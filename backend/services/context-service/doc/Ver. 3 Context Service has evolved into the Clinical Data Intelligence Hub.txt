@@ -1,0 +1,896 @@
+﻿Context Service: Comprehensive Design & Implementation Guidelines
+Executive Overview
+The Context Service has evolved into the Clinical Data Intelligence Hub of our platform, serving as the single source of truth for assembled clinical context. It bridges the gap between raw distributed data and actionable clinical intelligence, supporting both the Calculate → Validate → Commit pattern and the Digital Reflex Arc with sub-100ms response times.
+Core Architecture Evolution
+The Context Service as Clinical Data Federator
+The Context Service operates as a Clinical Data Orchestra:
+* Conductor of distributed data sources
+* Composer of clinical context recipes
+* Curator of data quality and freshness
+* Guardian of clinical data governance
+* Accelerator through intelligent caching
+Module 1: Foundational Architecture
+1.1 Dual-Purpose Design Pattern
+Two Distinct Context Paths
+Business Context Path (Domain Services):
+├── Calculation Context
+│   ├── Demographics (weight, height, BSA)
+│   ├── Insurance & Formulary
+│   ├── Provider Preferences
+│   └── Historical Patterns
+└── Enrichment Context
+    ├── Previous Orders
+    ├── Patient Preferences
+    ├── Department Protocols
+    └── Institutional Rules
+
+
+Safety Context Path (Safety Gateway):
+├── Clinical State Context
+│   ├── Active Medications
+│   ├── Allergies & Intolerances
+│   ├── Current Problems
+│   └── Active Orders
+└── Physiological Context
+    ├── Laboratory Results
+    ├── Vital Signs
+    ├── Risk Scores
+    └── Clinical Assessments
+
+
+1.2 GraphQL Federation Architecture
+Schema Design Principles
+Federation Strategy:
+├── Unified Graph Schema
+│   ├── Patient as root entity
+│   ├── Clinical domains as subgraphs
+│   └── Cross-domain relationships
+├── Service Boundaries
+│   ├── Each microservice owns its schema
+│   ├── Context Service as federation gateway
+│   └── Smart query routing
+└── Query Optimization
+    ├── DataLoader pattern implementation
+    ├── N+1 query prevention
+    ├── Batch operations
+    └── Field-level caching
+
+
+Core Schema Structure
+Root Types:
+├── Query
+│   ├── getContextByRecipe(recipeId, patientId)
+│   ├── getBusinessContext(fields[], patientId)
+│   ├── getSafetyContext(scenario, patientId)
+│   └── getContextBatch(requests[])
+├── Subscription
+│   ├── contextUpdates(patientId)
+│   ├── cacheInvalidations(patterns[])
+│   └── dataFreshnessAlerts(thresholds)
+└── Mutation
+    ├── invalidateContext(patientId, domains[])
+    ├── preloadContext(patientId, recipes[])
+    └── reportDataQualityIssue(details)
+
+
+1.3 Service Mesh Integration
+Microservice Communication Patterns
+gRPC Service Mesh:
+├── Service Discovery
+│   ├── Consul/K8s DNS resolution
+│   ├── Health check integration
+│   ├── Version compatibility
+│   └── Graceful degradation
+├── Load Balancing
+│   ├── Round-robin for stateless calls
+│   ├── Consistent hashing for cache affinity
+│   ├── Least-connection for heavy queries
+│   └── Circuit breaker integration
+└── Resilience Patterns
+    ├── Timeout management (service-specific)
+    ├── Retry with exponential backoff
+    ├── Bulkhead isolation
+    └── Fallback strategies
+
+
+Module 2: Clinical Context Recipe System
+2.1 Recipe Architecture
+Recipe Definition Model
+Recipe Components:
+├── Metadata
+│   ├── Recipe ID & Version
+│   ├── Clinical Scenario
+│   ├── Regulatory Classification
+│   └── Governance Approval
+├── Data Requirements
+│   ├── Required Data Points
+│   ├── Preferred Data Points
+│   ├── Conditional Requirements
+│   └── Fallback Strategies
+├── Quality Constraints
+│   ├── Freshness Requirements
+│   ├── Completeness Thresholds
+│   ├── Accuracy Standards
+│   └── Source Priorities
+└── Assembly Rules
+    ├── Aggregation Logic
+    ├── Transformation Rules
+    ├── Conflict Resolution
+    └── Enrichment Patterns
+
+
+2.2 Recipe Governance Framework
+Clinical Governance Structure
+Recipe Lifecycle:
+├── Development Phase
+│   ├── Clinical SME Input
+│   ├── Data Scientist Review
+│   ├── Safety Analysis
+│   └── Performance Testing
+├── Validation Phase
+│   ├── Clinical Simulation
+│   ├── Edge Case Testing
+│   ├── Regulatory Review
+│   └── Pilot Deployment
+├── Production Phase
+│   ├── Version Control
+│   ├── Change Management
+│   ├── Usage Analytics
+│   └── Continuous Monitoring
+└── Evolution Phase
+    ├── Feedback Integration
+    ├── Performance Optimization
+    ├── Clinical Updates
+    └── Deprecation Planning
+
+
+2.3 Advanced Recipe Patterns
+Conditional Recipe Logic
+Dynamic Requirements:
+├── Patient-Specific Conditions
+│   ├── Age-based variations
+│   ├── Comorbidity adjustments
+│   ├── Genetic factors
+│   └── Social determinants
+├── Clinical Scenario Variants
+│   ├── Emergency vs routine
+│   ├── Inpatient vs outpatient
+│   ├── Specialty-specific
+│   └── Protocol-driven
+├── Institutional Policies
+│   ├── Local formularies
+│   ├── Department protocols
+│   ├── Quality measures
+│   └── Research requirements
+└── Temporal Considerations
+    ├── Time-of-day factors
+    ├── Day-of-week variations
+    ├── Seasonal adjustments
+    └── Shift-based rules
+
+
+Recipe Composition Patterns
+Inheritance Model:
+BaseRecipe
+├── MedicationRecipe
+│   ├── AdultMedicationRecipe
+│   ├── PediatricMedicationRecipe
+│   └── GeriatricMedicationRecipe
+├── ProcedureRecipe
+│   ├── SurgicalProcedureRecipe
+│   ├── DiagnosticProcedureRecipe
+│   └── TherapeuticProcedureRecipe
+└── AssessmentRecipe
+    ├── AdmissionAssessmentRecipe
+    ├── DailyAssessmentRecipe
+    └── DischargeAssessmentRecipe
+
+
+Composition allows:
+- Shared base requirements
+- Specialized additions
+- Override capabilities
+- Version independence
+
+
+Module 3: Intelligent Caching Architecture
+3.1 Multi-Layer Cache Design
+Three-Tier Caching Strategy
+L1: Workflow Context Cache (In-Process)
+├── Scope: Single workflow execution
+├── Duration: Workflow lifetime (5-10 min)
+├── Storage: Local memory
+├── Size: ~100MB per workflow
+├── Hit Ratio Target: >95%
+└── Use Cases:
+    ├── Repeated context access
+    ├── Step-to-step sharing
+    ├── Proposal variations
+    └── Validation iterations
+
+
+L2: Distributed Cache (Redis Cluster)
+├── Scope: Cross-workflow, per-patient
+├── Duration: 15-30 minutes
+├── Storage: Redis with persistence
+├── Size: ~10GB total
+├── Hit Ratio Target: >80%
+└── Use Cases:
+    ├── Common patient data
+    ├── Recent calculations
+    ├── Frequent recipes
+    └── Session continuity
+
+
+L3: Service-Level Caches
+├── Scope: Domain-specific data
+├── Duration: Service-defined
+├── Storage: Service memory/Redis
+├── Size: Varies by service
+├── Hit Ratio Target: >60%
+└── Use Cases:
+    ├── Reference data
+    ├── Terminology mappings
+    ├── Historical aggregates
+    └── Computed values
+
+
+3.2 Cache Invalidation Strategies
+Event-Driven Invalidation
+Invalidation Pipeline:
+Kafka CDC Event
+├── Event Parser
+│   ├── Extract patient ID
+│   ├── Identify data domain
+│   ├── Determine impact scope
+│   └── Calculate dependencies
+├── Invalidation Planner
+│   ├── Build invalidation graph
+│   ├── Identify affected recipes
+│   ├── Calculate cache keys
+│   └── Priority ordering
+├── Invalidation Executor
+│   ├── L1 cache notification
+│   ├── L2 cache purge
+│   ├── L3 cache hints
+│   └── Metric recording
+└── Verification
+    ├── Confirm invalidation
+    ├── Log operations
+    ├── Alert on failures
+    └── Update statistics
+
+
+Smart Invalidation Patterns
+Dependency-Aware Invalidation:
+├── Direct Dependencies
+│   ├── Patient data → Patient context
+│   ├── Medication → Medication lists
+│   ├── Lab result → Lab context
+│   └── Allergy → Safety context
+├── Transitive Dependencies
+│   ├── Medication → Drug interactions
+│   ├── Problem → Treatment protocols
+│   ├── Lab → Risk calculations
+│   └── Order → Workflow state
+└── Selective Invalidation
+    ├── Partial cache updates
+    ├── Field-level granularity
+    ├── Time-based segments
+    └── Version preservation
+
+
+3.3 Cache Warming Strategies
+Predictive Cache Loading
+Warming Triggers:
+├── Workflow Initiation
+│   ├── Preload recipe requirements
+│   ├── Historical access patterns
+│   ├── Related patient data
+│   └── Common next steps
+├── Schedule-Based
+│   ├── Shift changes
+│   ├── Rounds preparation
+│   ├── Clinic schedules
+│   └── Admission predictions
+├── Event-Based
+│   ├── ADT movements
+│   ├── Order placements
+│   ├── Result availability
+│   └── Alert generation
+└── ML-Driven
+    ├── Access prediction
+    ├── Workflow forecasting
+    ├── Usage patterns
+    └── Capacity planning
+
+
+Module 4: Data Aggregation Engine
+4.1 Parallel Aggregation Architecture
+Aggregation Orchestration
+Aggregation Flow:
+Recipe Request
+├── Parse Requirements
+│   ├── Required fields
+│   ├── Optional fields
+│   ├── Quality constraints
+│   └── Timeout budgets
+├── Plan Execution
+│   ├── Identify sources
+│   ├── Check cache availability
+│   ├── Group by service
+│   └── Calculate parallelism
+├── Parallel Execution
+│   ├── Spawn coroutines
+│   ├── Manage timeouts
+│   ├── Handle partial failures
+│   └── Collect results
+└── Result Assembly
+    ├── Merge responses
+    ├── Apply transformations
+    ├── Calculate completeness
+    └── Add metadata
+
+
+Service Call Optimization
+Batching Strategies:
+├── Request Coalescing
+│   ├── 10ms collection window
+│   ├── Batch similar requests
+│   ├── Single service call
+│   └── Result distribution
+├── Field Aggregation
+│   ├── Combine field requests
+│   ├── Minimize payloads
+│   ├── Optimize queries
+│   └── Reduce round trips
+├── Predictive Fetching
+│   ├── Anticipate needs
+│   ├── Preemptive loading
+│   ├── Background refresh
+│   └── Speculative execution
+└── Circuit Breaking
+    ├── Fail fast on errors
+    ├── Prevent cascades
+    ├── Graceful degradation
+    └── Recovery monitoring
+
+
+4.2 Data Quality Management
+Quality Assurance Pipeline
+Quality Checks:
+├── Freshness Validation
+│   ├── Age calculation
+│   ├── Staleness detection
+│   ├── Update frequency
+│   └── Clinical relevance
+├── Completeness Scoring
+│   ├── Required fields
+│   ├── Optional fields
+│   ├── Weighted scoring
+│   └── Threshold evaluation
+├── Accuracy Verification
+│   ├── Range validation
+│   ├── Consistency checks
+│   ├── Cross-validation
+│   └── Anomaly detection
+└── Source Reliability
+    ├── Service health
+    ├── Historical accuracy
+    ├── Response times
+    └── Error rates
+
+
+Clinical Data Harmonization
+Harmonization Layers:
+├── Terminology Mapping
+│   ├── Code system translation
+│   ├── Semantic alignment
+│   ├── Version management
+│   └── Conflict resolution
+├── Unit Standardization
+│   ├── Measurement conversion
+│   ├── Time zone alignment
+│   ├── Reference ranges
+│   └── Precision handling
+├── Temporal Alignment
+│   ├── Event sequencing
+│   ├── Time synchronization
+│   ├── Duration calculation
+│   └── Trend analysis
+└── Semantic Enrichment
+    ├── Concept expansion
+    ├── Relationship inference
+    ├── Clinical significance
+    └── Contextual relevance
+
+
+Module 5: Performance Engineering
+5.1 Latency Optimization Techniques
+Query Optimization
+GraphQL Performance:
+├── Query Analysis
+│   ├── Complexity scoring
+│   ├── Depth limiting
+│   ├── Field counting
+│   └── Cost estimation
+├── Execution Planning
+│   ├── Parallel resolution
+│   ├── Batch loading
+│   ├── Cache utilization
+│   └── Early termination
+├── Resource Management
+│   ├── Connection pooling
+│   ├── Memory allocation
+│   ├── CPU throttling
+│   └── Timeout enforcement
+└── Response Optimization
+    ├── Field filtering
+    ├── Pagination
+    ├── Compression
+    └── Streaming
+
+
+Service Communication
+gRPC Optimizations:
+├── Connection Management
+│   ├── Persistent connections
+│   ├── Multiplexing
+│   ├── Keep-alive tuning
+│   └── Load balancing
+├── Protocol Buffers
+│   ├── Schema optimization
+│   ├── Field packing
+│   ├── Compression
+│   └── Streaming RPCs
+├── Timeout Strategies
+│   ├── Service-specific timeouts
+│   ├── Cascading timeouts
+│   ├── Deadline propagation
+│   └── Partial results
+└── Error Handling
+    ├── Fast failures
+    ├── Retry budgets
+    ├── Circuit breakers
+    └── Fallback data
+
+
+5.2 Scalability Patterns
+Horizontal Scaling
+Scaling Dimensions:
+├── Query Processing
+│   ├── Stateless instances
+│   ├── Request routing
+│   ├── Load distribution
+│   └── Auto-scaling rules
+├── Cache Layer
+│   ├── Redis clustering
+│   ├── Consistent hashing
+│   ├── Replication factor
+│   └── Shard management
+├── Data Sources
+│   ├── Read replicas
+│   ├── Connection pooling
+│   ├── Query routing
+│   └── Failover handling
+└── Event Processing
+    ├── Kafka partitioning
+    ├── Consumer groups
+    ├── Parallel processing
+    └── Back-pressure handling
+
+
+5.3 Resource Optimization
+Memory Management
+Memory Strategies:
+├── Object Pooling
+│   ├── Context objects
+│   ├── gRPC channels
+│   ├── Parser instances
+│   └── Buffer reuse
+├── Garbage Collection
+│   ├── GC tuning
+│   ├── Memory limits
+│   ├── Heap sizing
+│   └── Off-heap usage
+├── Cache Sizing
+│   ├── Eviction policies
+│   ├── Memory bounds
+│   ├── Priority queues
+│   └── Compression
+└── Streaming
+    ├── Chunked responses
+    ├── Cursor pagination
+    ├── Progressive loading
+    └── Memory mapping
+
+
+Module 6: Clinical Governance & Compliance
+6.1 Data Governance Framework
+Governance Hierarchy
+Governance Structure:
+├── Clinical Advisory Board
+│   ├── Recipe approval
+│   ├── Quality standards
+│   ├── Safety reviews
+│   └── Change management
+├── Data Stewardship
+│   ├── Source validation
+│   ├── Quality metrics
+│   ├── Access controls
+│   └── Audit oversight
+├── Technical Governance
+│   ├── Performance SLAs
+│   ├── Security standards
+│   ├── Integration patterns
+│   └── Version control
+└── Compliance Management
+    ├── Regulatory adherence
+    ├── Privacy protection
+    ├── Consent management
+    └── Retention policies
+
+
+6.2 Clinical Context Validation
+Validation Framework
+Clinical Validation:
+├── Semantic Validation
+│   ├── Clinical plausibility
+│   ├── Temporal consistency
+│   ├── Value ranges
+│   └── Relationship integrity
+├── Safety Validation
+│   ├── Critical value detection
+│   ├── Conflict identification
+│   ├── Risk assessment
+│   └── Alert generation
+├── Completeness Validation
+│   ├── Required data presence
+│   ├── Quality thresholds
+│   ├── Freshness requirements
+│   └── Source availability
+└── Regulatory Validation
+    ├── Consent verification
+    ├── Access authorization
+    ├── Audit requirements
+    └── Retention compliance
+
+
+Module 7: Integration Patterns
+7.1 Domain Service Integration
+Service Adapter Pattern
+Adapter Architecture:
+├── Service Registry
+│   ├── Service discovery
+│   ├── Capability mapping
+│   ├── Version negotiation
+│   └── Health monitoring
+├── Protocol Adapters
+│   ├── gRPC adapters
+│   ├── REST adapters
+│   ├── GraphQL adapters
+│   └── Legacy adapters
+├── Data Mappers
+│   ├── Schema translation
+│   ├── Field mapping
+│   ├── Type conversion
+│   └── Error handling
+└── Quality Monitors
+    ├── Response validation
+    ├── Latency tracking
+    ├── Error rates
+    └── Completeness metrics
+
+
+7.2 Event Stream Integration
+Kafka Integration Patterns
+Event Consumption:
+├── CDC Event Processing
+│   ├── Schema registry
+│   ├── Deserialization
+│   ├── Event routing
+│   └── Error handling
+├── Cache Invalidation
+│   ├── Event filtering
+│   ├── Impact analysis
+│   ├── Invalidation execution
+│   └── Confirmation
+├── Context Updates
+│   ├── Real-time sync
+│   ├── Batch updates
+│   ├── Conflict resolution
+│   └── Version control
+└── Audit Streaming
+    ├── Access logging
+    ├── Change tracking
+    ├── Quality events
+    └── Performance metrics
+
+
+7.3 External System Integration
+FHIR Integration Layer
+FHIR Patterns:
+├── Resource Mapping
+│   ├── FHIR to internal model
+│   ├── Terminology binding
+│   ├── Extension handling
+│   └── Profile validation
+├── Batch Operations
+│   ├── Bulk data export
+│   ├── Batch queries
+│   ├── Transaction bundles
+│   └── History tracking
+├── Subscription Support
+│   ├── Topic subscriptions
+│   ├── Webhook delivery
+│   ├── Criteria matching
+│   └── Retry handling
+└── Conformance
+    ├── Capability statement
+    ├── Profile support
+    ├── Search parameters
+    └── Operations definition
+
+
+Module 8: Security & Privacy
+8.1 Access Control Architecture
+Multi-Layer Security
+Security Layers:
+├── API Gateway Security
+│   ├── OAuth 2.0/OIDC
+│   ├── API key management
+│   ├── Rate limiting
+│   └── DDoS protection
+├── GraphQL Security
+│   ├── Query complexity limits
+│   ├── Field-level authorization
+│   ├── Introspection control
+│   └── Operation whitelisting
+├── Service Mesh Security
+│   ├── mTLS everywhere
+│   ├── Service identity
+│   ├── Zero trust network
+│   └── Encryption in transit
+└── Data Security
+    ├── Encryption at rest
+    ├── Field-level encryption
+    ├── Tokenization
+    └── Key management
+
+
+8.2 Privacy Protection
+PHI Protection Patterns
+Privacy Controls:
+├── Consent Management
+│   ├── Consent verification
+│   ├── Purpose limitation
+│   ├── Granular controls
+│   └── Withdrawal handling
+├── Access Auditing
+│   ├── Every access logged
+│   ├── Purpose recording
+│   ├── Context capture
+│   └── Anomaly detection
+├── De-identification
+│   ├── Safe harbor method
+│   ├── Expert determination
+│   ├── Limited datasets
+│   └── Synthetic data
+└── Break-glass Procedures
+    ├── Emergency access
+    ├── Audit escalation
+    ├── Time limitations
+    └── Review process
+
+
+Module 9: Observability & Monitoring
+9.1 Comprehensive Metrics
+Operational Metrics
+Performance Metrics:
+├── Latency Metrics
+│   ├── Query latency (P50, P95, P99)
+│   ├── Service call latency
+│   ├── Cache response time
+│   └── End-to-end latency
+├── Throughput Metrics
+│   ├── Queries per second
+│   ├── Cache operations/sec
+│   ├── Service calls/sec
+│   └── Events processed/sec
+├── Resource Metrics
+│   ├── CPU utilization
+│   ├── Memory usage
+│   ├── Network I/O
+│   └── Cache size
+└── Error Metrics
+    ├── Error rates by type
+    ├── Service failures
+    ├── Timeout frequency
+    └── Cache misses
+
+
+Clinical Metrics
+Quality Metrics:
+├── Data Quality
+│   ├── Completeness scores
+│   ├── Freshness distribution
+│   ├── Accuracy rates
+│   └── Source reliability
+├── Clinical Impact
+│   ├── Context assembly time
+│   ├── Recipe usage patterns
+│   ├── Safety context latency
+│   └── Clinical decision support time
+├── Governance Metrics
+│   ├── Recipe performance
+│   ├── Validation failures
+│   ├── Override frequency
+│   └── Audit compliance
+└── User Experience
+    ├── Query complexity
+    ├── Response times
+    ├── Error messages
+    └── Retry patterns
+
+
+9.2 Distributed Tracing
+Trace Architecture
+Trace Structure:
+├── Context Request Trace
+│   ├── GraphQL parsing
+│   ├── Recipe resolution
+│   ├── Cache checks
+│   └── Service calls
+├── Service Call Traces
+│   ├── Connection time
+│   ├── Request serialization
+│   ├── Network time
+│   └── Response parsing
+├── Cache Operation Traces
+│   ├── Key generation
+│   ├── Lookup time
+│   ├── Serialization
+│   └── Network round trip
+└── Assembly Traces
+    ├── Data merging
+    ├── Transformation
+    ├── Quality scoring
+    └── Response building
+
+
+9.3 Clinical Audit Trail
+Audit Architecture
+Audit Requirements:
+├── Access Auditing
+│   ├── Who accessed what
+│   ├── Clinical purpose
+│   ├── Recipe used
+│   └── Data returned
+├── Performance Auditing
+│   ├── Response times
+│   ├── Completeness achieved
+│   ├── Failures encountered
+│   └── Fallbacks used
+├── Clinical Auditing
+│   ├── Safety context access
+│   ├── Override decisions
+│   ├── Emergency access
+│   └── Consent verification
+└── Compliance Auditing
+    ├── Regulatory compliance
+    ├── Policy adherence
+    ├── Security events
+    └── Privacy violations
+
+
+Module 10: Reliability & Resilience
+10.1 Failure Handling Patterns
+Graceful Degradation
+Degradation Strategies:
+├── Partial Context Delivery
+│   ├── Return available data
+│   ├── Mark missing fields
+│   ├── Quality scoring
+│   └── Clinical safety assessment
+├── Fallback Data Sources
+│   ├── Secondary services
+│   ├── Cached data usage
+│   ├── Historical data
+│   └── Default values
+├── Service Isolation
+│   ├── Bulkhead pattern
+│   ├── Independent failures
+│   ├── Cascade prevention
+│   └── Resource isolation
+└── Recovery Procedures
+    ├── Automatic retry
+    ├── Circuit reset
+    ├── Cache rebuild
+    └── Service restoration
+
+
+10.2 High Availability Design
+HA Architecture
+Availability Patterns:
+├── Service Redundancy
+│   ├── Multiple instances
+│   ├── Cross-AZ deployment
+│   ├── Load balancing
+│   └── Health checking
+├── Data Redundancy
+│   ├── Cache replication
+│   ├── Multi-region sync
+│   ├── Backup strategies
+│   └── Recovery procedures
+├── Network Redundancy
+│   ├── Multiple paths
+│   ├── Failover routing
+│   ├── CDN integration
+│   └── Edge caching
+└── Operational Redundancy
+    ├── Runbook automation
+    ├── On-call rotation
+    ├── Incident response
+    └── Disaster recovery
+
+
+Module 11: Evolution & Maintenance
+11.1 Recipe Lifecycle Management
+Recipe Evolution
+Version Management:
+├── Version Control
+│   ├── Semantic versioning
+│   ├── Backward compatibility
+│   ├── Migration paths
+│   └── Deprecation notices
+├── Testing Pipeline
+│   ├── Unit testing
+│   ├── Integration testing
+│   ├── Clinical validation
+│   └── Performance testing
+├── Deployment Strategy
+│   ├── Canary releases
+│   ├── Blue-green deployment
+│   ├── Feature flags
+│   └── Rollback procedures
+└── Monitoring
+    ├── Usage analytics
+    ├── Performance tracking
+    ├── Error monitoring
+    └── Clinical outcomes
+
+
+11.2 Continuous Improvement
+Optimization Pipeline
+Improvement Process:
+├── Performance Analysis
+│   ├── Bottleneck identification
+│   ├── Query optimization
+│   ├── Cache tuning
+│   └── Service optimization
+├── Clinical Enhancement
+│   ├── Recipe refinement
+│   ├── Quality improvement
+│   ├── Safety enhancement
+│   └── Usability updates
+├── Technical Debt
+│   ├── Code refactoring
+│   ├── Dependency updates
+│   ├── Security patches
+│   └── Architecture evolution
+└── Innovation Pipeline
+    ├── New capabilities
+    ├── ML integration
+    ├── Predictive features
+    └── Research enablement
+
+
+Summary
+This Context Service architecture provides:
+1. Clinical Intelligence: Smart assembly of distributed clinical data
+2. Performance Excellence: Sub-100ms response with intelligent caching
+3. Flexibility: Supports both business and safety context needs
+4. Governance: Strong clinical oversight with recipe management
+5. Reliability: Resilient design with graceful degradation
+6. Evolution: Built for continuous improvement and innovation
+The Context Service serves as the critical bridge between raw clinical data and actionable intelligence, enabling both safe clinical decision-making and efficient healthcare delivery while maintaining the highest standards of performance, security, and clinical governance.

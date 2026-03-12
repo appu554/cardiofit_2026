@@ -1,0 +1,71 @@
+services:
+  kb20-postgres:
+    image: postgres:15-alpine
+    container_name: kb20-postgres
+    environment:
+      POSTGRES_USER: kb20_user
+      POSTGRES_PASSWORD: kb20_password
+      POSTGRES_DB: kb_service_20
+    ports:
+      - "5436:5432"
+    volumes:
+      - kb20_postgres_data:/var/lib/postgresql/data
+      - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb20_user -d kb_service_20"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb20-network
+
+  kb20-redis:
+    image: redis:7-alpine
+    container_name: kb20-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6385:6379"
+    volumes:
+      - kb20_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb20-network
+
+  kb20-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb20-service
+    ports:
+      - "8131:8131"
+    environment:
+      PORT: "8131"
+      ENVIRONMENT: "production"
+      DATABASE_URL: "postgres://kb20_user:kb20_password@kb20-postgres:5432/kb_service_20?sslmode=disable"
+      REDIS_URL: "redis://kb20-redis:6379"
+    depends_on:
+      kb20-postgres:
+        condition: service_healthy
+      kb20-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8131/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - kb20-network
+
+volumes:
+  kb20_postgres_data:
+  kb20_redis_data:
+
+networks:
+  kb20-network:
+    driver: bridge

@@ -1,0 +1,423 @@
+package com.cardiofit.flink.state;
+
+import com.cardiofit.flink.models.BloodPressure;
+import com.cardiofit.flink.models.VitalReading;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
+import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.core.memory.DataOutputView;
+
+import java.io.IOException;
+import java.io.Serializable;
+
+/**
+ * TypeSerializer for VitalReading with Type Change Migration Pattern.
+ *
+ * <p><b>Migration Scenario:</b> Changing field types from primitive/String to structured objects.
+ *
+ * <p><b>Schema Evolution:</b>
+ * <pre>
+ * V1: VitalReading {
+ *   timestamp: long
+ *   heartRate: int
+ *   bloodPressure: String    ← "120/80" format (hard to query)
+ *   temperature: double
+ * }
+ *
+ * V2: VitalReading {
+ *   timestamp: long
+ *   heartRate: int
+ *   bloodPressure: BloodPressure { systolic, diastolic } ← Structured type!
+ *   temperature: double
+ * }
+ * </pre>
+ *
+ * <p><b>Migration Strategy:</b> Type transformation is handled by PARSING the old format
+ * and CONVERTING to the new structured type during deserialization.
+ *
+ * <p><b>Key Pattern:</b>
+ * <ul>
+ *   <li><b>V1 Deserialization:</b> Read String "120/80", parse to BloodPressure(120, 80)</li>
+ *   <li><b>V2 Serialization:</b> Write BloodPressure as {systolic: 120, diastolic: 80}</li>
+ *   <li><b>Backward Compatible:</b> V2 code can read and convert V1 String data</li>
+ *   <li><b>Forward Incompatible:</b> V1 code CANNOT read V2 structured data (expected)</li>
+ * </ul>
+ *
+ * <p><b>Clinical Benefits of Type Change:</b>
+ * <ul>
+ *   <li><b>Queryable:</b> Can now filter "systolic < 90" directly (hypotension detection)</li>
+ *   <li><b>Calculable:</b> Can compute MAP, pulse pressure for clinical scoring</li>
+ *   <li><b>Alertable:</b> Enable threshold-based alerts on systolic/diastolic separately</li>
+ *   <li><b>Validated:</b> Structured type enforces data integrity (no "abc/xyz" invalid data)</li>
+ * </ul>
+ *
+ * <p><b>Production Example:</b>
+ * <pre>
+ * V1 State: bloodPressure = "120/80" (String in binary)
+ *    ↓ (Deserialize with V2 serializer)
+ * Parse: "120/80" → BloodPressure.parse("120/80")
+ *    ↓
+ * V2 State: bloodPressure = BloodPressure { systolic: 120, diastolic: 80 }
+ * </pre>
+ *
+ * @see BloodPressure Structured blood pressure type
+ * @see VitalReading Data model using BloodPressure
+ */
+public class VitalReadingSerializer extends TypeSerializer<VitalReading> {
+
+    private static final long serialVersionUID = 2L; // V2 serializer
+
+    private static final int CURRENT_VERSION = 2;
+
+    // ========================================================================================
+    // SERIALIZATION (V2 - writes structured BloodPressure)
+    // ========================================================================================
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public void serialize(VitalReading record, DataOutputView target) throws IOException {
+        // Write version header
+        target.writeInt(CURRENT_VERSION);
+
+        // Write common fields
+        target.writeLong(record.timestamp);
+        target.writeInt(record.heartRate);
+
+        // Write V2 structured blood pressure
+        BloodPressure bp = record.bloodPressure;
+        if (bp == null) {
+            target.writeBoolean(false); // No BP data
+        } else {
+            target.writeBoolean(true); // Has BP data
+            target.writeInt(bp.getSystolic());
+            target.writeInt(bp.getDiastolic());
+
+            // Write method enum
+            String method = bp.getMethod() != null ? bp.getMethod().name() : "OSCILLOMETRIC";
+            target.writeUTF(method);
+
+            target.writeLong(bp.getTimestamp());
+        }
+
+        // Write temperature
+        target.writeDouble(record.temperature);
+
+        // Write respiratory rate (optional, added in V2)
+        if (record.respiratoryRate != null) {
+            target.writeBoolean(true);
+            target.writeDouble(record.respiratoryRate);
+        } else {
+            target.writeBoolean(false);
+        }
+
+        // Write SpO2 (optional, added in V2)
+        if (record.oxygenSaturation != null) {
+            target.writeBoolean(true);
+            target.writeDouble(record.oxygenSaturation);
+        } else {
+            target.writeBoolean(false);
+        }
+    }
+
+    // ========================================================================================
+    // DESERIALIZATION (V1 and V2 backward compatible with TYPE CONVERSION)
+    // ========================================================================================
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public VitalReading deserialize(DataInputView source) throws IOException {
+        int version = source.readInt();
+
+        VitalReading reading = new VitalReading();
+
+        // Read common fields
+        reading.timestamp = source.readLong();
+        reading.heartRate = source.readInt();
+
+        // ============================================================
+        // CRITICAL: Type conversion logic for bloodPressure
+        // ============================================================
+
+        if (version == 1) {
+            // V1 FORMAT: bloodPressure is a String "120/80"
+            // Read String and PARSE to BloodPressure object
+
+            String bpString = source.readUTF();
+            reading.bloodPressure = parseBloodPressure(bpString);
+
+            // NOTE: This is the key pattern for type change migration!
+            // Old String format is parsed and converted to new structured type
+
+        } else if (version == 2) {
+            // V2 FORMAT: bloodPressure is structured BloodPressure object
+
+            boolean hasBP = source.readBoolean();
+            if (hasBP) {
+                int systolic = source.readInt();
+                int diastolic = source.readInt();
+                String methodName = source.readUTF();
+                long bpTimestamp = source.readLong();
+
+                BloodPressure bp = new BloodPressure(systolic, diastolic);
+                try {
+                    bp.setMethod(BloodPressure.MeasurementMethod.valueOf(methodName));
+                } catch (IllegalArgumentException e) {
+                    bp.setMethod(BloodPressure.MeasurementMethod.OSCILLOMETRIC);
+                }
+                bp.setTimestamp(bpTimestamp);
+
+                reading.bloodPressure = bp;
+            }
+        }
+
+        // Read temperature
+        reading.temperature = source.readDouble();
+
+        // Read optional V2 fields (with backward compatibility)
+        if (version >= 2) {
+            // Respiratory rate (V2 only)
+            boolean hasRR = source.readBoolean();
+            if (hasRR) {
+                reading.respiratoryRate = source.readDouble();
+            }
+
+            // SpO2 (V2 only)
+            boolean hasSpO2 = source.readBoolean();
+            if (hasSpO2) {
+                reading.oxygenSaturation = source.readDouble();
+            }
+        }
+
+        return reading;
+    }
+
+    /**
+     * Parse blood pressure from V1 String format to V2 BloodPressure object.
+     *
+     * <p><b>Examples:</b>
+     * <ul>
+     *   <li>"120/80" → BloodPressure(120, 80)</li>
+     *   <li>"90/60" → BloodPressure(90, 60)</li>
+     *   <li>"" or null → null</li>
+     *   <li>"invalid" → null (logged as error)</li>
+     * </ul>
+     *
+     * @param bpString Blood pressure in "systolic/diastolic" format
+     * @return Parsed BloodPressure object, or null if invalid
+     */
+    private BloodPressure parseBloodPressure(String bpString) {
+        if (bpString == null || bpString.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            String[] parts = bpString.split("/");
+            if (parts.length != 2) {
+                logWarning("Invalid BP format during migration: " + bpString);
+                return null;
+            }
+
+            int systolic = Integer.parseInt(parts[0].trim());
+            int diastolic = Integer.parseInt(parts[1].trim());
+
+            // Validate ranges (basic sanity check)
+            if (systolic < 50 || systolic > 300 || diastolic < 30 || diastolic > 200) {
+                logWarning("BP values out of physiological range: " + bpString);
+                // Still create object but flag for review
+            }
+
+            return new BloodPressure(systolic, diastolic);
+
+        } catch (NumberFormatException e) {
+            logWarning("Failed to parse BP during migration: " + bpString);
+            return null;
+        }
+    }
+
+    /**
+     * Log warnings about migration issues (for monitoring and alerting).
+     */
+    private void logWarning(String message) {
+        // In production, this would go to logging system
+        // Could also increment metrics for migration failures
+        System.err.println("[VitalReadingSerializer Migration Warning] " + message);
+    }
+
+    // ========================================================================================
+    // TYPE SERIALIZER METHODS
+    // ========================================================================================
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public VitalReading deserialize(VitalReading reuse, DataInputView source) throws IOException {
+        return deserialize(source);
+    }
+
+    @Override
+    public void copy(DataInputView source, DataOutputView target) throws IOException {
+        // Read version
+        int version = source.readInt();
+        target.writeInt(CURRENT_VERSION); // Always write current version
+
+        // Copy timestamp and heart rate
+        target.writeLong(source.readLong());
+        target.writeInt(source.readInt());
+
+        // Copy/convert blood pressure
+        if (version == 1) {
+            // V1: Read String, parse, write as V2 structured
+            String bpString = source.readUTF();
+            BloodPressure bp = parseBloodPressure(bpString);
+
+            if (bp == null) {
+                target.writeBoolean(false);
+            } else {
+                target.writeBoolean(true);
+                target.writeInt(bp.getSystolic());
+                target.writeInt(bp.getDiastolic());
+                target.writeUTF(bp.getMethod().name());
+                target.writeLong(bp.getTimestamp());
+            }
+        } else if (version == 2) {
+            // V2: Direct copy of structured data
+            boolean hasBP = source.readBoolean();
+            target.writeBoolean(hasBP);
+            if (hasBP) {
+                target.writeInt(source.readInt());    // systolic
+                target.writeInt(source.readInt());    // diastolic
+                target.writeUTF(source.readUTF());    // method
+                target.writeLong(source.readLong());  // timestamp
+            }
+        }
+
+        // Copy temperature
+        target.writeDouble(source.readDouble());
+
+        // Copy V2 optional fields
+        if (version >= 2) {
+            boolean hasRR = source.readBoolean();
+            target.writeBoolean(hasRR);
+            if (hasRR) {
+                target.writeDouble(source.readDouble());
+            }
+
+            boolean hasSpO2 = source.readBoolean();
+            target.writeBoolean(hasSpO2);
+            if (hasSpO2) {
+                target.writeDouble(source.readDouble());
+            }
+        } else {
+            // V1 didn't have these fields, write as absent
+            target.writeBoolean(false); // no RR
+            target.writeBoolean(false); // no SpO2
+        }
+    }
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public VitalReading copy(VitalReading from) {
+        VitalReading copy = new VitalReading();
+        copy.timestamp = from.timestamp;
+        copy.heartRate = from.heartRate;
+        copy.temperature = from.temperature;
+        copy.respiratoryRate = from.respiratoryRate;
+        copy.oxygenSaturation = from.oxygenSaturation;
+
+        // Deep copy blood pressure
+        if (from.bloodPressure != null) {
+            copy.bloodPressure = new BloodPressure(
+                from.bloodPressure.getSystolic(),
+                from.bloodPressure.getDiastolic(),
+                from.bloodPressure.getMethod()
+            );
+            copy.bloodPressure.setTimestamp(from.bloodPressure.getTimestamp());
+        }
+
+        return copy;
+    }
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public VitalReading copy(VitalReading from, VitalReading reuse) {
+        return copy(from);
+    }
+
+    @Override
+    public int getLength() {
+        return -1; // Variable length
+    }
+
+    @Override
+    public boolean isImmutableType() {
+        return false;
+    }
+
+    @Override
+    public int hashCode() {
+        return getClass().hashCode();
+    }
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public TypeSerializer<VitalReading> duplicate() {
+        return this;
+    }
+
+    // @Override - Removed for Flink 2.x (method signature changed)
+    public TypeSerializerSnapshot<VitalReading> snapshotConfiguration() {
+        return new VitalReadingSerializerSnapshot();
+    }
+
+    // ========================================================================================
+    // VITAL READING DATA CLASS (simplified for example)
+    // ========================================================================================
+
+    /**
+     * VitalReading data class (simplified for serializer example).
+     * In production, this would be in a separate file.
+     */
+    public static class VitalReading implements Serializable {
+        private static final long serialVersionUID = 2L;
+
+        public long timestamp;
+        public int heartRate;
+        public BloodPressure bloodPressure; // V2: Structured type
+        public double temperature;
+        public Double respiratoryRate;     // V2: Added field
+        public Double oxygenSaturation;    // V2: Added field
+
+        public VitalReading() {
+            this.timestamp = System.currentTimeMillis();
+        }
+    }
+
+    // ========================================================================================
+    // SERIALIZER SNAPSHOT
+    // ========================================================================================
+
+    public static class VitalReadingSerializerSnapshot
+            implements TypeSerializerSnapshot<VitalReading> {
+
+        @Override
+        public int getCurrentVersion() {
+            return 2;
+        }
+
+        @Override
+        public void writeSnapshot(DataOutputView out) throws IOException {
+            out.writeInt(2);
+        }
+
+        @Override
+        public void readSnapshot(int readVersion, DataInputView in, ClassLoader userCodeClassLoader)
+                throws IOException {
+            // No additional state to read
+        }
+
+        @Override
+        public TypeSerializer<VitalReading> restoreSerializer() {
+            return new VitalReadingSerializer();
+        }
+
+        @Override
+        public TypeSerializerSchemaCompatibility<VitalReading> resolveSchemaCompatibility(
+                TypeSerializer<VitalReading> newSerializer) {
+            return TypeSerializerSchemaCompatibility.compatibleAsIs();
+        }
+    }
+}

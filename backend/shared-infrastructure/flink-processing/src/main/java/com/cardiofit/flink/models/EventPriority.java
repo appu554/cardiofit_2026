@@ -1,0 +1,12 @@
+package com.cardiofit.flink.models;
+
+/**
+ * EventPriority enum for clinical event prioritization
+ */
+public enum EventPriority {
+    LOW,
+    NORMAL,
+    MEDIUM,
+    HIGH,
+    CRITICAL
+}

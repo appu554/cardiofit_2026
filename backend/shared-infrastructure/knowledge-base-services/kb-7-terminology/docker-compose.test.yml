@@ -1,0 +1,135 @@
+version: '3.8'
+
+# Docker Compose for KB-7 Terminology Testing Environment
+# Provides isolated PostgreSQL and Redis instances for testing
+
+services:
+  # Test PostgreSQL Database
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: kb7-postgres-test
+    environment:
+      POSTGRES_DB: clinical_governance_test
+      POSTGRES_USER: kb_test_user
+      POSTGRES_PASSWORD: kb_test_password
+    ports:
+      - "5434:5432"  # Different port to avoid conflicts
+    volumes:
+      # Initialize with required extensions
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb_test_user -d clinical_governance_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb7-test-network
+
+  # Test Redis Cache  
+  redis-test:
+    image: redis:7-alpine
+    container_name: kb7-redis-test
+    ports:
+      - "6381:6379"  # Different port to avoid conflicts
+    volumes:
+      - redis_test_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb7-test-network
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  # KB-7 Terminology Service for Testing
+  kb7-service-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb7-service-test
+    environment:
+      # Test environment configuration
+      ENVIRONMENT: test
+      LOG_LEVEL: debug
+      PORT: 8087
+      
+      # Test database configuration
+      DATABASE_URL: postgresql://kb_test_user:kb_test_password@postgres-test:5432/clinical_governance_test
+      MIGRATIONS_PATH: ./migrations
+      
+      # Test cache configuration
+      REDIS_URL: redis://redis-test:6379/8
+      
+      # Test-specific settings
+      GRAPHQL_PLAYGROUND: true
+      GRAPHQL_INTROSPECT: true
+      METRICS_ENABLED: true
+      
+      # Disable external dependencies for testing
+      FEDERATION_ENABLED: false
+      
+      # Performance settings for testing
+      DB_MAX_OPEN_CONNS: 10
+      DB_MAX_IDLE_CONNS: 2
+      
+    ports:
+      - "8088:8087"  # Different port for test service
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    networks:
+      - kb7-test-network
+    volumes:
+      - ./data:/app/data:ro  # Mount test data as read-only
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Test Data Loader
+  kb7-test-loader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb7-test-loader
+    environment:
+      DATABASE_URL: postgresql://kb_test_user:kb_test_password@postgres-test:5432/clinical_governance_test
+      REDIS_URL: redis://redis-test:6379/8
+      ENVIRONMENT: test
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    networks:
+      - kb7-test-network
+    volumes:
+      - ./data:/app/data:ro
+      - ./test-data:/app/test-data:ro
+    command: /bin/sh -c "
+      echo 'Loading minimal test data...' &&
+      ./load-test-data.sh &&
+      echo 'Test data loading completed'"
+    profiles:
+      - data-loader
+
+# Named volumes for persistent test data
+volumes:
+  postgres_test_data:
+    driver: local
+  redis_test_data:
+    driver: local
+
+# Isolated network for testing
+networks:
+  kb7-test-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

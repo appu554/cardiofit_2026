@@ -1,0 +1,211 @@
+# P_HYPERALDOSTERONISM - HPI Node Definition
+# Bayesian differential for primary hyperaldosteronism screening in patients
+# with confirmed resistant hypertension.
+# Triggered by: RESISTANT_HTN_DETECTED event from KB-20.
+# Output: posterior probability of hyperaldosteronism → feeds KB-23 specialist referral.
+
+node_id: P_HYPERALDOSTERONISM
+version: "1.0.0"
+description: "Hyperaldosteronism differential in resistant hypertension patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ENDOCRINE_SOCIETY_PA_2016"
+
+# Trigger event — this node activates on resistant HTN detection
+trigger_event: "RESISTANT_HTN_DETECTED"
+
+# Differentials with per-stratum priors (F-05)
+# Primary hyperaldosteronism prevalence: 5-10% of HTN, 15-20% of resistant HTN.
+# Priors calibrated for DM+HTN+CKD strata in the resistant HTN population.
+differentials:
+  - id: PRIMARY_HYPERALDOSTERONISM
+    label: "Primary Hyperaldosteronism (Conn syndrome)"
+    population_reference: "Funder JW, J Clin Endocrinol Metab 2016; Monticone S, JAHA 2017"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.18
+      DM_HTN_CKD: 0.15
+
+  - id: SECONDARY_HYPERALDOSTERONISM
+    label: "Secondary Hyperaldosteronism (renal/renovascular)"
+    population_reference: "Rossi GP, Hypertension 2013"
+    priors:
+      DM_ONLY: 0.05
+      DM_HTN: 0.08
+      DM_HTN_CKD: 0.12
+
+  - id: DIURETIC_INDUCED_HYPOK
+    label: "Diuretic-Induced Hypokalaemia (mimics PA biochemically)"
+    population_reference: "NICE HTN 2023; Brown MJ, Endocrine Reviews 2020"
+    priors:
+      DM_ONLY: 0.25
+      DM_HTN: 0.30
+      DM_HTN_CKD: 0.28
+
+  - id: OTHER
+    label: "Other Cause (essential resistant HTN, Liddle, apparent mineralocorticoid excess)"
+    population_reference: "AHA Resistant HTN Statement 2018"
+    priors:
+      DM_ONLY: 0.60
+      DM_HTN: 0.44
+      DM_HTN_CKD: 0.45
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Has the patient had spontaneous hypokalaemia (K+ < 3.5 mEq/L) without diuretic use?"
+    text_hi: "क्या रोगी को बिना मूत्रवर्धक उपयोग के स्वतःस्फूर्त हाइपोकैलिमिया (K+ < 3.5 mEq/L) हुआ है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_SPONTANEOUS_HYPOK"
+        label_en: "Yes, spontaneous K+ < 3.5 documented"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 6.0
+          SECONDARY_HYPERALDOSTERONISM: 3.0
+          DIURETIC_INDUCED_HYPOK: 0.2
+          OTHER: 0.3
+      - value: "HYPOK_ON_DIURETIC"
+        label_en: "Hypokalaemia present but patient is on diuretic"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 2.0
+          SECONDARY_HYPERALDOSTERONISM: 1.5
+          DIURETIC_INDUCED_HYPOK: 3.5
+          OTHER: 0.5
+      - value: "NO"
+        label_en: "No hypokalaemia"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 0.6
+          SECONDARY_HYPERALDOSTERONISM: 0.8
+          DIURETIC_INDUCED_HYPOK: 0.4
+          OTHER: 1.5
+
+  - question_id: Q02
+    text_en: "Does the patient report muscle weakness or cramps?"
+    text_hi: "क्या रोगी को मांसपेशियों में कमजोरी या ऐंठन की शिकायत है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, muscle weakness or cramps"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 2.5
+          SECONDARY_HYPERALDOSTERONISM: 2.0
+          DIURETIC_INDUCED_HYPOK: 2.2
+          OTHER: 0.6
+      - value: "NO"
+        label_en: "No neuromuscular symptoms"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 0.7
+          SECONDARY_HYPERALDOSTERONISM: 0.8
+          DIURETIC_INDUCED_HYPOK: 0.7
+          OTHER: 1.2
+
+  - question_id: Q03
+    text_en: "Is the patient's hypertension resistant to 3 or more drugs including a diuretic?"
+    text_hi: "क्या रोगी का उच्च रक्तचाप 3 या अधिक दवाओं (जिसमें मूत्रवर्धक शामिल है) से नियंत्रित नहीं हो रहा?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_RESISTANT"
+        label_en: "Yes, resistant to 3+ drugs including diuretic"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 3.0
+          SECONDARY_HYPERALDOSTERONISM: 2.5
+          DIURETIC_INDUCED_HYPOK: 1.0
+          OTHER: 0.8
+      - value: "NO"
+        label_en: "No, controlled or fewer than 3 drugs"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 0.4
+          SECONDARY_HYPERALDOSTERONISM: 0.5
+          DIURETIC_INDUCED_HYPOK: 1.0
+          OTHER: 1.3
+
+  - question_id: Q04
+    text_en: "Is there a family history of early-onset hypertension (age < 40) or stroke at young age?"
+    text_hi: "क्या परिवार में कम उम्र (40 वर्ष से पहले) में उच्च रक्तचाप या स्ट्रोक का इतिहास है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, family history of early-onset HTN or stroke"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 2.8
+          SECONDARY_HYPERALDOSTERONISM: 1.5
+          DIURETIC_INDUCED_HYPOK: 0.8
+          OTHER: 0.9
+      - value: "NO"
+        label_en: "No relevant family history"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 0.8
+          SECONDARY_HYPERALDOSTERONISM: 0.9
+          DIURETIC_INDUCED_HYPOK: 1.0
+          OTHER: 1.1
+
+  - question_id: Q05
+    text_en: "Does the patient have metabolic alkalosis on recent lab results (HCO3 > 28 mEq/L)?"
+    text_hi: "क्या हाल की प्रयोगशाला रिपोर्ट में मेटाबॉलिक अल्कलोसिस (HCO3 > 28 mEq/L) है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, metabolic alkalosis present"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 4.0
+          SECONDARY_HYPERALDOSTERONISM: 2.5
+          DIURETIC_INDUCED_HYPOK: 2.0
+          OTHER: 0.3
+      - value: "NO"
+        label_en: "No metabolic alkalosis"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 0.6
+          SECONDARY_HYPERALDOSTERONISM: 0.7
+          DIURETIC_INDUCED_HYPOK: 0.7
+          OTHER: 1.3
+
+  - question_id: Q06
+    text_en: "Has an adrenal incidentaloma been found on any prior imaging?"
+    text_hi: "क्या किसी पूर्व इमेजिंग में एड्रीनल इंसीडेंटलोमा पाया गया है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, adrenal incidentaloma documented"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 5.5
+          SECONDARY_HYPERALDOSTERONISM: 0.8
+          DIURETIC_INDUCED_HYPOK: 0.5
+          OTHER: 0.4
+      - value: "NO"
+        label_en: "No adrenal mass on imaging"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 0.7
+          SECONDARY_HYPERALDOSTERONISM: 1.0
+          DIURETIC_INDUCED_HYPOK: 1.0
+          OTHER: 1.1
+      - value: "NO_IMAGING"
+        label_en: "No imaging performed"
+        likelihood_ratios:
+          PRIMARY_HYPERALDOSTERONISM: 1.0
+          SECONDARY_HYPERALDOSTERONISM: 1.0
+          DIURETIC_INDUCED_HYPOK: 1.0
+          OTHER: 1.0
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.60
+    action: "SPECIALIST_REFERRAL"
+    description: "Posterior > 0.60 for primary hyperaldosteronism → Refer to endocrinologist. Order aldosterone:renin ratio (ARR) with confirmatory testing."
+  - threshold: 0.40
+    action: "INVESTIGATE_ARR"
+    description: "Moderate probability. Order aldosterone:renin ratio (ARR) as screening. Ensure MRA/ACEi/ARB washout per protocol before test if feasible."
+  - threshold: 0.20
+    action: "CONTINUE_MONITORING"
+    description: "Low probability. Continue standard resistant HTN workup. Re-evaluate if hypokalaemia develops or BP worsens."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "SECONDARY_HYPERALDOSTERONISM posterior > 0.35"
+    trigger_node: "P_RENAL_ARTERY_STENOSIS"
+    rationale: "Secondary hyperaldosteronism with moderate posterior suggests renovascular aetiology; trigger renal artery stenosis differential."

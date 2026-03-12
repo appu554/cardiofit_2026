@@ -1,0 +1,574 @@
+# StatefulSets for Medication Service V2 Database Services
+# Production-ready PostgreSQL and Redis with persistent storage
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: cardiofit-medication-v2
+  labels:
+    app: postgres
+    component: database
+    version: v1
+    tier: data
+  annotations:
+    description: "PostgreSQL database for Medication Service V2"
+spec:
+  serviceName: postgres-service
+  replicas: 3  # Primary + 2 replicas for HA
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: postgres
+      component: database
+  template:
+    metadata:
+      labels:
+        app: postgres
+        component: database
+        version: v1
+        tier: data
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: postgres-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70  # postgres user in container
+        runAsGroup: 70
+        fsGroup: 70
+        supplementalGroups: [70]
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Pod Anti-Affinity for HA
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - postgres
+            topologyKey: kubernetes.io/hostname
+      
+      # Node selection for database nodes
+      nodeSelector:
+        workload-type: database
+        storage-type: ssd
+        compliance: hipaa
+      
+      tolerations:
+      - key: "database-workload"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      
+      initContainers:
+      # Initialize database with security settings
+      - name: postgres-init
+        image: postgres:15-alpine
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          
+          # Create necessary directories
+          mkdir -p /var/lib/postgresql/data/pgdata
+          chmod 700 /var/lib/postgresql/data/pgdata
+          
+          # Initialize database if not exists
+          if [ ! -s "/var/lib/postgresql/data/pgdata/PG_VERSION" ]; then
+            echo "Initializing PostgreSQL database..."
+            initdb -D /var/lib/postgresql/data/pgdata -U postgres --auth-host=scram-sha-256 --auth-local=peer
+          fi
+          
+          echo "PostgreSQL initialization complete"
+        securityContext:
+          runAsUser: 70
+          runAsGroup: 70
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: medication-service-secrets
+              key: DB_PASSWORD
+        - name: POSTGRES_USER
+          value: "medication_user"
+        - name: POSTGRES_DB
+          value: "medication_v2"
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - name: postgres
+          containerPort: 5432
+          protocol: TCP
+        env:
+        - name: POSTGRES_DB
+          value: "medication_v2"
+        - name: POSTGRES_USER
+          value: "medication_user"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: medication-service-secrets
+              key: DB_PASSWORD
+        - name: PGDATA
+          value: "/var/lib/postgresql/data/pgdata"
+        - name: POSTGRES_INITDB_ARGS
+          value: "--auth-host=scram-sha-256 --auth-local=peer"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        
+        securityContext:
+          runAsUser: 70
+          runAsGroup: 70
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+        
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "2Gi"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+            ephemeral-storage: "5Gi"
+        
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-config
+          mountPath: /etc/postgresql
+          readOnly: true
+        - name: postgres-ssl-certs
+          mountPath: /etc/ssl/certs
+          readOnly: true
+        - name: postgres-ssl-private
+          mountPath: /etc/ssl/private
+          readOnly: true
+        - name: postgres-tmp
+          mountPath: /tmp
+        
+        # Health checks
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p 5432
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p 5432
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        # Startup probe
+        startupProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - exec pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1 -p 5432
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 18  # Allow 3 minutes for startup
+        
+        # Use custom config
+        command:
+        - postgres
+        args:
+        - -c
+        - config_file=/etc/postgresql/postgresql.conf
+      
+      # PostgreSQL Exporter sidecar for monitoring
+      - name: postgres-exporter
+        image: prometheuscommunity/postgres-exporter:v0.12.0
+        ports:
+        - name: metrics
+          containerPort: 9187
+          protocol: TCP
+        env:
+        - name: DATA_SOURCE_NAME
+          value: "postgresql://medication_user:$(DB_PASSWORD)@localhost:5432/medication_v2?sslmode=require"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: medication-service-secrets
+              key: DB_PASSWORD
+        - name: PG_EXPORTER_EXCLUDE_DATABASES
+          value: "template0,template1"
+        - name: PG_EXPORTER_INCLUDE_DATABASES
+          value: "medication_v2"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: postgres-exporter-tmp
+          mountPath: /tmp
+      
+      volumes:
+      - name: postgres-config
+        configMap:
+          name: postgres-config
+          defaultMode: 0444
+      - name: postgres-ssl-certs
+        secret:
+          secretName: postgres-ssl-certs
+          items:
+          - key: server.crt
+            path: server.crt
+            mode: 0444
+          - key: ca.crt
+            path: ca.crt
+            mode: 0444
+      - name: postgres-ssl-private
+        secret:
+          secretName: postgres-ssl-certs
+          items:
+          - key: server.key
+            path: server.key
+            mode: 0400
+      - name: postgres-tmp
+        emptyDir:
+          sizeLimit: 100Mi
+      - name: postgres-exporter-tmp
+        emptyDir:
+          sizeLimit: 50Mi
+      
+      terminationGracePeriodSeconds: 120
+  
+  # Volume claim templates
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-storage
+      labels:
+        app: postgres
+        component: storage
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd-retain
+      resources:
+        requests:
+          storage: 100Gi
+
+---
+# Redis StatefulSet for caching
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: cardiofit-medication-v2
+  labels:
+    app: redis
+    component: cache
+    version: v1
+    tier: cache
+  annotations:
+    description: "Redis cache cluster for Medication Service V2"
+spec:
+  serviceName: redis-service
+  replicas: 3  # Redis cluster with 3 nodes
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: redis
+      component: cache
+  template:
+    metadata:
+      labels:
+        app: redis
+        component: cache
+        version: v1
+        tier: cache
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: redis-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999  # redis user in container
+        runAsGroup: 999
+        fsGroup: 999
+        supplementalGroups: [999]
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Pod Anti-Affinity
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - redis
+              topologyKey: kubernetes.io/hostname
+      
+      nodeSelector:
+        workload-type: cache
+        storage-type: ssd
+      
+      tolerations:
+      - key: "cache-workload"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - name: redis
+          containerPort: 6379
+          protocol: TCP
+        command:
+        - redis-server
+        args:
+        - /etc/redis/redis.conf
+        - --requirepass
+        - $(REDIS_PASSWORD)
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: medication-service-secrets
+              key: REDIS_PASSWORD
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        
+        securityContext:
+          runAsUser: 999
+          runAsGroup: 999
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "2Gi"
+        
+        volumeMounts:
+        - name: redis-storage
+          mountPath: /data
+        - name: redis-config
+          mountPath: /etc/redis
+          readOnly: true
+        - name: redis-tmp
+          mountPath: /tmp
+        
+        # Health checks
+        livenessProbe:
+          exec:
+            command:
+            - redis-cli
+            - --raw
+            - incr
+            - ping
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        startupProbe:
+          exec:
+            command:
+            - redis-cli
+            - ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12
+      
+      # Redis Exporter sidecar
+      - name: redis-exporter
+        image: oliver006/redis_exporter:v1.55.0-alpine
+        ports:
+        - name: metrics
+          containerPort: 9121
+          protocol: TCP
+        env:
+        - name: REDIS_ADDR
+          value: "redis://localhost:6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: medication-service-secrets
+              key: REDIS_PASSWORD
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "25m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+        volumeMounts:
+        - name: redis-exporter-tmp
+          mountPath: /tmp
+      
+      volumes:
+      - name: redis-config
+        configMap:
+          name: redis-config
+          defaultMode: 0444
+      - name: redis-tmp
+        emptyDir:
+          sizeLimit: 100Mi
+      - name: redis-exporter-tmp
+        emptyDir:
+          sizeLimit: 50Mi
+      
+      terminationGracePeriodSeconds: 30
+  
+  # Volume claim templates
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-storage
+      labels:
+        app: redis
+        component: storage
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd-retain
+      resources:
+        requests:
+          storage: 20Gi
+
+---
+# Service Accounts for StatefulSets
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-sa
+  namespace: cardiofit-medication-v2
+  labels:
+    app: postgres
+    component: serviceaccount
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis-sa
+  namespace: cardiofit-medication-v2
+  labels:
+    app: redis
+    component: serviceaccount
+
+---
+# Storage Class for high-performance SSD with retention policy
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd-retain
+  labels:
+    app: medication-service-v2
+    component: storage
+provisioner: kubernetes.io/aws-ebs  # Change to appropriate provisioner
+parameters:
+  type: gp3
+  fsType: ext4
+  encrypted: "true"
+  iops: "3000"
+  throughput: "125"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+mountOptions:
+- discard
+- noatime

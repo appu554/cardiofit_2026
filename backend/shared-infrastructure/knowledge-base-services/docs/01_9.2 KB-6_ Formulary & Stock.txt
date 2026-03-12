@@ -1,0 +1,519 @@
+﻿# Final Proposal — **KB-6: Formulary & Stock** (production-ready)
+
+
+Thanks — I reviewed your draft () and built a hardened, end-to-end design that matches the rigour we used for KB-1..KB-5. This document gives concrete schemas, APIs, ETL behaviors, caching strategy, governance, SLOs, test fixtures, runbooks and sample seed data so your engineers can implement KB-6 as a first-class microservice in the medication platform.
+
+
+I preserved and extended your core choices: Postgres for canonical transactional data, Redis for hot stock lookups, Elasticsearch for complex search, Unified ETL for inbound data ingestion, and strict KB-7 normalization. Additions include versioned dataset promotion, blue/green cutover, evidence envelopes, deterministic cache keys, predictive stock model contract, and operational runbooks.
+
+
+---
+
+
+# 1 — Purpose & scope (concise)
+
+
+**Purpose:** Single source of truth for coverage, cost, prior-auth/step-therapy rules, tiering, and real-time inventory for medication ranking and fulfillment decisions.
+
+
+**In scope:**
+
+
+* Plan-specific formulary (coverage, tier, copay, prior auth rules, step-therapy).
+* Inventory by location (on-hand, allocated, lot, expiry).
+* Fulfilment constraints (restricted distribution, specialty pharmacy).
+* Predictive stock forecasts (per location).
+* Formulary optimization view for ScoringEngine.
+
+
+**Out of scope:** clinical safety (KB-4), dosing math (KB-1), guideline evidence (KB-3). (As in your draft.)&#x20;
+
+
+---
+
+
+# 2 — High-level architecture & responsibilities
+
+
+* **ETL (Unified ETL):** ingest PBM feeds, IMS feeds, internal IMS streams; normalize codes with KB-7; validate; harmonize; produce `canonical_formulary` and `canonical_inventory` bundles.
+* **KB-6 Service:** exposes gRPC/REST APIs; caches hot data in Redis; indexes search into Elasticsearch; persists canonical data in Postgres.
+* **Consumers:** Medication Service (ScoringEngine), Order Fulfillment, Pharmacy UI, Analytics.
+* **Governance:** formulary admins maintain overrides, pricing adjustments, and promotion approvals (blue/green).
+
+
+---
+
+
+# 3 — Data model (core tables + DDL snippets)
+
+
+Primary DB: **Postgres 15+** (partitioning + JSONB). Use `provenance` JSONB on all records.
+
+
+### 3.1 Key tables (DDL excerpts)
+
+
+```sql
+-- canonical drug identifier is RxNorm (rxnorm:nnnn). Use KB-7 to normalize.
+CREATE TABLE formulary (
+  id BIGSERIAL PRIMARY KEY,
+  dataset_version TEXT NOT NULL,           -- e.g. "pbmA.2025-08.v1" or "kb6.harmonized.2025Q3"
+  plan_id TEXT NOT NULL,
+  drug_code TEXT NOT NULL,                 -- RxNorm / ATC canonical
+  coverage_status TEXT NOT NULL,           -- 'preferred','non_preferred','not_covered'
+  tier INTEGER,                            -- numeric tier if present
+  copay_cents INTEGER,                     -- integer cents or null
+  coinsurance_pct numeric(5,2),
+  prior_auth_required boolean DEFAULT false,
+  step_therapy jsonb,                      -- structured rules
+  restrictions jsonb,                      -- e.g., {specialty:true, distribution:'wholesalerX'}
+  effective_from date,
+  effective_to date,
+  provenance jsonb,                        -- {source_bundle, import_job, kb7_snapshot}
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX ix_formulary_plan_drug ON formulary(plan_id, drug_code);
+
+
+CREATE TABLE inventory (
+  id BIGSERIAL PRIMARY KEY,
+  dataset_version TEXT NOT NULL,
+  location_id TEXT NOT NULL,               -- site / pharmacy / ward
+  drug_code TEXT NOT NULL,
+  lot_number TEXT,
+  qty_on_hand integer NOT NULL DEFAULT 0,
+  qty_allocated integer NOT NULL DEFAULT 0,
+  qty_reserved integer NOT NULL DEFAULT 0,
+  expiry_date date,
+  last_updated timestamptz NOT NULL DEFAULT now(),
+  provenance jsonb,                         -- {source_system, timestamp, import_job}
+  UNIQUE(location_id, drug_code, lot_number)
+);
+CREATE INDEX ix_inventory_loc_drug ON inventory(location_id, drug_code);
+
+
+-- materialized view for ScoringEngine (fast single-row read)
+CREATE MATERIALIZED VIEW mv_formulary_best AS
+SELECT plan_id, drug_code,
+       min(copay_cents) as best_copay,
+       bool_or(prior_auth_required) as any_prior_auth,
+       array_agg(distinct coverage_status) as statuses
+FROM formulary
+GROUP BY plan_id, drug_code;
+CREATE INDEX ix_mv_formulary_best ON mv_formulary_best(plan_id, drug_code);
+
+
+-- dispensing history for predictive models (partitioned by month)
+CREATE TABLE dispensing_history (
+  id BIGSERIAL PRIMARY KEY,
+  location_id TEXT,
+  drug_code TEXT,
+  dispensed_qty integer,
+  dispensed_at timestamptz,
+  patient_age_band TEXT,
+  payer_id TEXT,
+  deidentified_context jsonb
+) PARTITION BY RANGE (dispensed_at);
+```
+
+
+**Notes:** keep `dataset_version` on each row so you can support deterministic rollbacks and audits (blue/green dataset switching).
+
+
+---
+
+
+# 4 — Normalization & ETL contract
+
+
+* All inbound PBM and inventory codes **must** be normalized to canonical codes using **KB-7** during Normalize stage. ETL must fail the bundle if KB-7 returns unmapped top-frequency items beyond a threshold.
+* ETL produces a **Canonical Formulary Bundle (CBF)** and **Canonical Inventory Bundle (CIB)** with a manifest: `{bundle_id, sha256, source_id, kb7_snapshot, record_count, dataset_version}`.
+* ETL runs include semantic validations (e.g., copay >= 0, tier in allowed range, prior\_auth rules parse) and produces `validation_report.json`. Failures result in Quarantine.
+
+
+---
+
+
+# 5 — APIs: contracts & example protobufs
+
+
+Provide both **low-latency** gRPC for hot lookups and **REST/JSON** for admin & bulk queries. Also expose Elasticsearch for search.
+
+
+### 5.1 gRPC (hot path) — `kb6.proto` (excerpt)
+
+
+```proto
+syntax = "proto3";
+package kb6.v1;
+
+
+message PriceRequest {
+  string transaction_id = 1;
+  string plan_id = 2;
+  string drug_code = 3;       // canonical RxNorm
+  string location_id = 4;     // optional: for stock-aware scoring
+  repeated string preferences = 5; // e.g., ["preferred_on_formulary"]
+}
+
+
+message PriceResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;    // dataset used
+  bool covered = 3;
+  string coverage_status = 4;    // 'preferred','non_preferred','not_covered'
+  int32 tier = 5;
+  int64 copay_cents = 6;
+  double coinsurance_pct = 7;
+  bool prior_auth_required = 8;
+  repeated string restrictions = 9;
+  string provenance_json = 10;   // summarised
+}
+
+
+message StockRequest {
+  string transaction_id = 1;
+  string location_id = 2;
+  string drug_code = 3;
+  bool include_lots = 4;
+}
+
+
+message StockResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;
+  int32 qty_on_hand = 3;
+  int32 qty_allocated = 4;
+  int32 qty_available = 5;   // on_hand - allocated - reserved
+  repeated Lot lots = 6;
+  string provenance_json = 7;
+}
+
+
+message Lot {
+  string lot_number = 1;
+  int32 qty_on_hand = 2;
+  date expiry_date = 3;
+}
+
+
+service KB6 {
+  rpc GetFormularyStatus(PriceRequest) returns (PriceResponse);
+  rpc GetStock(StockRequest) returns (StockResponse);
+}
+```
+
+
+SLO target: p95 < 40ms for Redis cache hits; p95 < 150ms for SQL fallback.
+
+
+---
+
+
+# 6 — Caching & read patterns
+
+
+**Redis hot cache** keys (deterministic, version-qualified):
+
+
+* `kb6:formulary:{dataset_version}:{plan_id}:{drug_code}` → serialized PriceResponse
+* `kb6:stock:{dataset_version}:{location_id}:{drug_code}` → StockResponse
+
+
+**Cache behavior:**
+
+
+* When dataset cutover occurs, use **namespaced version** swap to immediately invalidate old keys (no mass delete). E.g., `current_dataset_version` pointer in config + cache namespace derived from it.
+* Short TTL for dynamic inventory keys (e.g., 5–30s depending on update cadence); longer TTL for formulary (15 minutes) as you proposed. But prefer versioned keys with long TTLs.
+
+
+**Elasticsearch**: index canonical formulary records for complex search (therapeutic alternatives), mapping includes analyzers and exact filters on `coverage_status`, `tier`, `restrictions`.
+
+
+---
+
+
+# 7 — Formulary evaluation & scoring contract (ScoringEngine)
+
+
+ScoringEngine calls:
+
+
+1. `GetFormularyStatus` → returns coverage, copay, prior\_auth flags.
+2. `GetStock` (optionally including `include_lots`) → returns availability.
+3. ScoringEngine applies weighting (clinical score + cost/availability) and ranks proposals.
+
+
+**Important:** KB-6 must supply **evidence envelope** (dataset\_version + provenance) so ScoringEngine can log reproducible scoring decisions.
+
+
+---
+
+
+# 8 — Predictive stock service (contract & model)
+
+
+KB-6 hosts forecast outputs (not necessarily trains models; models can live in Analytics).
+
+
+**Interface:** daily jobs write `stock_predictions` table:
+
+
+```sql
+CREATE TABLE stock_predictions (
+  id bigserial primary key,
+  dataset_version text,
+  location_id text,
+  drug_code text,
+  predicted_date date,
+  predicted_qty integer,
+  model_version text,
+  confidence numeric(5,3),
+  provenance jsonb
+);
+CREATE INDEX ON stock_predictions(location_id, drug_code, predicted_date);
+```
+
+
+**API:** `GET /api/v1/stock/predict?location_id=&drug_code=&date=` returns predicted qty and confidence. Used by replenishment and ScoringEngine for “likely availability”.
+
+
+**Model contract:** model outputs must include `model_version` and `provenance` and be persisted as immutable rows.
+
+
+---
+
+
+# 9 — Versioning, harmonization & promotion (blue/green)
+
+
+* ETL produces vendor dataset `dataset_version` (e.g., `pbmA.2025-08.v1`). Harmonizer produces `kb6.harmonized.2025Q3.v1`.
+
+
+* **Promotion:** after QA & governance approval, KB-6 promotes harmonized dataset to `current_dataset_version` via atomic pointer change and publishes `kb6.dataset.promoted` event on Kafka with `dataset_version`, `bundle_sha256`, `effective_at`. Consumers should load new dataset pointer and warm caches.
+
+
+* **Rollback:** previous dataset is retained; pointer swap restores prior dataset instantly.
+
+
+---
+
+
+# 10 — Governance & approvals
+
+
+* **Clinical/business owners**: formulary committee, procurement team approve changes.
+
+
+* Changeset package includes: diff (old vs new), impact report (top 500 affected drugs/plans), cost delta estimate, and compliance signoff. This is automatically generated by ETL prior to promotion.
+
+
+* **Audit:** every promoted dataset must include `signed_manifest`: `{promoted_by, promoted_at, signature, approval_ticket}` stored in Postgres `governance` table.
+
+
+---
+
+
+# 11 — Testing & QA
+
+
+**Unit & contract tests:**
+
+
+* gRPC contract tests (positive/negative) with mock Redis/SQL.
+* ETL schema validation tests (JSON Schema).
+* KB-7 mapping tests: ensure all codes mapped.
+
+
+**Integration tests / Golden suites:**
+
+
+* For top 200 drugs, seeded PBM feed → expected coverage & copay results.
+* Inventory reconciliation tests: ingest stream of allocations/dispenses and verify Redis values.
+
+
+**Performance tests:**
+
+
+* 1k RPS simulation with p95 < 120ms; Redis hit ratio > 95% for hot keys.
+
+
+**Data quality:**
+
+
+* daily parity checks: `count(raw) == count(parsed)`; cost anomalies detection (>10x change flagged).
+
+
+---
+
+
+# 12 — Monitoring & alerting
+
+
+**Key metrics:**
+
+
+* Service: request\_count, latency p50/p95/p99, error\_rate.
+* Cache: hit\_ratio, invalidation\_count.
+* Data: dataset\_age, last\_promoted\_dataset, ETL\_failures, quarantine\_count.
+* Business: stock\_out\_rate, prior\_auth\_rate, top\_cost\_delta.
+
+
+**Alerts:**
+
+
+* ETL failure (high priority), dataset older than SLA (e.g., >36h), Redis down, spike in stock\_out\_rate > threshold.
+
+
+**Dashboards:** API metrics, ETL pipeline health, top formulary changes, inventory heatmap by location.
+
+
+---
+
+
+# 13 — Security, privacy & compliance
+
+
+* **mTLS** between services. RBAC policy: only ScoringEngine and OrderFulfillment have read access (others by role).
+* **Commercial data protection:** encrypt formulary vendor data at rest; restrict export.
+* **Dispensing\_history**: de-identified; re-identification risk assessment; strict query controls and logging.
+* **Supply chain:** validate PBM feed checksums; manifest signatures; SLSA provenance for code artifacts.
+
+
+---
+
+
+# 14 — Failure modes & runbooks
+
+
+**Mode: ETL failure** → runbook:
+
+
+1. Check last ETL run logs; restart normalization job; notify data owner.
+2. If failure persists > 30 min, alert on-call and promote previous dataset if older dataset missing.
+
+
+**Mode: Redis cache corruption**:
+
+
+1. Switch to SQL fallback; rehydrate cache using `current_dataset_version`.
+2. Investigate invalidation pattern.
+
+
+**Mode: stock divergence (cache vs. IMS)**:
+
+
+1. Mark location as “graceful\_degrade”; block auto fulfillment; alert pharmacy ops.
+
+
+---
+
+
+# 15 — CI/CD & Data pipelines
+
+
+**Code CI:** lint → unit tests → integration tests → security scan → build → sign image.
+**Data CI:** on PR to ETL rules, run sample ingest with golden fixtures; run delta impact report; require governance approval for merges to `main`. Automate dataset promotion pipeline: `PR -> staging ingest -> QA -> governance signoff -> promote`.
+
+
+---
+
+
+# 16 — Seed data (minimal) — YAML (to exercise flows)
+
+
+```yaml
+dataset_version: "kb6.harmonized.2025Q3.v1"
+formulary:
+  - plan_id: "Plan-A-Commercial"
+    drug_code: "rxnorm:8610"    # lisinopril
+    coverage_status: "preferred"
+    tier: 1
+    copay_cents: 500
+    prior_auth_required: false
+    restrictions: []
+    effective_from: "2025-08-01"
+    provenance: {source: "pbmA", bundle:"pbmA.202508", kb7_snap:"kb7:202508"}
+  - plan_id: "Plan-A-Commercial"
+    drug_code: "rxnorm:36567"   # spironolactone
+    coverage_status: "non_preferred"
+    tier: 3
+    copay_cents: 3000
+    prior_auth_required: true
+inventory:
+  - location_id: "Hospital-1-Pharmacy"
+    drug_code: "rxnorm:8610"
+    lot_number: "L1001"
+    qty_on_hand: 120
+    qty_allocated: 12
+    expiry_date: "2026-01-10"
+    provenance: {source: "ims_real_time", timestamp: "2025-09-01T08:00:00Z"}
+  - location_id: "Retail-Pharm-1"
+    drug_code: "rxnorm:36567"
+    lot_number: "L3002"
+    qty_on_hand: 3
+    qty_allocated: 0
+    expiry_date: "2025-12-01"
+stock_predictions:
+  - location_id: "Retail-Pharm-1"
+    drug_code: "rxnorm:36567"
+    predicted_date: "2025-09-08"
+    predicted_qty: 0
+    model_version: "forecast-v1"
+    confidence: 0.72
+```
+
+
+---
+
+
+# 17 — Example workflows (two key flows)
+
+
+### A. ScoringEngine ranking (hot path)
+
+
+1. Medication Service creates `proposal` and includes `patient.plan_id` and `preferred_location` (if any).
+2. ScoringEngine calls KB-6 `GetFormularyStatus` for each drug + plan (Redis hit expected).
+3. ScoringEngine calls KB-6 `GetStock` for the chosen location.
+4. ScoringEngine computes score and returns ranked proposals with KB-6 `dataset_version` + `provenance`. Log decision hash.
+
+
+### B. Order fulfillment decision
+
+
+1. Order service calls `GetStock` with `include_lots=true`.
+2. If qty\_available >= required, allocation is done (qty\_allocated increment via transaction), and inventory record updated through ETL/stream.
+3. If insufficient, fallback: check `stock_predictions` for expected arrival; or call alternative location endpoints.
+
+
+---
+
+
+# 18 — Operational checklist for go-live
+
+
+1. Implement ETL for one PBM + internal IMS; validate with seed data.
+2. Deploy KB-7 normalization and verify code mapping parity.
+3. Deploy KB-6 service + Redis + Elasticsearch (staging).
+4. Run contract tests with ScoringEngine / Medication Service.
+5. Run shadow traffic for 2 weeks; compare ranking deltas and impact.
+6. Perform governance approval for dataset promotion; promote to `current_dataset_version`.
+7. Monitor KPIs for 30 days and adjust caches and indexes.
+
+
+---
+
+
+# 19 — Next deliverables I can produce (pick one or more)
+
+
+* Full Postgres DDL file (`/kb6/db/ddl.sql`) with migrations.
+* `kb6.proto` gRPC file + example server stub (Go/Rust) and client integration tests.
+* Airflow DAG template for PBM ETL → normalize → validate → harmonize → promote.
+* Redis key management & cache rehydration scripts, blue/green promotion tooling.
+* Elasticsearch mapping for formulary search and example queries.
+* CI pipeline YAML (GitHub Actions) for KB-6 code + data contract tests.
+
+
+Tell me which artifact you want first and I’ll produce repo-ready files with unit tests and sample fixtures.

@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  observation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: observation-service
+    restart: unless-stopped
+    ports:
+      - "8007:8007"
+    environment:
+      - ENVIRONMENT=development
+      - MONGODB_URL=mongodb://mongo:27017/observation-service
+      - MONGODB_DB=observation-service
+      - USE_GOOGLE_HEALTHCARE_API=false
+    depends_on:
+      - mongo
+    networks:
+      - observation-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  mongo:
+    image: mongo:6.0
+    container_name: mongo-observation
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_DATABASE=observation-service
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - observation-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  observation-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
+    driver: local

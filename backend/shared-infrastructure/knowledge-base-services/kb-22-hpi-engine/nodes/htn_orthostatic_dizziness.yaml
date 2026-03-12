@@ -1,0 +1,200 @@
+# P08 HTN Orthostatic Dizziness - HPI Node Definition
+# Bayesian differential for dizziness/lightheadedness on standing in hypertensive patients.
+# Triggered by: patient self-report of dizziness OR clinician symptom query.
+# Output: posterior probability of orthostatic hypotension -> feeds KB-23 decision cards.
+
+node_id: P08_HTN_ORTHOSTATIC
+version: "1.0"
+description: "Orthostatic dizziness differential in hypertensive cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Safety classification
+safety_criticality: MODERATE
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_HTN_2023_ORTHOSTATIC; ADA_STANDARDS_2024_AUTONOMIC"
+
+# Differentials with per-stratum priors (F-05)
+# Orthostatic hypotension prevalence: 6-30% in treated hypertensives, higher with diabetes.
+differentials:
+  - id: ORTHOSTATIC_HYPOTENSION
+    label: "Orthostatic Hypotension (Drug-Induced or Autonomic)"
+    population_reference: "Ricci F, J Am Heart Assoc 2015; ESC HTN 2023"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.40
+      DM_HTN_CKD: 0.45
+
+  - id: HYPOGLYCAEMIA
+    label: "Hypoglycaemia"
+    population_reference: "ADA Standards of Care 2024; Cryer PE, JCEM 2009"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.20
+
+  - id: DEHYDRATION_SGLT2I
+    label: "Dehydration / SGLT2 Inhibitor Volume Depletion"
+    population_reference: "KDIGO DM-CKD 2024; Zinman B, NEJM 2015"
+    priors:
+      DM_ONLY: 0.20
+      DM_HTN: 0.20
+      DM_HTN_CKD: 0.20
+
+  - id: MEDICATION_TIMING
+    label: "Medication Timing Effect (Peak Dose Hypotension)"
+    population_reference: "NICE HTN NG136 2022; Pickering TG, Hypertension 2005"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.15
+      DM_HTN_CKD: 0.15
+
+# Enrichment fields pulled from KB-20 patient profile
+enrichment_fields:
+  - orthostatic_drop
+  - current_antihypertensives
+  - sglt2i_active
+  - insulin_active
+  - last_glucose
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Does the dizziness or lightheadedness happen specifically when you stand up from sitting or lying down?"
+    text_hi: "क्या चक्कर आना या सिर में हल्कापन विशेष रूप से बैठने या लेटने के बाद खड़े होने पर होता है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_ON_STANDING"
+        label_en: "Yes, specifically on standing up"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 4.0
+          HYPOGLYCAEMIA: 0.6
+          DEHYDRATION_SGLT2I: 2.0
+          MEDICATION_TIMING: 1.5
+      - value: "NO_ANY_POSITION"
+        label_en: "No, happens in any position"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 0.3
+          HYPOGLYCAEMIA: 2.5
+          DEHYDRATION_SGLT2I: 0.8
+          MEDICATION_TIMING: 0.5
+
+  - question_id: Q02
+    text_en: "What time of day does the dizziness typically occur?"
+    text_hi: "चक्कर आमतौर पर दिन के किस समय आता है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "MORNING"
+        label_en: "Morning, especially first getting up"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 2.0
+          HYPOGLYCAEMIA: 1.5
+          DEHYDRATION_SGLT2I: 1.2
+          MEDICATION_TIMING: 2.5
+      - value: "AFTER_MEALS"
+        label_en: "After meals"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 1.5
+          HYPOGLYCAEMIA: 0.5
+          DEHYDRATION_SGLT2I: 0.8
+          MEDICATION_TIMING: 1.0
+      - value: "BEFORE_MEALS"
+        label_en: "Before meals / long gaps between meals"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 0.5
+          HYPOGLYCAEMIA: 3.5
+          DEHYDRATION_SGLT2I: 0.8
+          MEDICATION_TIMING: 0.5
+      - value: "NO_PATTERN"
+        label_en: "No specific time pattern"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 0.8
+          HYPOGLYCAEMIA: 0.8
+          DEHYDRATION_SGLT2I: 1.2
+          MEDICATION_TIMING: 0.8
+
+  - question_id: Q03
+    text_en: "Has there been a recent change in your blood pressure medication dose or a new medication started?"
+    text_hi: "क्या हाल ही में आपकी रक्तचाप की दवा की खुराक बदली गई है या कोई नई दवा शुरू हुई है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_DOSE_CHANGE"
+        label_en: "Yes, dose increase or new antihypertensive"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 3.5
+          HYPOGLYCAEMIA: 0.5
+          DEHYDRATION_SGLT2I: 0.8
+          MEDICATION_TIMING: 4.0
+      - value: "NO_CHANGE"
+        label_en: "No recent medication change"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 0.6
+          HYPOGLYCAEMIA: 1.2
+          DEHYDRATION_SGLT2I: 1.2
+          MEDICATION_TIMING: 0.3
+
+  - question_id: Q04
+    text_en: "How much fluid (water, tea, etc.) do you drink per day? Do you feel your urine output has increased?"
+    text_hi: "आप प्रतिदिन कितना तरल (पानी, चाय आदि) पीते हैं? क्या आपको लगता है कि आपका पेशाब बढ़ गया है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "LOW_FLUID_HIGH_URINE"
+        label_en: "Low fluid intake and/or increased urine output"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 1.5
+          HYPOGLYCAEMIA: 0.8
+          DEHYDRATION_SGLT2I: 4.0
+          MEDICATION_TIMING: 0.8
+      - value: "ADEQUATE_FLUID"
+        label_en: "Adequate fluid intake, normal urine"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 0.8
+          HYPOGLYCAEMIA: 1.0
+          DEHYDRATION_SGLT2I: 0.3
+          MEDICATION_TIMING: 1.0
+
+  - question_id: Q05
+    text_en: "Are you taking an SGLT2 inhibitor (e.g., dapagliflozin, empagliflozin, canagliflozin)?"
+    text_hi: "क्या आप SGLT2 इन्हिबिटर ले रहे हैं (जैसे डैपाग्लिफ्लोज़िन, एम्पाग्लिफ्लोज़िन, कैनाग्लिफ्लोज़िन)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_SGLT2I"
+        label_en: "Yes, currently on SGLT2 inhibitor"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 1.2
+          HYPOGLYCAEMIA: 0.8
+          DEHYDRATION_SGLT2I: 4.5
+          MEDICATION_TIMING: 0.8
+      - value: "NO_SGLT2I"
+        label_en: "No SGLT2 inhibitor"
+        likelihood_ratios:
+          ORTHOSTATIC_HYPOTENSION: 1.0
+          HYPOGLYCAEMIA: 1.0
+          DEHYDRATION_SGLT2I: 0.3
+          MEDICATION_TIMING: 1.0
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_ORTHOSTATIC_MANAGEMENT_CARD"
+    description: "Posterior > 0.70 for orthostatic hypotension -> generate decision card for antihypertensive dose adjustment. Recommend lying-standing BP protocol via KB-23."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Perform lying-standing BP measurement. Check capillary glucose. Review medication timing and doses."
+  - threshold: 0.30
+    action: "INVESTIGATE_ALTERNATIVES"
+    description: "Low orthostatic probability. Check glucose (hypoglycaemia), hydration status, and review SGLT2i volume effects."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "HYPOGLYCAEMIA posterior > 0.40"
+    trigger_node: "BB_HYPO_SYMPTOM_MODIFIER"
+    rationale: "If beta-blocker active, hypoglycaemia symptom presentation is modified. Apply BB modifier to adjust question weights."
+  - condition: "ORTHOSTATIC_HYPOTENSION posterior > 0.50"
+    trigger_node: "P05_HTN_HEADACHE"
+    rationale: "Orthostatic hypotension may co-present with positional headache; assess for concurrent HTN headache symptoms."

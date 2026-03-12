@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: module8-clickhouse
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"  # Native protocol
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./schema/tables.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      CLICKHOUSE_DB: module8_analytics
+      CLICKHOUSE_USER: module8_user
+      CLICKHOUSE_PASSWORD: module8_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clickhouse-projector:
+    build:
+      context: ../
+      dockerfile: module8-clickhouse-projector/Dockerfile
+    container_name: module8-clickhouse-projector
+    network_mode: host
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "localhost:9092"
+      CLICKHOUSE_HOST: "localhost"
+      CLICKHOUSE_PORT: "9000"
+      CLICKHOUSE_DATABASE: "module8_analytics"
+      CLICKHOUSE_USER: "module8_user"
+      CLICKHOUSE_PASSWORD: "module8_password"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  clickhouse_data:
+    driver: local

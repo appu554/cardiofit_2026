@@ -1,0 +1,133 @@
+# Prometheus Configuration for KB Services Enhanced Architecture
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+rule_files:
+  - "alert_rules.yml"
+
+# A scrape configuration containing exactly one endpoint to scrape:
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # KB API Gateway metrics
+  - job_name: 'kb-api-gateway'
+    static_configs:
+      - targets: ['kb-api-gateway:4000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # KB Drug Rules Service metrics
+  - job_name: 'kb-drug-rules'
+    static_configs:
+      - targets: ['kb-drug-rules-enhanced:8081']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # KB Clinical Pathways Service metrics
+  - job_name: 'kb-clinical-pathways'
+    static_configs:
+      - targets: ['kb-clinical-pathways:8084']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # PostgreSQL metrics (using postgres_exporter)
+  - job_name: 'kb-postgres'
+    static_configs:
+      - targets: ['kb-postgres-enhanced:5432']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'pg_stat_database'
+        - 'pg_stat_user_tables'
+        - 'pg_stat_bgwriter'
+        - 'pg_locks'
+        - 'pg_stat_replication'
+
+  # Redis metrics (using redis_exporter)
+  - job_name: 'kb-redis'
+    static_configs:
+      - targets: ['kb-redis-enhanced:6379']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # ClickHouse metrics
+  - job_name: 'kb-clickhouse'
+    static_configs:
+      - targets: ['kb-clickhouse:9363']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Kafka metrics (using kafka_exporter)
+  - job_name: 'kb-kafka'
+    static_configs:
+      - targets: ['kb-kafka:9308']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # MLFlow metrics
+  - job_name: 'kb-mlflow'
+    static_configs:
+      - targets: ['kb-mlflow:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+    scrape_timeout: 15s
+
+  # Elasticsearch metrics
+  - job_name: 'kb-elasticsearch'
+    static_configs:
+      - targets: ['kb-elasticsearch:9114']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Node Exporter for system metrics (if available)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Custom KB Health Checks
+  - job_name: 'kb-health-checks'
+    static_configs:
+      - targets: 
+          - 'kb-api-gateway:4000'
+          - 'kb-drug-rules-enhanced:8081'
+          - 'kb-clinical-pathways:8084'
+    metrics_path: '/health'
+    scrape_interval: 30s
+    scrape_timeout: 5s
+    params:
+      format: ['prometheus']
+
+# Remote write configuration for long-term storage (optional)
+# remote_write:
+#   - url: "http://remote-storage:9201/write"
+#     queue_config:
+#       max_samples_per_send: 10000
+#       max_shards: 200
+#       capacity: 20000
+
+# Remote read configuration (optional)
+# remote_read:
+#   - url: "http://remote-storage:9201/read"

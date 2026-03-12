@@ -1,0 +1,470 @@
+# KB-5 Drug Interactions Service - Production Configuration
+# Enhanced configuration for production-grade clinical safety platform
+
+service:
+  name: "kb-5-drug-interactions"
+  version: "2.0.0"
+  environment: "production"
+  
+server:
+  # Dual protocol support - HTTP REST + gRPC
+  http_port: "8085"
+  grpc_port: "8086"
+  host: "0.0.0.0"
+  read_timeout: "30s"
+  write_timeout: "30s"
+  idle_timeout: "60s"
+  shutdown_timeout: "30s"
+
+database:
+  # PostgreSQL configuration with connection pooling
+  host: "${DB_HOST}"
+  port: 5432
+  database: "${KB5_DB_NAME}"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+  ssl_mode: "require"
+  
+  # Connection pool settings for high performance
+  max_open_connections: 50
+  max_idle_connections: 25
+  connection_max_lifetime: "1h"
+  connection_max_idle_time: "15m"
+  
+  # Performance optimizations
+  prepared_statements: true
+  query_timeout: "10s"
+  migration_timeout: "5m"
+
+cache:
+  # Hot/Warm Redis caching strategy
+  redis:
+    # Hot cache - primary Redis instance
+    hot_cache:
+      address: "${REDIS_HOT_HOST}:${REDIS_HOT_PORT}"
+      password: "${REDIS_HOT_PASSWORD}"
+      database: 0
+      pool_size: 20
+      min_idle_connections: 5
+      max_retries: 3
+      retry_delay: "100ms"
+      dial_timeout: "5s"
+      read_timeout: "3s"
+      write_timeout: "3s"
+      pool_timeout: "4s"
+      
+    # Warm cache - secondary Redis instance or cluster
+    warm_cache:
+      address: "${REDIS_WARM_HOST}:${REDIS_WARM_PORT}"
+      password: "${REDIS_WARM_PASSWORD}"
+      database: 1
+      pool_size: 10
+      min_idle_connections: 2
+      max_retries: 2
+      retry_delay: "200ms"
+      
+  # Cache configuration
+  hot_cache_max_entries: 50000
+  cache_interaction_results: true
+  interaction_cache_ttl: "1h"
+  matrix_cache_ttl: "24h"
+  
+  # TTL by severity (higher severity = longer cache time)
+  severity_ttl:
+    contraindicated: "24h"
+    major: "12h"
+    moderate: "6h"
+    minor: "2h"
+    unknown: "1h"
+
+interaction_matrix:
+  # High-performance interaction matrix configuration
+  enable_hot_cache: true
+  hot_cache_size_mb: 1000
+  refresh_interval: "1h"
+  parallel_loading: true
+  load_timeout: "30s"
+  
+  # Dataset versioning
+  current_dataset_version: "${DATASET_VERSION}"
+  enable_version_switching: true
+  atomic_updates: true
+  double_buffered_loading: true
+
+performance:
+  # SLA targets from specifications (p95 < 80ms)
+  target_latency:
+    p50: "5ms"
+    p95: "80ms"
+    p99: "200ms"
+    timeout: "30s"
+    
+  # Throughput targets
+  target_rps: 50000
+  max_concurrent_connections: 1000
+  
+  # Request limits
+  max_interactions_per_request: 20
+  max_batch_size: 100
+  max_batch_concurrency: 10
+  
+  # Circuit breaker configuration
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 0.5
+    recovery_timeout: "30s"
+    max_requests: 100
+    interval: "10s"
+
+clinical_features:
+  # Enhanced clinical features configuration
+  enable_synonym_resolution: true
+  enable_pgx_interactions: true
+  enable_class_interactions: true
+  enable_food_drug_interactions: true
+  enable_institutional_overrides: true
+  enable_interaction_analytics: true
+  
+  # Patient context support
+  patient_context:
+    enable_pgx_screening: true
+    enable_age_band_filtering: true
+    enable_hepatic_renal_screening: true
+    enable_comorbidity_screening: true
+    
+  # Evidence requirements
+  evidence_level:
+    minimum_level: "C"
+    require_confidence_score: true
+    minimum_confidence: 0.6
+    
+  # Severity filtering
+  default_severity_filter: ["contraindicated", "major", "moderate"]
+  enable_severity_overrides: true
+
+integrations:
+  # KB-7 Terminology Service integration
+  kb7_terminology:
+    enabled: true
+    endpoint: "${KB7_ENDPOINT}"
+    timeout: "5s"
+    max_retries: 3
+    circuit_breaker: true
+    
+  # Evidence Envelope integration for audit trails
+  evidence_envelope:
+    enabled: true
+    endpoint: "${EVIDENCE_ENVELOPE_ENDPOINT}"
+    timeout: "3s"
+    async_logging: true
+    batch_size: 100
+    
+  # Safety Gateway integration
+  safety_gateway:
+    enabled: true
+    callback_endpoint: "${SAFETY_GATEWAY_CALLBACK}"
+    mtls_cert: "${MTLS_CERT_PATH}"
+    mtls_key: "${MTLS_KEY_PATH}"
+
+security:
+  # mTLS configuration for service-to-service communication
+  mtls:
+    enabled: true
+    cert_file: "${MTLS_CERT_PATH}"
+    key_file: "${MTLS_KEY_PATH}"
+    ca_file: "${MTLS_CA_PATH}"
+    verify_client_cert: true
+    
+  # API authentication
+  api_auth:
+    enabled: true
+    require_api_key: true
+    allowed_services:
+      - "safety-gateway"
+      - "medication-service"
+      - "flow2-orchestrator"
+    
+  # Rate limiting
+  rate_limiting:
+    enabled: true
+    requests_per_second: 1000
+    burst_size: 2000
+    per_ip_limit: 100
+    
+  # Security headers
+  security_headers:
+    enabled: true
+    content_type_nosniff: true
+    frame_deny: true
+    content_security_policy: "default-src 'self'"
+
+monitoring:
+  # Comprehensive observability configuration
+  metrics:
+    enabled: true
+    endpoint: "/metrics"
+    namespace: "kb5_drug_interactions"
+    
+    # Custom metrics for clinical decision support
+    clinical_metrics:
+      - "interactions_requests_total"
+      - "interactions_found_by_severity"
+      - "pgx_interactions_detected"
+      - "class_interactions_detected"
+      - "contraindicated_pairs_found"
+      - "clinical_override_applied"
+      - "evidence_envelope_events"
+      
+    # Performance metrics
+    performance_metrics:
+      - "request_duration_seconds"
+      - "cache_hit_rate"
+      - "matrix_lookup_time"
+      - "database_query_duration"
+      - "batch_processing_rate"
+      
+  # Logging configuration
+  logging:
+    level: "info"
+    format: "json"
+    output: "stdout"
+    
+    # Structured logging for clinical events
+    clinical_logging:
+      enabled: true
+      log_interactions: true
+      log_pgx_events: true
+      log_overrides: true
+      scrub_pii: true
+      
+    # Audit logging
+    audit_logging:
+      enabled: true
+      destination: "${AUDIT_LOG_ENDPOINT}"
+      include_request_body: false
+      include_response_body: false
+      
+  # Distributed tracing
+  tracing:
+    enabled: true
+    service_name: "kb5-drug-interactions"
+    sampler_type: "probabilistic"
+    sampler_param: 0.1
+    jaeger_endpoint: "${JAEGER_ENDPOINT}"
+    
+  # Health checks
+  health_checks:
+    enabled: true
+    endpoint: "/health"
+    detailed_endpoint: "/health/detailed"
+    check_interval: "30s"
+    
+    checks:
+      - name: "database"
+        timeout: "5s"
+        critical: true
+      - name: "cache_hot"
+        timeout: "2s"
+        critical: true
+      - name: "cache_warm"
+        timeout: "3s"
+        critical: false
+      - name: "interaction_matrix"
+        timeout: "1s"
+        critical: true
+
+alerting:
+  # Clinical and operational alerting
+  enabled: true
+  
+  # Critical alerts
+  critical_alerts:
+    - name: "service_down"
+      condition: "up == 0"
+      duration: "1m"
+      severity: "critical"
+      
+    - name: "high_error_rate"
+      condition: "rate(http_requests_total{status=~'5..'}[5m]) > 0.01"
+      duration: "5m"
+      severity: "critical"
+      
+    - name: "contraindicated_detection_failure"
+      condition: "rate(interactions_found_total{severity='contraindicated'}[1h]) == 0"
+      duration: "10m"
+      severity: "critical"
+      
+    - name: "database_connectivity"
+      condition: "database_up == 0"
+      duration: "2m"
+      severity: "critical"
+      
+  # Warning alerts  
+  warning_alerts:
+    - name: "high_latency"
+      condition: "histogram_quantile(0.95, http_request_duration_seconds) > 0.08"
+      duration: "10m"
+      severity: "warning"
+      
+    - name: "cache_hit_rate_low"
+      condition: "cache_hit_rate < 0.8"
+      duration: "15m"
+      severity: "warning"
+      
+    - name: "matrix_load_slow"
+      condition: "matrix_load_duration_seconds > 30"
+      duration: "1m"
+      severity: "warning"
+      
+  # Clinical alerts
+  clinical_alerts:
+    - name: "pgx_interaction_spike"
+      condition: "rate(pgx_interactions_detected_total[1h]) > 100"
+      duration: "30m"
+      severity: "warning"
+      description: "Unusual spike in pharmacogenomic interactions detected"
+      
+    - name: "override_rate_high"
+      condition: "rate(clinical_overrides_applied_total[24h]) > 50"
+      duration: "1h"
+      severity: "info"
+      description: "High rate of institutional overrides applied"
+
+failure_modes:
+  # Graceful degradation configuration
+  graceful_degradation:
+    enabled: true
+    
+    levels:
+      - level: 1
+        description: "Serve from cache only"
+        functionality: 0.8
+        triggers:
+          - "database_unavailable"
+          
+      - level: 2  
+        description: "Conservative defaults"
+        functionality: 0.5
+        triggers:
+          - "cache_unavailable"
+          - "matrix_load_failed"
+          
+      - level: 3
+        description: "Essential functions only"
+        functionality: 0.2
+        triggers:
+          - "memory_exhaustion"
+          - "critical_service_failure"
+          
+  # Disaster recovery
+  disaster_recovery:
+    rto: "15m"     # Recovery Time Objective
+    rpo: "5m"      # Recovery Point Objective
+    backup_frequency: "1h"
+    geo_redundancy: false
+    
+  # Circuit breaker patterns
+  circuit_breakers:
+    database:
+      failure_threshold: 0.5
+      recovery_timeout: "30s"
+      max_requests: 10
+      
+    cache:
+      failure_threshold: 0.3
+      recovery_timeout: "10s"
+      max_requests: 20
+      
+    external_services:
+      failure_threshold: 0.6
+      recovery_timeout: "1m"
+      max_requests: 5
+
+data_governance:
+  # Dataset versioning and Evidence Envelope compliance
+  dataset_management:
+    current_version: "${DATASET_VERSION}"
+    enable_version_pinning: true
+    enable_rollback: true
+    archive_old_versions: true
+    archive_location: "${ARCHIVE_S3_BUCKET}"
+    
+  # Data quality requirements
+  data_quality:
+    minimum_evidence_level: "C"
+    require_vendor_validation: true
+    require_clinical_review: true
+    quality_score_threshold: 0.8
+    
+  # Audit and compliance
+  audit_trail:
+    enabled: true
+    log_all_requests: false
+    log_contraindicated_only: true
+    log_pgx_interactions: true
+    log_overrides: true
+    retention_period: "7y"
+    
+  # Institutional governance
+  institutional_overrides:
+    enabled: true
+    require_approval: true
+    approval_workflow: "P&T_committee"
+    expiry_period: "1y"
+    audit_changes: true
+
+clinical_validation:
+  # Golden fixtures validation
+  validation_suite:
+    enabled: true
+    suite_path: "./tests/clinical_validation_suite.json"
+    run_on_startup: true
+    run_on_dataset_update: true
+    failure_action: "alert_and_continue"
+    
+  # Performance benchmarks
+  performance_benchmarks:
+    single_lookup_p95_ms: 80
+    batch_processing_rps: 1000
+    cache_hit_rate: 0.85
+    accuracy_rate: 0.99
+    
+  # Clinical safety requirements
+  safety_requirements:
+    zero_false_negatives_contraindicated: true
+    maximum_false_positive_rate: 0.05
+    minimum_sensitivity_major: 0.95
+    minimum_specificity: 0.90
+
+# Environment-specific overrides
+production_overrides:
+  # Production-specific database settings
+  database:
+    max_open_connections: 100
+    connection_max_lifetime: "2h"
+    
+  # Production cache settings
+  cache:
+    hot_cache_max_entries: 100000
+    interaction_cache_ttl: "6h"
+    
+  # Production performance settings
+  performance:
+    max_batch_size: 1000
+    max_batch_concurrency: 50
+    
+  # Production monitoring
+  monitoring:
+    tracing:
+      sampler_param: 0.01  # Lower sampling in production
+      
+  # Production alerting
+  alerting:
+    notification_channels:
+      - type: "slack"
+        webhook: "${SLACK_WEBHOOK_URL}"
+        channel: "#kb5-alerts"
+      - type: "pagerduty"
+        service_key: "${PAGERDUTY_SERVICE_KEY}"
+      - type: "email"
+        recipients: ["clinical-team@hospital.org", "platform-team@hospital.org"]

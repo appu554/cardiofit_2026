@@ -1,0 +1,136 @@
+# KB-22 HPI Engine - Docker Compose
+# Starts PostgreSQL (5437), Redis (6386), and the KB-22 Go service (8132)
+# Usage: docker-compose up -d --build
+
+services:
+  # ============================================================================
+  # PostgreSQL Database
+  # Stores HPI sessions, answers, differential snapshots, safety flags,
+  # calibration records, and cross-node triggers
+  # ============================================================================
+  kb22-postgres:
+    image: postgres:15-alpine
+    container_name: kb22-postgres
+    environment:
+      POSTGRES_USER: kb22_user
+      POSTGRES_PASSWORD: kb22_password
+      POSTGRES_DB: kb_hpi_engine
+    ports:
+      - "5437:5432"
+    volumes:
+      - kb22_postgres_data:/var/lib/postgresql/data
+      - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./migrations/002_reasoning_chain.sql:/docker-entrypoint-initdb.d/002_reasoning_chain.sql:ro
+      - ./migrations/003_g15_g16_engine_upgrades.sql:/docker-entrypoint-initdb.d/003_g15_g16_engine_upgrades.sql:ro
+      - ./migrations/004_clinical_source_registry.sql:/docker-entrypoint-initdb.d/004_clinical_source_registry.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb22_user -d kb_hpi_engine"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - kb22-network
+
+  # ============================================================================
+  # Redis Cache
+  # Session state (DB 0), node definitions (DB 1), differentials (DB 2)
+  # ============================================================================
+  kb22-redis:
+    image: redis:7-alpine
+    container_name: kb22-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6386:6379"
+    volumes:
+      - kb22_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb22-network
+
+  # ============================================================================
+  # KB-22 HPI Engine Service
+  # Bayesian differential diagnosis with log-odds inference, safety triggers,
+  # entropy-based question ordering, and calibration feedback loop
+  # ============================================================================
+  kb22-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb22-hpi-engine
+    ports:
+      - "8132:8132"
+    environment:
+      # Server
+      PORT: "8132"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "info"
+
+      # Database (local PostgreSQL)
+      DATABASE_URL: "postgres://kb22_user:kb22_password@kb22-postgres:5432/kb_hpi_engine?sslmode=disable"
+      DB_MAX_CONNECTIONS: "25"
+      DB_CONN_MAX_LIFETIME: "5m"
+
+      # Redis
+      REDIS_URL: "redis://kb22-redis:6379"
+
+      # Nodes directory (baked into image)
+      NODES_DIR: "/app/nodes"
+
+      # Session configuration
+      SESSION_TTL_HOURS: "24"
+
+      # KB dependency URLs (connect via shared kb-network)
+      KB20_URL: "http://kb20-patient-profile:8131"
+      KB21_URL: "http://kb21-behavioral-intelligence:8133"
+      KB3_URL: "http://kb3-guidelines:8087"
+      KB5_URL: "http://kb5-drug-interactions:8085"
+      KB19_URL: "http://kb19-protocol-orchestrator:8103"
+      KB23_URL: "http://kb23-decision-cards:8134"
+
+      # Timeouts
+      KB20_TIMEOUT_MS: "200"
+      KB21_TIMEOUT_MS: "200"
+      KB3_TIMEOUT_MS: "300"
+      KB5_TIMEOUT_MS: "30"
+      KB19_TIMEOUT_MS: "500"
+      KB23_TIMEOUT_MS: "500"
+
+    depends_on:
+      kb22-postgres:
+        condition: service_healthy
+      kb22-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8132/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - kb22-network
+      - kb-network
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  kb22_postgres_data:
+    driver: local
+  kb22_redis_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  kb22-network:
+    name: kb22-network
+    driver: bridge
+  kb-network:
+    external: true

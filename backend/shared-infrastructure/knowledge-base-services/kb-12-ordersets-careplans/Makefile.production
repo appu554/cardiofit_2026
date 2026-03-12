@@ -1,0 +1,312 @@
+# KB-12 Order Sets & Care Plans - Production Makefile
+# NO MOCKS, NO FALLBACKS - Production Only
+# =============================================================================
+
+.PHONY: help build up down logs health migrate seed test clean rebuild status validate
+
+# Default target
+.DEFAULT_GOAL := help
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+DOCKER_COMPOSE := docker compose -f docker-compose.production.yml
+SERVICE_NAME := kb-12-ordersets-careplans
+IMAGE_NAME := kb-12-ordersets-careplans
+VERSION ?= 1.0.0
+BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+# Colors for output
+RED := \033[0;31m
+GREEN := \033[0;32m
+YELLOW := \033[0;33m
+BLUE := \033[0;34m
+NC := \033[0m # No Color
+
+# =============================================================================
+# Help
+# =============================================================================
+
+help: ## Show this help message
+	@echo ""
+	@echo "$(BLUE)KB-12 Order Sets & Care Plans - Production Commands$(NC)"
+	@echo "$(YELLOW)======================================================$(NC)"
+	@echo ""
+	@echo "$(GREEN)Build & Deploy:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E 'build|up|down|rebuild' | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(BLUE)%-15s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(GREEN)Database:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E 'migrate|seed|db-' | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(BLUE)%-15s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+	@echo "$(GREEN)Operations:$(NC)"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | grep -E 'logs|health|status|validate|test|clean' | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  $(BLUE)%-15s$(NC) %s\n", $$1, $$2}'
+	@echo ""
+
+# =============================================================================
+# Build Commands
+# =============================================================================
+
+build: validate-env ## Build production Docker image
+	@echo "$(BLUE)Building KB-12 production image...$(NC)"
+	docker build \
+		-f Dockerfile.production \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		-t $(IMAGE_NAME):$(VERSION) \
+		-t $(IMAGE_NAME):latest \
+		.
+	@echo "$(GREEN)✓ Build complete: $(IMAGE_NAME):$(VERSION)$(NC)"
+
+build-no-cache: validate-env ## Build production image without cache
+	@echo "$(BLUE)Building KB-12 production image (no cache)...$(NC)"
+	docker build \
+		-f Dockerfile.production \
+		--no-cache \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg BUILD_TIME=$(BUILD_TIME) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		-t $(IMAGE_NAME):$(VERSION) \
+		-t $(IMAGE_NAME):latest \
+		.
+	@echo "$(GREEN)✓ Build complete: $(IMAGE_NAME):$(VERSION)$(NC)"
+
+# =============================================================================
+# Deploy Commands
+# =============================================================================
+
+up: validate-env ## Start all production services
+	@echo "$(BLUE)Starting KB-12 production services...$(NC)"
+	@echo "$(YELLOW)PRODUCTION MODE - No mocks or fallbacks$(NC)"
+	$(DOCKER_COMPOSE) up -d
+	@echo "$(GREEN)✓ Services started$(NC)"
+	@make health
+
+down: ## Stop all production services
+	@echo "$(BLUE)Stopping KB-12 production services...$(NC)"
+	$(DOCKER_COMPOSE) down
+	@echo "$(GREEN)✓ Services stopped$(NC)"
+
+restart: ## Restart all services
+	@echo "$(BLUE)Restarting KB-12 production services...$(NC)"
+	$(DOCKER_COMPOSE) restart
+	@echo "$(GREEN)✓ Services restarted$(NC)"
+
+rebuild: down build up ## Rebuild and restart all services
+	@echo "$(GREEN)✓ Rebuild complete$(NC)"
+
+up-infra: ## Start only infrastructure (PostgreSQL, Redis)
+	@echo "$(BLUE)Starting infrastructure services...$(NC)"
+	$(DOCKER_COMPOSE) up -d kb-12-postgres kb-12-redis
+	@echo "$(GREEN)✓ Infrastructure started$(NC)"
+	@sleep 5
+	@make health-infra
+
+# =============================================================================
+# Database Commands
+# =============================================================================
+
+migrate: ## Run database migrations
+	@echo "$(BLUE)Running database migrations...$(NC)"
+	$(DOCKER_COMPOSE) exec -T kb-12-postgres psql -U kb12_user -d kb12_ordersets -f /docker-entrypoint-initdb.d/init.sql
+	@echo "$(GREEN)✓ Migrations complete$(NC)"
+
+seed: ## Seed database with production templates
+	@echo "$(BLUE)Seeding database with production templates...$(NC)"
+	$(DOCKER_COMPOSE) exec -T kb-12-postgres psql -U kb12_user -d kb12_ordersets -f /docker-entrypoint-initdb.d/seed_templates.sql
+	@echo "$(GREEN)✓ Seed complete$(NC)"
+
+db-shell: ## Open PostgreSQL shell
+	@echo "$(BLUE)Opening PostgreSQL shell...$(NC)"
+	$(DOCKER_COMPOSE) exec kb-12-postgres psql -U kb12_user -d kb12_ordersets
+
+db-backup: ## Backup database to file
+	@echo "$(BLUE)Backing up database...$(NC)"
+	@mkdir -p ./backups
+	$(DOCKER_COMPOSE) exec -T kb-12-postgres pg_dump -U kb12_user -d kb12_ordersets > ./backups/kb12_backup_$$(date +%Y%m%d_%H%M%S).sql
+	@echo "$(GREEN)✓ Backup complete$(NC)"
+
+db-reset: ## Reset database (DESTRUCTIVE)
+	@echo "$(RED)WARNING: This will destroy all data!$(NC)"
+	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ]
+	$(DOCKER_COMPOSE) down -v
+	$(DOCKER_COMPOSE) up -d kb-12-postgres kb-12-redis
+	@sleep 5
+	@make migrate
+	@make seed
+	@echo "$(GREEN)✓ Database reset complete$(NC)"
+
+# =============================================================================
+# Operations Commands
+# =============================================================================
+
+logs: ## Show logs for all services
+	$(DOCKER_COMPOSE) logs -f
+
+logs-app: ## Show logs for KB-12 application only
+	$(DOCKER_COMPOSE) logs -f kb-12-service
+
+logs-db: ## Show logs for PostgreSQL only
+	$(DOCKER_COMPOSE) logs -f kb-12-postgres
+
+status: ## Show status of all services
+	@echo "$(BLUE)KB-12 Service Status$(NC)"
+	@echo "$(YELLOW)====================$(NC)"
+	$(DOCKER_COMPOSE) ps
+
+health: ## Check health of all services
+	@echo "$(BLUE)Checking service health...$(NC)"
+	@echo ""
+	@echo "$(YELLOW)PostgreSQL:$(NC)"
+	@$(DOCKER_COMPOSE) exec -T kb-12-postgres pg_isready -U kb12_user -d kb12_ordersets && \
+		echo "$(GREEN)  ✓ PostgreSQL is healthy$(NC)" || \
+		echo "$(RED)  ✗ PostgreSQL is unhealthy$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Redis:$(NC)"
+	@$(DOCKER_COMPOSE) exec -T kb-12-redis redis-cli ping > /dev/null 2>&1 && \
+		echo "$(GREEN)  ✓ Redis is healthy$(NC)" || \
+		echo "$(RED)  ✗ Redis is unhealthy$(NC)"
+	@echo ""
+	@echo "$(YELLOW)KB-12 Service:$(NC)"
+	@curl -sf http://localhost:8092/health > /dev/null 2>&1 && \
+		echo "$(GREEN)  ✓ KB-12 service is healthy$(NC)" || \
+		echo "$(RED)  ✗ KB-12 service is unhealthy$(NC)"
+	@echo ""
+	@echo "$(YELLOW)KB-12 Ready Check:$(NC)"
+	@curl -sf http://localhost:8092/ready > /dev/null 2>&1 && \
+		echo "$(GREEN)  ✓ KB-12 service is ready$(NC)" || \
+		echo "$(RED)  ✗ KB-12 service is not ready$(NC)"
+
+health-infra: ## Check health of infrastructure only
+	@echo "$(BLUE)Checking infrastructure health...$(NC)"
+	@$(DOCKER_COMPOSE) exec -T kb-12-postgres pg_isready -U kb12_user -d kb12_ordersets && \
+		echo "$(GREEN)✓ PostgreSQL is healthy$(NC)" || \
+		echo "$(RED)✗ PostgreSQL is unhealthy$(NC)"
+	@$(DOCKER_COMPOSE) exec -T kb-12-redis redis-cli ping > /dev/null 2>&1 && \
+		echo "$(GREEN)✓ Redis is healthy$(NC)" || \
+		echo "$(RED)✗ Redis is unhealthy$(NC)"
+
+# =============================================================================
+# Testing Commands
+# =============================================================================
+
+test: ## Run production smoke tests
+	@echo "$(BLUE)Running production smoke tests...$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test 1: Health endpoint$(NC)"
+	@curl -sf http://localhost:8092/health | jq . && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test 2: Ready endpoint$(NC)"
+	@curl -sf http://localhost:8092/ready | jq . && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test 3: List order set templates$(NC)"
+	@curl -sf http://localhost:8092/api/v1/ordersets/templates | jq '.count' && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test 4: List care plan templates$(NC)"
+	@curl -sf http://localhost:8092/api/v1/careplans/templates | jq '.count' && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test 5: CDS Hooks discovery$(NC)"
+	@curl -sf http://localhost:8092/cds-services | jq '.services | length' && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+
+test-kb-integration: ## Test KB service integrations (requires external KBs)
+	@echo "$(BLUE)Testing KB service integrations...$(NC)"
+	@echo "$(YELLOW)NOTE: Requires KB-1, KB-3, KB-6, KB-7 to be running$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test KB-7 Terminology:$(NC)"
+	@curl -sf "http://localhost:8092/api/v1/terminology/validate?code=410429000&system=snomed" | jq . && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Test KB-1 Dosing:$(NC)"
+	@curl -sf "http://localhost:8092/api/v1/dosing/calculate?drug=6809&weight=70" | jq . && \
+		echo "$(GREEN)  ✓ PASS$(NC)" || echo "$(RED)  ✗ FAIL$(NC)"
+
+# =============================================================================
+# Validation Commands
+# =============================================================================
+
+validate-env: ## Validate environment configuration
+	@echo "$(BLUE)Validating environment...$(NC)"
+	@test -f .env.production || (echo "$(RED)ERROR: .env.production not found$(NC)" && exit 1)
+	@echo "$(GREEN)✓ Environment file exists$(NC)"
+	@grep -q "POSTGRES_PASSWORD" .env.production || (echo "$(RED)ERROR: POSTGRES_PASSWORD not set$(NC)" && exit 1)
+	@echo "$(GREEN)✓ POSTGRES_PASSWORD is set$(NC)"
+	@grep -q "KB1_URL" .env.production || (echo "$(RED)ERROR: KB1_URL not set$(NC)" && exit 1)
+	@echo "$(GREEN)✓ KB1_URL is set$(NC)"
+	@grep -q "KB7_URL" .env.production || (echo "$(RED)ERROR: KB7_URL not set$(NC)" && exit 1)
+	@echo "$(GREEN)✓ KB7_URL is set$(NC)"
+	@echo "$(GREEN)✓ Environment validation complete$(NC)"
+
+validate-kb-services: ## Validate external KB services are accessible
+	@echo "$(BLUE)Validating external KB services...$(NC)"
+	@. ./.env.production && curl -sf "$$KB1_URL/health" > /dev/null && \
+		echo "$(GREEN)✓ KB-1 Dosing is accessible$(NC)" || \
+		echo "$(RED)✗ KB-1 Dosing is NOT accessible$(NC)"
+	@. ./.env.production && curl -sf "$$KB3_URL/health" > /dev/null && \
+		echo "$(GREEN)✓ KB-3 Guidelines is accessible$(NC)" || \
+		echo "$(RED)✗ KB-3 Guidelines is NOT accessible$(NC)"
+	@. ./.env.production && curl -sf "$$KB6_URL/health" > /dev/null && \
+		echo "$(GREEN)✓ KB-6 Formulary is accessible$(NC)" || \
+		echo "$(RED)✗ KB-6 Formulary is NOT accessible$(NC)"
+	@. ./.env.production && curl -sf "$$KB7_URL/health" > /dev/null && \
+		echo "$(GREEN)✓ KB-7 Terminology is accessible$(NC)" || \
+		echo "$(RED)✗ KB-7 Terminology is NOT accessible$(NC)"
+
+# =============================================================================
+# Clean Up Commands
+# =============================================================================
+
+clean: ## Remove containers and volumes
+	@echo "$(BLUE)Cleaning up...$(NC)"
+	$(DOCKER_COMPOSE) down -v --remove-orphans
+	@echo "$(GREEN)✓ Cleanup complete$(NC)"
+
+clean-images: ## Remove Docker images
+	@echo "$(BLUE)Removing Docker images...$(NC)"
+	docker rmi $(IMAGE_NAME):$(VERSION) $(IMAGE_NAME):latest 2>/dev/null || true
+	@echo "$(GREEN)✓ Images removed$(NC)"
+
+clean-all: clean clean-images ## Remove everything
+	@echo "$(GREEN)✓ Full cleanup complete$(NC)"
+
+# =============================================================================
+# Production Quick Start
+# =============================================================================
+
+quick-start: ## Quick start for production (validates, builds, starts, tests)
+	@echo "$(BLUE)╔══════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(BLUE)║     KB-12 Order Sets & Care Plans - Quick Start      ║$(NC)"
+	@echo "$(BLUE)║              PRODUCTION MODE                         ║$(NC)"
+	@echo "$(BLUE)╚══════════════════════════════════════════════════════╝$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Step 1: Validating environment...$(NC)"
+	@make validate-env
+	@echo ""
+	@echo "$(YELLOW)Step 2: Building production image...$(NC)"
+	@make build
+	@echo ""
+	@echo "$(YELLOW)Step 3: Starting services...$(NC)"
+	@make up
+	@echo ""
+	@echo "$(YELLOW)Step 4: Waiting for services to be ready...$(NC)"
+	@sleep 10
+	@echo ""
+	@echo "$(YELLOW)Step 5: Running smoke tests...$(NC)"
+	@make test
+	@echo ""
+	@echo "$(GREEN)╔══════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║     KB-12 is running in PRODUCTION mode!             ║$(NC)"
+	@echo "$(GREEN)║                                                      ║$(NC)"
+	@echo "$(GREEN)║     API:        http://localhost:8092                ║$(NC)"
+	@echo "$(GREEN)║     Health:     http://localhost:8092/health         ║$(NC)"
+	@echo "$(GREEN)║     CDS Hooks:  http://localhost:8092/cds-services   ║$(NC)"
+	@echo "$(GREEN)╚══════════════════════════════════════════════════════╝$(NC)"

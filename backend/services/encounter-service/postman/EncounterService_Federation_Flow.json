@@ -1,0 +1,1238 @@
+{
+	"info": {
+		"_postman_id": "encounter-federation-flow-001",
+		"name": "EncounterService Federation Flow",
+		"description": "Complete architecture flow testing for Encounter Management Service:\nAPI Gateway (8005) → Auth Service (8001) → Apollo Federation Gateway (4000) → EncounterService (8020) → Google Healthcare API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Authentication Flow",
+			"item": [
+				{
+					"name": "Login Doctor",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.access_token) {",
+									"        pm.environment.set('auth_token', response.access_token);",
+									"        console.log('✅ Authentication successful');",
+									"        console.log('Token stored in environment variable');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Authentication failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"doctor@example.com\",\n    \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/auth/login",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"auth",
+								"login"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Verify Token via API Gateway",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    console.log('✅ Token verification successful');",
+									"    console.log('User info:', JSON.stringify(response, null, 2));",
+									"} else {",
+									"    console.log('❌ Token verification failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{api_gateway_url}}/auth/verify",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"auth",
+								"verify"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. Federation Schema Introspection",
+			"item": [
+				{
+					"name": "Get Encounter Service Federation Schema",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    console.log('✅ Federation schema retrieved successfully');",
+									"    console.log('Schema types available:', Object.keys(response.data.__schema.types).length);",
+									"} else {",
+									"    console.log('❌ Failed to retrieve federation schema');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query IntrospectionQuery { __schema { types { name kind description } } }\"\n}"
+						},
+						"url": {
+							"raw": "{{encounter_service_url}}/api/federation",
+							"host": [
+								"{{encounter_service_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Apollo Federation Gateway Schema",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    console.log('✅ Apollo Federation Gateway schema retrieved');",
+									"    console.log('Federated schema includes encounter types');",
+									"} else {",
+									"    console.log('❌ Failed to retrieve Apollo Federation schema');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query IntrospectionQuery { __schema { types { name kind description } } }\"\n}"
+						},
+						"url": {
+							"raw": "{{apollo_gateway_url}}/graphql",
+							"host": [
+								"{{apollo_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Encounter Management Queries",
+			"item": [
+				{
+					"name": "Get Encounter by ID (via API Gateway)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.encounter) {",
+									"        console.log('✅ Encounter retrieved successfully');",
+									"        console.log('Encounter ID:', response.data.encounter.id);",
+									"        console.log('Status:', response.data.encounter.status);",
+									"        console.log('Class:', response.data.encounter.class);",
+									"    } else {",
+									"        console.log('⚠️ No encounter found with this ID');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Failed to retrieve encounter');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetEncounter($id: ID!) { encounter(id: $id) { id resourceType status class subject { reference display } period { start end } participant { individual { reference display } } location { location { reference display } status } } }\",\n    \"variables\": {\n        \"id\": \"{{encounter_id}}\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Encounters by Patient ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.encounters) {",
+									"        console.log('✅ Patient encounters retrieved successfully');",
+									"        console.log('Number of encounters:', response.data.encounters.length);",
+									"        response.data.encounters.forEach((enc, index) => {",
+									"            console.log(`Encounter ${index + 1}: ${enc.id} - ${enc.status}`);",
+									"        });",
+									"    } else {",
+									"        console.log('⚠️ No encounters found for this patient');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Failed to retrieve patient encounters');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetEncountersByPatient($patientId: ID!) { encounters(patientId: $patientId) { id status class subject { reference display } period { start end } } }\",\n    \"variables\": {\n        \"patientId\": \"{{patient_id}}\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Active Inpatient Encounters",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.activeInpatientEncounters) {",
+									"        console.log('✅ Active inpatient encounters retrieved');",
+									"        console.log('Number of active inpatients:', response.data.activeInpatientEncounters.length);",
+									"        response.data.activeInpatientEncounters.forEach((enc, index) => {",
+									"            console.log(`Patient ${index + 1}: ${enc.subject.display} - ${enc.status}`);",
+									"        });",
+									"    } else {",
+									"        console.log('⚠️ No active inpatient encounters found');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Failed to retrieve active inpatient encounters');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetActiveInpatients($organizationId: ID) { activeInpatientEncounters(organizationId: $organizationId) { id status class subject { reference display } period { start end } location { location { reference display } status } } }\",\n    \"variables\": {\n        \"organizationId\": \"{{organization_id}}\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "4. Encounter Management Mutations",
+			"item": [
+				{
+					"name": "Create New Encounter",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createEncounter) {",
+									"        console.log('✅ Encounter created successfully');",
+									"        console.log('New Encounter ID:', response.data.createEncounter.id);",
+									"        pm.environment.set('created_encounter_id', response.data.createEncounter.id);",
+									"    } else {",
+									"        console.log('❌ Failed to create encounter');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation CreateEncounter($encounter: CreateEncounterInput!) { createEncounter(encounter: $encounter) { id status class subject { reference display } period { start end } } }\",\n    \"variables\": {\n        \"encounter\": {\n            \"status\": \"PLANNED\",\n            \"class\": \"OUTPATIENT\",\n            \"subject\": {\n                \"reference\": \"Patient/{{patient_id}}\",\n                \"display\": \"Test Patient\"\n            },\n            \"period\": {\n                \"start\": \"2024-01-15T09:00:00Z\",\n                \"end\": \"2024-01-15T10:00:00Z\"\n            },\n            \"type\": [{\n                \"text\": \"Routine Check-up\"\n            }]\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Encounter Status",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.updateEncounterStatus) {",
+									"        console.log('✅ Encounter status updated successfully');",
+									"        console.log('Updated Status:', response.data.updateEncounterStatus.status);",
+									"    } else {",
+									"        console.log('❌ Failed to update encounter status');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation UpdateEncounterStatus($encounterId: ID!, $input: UpdateEncounterStatusInput!) { updateEncounterStatus(encounterId: $encounterId, input: $input) { id status statusHistory { status period { start end } } } }\",\n    \"variables\": {\n        \"encounterId\": \"{{created_encounter_id}}\",\n        \"input\": {\n            \"status\": \"IN_PROGRESS\",\n            \"reason\": \"Patient arrived for appointment\"\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Admit Patient (Create Inpatient Encounter)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.admitPatient) {",
+									"        console.log('✅ Patient admitted successfully');",
+									"        console.log('Admission Encounter ID:', response.data.admitPatient.id);",
+									"        console.log('Class:', response.data.admitPatient.class);",
+									"        pm.environment.set('admission_encounter_id', response.data.admitPatient.id);",
+									"    } else {",
+									"        console.log('❌ Failed to admit patient');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation AdmitPatient($input: AdmitPatientInput!) { admitPatient(input: $input) { id status class subject { reference display } location { location { reference display } status } participant { individual { reference display } } } }\",\n    \"variables\": {\n        \"input\": {\n            \"patientId\": \"{{patient_id}}\",\n            \"admitSource\": {\n                \"text\": \"Emergency Department\"\n            },\n            \"location\": {\n                \"reference\": \"Location/ward-001\",\n                \"display\": \"Medical Ward Room 101\"\n            },\n            \"attendingPhysician\": {\n                \"reference\": \"Practitioner/{{practitioner_id}}\",\n                \"display\": \"Dr. Smith\"\n            },\n            \"reasonCode\": [{\n                \"text\": \"Chest pain evaluation\"\n            }]\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Transfer Patient",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.transferPatient) {",
+									"        console.log('✅ Patient transferred successfully');",
+									"        console.log('Transfer completed for encounter:', response.data.transferPatient.id);",
+									"        console.log('New location history:', response.data.transferPatient.location);",
+									"    } else {",
+									"        console.log('❌ Failed to transfer patient');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation TransferPatient($encounterId: ID!, $input: TransferPatientInput!) { transferPatient(encounterId: $encounterId, input: $input) { id location { location { reference display } status period { start end } } } }\",\n    \"variables\": {\n        \"encounterId\": \"{{admission_encounter_id}}\",\n        \"input\": {\n            \"newLocation\": {\n                \"reference\": \"Location/icu-001\",\n                \"display\": \"ICU Room 5\"\n            },\n            \"reason\": \"Patient condition requires intensive monitoring\",\n            \"effectiveTime\": \"2024-01-15T14:30:00Z\"\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Add Participant to Encounter",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.addParticipantToEncounter) {",
+									"        console.log('✅ Participant added successfully');",
+									"        console.log('Updated participants:', response.data.addParticipantToEncounter.participant);",
+									"    } else {",
+									"        console.log('❌ Failed to add participant');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation AddParticipant($encounterId: ID!, $practitionerId: ID!, $role: ParticipantType!) { addParticipantToEncounter(encounterId: $encounterId, practitionerId: $practitionerId, role: $role) { id participant { individual { reference display } } } }\",\n    \"variables\": {\n        \"encounterId\": \"{{admission_encounter_id}}\",\n        \"practitionerId\": \"{{consultant_id}}\",\n        \"role\": \"CONSULTANT\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Discharge Patient",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.dischargePatient) {",
+									"        console.log('✅ Patient discharged successfully');",
+									"        console.log('Final status:', response.data.dischargePatient.status);",
+									"        console.log('Discharge time:', response.data.dischargePatient.period.end);",
+									"    } else {",
+									"        console.log('❌ Failed to discharge patient');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation DischargePatient($encounterId: ID!, $input: DischargePatientInput!) { dischargePatient(encounterId: $encounterId, input: $input) { id status period { start end } hospitalization { dischargeDisposition { text } } } }\",\n    \"variables\": {\n        \"encounterId\": \"{{admission_encounter_id}}\",\n        \"input\": {\n            \"dischargeDisposition\": {\n                \"text\": \"Home with follow-up\"\n            },\n            \"reason\": \"Patient condition stable, ready for discharge\",\n            \"dischargeTime\": \"2024-01-16T10:00:00Z\"\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "5. Advanced Encounter Management",
+			"item": [
+				{
+					"name": "Process ADT Message (A01 - Admit)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.processAdtMessage) {",
+									"        console.log('✅ ADT message processed successfully');",
+									"        console.log('Message ID:', response.data.processAdtMessage.messageId);",
+									"        console.log('Status:', response.data.processAdtMessage.status);",
+									"        if (response.data.processAdtMessage.encounterId) {",
+									"            pm.environment.set('adt_encounter_id', response.data.processAdtMessage.encounterId);",
+									"        }",
+									"    } else {",
+									"        console.log('❌ Failed to process ADT message');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation ProcessADT($input: ProcessADTMessageInput!) { processAdtMessage(input: $input) { messageId messageType processedAt encounterId status errorMessage } }\",\n    \"variables\": {\n        \"input\": {\n            \"messageContent\": \"MSH|^~\\\\&|SENDING_APP|SENDING_FACILITY|RECEIVING_APP|RECEIVING_FACILITY|20240115080000||ADT^A01|MSG123|P|2.5.1|\\rEVN||20240115080000|||\\rPID|||{{patient_id}}^^^MRN||DOE^JOHN||19700101|M||\\rPV1||I|ICU^101^A|||||||||||||||123456789||\\r\",\n            \"messageType\": \"A01\",\n            \"sendingFacility\": \"SENDING_FACILITY\",\n            \"receivingFacility\": \"RECEIVING_FACILITY\"\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Check In From Appointment",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.checkInFromAppointment) {",
+									"        console.log('✅ Patient checked in from appointment');",
+									"        console.log('Encounter ID:', response.data.checkInFromAppointment.id);",
+									"        console.log('Status:', response.data.checkInFromAppointment.status);",
+									"        pm.environment.set('checkin_encounter_id', response.data.checkInFromAppointment.id);",
+									"    } else {",
+									"        console.log('❌ Failed to check in from appointment');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation CheckInFromAppointment($input: CheckInFromAppointmentInput!) { checkInFromAppointment(input: $input) { id status class appointment { reference } location { location { reference display } status } } }\",\n    \"variables\": {\n        \"input\": {\n            \"appointmentId\": \"{{appointment_id}}\",\n            \"arrivalTime\": \"2024-01-15T09:00:00Z\",\n            \"location\": {\n                \"reference\": \"Location/clinic-room-1\",\n                \"display\": \"Clinic Room 1\"\n            }\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Assign Bed to Patient",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.assignBed) {",
+									"        console.log('✅ Bed assigned successfully');",
+									"        console.log('Encounter ID:', response.data.assignBed.id);",
+									"        console.log('Location:', response.data.assignBed.location);",
+									"    } else {",
+									"        console.log('❌ Failed to assign bed');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"mutation AssignBed($encounterId: ID!, $bedAssignment: BedAssignmentInput!) { assignBed(encounterId: $encounterId, bedAssignment: $bedAssignment) { id location { location { reference display } status period { start } } } }\",\n    \"variables\": {\n        \"encounterId\": \"{{admission_encounter_id}}\",\n        \"bedAssignment\": {\n            \"bedId\": \"bed-icu-005\",\n            \"roomNumber\": \"ICU-005\",\n            \"ward\": \"Intensive Care Unit\",\n            \"effectiveTime\": \"2024-01-15T15:00:00Z\"\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Enhanced Encounter Search",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.enhancedEncounterSearch) {",
+									"        console.log('✅ Enhanced search completed');",
+									"        console.log('Results found:', response.data.enhancedEncounterSearch.length);",
+									"        response.data.enhancedEncounterSearch.forEach((enc, index) => {",
+									"            console.log(`Result ${index + 1}: ${enc.id} - ${enc.status} - ${enc.class}`);",
+									"        });",
+									"    } else {",
+									"        console.log('❌ Enhanced search failed');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query EnhancedSearch($search: EncounterSearchInput!) { enhancedEncounterSearch(search: $search) { id status class subject { reference display } period { start end } location { location { reference display } } } }\",\n    \"variables\": {\n        \"search\": {\n            \"patientId\": \"{{patient_id}}\",\n            \"status\": [\"IN_PROGRESS\", \"ARRIVED\"],\n            \"class\": \"INPATIENT\",\n            \"organizationId\": \"{{organization_id}}\",\n            \"dateRangeStart\": \"2024-01-01T00:00:00Z\",\n            \"dateRangeEnd\": \"2024-12-31T23:59:59Z\"\n        }\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Encounter Audit Trail",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.encounterAuditTrail) {",
+									"        console.log('✅ Audit trail retrieved');",
+									"        console.log('Audit entries:', response.data.encounterAuditTrail.length);",
+									"        response.data.encounterAuditTrail.forEach((entry, index) => {",
+									"            console.log(`Entry ${index + 1}: ${entry.action} - ${entry.fieldChanged}`);",
+									"        });",
+									"    } else {",
+									"        console.log('⚠️ No audit trail found (feature in development)');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetAuditTrail($encounterId: ID!) { encounterAuditTrail(encounterId: $encounterId) { id timestamp action fieldChanged oldValue newValue reason } }\",\n    \"variables\": {\n        \"encounterId\": \"{{created_encounter_id}}\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Available Beds",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.availableBeds) {",
+									"        console.log('✅ Available beds retrieved');",
+									"        console.log('Available beds:', response.data.availableBeds.length);",
+									"        response.data.availableBeds.forEach((bed, index) => {",
+									"            console.log(`Bed ${index + 1}: ${bed.roomNumber} - ${bed.ward} - ${bed.status}`);",
+									"        });",
+									"    } else {",
+									"        console.log('⚠️ No available beds found (feature in development)');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetAvailableBeds($ward: String) { availableBeds(ward: $ward) { bedId roomNumber ward status patientReference { reference display } assignmentPeriod { start end } } }\",\n    \"variables\": {\n        \"ward\": \"ICU\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. Federation Entity Extensions",
+			"item": [
+				{
+					"name": "Get Patient with Encounters (Federation)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.patient) {",
+									"        console.log('✅ Patient with encounters retrieved via federation');",
+									"        console.log('Patient:', response.data.patient.name);",
+									"        console.log('Number of encounters:', response.data.patient.encounters.length);",
+									"    } else {",
+									"        console.log('❌ Failed to retrieve patient with encounters');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetPatientWithEncounters($id: ID!) { patient(id: $id) { id name { family given } encounters { id status class period { start end } } } }\",\n    \"variables\": {\n        \"id\": \"{{patient_id}}\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get User with Encounters as Participant",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.user) {",
+									"        console.log('✅ User with encounter participation retrieved');",
+									"        console.log('User:', response.data.user.fullName);",
+									"        console.log('Encounters as participant:', response.data.user.encountersAsParticipant.length);",
+									"    } else {",
+									"        console.log('❌ Failed to retrieve user with encounters');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Request failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"query GetUserWithEncounters($id: ID!) { user(id: $id) { id fullName encountersAsParticipant { id status class subject { display } } } }\",\n    \"variables\": {\n        \"id\": \"{{practitioner_id}}\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": [
+								"{{api_gateway_url}}"
+							],
+							"path": [
+								"graphql"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. Health Checks",
+			"item": [
+				{
+					"name": "Encounter Service Health Check",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    console.log('✅ Encounter Service is healthy');",
+									"    console.log('Service:', response.service);",
+									"    console.log('FHIR Service Status:', response.fhir_service.status);",
+									"    console.log('Using Google Healthcare API:', response.fhir_service.using_google_healthcare_api);",
+									"} else {",
+									"    console.log('❌ Encounter Service health check failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{encounter_service_url}}/health",
+							"host": [
+								"{{encounter_service_url}}"
+							],
+							"path": [
+								"health"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Set default environment variables if not already set",
+					"if (!pm.environment.get('api_gateway_url')) {",
+					"    pm.environment.set('api_gateway_url', 'http://localhost:8005');",
+					"}",
+					"if (!pm.environment.get('apollo_gateway_url')) {",
+					"    pm.environment.set('apollo_gateway_url', 'http://localhost:4000');",
+					"}",
+					"if (!pm.environment.get('encounter_service_url')) {",
+					"    pm.environment.set('encounter_service_url', 'http://localhost:8020');",
+					"}",
+					"if (!pm.environment.get('encounter_id')) {",
+					"    pm.environment.set('encounter_id', 'encounter-test-001');",
+					"}",
+					"if (!pm.environment.get('patient_id')) {",
+					"    pm.environment.set('patient_id', 'patient-test-001');",
+					"}",
+					"if (!pm.environment.get('organization_id')) {",
+					"    pm.environment.set('organization_id', 'org-test-001');",
+					"}",
+					"if (!pm.environment.get('practitioner_id')) {",
+					"    pm.environment.set('practitioner_id', 'practitioner-test-001');",
+					"}",
+					"if (!pm.environment.get('consultant_id')) {",
+					"    pm.environment.set('consultant_id', 'practitioner-test-002');",
+					"}",
+					"if (!pm.environment.get('appointment_id')) {",
+					"    pm.environment.set('appointment_id', 'appointment-test-001');",
+					"}"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "api_gateway_url",
+			"value": "http://localhost:8005",
+			"type": "string"
+		},
+		{
+			"key": "apollo_gateway_url",
+			"value": "http://localhost:4000",
+			"type": "string"
+		},
+		{
+			"key": "encounter_service_url",
+			"value": "http://localhost:8020",
+			"type": "string"
+		},
+		{
+			"key": "encounter_id",
+			"value": "encounter-test-001",
+			"type": "string"
+		},
+		{
+			"key": "patient_id",
+			"value": "patient-test-001",
+			"type": "string"
+		},
+		{
+			"key": "organization_id",
+			"value": "org-test-001",
+			"type": "string"
+		},
+		{
+			"key": "practitioner_id",
+			"value": "practitioner-test-001",
+			"type": "string"
+		},
+		{
+			"key": "consultant_id",
+			"value": "practitioner-test-002",
+			"type": "string"
+		},
+		{
+			"key": "appointment_id",
+			"value": "appointment-test-001",
+			"type": "string"
+		}
+	]
+}

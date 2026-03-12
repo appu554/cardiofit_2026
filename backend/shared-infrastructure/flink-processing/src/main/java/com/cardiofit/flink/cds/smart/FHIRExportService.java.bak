@@ -1,0 +1,592 @@
+package com.cardiofit.flink.cds.smart;
+
+import com.cardiofit.flink.cds.analytics.RiskScore;
+import com.cardiofit.flink.cds.population.CareGap;
+import com.cardiofit.flink.models.ClinicalRecommendation;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.hc.client5.http.classic.methods.HttpPost;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.core5.http.io.entity.StringEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+
+/**
+ * FHIR Export Service
+ * Phase 8 Day 12 - SMART Authorization Implementation
+ *
+ * Exports CardioFit CDS recommendations, risk scores, and care gaps to FHIR resources
+ * for integration with EHR systems. Uses SMART OAuth2 tokens for authenticated API calls.
+ *
+ * FHIR Resource Mappings:
+ * - ClinicalRecommendation → ServiceRequest (intent=proposal, status=draft)
+ * - RiskScore → RiskAssessment (with prediction and basis)
+ * - CareGap → DetectedIssue (with severity and mitigation)
+ *
+ * Authentication:
+ * - Uses SMART OAuth2 Bearer tokens
+ * - Validates token expiration before requests
+ * - Includes patient/encounter context from token
+ *
+ * @author CardioFit CDS Team
+ * @version 1.0.0
+ * @since Phase 8 Day 12
+ */
+public class FHIRExportService {
+    private static final Logger LOG = LoggerFactory.getLogger(FHIRExportService.class);
+
+    // Configuration
+    private final String fhirBaseUrl;
+    private final CloseableHttpClient httpClient;
+    private final ObjectMapper objectMapper;
+
+    // Date/time formatting
+    private static final DateTimeFormatter ISO_DATETIME = DateTimeFormatter.ISO_INSTANT;
+
+    /**
+     * Constructor with FHIR server base URL
+     *
+     * @param fhirBaseUrl FHIR server base URL (e.g., "https://fhir.ehr.com/fhir")
+     */
+    public FHIRExportService(String fhirBaseUrl) {
+        this.fhirBaseUrl = fhirBaseUrl;
+        this.httpClient = HttpClients.createDefault();
+        this.objectMapper = new ObjectMapper();
+
+        LOG.info("FHIRExportService initialized with base URL: {}", fhirBaseUrl);
+    }
+
+    /**
+     * Export CDS recommendation to FHIR ServiceRequest
+     *
+     * Creates FHIR ServiceRequest resource representing clinical recommendation.
+     * ServiceRequest captures the proposed clinical action with supporting evidence.
+     *
+     * FHIR ServiceRequest:
+     * - resourceType: ServiceRequest
+     * - status: draft (not yet ordered)
+     * - intent: proposal (recommendation from CDS)
+     * - subject: Patient reference
+     * - authoredOn: Recommendation timestamp
+     * - note: Clinical rationale and evidence
+     *
+     * @param recommendation CDS recommendation to export
+     * @param token SMART OAuth2 token with write permissions
+     * @return FHIR ServiceRequest resource ID
+     * @throws IOException if export fails
+     */
+    public String exportRecommendationToFHIR(ClinicalRecommendation recommendation, SMARTToken token)
+            throws IOException {
+        LOG.info("Exporting recommendation to FHIR ServiceRequest: {} (protocol: {})",
+            recommendation.getRecommendationId(), recommendation.getProtocolName());
+
+        // Validate token
+        validateToken(token);
+
+        // Build ServiceRequest resource
+        ObjectNode serviceRequest = objectMapper.createObjectNode();
+        serviceRequest.put("resourceType", "ServiceRequest");
+        serviceRequest.put("status", "draft");
+        serviceRequest.put("intent", "proposal");
+
+        // Patient reference (from token or recommendation)
+        ObjectNode subject = objectMapper.createObjectNode();
+        String patientId = token.hasPatientContext() ? token.getPatientId() : recommendation.getPatientId();
+        subject.put("reference", "Patient/" + patientId);
+        serviceRequest.set("subject", subject);
+
+        // Category - diagnostic or therapeutic
+        ArrayNode category = objectMapper.createArrayNode();
+        ObjectNode categoryItem = objectMapper.createObjectNode();
+        ObjectNode categoryCoding = objectMapper.createObjectNode();
+        ArrayNode categoryCodings = objectMapper.createArrayNode();
+        ObjectNode categoryCode = objectMapper.createObjectNode();
+        categoryCode.put("system", "http://snomed.info/sct");
+        categoryCode.put("code", "387713003"); // Surgical procedure
+        categoryCode.put("display", "Clinical Procedure");
+        categoryCodings.add(categoryCode);
+        categoryCoding.set("coding", categoryCodings);
+        category.add(categoryCoding);
+        serviceRequest.set("category", category);
+
+        // Code - what service is being requested
+        ObjectNode code = objectMapper.createObjectNode();
+        ArrayNode codings = objectMapper.createArrayNode();
+        ObjectNode coding = objectMapper.createObjectNode();
+        coding.put("system", "http://cardiofit.health/protocols");
+        coding.put("code", recommendation.getProtocolId());
+        coding.put("display", recommendation.getProtocolName());
+        codings.add(coding);
+        code.set("coding", codings);
+        code.put("text", recommendation.getProtocolName());
+        serviceRequest.set("code", code);
+
+        // Priority
+        String priority = mapPriorityToFHIR(recommendation.getPriority());
+        serviceRequest.put("priority", priority);
+
+        // Authored timestamp
+        String authoredOn = formatTimestamp(recommendation.getTimestamp());
+        serviceRequest.put("authoredOn", authoredOn);
+
+        // Reason code - triggered by alert
+        if (recommendation.getTriggeredByAlert() != null) {
+            ArrayNode reasonCode = objectMapper.createArrayNode();
+            ObjectNode reason = objectMapper.createObjectNode();
+            reason.put("text", "Triggered by alert: " + recommendation.getTriggeredByAlert());
+            reasonCode.add(reason);
+            serviceRequest.set("reasonCode", reasonCode);
+        }
+
+        // Notes - include clinical rationale
+        ArrayNode notes = objectMapper.createArrayNode();
+
+        // Evidence base
+        if (recommendation.getEvidenceBase() != null) {
+            ObjectNode evidenceNote = objectMapper.createObjectNode();
+            evidenceNote.put("text", "Evidence: " + recommendation.getEvidenceBase());
+            notes.add(evidenceNote);
+        }
+
+        // Urgency rationale
+        if (recommendation.getUrgencyRationale() != null) {
+            ObjectNode urgencyNote = objectMapper.createObjectNode();
+            urgencyNote.put("text", "Urgency: " + recommendation.getUrgencyRationale());
+            notes.add(urgencyNote);
+        }
+
+        // Warnings
+        if (recommendation.hasWarnings()) {
+            ObjectNode warningNote = objectMapper.createObjectNode();
+            warningNote.put("text", "Warnings: " + String.join("; ", recommendation.getWarnings()));
+            notes.add(warningNote);
+        }
+
+        serviceRequest.set("note", notes);
+
+        // Add provenance - generated by CardioFit CDS
+        ObjectNode meta = objectMapper.createObjectNode();
+        ArrayNode tags = objectMapper.createArrayNode();
+        ObjectNode tag = objectMapper.createObjectNode();
+        tag.put("system", "http://cardiofit.health/tags");
+        tag.put("code", "cds-recommendation");
+        tag.put("display", "CDS Recommendation");
+        tags.add(tag);
+        meta.set("tag", tags);
+        serviceRequest.set("meta", meta);
+
+        // Submit to FHIR server
+        String resourceJson = objectMapper.writeValueAsString(serviceRequest);
+        String resourceId = postFHIRResource("ServiceRequest", resourceJson, token);
+
+        LOG.info("Successfully exported recommendation to ServiceRequest: {}", resourceId);
+        return resourceId;
+    }
+
+    /**
+     * Export risk score to FHIR RiskAssessment
+     *
+     * Creates FHIR RiskAssessment resource representing calculated clinical risk.
+     * RiskAssessment captures the probability and rationale for predicted outcome.
+     *
+     * FHIR RiskAssessment:
+     * - resourceType: RiskAssessment
+     * - status: final
+     * - subject: Patient reference
+     * - prediction: Risk category and probability
+     * - basis: Contributing factors and calculation method
+     *
+     * @param riskScore Risk score to export
+     * @param patientId Patient ID
+     * @param token SMART OAuth2 token with write permissions
+     * @return FHIR RiskAssessment resource ID
+     * @throws IOException if export fails
+     */
+    public String exportRiskScoreToFHIR(RiskScore riskScore, String patientId, SMARTToken token)
+            throws IOException {
+        LOG.info("Exporting risk score to FHIR RiskAssessment: {} (type: {}, score: {:.3f})",
+            riskScore.getScoreId(), riskScore.getRiskType(), riskScore.getScore());
+
+        // Validate token
+        validateToken(token);
+
+        // Build RiskAssessment resource
+        ObjectNode riskAssessment = objectMapper.createObjectNode();
+        riskAssessment.put("resourceType", "RiskAssessment");
+        riskAssessment.put("status", "final");
+
+        // Patient reference
+        ObjectNode subject = objectMapper.createObjectNode();
+        subject.put("reference", "Patient/" + patientId);
+        riskAssessment.set("subject", subject);
+
+        // Occurrence (when assessed)
+        String occurrenceDateTime = formatTimestamp(riskScore.getCalculationTime());
+        riskAssessment.put("occurrenceDateTime", occurrenceDateTime);
+
+        // Method - calculation algorithm
+        ObjectNode method = objectMapper.createObjectNode();
+        ArrayNode methodCodings = objectMapper.createArrayNode();
+        ObjectNode methodCoding = objectMapper.createObjectNode();
+        methodCoding.put("system", "http://cardiofit.health/risk-models");
+        methodCoding.put("code", riskScore.getCalculationMethod());
+        methodCoding.put("display", riskScore.getCalculationMethod());
+        methodCodings.add(methodCoding);
+        method.set("coding", methodCodings);
+        riskAssessment.set("method", method);
+
+        // Prediction array
+        ArrayNode predictions = objectMapper.createArrayNode();
+        ObjectNode prediction = objectMapper.createObjectNode();
+
+        // Outcome - what is being predicted
+        ObjectNode outcome = objectMapper.createObjectNode();
+        ArrayNode outcomeCodings = objectMapper.createArrayNode();
+        ObjectNode outcomeCoding = objectMapper.createObjectNode();
+        outcomeCoding.put("system", "http://snomed.info/sct");
+        outcomeCoding.put("code", getRiskTypeSNOMEDCode(riskScore.getRiskType()));
+        outcomeCoding.put("display", riskScore.getRiskType().toString());
+        outcomeCodings.add(outcomeCoding);
+        outcome.set("coding", outcomeCodings);
+        prediction.set("outcome", outcome);
+
+        // Probability as decimal
+        ObjectNode probability = objectMapper.createObjectNode();
+        probability.put("value", riskScore.getScore());
+        probability.put("unit", "probability");
+        probability.put("system", "http://unitsofmeasure.org");
+        probability.put("code", "1");
+        prediction.set("probabilityDecimal", riskScore.getScore());
+
+        // Qualitative risk category
+        ObjectNode qualitativeRisk = objectMapper.createObjectNode();
+        ArrayNode qualCodings = objectMapper.createArrayNode();
+        ObjectNode qualCoding = objectMapper.createObjectNode();
+        qualCoding.put("system", "http://terminology.hl7.org/CodeSystem/risk-probability");
+        qualCoding.put("code", riskScore.getRiskCategory().toString().toLowerCase());
+        qualCoding.put("display", riskScore.getRiskCategory().getClinicalGuidance());
+        qualCodings.add(qualCoding);
+        qualitativeRisk.set("coding", qualCodings);
+        prediction.set("qualitativeRisk", qualitativeRisk);
+
+        // Rationale - recommended action
+        if (riskScore.getRecommendedAction() != null) {
+            prediction.put("rationale", riskScore.getRecommendedAction());
+        }
+
+        predictions.add(prediction);
+        riskAssessment.set("prediction", predictions);
+
+        // Basis - contributing factors
+        ArrayNode basis = objectMapper.createArrayNode();
+        if (riskScore.getFeatureWeights() != null && !riskScore.getFeatureWeights().isEmpty()) {
+            for (String feature : riskScore.getFeatureWeights().keySet()) {
+                ObjectNode basisRef = objectMapper.createObjectNode();
+                basisRef.put("display", String.format("%s (weight: %.3f)",
+                    feature, riskScore.getFeatureWeights().get(feature)));
+                basis.add(basisRef);
+            }
+        }
+        if (basis.size() > 0) {
+            riskAssessment.set("basis", basis);
+        }
+
+        // Note - model version and validation
+        ArrayNode notes = objectMapper.createArrayNode();
+        ObjectNode modelNote = objectMapper.createObjectNode();
+        modelNote.put("text", String.format("Model: %s v%s, Validated: %s",
+            riskScore.getCalculationMethod(),
+            riskScore.getModelVersion(),
+            riskScore.isValidated()));
+        notes.add(modelNote);
+        riskAssessment.set("note", notes);
+
+        // Submit to FHIR server
+        String resourceJson = objectMapper.writeValueAsString(riskAssessment);
+        String resourceId = postFHIRResource("RiskAssessment", resourceJson, token);
+
+        LOG.info("Successfully exported risk score to RiskAssessment: {}", resourceId);
+        return resourceId;
+    }
+
+    /**
+     * Export care gap to FHIR DetectedIssue
+     *
+     * Creates FHIR DetectedIssue resource representing identified care gap.
+     * DetectedIssue captures the gap, its severity, and recommended mitigation.
+     *
+     * FHIR DetectedIssue:
+     * - resourceType: DetectedIssue
+     * - status: preliminary (identified but not addressed)
+     * - severity: high/moderate/low
+     * - code: Gap type
+     * - detail: Gap description and recommended action
+     *
+     * @param careGap Care gap to export
+     * @param token SMART OAuth2 token with write permissions
+     * @return FHIR DetectedIssue resource ID
+     * @throws IOException if export fails
+     */
+    public String exportCareGapToFHIR(CareGap careGap, SMARTToken token) throws IOException {
+        LOG.info("Exporting care gap to FHIR DetectedIssue: {} (type: {}, severity: {})",
+            careGap.getGapId(), careGap.getGapType(), careGap.getSeverity());
+
+        // Validate token
+        validateToken(token);
+
+        // Build DetectedIssue resource
+        ObjectNode detectedIssue = objectMapper.createObjectNode();
+        detectedIssue.put("resourceType", "DetectedIssue");
+
+        // Status - map gap status to DetectedIssue status
+        String status = careGap.isOpen() ? "preliminary" : "final";
+        detectedIssue.put("status", status);
+
+        // Severity
+        String severity = mapGapSeverityToFHIR(careGap.getSeverity());
+        detectedIssue.put("severity", severity);
+
+        // Patient reference
+        ObjectNode patient = objectMapper.createObjectNode();
+        String patientId = token.hasPatientContext() ? token.getPatientId() : careGap.getPatientId();
+        patient.put("reference", "Patient/" + patientId);
+        detectedIssue.set("patient", patient);
+
+        // Code - gap type
+        ObjectNode code = objectMapper.createObjectNode();
+        ArrayNode codings = objectMapper.createArrayNode();
+        ObjectNode coding = objectMapper.createObjectNode();
+        coding.put("system", "http://cardiofit.health/care-gaps");
+        coding.put("code", careGap.getGapType().toString());
+        coding.put("display", careGap.getGapName());
+        codings.add(coding);
+        code.set("coding", codings);
+        code.put("text", careGap.getGapName());
+        detectedIssue.set("code", code);
+
+        // Detail - description and clinical reason
+        StringBuilder detail = new StringBuilder();
+        if (careGap.getDescription() != null) {
+            detail.append(careGap.getDescription());
+        }
+        if (careGap.getClinicalReason() != null) {
+            detail.append(" Clinical reason: ").append(careGap.getClinicalReason());
+        }
+        if (careGap.isOverdue()) {
+            detail.append(String.format(" OVERDUE by %d days.", careGap.getDaysOverdue()));
+        }
+        detectedIssue.put("detail", detail.toString());
+
+        // Identified date
+        String identified = formatTimestamp(careGap.getIdentifiedAt());
+        detectedIssue.put("identifiedDateTime", identified);
+
+        // Evidence - guideline reference
+        if (careGap.getGuidelineReference() != null) {
+            ArrayNode evidence = objectMapper.createArrayNode();
+            ObjectNode evidenceItem = objectMapper.createObjectNode();
+            ArrayNode evidenceDetail = objectMapper.createArrayNode();
+            ObjectNode evidenceRef = objectMapper.createObjectNode();
+            evidenceRef.put("display", "Guideline: " + careGap.getGuidelineReference());
+            evidenceDetail.add(evidenceRef);
+            evidenceItem.set("detail", evidenceDetail);
+            evidence.add(evidenceItem);
+            detectedIssue.set("evidence", evidence);
+        }
+
+        // Mitigation - recommended action
+        if (careGap.getRecommendedAction() != null) {
+            ArrayNode mitigation = objectMapper.createArrayNode();
+            ObjectNode mitigationItem = objectMapper.createObjectNode();
+            mitigationItem.put("action", "recommendation");
+
+            ObjectNode mitigationCode = objectMapper.createObjectNode();
+            mitigationCode.put("text", careGap.getRecommendedAction());
+            mitigationItem.set("action", mitigationCode);
+
+            if (careGap.getDueDate() != null) {
+                mitigationItem.put("date", careGap.getDueDate().toString());
+            }
+
+            mitigation.add(mitigationItem);
+            detectedIssue.set("mitigation", mitigation);
+        }
+
+        // Submit to FHIR server
+        String resourceJson = objectMapper.writeValueAsString(detectedIssue);
+        String resourceId = postFHIRResource("DetectedIssue", resourceJson, token);
+
+        LOG.info("Successfully exported care gap to DetectedIssue: {}", resourceId);
+        return resourceId;
+    }
+
+    /**
+     * POST FHIR resource to server with OAuth2 authentication
+     *
+     * @param resourceType FHIR resource type (e.g., "ServiceRequest")
+     * @param resourceJson JSON representation of resource
+     * @param token SMART OAuth2 token
+     * @return Created resource ID
+     * @throws IOException if request fails
+     */
+    private String postFHIRResource(String resourceType, String resourceJson, SMARTToken token) throws IOException {
+        String url = fhirBaseUrl + "/" + resourceType;
+
+        HttpPost httpPost = new HttpPost(url);
+        httpPost.setHeader("Authorization", "Bearer " + token.getAccessToken());
+        httpPost.setHeader("Content-Type", "application/fhir+json");
+        httpPost.setHeader("Accept", "application/fhir+json");
+        httpPost.setEntity(new StringEntity(resourceJson));
+
+        LOG.debug("Posting {} to FHIR server (length: {} bytes)", resourceType, resourceJson.length());
+
+        try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
+            int statusCode = response.getCode();
+            InputStream content = response.getEntity().getContent();
+            JsonNode jsonResponse = objectMapper.readTree(content);
+
+            if (statusCode >= 200 && statusCode < 300) {
+                // Success - extract resource ID from response
+                String resourceId = null;
+                if (jsonResponse.has("id")) {
+                    resourceId = jsonResponse.get("id").asText();
+                }
+
+                LOG.info("Successfully created {} resource: {}", resourceType, resourceId);
+                return resourceId;
+
+            } else {
+                // Error response
+                String errorMsg = String.format("FHIR resource creation failed: HTTP %d", statusCode);
+                if (jsonResponse.has("issue")) {
+                    errorMsg += " - " + jsonResponse.get("issue").toString();
+                }
+
+                LOG.error(errorMsg);
+                throw new IOException(errorMsg);
+            }
+        }
+    }
+
+    /**
+     * Validate token before use
+     */
+    private void validateToken(SMARTToken token) throws IOException {
+        if (token == null) {
+            throw new IOException("Token is null");
+        }
+
+        if (token.getAccessToken() == null || token.getAccessToken().isEmpty()) {
+            throw new IOException("Token has no access token");
+        }
+
+        if (token.isExpired()) {
+            throw new IOException("Token has expired");
+        }
+
+        // Check write permissions
+        if (!token.hasScope("patient/*.write") && !token.hasScope("user/*.write")) {
+            LOG.warn("Token may not have write permissions - scope: {}", token.getScope());
+        }
+    }
+
+    /**
+     * Map CardioFit priority to FHIR ServiceRequest priority
+     */
+    private String mapPriorityToFHIR(String priority) {
+        if (priority == null) return "routine";
+
+        switch (priority.toUpperCase()) {
+            case "CRITICAL":
+                return "stat";
+            case "HIGH":
+                return "urgent";
+            case "MEDIUM":
+                return "asap";
+            case "LOW":
+            default:
+                return "routine";
+        }
+    }
+
+    /**
+     * Map gap severity to FHIR DetectedIssue severity
+     */
+    private String mapGapSeverityToFHIR(CareGap.GapSeverity severity) {
+        if (severity == null) return "moderate";
+
+        switch (severity) {
+            case CRITICAL:
+            case HIGH:
+                return "high";
+            case MODERATE:
+                return "moderate";
+            case LOW:
+            default:
+                return "low";
+        }
+    }
+
+    /**
+     * Get SNOMED code for risk type
+     */
+    private String getRiskTypeSNOMEDCode(RiskScore.RiskType riskType) {
+        switch (riskType) {
+            case MORTALITY:
+                return "419620001"; // Death
+            case READMISSION:
+                return "32485007"; // Hospital admission
+            case SEPSIS:
+                return "91302008"; // Sepsis
+            case DETERIORATION:
+                return "271737000"; // Clinical deterioration
+            case CARDIAC_EVENT:
+                return "84114007"; // Heart failure
+            case RESPIRATORY_FAILURE:
+                return "409622000"; // Respiratory failure
+            case RENAL_FAILURE:
+                return "14669001"; // Acute renal failure
+            default:
+                return "281647001"; // Adverse reaction
+        }
+    }
+
+    /**
+     * Format timestamp for FHIR dateTime
+     */
+    private String formatTimestamp(long timestampMillis) {
+        Instant instant = Instant.ofEpochMilli(timestampMillis);
+        return ISO_DATETIME.format(instant);
+    }
+
+    /**
+     * Format LocalDateTime for FHIR dateTime
+     */
+    private String formatTimestamp(LocalDateTime dateTime) {
+        Instant instant = dateTime.atZone(ZoneId.systemDefault()).toInstant();
+        return ISO_DATETIME.format(instant);
+    }
+
+    /**
+     * Close HTTP client and release resources
+     */
+    public void close() {
+        try {
+            httpClient.close();
+            LOG.info("FHIRExportService closed");
+        } catch (IOException e) {
+            LOG.warn("Error closing HTTP client", e);
+        }
+    }
+}

@@ -1,0 +1,520 @@
+﻿package com.cds.knowledgebase.model;
+
+
+import lombok.Data;
+import lombok.Builder;
+import java.util.*;
+
+
+/**
+ * PatientContext - Holds all patient data needed for protocol matching
+ * This is the data structure that flows from Module 2 to Module 3
+ */
+@Data
+@Builder
+public class PatientContext {
+    
+    // ================================================================
+    // PATIENT IDENTIFICATION
+    // ================================================================
+    private String patientId;
+    private String encounterId;
+    private String mrn;
+    
+    // ================================================================
+    // ALERTS FROM MODULE 2
+    // ================================================================
+    private List<Alert> alerts;
+    
+    @Data
+    @Builder
+    public static class Alert {
+        private String alertType;  // SEPSIS_SUSPECTED, SEPTIC_SHOCK, RESPIRATORY_DISTRESS, etc.
+        private String severity;
+        private double score;
+        private String triggeredBy;
+        private long timestamp;
+        private Map<String, Object> metadata;
+    }
+    
+    // ================================================================
+    // VITAL SIGNS
+    // ================================================================
+    private VitalSigns currentVitals;
+    private List<VitalSigns> vitalHistory; // Last 24 hours
+    
+    @Data
+    @Builder
+    public static class VitalSigns {
+        private long timestamp;
+        private Double temperature;      // Celsius
+        private Double heartRate;        // bpm
+        private Double systolicBp;       // mmHg
+        private Double diastolicBp;      // mmHg
+        private Double meanArterialPressure; // mmHg
+        private Double respiratoryRate;  // breaths/min
+        private Double spo2;             // %
+        private Double fi02;             // Fraction inspired oxygen
+        private String consciousness;    // ALERT, VOICE, PAIN, UNRESPONSIVE
+    }
+    
+    // ================================================================
+    // CLINICAL SCORES (from Module 2)
+    // ================================================================
+    private Map<String, Double> scores;  // NEWS2, qSOFA, SIRS, APACHE, SOFA, etc.
+    
+    public Double getScore(String scoreName) {
+        return scores != null ? scores.get(scoreName) : null;
+    }
+    
+    // ================================================================
+    // LABORATORY VALUES
+    // ================================================================
+    private Map<String, LabResult> labs;
+    
+    @Data
+    @Builder
+    public static class LabResult {
+        private String loincCode;
+        private String testName;
+        private Double value;
+        private String unit;
+        private long timestamp;
+        private String interpretation; // HIGH, LOW, NORMAL, CRITICAL
+        private Double referenceRangeLow;
+        private Double referenceRangeHigh;
+    }
+    
+    public Double getLabValue(String testName) {
+        LabResult result = labs != null ? labs.get(testName) : null;
+        return result != null ? result.getValue() : null;
+    }
+    
+    // ================================================================
+    // MEDICATIONS (Current and Recent)
+    // ================================================================
+    private List<Medication> currentMedications;
+    private List<Medication> recentMedications; // Last 48 hours
+    
+    @Data
+    @Builder
+    public static class Medication {
+        private String medicationId;
+        private String medicationName;
+        private String dose;
+        private String route;
+        private String frequency;
+        private long startTime;
+        private Long endTime;
+        private boolean active;
+    }
+    
+    // ================================================================
+    // ALLERGIES & ADVERSE REACTIONS
+    // ================================================================
+    private Set<String> allergies;
+    
+    public boolean hasAllergy(String allergen) {
+        return allergies != null && allergies.stream()
+            .anyMatch(a -> a.toLowerCase().contains(allergen.toLowerCase()));
+    }
+    
+    // ================================================================
+    // MEDICAL HISTORY
+    // ================================================================
+    private Set<String> medicalConditions;  // Chronic conditions, past history
+    private Set<String> activeDiagnoses;     // Current episode diagnoses
+    
+    public boolean hasCondition(String condition) {
+        return (medicalConditions != null && medicalConditions.contains(condition.toLowerCase())) ||
+               (activeDiagnoses != null && activeDiagnoses.contains(condition.toLowerCase()));
+    }
+    
+    // ================================================================
+    // ORGAN FUNCTION
+    // ================================================================
+    private RenalFunction renalFunction;
+    private HepaticFunction hepaticFunction;
+    private CardiacFunction cardiacFunction;
+    
+    @Data
+    @Builder
+    public static class RenalFunction {
+        private Double creatinine;     // mg/dL
+        private Double bun;            // mg/dL
+        private Double egfr;           // mL/min/1.73m²
+        private String ckdStage;       // Stage 1-5
+    }
+    
+    @Data
+    @Builder
+    public static class HepaticFunction {
+        private Double ast;
+        private Double alt;
+        private Double alkalinePhosphatase;
+        private Double totalBilirubin;
+        private Double albumin;
+        private Double inr;
+        private String childPughClass; // A, B, C
+    }
+    
+    @Data
+    @Builder
+    public static class CardiacFunction {
+        private Double troponin;
+        private Double bnp;
+        private String rhythm;
+        private Double ejectionFraction;
+        private boolean onVasopressors;
+    }
+    
+    public boolean hasRenalImpairment() {
+        return renalFunction != null && renalFunction.getEgfr() != null && 
+               renalFunction.getEgfr() < 60;
+    }
+    
+    public Double getEgfr() {
+        return renalFunction != null ? renalFunction.getEgfr() : null;
+    }
+    
+    // ================================================================
+    // INFECTION INDICATORS
+    // ================================================================
+    private InfectionStatus infectionStatus;
+    
+    @Data
+    @Builder
+    public static class InfectionStatus {
+        private boolean suspectedInfection;
+        private String suspectedSource;  // RESPIRATORY, URINARY, ABDOMINAL, etc.
+        private Double wbc;              // K/uL
+        private Double bandemia;         // %
+        private Double procalcitonin;    // ng/mL
+        private Double lactate;          // mmol/L
+        private List<String> culturesOrdered;
+        private List<String> cultureResults;
+        private long antibioticStartTime;
+    }
+    
+    public boolean hasSuspectedInfection() {
+        return infectionStatus != null && infectionStatus.isSuspectedInfection();
+    }
+    
+    // ================================================================
+    // RESPIRATORY STATUS
+    // ================================================================
+    private RespiratoryStatus respiratoryStatus;
+    
+    @Data
+    @Builder
+    public static class RespiratoryStatus {
+        private Double pao2;             // mmHg
+        private Double paco2;            // mmHg
+        private Double ph;
+        private Double pao2Fio2Ratio;
+        private String ventilationMode;  // ROOM_AIR, NASAL_CANNULA, HFNC, NIV, MECHANICAL
+        private Double peep;
+        private boolean requiresOxygenSupport;
+        private boolean requiresVentilation;
+    }
+    
+    // ================================================================
+    // HEMODYNAMIC STATUS
+    // ================================================================
+    private HemodynamicStatus hemodynamicStatus;
+    
+    @Data
+    @Builder
+    public static class HemodynamicStatus {
+        private boolean isHypotensive;
+        private boolean requiresVasopressors;
+        private Double fluidBalance24h;  // mL
+        private Double cvp;              // mmHg
+        private Double cardiacOutput;
+        private boolean inSepticShock;
+    }
+    
+    // ================================================================
+    // ECG/CARDIAC DATA
+    // ================================================================
+    private EcgData ecgData;
+    
+    @Data
+    @Builder
+    public static class EcgData {
+        private boolean stElevation;
+        private List<String> stElevationLeads;
+        private boolean newLbbb;
+        private String rhythm;
+        private Integer qtcInterval;
+        private boolean hasIschemia;
+        private long acquisitionTime;
+    }
+    
+    // ================================================================
+    // IMAGING RESULTS
+    // ================================================================
+    private List<ImagingResult> imagingResults;
+    
+    @Data
+    @Builder
+    public static class ImagingResult {
+        private String studyType;  // CXR, CT, ECHO, etc.
+        private String findings;
+        private String interpretation;
+        private long studyTime;
+        private boolean abnormal;
+    }
+    
+    // ================================================================
+    // DEMOGRAPHICS & BODY METRICS
+    // ================================================================
+    private Demographics demographics;
+    
+    @Data
+    @Builder
+    public static class Demographics {
+        private Integer age;
+        private String sex;
+        private Double weight;      // kg
+        private Double height;      // cm
+        private Double bmi;
+        private boolean isPregnant;
+        private boolean isBreastfeeding;
+    }
+    
+    // ================================================================
+    // CLINICAL CONTEXT
+    // ================================================================
+    private ClinicalContext clinicalContext;
+    
+    @Data
+    @Builder
+    public static class ClinicalContext {
+        private String location;         // ED, ICU, FLOOR, etc.
+        private String chiefComplaint;
+        private List<String> symptoms;
+        private long presentationTime;
+        private String admittingDiagnosis;
+        private boolean codeStatus;      // Full code vs DNR
+        private Integer dayOfStay;
+    }
+    
+    // ================================================================
+    // HELPER METHODS FOR PROTOCOL MATCHING
+    // ================================================================
+    
+    /**
+     * Get value from any source (vital, lab, score, etc.)
+     * Used by ProtocolTrigger evaluation
+     */
+    public Object getValue(String source, String field) {
+        switch (source.toLowerCase()) {
+            case "alert":
+                return getAlertValue(field);
+            case "vital":
+                return getVitalValue(field);
+            case "score":
+                return getScore(field);
+            case "lab":
+                return getLabValue(field);
+            case "symptom":
+                return hasSymptom(field);
+            case "ecg":
+                return getEcgValue(field);
+            default:
+                return null;
+        }
+    }
+    
+    private Object getAlertValue(String field) {
+        if (alerts == null || alerts.isEmpty()) return null;
+        
+        switch (field) {
+            case "alert_type":
+                return alerts.get(0).getAlertType();
+            case "suspected_infection":
+                return hasSuspectedInfection();
+            default:
+                return alerts.get(0).getMetadata() != null ? 
+                       alerts.get(0).getMetadata().get(field) : null;
+        }
+    }
+    
+    private Object getVitalValue(String field) {
+        if (currentVitals == null) return null;
+        
+        switch (field) {
+            case "temperature":
+                return currentVitals.getTemperature();
+            case "heart_rate":
+                return currentVitals.getHeartRate();
+            case "systolic_bp":
+                return currentVitals.getSystolicBp();
+            case "diastolic_bp":
+                return currentVitals.getDiastolicBp();
+            case "respiratory_rate":
+                return currentVitals.getRespiratoryRate();
+            case "spo2":
+                return currentVitals.getSpo2();
+            case "map":
+            case "mean_arterial_pressure":
+                return currentVitals.getMeanArterialPressure();
+            default:
+                return null;
+        }
+    }
+    
+    private Object getEcgValue(String field) {
+        if (ecgData == null) return null;
+        
+        switch (field) {
+            case "st_elevation":
+                return ecgData.isStElevation();
+            case "new_lbbb":
+                return ecgData.isNewLbbb();
+            case "rhythm":
+                return ecgData.getRhythm();
+            default:
+                return null;
+        }
+    }
+    
+    private boolean hasSymptom(String symptom) {
+        if (clinicalContext == null || clinicalContext.getSymptoms() == null) {
+            return false;
+        }
+        return clinicalContext.getSymptoms().stream()
+            .anyMatch(s -> s.toLowerCase().contains(symptom.toLowerCase()));
+    }
+    
+    /**
+     * Get most recent alert of specific type
+     */
+    public Alert getAlert(String alertType) {
+        if (alerts == null) return null;
+        
+        return alerts.stream()
+            .filter(a -> a.getAlertType().equals(alertType))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    /**
+     * Check if patient has any alert
+     */
+    public boolean hasAlert(String alertType) {
+        return getAlert(alertType) != null;
+    }
+    
+    /**
+     * Get lab result by name
+     */
+    public LabResult getLab(String testName) {
+        return labs != null ? labs.get(testName) : null;
+    }
+    
+    /**
+     * Check if patient is on specific medication
+     */
+    public boolean isOnMedication(String medicationName) {
+        if (currentMedications == null) return false;
+        
+        return currentMedications.stream()
+            .anyMatch(m -> m.isActive() && 
+                     m.getMedicationName().toLowerCase().contains(medicationName.toLowerCase()));
+    }
+    
+    /**
+     * Calculate if patient meets sepsis-3 criteria
+     */
+    public boolean meetsSepsis3Criteria() {
+        Double qsofa = getScore("qSOFA");
+        Double sofa = getScore("SOFA");
+        
+        return hasSuspectedInfection() && 
+               ((qsofa != null && qsofa >= 2) || 
+                (sofa != null && sofa >= 2));
+    }
+    
+    /**
+     * Calculate if patient is in septic shock
+     */
+    public boolean isInSepticShock() {
+        if (infectionStatus == null || !infectionStatus.isSuspectedInfection()) {
+            return false;
+        }
+        
+        boolean requiresVasopressors = hemodynamicStatus != null && 
+                                       hemodynamicStatus.isRequiresVasopressors();
+        boolean elevatedLactate = infectionStatus.getLactate() != null && 
+                                 infectionStatus.getLactate() > 2.0;
+        
+        return requiresVasopressors && elevatedLactate;
+    }
+    
+    /**
+     * Calculate PaO2/FiO2 ratio if not already calculated
+     */
+    public Double calculatePaO2FiO2Ratio() {
+        if (respiratoryStatus == null) return null;
+        
+        if (respiratoryStatus.getPao2Fio2Ratio() != null) {
+            return respiratoryStatus.getPao2Fio2Ratio();
+        }
+        
+        if (respiratoryStatus.getPao2() != null && currentVitals != null && 
+            currentVitals.getFi02() != null && currentVitals.getFi02() > 0) {
+            return respiratoryStatus.getPao2() / currentVitals.getFi02();
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Check if patient has ARDS
+     */
+    public boolean hasARDS() {
+        Double pao2fio2 = calculatePaO2FiO2Ratio();
+        return pao2fio2 != null && pao2fio2 < 300;
+    }
+    
+    /**
+     * Summary string for debugging
+     */
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("PatientContext[\n");
+        sb.append("  Patient ID: ").append(patientId).append("\n");
+        
+        if (alerts != null && !alerts.isEmpty()) {
+            sb.append("  Active Alerts: ").append(alerts.size()).append("\n");
+            alerts.forEach(a -> sb.append("    - ").append(a.getAlertType()).append("\n"));
+        }
+        
+        if (currentVitals != null) {
+            sb.append("  Vitals: HR=").append(currentVitals.getHeartRate())
+              .append(", BP=").append(currentVitals.getSystolicBp())
+              .append("/").append(currentVitals.getDiastolicBp())
+              .append(", RR=").append(currentVitals.getRespiratoryRate())
+              .append(", SpO2=").append(currentVitals.getSpo2()).append("%\n");
+        }
+        
+        if (scores != null && !scores.isEmpty()) {
+            sb.append("  Scores: ");
+            scores.forEach((k, v) -> sb.append(k).append("=").append(v).append(" "));
+            sb.append("\n");
+        }
+        
+        if (infectionStatus != null && infectionStatus.isSuspectedInfection()) {
+            sb.append("  Infection: Suspected (").append(infectionStatus.getSuspectedSource()).append(")\n");
+            if (infectionStatus.getLactate() != null) {
+                sb.append("    Lactate: ").append(infectionStatus.getLactate()).append(" mmol/L\n");
+            }
+        }
+        
+        sb.append("]");
+        return sb.toString();
+    }
+}

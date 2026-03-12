@@ -1,0 +1,264 @@
+# P12 Peripheral Oedema - HPI Node Definition
+# Bayesian differential for non-HTN peripheral edema in cardio-renal-metabolic patients
+# Binary question format (YES/NO/PATA_NAHI) with lr_positive / lr_negative
+# Priors sum to 0.90 (Other bucket reserves 0.10)
+
+node_id: P12_PERIPHERAL_OEDEMA
+version: "1.0.0"
+title_en: "Peripheral Oedema Differential Diagnosis"
+title_hi: "Pair ki Sujan Vibhedak Nidaan"
+description: "Bayesian differential for peripheral edema not attributable solely to HTN in DM+HTN patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Supported strata
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_HF_2023"
+
+# ===============================================================
+# Differentials with per-stratum priors (F-05)
+# Sum = 0.90; Other bucket = 0.10 -> total 1.00
+# ===============================================================
+differentials:
+  - id: HEART_FAILURE
+    label: "Heart Failure"
+    population_reference: "ESC Heart Failure Guidelines 2023; Framingham criteria"
+    priors:
+      DM_HTN_base: 0.28
+
+  - id: CKD_FLUID_OVERLOAD
+    label: "CKD Fluid Overload"
+    population_reference: "KDIGO CKD Guidelines 2024; nephrotic/nephritic spectrum"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: VENOUS_INSUFFICIENCY
+    label: "Chronic Venous Insufficiency"
+    population_reference: "CEAP classification; Robertson et al. JVS 2008"
+    priors:
+      DM_HTN_base: 0.18
+
+  - id: MEDICATION_INDUCED
+    label: "Medication-Induced Oedema (CCB, Pioglitazone, Pregabalin)"
+    population_reference: "Sica DA. J Clin Hypertens 2003; CCB edema 5-30%"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: DVT
+    label: "Deep Vein Thrombosis"
+    population_reference: "Wells Score; NICE DVT Guidelines 2020"
+    priors:
+      DM_HTN_base: 0.07
+
+  - id: OTHER
+    label: "Other (Hepatic, Lymphoedema, Hypothyroid)"
+    population_reference: "Clinical practice review"
+    priors:
+      DM_HTN_base: 0.05
+
+# ===============================================================
+# G1: Safety floor clamping
+# DVT posterior NEVER drops below 0.04 — missed DVT can cause PE.
+# Heart failure floor at 0.05 — must be excluded with BNP/echo.
+# ===============================================================
+safety_floors:
+  DVT: 0.04
+  HEART_FAILURE: 0.05
+
+# ===============================================================
+# Safety triggers
+# ===============================================================
+safety_triggers:
+  - id: RF01_DVT_UNILATERAL
+    type: BOOLEAN
+    condition: "Q001=YES AND Q003=YES"
+    severity: IMMEDIATE
+    recommended_action: "Acute unilateral painful swelling — urgent D-dimer and compression ultrasound. SNOMED: 128053003"
+
+  - id: RF02_HF_DECOMPENSATION
+    type: BOOLEAN
+    condition: "HEART_FAILURE.posterior > 0.45"
+    severity: IMMEDIATE
+    recommended_action: "Suspected acute decompensated heart failure. Order urgent BNP/NT-proBNP and echocardiography. SNOMED: 84114007"
+
+  - id: RF03_ANASARCA
+    type: BOOLEAN
+    condition: "Q006=YES AND Q007=YES"
+    severity: URGENT
+    recommended_action: "Bilateral oedema with facial/abdominal swelling — evaluate for nephrotic syndrome, hepatic failure, or severe HF."
+
+# ===============================================================
+# Questions — Binary (YES / NO / PATA_NAHI)
+# LR values for ALL differentials per question
+# ===============================================================
+questions:
+  - id: Q001
+    text_en: "Is the swelling mainly in one leg rather than both?"
+    text_hi: "Kya sujan ek pair mein zyada hai dono ke bajaye?"
+    mandatory: true
+    lr_source: "Wells Score DVT; NICE DVT 2020"
+    lr_positive:
+      HEART_FAILURE: 0.30
+      CKD_FLUID_OVERLOAD: 0.25
+      VENOUS_INSUFFICIENCY: 1.40
+      MEDICATION_INDUCED: 0.20
+      DVT: 5.80
+      OTHER: 0.80
+    lr_negative:
+      HEART_FAILURE: 1.25
+      CKD_FLUID_OVERLOAD: 1.20
+      VENOUS_INSUFFICIENCY: 0.85
+      MEDICATION_INDUCED: 1.30
+      DVT: 0.30
+      OTHER: 1.05
+
+  - id: Q002
+    text_en: "Does the swelling get worse as the day goes on and improve overnight?"
+    text_hi: "Kya sujan din mein badhti hai aur raat ko sone ke baad kam hoti hai?"
+    mandatory: true
+    lr_source: "ESC HF 2023; CVI clinical features"
+    lr_positive:
+      HEART_FAILURE: 2.40
+      CKD_FLUID_OVERLOAD: 1.50
+      VENOUS_INSUFFICIENCY: 2.80
+      MEDICATION_INDUCED: 1.80
+      DVT: 0.80
+      OTHER: 0.90
+    lr_negative:
+      HEART_FAILURE: 0.55
+      CKD_FLUID_OVERLOAD: 0.70
+      VENOUS_INSUFFICIENCY: 0.40
+      MEDICATION_INDUCED: 0.65
+      DVT: 1.10
+      OTHER: 1.05
+
+  - id: Q003
+    text_en: "Is the swollen leg red, warm, or painful to touch?"
+    text_hi: "Kya suja hua pair laal, garam, ya chhoone mein dard karta hai?"
+    mandatory: true
+    lr_source: "Wells Score; NICE DVT 2020"
+    lr_positive:
+      HEART_FAILURE: 0.40
+      CKD_FLUID_OVERLOAD: 0.30
+      VENOUS_INSUFFICIENCY: 0.90
+      MEDICATION_INDUCED: 0.30
+      DVT: 4.20
+      OTHER: 0.80
+    lr_negative:
+      HEART_FAILURE: 1.15
+      CKD_FLUID_OVERLOAD: 1.15
+      VENOUS_INSUFFICIENCY: 1.05
+      MEDICATION_INDUCED: 1.20
+      DVT: 0.50
+      OTHER: 1.05
+
+  - id: Q004
+    text_en: "Do you also feel breathless, especially when lying flat or climbing stairs?"
+    text_hi: "Kya aapko saans ki taklif bhi hoti hai, khaaskar lete waqt ya seedhi chadhte waqt?"
+    mandatory: true
+    lr_source: "ESC HF 2023; Framingham criteria"
+    lr_positive:
+      HEART_FAILURE: 3.80
+      CKD_FLUID_OVERLOAD: 1.60
+      VENOUS_INSUFFICIENCY: 0.40
+      MEDICATION_INDUCED: 0.50
+      DVT: 1.30
+      OTHER: 0.70
+    lr_negative:
+      HEART_FAILURE: 0.35
+      CKD_FLUID_OVERLOAD: 0.75
+      VENOUS_INSUFFICIENCY: 1.20
+      MEDICATION_INDUCED: 1.15
+      DVT: 0.90
+      OTHER: 1.10
+
+  - id: Q005
+    text_en: "Has a new medication been started or dose changed in the last few weeks (especially BP or diabetes medicines)?"
+    text_hi: "Kya pichle kuch hafton mein koi nayi dawai shuru hui ya dose badla hai (khaaskar BP ya sugar ki dawai)?"
+    mandatory: false
+    lr_source: "Sica DA. J Clin Hypertens 2003; CCB edema incidence"
+    lr_positive:
+      HEART_FAILURE: 0.70
+      CKD_FLUID_OVERLOAD: 0.80
+      VENOUS_INSUFFICIENCY: 0.50
+      MEDICATION_INDUCED: 4.50
+      DVT: 0.60
+      OTHER: 1.20
+    lr_negative:
+      HEART_FAILURE: 1.10
+      CKD_FLUID_OVERLOAD: 1.05
+      VENOUS_INSUFFICIENCY: 1.15
+      MEDICATION_INDUCED: 0.35
+      DVT: 1.10
+      OTHER: 0.95
+
+  - id: Q006
+    text_en: "Is there swelling in both legs equally?"
+    text_hi: "Kya dono pairon mein barabar sujan hai?"
+    mandatory: false
+    lr_source: "Clinical practice; ESC HF 2023"
+    lr_positive:
+      HEART_FAILURE: 2.50
+      CKD_FLUID_OVERLOAD: 3.00
+      VENOUS_INSUFFICIENCY: 1.80
+      MEDICATION_INDUCED: 2.80
+      DVT: 0.20
+      OTHER: 1.50
+    lr_negative:
+      HEART_FAILURE: 0.50
+      CKD_FLUID_OVERLOAD: 0.40
+      VENOUS_INSUFFICIENCY: 0.70
+      MEDICATION_INDUCED: 0.45
+      DVT: 2.50
+      OTHER: 0.80
+
+  - id: Q007
+    text_en: "Is there puffiness around your eyes or face, especially in the morning?"
+    text_hi: "Kya subah aankhon ya chehre ke aas-paas sujan hoti hai?"
+    mandatory: false
+    lr_source: "KDIGO CKD 2024; nephrotic syndrome features"
+    lr_positive:
+      HEART_FAILURE: 0.80
+      CKD_FLUID_OVERLOAD: 4.20
+      VENOUS_INSUFFICIENCY: 0.20
+      MEDICATION_INDUCED: 0.50
+      DVT: 0.30
+      OTHER: 1.80
+    lr_negative:
+      HEART_FAILURE: 1.05
+      CKD_FLUID_OVERLOAD: 0.50
+      VENOUS_INSUFFICIENCY: 1.20
+      MEDICATION_INDUCED: 1.15
+      DVT: 1.10
+      OTHER: 0.85
+
+  - id: Q008
+    text_en: "When you press on the swollen area, does it leave a dent (pit) that stays for a few seconds?"
+    text_hi: "Jab sujan wali jagah par ungali dabaate hain to kya gaddha banta hai jo kuch second rehta hai?"
+    mandatory: false
+    lr_source: "Braunwald's Heart Disease; clinical examination"
+    lr_positive:
+      HEART_FAILURE: 2.20
+      CKD_FLUID_OVERLOAD: 2.50
+      VENOUS_INSUFFICIENCY: 1.60
+      MEDICATION_INDUCED: 2.00
+      DVT: 1.40
+      OTHER: 0.50
+    lr_negative:
+      HEART_FAILURE: 0.55
+      CKD_FLUID_OVERLOAD: 0.50
+      VENOUS_INSUFFICIENCY: 0.70
+      MEDICATION_INDUCED: 0.60
+      DVT: 0.80
+      OTHER: 1.80

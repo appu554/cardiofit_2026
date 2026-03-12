@@ -1,0 +1,224 @@
+# prometheus.yml
+# Prometheus configuration for CDC connector monitoring
+# Scrapes metrics from Kafka Connect, PostgreSQL, and Kafka
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: 'cardiofit-production'
+    environment: 'production'
+    project: 'cdc-connectors'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+      timeout: 10s
+      api_version: v2
+
+# Load alerting rules
+rule_files:
+  - '/etc/prometheus/rules/cdc-connector-rules.yml'
+
+# Scrape configurations
+scrape_configs:
+  # Kafka Connect JMX metrics
+  - job_name: 'kafka-connect'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'kafka-connect:8083'
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'kafka-connect'
+
+  # Kafka Connect worker metrics (JMX Exporter)
+  - job_name: 'kafka-connect-jmx'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'kafka-connect:9404'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'kafka-connect-jmx'
+
+  # PostgreSQL metrics (KB1 - medications)
+  - job_name: 'postgresql-kb1'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'postgres-exporter-kb1:9187'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgresql-kb1'
+      - target_label: database
+        replacement: 'medications_db'
+      - target_label: kb_service
+        replacement: 'KB1'
+
+  # PostgreSQL metrics (KB2 - scheduling)
+  - job_name: 'postgresql-kb2'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'postgres-exporter-kb2:9187'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgresql-kb2'
+      - target_label: database
+        replacement: 'kb2_scheduling_db'
+      - target_label: kb_service
+        replacement: 'KB2'
+
+  # PostgreSQL metrics (KB3 - encounter)
+  - job_name: 'postgresql-kb3'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'postgres-exporter-kb3:9187'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgresql-kb3'
+      - target_label: database
+        replacement: 'kb3_encounter_db'
+      - target_label: kb_service
+        replacement: 'KB3'
+
+  # PostgreSQL metrics (KB6 - drug rules)
+  - job_name: 'postgresql-kb6'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'postgres-exporter-kb6:9187'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgresql-kb6'
+      - target_label: database
+        replacement: 'kb6_drug_rules_db'
+      - target_label: kb_service
+        replacement: 'KB6'
+
+  # PostgreSQL metrics (KB7 - guideline evidence)
+  - job_name: 'postgresql-kb7'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'postgres-exporter-kb7:9187'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'postgresql-kb7'
+      - target_label: database
+        replacement: 'kb7_guideline_evidence_db'
+      - target_label: kb_service
+        replacement: 'KB7'
+
+  # Kafka broker metrics
+  - job_name: 'kafka'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'kafka-exporter:9308'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'kafka-broker'
+
+  # Kafka topic metrics
+  - job_name: 'kafka-topics'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'kafka-exporter:9308'
+    metric_relabel_configs:
+      # Only keep CDC topics
+      - source_labels: [topic]
+        regex: 'cdc\..*'
+        action: keep
+      - source_labels: [topic]
+        target_label: cdc_topic
+        regex: 'cdc\.(.*)'
+        replacement: '$1'
+
+  # Custom CDC connector health exporter
+  - job_name: 'cdc-health-exporter'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'cdc-health-exporter:8080'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'cdc-health-exporter'
+
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    scrape_interval: 60s
+    static_configs:
+      - targets:
+          - 'node-exporter:9100'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'cardiofit-host'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - 'localhost:9090'
+
+# Recording rules for performance optimization
+recording_rules:
+  groups:
+    - name: cdc_connector_aggregations
+      interval: 60s
+      rules:
+        # Total CDC connectors by state
+        - record: cdc:connector_state:count
+          expr: count(kafka_connect_connector_status) by (state)
+
+        # Total CDC tasks by state
+        - record: cdc:task_state:count
+          expr: count(kafka_connect_connector_task_status) by (state)
+
+        # Average replication lag across all connectors
+        - record: cdc:replication_lag:avg
+          expr: avg(kafka_connect_source_connector_replication_lag_seconds)
+
+        # Total CDC topic throughput
+        - record: cdc:topic_throughput:sum
+          expr: sum(rate(kafka_topic_partition_current_offset{topic=~"cdc\\..*"}[5m]))
+
+        # PostgreSQL replication slot lag total
+        - record: pg:replication_slot_lag:sum
+          expr: sum(pg_replication_slots_lag_bytes{slot_type="logical"})
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus/data
+    retention.time: 30d
+    retention.size: 50GB
+
+# Remote write for long-term storage (optional)
+# remote_write:
+#   - url: 'http://victoriametrics:8428/api/v1/write'
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 10
+#       min_shards: 1
+#       max_samples_per_send: 5000
+#       batch_send_deadline: 5s

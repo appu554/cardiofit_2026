@@ -1,0 +1,238 @@
+# V4.1 Clinical Guideline Curation Pipeline - Full Docker Stack
+# Includes: V4.1 Pipeline, Ollama (Channel F), Snow Owl (L4), Redis, PostgreSQL
+#
+# V4.1 Hybrid Architecture:
+#   - Marker L1 (text-of-record) + Granite-Docling Channel A (structural oracle)
+#   - Ollama sidecar for Channel F NuExtract 2.0-8B
+#
+# Usage:
+#   cd shared/tools/guideline-atomiser
+#   docker compose up -d
+#
+#   # Pull NuExtract model into Ollama (first time only, ~6GB):
+#   docker compose exec ollama ollama pull nuextract
+#
+#   # Run V4.1 Pipeline 1 (hybrid extraction):
+#   docker compose run --rm v4-pipeline-cli python /app/guideline-atomiser/data/run_pipeline_targeted.py --pipeline 1 --source quick-reference
+#
+#   # Run dual extraction comparison:
+#   docker compose run --rm v4-pipeline-cli python /app/guideline-atomiser/data/compare_dual_extraction.py
+
+version: '3.9'
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Ollama - Channel F NuExtract Sidecar (V4.1 NEW)
+  # Hosts NuExtract 2.0-8B model for proposition extraction.
+  # On macOS Docker Desktop: runs on CPU (no Metal passthrough).
+  # For production: run Ollama natively on host for Metal GPU acceleration.
+  # ═══════════════════════════════════════════════════════════════════════════
+  ollama:
+    image: ollama/ollama:latest
+    container_name: v4-ollama
+    ports:
+      - "11434:11434"   # Ollama API
+    volumes:
+      # Persist pulled models across container restarts
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # Ollama image has no curl — use the ollama CLI which contacts the local server
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - v4-network
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # V4.1 Pipeline Service (Marker L1 + Granite Channel A + Multi-Channel L2)
+  # ═══════════════════════════════════════════════════════════════════════════
+  v4-pipeline:
+    image: v4-pipeline:4.3.1
+    build:
+      # Build from shared/ directory to include extraction/ and cql/ modules
+      context: ../..
+      dockerfile: tools/guideline-atomiser/Dockerfile
+    container_name: v4-guideline-pipeline
+    environment:
+      # L3: Claude API (REQUIRED for Pipeline 2)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+      # V4 Channel E: GLiNER Configuration
+      - GLINER_MODEL=urchade/gliner_mediumv2.1
+      - GLINER_DEVICE=cpu
+      - GLINER_THRESHOLD=0.5
+
+      # V4.1 Channel F: Ollama sidecar connection (in-network)
+      - OLLAMA_URL=http://ollama:11434
+      - NUEXTRACT_MODEL=nuextract
+
+      # L4: Snow Owl Connection
+      - SNOW_OWL_URL=http://snow-owl:8080
+      - SNOW_OWL_USER=snowowl
+      - SNOW_OWL_PASSWORD=snowowl123
+
+      # L5: CQL/Vaidshala paths
+      - VAIDSHALA_PATH=/data/vaidshala
+      - REGISTRY_PATH=/app/cql/registry/cql_guideline_registry.yaml
+
+      # Database
+      - POSTGRES_URL=postgresql://v4user:v4pass@postgres:5432/v4_facts
+      - REDIS_URL=redis://redis:6379/0
+
+      # Python
+      - PYTHONPATH=/app:/app/guideline-atomiser
+
+    volumes:
+      # Source PDFs for extraction
+      - ./data/pdfs:/data/pdfs:ro
+
+      # Output directory for extracted facts
+      - ./data/output:/data/output
+
+      # Vaidshala CQL files (mount your vaidshala repo here)
+      - ${VAIDSHALA_LOCAL_PATH:-./vaidshala}:/data/vaidshala:ro
+
+      # magic-pdf.json config for MinerU/MonkeyOCR
+      - ./magic-pdf.json:/root/magic-pdf.json:ro
+
+    depends_on:
+      ollama:
+        condition: service_healthy
+      snow-owl:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - v4-network
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Snow Owl - L4 Terminology Server (RxNorm, LOINC, SNOMED-CT)
+  # Note: Runs via Rosetta emulation on Apple Silicon (M1/M2/M3/M4)
+  # ═══════════════════════════════════════════════════════════════════════════
+  snow-owl:
+    image: b2ihealthcare/snow-owl-oss:9.2.0
+    platform: linux/amd64  # Required for Apple Silicon - runs via Rosetta
+    container_name: v4-snow-owl
+    environment:
+      - SO_JAVA_OPTS=-Xms2g -Xmx4g
+      - SO_ADMIN_PASSWORD=snowowl123
+    ports:
+      - "8080:8080"   # REST API
+      - "2036:2036"   # Binary protocol
+    volumes:
+      # Terminology data persistence
+      - snow-owl-data:/opt/snowowl/resources
+
+      # Import scripts for RxNorm, LOINC, SNOMED-CT
+      - ./terminology-imports:/opt/snowowl/imports:ro
+    healthcheck:
+      # Use root endpoint which returns HTML (200 OK)
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/snowowl/"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s  # Snow Owl takes longer on emulation
+    networks:
+      - v4-network
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PostgreSQL - Facts Store (KB-1, KB-4, KB-16 storage + L2 merged spans)
+  # ═══════════════════════════════════════════════════════════════════════════
+  postgres:
+    image: postgres:16-alpine
+    container_name: v4-postgres
+    environment:
+      - POSTGRES_USER=v4user
+      - POSTGRES_PASSWORD=v4pass
+      - POSTGRES_DB=v4_facts
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U v4user -d v4_facts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - v4-network
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Redis - Extraction Cache & Session State
+  # ═══════════════════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: v4-redis
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - v4-network
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # V4.1 Pipeline CLI - Interactive shell for running extractions
+  # ═══════════════════════════════════════════════════════════════════════════
+  v4-pipeline-cli:
+    image: v4-pipeline:4.3.1
+    build:
+      context: ../..
+      dockerfile: tools/guideline-atomiser/Dockerfile
+    container_name: v4-pipeline-cli
+    stdin_open: true
+    tty: true
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GLINER_MODEL=urchade/gliner_mediumv2.1
+      - GLINER_DEVICE=cpu
+      - OLLAMA_URL=http://ollama:11434
+      - NUEXTRACT_MODEL=nuextract
+      - SNOW_OWL_URL=http://snow-owl:8080
+      - VAIDSHALA_PATH=/data/vaidshala
+      - REGISTRY_PATH=/app/cql/registry/cql_guideline_registry.yaml
+      - PYTHONPATH=/app:/app/guideline-atomiser
+    volumes:
+      - ./data/pdfs:/data/pdfs
+      - ./data/output:/data/output
+      - ${VAIDSHALA_LOCAL_PATH:-./vaidshala}:/data/vaidshala:ro
+      - ./magic-pdf.json:/root/magic-pdf.json:ro
+    entrypoint: ["/bin/bash"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - v4-network
+    profiles:
+      - cli
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Networks
+# ═══════════════════════════════════════════════════════════════════════════
+networks:
+  v4-network:
+    driver: bridge
+    name: v4-guideline-network
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Volumes
+# ═══════════════════════════════════════════════════════════════════════════
+volumes:
+  ollama-models:
+    name: v4-ollama-models
+  snow-owl-data:
+    name: v4-snow-owl-data
+  postgres-data:
+    name: v4-postgres-data
+  redis-data:
+    name: v4-redis-data

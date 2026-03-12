@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 Backend Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0063b1;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 4px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        .hidden {
+            display: none;
+        }
+        .api-test {
+            margin-top: 20px;
+        }
+        input[type="text"], input[type="password"] {
+            padding: 8px;
+            width: 300px;
+            margin-bottom: 10px;
+            display: block;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        #error-message {
+            color: red;
+            margin-top: 10px;
+        }
+        #user-info {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Auth0 Backend Login</h1>
+            <p>Use this page to test the backend authentication API.</p>
+            <div id="user-info">Not logged in</div>
+            <div id="login-form">
+                <label for="username">Username:</label>
+                <input type="text" id="username" placeholder="Email">
+                <label for="password">Password:</label>
+                <input type="password" id="password" placeholder="Password">
+                <button id="login">Login</button>
+                <button id="authorize">Login with Auth0</button>
+            </div>
+            <div id="logout-form" class="hidden">
+                <button id="logout">Logout</button>
+                <button id="refresh">Refresh Token</button>
+            </div>
+            <div id="error-message"></div>
+        </div>
+
+        <div id="token-info" class="card">
+            <h2>Token Information</h2>
+            <pre id="token">No token</pre>
+        </div>
+
+        <div id="api-test" class="card">
+            <h2>API Test</h2>
+            <div>
+                <input type="text" id="api-url" value="http://localhost:8000/api/auth/me">
+                <button id="call-api">Call API</button>
+            </div>
+            <pre id="api-response">No response</pre>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const loginForm = document.getElementById('login-form');
+        const logoutForm = document.getElementById('logout-form');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const loginButton = document.getElementById('login');
+        const authorizeButton = document.getElementById('authorize');
+        const logoutButton = document.getElementById('logout');
+        const refreshButton = document.getElementById('refresh');
+        const callApiButton = document.getElementById('call-api');
+        const tokenElement = document.getElementById('token');
+        const apiResponseElement = document.getElementById('api-response');
+        const apiUrlInput = document.getElementById('api-url');
+        const errorMessageElement = document.getElementById('error-message');
+        const userInfoElement = document.getElementById('user-info');
+
+        // Store tokens
+        let accessToken = '';
+        let refreshToken = '';
+        let tokenExpiry = 0;
+        let userInfo = null;
+        
+        // Check if we have tokens in localStorage
+        window.addEventListener('load', function() {
+            // Try to load tokens from localStorage
+            accessToken = localStorage.getItem('access_token') || '';
+            refreshToken = localStorage.getItem('refresh_token') || '';
+            tokenExpiry = parseInt(localStorage.getItem('token_expiry') || '0');
+            userInfo = JSON.parse(localStorage.getItem('user_info') || 'null');
+            
+            // Update UI based on token status
+            updateUI();
+            
+            // Check if token is expired
+            if (accessToken && tokenExpiry < Date.now()) {
+                refreshTokens();
+            }
+            
+            // Check for authorization code in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            if (code) {
+                // Exchange code for tokens
+                exchangeCodeForTokens(code);
+                // Remove code from URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        });
+        
+        // Login function
+        async function login() {
+            try {
+                errorMessageElement.textContent = '';
+                
+                const username = usernameInput.value;
+                const password = passwordInput.value;
+                
+                if (!username || !password) {
+                    errorMessageElement.textContent = 'Username and password are required';
+                    return;
+                }
+                
+                // Call login API
+                const response = await fetch('http://localhost:8000/api/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username,
+                        password
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Login failed');
+                }
+                
+                const data = await response.json();
+                
+                // Save tokens
+                accessToken = data.access_token;
+                refreshToken = data.refresh_token;
+                tokenExpiry = Date.now() + (data.expires_in * 1000);
+                userInfo = data.user;
+                
+                // Save tokens to localStorage
+                localStorage.setItem('access_token', accessToken);
+                localStorage.setItem('refresh_token', refreshToken);
+                localStorage.setItem('token_expiry', tokenExpiry);
+                localStorage.setItem('user_info', JSON.stringify(userInfo));
+                
+                // Update UI
+                updateUI();
+                
+                // Display token
+                tokenElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('Login error:', error);
+                errorMessageElement.textContent = error.message;
+            }
+        }
+        
+        // Get authorization URL function
+        async function getAuthorizationUrl() {
+            try {
+                errorMessageElement.textContent = '';
+                
+                // Call authorize API
+                const redirectUri = window.location.origin + window.location.pathname;
+                const response = await fetch(`http://localhost:8000/api/auth/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to get authorization URL');
+                }
+                
+                const data = await response.json();
+                
+                // Redirect to authorization URL
+                window.location.href = data.authorization_url;
+            } catch (error) {
+                console.error('Authorization error:', error);
+                errorMessageElement.textContent = error.message;
+            }
+        }
+        
+        // Exchange code for tokens function
+        async function exchangeCodeForTokens(code) {
+            try {
+                errorMessageElement.textContent = '';
+                
+                // Call callback API
+                const redirectUri = window.location.origin + window.location.pathname;
+                const response = await fetch('http://localhost:8000/api/auth/callback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        code,
+                        redirect_uri: redirectUri
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to exchange code for tokens');
+                }
+                
+                const data = await response.json();
+                
+                // Save tokens
+                accessToken = data.access_token;
+                refreshToken = data.refresh_token;
+                tokenExpiry = Date.now() + (data.expires_in * 1000);
+                userInfo = data.user;
+                
+                // Save tokens to localStorage
+                localStorage.setItem('access_token', accessToken);
+                localStorage.setItem('refresh_token', refreshToken);
+                localStorage.setItem('token_expiry', tokenExpiry);
+                localStorage.setItem('user_info', JSON.stringify(userInfo));
+                
+                // Update UI
+                updateUI();
+                
+                // Display token
+                tokenElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('Token exchange error:', error);
+                errorMessageElement.textContent = error.message;
+            }
+        }
+        
+        // Refresh tokens function
+        async function refreshTokens() {
+            try {
+                errorMessageElement.textContent = '';
+                
+                if (!refreshToken) {
+                    errorMessageElement.textContent = 'No refresh token available';
+                    return;
+                }
+                
+                // Call refresh API
+                const response = await fetch('http://localhost:8000/api/auth/refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        refresh_token: refreshToken
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to refresh token');
+                }
+                
+                const data = await response.json();
+                
+                // Save tokens
+                accessToken = data.access_token;
+                refreshToken = data.refresh_token || refreshToken;
+                tokenExpiry = Date.now() + (data.expires_in * 1000);
+                userInfo = data.user;
+                
+                // Save tokens to localStorage
+                localStorage.setItem('access_token', accessToken);
+                localStorage.setItem('refresh_token', refreshToken);
+                localStorage.setItem('token_expiry', tokenExpiry);
+                localStorage.setItem('user_info', JSON.stringify(userInfo));
+                
+                // Update UI
+                updateUI();
+                
+                // Display token
+                tokenElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('Token refresh error:', error);
+                errorMessageElement.textContent = error.message;
+                
+                // If refresh fails, logout
+                logout();
+            }
+        }
+        
+        // Logout function
+        async function logout() {
+            try {
+                errorMessageElement.textContent = '';
+                
+                // Call logout API
+                const response = await fetch('http://localhost:8000/api/auth/logout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        refresh_token: refreshToken
+                    })
+                });
+                
+                // Clear tokens
+                accessToken = '';
+                refreshToken = '';
+                tokenExpiry = 0;
+                userInfo = null;
+                
+                // Clear localStorage
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('refresh_token');
+                localStorage.removeItem('token_expiry');
+                localStorage.removeItem('user_info');
+                
+                // Update UI
+                updateUI();
+                
+                // Clear token display
+                tokenElement.textContent = 'No token';
+                apiResponseElement.textContent = 'No response';
+            } catch (error) {
+                console.error('Logout error:', error);
+                errorMessageElement.textContent = error.message;
+            }
+        }
+        
+        // Call API function
+        async function callApi() {
+            try {
+                errorMessageElement.textContent = '';
+                apiResponseElement.textContent = 'Loading...';
+                
+                if (!accessToken) {
+                    errorMessageElement.textContent = 'No access token available';
+                    apiResponseElement.textContent = 'No response';
+                    return;
+                }
+                
+                // Check if token is expired
+                if (tokenExpiry < Date.now()) {
+                    await refreshTokens();
+                    if (!accessToken) {
+                        return;
+                    }
+                }
+                
+                // Call API
+                const apiUrl = apiUrlInput.value;
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || `HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                apiResponseElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API error:', error);
+                errorMessageElement.textContent = error.message;
+                apiResponseElement.textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        // Update UI based on token status
+        function updateUI() {
+            if (accessToken && userInfo) {
+                // User is logged in
+                loginForm.classList.add('hidden');
+                logoutForm.classList.remove('hidden');
+                
+                // Display user info
+                if (userInfo.full_name) {
+                    userInfoElement.textContent = `Welcome, ${userInfo.full_name}`;
+                } else if (userInfo.email) {
+                    userInfoElement.textContent = `Welcome, ${userInfo.email}`;
+                } else if (userInfo.id) {
+                    userInfoElement.textContent = `Welcome, User ${userInfo.id.split('|')[1].substring(0, 4)}`;
+                } else {
+                    userInfoElement.textContent = 'Welcome, Authenticated User';
+                }
+            } else {
+                // User is not logged in
+                loginForm.classList.remove('hidden');
+                logoutForm.classList.add('hidden');
+                userInfoElement.textContent = 'Not logged in';
+            }
+        }
+        
+        // Event listeners
+        loginButton.addEventListener('click', login);
+        authorizeButton.addEventListener('click', getAuthorizationUrl);
+        logoutButton.addEventListener('click', logout);
+        refreshButton.addEventListener('click', refreshTokens);
+        callApiButton.addEventListener('click', callApi);
+    </script>
+</body>
+</html>

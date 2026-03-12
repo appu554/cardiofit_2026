@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  jobmanager:
+    image: flink:2.1.0-scala_2.12-java17
+    container_name: flink-jobmanager
+    command: jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 4
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    volumes:
+      - ./target:/opt/flink/usrlib
+      - ./checkpoints:/checkpoints
+      - ./savepoints:/savepoints
+      - ../../services/patient-service/credentials:/app/credentials:ro
+      - ./models:/opt/flink/models:ro
+    networks:
+      - kafka_cardiofit-network
+      - default
+
+  taskmanager:
+    image: flink:2.1.0-scala_2.12-java17
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    scale: 2
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        taskmanager.memory.process.size: 8g
+        taskmanager.memory.task.heap.size: 4g
+        taskmanager.memory.managed.fraction: 0.2
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+    volumes:
+      - ./target:/opt/flink/usrlib
+      - ./checkpoints:/checkpoints
+      - ../../services/patient-service/credentials:/app/credentials:ro
+      - ./models:/opt/flink/models:ro
+    networks:
+      - kafka_cardiofit-network
+      - default
+
+networks:
+  kafka_cardiofit-network:
+    external: true

@@ -1,0 +1,440 @@
+package com.cardiofit.flink.state;
+
+import com.cardiofit.flink.models.PatientSnapshot;
+import com.cardiofit.flink.models.Demographics;
+import com.cardiofit.flink.models.VitalsHistory;
+import com.cardiofit.flink.models.SocialDeterminants;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Comprehensive test suite for state migration framework.
+ *
+ * <p><b>Test Coverage:</b>
+ * <ul>
+ *   <li>V1 to V2 schema migration with backward compatibility</li>
+ *   <li>TypeSerializer serialization/deserialization roundtrip</li>
+ *   <li>Safe default initialization for new fields</li>
+ *   <li>Data integrity validation across schema versions</li>
+ *   <li>Schema registry version management</li>
+ * </ul>
+ *
+ * <p><b>Clinical Safety Requirements:</b>
+ * All tests verify that no patient data is lost during schema evolution,
+ * and that missing fields receive clinically safe default values.
+ *
+ * @see PatientSnapshotSerializer Version-aware serialization logic
+ * @see StateSchemaRegistry Centralized schema version management
+ */
+@DisplayName("State Migration Framework Tests")
+public class StateMigrationTest {
+
+    private PatientSnapshotSerializer serializer;
+
+    @BeforeEach
+    public void setUp() {
+        serializer = new PatientSnapshotSerializer();
+    }
+
+    // ========================================================================================
+    // TEST GROUP 1: V1 → V2 Migration with Backward Compatibility
+    // ========================================================================================
+
+    @Test
+    @DisplayName("Should migrate V1 PatientSnapshot to V2 with safe defaults")
+    public void testPatientSnapshotV1toV2Migration() throws Exception {
+        // ARRANGE: Create V1 snapshot (no socialDeterminants field)
+        PatientSnapshot v1Snapshot = createV1PatientSnapshot();
+
+        // ACT: Serialize as V1, deserialize as V2
+        byte[] serializedV1 = serializeAsV1(v1Snapshot);
+        PatientSnapshot v2Snapshot = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(serializedV1))
+        );
+
+        // ASSERT: All V1 fields preserved
+        assertEquals(v1Snapshot.getPatientId(), v2Snapshot.getPatientId());
+        assertEquals(v1Snapshot.getDemographics().getAge(), v2Snapshot.getDemographics().getAge());
+        assertEquals(v1Snapshot.getVitalsHistory().size(), v2Snapshot.getVitalsHistory().size());
+
+        // ASSERT: New V2 field initialized with safe defaults
+        assertNotNull(v2Snapshot.getSocialDeterminants(),
+            "V2 socialDeterminants should not be null");
+        assertNotNull(v2Snapshot.getSocialDeterminants().getHousingStatus(),
+            "Housing status should have safe default");
+        assertEquals("UNKNOWN", v2Snapshot.getSocialDeterminants().getHousingStatus(),
+            "Housing status default should be UNKNOWN");
+        assertFalse(v2Snapshot.getSocialDeterminants().isFoodInsecurity(),
+            "Food insecurity should default to false");
+    }
+
+    @Test
+    @DisplayName("Should handle V2 serialization with full fields")
+    public void testPatientSnapshotV2SerializationRoundtrip() throws Exception {
+        // ARRANGE: Create V2 snapshot with socialDeterminants
+        PatientSnapshot v2Original = createV2PatientSnapshot();
+
+        // ACT: Serialize and deserialize V2
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        serializer.serialize(v2Original, new DataOutputViewStreamWrapper(baos));
+
+        PatientSnapshot v2Deserialized = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(baos.toByteArray()))
+        );
+
+        // ASSERT: All fields preserved exactly
+        assertEquals(v2Original.getPatientId(), v2Deserialized.getPatientId());
+        assertEquals(v2Original.getDemographics().getAge(), v2Deserialized.getDemographics().getAge());
+
+        // ASSERT: V2-specific fields preserved
+        assertNotNull(v2Deserialized.getSocialDeterminants());
+        assertEquals(v2Original.getSocialDeterminants().getHousingStatus(),
+                     v2Deserialized.getSocialDeterminants().getHousingStatus());
+        assertEquals(v2Original.getSocialDeterminants().isFoodInsecurity(),
+                     v2Deserialized.getSocialDeterminants().isFoodInsecurity());
+    }
+
+    @Test
+    @DisplayName("Should preserve data integrity across multiple migrations")
+    public void testMultipleMigrationCycles() throws Exception {
+        // ARRANGE: Create original V1 snapshot
+        PatientSnapshot original = createV1PatientSnapshot();
+
+        // ACT: Perform 3 migration cycles (V1→V2→V1→V2)
+        byte[] v1Bytes = serializeAsV1(original);
+
+        // Cycle 1: V1 → V2
+        PatientSnapshot cycle1 = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(v1Bytes))
+        );
+
+        // Cycle 2: V2 → V2 (roundtrip)
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        serializer.serialize(cycle1, new DataOutputViewStreamWrapper(baos));
+        PatientSnapshot cycle2 = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(baos.toByteArray()))
+        );
+
+        // Cycle 3: V2 → V2 (another roundtrip)
+        baos.reset();
+        serializer.serialize(cycle2, new DataOutputViewStreamWrapper(baos));
+        PatientSnapshot cycle3 = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(baos.toByteArray()))
+        );
+
+        // ASSERT: Core patient data unchanged after 3 cycles
+        assertEquals(original.getPatientId(), cycle3.getPatientId());
+        assertEquals(original.getDemographics().getAge(), cycle3.getDemographics().getAge());
+        assertEquals(original.getVitalsHistory().size(), cycle3.getVitalsHistory().size());
+
+        // ASSERT: V2 fields remain consistent
+        assertEquals(cycle1.getSocialDeterminants().getHousingStatus(),
+                     cycle3.getSocialDeterminants().getHousingStatus());
+    }
+
+    // ========================================================================================
+    // TEST GROUP 2: Serializer Backward Compatibility
+    // ========================================================================================
+
+    @Test
+    @DisplayName("Should deserialize V1 binary data with V2 serializer")
+    public void testSerializerBackwardCompatibility() throws Exception {
+        // ARRANGE: Simulate V1 binary data from production savepoint
+        PatientSnapshot v1Data = createV1PatientSnapshot();
+        byte[] v1Binary = serializeAsV1(v1Data);
+
+        // ACT: Read V1 binary with V2 serializer (simulates production upgrade)
+        DataInputViewStreamWrapper input = new DataInputViewStreamWrapper(
+            new ByteArrayInputStream(v1Binary)
+        );
+        PatientSnapshot migratedData = serializer.deserialize(input);
+
+        // ASSERT: V1 data successfully read
+        assertEquals(v1Data.getPatientId(), migratedData.getPatientId());
+        assertNotNull(migratedData.getDemographics());
+        assertNotNull(migratedData.getVitalsHistory());
+
+        // ASSERT: V2 fields initialized with safe defaults
+        assertNotNull(migratedData.getSocialDeterminants(),
+            "Missing V2 field should be initialized");
+        assertEquals("UNKNOWN", migratedData.getSocialDeterminants().getHousingStatus(),
+            "Safe default should prevent null values");
+    }
+
+    @Test
+    @DisplayName("Should handle corrupted version header gracefully")
+    public void testCorruptedVersionHeader() throws Exception {
+        // ARRANGE: Create binary data with invalid version number
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputViewStreamWrapper output = new DataOutputViewStreamWrapper(baos);
+        output.writeInt(999); // Invalid version
+        output.writeUTF("PT-12345");
+
+        // ACT & ASSERT: Should throw exception with clear error message
+        DataInputViewStreamWrapper input = new DataInputViewStreamWrapper(
+            new ByteArrayInputStream(baos.toByteArray())
+        );
+
+        Exception exception = assertThrows(IOException.class, () -> {
+            serializer.deserialize(input);
+        });
+
+        assertTrue(exception.getMessage().contains("version") ||
+                   exception.getMessage().contains("Unsupported"),
+                   "Error message should indicate version incompatibility");
+    }
+
+    // ========================================================================================
+    // TEST GROUP 3: Data Integrity Validation
+    // ========================================================================================
+
+    @Test
+    @DisplayName("Should preserve all clinical data during migration")
+    public void testClinicalDataIntegrityAfterMigration() throws Exception {
+        // ARRANGE: Create V1 snapshot with critical clinical data
+        PatientSnapshot v1 = createV1PatientSnapshot();
+        v1.getDemographics().setAge(72);
+        v1.getDemographics().setGender("M");
+        v1.getConditions().add("I50.9"); // ICD-10 Heart Failure
+        v1.getConditions().add("E11.9"); // ICD-10 Type 2 Diabetes
+
+        // ACT: Migrate to V2
+        byte[] serialized = serializeAsV1(v1);
+        PatientSnapshot v2 = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(serialized))
+        );
+
+        // ASSERT: Critical clinical data preserved
+        assertEquals(72, v2.getDemographics().getAge(),
+            "Patient age must be preserved (critical for dosing)");
+        assertEquals("M", v2.getDemographics().getGender(),
+            "Patient gender must be preserved (critical for clinical decisions)");
+        assertTrue(v2.getConditions().contains("I50.9"),
+            "Heart failure diagnosis must be preserved");
+        assertTrue(v2.getConditions().contains("E11.9"),
+            "Diabetes diagnosis must be preserved");
+    }
+
+    @Test
+    @DisplayName("Should handle empty/null collections safely")
+    public void testEmptyCollectionsMigration() throws Exception {
+        // ARRANGE: V1 snapshot with empty collections
+        PatientSnapshot v1 = new PatientSnapshot();
+        v1.setPatientId("PT-EMPTY-001");
+        v1.setDemographics(new Demographics());
+        v1.setConditions(new ArrayList<>()); // Empty conditions
+        v1.setActiveMedications(new ArrayList<>()); // Empty medications
+        v1.setVitalsHistory(new VitalsHistory()); // Empty vitals
+
+        // ACT: Serialize and deserialize
+        byte[] serialized = serializeAsV1(v1);
+        PatientSnapshot v2 = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(serialized))
+        );
+
+        // ASSERT: Empty collections preserved (not null)
+        assertNotNull(v2.getConditions());
+        assertNotNull(v2.getActiveMedications());
+        assertNotNull(v2.getVitalsHistory());
+        assertEquals(0, v2.getConditions().size());
+        assertEquals(0, v2.getActiveMedications().size());
+        assertTrue(v2.getVitalsHistory().isEmpty());
+    }
+
+    @Test
+    @DisplayName("Should handle large patient datasets efficiently")
+    public void testLargePatientDatasetMigration() throws Exception {
+        // ARRANGE: V1 snapshot with large dataset (simulating long-term patient)
+        PatientSnapshot v1 = createV1PatientSnapshot();
+
+        // Add 100 conditions (chronic patient)
+        for (int i = 0; i < 100; i++) {
+            v1.getConditions().add("ICD10-" + String.format("%03d", i));
+        }
+
+        // ACT: Migrate large dataset
+        long startTime = System.currentTimeMillis();
+        byte[] serialized = serializeAsV1(v1);
+        PatientSnapshot v2 = serializer.deserialize(
+            new DataInputViewStreamWrapper(new ByteArrayInputStream(serialized))
+        );
+        long duration = System.currentTimeMillis() - startTime;
+
+        // ASSERT: All data preserved
+        assertEquals(100, v2.getConditions().size(),
+            "All 100 conditions should be preserved");
+
+        // ASSERT: Performance acceptable (< 100ms for large dataset)
+        assertTrue(duration < 100,
+            "Migration should complete in <100ms, took: " + duration + "ms");
+    }
+
+    // ========================================================================================
+    // TEST GROUP 4: Schema Registry Integration
+    // ========================================================================================
+
+    @Test
+    @DisplayName("Should retrieve correct schema version from registry")
+    public void testSchemaRegistryVersionLookup() {
+        // ACT: Get current version for PatientSnapshot
+        int currentVersion = StateSchemaRegistry.getCurrentVersion("PatientSnapshot");
+
+        // ASSERT: Should be V2 (current production version)
+        assertEquals(2, currentVersion,
+            "Current PatientSnapshot version should be 2");
+    }
+
+    @Test
+    @DisplayName("Should track schema evolution history")
+    public void testSchemaEvolutionHistory() {
+        // ACT: Get schema version info
+        StateSchemaVersion schemaVersion = StateSchemaRegistry.getSchema("PatientSnapshot");
+
+        // ASSERT: Version history tracked
+        assertNotNull(schemaVersion);
+        assertEquals(2, schemaVersion.getCurrentVersion());
+        assertTrue(schemaVersion.getVersionDescriptions().containsKey(1),
+            "V1 schema should be documented");
+        assertTrue(schemaVersion.getVersionDescriptions().containsKey(2),
+            "V2 schema should be documented");
+    }
+
+    // ========================================================================================
+    // TEST GROUP 5: Edge Cases and Error Handling
+    // ========================================================================================
+
+    @Test
+    @DisplayName("Should handle concurrent version migrations")
+    public void testConcurrentMigrations() throws Exception {
+        // ARRANGE: Create 10 patient snapshots
+        List<PatientSnapshot> patients = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            PatientSnapshot p = createV1PatientSnapshot();
+            p.setPatientId("PT-CONCURRENT-" + String.format("%03d", i));
+            patients.add(p);
+        }
+
+        // ACT: Migrate all concurrently (simulates parallel Flink processing)
+        List<PatientSnapshot> migrated = patients.parallelStream()
+            .map(p -> {
+                try {
+                    byte[] bytes = serializeAsV1(p);
+                    return serializer.deserialize(
+                        new DataInputViewStreamWrapper(new ByteArrayInputStream(bytes))
+                    );
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            })
+            .collect(Collectors.toList());
+
+        // ASSERT: All migrations successful
+        assertEquals(10, migrated.size());
+        for (int i = 0; i < 10; i++) {
+            assertEquals(patients.get(i).getPatientId(), migrated.get(i).getPatientId());
+            assertNotNull(migrated.get(i).getSocialDeterminants());
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle null patient ID gracefully")
+    public void testNullPatientIdHandling() throws Exception {
+        // ARRANGE: Snapshot with null patient ID (invalid but should not crash)
+        PatientSnapshot invalid = new PatientSnapshot();
+        invalid.setPatientId(null); // Invalid state
+        invalid.setDemographics(new Demographics());
+
+        // ACT & ASSERT: Should throw validation exception
+        Exception exception = assertThrows(Exception.class, () -> {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            serializer.serialize(invalid, new DataOutputViewStreamWrapper(baos));
+        });
+
+        // Error should indicate validation failure
+        assertTrue(exception.getMessage().contains("patientId") ||
+                   exception instanceof NullPointerException,
+                   "Should fail validation for null patientId");
+    }
+
+    // ========================================================================================
+    // HELPER METHODS
+    // ========================================================================================
+
+    /**
+     * Creates a V1 PatientSnapshot (pre-socialDeterminants schema).
+     */
+    private PatientSnapshot createV1PatientSnapshot() {
+        PatientSnapshot snapshot = new PatientSnapshot();
+        snapshot.setPatientId("PT-12345");
+
+        Demographics demographics = new Demographics();
+        demographics.setAge(65);
+        demographics.setGender("F");
+        snapshot.setDemographics(demographics);
+
+        snapshot.setConditions(new ArrayList<>(List.of("I10", "E11.9")));
+        snapshot.setActiveMedications(new ArrayList<>());
+        snapshot.setVitalsHistory(new VitalsHistory());
+
+        return snapshot;
+    }
+
+    /**
+     * Creates a V2 PatientSnapshot (with socialDeterminants).
+     */
+    private PatientSnapshot createV2PatientSnapshot() {
+        PatientSnapshot snapshot = createV1PatientSnapshot();
+
+        SocialDeterminants socialDeterminants = new SocialDeterminants();
+        socialDeterminants.setHousingStatus("STABLE");
+        socialDeterminants.setFoodInsecurity(false);
+        socialDeterminants.setTransportationAccess(true);
+        snapshot.setSocialDeterminants(socialDeterminants);
+
+        return snapshot;
+    }
+
+    /**
+     * Serializes a PatientSnapshot as V1 format (for testing backward compatibility).
+     */
+    private byte[] serializeAsV1(PatientSnapshot snapshot) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputViewStreamWrapper output = new DataOutputViewStreamWrapper(baos);
+
+        // Write V1 version header
+        output.writeInt(1);
+
+        // Write V1 fields only
+        output.writeUTF(snapshot.getPatientId());
+
+        // Demographics
+        Demographics demo = snapshot.getDemographics();
+        output.writeInt(demo.getAge());
+        output.writeUTF(demo.getGender());
+
+        // Conditions
+        output.writeInt(snapshot.getConditions().size());
+        for (String condition : snapshot.getConditions()) {
+            output.writeUTF(condition);
+        }
+
+        // Medications (simplified)
+        output.writeInt(snapshot.getActiveMedications().size());
+
+        // VitalsHistory (simplified)
+        output.writeInt(snapshot.getVitalsHistory().size());
+
+        return baos.toByteArray();
+    }
+}

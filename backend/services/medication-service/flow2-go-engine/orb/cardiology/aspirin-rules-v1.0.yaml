@@ -1,0 +1,135 @@
+# Enhanced ORB Rule: Aspirin Cardioprotection with Minimal Knowledge Manifest
+# This demonstrates knowledge_manifest with minimal KB requirements (5/7 KBs)
+# File: /orb/cardiology/aspirin-rules-v1.0.yaml
+
+metadata:
+  version: "1.0"
+  last_updated: "2024-01-15"
+  description: "Aspirin cardioprotection rules with minimal Knowledge Manifest"
+  author: "Cardiology Team"
+  validation_status: "approved"
+  clinical_complexity: "low"
+
+rules:
+  - id: "aspirin-cardioprotection-primary-v1"
+    priority: 50
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Aspirin" }
+        - { fact: "indication", operator: "equal", value: "PRIMARY_PREVENTION" }
+        - { fact: "patient.age_years", operator: "gte", value: 40 }
+        - { fact: "patient.age_years", operator: "lte", value: 70 }
+    action:
+      generate_manifest:
+        intent: "aspirin_cardioprotection"
+        recipe_id: "aspirin-cardioprotection-v1.0"
+        variant: "primary_prevention"
+        
+        # Simple data requirements for aspirin
+        data_manifest:
+          required:
+            - "demographics.age"
+            - "demographics.weight.actual_kg"
+            - "conditions.cardiovascular_risk"
+            - "conditions.bleeding_risk"
+            - "medications.anticoagulants[active]"
+            - "labs.platelet_count[latest]"
+        
+        # Minimal KB requirements (5/7 KBs) - aspirin is straightforward
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"           # Basic aspirin information
+            - "kb_dosing_rules_v1"          # Simple dosing (81mg vs 325mg)
+            - "kb_ddi_v1"                   # Drug interactions (warfarin, etc.)
+            - "kb_formulary_stock_v1"       # Formulary status
+            - "kb_patient_safe_checks_v1"   # Bleeding risk assessment
+            # OMITTED: "kb_guideline_evidence_v1" - simple case, basic guidelines sufficient
+            # OMITTED: "kb_resistance_profiles_v1" - not applicable to aspirin
+
+  - id: "aspirin-cardioprotection-secondary-v1"
+    priority: 60
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Aspirin" }
+        - { fact: "indication", operator: "equal", value: "SECONDARY_PREVENTION" }
+        - { fact: "patient.history.myocardial_infarction", operator: "equal", value: true }
+    action:
+      generate_manifest:
+        intent: "aspirin_secondary_prevention"
+        recipe_id: "aspirin-cardioprotection-v1.0"
+        variant: "secondary_prevention"
+        
+        data_manifest:
+          required:
+            - "demographics.age"
+            - "conditions.cardiovascular_disease"
+            - "conditions.bleeding_risk"
+            - "medications.anticoagulants[active]"
+            - "procedures.cardiac_interventions[history]"
+        
+        # Same minimal KB requirements for secondary prevention
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"
+            - "kb_dosing_rules_v1"
+            - "kb_ddi_v1"
+            - "kb_formulary_stock_v1"
+            - "kb_patient_safe_checks_v1"
+
+  - id: "aspirin-high-dose-pain-v1"
+    priority: 30
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Aspirin" }
+        - { fact: "indication", operator: "equal", value: "PAIN_MANAGEMENT" }
+        - { fact: "requested_dose_mg", operator: "gte", value: 650 }
+    action:
+      generate_manifest:
+        intent: "aspirin_analgesic"
+        recipe_id: "aspirin-analgesic-v1.0"
+        variant: "high_dose"
+        
+        data_manifest:
+          required:
+            - "demographics.age"
+            - "demographics.weight.actual_kg"
+            - "conditions.gastrointestinal_risk"
+            - "conditions.bleeding_risk"
+            - "labs.liver_function[latest]"
+        
+        # High-dose aspirin needs guidelines for safety
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"           # Aspirin properties
+            - "kb_dosing_rules_v1"          # High-dose protocols
+            - "kb_ddi_v1"                   # Interactions at high doses
+            - "kb_formulary_stock_v1"       # Available formulations
+            - "kb_patient_safe_checks_v1"   # GI bleeding risk
+            - "kb_guideline_evidence_v1"    # High-dose safety guidelines
+            # OMITTED: "kb_resistance_profiles_v1" - not applicable
+
+  # Backward compatibility example - rule without knowledge_manifest
+  - id: "aspirin-legacy-rule-v1"
+    priority: 10
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Aspirin" }
+        - { fact: "indication", operator: "equal", value: "LEGACY_REQUEST" }
+    action:
+      generate_manifest:
+        intent: "aspirin_legacy"
+        recipe_id: "aspirin-legacy-v1.0"
+        variant: "standard"
+        
+        data_manifest:
+          required:
+            - "demographics.age"
+            - "demographics.weight.actual_kg"
+        
+        # NO knowledge_manifest section - will fall back to all 7 KBs
+        # This demonstrates backward compatibility
+
+rule_evaluation:
+  evaluation_order: "priority_desc"
+  stop_on_first_match: true
+  evaluation_timeout_ms: 50

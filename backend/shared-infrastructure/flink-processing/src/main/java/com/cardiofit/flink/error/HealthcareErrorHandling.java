@@ -1,0 +1,750 @@
+
+package com.cardiofit.flink.error;
+
+import com.cardiofit.flink.models.*;
+import com.cardiofit.flink.utils.KafkaTopics;
+import org.apache.flink.api.common.functions.FilterFunction;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+
+import java.time.Instant;
+import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
+
+/**
+ * Advanced error handling system for healthcare data processing
+ * Implements Dead Letter Queue (DLQ) routing, exponential backoff retry logic,
+ * and healthcare-specific error classification and recovery strategies
+ */
+public class HealthcareErrorHandling {
+
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    // Output tags for different error categories
+    public static final OutputTag<ErrorEvent> SCHEMA_VALIDATION_ERRORS =
+        new OutputTag<ErrorEvent>("schema-validation-errors") {};
+
+    public static final OutputTag<ErrorEvent> CLINICAL_RULE_VIOLATIONS =
+        new OutputTag<ErrorEvent>("clinical-rule-violations") {};
+
+    public static final OutputTag<ErrorEvent> DATA_QUALITY_ISSUES =
+        new OutputTag<ErrorEvent>("data-quality-issues") {};
+
+    public static final OutputTag<ErrorEvent> PROCESSING_FAILURES =
+        new OutputTag<ErrorEvent>("processing-failures") {};
+
+    public static final OutputTag<ErrorEvent> CRITICAL_SAFETY_ERRORS =
+        new OutputTag<ErrorEvent>("critical-safety-errors") {};
+
+    // Retry configuration constants
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    private static final long BASE_RETRY_DELAY_MS = 1000; // 1 second
+    private static final long MAX_RETRY_DELAY_MS = 30000; // 30 seconds
+    private static final double RETRY_BACKOFF_MULTIPLIER = 2.0;
+
+    /**
+     * Comprehensive error classification and routing processor
+     * Routes errors to appropriate DLQ topics based on error type and severity
+     */
+    public static class ErrorClassificationProcessor extends ProcessFunction<RawEvent, com.cardiofit.flink.models.CanonicalEvent> {
+
+        @Override
+        public void processElement(RawEvent event, Context ctx, Collector<com.cardiofit.flink.models.CanonicalEvent> out) throws Exception {
+            try {
+                // Validate and process the event
+                com.cardiofit.flink.models.CanonicalEvent canonicalEvent = validateAndConvert(event);
+                out.collect(canonicalEvent);
+
+            } catch (SchemaValidationException e) {
+                handleSchemaValidationError(event, e, ctx);
+            } catch (ClinicalRuleViolationException e) {
+                handleClinicalRuleViolation(event, e, ctx);
+            } catch (DataQualityException e) {
+                handleDataQualityIssue(event, e, ctx);
+            } catch (CriticalSafetyException e) {
+                handleCriticalSafetyError(event, e, ctx);
+            } catch (Exception e) {
+                handleGeneralProcessingFailure(event, e, ctx);
+            }
+        }
+
+        private com.cardiofit.flink.models.CanonicalEvent validateAndConvert(RawEvent event) throws Exception {
+            // Schema validation
+            validateEventSchema(event);
+
+            // Clinical rule validation
+            validateClinicalRules(event);
+
+            // Data quality checks
+            validateDataQuality(event);
+
+            // Critical safety checks
+            validateCriticalSafetyRules(event);
+
+            // Convert to canonical event if all validations pass
+            return convertToCanonicalEvent(event);
+        }
+
+        private void validateEventSchema(RawEvent event) throws SchemaValidationException {
+            if (event.getPatientId() == null || event.getPatientId().trim().isEmpty()) {
+                throw new SchemaValidationException("Missing required field: patientId");
+            }
+
+            if (event.getType() == null) {
+                throw new SchemaValidationException("Missing required field: eventType");
+            }
+
+            if (event.getEventTime() <= 0) {
+                throw new SchemaValidationException("Invalid timestamp: " + event.getEventTime());
+            }
+
+            // Validate payload structure based on event type
+            validatePayloadStructure(event);
+        }
+
+        private void validatePayloadStructure(RawEvent event) throws SchemaValidationException {
+            Object payload = event.getPayload();
+            if (payload == null) {
+                throw new SchemaValidationException("Null payload for event type: " + event.getType());
+            }
+
+            try {
+                JsonNode payloadNode = objectMapper.valueToTree(payload);
+
+                switch (event.getType()) {
+                    case "VITAL_SIGNS":
+                        validateVitalSignsPayload(payloadNode);
+                        break;
+                    case "MEDICATION_ADMINISTRATION":
+                        validateMedicationPayload(payloadNode);
+                        break;
+                    case "LAB_RESULT":
+                        validateLabResultPayload(payloadNode);
+                        break;
+                    case "CLINICAL_NOTE":
+                        validateClinicalNotePayload(payloadNode);
+                        break;
+                    default:
+                        validateGenericPayload(payloadNode);
+                }
+            } catch (Exception e) {
+                throw new SchemaValidationException("Payload validation failed: " + e.getMessage());
+            }
+        }
+
+        private void validateVitalSignsPayload(JsonNode payload) throws SchemaValidationException {
+            // Validate required vital sign fields
+            String[] requiredFields = {"heart_rate", "blood_pressure", "respiratory_rate", "temperature"};
+            for (String field : requiredFields) {
+                if (!payload.has(field)) {
+                    throw new SchemaValidationException("Missing vital sign field: " + field);
+                }
+            }
+
+            // Validate ranges
+            if (payload.has("heart_rate")) {
+                int heartRate = payload.get("heart_rate").asInt();
+                if (heartRate < 20 || heartRate > 300) {
+                    throw new SchemaValidationException("Heart rate out of valid range: " + heartRate);
+                }
+            }
+
+            if (payload.has("temperature")) {
+                double temperature = payload.get("temperature").asDouble();
+                if (temperature < 25.0 || temperature > 50.0) {
+                    throw new SchemaValidationException("Temperature out of valid range: " + temperature);
+                }
+            }
+        }
+
+        private void validateMedicationPayload(JsonNode payload) throws SchemaValidationException {
+            String[] requiredFields = {"medication_name", "dose", "route", "frequency"};
+            for (String field : requiredFields) {
+                if (!payload.has(field)) {
+                    throw new SchemaValidationException("Missing medication field: " + field);
+                }
+            }
+        }
+
+        private void validateLabResultPayload(JsonNode payload) throws SchemaValidationException {
+            String[] requiredFields = {"test_name", "value", "unit", "reference_range"};
+            for (String field : requiredFields) {
+                if (!payload.has(field)) {
+                    throw new SchemaValidationException("Missing lab result field: " + field);
+                }
+            }
+        }
+
+        private void validateClinicalNotePayload(JsonNode payload) throws SchemaValidationException {
+            if (!payload.has("note_text") || payload.get("note_text").asText().trim().isEmpty()) {
+                throw new SchemaValidationException("Clinical note text is required");
+            }
+
+            if (!payload.has("note_type")) {
+                throw new SchemaValidationException("Clinical note type is required");
+            }
+        }
+
+        private void validateGenericPayload(JsonNode payload) throws SchemaValidationException {
+            // Basic validation for unknown event types
+            if (payload.size() == 0) {
+                throw new SchemaValidationException("Empty payload for generic event");
+            }
+        }
+
+        private void validateClinicalRules(RawEvent event) throws ClinicalRuleViolationException {
+            // Implement clinical business rules validation
+            switch (event.getType()) {
+                case "MEDICATION_ADMINISTRATION":
+                    validateMedicationRules(event);
+                    break;
+                case "LAB_RESULT":
+                    validateLabResultRules(event);
+                    break;
+                case "VITAL_SIGNS":
+                    validateVitalSignRules(event);
+                    break;
+            }
+        }
+
+        private void validateMedicationRules(RawEvent event) throws ClinicalRuleViolationException {
+            JsonNode payload = objectMapper.valueToTree(event.getPayload());
+
+            // Check for high-risk medications
+            String medicationName = payload.get("medication_name").asText().toLowerCase();
+            if (isHighRiskMedication(medicationName)) {
+                String dose = payload.get("dose").asText();
+                if (!validateHighRiskMedicationDose(medicationName, dose)) {
+                    throw new ClinicalRuleViolationException(
+                        "High-risk medication dose validation failed: " + medicationName + " " + dose);
+                }
+            }
+
+            // Check for duplicate administration within time window
+            // This would typically check against patient state
+            // For now, implementing basic validation
+        }
+
+        private void validateLabResultRules(RawEvent event) throws ClinicalRuleViolationException {
+            JsonNode payload = objectMapper.valueToTree(event.getPayload());
+
+            String testName = payload.get("test_name").asText().toLowerCase();
+            double value = payload.get("value").asDouble();
+
+            // Check for critical values that require immediate attention
+            if (isCriticalLabValue(testName, value)) {
+                // This is actually a valid scenario, but we flag it for priority handling
+                // In a real system, this might trigger immediate alerts rather than errors
+            }
+        }
+
+        private void validateVitalSignRules(RawEvent event) throws ClinicalRuleViolationException {
+            JsonNode payload = objectMapper.valueToTree(event.getPayload());
+
+            // Check for vital sign combinations that indicate immediate danger
+            if (payload.has("heart_rate") && payload.has("blood_pressure")) {
+                int heartRate = payload.get("heart_rate").asInt();
+                String bpString = payload.get("blood_pressure").asText();
+
+                if (indicatesCardiacEmergency(heartRate, bpString)) {
+                    throw new ClinicalRuleViolationException(
+                        "Vital signs indicate potential cardiac emergency: HR=" + heartRate + ", BP=" + bpString);
+                }
+            }
+        }
+
+        private void validateDataQuality(RawEvent event) throws DataQualityException {
+            // Check for data freshness
+            long eventAge = System.currentTimeMillis() - event.getEventTime();
+            long maxAgeMs = getMaxAllowableAge(event.getType());
+
+            if (eventAge > maxAgeMs) {
+                throw new DataQualityException("Event is too old: " + eventAge + "ms, max allowed: " + maxAgeMs + "ms");
+            }
+
+            // Check for duplicate events
+            if (isDuplicateEvent(event)) {
+                throw new DataQualityException("Duplicate event detected");
+            }
+
+            // Check data completeness
+            validateDataCompleteness(event);
+        }
+
+        private void validateDataCompleteness(RawEvent event) throws DataQualityException {
+            JsonNode payload = objectMapper.valueToTree(event.getPayload());
+
+            // Count null or empty fields
+            int totalFields = 0;
+            int emptyFields = 0;
+
+            Iterator<Map.Entry<String, JsonNode>> fields = payload.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                totalFields++;
+
+                JsonNode value = field.getValue();
+                if (value.isNull() || (value.isTextual() && value.asText().trim().isEmpty())) {
+                    emptyFields++;
+                }
+            }
+
+            double completenessRatio = (double)(totalFields - emptyFields) / totalFields;
+            if (completenessRatio < 0.7) { // 70% completeness threshold
+                throw new DataQualityException(
+                    "Data completeness below threshold: " + (completenessRatio * 100) + "%");
+            }
+        }
+
+        private void validateCriticalSafetyRules(RawEvent event) throws CriticalSafetyException {
+            // Check for patient safety violations that could cause harm
+            if (event.getType().equals("MEDICATION_ADMINISTRATION")) {
+                validateMedicationSafety(event);
+            }
+
+            if (event.getType().equals("PROCEDURE")) {
+                validateProcedureSafety(event);
+            }
+        }
+
+        private void validateMedicationSafety(RawEvent event) throws CriticalSafetyException {
+            JsonNode payload = objectMapper.valueToTree(event.getPayload());
+
+            String medicationName = payload.get("medication_name").asText().toLowerCase();
+
+            // Check for medications that should never be administered in certain contexts
+            if (isBlacklistedMedication(medicationName)) {
+                throw new CriticalSafetyException(
+                    "Blacklisted medication detected: " + medicationName);
+            }
+
+            // Check for lethal dose ranges
+            if (payload.has("dose")) {
+                String dose = payload.get("dose").asText();
+                if (isLethalDose(medicationName, dose)) {
+                    throw new CriticalSafetyException(
+                        "Potentially lethal medication dose: " + medicationName + " " + dose);
+                }
+            }
+        }
+
+        private void validateProcedureSafety(RawEvent event) throws CriticalSafetyException {
+            JsonNode payload = objectMapper.valueToTree(event.getPayload());
+
+            if (payload.has("procedure_type")) {
+                String procedureType = payload.get("procedure_type").asText();
+
+                // Check for high-risk procedures that require additional validation
+                if (isHighRiskProcedure(procedureType)) {
+                    if (!hasRequiredSafetyChecks(payload)) {
+                        throw new CriticalSafetyException(
+                            "High-risk procedure missing safety checks: " + procedureType);
+                    }
+                }
+            }
+        }
+
+        private com.cardiofit.flink.models.CanonicalEvent convertToCanonicalEvent(RawEvent event) {
+            return com.cardiofit.flink.models.CanonicalEvent.builder()
+                .id(event.getId() != null ? event.getId() : UUID.randomUUID().toString())
+                .patientId(event.getPatientId())
+                .eventType(com.cardiofit.flink.models.EventType.fromString(event.getType()))
+                .eventTime(event.getEventTime())
+                .sourceSystem(event.getSource())
+                .payload((Map<String, Object>) event.getPayload())
+                .correlationId(event.getCorrelationId())
+                .build();
+        }
+
+        // Error handling methods
+        private void handleSchemaValidationError(RawEvent event, SchemaValidationException e, Context ctx) {
+            ErrorEvent errorEvent = createErrorEvent(event, e, ErrorSeverity.MEDIUM, ErrorCategory.SCHEMA_VALIDATION);
+            ctx.output(SCHEMA_VALIDATION_ERRORS, errorEvent);
+        }
+
+        private void handleClinicalRuleViolation(RawEvent event, ClinicalRuleViolationException e, Context ctx) {
+            ErrorEvent errorEvent = createErrorEvent(event, e, ErrorSeverity.HIGH, ErrorCategory.CLINICAL_RULE_VIOLATION);
+            ctx.output(CLINICAL_RULE_VIOLATIONS, errorEvent);
+        }
+
+        private void handleDataQualityIssue(RawEvent event, DataQualityException e, Context ctx) {
+            ErrorEvent errorEvent = createErrorEvent(event, e, ErrorSeverity.MEDIUM, ErrorCategory.DATA_QUALITY);
+            ctx.output(DATA_QUALITY_ISSUES, errorEvent);
+        }
+
+        private void handleCriticalSafetyError(RawEvent event, CriticalSafetyException e, Context ctx) {
+            ErrorEvent errorEvent = createErrorEvent(event, e, ErrorSeverity.CRITICAL, ErrorCategory.PATIENT_SAFETY);
+            ctx.output(CRITICAL_SAFETY_ERRORS, errorEvent);
+        }
+
+        private void handleGeneralProcessingFailure(RawEvent event, Exception e, Context ctx) {
+            ErrorEvent errorEvent = createErrorEvent(event, e, ErrorSeverity.HIGH, ErrorCategory.PROCESSING_FAILURE);
+            ctx.output(PROCESSING_FAILURES, errorEvent);
+        }
+
+        private ErrorEvent createErrorEvent(RawEvent originalEvent, Exception exception,
+                                          ErrorSeverity severity, ErrorCategory category) {
+            return ErrorEvent.builder()
+                .id(UUID.randomUUID().toString())
+                .originalEventId(originalEvent.getId())
+                .patientId(originalEvent.getPatientId())
+                .errorType(exception.getClass().getSimpleName())
+                .errorMessage(exception.getMessage())
+                .severity(severity)
+                .category(category)
+                .timestamp(System.currentTimeMillis())
+                .originalEvent(originalEvent)
+                .stackTrace(getStackTrace(exception))
+                .retryCount(0)
+                .build();
+        }
+
+        // Helper methods for validation rules
+        private boolean isHighRiskMedication(String medicationName) {
+            Set<String> highRiskMeds = Set.of("warfarin", "heparin", "insulin", "morphine", "fentanyl");
+            return highRiskMeds.contains(medicationName.toLowerCase());
+        }
+
+        private boolean validateHighRiskMedicationDose(String medicationName, String dose) {
+            // Implement dose validation logic for high-risk medications
+            return true; // Placeholder
+        }
+
+        private boolean isCriticalLabValue(String testName, double value) {
+            // Define critical lab values that require immediate attention
+            Map<String, Tuple2<Double, Double>> criticalRanges = Map.of(
+                "glucose", Tuple2.of(40.0, 400.0),
+                "potassium", Tuple2.of(2.5, 6.0),
+                "sodium", Tuple2.of(120.0, 160.0),
+                "creatinine", Tuple2.of(0.0, 5.0)
+            );
+
+            if (criticalRanges.containsKey(testName.toLowerCase())) {
+                Tuple2<Double, Double> range = criticalRanges.get(testName.toLowerCase());
+                return value < range.f0 || value > range.f1;
+            }
+
+            return false;
+        }
+
+        private boolean indicatesCardiacEmergency(int heartRate, String bloodPressure) {
+            // Simple cardiac emergency detection
+            return heartRate > 150 || heartRate < 40 || bloodPressure.startsWith("70/") || bloodPressure.startsWith("60/");
+        }
+
+        private long getMaxAllowableAge(String eventType) {
+            Map<String, Long> maxAges = Map.of(
+                "VITAL_SIGNS", 300000L, // 5 minutes
+                "LAB_RESULT", 3600000L, // 1 hour
+                "MEDICATION_ADMINISTRATION", 1800000L, // 30 minutes
+                "CLINICAL_NOTE", 86400000L // 24 hours
+            );
+
+            return maxAges.getOrDefault(eventType, 3600000L); // Default 1 hour
+        }
+
+        private boolean isDuplicateEvent(RawEvent event) {
+            // Placeholder for duplicate detection logic
+            // Would typically check against recent event cache
+            return false;
+        }
+
+        private boolean isBlacklistedMedication(String medicationName) {
+            Set<String> blacklisted = Set.of("thalidomide", "withdrawn_drug_example");
+            return blacklisted.contains(medicationName.toLowerCase());
+        }
+
+        private boolean isLethalDose(String medicationName, String dose) {
+            // Implement lethal dose checking logic
+            return false; // Placeholder
+        }
+
+        private boolean isHighRiskProcedure(String procedureType) {
+            Set<String> highRiskProcedures = Set.of("surgery", "cardiac_catheterization", "intubation");
+            return highRiskProcedures.contains(procedureType.toLowerCase());
+        }
+
+        private boolean hasRequiredSafetyChecks(JsonNode payload) {
+            // Check for required safety validation fields
+            return payload.has("consent_verified") &&
+                   payload.has("allergies_checked") &&
+                   payload.has("attending_physician");
+        }
+
+        private String getStackTrace(Exception e) {
+            java.io.StringWriter sw = new java.io.StringWriter();
+            java.io.PrintWriter pw = new java.io.PrintWriter(sw);
+            e.printStackTrace(pw);
+            return sw.toString();
+        }
+    }
+
+    /**
+     * Retry processor with exponential backoff for recoverable errors
+     */
+    public static class RetryProcessor extends KeyedProcessFunction<String, ErrorEvent, com.cardiofit.flink.models.CanonicalEvent> {
+
+        private transient ValueState<Integer> retryCountState;
+        private transient ValueState<Long> lastRetryTimeState;
+
+        @Override
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
+
+            retryCountState = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("retryCount", Integer.class, 0));
+
+            lastRetryTimeState = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("lastRetryTime", Long.class, 0L));
+        }
+
+        @Override
+        public void processElement(ErrorEvent errorEvent, Context ctx, Collector<com.cardiofit.flink.models.CanonicalEvent> out) throws Exception {
+            if (!isRecoverableError(errorEvent)) {
+                // Non-recoverable errors go straight to DLQ
+                return;
+            }
+
+            Integer currentRetryCount = retryCountState.value();
+            if (currentRetryCount >= MAX_RETRY_ATTEMPTS) {
+                // Exceeded retry limit, send to DLQ
+                return;
+            }
+
+            // Calculate retry delay with exponential backoff and jitter
+            long retryDelay = calculateRetryDelay(currentRetryCount);
+            long retryTime = ctx.timestamp() + retryDelay;
+
+            // Schedule retry
+            ctx.timerService().registerEventTimeTimer(retryTime);
+
+            // Update state
+            retryCountState.update(currentRetryCount + 1);
+            lastRetryTimeState.update(retryTime);
+        }
+
+        @Override
+        public void onTimer(long timestamp, OnTimerContext ctx, Collector<com.cardiofit.flink.models.CanonicalEvent> out) throws Exception {
+            // Retry the failed event
+            // In a real implementation, we would reconstruct the original event and retry processing
+
+            // For now, create a retry event
+            Integer retryCount = retryCountState.value();
+
+            // Simulate retry success/failure
+            boolean retrySuccessful = simulateRetryAttempt();
+
+            if (retrySuccessful) {
+                // Successfully processed on retry
+                retryCountState.clear();
+                lastRetryTimeState.clear();
+
+                // Emit successful result (would be actual processed event)
+                // out.collect(reprocessedEvent);
+            } else {
+                // Retry failed, increment count and potentially retry again
+                if (retryCount < MAX_RETRY_ATTEMPTS) {
+                    long nextRetryDelay = calculateRetryDelay(retryCount);
+                    ctx.timerService().registerEventTimeTimer(timestamp + nextRetryDelay);
+                    retryCountState.update(retryCount + 1);
+                } else {
+                    // Exceeded retry limit, clear state and send to DLQ
+                    retryCountState.clear();
+                    lastRetryTimeState.clear();
+                }
+            }
+        }
+
+        private boolean isRecoverableError(ErrorEvent errorEvent) {
+            // Determine if error is recoverable based on error type and category
+            switch (errorEvent.getCategory()) {
+                case PROCESSING_FAILURE:
+                case DATA_QUALITY:
+                    return true;
+                case PATIENT_SAFETY:
+                case SCHEMA_VALIDATION:
+                    return false; // These require manual intervention
+                case CLINICAL_RULE_VIOLATION:
+                    return errorEvent.getSeverity() != ErrorSeverity.CRITICAL;
+                default:
+                    return false;
+            }
+        }
+
+        private long calculateRetryDelay(int retryCount) {
+            // Exponential backoff with jitter
+            long baseDelay = (long) (BASE_RETRY_DELAY_MS * Math.pow(RETRY_BACKOFF_MULTIPLIER, retryCount));
+
+            // Add jitter to prevent thundering herd
+            long jitter = ThreadLocalRandom.current().nextLong(0, baseDelay / 4);
+
+            long totalDelay = baseDelay + jitter;
+
+            // Cap at maximum delay
+            return Math.min(totalDelay, MAX_RETRY_DELAY_MS);
+        }
+
+        private boolean simulateRetryAttempt() {
+            // Simulate retry with 70% success rate
+            return ThreadLocalRandom.current().nextDouble() < 0.7;
+        }
+    }
+
+    /**
+     * Create DLQ sinks for different error categories
+     */
+    public static Map<String, KafkaSink<String>> createDLQSinks(Properties kafkaProps) {
+        Map<String, KafkaSink<String>> dlqSinks = new HashMap<>();
+
+        // Schema validation errors DLQ
+        dlqSinks.put("schema_validation", KafkaSink.<String>builder()
+            .setBootstrapServers(kafkaProps.getProperty("bootstrap.servers"))
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.SCHEMA_VALIDATION_DLQ.getTopicName())
+                .setValueSerializationSchema(new SimpleStringSchema())
+                .build())
+            .build());
+
+        // Clinical rule violations DLQ
+        dlqSinks.put("clinical_violations", KafkaSink.<String>builder()
+            .setBootstrapServers(kafkaProps.getProperty("bootstrap.servers"))
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.CLINICAL_VIOLATIONS_DLQ.getTopicName())
+                .setValueSerializationSchema(new SimpleStringSchema())
+                .build())
+            .build());
+
+        // Critical safety errors DLQ
+        dlqSinks.put("safety_errors", KafkaSink.<String>builder()
+            .setBootstrapServers(kafkaProps.getProperty("bootstrap.servers"))
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.SAFETY_ERRORS_DLQ.getTopicName())
+                .setValueSerializationSchema(new SimpleStringSchema())
+                .build())
+            .build());
+
+        return dlqSinks;
+    }
+
+    // Custom exception classes
+    public static class SchemaValidationException extends Exception {
+        public SchemaValidationException(String message) { super(message); }
+    }
+
+    public static class ClinicalRuleViolationException extends Exception {
+        public ClinicalRuleViolationException(String message) { super(message); }
+    }
+
+    public static class DataQualityException extends Exception {
+        public DataQualityException(String message) { super(message); }
+    }
+
+    public static class CriticalSafetyException extends Exception {
+        public CriticalSafetyException(String message) { super(message); }
+    }
+
+    // Error event model
+    public static class ErrorEvent {
+        private String id;
+        private String originalEventId;
+        private String patientId;
+        private String errorType;
+        private String errorMessage;
+        private ErrorSeverity severity;
+        private ErrorCategory category;
+        private long timestamp;
+        private RawEvent originalEvent;
+        private String stackTrace;
+        private int retryCount;
+        private Map<String, Object> metadata;
+
+        private ErrorEvent(Builder builder) {
+            this.id = builder.id;
+            this.originalEventId = builder.originalEventId;
+            this.patientId = builder.patientId;
+            this.errorType = builder.errorType;
+            this.errorMessage = builder.errorMessage;
+            this.severity = builder.severity;
+            this.category = builder.category;
+            this.timestamp = builder.timestamp;
+            this.originalEvent = builder.originalEvent;
+            this.stackTrace = builder.stackTrace;
+            this.retryCount = builder.retryCount;
+            this.metadata = builder.metadata;
+        }
+
+        public static Builder builder() { return new Builder(); }
+
+        public static class Builder {
+            private String id;
+            private String originalEventId;
+            private String patientId;
+            private String errorType;
+            private String errorMessage;
+            private ErrorSeverity severity;
+            private ErrorCategory category;
+            private long timestamp;
+            private RawEvent originalEvent;
+            private String stackTrace;
+            private int retryCount;
+            private Map<String, Object> metadata = new HashMap<>();
+
+            public Builder id(String id) { this.id = id; return this; }
+            public Builder originalEventId(String originalEventId) { this.originalEventId = originalEventId; return this; }
+            public Builder patientId(String patientId) { this.patientId = patientId; return this; }
+            public Builder errorType(String errorType) { this.errorType = errorType; return this; }
+            public Builder errorMessage(String errorMessage) { this.errorMessage = errorMessage; return this; }
+            public Builder severity(ErrorSeverity severity) { this.severity = severity; return this; }
+            public Builder category(ErrorCategory category) { this.category = category; return this; }
+            public Builder timestamp(long timestamp) { this.timestamp = timestamp; return this; }
+            public Builder originalEvent(RawEvent originalEvent) { this.originalEvent = originalEvent; return this; }
+            public Builder stackTrace(String stackTrace) { this.stackTrace = stackTrace; return this; }
+            public Builder retryCount(int retryCount) { this.retryCount = retryCount; return this; }
+
+            public ErrorEvent build() { return new ErrorEvent(this); }
+        }
+
+        // Getters
+        public String getId() { return id; }
+        public String getOriginalEventId() { return originalEventId; }
+        public String getPatientId() { return patientId; }
+        public String getErrorType() { return errorType; }
+        public String getErrorMessage() { return errorMessage; }
+        public ErrorSeverity getSeverity() { return severity; }
+        public ErrorCategory getCategory() { return category; }
+        public long getTimestamp() { return timestamp; }
+        public RawEvent getOriginalEvent() { return originalEvent; }
+        public String getStackTrace() { return stackTrace; }
+        public int getRetryCount() { return retryCount; }
+        public Map<String, Object> getMetadata() { return metadata; }
+    }
+
+    public enum ErrorSeverity {
+        LOW, MEDIUM, HIGH, CRITICAL
+    }
+
+    public enum ErrorCategory {
+        SCHEMA_VALIDATION,
+        CLINICAL_RULE_VIOLATION,
+        DATA_QUALITY,
+        PROCESSING_FAILURE,
+        PATIENT_SAFETY
+    }
+}

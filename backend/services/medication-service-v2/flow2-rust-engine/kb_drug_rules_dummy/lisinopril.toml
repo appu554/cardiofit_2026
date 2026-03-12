@@ -1,0 +1,110 @@
+# Lisinopril (ACE Inhibitor) - Rule-Based Dosing
+# Version: 1.3.0
+# Evidence: ADA-SOC-2025, KDIGO-CKD-2022, ACC/AHA-HTN-2017
+# Classification: RULE-BASED (Linear adjustments, wide therapeutic index)
+
+[meta]
+drug_id = "lisinopril"
+name = "Lisinopril"
+generic_name = "lisinopril"
+version = "1.3.0"
+calculation_strategy = "standard_rules"  # Explicit routing to rule engine
+therapeutic_class = ["ace_inhibitor", "antihypertensive"]
+mechanism_of_action = ["ace_inhibition", "angiotensin_ii_reduction"]
+evidence = ["ADA-SOC-2025", "KDIGO-CKD-2022", "ACC/AHA-HTN-2017"]
+last_updated = "2024-08-01T00:00:00Z"
+clinical_reviewer = "Dr. Michael Chen, MD"
+clinical_reviewer_id = "MC67890"
+approval_date = "2024-08-01"
+next_review_date = "2025-08-01"
+
+[validation]
+# Self-validation rules for rule-based calculation
+min_dose_possible = 2.5
+max_dose_possible = 40.0
+incompatible_conditions = ["bilateral_renal_artery_stenosis", "angioedema_history", "pregnancy"]
+
+[hard_contraindications]
+allergy_codes = ["ACE_INHIBITOR"]
+pregnancy = true
+angioedema_history = true
+
+[hepatic]
+# ACE inhibitors generally not dose-adjusted for liver function
+max_child_pugh = "C"    # Block if Child-Pugh > C
+
+[renal]
+# Renal dose adjustments based on eGFR/CrCl
+bands = [
+  { min = 0,   max = 29, action = "cap", max_dose_mg = 5,  min_interval_h = 24, reason = "Severe CKD: reduce dose to prevent hyperkalemia" },
+  { min = 30,  max = 44, action = "cap", max_dose_mg = 10, min_interval_h = 24, reason = "Moderate CKD: standard dose acceptable with monitoring" },
+  { min = 45,  max = 300, action = "allow", reason = "Normal renal function" }
+]
+egfr_metric = "crcl_or_egfr"  # Prefer CrCl, fallback to eGFR
+
+[dose_limits]
+absolute_max_mg_per_day = 40
+absolute_min_mg = 2.5
+
+[duplicate_class]
+class_id = "RAAS"
+block_combination = false
+flag_severity = "major"  # Flag if ARB/ARNI present
+
+[qt_rules]
+applies = false  # ACE inhibitors don't typically prolong QT
+
+# Rule-Based Dose Calculation Rules
+[calculation_rules]
+[calculation_rules.base_dose]
+default_mg = 10.0
+calculation_method = "fixed"  # Fixed starting dose
+
+[calculation_rules.indication_specific]
+[calculation_rules.indication_specific.hypertension]
+base_dose_mg = 10.0
+max_dose_mg = 40.0
+
+[calculation_rules.indication_specific.heart_failure]
+base_dose_mg = 5.0
+max_dose_mg = 35.0
+
+[calculation_rules.indication_specific.diabetic_nephropathy]
+base_dose_mg = 10.0
+max_dose_mg = 40.0
+
+[clinical_info]
+default_route = "oral"
+default_frequency = "daily"
+default_duration = "chronic"
+special_instructions = [
+    "Take at same time daily",
+    "Monitor potassium and creatinine",
+    "Report dry cough immediately",
+    "Hold before major surgery",
+    "Avoid potassium supplements"
+]
+
+[[alternatives]]
+drug_id = "losartan"
+name = "Losartan"
+rationale = "ARB alternative if ACE inhibitor cough"
+relative_efficacy = 0.95
+
+[[alternatives]]
+drug_id = "amlodipine"
+name = "Amlodipine"
+rationale = "Calcium channel blocker for hypertension"
+relative_efficacy = 0.85
+
+# Clinical Notes:
+# - This drug uses RULE-BASED calculation because:
+#   * Simple fixed dosing with renal bands
+#   * Linear dose adjustments
+#   * Wide therapeutic index
+#   * Well-established dosing guidelines
+# - Monitor potassium, especially with CKD
+# - Check for dry cough (class effect)
+# - Avoid in pregnancy (teratogenic)
+# - Hold before major surgery
+# - Contraindicated with history of angioedema

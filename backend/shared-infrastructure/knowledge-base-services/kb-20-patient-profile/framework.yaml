@@ -1,0 +1,83 @@
+framework_version: 2.0.0
+template_type: knowledge_base
+
+service_identity:
+  component_name: "KB-20 Patient Profile & Contextual State Engine"
+  service_id: "kb-20-patient-profile"
+  version: "1.0.0"
+  owner_team: "clinical-platform-team"
+  clinical_lead: "clinical-informatics-team"
+  next_review: "2026-06-04"
+
+1_purpose_and_scope:
+  purpose: "Central patient state service storing demographics, lab values, medications, CKD staging, stratum activation, context modifier registry, and ADR profiles with completeness grading"
+  clinical_value: "Enables stratum-conditional medication overlay in HPI Bayesian differential engine for P2-P7 clinical nodes"
+  scope:
+    includes:
+      - "Patient demographics and disease history"
+      - "Lab value storage with plausibility validation (F-05)"
+      - "Medication state with FDC decomposition (F-01)"
+      - "eGFR computation via CKD-EPI 2021"
+      - "CKD staging with substage visibility (F-03)"
+      - "Stratum activation for HPI nodes"
+      - "Context modifier registry per node"
+      - "ADR profile storage with completeness grading"
+      - "Pipeline batch write with merge strategy"
+      - "Event bus: STRATUM_CHANGE, SAFETY_ALERT, MEDICATION_THRESHOLD_CROSSED, MEDICATION_CHANGE"
+    excludes:
+      - "HPI question selection logic (KB-22)"
+      - "Protocol execution (KB-19)"
+      - "Drug interaction checking (KB-5)"
+      - "Audit trail logging (KB-18)"
+
+2_data_model:
+  primary_format: JSON
+  entities:
+    - PatientProfile
+    - LabEntry
+    - MedicationState
+    - ContextModifier
+    - AdverseReactionProfile
+
+3_api_contracts:
+  base_path: "/api/v1"
+  endpoints:
+    - path: "/health"
+      method: "GET"
+      sla: "1ms p95"
+    - path: "/patient/:id/profile"
+      method: "GET"
+      sla: "15ms p95"
+    - path: "/patient/:id/stratum/:node_id"
+      method: "GET"
+      sla: "10ms p95"
+    - path: "/patient/:id/labs"
+      method: "POST"
+      sla: "20ms p95"
+    - path: "/pipeline/adr-profiles"
+      method: "POST"
+      sla: "100ms p95"
+
+4_integration_map:
+  consumes_from:
+    - "Guideline extraction pipeline (batch write)"
+    - "SPLGuard ETL (ADR profiles)"
+    - "Clinician intake forms (patient creation)"
+  consumed_by:
+    - "KB-22 HPI Engine (stratum queries)"
+    - "KB-1 Drug Rules (medication alerts)"
+    - "KB-19 Protocol Orchestrator (events)"
+    - "KB-23 Decision Card Generator (safety alerts)"
+
+5_performance:
+  latency_targets:
+    p50: "5ms"
+    p95: "15ms"
+    p99: "50ms"
+  caching:
+    strategy: "Redis single-tier"
+    patient_profile_ttl: "15m"
+    stratum_ttl: "5m"
+    modifier_registry_ttl: "30m"
+
+6_port: 8131

@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  kb-21-behavioral-intelligence:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-21-behavioral-intelligence
+    ports:
+      - "8133:8133"
+    environment:
+      - PORT=8133
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+      - DATABASE_URL=postgres://kb21_user:kb21_pass@kb21-postgres:5432/kb_behavioral_intelligence
+      - REDIS_URL=redis://kb21-redis:6379/21
+      - EVENT_BUS_ENABLED=false
+      # Cross-KB integration
+      - KB20_PATIENT_PROFILE_URL=http://host.docker.internal:8131
+      - KB4_PATIENT_SAFETY_URL=http://host.docker.internal:8088
+      - KB19_ORCHESTRATOR_URL=http://host.docker.internal:8103
+    depends_on:
+      kb21-postgres:
+        condition: service_healthy
+    networks:
+      - kb-network
+    restart: unless-stopped
+
+  kb21-postgres:
+    image: postgres:16-alpine
+    container_name: kb21-postgres
+    environment:
+      POSTGRES_DB: kb_behavioral_intelligence
+      POSTGRES_USER: kb21_user
+      POSTGRES_PASSWORD: kb21_pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - kb21-pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb21_user -d kb_behavioral_intelligence"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-network
+
+  kb21-redis:
+    image: redis:7-alpine
+    container_name: kb21-redis
+    ports:
+      - "6381:6379"
+    networks:
+      - kb-network
+
+volumes:
+  kb21-pgdata:
+
+networks:
+  kb-network:
+    driver: bridge

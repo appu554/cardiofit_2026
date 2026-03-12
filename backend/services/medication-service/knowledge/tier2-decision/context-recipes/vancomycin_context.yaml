@@ -1,0 +1,194 @@
+recipe_id: "vancomycin-context-v1"
+version: "1.0.0"
+last_updated: "2024-01-15"
+medication_code: "vancomycin"
+description: "Context data requirements for vancomycin dosing and monitoring"
+
+# Base context requirements for all vancomycin recipes
+base_requirements:
+  - field: "age_years"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "weight_kg"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+    fallback: "estimated_weight"
+
+  - field: "height_cm"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: false
+
+  - field: "gender"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "creatinine_clearance"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/latest"
+    required: true
+    max_age_hours: 24
+
+  - field: "serum_creatinine"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/latest"
+    required: true
+    max_age_hours: 24
+    units: "mg/dl"
+
+  - field: "bun"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/latest"
+    required: false
+    max_age_hours: 24
+    units: "mg/dl"
+
+  - field: "infection_severity"
+    source: "clinical_service"
+    endpoint: "/api/clinical/{patient_id}/current"
+    required: true
+    values: ["mild", "moderate", "severe", "sepsis"]
+
+  - field: "hemodynamic_status"
+    source: "vitals_service"
+    endpoint: "/api/vitals/{patient_id}/latest"
+    required: true
+    max_age_hours: 4
+
+# Recipe-specific requirements
+recipe_specific_requirements:
+  "vancomycin-renal-v2":
+    additional_requirements:
+      - field: "dialysis_status"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/dialysis"
+        required: true
+        values: ["none", "hemodialysis", "peritoneal", "crrt"]
+
+      - field: "baseline_hearing"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/hearing"
+        required: false
+        max_age_days: 30
+
+      - field: "previous_vancomycin_levels"
+        source: "lab_service"
+        endpoint: "/api/labs/{patient_id}/vancomycin_levels"
+        required: false
+        max_age_days: 7
+
+      - field: "hourly_urine_output"
+        source: "nursing_service"
+        endpoint: "/api/nursing/{patient_id}/intake_output"
+        required: true
+
+  "vancomycin-standard-v1":
+    additional_requirements:
+      - field: "allergy_history"
+        source: "allergy_service"
+        endpoint: "/api/allergies/{patient_id}"
+        required: true
+
+      - field: "concurrent_medications"
+        source: "medication_service"
+        endpoint: "/api/medications/{patient_id}/current"
+        required: true
+
+# Data source configuration
+data_sources:
+  patient_service:
+    base_url: "http://patient-service:8003"
+    timeout_ms: 2000
+    retry_attempts: 2
+    
+  lab_service:
+    base_url: "http://lab-service:8000"
+    timeout_ms: 3000
+    retry_attempts: 3
+    
+  clinical_service:
+    base_url: "http://clinical-service:8015"
+    timeout_ms: 2000
+    retry_attempts: 2
+    
+  vitals_service:
+    base_url: "http://vitals-service:8016"
+    timeout_ms: 1500
+    retry_attempts: 2
+    
+  allergy_service:
+    base_url: "http://allergy-service:8017"
+    timeout_ms: 1000
+    retry_attempts: 2
+
+# Data validation rules
+validation_rules:
+  creatinine_clearance:
+    min_value: 5
+    max_value: 200
+    units: "ml/min"
+    
+  weight_kg:
+    min_value: 0.5
+    max_value: 300
+    
+  age_years:
+    min_value: 0
+    max_value: 120
+
+# Caching configuration
+caching:
+  patient_demographics:
+    ttl_minutes: 60
+    cache_key: "demographics_{patient_id}"
+    
+  laboratory_values:
+    ttl_minutes: 30
+    cache_key: "labs_{patient_id}_{test_name}"
+    
+  clinical_status:
+    ttl_minutes: 15
+    cache_key: "clinical_{patient_id}"
+
+# Error handling
+error_handling:
+  missing_required_field:
+    action: "fail_request"
+    message: "Required field {field_name} not available"
+    
+  stale_data:
+    action: "warn_and_proceed"
+    message: "Data for {field_name} is older than {max_age}"
+    
+  service_unavailable:
+    action: "fail_request"
+    message: "Unable to retrieve {field_name} from {service_name}"
+
+# Performance optimization
+optimization:
+  parallel_requests: true
+  max_concurrent_requests: 5
+  request_batching: true
+  
+  priority_order:
+    - "patient_demographics"
+    - "laboratory_values"
+    - "clinical_status"
+    - "additional_requirements"
+
+# Quality metrics
+quality_metrics:
+  data_completeness_target: ">95%"
+  response_time_target: "<500ms"
+  cache_hit_rate_target: ">70%"
+  
+# Audit configuration
+audit:
+  log_data_requests: true
+  log_missing_data: true
+  log_performance_metrics: true
+  retention_days: 90

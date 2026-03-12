@@ -1,0 +1,615 @@
+# GitHub Actions CI/CD Pipeline for Safety Gateway Platform
+# Enhanced pipeline for safety-critical healthcare system with comprehensive testing and rollout automation
+
+name: Safety Gateway CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, feature/*]
+    paths: 
+      - 'backend/services/safety-gateway-platform/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'backend/services/safety-gateway-platform/**'
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: 'Deployment type'
+        required: true
+        default: 'shadow'
+        type: choice
+        options:
+          - 'shadow'
+          - 'canary'
+          - 'full-rollout'
+          - 'emergency-rollback'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/safety-gateway-platform
+  WORKING_DIRECTORY: backend/services/safety-gateway-platform
+  GOLANG_VERSION: "1.21"
+  KUBECTL_VERSION: "v1.28.0"
+  HELM_VERSION: "v3.12.0"
+
+jobs:
+  # Security and compliance scanning - critical for healthcare
+  security-compliance:
+    name: Security & Compliance Scan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for security scanning
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GOLANG_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    # HIPAA compliance and security scanning
+    - name: Run Gosec Security Scanner
+      uses: securecodewarrior/github-action-gosec@master
+      with:
+        args: '-fmt sarif -out gosec-results.sarif ./...'
+        
+    - name: Upload Gosec results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: gosec-results.sarif
+    
+    - name: Run Nancy vulnerability scanner
+      run: |
+        go install github.com/sonatypecommunity/nancy@latest
+        go list -json -deps ./... | nancy sleuth
+    
+    - name: HIPAA Compliance Check
+      run: |
+        echo "Checking HIPAA compliance requirements..."
+        # Check for hardcoded credentials
+        if grep -r "password\|secret\|key" --include="*.go" --exclude-dir=".git" . | grep -v "// SAFE:" ; then
+          echo "❌ Potential hardcoded credentials found"
+          exit 1
+        fi
+        
+        # Check for PHI logging
+        if grep -r "log\|print" --include="*.go" --exclude-dir=".git" . | grep -i "patient\|medical\|health" | grep -v "// SAFE:" ; then
+          echo "⚠️ Potential PHI in logs detected, review required"
+          # Don't fail, but flag for review
+        fi
+        
+        echo "✅ HIPAA compliance checks passed"
+    
+    - name: License compatibility check
+      run: |
+        go install github.com/fossa-contrib/fossa-cli@latest
+        fossa analyze || true  # Don't fail on license issues, but report
+        fossa test || true
+
+  # Comprehensive testing suite for safety-critical system
+  comprehensive-testing:
+    name: Comprehensive Testing Suite
+    runs-on: ubuntu-latest
+    needs: security-compliance
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+    
+    services:
+      # Test dependencies
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: safety_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GOLANG_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    # Unit tests with coverage
+    - name: Run unit tests
+      run: |
+        go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        go tool cover -html=coverage.out -o coverage.html
+    
+    - name: Check test coverage
+      run: |
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | grep -Eo '[0-9]+\.[0-9]+')
+        echo "Test coverage: ${COVERAGE}%"
+        if (( $(echo "$COVERAGE < 80.0" | bc -l) )); then
+          echo "❌ Test coverage below 80%: ${COVERAGE}%"
+          exit 1
+        fi
+        echo "✅ Test coverage meets requirements: ${COVERAGE}%"
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: safety-gateway-coverage
+    
+    # Integration tests with real dependencies
+    - name: Run integration tests
+      env:
+        POSTGRES_URL: postgres://postgres:test_password@localhost:5432/safety_test?sslmode=disable
+        REDIS_URL: redis://localhost:6379
+      run: |
+        echo "Running integration tests with real dependencies..."
+        go test -v -tags=integration ./tests/integration/...
+    
+    # Safety-critical scenario tests
+    - name: Run safety scenario tests
+      run: |
+        echo "Testing critical safety scenarios..."
+        go test -v -tags=safety -timeout=30m ./tests/safety/...
+    
+    # Performance and load testing
+    - name: Performance benchmarks
+      run: |
+        echo "Running performance benchmarks..."
+        go test -bench=. -benchmem -timeout=10m ./...
+    
+    # API contract testing
+    - name: API contract testing
+      run: |
+        echo "Testing API contracts..."
+        # Start service in background
+        go build -o safety-gateway ./cmd/server
+        ./safety-gateway -config=configs/test.yaml &
+        SERVICE_PID=$!
+        
+        # Wait for service to start
+        sleep 10
+        
+        # Run contract tests
+        go test -v -tags=contract ./tests/contract/...
+        
+        # Cleanup
+        kill $SERVICE_PID || true
+
+  # Build and containerize
+  build-and-containerize:
+    name: Build & Containerize
+    runs-on: ubuntu-latest
+    needs: comprehensive-testing
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GOLANG_VERSION }}
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=shadow,enable={{is_default_branch}}
+          type=raw,value=canary,enable={{is_default_branch}}
+    
+    # Security scan of base images
+    - name: Scan base image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'golang:1.21-alpine'
+        format: 'sarif'
+        output: 'base-image-scan.sarif'
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ env.WORKING_DIRECTORY }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          VERSION=${{ github.sha }}
+          BUILD_TIME=${{ github.event.head_commit.timestamp }}
+        # Multi-platform build for production
+        platforms: linux/amd64,linux/arm64
+    
+    # Container security scanning
+    - name: Scan container image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ steps.meta.outputs.tags }}
+        format: 'sarif'
+        output: 'container-scan.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'container-scan.sarif'
+
+  # Shadow environment deployment
+  deploy-shadow:
+    name: Deploy to Shadow Environment
+    runs-on: ubuntu-latest
+    needs: build-and-containerize
+    if: github.ref == 'refs/heads/main' || github.event.inputs.deployment_type == 'shadow'
+    environment: 
+      name: shadow
+      url: https://safety-shadow.cardiofit.local
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Set up Kubernetes context
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBE_CONFIG_SHADOW }}" | base64 -d > ~/.kube/config
+        kubectl config use-context shadow-cluster
+    
+    - name: Deploy to shadow environment
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        chmod +x devops/rollout-automation.sh
+        ./devops/rollout-automation.sh shadow
+    
+    - name: Verify shadow deployment
+      run: |
+        kubectl wait --for=condition=available deployment/shadow-safety-gateway -n safety-shadow --timeout=300s
+        kubectl get pods -n safety-shadow -l app=shadow-safety-gateway
+    
+    - name: Run shadow validation tests
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        go test -v -tags=shadow ./tests/shadow/...
+    
+    - name: Report shadow deployment status
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        channel: '#safety-deployments'
+        text: 'Shadow deployment ${{ job.status }} for Safety Gateway'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Canary deployment with automated analysis
+  deploy-canary:
+    name: Deploy to Canary Environment
+    runs-on: ubuntu-latest
+    needs: [build-and-containerize, deploy-shadow]
+    if: github.ref == 'refs/heads/main' && success() || github.event.inputs.deployment_type == 'canary'
+    environment: 
+      name: canary
+      url: https://safety-canary.cardiofit.local
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Set up Argo Rollouts CLI
+      run: |
+        curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+        chmod +x kubectl-argo-rollouts-linux-amd64
+        sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+    
+    - name: Set up Kubernetes context
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBE_CONFIG_CANARY }}" | base64 -d > ~/.kube/config
+        kubectl config use-context canary-cluster
+    
+    - name: Deploy to canary environment
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        chmod +x devops/rollout-automation.sh
+        ./devops/rollout-automation.sh canary
+    
+    - name: Monitor canary rollout
+      timeout-minutes: 60
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        # Monitor rollout with timeout
+        timeout 3600 ./devops/rollout-automation.sh status || {
+          echo "Canary rollout timed out or failed"
+          ./devops/rollout-automation.sh rollback
+          exit 1
+        }
+    
+    - name: Canary analysis validation
+      run: |
+        # Wait for analysis to complete
+        kubectl wait --for=condition=Successful analysisrun/safety-gateway-canary-analysis-run -n safety-canary --timeout=900s
+        
+        # Get analysis results
+        kubectl get analysisrun safety-gateway-canary-analysis-run -n safety-canary -o yaml
+    
+    - name: Report canary deployment status
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        channel: '#safety-deployments'
+        text: 'Canary deployment ${{ job.status }} for Safety Gateway'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Production promotion (requires manual approval)
+  deploy-production:
+    name: Promote to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-containerize, deploy-canary]
+    if: github.ref == 'refs/heads/main' && success() || github.event.inputs.deployment_type == 'full-rollout'
+    environment: 
+      name: production
+      url: https://safety.cardiofit.local
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Set up Kubernetes context
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+        kubectl config use-context production-cluster
+    
+    # Pre-production validation
+    - name: Pre-production validation
+      run: |
+        echo "Running pre-production validation..."
+        # Validate canary metrics before promotion
+        cd ${{ env.WORKING_DIRECTORY }}
+        go test -v -tags=pre-prod ./tests/pre-production/...
+    
+    - name: Create production backup
+      run: |
+        kubectl create backup production-backup-$(date +%Y%m%d-%H%M%S) \
+          --include-namespaces=safety-prod \
+          --include-resources=deployments,configmaps,secrets
+    
+    - name: Promote to production
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        chmod +x devops/rollout-automation.sh
+        ./devops/rollout-automation.sh promote
+    
+    - name: Verify production deployment
+      run: |
+        kubectl wait --for=condition=available deployment/safety-gateway -n safety-prod --timeout=300s
+        kubectl get pods -n safety-prod -l app=safety-gateway
+    
+    - name: Run production smoke tests
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        go test -v -tags=smoke,production ./tests/smoke/...
+    
+    - name: Generate deployment report
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        ./devops/rollout-automation.sh status > deployment-report.txt
+        echo "## Deployment Report" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        cat deployment-report.txt >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+    
+    - name: Notify clinical team
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#clinical-safety'
+        text: |
+          🏥 PRODUCTION DEPLOYMENT COMPLETE 🏥
+          Safety Gateway Platform has been successfully deployed to production.
+          
+          Version: ${{ github.sha }}
+          Deployment Time: ${{ github.event.head_commit.timestamp }}
+          Deployed By: ${{ github.actor }}
+          
+          All safety validations passed ✅
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Emergency rollback workflow
+  emergency-rollback:
+    name: Emergency Rollback
+    runs-on: ubuntu-latest
+    if: github.event.inputs.deployment_type == 'emergency-rollback'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+    
+    - name: Set up Kubernetes context
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+        kubectl config use-context production-cluster
+    
+    - name: Execute emergency rollback
+      run: |
+        cd ${{ env.WORKING_DIRECTORY }}
+        chmod +x devops/rollout-automation.sh
+        ./devops/rollout-automation.sh rollback emergency
+    
+    - name: Verify rollback
+      run: |
+        kubectl rollout status deployment/safety-gateway -n safety-prod --timeout=180s
+        kubectl get pods -n safety-prod -l app=safety-gateway
+    
+    - name: Alert clinical team
+      uses: 8398a7/action-slack@v3
+      with:
+        status: 'custom'
+        custom_payload: |
+          {
+            "text": "🚨 EMERGENCY ROLLBACK EXECUTED 🚨",
+            "attachments": [
+              {
+                "color": "danger",
+                "fields": [
+                  {
+                    "title": "Service",
+                    "value": "Safety Gateway Platform",
+                    "short": true
+                  },
+                  {
+                    "title": "Action",
+                    "value": "Emergency Rollback",
+                    "short": true
+                  },
+                  {
+                    "title": "Triggered By",
+                    "value": "${{ github.actor }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Time",
+                    "value": "${{ github.event.head_commit.timestamp }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Post-deployment monitoring and validation
+  post-deployment-monitoring:
+    name: Post-Deployment Monitoring
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: success()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up monitoring
+      run: |
+        # Set up extended monitoring for new deployment
+        echo "Setting up post-deployment monitoring..."
+        # Configure Grafana alerts
+        # Set up Prometheus recording rules
+        # Enable enhanced logging
+    
+    - name: Continuous validation
+      run: |
+        # Run continuous validation tests for 15 minutes post-deployment
+        cd ${{ env.WORKING_DIRECTORY }}
+        timeout 900 go test -v -tags=continuous ./tests/continuous/... || {
+          echo "Continuous validation failed"
+          # Trigger rollback if validation fails
+          ./devops/rollout-automation.sh rollback "continuous-validation-failure"
+          exit 1
+        }
+    
+    - name: Update status dashboard
+      run: |
+        # Update deployment status on internal dashboard
+        curl -X POST "${{ secrets.STATUS_WEBHOOK }}" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "service": "safety-gateway",
+            "status": "deployed",
+            "version": "${{ github.sha }}",
+            "timestamp": "${{ github.event.head_commit.timestamp }}"
+          }'

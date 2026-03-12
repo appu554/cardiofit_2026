@@ -1,0 +1,1126 @@
+﻿package com.cds.knowledgebase.evidence.model;
+
+
+import lombok.Data;
+import lombok.Builder;
+import java.time.LocalDate;
+import java.util.List;
+
+
+/**
+ * Research Citation Model
+ * Represents a published research article/study
+ */
+@Data
+@Builder
+public class Citation {
+    
+    // ================================================================
+    // IDENTIFICATION
+    // ================================================================
+    private String citationId;            // Internal ID
+    private String pmid;                  // PubMed ID
+    private String doi;                   // Digital Object Identifier
+    private String pmcid;                 // PubMed Central ID
+    
+    // ================================================================
+    // PUBLICATION DETAILS
+    // ================================================================
+    private String title;
+    private List<String> authors;
+    private String firstAuthor;           // "Evans L"
+    private String lastAuthor;
+    private String journal;
+    private String journalAbbreviation;   // "Crit Care Med"
+    
+    private Integer publicationYear;
+    private Integer volume;
+    private Integer issue;
+    private String pages;
+    
+    // ================================================================
+    // CONTENT
+    // ================================================================
+    private String abstractText;
+    private List<String> keywords;
+    private List<String> meshTerms;
+    
+    // ================================================================
+    // STUDY CHARACTERISTICS
+    // ================================================================
+    private StudyType studyType;
+    
+    public enum StudyType {
+        GUIDELINE("Clinical Practice Guideline"),
+        META_ANALYSIS("Meta-Analysis"),
+        SYSTEMATIC_REVIEW("Systematic Review"),
+        RCT("Randomized Controlled Trial"),
+        COHORT("Cohort Study"),
+        CASE_CONTROL("Case-Control Study"),
+        CASE_SERIES("Case Series"),
+        CASE_REPORT("Case Report"),
+        EXPERT_OPINION("Expert Opinion"),
+        REVIEW("Review Article"),
+        EDITORIAL("Editorial");
+        
+        private String description;
+        StudyType(String description) { this.description = description; }
+        public String getDescription() { return description; }
+    }
+    
+    private String studyPopulation;       // "Adults with septic shock"
+    private Integer sampleSize;
+    private String primaryOutcome;
+    
+    // ================================================================
+    // EVIDENCE QUALITY (GRADE)
+    // ================================================================
+    private EvidenceQuality evidenceQuality;
+    
+    @Data
+    @Builder
+    public static class EvidenceQuality {
+        private String gradeLevel;        // "High", "Moderate", "Low", "Very Low"
+        private Integer levelOfEvidence;  // 1, 2, 3, 4, 5 (Oxford CEBM)
+        private List<String> limitations;
+        private List<String> strengths;
+    }
+    
+    // ================================================================
+    // KEY FINDINGS
+    // ================================================================
+    private List<String> keyFindings;
+    private List<String> conclusions;
+    private String clinicalImplication;
+    
+    // ================================================================
+    // IMPACT METRICS
+    // ================================================================
+    private ImpactMetrics impact;
+    
+    @Data
+    @Builder
+    public static class ImpactMetrics {
+        private Integer citationCount;
+        private Double impactFactor;
+        private String altmetricScore;
+        private LocalDate lastCitationUpdate;
+    }
+    
+    // ================================================================
+    // LINKS & RELATIONSHIPS
+    // ================================================================
+    private Links links;
+    
+    @Data
+    @Builder
+    public static class Links {
+        private String pubmedUrl;
+        private String fullTextUrl;
+        private String pdfUrl;
+        private List<String> relatedArticles;   // PMIDs
+        private List<String> citedBy;           // PMIDs of citing articles
+    }
+    
+    // ================================================================
+    // USAGE IN CDS
+    // ================================================================
+    private List<String> referencedByGuidelines;  // Guideline IDs
+    private List<String> referencedByProtocols;   // Protocol IDs
+    private List<String> referencedByActions;     // Action IDs
+    
+    // ================================================================
+    // METADATA
+    // ================================================================
+    private LocalDate addedToDatabase;
+    private LocalDate lastUpdated;
+    private String source;                // "PubMed", "Manual Entry"
+    
+    // ================================================================
+    // HELPER METHODS
+    // ================================================================
+    
+    /**
+     * Get formatted citation (AMA style)
+     */
+    public String getFormattedCitation() {
+        StringBuilder citation = new StringBuilder();
+        
+        // Authors
+        if (authors != null && !authors.isEmpty()) {
+            if (authors.size() <= 6) {
+                citation.append(String.join(", ", authors));
+            } else {
+                citation.append(authors.get(0)).append(" et al");
+            }
+            citation.append(". ");
+        }
+        
+        // Title
+        citation.append(title).append(". ");
+        
+        // Journal
+        citation.append(journalAbbreviation != null ? journalAbbreviation : journal);
+        citation.append(". ");
+        
+        // Year;Volume(Issue):Pages
+        citation.append(publicationYear).append(";");
+        if (volume != null) citation.append(volume);
+        if (issue != null) citation.append("(").append(issue).append(")");
+        citation.append(":").append(pages).append(".");
+        
+        return citation.toString();
+    }
+    
+    /**
+     * Get PubMed URL
+     */
+    public String getPubMedUrl() {
+        if (pmid != null) {
+            return "https://pubmed.ncbi.nlm.nih.gov/" + pmid + "/";
+        }
+        return null;
+    }
+    
+    /**
+     * Get DOI URL
+     */
+    public String getDoiUrl() {
+        if (doi != null) {
+            return "https://doi.org/" + doi;
+        }
+        return null;
+    }
+    
+    /**
+     * Check if high-quality evidence (RCT or Meta-Analysis)
+     */
+    public boolean isHighQualityEvidence() {
+        return studyType == StudyType.RCT || 
+               studyType == StudyType.META_ANALYSIS ||
+               studyType == StudyType.SYSTEMATIC_REVIEW;
+    }
+    
+    /**
+     * Get evidence level description
+     */
+    public String getEvidenceLevelDescription() {
+        if (evidenceQuality == null) return "Unknown";
+        
+        return evidenceQuality.getGradeLevel() != null ? 
+               evidenceQuality.getGradeLevel() : "Not Assessed";
+    }
+    
+    /**
+     * Check if citation is recent (within 5 years)
+     */
+    public boolean isRecent() {
+        if (publicationYear == null) return false;
+        
+        int currentYear = LocalDate.now().getYear();
+        return (currentYear - publicationYear) <= 5;
+    }
+    
+    /**
+     * Check if highly cited (>100 citations)
+     */
+    public boolean isHighlyCited() {
+        return impact != null && 
+               impact.getCitationCount() != null && 
+               impact.getCitationCount() > 100;
+    }
+}
+
+
+
+
+
+
+
+
+# ==================================================================
+# SURVIVING SEPSIS CAMPAIGN 2021 GUIDELINE
+# ==================================================================
+guidelineId: "GUIDE-SSC-2021"
+name: "Surviving Sepsis Campaign: International Guidelines for Management of Sepsis and Septic Shock 2021"
+shortName: "SSC 2021"
+organization: "Society of Critical Care Medicine / European Society of Intensive Care Medicine"
+topic: "Sepsis and Septic Shock Management"
+
+
+# ==================================================================
+# VERSIONING
+# ==================================================================
+version: "2021.1"
+publicationDate: "2021-11-01"
+lastReviewDate: "2021-11-01"
+nextReviewDate: "2026-11-01"
+status: "CURRENT"
+
+
+# ==================================================================
+# PUBLICATION DETAILS
+# ==================================================================
+publication:
+  journal: "Critical Care Medicine"
+  year: 2021
+  volume: 49
+  issue: 11
+  pages: "e1063-e1143"
+  doi: "10.1097/CCM.0000000000005337"
+  pmid: "34605781"
+  url: "https://journals.lww.com/ccmjournal/Fulltext/2021/11000/Surviving_Sepsis_Campaign__International.15.aspx"
+  pdfUrl: "https://journals.lww.com/ccmjournal/Fulltext/2021/11000/Surviving_Sepsis_Campaign__International.15.aspx"
+
+
+# ==================================================================
+# SCOPE & APPLICABILITY
+# ==================================================================
+scope:
+  clinicalDomain: "Critical Care / Emergency Medicine"
+  targetPopulations:
+    - "Adults (≥18 years) with sepsis or septic shock"
+    - "Pediatric considerations provided separately"
+  targetSettings:
+    - "ICU"
+    - "Emergency Department"
+    - "Hospital Wards"
+    - "Pre-hospital (EMS)"
+  exclusions:
+    - "Neonates (<28 days)"
+    - "Immunocompromised patients (separate guidance)"
+  geographicScope: "International"
+
+
+# ==================================================================
+# METHODOLOGY
+# ==================================================================
+methodology:
+  approachUsed: "GRADE (Grading of Recommendations Assessment, Development and Evaluation)"
+  evidenceSearchStrategy: "Systematic review of literature through August 2020"
+  evidenceSearchDate: "2020-08-31"
+  panelSize: 39
+  panelComposition:
+    - "31 international experts in critical care"
+    - "4 methodologists"
+    - "2 patient representatives"
+    - "2 librarians"
+  conflictOfInterestPolicy: "All panel members disclosed conflicts; those with significant conflicts recused from relevant recommendations"
+  externalReview: true
+  numberOfReviewers: 25
+
+
+# ==================================================================
+# RECOMMENDATIONS
+# ==================================================================
+recommendations:
+  # SECTION 1: INITIAL RESUSCITATION
+  
+  - recommendationId: "SSC-2021-REC-001"
+    number: "1.1"
+    title: "Measure Blood Lactate"
+    statement: "In adults with possible septic shock or with sepsis with elevated lactate, we recommend measuring blood lactate"
+    strength: "STRONG"
+    evidenceQuality: "MODERATE"
+    gradeLevel: "Moderate"
+    rationale: "Elevated lactate indicates tissue hypoperfusion and is associated with increased mortality. Serial lactate measurements guide resuscitation."
+    keyEvidence:
+      - "28114553"  # Lactate clearance
+      - "21378355"  # Lactate-guided resuscitation
+    remarks: "Lactate >2 mmol/L considered elevated. Repeat every 2-4 hours to assess clearance."
+    linkedProtocolActions:
+      - "SEPSIS-LAB-001"  # Measure lactate
+      - "SEPSIS-LAB-004"  # Repeat lactate
+
+
+  - recommendationId: "SSC-2021-REC-002"
+    number: "1.2"
+    title: "Obtain Blood Cultures Before Antibiotics"
+    statement: "In adults with possible sepsis, we recommend obtaining appropriate cultures (including blood) before starting antimicrobial therapy if doing so results in no substantial delay in antimicrobial administration"
+    strength: "BEST_PRACTICE"
+    evidenceQuality: null
+    gradeLevel: "Best Practice Statement"
+    rationale: "Blood cultures identify causative organism in 30-40% of cases, allowing targeted therapy and antimicrobial stewardship."
+    keyEvidence:
+      - "22809906"  # Blood culture timing
+    remarks: "Do not delay antibiotics >45 minutes to obtain cultures"
+    linkedProtocolActions:
+      - "SEPSIS-LAB-002"  # Blood cultures
+
+
+  - recommendationId: "SSC-2021-REC-003"
+    number: "2.1"
+    title: "Administer Antimicrobials Within One Hour"
+    statement: "In adults with possible septic shock or a high likelihood of sepsis, we recommend that antimicrobial therapy be initiated immediately, ideally within one hour of recognition"
+    strength: "STRONG"
+    evidenceQuality: "MODERATE"
+    gradeLevel: "Moderate"
+    rationale: "Each hour delay in antibiotic administration increases mortality by approximately 7.6% in septic shock. Early administration is life-saving."
+    keyEvidence:
+      - "16625125"  # Kumar et al - antibiotic timing
+      - "25776532"  # Sterling et al - mortality with delays
+    remarks: "Hour-1 Bundle component. Critical for reducing mortality."
+    linkedProtocolActions:
+      - "SEPSIS-MED-001"  # Piperacillin-Tazobactam
+      - "SEPSIS-MED-002"  # Meropenem
+      - "SEPSIS-MED-003"  # Vancomycin
+
+
+  - recommendationId: "SSC-2021-REC-004"
+    number: "2.2"
+    title: "Empiric Broad-Spectrum Therapy"
+    statement: "In adults with sepsis or septic shock, we recommend empiric broad-spectrum therapy with one or more antimicrobials to cover all likely pathogens"
+    strength: "STRONG"
+    evidenceQuality: "MODERATE"
+    gradeLevel: "Moderate"
+    rationale: "Inadequate initial antimicrobial therapy increases mortality. Broad coverage ensures all likely pathogens are treated pending culture results."
+    keyEvidence:
+      - "16625125"
+    remarks: "De-escalate to targeted therapy once organism identified"
+    linkedProtocolActions:
+      - "SEPSIS-MED-001"
+
+
+  - recommendationId: "SSC-2021-REC-005"
+    number: "3.1"
+    title: "Fluid Resuscitation"
+    statement: "In adults with sepsis-induced hypoperfusion, we recommend at least 30 mL/kg of IV crystalloid fluid be given within the first 3 hours of resuscitation"
+    strength: "STRONG"
+    evidenceQuality: "LOW"
+    gradeLevel: "Low"
+    rationale: "Early goal-directed therapy with adequate fluid resuscitation improves outcomes. 30 mL/kg is evidence-based target from landmark trials."
+    keyEvidence:
+      - "24635773"  # ProCESS trial
+      - "25776532"  # ARISE trial
+      - "25862544"  # ProMISe trial
+    remarks: "Reassess volume status frequently. Avoid fluid overload."
+    linkedProtocolActions:
+      - "SEPSIS-FLUID-001"
+
+
+  - recommendationId: "SSC-2021-REC-006"
+    number: "4.1"
+    title: "Vasopressor - Norepinephrine First-Line"
+    statement: "In adults with septic shock requiring vasopressors, we recommend norepinephrine as the first-choice vasopressor"
+    strength: "STRONG"
+    evidenceQuality: "MODERATE"
+    gradeLevel: "Moderate"
+    rationale: "Norepinephrine superior to dopamine in reducing mortality and arrhythmias. Preferred agent per multiple RCTs and meta-analyses."
+    keyEvidence:
+      - "20200382"  # De Backer et al - norepinephrine vs dopamine
+    remarks: "Target MAP ≥65 mmHg. Titrate to effect."
+    linkedProtocolActions:
+      - "SEPSIS-MED-004"
+
+
+  - recommendationId: "SSC-2021-REC-007"
+    number: "4.2"
+    title: "Target Mean Arterial Pressure"
+    statement: "In adults with septic shock requiring vasopressors, we recommend targeting a mean arterial pressure (MAP) of 65 mmHg, rather than higher MAP targets"
+    strength: "STRONG"
+    evidenceQuality: "MODERATE"
+    gradeLevel: "Moderate"
+    rationale: "MAP ≥65 mmHg maintains organ perfusion. Higher targets (e.g., 80-85 mmHg) do not improve outcomes and may increase adverse events."
+    keyEvidence:
+      - "24635677"  # SEPSISPAM trial
+    remarks: "Consider higher targets in patients with chronic hypertension"
+    linkedProtocolActions:
+      - "SEPSIS-MED-004"
+
+
+  # SECTION 2: INFECTION
+  
+  - recommendationId: "SSC-2021-REC-008"
+    number: "5.1"
+    title: "Source Control"
+    statement: "In adults with sepsis, we recommend that specific anatomical diagnosis of infection requiring emergent source control be sought and diagnosed or excluded as rapidly as possible"
+    strength: "BEST_PRACTICE"
+    evidenceQuality: null
+    gradeLevel: "Best Practice Statement"
+    rationale: "Source control (drainage, debridement, device removal) is essential for sepsis resolution when anatomical focus of infection exists."
+    keyEvidence: []
+    remarks: "Examples: abscess drainage, bowel perforation repair, infected device removal"
+    linkedProtocolActions:
+      - "SEPSIS-CONSULT-001"
+
+
+  - recommendationId: "SSC-2021-REC-009"
+    number: "5.2"
+    title: "Timing of Source Control"
+    statement: "In adults with septic shock with a source control intervention, we recommend performing adequate source control with the most appropriate method as soon as medically and logistically practical after diagnosis"
+    strength: "BEST_PRACTICE"
+    evidenceQuality: null
+    gradeLevel: "Best Practice Statement"
+    rationale: "Delays in source control associated with increased mortality. Optimal timing is within 6-12 hours."
+    keyEvidence: []
+    remarks: "Balance urgency against patient stabilization needs"
+    linkedProtocolActions:
+      - "SEPSIS-CONSULT-001"
+
+
+  - recommendationId: "SSC-2021-REC-010"
+    number: "6.1"
+    title: "Procalcitonin to Discontinue Antibiotics"
+    statement: "In adults with sepsis, we suggest using procalcitonin levels plus clinical evaluation to guide discontinuation of antimicrobial therapy"
+    strength: "WEAK"
+    evidenceQuality: "LOW"
+    gradeLevel: "Low"
+    rationale: "Procalcitonin-guided therapy can safely reduce antibiotic duration, promoting antimicrobial stewardship without increasing mortality."
+    keyEvidence:
+      - "28114553"  # Procalcitonin trials
+    remarks: "Not for diagnosis - use only to guide duration of therapy"
+    linkedProtocolActions:
+      - "SEPSIS-LAB-008"
+
+
+# ==================================================================
+# SUMMARY
+# ==================================================================
+summary:
+  executiveSummary: |
+    The SSC 2021 guidelines provide evidence-based recommendations for 
+    management of sepsis and septic shock. Key components include the 
+    Hour-1 Bundle: measure lactate, obtain cultures before antibiotics, 
+    administer broad-spectrum antibiotics within 1 hour, and begin rapid 
+    fluid resuscitation with 30 mL/kg crystalloid for hypoperfusion.
+  
+  keyRecommendations:
+    - "Measure lactate in all patients with suspected sepsis (Strong, Moderate)"
+    - "Administer antimicrobials within 1 hour (Strong, Moderate)"
+    - "Give 30 mL/kg crystalloid for hypoperfusion (Strong, Low)"
+    - "Use norepinephrine as first-line vasopressor (Strong, Moderate)"
+    - "Target MAP ≥65 mmHg (Strong, Moderate)"
+    - "Obtain blood cultures before antibiotics (Best Practice)"
+    - "Pursue source control emergently (Best Practice)"
+  
+  majorChanges:
+    - "Updated from SSC 2016: More emphasis on Hour-1 Bundle"
+    - "Stronger recommendation for lactate measurement"
+    - "Clarified antibiotic timing (within 1 hour)"
+    - "Updated fluid resuscitation strategies"
+    - "New recommendations on procalcitonin use"
+  
+  controversialPoints:
+    - "Optimal fluid type (crystalloid vs colloid)"
+    - "Role of albumin in resuscitation"
+    - "Corticosteroid use in septic shock"
+    - "Vitamin C, thiamine, hydrocortisone cocktail"
+
+
+# ==================================================================
+# RELATED GUIDELINES
+# ==================================================================
+related:
+  supersedes: "GUIDE-SSC-2016"
+  supersededBy: []
+  relatedGuidelines:
+    - "GUIDE-NICE-SEPSIS-2024"
+    - "GUIDE-IDSA-SEPSIS-2020"
+  contradictoryGuidelines: []
+
+
+# ==================================================================
+# IMPLEMENTATION
+# ==================================================================
+implementation:
+  barriers:
+    - "Timely recognition of sepsis"
+    - "Rapid antimicrobial administration"
+    - "Adequate fluid resuscitation"
+    - "Availability of ICU beds"
+  
+  facilitators:
+    - "Electronic health record integration"
+    - "Sepsis alert systems"
+    - "Nurse-driven protocols"
+    - "Emergency department sepsis teams"
+  
+  qualityIndicators:
+    - "% patients with lactate measured within 1 hour"
+    - "% patients receiving antibiotics within 1 hour"
+    - "% patients receiving 30 mL/kg fluids within 3 hours"
+    - "% patients achieving lactate clearance"
+    - "Sepsis-related mortality rate"
+  
+  implementationResources: "SSC provides implementation toolkit, order sets, and educational materials"
+  
+  auditCriteria:
+    - "Time from triage to lactate measurement"
+    - "Time from triage to antibiotic administration"
+    - "Volume of fluids administered in first 3 hours"
+    - "Appropriate antibiotic selection"
+
+
+# ==================================================================
+# METADATA
+# ==================================================================
+specialty: "Critical Care"
+keywords:
+  - "sepsis"
+  - "septic shock"
+  - "resuscitation"
+  - "antibiotics"
+  - "vasopressors"
+  - "lactate"
+  - "Hour-1 Bundle"
+
+
+meshTerms:
+  - "Sepsis"
+  - "Shock, Septic"
+  - "Fluid Therapy"
+  - "Anti-Bacterial Agents"
+  - "Vasoconstrictor Agents"
+  - "Lactic Acid"
+
+
+translations:
+  spanish: "https://www.sccm.org/SurvivingSepsisCampaign/Guidelines/Spanish"
+  portuguese: "https://www.sccm.org/SurvivingSepsisCampaign/Guidelines/Portuguese"
+  chinese: "https://www.sccm.org/SurvivingSepsisCampaign/Guidelines/Chinese”
+
+
+
+
+
+
+
+
+package com.cds.knowledgebase.evidence.linker;
+
+
+import com.cds.knowledgebase.evidence.model.*;
+import com.cds.knowledgebase.model.*;
+import lombok.extern.slf4j.Slf4j;
+import java.util.*;
+import java.util.stream.Collectors;
+
+
+/**
+ * Guideline Linker
+ * Links protocol actions to guidelines and evidence
+ */
+@Slf4j
+public class GuidelineLinker {
+    
+    private final Map<String, Guideline> guidelines;
+    private final Map<String, Citation> citations;
+    
+    public GuidelineLinker(Map<String, Guideline> guidelines, 
+                          Map<String, Citation> citations) {
+        this.guidelines = guidelines;
+        this.citations = citations;
+    }
+    
+    // ================================================================
+    // MAIN LINKING METHODS
+    // ================================================================
+    
+    /**
+     * Get complete evidence chain for a protocol action
+     */
+    public EvidenceChain getEvidenceChain(ProtocolAction action) {
+        log.debug("Building evidence chain for action: {}", action.getId());
+        
+        EvidenceChain chain = new EvidenceChain();
+        chain.setActionId(action.getId());
+        chain.setActionTitle(action.getTitle());
+        
+        // 1. Get source guideline
+        if (action.getGuidelineReference() != null) {
+            Guideline guideline = getSourceGuideline(action);
+            chain.setSourceGuideline(guideline);
+            
+            // 2. Get specific guideline recommendation
+            if (guideline != null) {
+                Guideline.GuidelineRecommendation rec = 
+                    findMatchingRecommendation(action, guideline);
+                chain.setGuidelineRecommendation(rec);
+            }
+        }
+        
+        // 3. Get supporting evidence (citations)
+        if (action.getEvidenceReferences() != null) {
+            List<Citation> evidence = getEvidence(action);
+            chain.setSupportingEvidence(evidence);
+        }
+        
+        // 4. Assess overall evidence quality
+        chain.setOverallQuality(assessOverallQuality(chain));
+        
+        // 5. Check currency
+        chain.setCurrent(isEvidenceCurrent(chain));
+        
+        return chain;
+    }
+    
+    /**
+     * Get source guideline for action
+     */
+    public Guideline getSourceGuideline(ProtocolAction action) {
+        if (action.getGuidelineReference() == null) {
+            return null;
+        }
+        
+        // Try direct guideline ID match
+        Guideline guideline = guidelines.get(action.getGuidelineReference());
+        if (guideline != null) {
+            return guideline;
+        }
+        
+        // Try matching by guideline short name (e.g., "SSC 2021")
+        return guidelines.values().stream()
+            .filter(g -> g.getShortName().equals(action.getGuidelineReference()))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    /**
+     * Get all evidence citations for action
+     */
+    public List<Citation> getEvidence(ProtocolAction action) {
+        if (action.getEvidenceReferences() == null) {
+            return Collections.emptyList();
+        }
+        
+        return action.getEvidenceReferences().stream()
+            .map(this::resolveCitation)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Find matching guideline recommendation for action
+     */
+    private Guideline.GuidelineRecommendation findMatchingRecommendation(
+            ProtocolAction action, 
+            Guideline guideline) {
+        
+        if (guideline.getRecommendations() == null) {
+            return null;
+        }
+        
+        // Try to find by linked action ID
+        return guideline.getRecommendations().stream()
+            .filter(rec -> rec.getLinkedProtocolActions() != null &&
+                          rec.getLinkedProtocolActions().contains(action.getId()))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    // ================================================================
+    // EVIDENCE QUALITY ASSESSMENT
+    // ================================================================
+    
+    /**
+     * Assess overall evidence quality using GRADE
+     */
+    public String assessOverallQuality(EvidenceChain chain) {
+        // Start with guideline recommendation quality
+        if (chain.getGuidelineRecommendation() != null) {
+            String gradeLevel = chain.getGuidelineRecommendation().getGradeLevel();
+            if (gradeLevel != null) {
+                return gradeLevel;
+            }
+        }
+        
+        // Fall back to assessing supporting evidence
+        List<Citation> evidence = chain.getSupportingEvidence();
+        if (evidence == null || evidence.isEmpty()) {
+            return "Unknown";
+        }
+        
+        // Check for high-quality studies
+        boolean hasMetaAnalysis = evidence.stream()
+            .anyMatch(c -> c.getStudyType() == Citation.StudyType.META_ANALYSIS);
+        
+        long rctCount = evidence.stream()
+            .filter(c -> c.getStudyType() == Citation.StudyType.RCT)
+            .count();
+        
+        if (hasMetaAnalysis || rctCount >= 3) {
+            return "High";
+        } else if (rctCount > 0) {
+            return "Moderate";
+        } else {
+            return "Low";
+        }
+    }
+    
+    /**
+     * Check if evidence is current (guidelines <5 years, studies <10 years)
+     */
+    public boolean isEvidenceCurrent(EvidenceChain chain) {
+        // Check guideline currency
+        if (chain.getSourceGuideline() != null) {
+            if (!chain.getSourceGuideline().isCurrent()) {
+                log.warn("Guideline {} is not current", 
+                    chain.getSourceGuideline().getShortName());
+                return false;
+            }
+        }
+        
+        // Check citation currency
+        if (chain.getSupportingEvidence() != null) {
+            boolean hasRecentEvidence = chain.getSupportingEvidence().stream()
+                .anyMatch(Citation::isRecent);
+            
+            if (!hasRecentEvidence) {
+                log.warn("No recent evidence (<5 years) for action {}", 
+                    chain.getActionId());
+            }
+        }
+        
+        return true;
+    }
+    
+    // ================================================================
+    // CITATION RESOLUTION
+    // ================================================================
+    
+    /**
+     * Resolve citation from reference string
+     */
+    private Citation resolveCitation(String reference) {
+        // Reference might be PMID or citation ID
+        // Try PMID first (most common)
+        if (reference.startsWith("PMID:")) {
+            String pmid = reference.substring(5).trim();
+            return findCitationByPmid(pmid);
+        }
+        
+        // Try as direct citation ID
+        Citation citation = citations.get(reference);
+        if (citation != null) {
+            return citation;
+        }
+        
+        // Try as PMID without prefix
+        return findCitationByPmid(reference);
+    }
+    
+    private Citation findCitationByPmid(String pmid) {
+        return citations.values().stream()
+            .filter(c -> pmid.equals(c.getPmid()))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    // ================================================================
+    // RECOMMENDATION ANALYSIS
+    // ================================================================
+    
+    /**
+     * Get all protocol actions implementing a guideline recommendation
+     */
+    public List<ProtocolAction> getActionsForRecommendation(
+            Guideline guideline, 
+            String recommendationId) {
+        
+        Guideline.GuidelineRecommendation rec = 
+            guideline.getRecommendation(recommendationId);
+        
+        if (rec == null || rec.getLinkedProtocolActions() == null) {
+            return Collections.emptyList();
+        }
+        
+        // Return list of action IDs
+        // Note: Would need Protocol registry to resolve to actual actions
+        log.info("Guideline recommendation {} linked to {} actions",
+            recommendationId, rec.getLinkedProtocolActions().size());
+        
+        return Collections.emptyList(); // Placeholder
+    }
+    
+    /**
+     * Get evidence summary for display
+     */
+    public EvidenceSummary summarizeEvidence(EvidenceChain chain) {
+        EvidenceSummary summary = new EvidenceSummary();
+        
+        // Guideline info
+        if (chain.getSourceGuideline() != null) {
+            Guideline g = chain.getSourceGuideline();
+            summary.setGuidelineName(g.getShortName());
+            summary.setGuidelineYear(g.getPublicationDate().getYear());
+            summary.setGuidelineOrganization(g.getOrganization());
+        }
+        
+        // Recommendation strength
+        if (chain.getGuidelineRecommendation() != null) {
+            summary.setRecommendationStrength(
+                chain.getGuidelineRecommendation().getStrength().toString());
+            summary.setEvidenceQuality(
+                chain.getGuidelineRecommendation().getGradeLevel());
+        }
+        
+        // Supporting studies
+        if (chain.getSupportingEvidence() != null) {
+            summary.setNumberOfStudies(chain.getSupportingEvidence().size());
+            
+            long rctCount = chain.getSupportingEvidence().stream()
+                .filter(c -> c.getStudyType() == Citation.StudyType.RCT)
+                .count();
+            summary.setNumberOfRCTs((int) rctCount);
+            
+            // Get key citations
+            List<String> keyCitations = chain.getSupportingEvidence().stream()
+                .limit(3)
+                .map(Citation::getFormattedCitation)
+                .collect(Collectors.toList());
+            summary.setKeyCitations(keyCitations);
+        }
+        
+        return summary;
+    }
+    
+    /**
+     * Validate protocol against guideline
+     * Check if protocol actions align with guideline recommendations
+     */
+    public ValidationReport validateProtocol(Protocol protocol, Guideline guideline) {
+        ValidationReport report = new ValidationReport();
+        report.setProtocolId(protocol.getId());
+        report.setGuidelineId(guideline.getGuidelineId());
+        
+        List<String> missingRecommendations = new ArrayList<>();
+        List<String> implementedRecommendations = new ArrayList<>();
+        List<String> deviations = new ArrayList<>();
+        
+        // Check each strong recommendation
+        List<Guideline.GuidelineRecommendation> strongRecs = 
+            guideline.getStrongRecommendations();
+        
+        for (Guideline.GuidelineRecommendation rec : strongRecs) {
+            boolean implemented = protocol.getActions().stream()
+                .anyMatch(action -> 
+                    guideline.getShortName().equals(action.getGuidelineReference()));
+            
+            if (implemented) {
+                implementedRecommendations.add(rec.getRecommendationId());
+            } else {
+                missingRecommendations.add(rec.getRecommendationId() + ": " + rec.getTitle());
+            }
+        }
+        
+        report.setMissingRecommendations(missingRecommendations);
+        report.setImplementedRecommendations(implementedRecommendations);
+        report.setDeviations(deviations);
+        
+        // Calculate compliance score
+        int totalStrong = strongRecs.size();
+        int implemented = implementedRecommendations.size();
+        double compliance = totalStrong > 0 ? 
+            (double) implemented / totalStrong * 100 : 0;
+        report.setCompliancePercentage(compliance);
+        
+        return report;
+    }
+    
+    // ================================================================
+    // SUPPORTING CLASSES
+    // ================================================================
+    
+    @lombok.Data
+    public static class EvidenceSummary {
+        private String guidelineName;
+        private Integer guidelineYear;
+        private String guidelineOrganization;
+        private String recommendationStrength;
+        private String evidenceQuality;
+        private Integer numberOfStudies;
+        private Integer numberOfRCTs;
+        private List<String> keyCitations;
+    }
+    
+    @lombok.Data
+    public static class ValidationReport {
+        private String protocolId;
+        private String guidelineId;
+        private List<String> implementedRecommendations;
+        private List<String> missingRecommendations;
+        private List<String> deviations;
+        private Double compliancePercentage;
+        
+        public boolean isFullyCompliant() {
+            return missingRecommendations.isEmpty() && deviations.isEmpty();
+        }
+    }
+}
+
+
+
+
+
+
+package com.cds.knowledgebase.evidence.linker;
+
+
+import com.cds.knowledgebase.evidence.model.*;
+import lombok.Data;
+import java.util.List;
+
+
+/**
+ * Evidence Chain
+ * Complete traceability from protocol action → guideline → evidence
+ */
+@Data
+public class EvidenceChain {
+    
+    // ================================================================
+    // ACTION IDENTIFICATION
+    // ================================================================
+    private String actionId;
+    private String actionTitle;
+    
+    // ================================================================
+    // GUIDELINE LAYER
+    // ================================================================
+    private Guideline sourceGuideline;
+    private Guideline.GuidelineRecommendation guidelineRecommendation;
+    
+    // ================================================================
+    // EVIDENCE LAYER
+    // ================================================================
+    private List<Citation> supportingEvidence;
+    
+    // ================================================================
+    // QUALITY ASSESSMENT
+    // ================================================================
+    private String overallQuality;      // "High", "Moderate", "Low", "Very Low"
+    private boolean current;            // Is evidence up-to-date?
+    
+    // ================================================================
+    // HELPER METHODS
+    // ================================================================
+    
+    /**
+     * Get complete evidence trail as string
+     */
+    public String getEvidenceTrail() {
+        StringBuilder trail = new StringBuilder();
+        
+        trail.append("Action: ").append(actionTitle).append("\n");
+        
+        if (sourceGuideline != null) {
+            trail.append("└─ Guideline: ").append(sourceGuideline.getShortName())
+                 .append(" (").append(sourceGuideline.getPublicationDate().getYear()).append(")\n");
+            
+            if (guidelineRecommendation != null) {
+                trail.append("   └─ Recommendation: ")
+                     .append(guidelineRecommendation.getNumber())
+                     .append(" - ").append(guidelineRecommendation.getTitle()).append("\n");
+                trail.append("      Strength: ")
+                     .append(guidelineRecommendation.getStrength()).append("\n");
+                trail.append("      Quality: ")
+                     .append(guidelineRecommendation.getGradeLevel()).append("\n");
+            }
+        }
+        
+        if (supportingEvidence != null && !supportingEvidence.isEmpty()) {
+            trail.append("   └─ Supporting Evidence (")
+                 .append(supportingEvidence.size()).append(" studies):\n");
+            
+            for (int i = 0; i < Math.min(3, supportingEvidence.size()); i++) {
+                Citation c = supportingEvidence.get(i);
+                trail.append("      ").append(i + 1).append(". ")
+                     .append(c.getFirstAuthor()).append(" et al. ")
+                     .append(c.getJournal()).append(" ")
+                     .append(c.getPublicationYear())
+                     .append(" (PMID: ").append(c.getPmid()).append(")\n");
+            }
+            
+            if (supportingEvidence.size() > 3) {
+                trail.append("      ... and ")
+                     .append(supportingEvidence.size() - 3)
+                     .append(" more studies\n");
+            }
+        }
+        
+        return trail.toString();
+    }
+    
+    /**
+     * Check if evidence chain is complete
+     */
+    public boolean isComplete() {
+        return sourceGuideline != null && 
+               guidelineRecommendation != null &&
+               supportingEvidence != null && 
+               !supportingEvidence.isEmpty();
+    }
+    
+    /**
+     * Get recommendation strength level (1-5)
+     */
+    public int getStrengthLevel() {
+        if (guidelineRecommendation == null) return 0;
+        
+        switch (guidelineRecommendation.getStrength()) {
+            case STRONG:
+                return 5;
+            case WEAK:
+                return 3;
+            case CONDITIONAL:
+                return 2;
+            case BEST_PRACTICE:
+                return 5;
+            default:
+                return 0;
+        }
+    }
+    
+    /**
+     * Get quality level (1-4)
+     */
+    public int getQualityLevel() {
+        if (overallQuality == null) return 0;
+        
+        switch (overallQuality.toLowerCase()) {
+            case "high":
+                return 4;
+            case "moderate":
+                return 3;
+            case "low":
+                return 2;
+            case "very low":
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    
+    /**
+     * Get display badge for UI
+     */
+    public String getQualityBadge() {
+        if (!current) {
+            return "⚠️ OUTDATED";
+        }
+        
+        int quality = getQualityLevel();
+        int strength = getStrengthLevel();
+        
+        if (quality >= 3 && strength >= 4) {
+            return "🟢 STRONG";
+        } else if (quality >= 2 && strength >= 3) {
+            return "🟡 MODERATE";
+        } else {
+            return "🟠 WEAK";
+        }
+    }
+    
+    /**
+     * Check if action requires urgent review (outdated evidence)
+     */
+    public boolean needsReview() {
+        if (!current) return true;
+        
+        if (sourceGuideline != null) {
+            return sourceGuideline.needsReview();
+        }
+        
+        return false;
+    }
+}

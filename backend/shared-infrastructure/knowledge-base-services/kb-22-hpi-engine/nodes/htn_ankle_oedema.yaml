@@ -1,0 +1,196 @@
+# P07 HTN Ankle Oedema - HPI Node Definition
+# Bayesian differential for ankle oedema in hypertensive patients.
+# Triggered by: patient self-report of swollen ankles OR clinician examination finding.
+# Output: posterior probability of CCB side effect vs heart failure -> feeds KB-23 decision cards.
+
+node_id: P07_HTN_OEDEMA
+version: "1.0"
+description: "Ankle oedema differential in hypertensive cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Safety classification
+safety_criticality: MODERATE
+
+# Guideline prior source (N-01)
+guideline_prior_source: "NICE_HTN_2022_CCB_OEDEMA; ESC_HF_2023"
+
+# Differentials with per-stratum priors (F-05)
+# CCB (amlodipine) peripheral oedema incidence: 5-15% dose-dependent.
+# Per-stratum priors shift based on medication profile and CKD status.
+differentials:
+  - id: CCB_SIDE_EFFECT
+    label: "Calcium Channel Blocker (Amlodipine) Side Effect"
+    population_reference: "Sica DA, J Clin Hypertens 2003; NICE HTN NG136 2022"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.55
+      DM_HTN_CKD: 0.45
+    conditional_priors:
+      - condition: "on_amlodipine == true"
+        override: 0.65
+      - condition: "on_amlodipine == false AND on_ccb == false"
+        override: 0.05
+
+  - id: HEART_FAILURE
+    label: "Heart Failure (Fluid Overload)"
+    population_reference: "ESC Heart Failure Guidelines 2023; Yancy CW, Circulation 2017"
+    priors:
+      DM_ONLY: 0.15
+      DM_HTN: 0.20
+      DM_HTN_CKD: 0.25
+    conditional_priors:
+      - condition: "eGFR_declining == true AND on_ccb == false"
+        override: 0.35
+
+  - id: RENAL_FLUID_RETENTION
+    label: "Renal Fluid Retention (CKD-Related)"
+    population_reference: "KDIGO CKD 2024; Abboud H, CJASN 2010"
+    priors:
+      DM_ONLY: 0.05
+      DM_HTN: 0.08
+      DM_HTN_CKD: 0.15
+
+  - id: DVT
+    label: "Deep Vein Thrombosis"
+    population_reference: "NICE VTE CG144 2020; Wells Score Criteria"
+    priors:
+      DM_ONLY: 0.05
+      DM_HTN: 0.05
+      DM_HTN_CKD: 0.05
+
+# Enrichment fields pulled from KB-20 patient profile
+enrichment_fields:
+  - current_antihypertensives
+  - on_amlodipine
+  - on_ccb
+  - eGFR_latest
+  - eGFR_declining
+  - bnp_latest
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Is the swelling in both ankles/legs (bilateral) or only one side (unilateral)?"
+    text_hi: "क्या सूजन दोनों टखनों/पैरों में है (द्विपक्षीय) या केवल एक तरफ (एकपक्षीय)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "BILATERAL"
+        label_en: "Both ankles/legs"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 2.5
+          HEART_FAILURE: 2.0
+          RENAL_FLUID_RETENTION: 2.2
+          DVT: 0.2
+      - value: "UNILATERAL"
+        label_en: "One side only"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.3
+          HEART_FAILURE: 0.4
+          RENAL_FLUID_RETENTION: 0.3
+          DVT: 5.0
+
+  - question_id: Q02
+    text_en: "When you press the swollen area, does it leave a dent (pitting oedema)?"
+    text_hi: "जब आप सूजे हुए हिस्से को दबाते हैं, तो क्या वहां गड्ढा बनता है (पिटिंग एडिमा)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_PITTING"
+        label_en: "Yes, pitting oedema present"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 2.0
+          HEART_FAILURE: 3.0
+          RENAL_FLUID_RETENTION: 2.5
+          DVT: 1.5
+      - value: "NO_NON_PITTING"
+        label_en: "No, non-pitting or minimal"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.8
+          HEART_FAILURE: 0.5
+          RENAL_FLUID_RETENTION: 0.6
+          DVT: 1.0
+
+  - question_id: Q03
+    text_en: "Does the swelling get worse after standing or sitting for a long time?"
+    text_hi: "क्या लंबे समय तक खड़े रहने या बैठने पर सूजन बढ़ जाती है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_POSITIONAL"
+        label_en: "Yes, worse with prolonged standing/sitting"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 2.5
+          HEART_FAILURE: 1.5
+          RENAL_FLUID_RETENTION: 1.2
+          DVT: 1.8
+      - value: "NO"
+        label_en: "No positional worsening"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.6
+          HEART_FAILURE: 1.0
+          RENAL_FLUID_RETENTION: 1.0
+          DVT: 0.8
+
+  - question_id: Q04
+    text_en: "Did the swelling start after a change in your blood pressure medication?"
+    text_hi: "क्या सूजन रक्तचाप की दवा बदलने के बाद शुरू हुई?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_AFTER_MED_CHANGE"
+        label_en: "Yes, started after medication change"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 5.0
+          HEART_FAILURE: 0.5
+          RENAL_FLUID_RETENTION: 0.6
+          DVT: 0.3
+      - value: "NO_MED_CHANGE"
+        label_en: "No recent medication change"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.4
+          HEART_FAILURE: 1.5
+          RENAL_FLUID_RETENTION: 1.5
+          DVT: 1.2
+
+  - question_id: Q05
+    text_en: "Do you have pain or tenderness in your calf muscle?"
+    text_hi: "क्या आपकी पिंडली की मांसपेशी में दर्द या छूने पर दर्द है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_CALF_PAIN"
+        label_en: "Yes, calf pain or tenderness present"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.2
+          HEART_FAILURE: 0.5
+          RENAL_FLUID_RETENTION: 0.3
+          DVT: 6.0
+      - value: "NO_CALF_PAIN"
+        label_en: "No calf pain"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 1.3
+          HEART_FAILURE: 1.1
+          RENAL_FLUID_RETENTION: 1.1
+          DVT: 0.4
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_OEDEMA_MANAGEMENT_CARD"
+    description: "Posterior > 0.70 for CCB side effect -> generate decision card recommending amlodipine dose reduction or switch to lercanidipine. If HF > 0.70, urgent echocardiography and BNP."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Review medication history, check BNP/NT-proBNP, assess fluid balance."
+  - threshold: 0.30
+    action: "INVESTIGATE_ALTERNATIVES"
+    description: "Low CCB/HF probability. Consider DVT assessment (Wells score, D-dimer) if unilateral. Check renal function if CKD suspected."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "HEART_FAILURE posterior > 0.40"
+    trigger_node: "P02_DYSPNEA"
+    rationale: "Heart failure with oedema warrants dyspnoea HPI pathway for complete cardiac assessment."
+  - condition: "DVT posterior > 0.30"
+    trigger_node: "EMERGENCY_REFERRAL"
+    rationale: "DVT suspicion requires urgent Doppler ultrasound and anticoagulation assessment."

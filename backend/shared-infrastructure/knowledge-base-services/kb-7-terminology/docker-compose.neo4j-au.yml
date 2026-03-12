@@ -1,0 +1,44 @@
+version: '3.8'
+
+# Neo4j AU with n10s for SNOMED AU + AMT + LOINC
+# PERSISTENT volumes in project directory (NOT /tmp)
+
+services:
+  neo4j-au:
+    image: neo4j:5.15.0-community
+    container_name: kb7-neo4j-au
+    ports:
+      - "7475:7474"   # HTTP Browser (AU on 7475)
+      - "7688:7687"   # Bolt protocol (AU on 7688)
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_PLUGINS=["apoc", "n10s"]
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*,n10s.*
+      - NEO4J_dbms_security_procedures_allowlist=apoc.*,n10s.*
+      # Performance tuning for large ontology
+      - NEO4J_server_memory_heap_initial__size=2g
+      - NEO4J_server_memory_heap_max__size=4g
+      - NEO4J_server_memory_pagecache_size=2g
+      - NEO4J_dbms_memory_transaction_total_max=2g
+    volumes:
+      # PERSISTENT volumes in project directory
+      - ./data/neo4j-au/data:/data
+      - ./data/neo4j-au/logs:/logs
+      - ./data/neo4j-au/import:/var/lib/neo4j/import
+      - ./data/neo4j-au/plugins:/plugins
+    networks:
+      - kb7-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  kb7-network:
+    driver: bridge

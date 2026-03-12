@@ -1,0 +1,546 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Unified KB Services - Operational Dashboard",
+    "tags": ["kb-services", "unified", "operational", "monitoring"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "schemaVersion": 30,
+    "version": 1,
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "kb_service",
+          "type": "custom",
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "options": [
+            {"text": "All", "value": ".*", "selected": true},
+            {"text": "KB-1 Drug Rules", "value": "kb-drug-rules", "selected": false},
+            {"text": "KB-2 Clinical Context", "value": "kb-clinical-context", "selected": false},
+            {"text": "KB-3 Guideline Evidence", "value": "kb-guideline-evidence", "selected": false},
+            {"text": "KB-4 Patient Safety", "value": "kb-patient-safety", "selected": false},
+            {"text": "KB-5 Drug Interactions", "value": "kb-drug-interactions", "selected": false},
+            {"text": "KB-6 Formulary", "value": "kb-formulary", "selected": false},
+            {"text": "KB-7 Terminology", "value": "kb-terminology", "selected": false}
+          ]
+        },
+        {
+          "name": "time_range",
+          "type": "interval",
+          "auto": true,
+          "auto_count": 50,
+          "auto_min": "1m",
+          "options": [
+            {"text": "1m", "value": "1m", "selected": false},
+            {"text": "5m", "value": "5m", "selected": true},
+            {"text": "15m", "value": "15m", "selected": false},
+            {"text": "1h", "value": "1h", "selected": false}
+          ]
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "prometheus",
+          "enable": true,
+          "expr": "changes(up{job=~\"kb-.*\"}[5m]) > 0",
+          "iconColor": "blue",
+          "titleFormat": "{{job}} deployment"
+        },
+        {
+          "name": "Alerts",
+          "datasource": "prometheus", 
+          "enable": true,
+          "expr": "ALERTS{job=~\"kb-.*\", alertstate=\"firing\"}",
+          "iconColor": "red",
+          "titleFormat": "{{alertname}}"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "KB Services Health Overview",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=~\"kb-.*\"}",
+            "legendFormat": "{{job}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {
+                "options": {
+                  "0": {"text": "DOWN", "color": "red"},
+                  "1": {"text": "UP", "color": "green"}
+                },
+                "type": "value"
+              }
+            ],
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "green", "value": 1}
+              ]
+            },
+            "unit": "short",
+            "displayName": "${__field.labels.job}"
+          }
+        },
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background"
+        },
+        "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Total Request Rate (req/sec)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total{job=~\"$kb_service\"}[$time_range]))",
+            "legendFormat": "Total Requests/sec",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "min": 0,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 100},
+                {"color": "red", "value": 500}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 6}
+      },
+      {
+        "id": 3,
+        "title": "Average Response Time (ms)",
+        "type": "stat", 
+        "targets": [
+          {
+            "expr": "avg(histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=~\"$kb_service\"}[$time_range])) * 1000)",
+            "legendFormat": "Avg Response Time",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "min": 0,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 100},
+                {"color": "red", "value": 500}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 6}
+      },
+      {
+        "id": 4,
+        "title": "Error Rate (%)",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total{job=~\"$kb_service\",status=~\"4..|5..\"}[$time_range])) / sum(rate(http_requests_total{job=~\"$kb_service\"}[$time_range])) * 100",
+            "legendFormat": "Error Rate",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 1},
+                {"color": "red", "value": 5}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 6}
+      },
+      {
+        "id": 5,
+        "title": "Active Database Connections",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(db_connections_active{service=~\"$kb_service\"})",
+            "legendFormat": "Active Connections",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "min": 0,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 80},
+                {"color": "red", "value": 95}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 6}
+      },
+      {
+        "id": 6,
+        "title": "Request Volume by Service",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total{job=~\"$kb_service\"}[$time_range])",
+            "legendFormat": "{{job}} - {{method}} {{handler}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "linear",
+              "lineWidth": 1,
+              "fillOpacity": 10,
+              "gradientMode": "none",
+              "spanNulls": false,
+              "insertNulls": false,
+              "showPoints": "never",
+              "pointSize": 5,
+              "stacking": {"mode": "none", "group": "A"},
+              "axisPlacement": "auto",
+              "axisLabel": "",
+              "scaleDistribution": {"type": "linear"},
+              "hideFrom": {"legend": false, "tooltip": false, "vis": false},
+              "thresholdsStyle": {"mode": "off"}
+            },
+            "unit": "reqps",
+            "min": 0
+          }
+        },
+        "options": {
+          "tooltip": {"mode": "multi", "sort": "desc"},
+          "legend": {"displayMode": "table", "placement": "right", "values": ["max", "mean"]},
+          "displayMode": "list"
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10}
+      },
+      {
+        "id": 7,
+        "title": "Response Time Percentiles",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=~\"$kb_service\"}[$time_range])) by (le)) * 1000",
+            "legendFormat": "P50",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"$kb_service\"}[$time_range])) by (le)) * 1000",
+            "legendFormat": "P95", 
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=~\"$kb_service\"}[$time_range])) by (le)) * 1000",
+            "legendFormat": "P99",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "min": 0,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 100},
+                {"color": "red", "value": 500}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10}
+      },
+      {
+        "id": 8,
+        "title": "Database Performance by Technology",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(db_query_duration_seconds_sum{service=~\"$kb_service\",db_type=\"postgresql\"}[$time_range]) / rate(db_query_duration_seconds_count{service=~\"$kb_service\",db_type=\"postgresql\"}[$time_range]) * 1000",
+            "legendFormat": "PostgreSQL Avg Query Time",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(mongodb_query_duration_seconds_sum{service=~\"$kb_service\"}[$time_range]) / rate(mongodb_query_duration_seconds_count{service=~\"$kb_service\"}[$time_range]) * 1000",
+            "legendFormat": "MongoDB Avg Query Time",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(neo4j_query_duration_seconds_sum{service=~\"$kb_service\"}[$time_range]) / rate(neo4j_query_duration_seconds_count{service=~\"$kb_service\"}[$time_range]) * 1000",
+            "legendFormat": "Neo4j Avg Query Time",
+            "refId": "C"
+          },
+          {
+            "expr": "rate(elasticsearch_query_duration_seconds_sum{service=~\"$kb_service\"}[$time_range]) / rate(elasticsearch_query_duration_seconds_count{service=~\"$kb_service\"}[$time_range]) * 1000", 
+            "legendFormat": "Elasticsearch Avg Query Time",
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "min": 0
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18}
+      },
+      {
+        "id": 9,
+        "title": "Cache Performance",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "avg(cache_hit_rate{service=~\"$kb_service\",cache_level=\"L1\"}) by (service) * 100",
+            "legendFormat": "{{service}} L1 Cache Hit Rate",
+            "refId": "A"
+          },
+          {
+            "expr": "avg(cache_hit_rate{service=~\"$kb_service\",cache_level=\"L2\"}) by (service) * 100",
+            "legendFormat": "{{service}} L2 Cache Hit Rate", 
+            "refId": "B"
+          },
+          {
+            "expr": "avg(cache_hit_rate{service=~\"$kb_service\",cache_level=\"L3\"}) by (service) * 100",
+            "legendFormat": "{{service}} L3 Cache Hit Rate",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 80},
+                {"color": "green", "value": 90}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18}
+      },
+      {
+        "id": 10,
+        "title": "Memory Usage by Service",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes{job=~\"$kb_service\"} / 1024 / 1024",
+            "legendFormat": "{{job}} Memory (MB)",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "decbytes",
+            "min": 0
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26}
+      },
+      {
+        "id": 11,
+        "title": "CPU Usage by Service", 
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total{job=~\"$kb_service\"}[$time_range]) * 100",
+            "legendFormat": "{{job}} CPU %",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26}
+      },
+      {
+        "id": 12,
+        "title": "Top 10 Endpoints by Error Rate",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "topk(10, sum(rate(http_requests_total{job=~\"$kb_service\",status=~\"4..|5..\"}[$time_range])) by (job, handler, method) / sum(rate(http_requests_total{job=~\"$kb_service\"}[$time_range])) by (job, handler, method) * 100)",
+            "legendFormat": "",
+            "refId": "A",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {"Time": true},
+              "indexByName": {},
+              "renameByName": {
+                "job": "Service",
+                "handler": "Endpoint", 
+                "method": "Method",
+                "Value": "Error Rate (%)"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "displayMode": "color-background",
+              "align": "auto",
+              "inspect": false
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 1},
+                {"color": "red", "value": 5}
+              ]
+            },
+            "unit": "percent"
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34}
+      },
+      {
+        "id": 13,
+        "title": "Business Metrics",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(terminology_validations_total{job=\"kb-terminology\"}[$time_range]))",
+            "legendFormat": "Terminology Validations/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "sum(rate(drug_interaction_checks_total{job=\"kb-drug-interactions\"}[$time_range]))",
+            "legendFormat": "Drug Interaction Checks/sec", 
+            "refId": "B"
+          },
+          {
+            "expr": "sum(rate(safety_alerts_generated_total{job=\"kb-patient-safety\"}[$time_range]))",
+            "legendFormat": "Safety Alerts/sec",
+            "refId": "C"
+          },
+          {
+            "expr": "sum(rate(guideline_recommendations_total{job=\"kb-guideline-evidence\"}[$time_range]))",
+            "legendFormat": "Guideline Recommendations/sec",
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "min": 0,
+            "displayName": "${__field.labels.__name__}"
+          }
+        },
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          },
+          "orientation": "vertical",
+          "textMode": "auto",
+          "colorMode": "value"
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34}
+      },
+      {
+        "id": 14,
+        "title": "Alert Summary",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ALERTS{job=~\"$kb_service\"}",
+            "legendFormat": "",
+            "refId": "A",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize", 
+            "options": {
+              "excludeByName": {"Time": true, "__name__": true},
+              "indexByName": {},
+              "renameByName": {
+                "alertname": "Alert",
+                "alertstate": "State",
+                "job": "Service",
+                "severity": "Severity",
+                "summary": "Summary"
+              }
+            }
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "displayMode": "color-background",
+              "align": "auto"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": "warning"},
+                {"color": "red", "value": "critical"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 42}
+      }
+    ]
+  }
+}

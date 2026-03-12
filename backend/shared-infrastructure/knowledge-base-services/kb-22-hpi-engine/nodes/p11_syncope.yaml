@@ -1,0 +1,243 @@
+# P11 Syncope - HPI Node Definition
+# Bayesian differential for syncope/fainting presentations in cardio-renal-metabolic patients
+# Binary question format (YES/NO/PATA_NAHI) with lr_positive / lr_negative
+# Priors sum to 0.90 (Other bucket reserves 0.10)
+
+node_id: P11_SYNCOPE
+version: "1.0.0"
+title_en: "Syncope Differential Diagnosis"
+title_hi: "Behoshi Vibhedak Nidaan"
+description: "Bayesian differential for transient loss of consciousness in DM+HTN patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Supported strata
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_Syncope_2018"
+
+# ===============================================================
+# Differentials with per-stratum priors (F-05)
+# Sum = 0.90; Other bucket = 0.10 -> total 1.00
+# ===============================================================
+differentials:
+  - id: VASOVAGAL
+    label: "Vasovagal Syncope"
+    population_reference: "ESC Syncope Guidelines 2018; Framingham Heart Study"
+    priors:
+      DM_HTN_base: 0.30
+
+  - id: CARDIAC_ARRHYTHMIA
+    label: "Cardiac Arrhythmia (Brady/Tachyarrhythmia)"
+    population_reference: "ESC Syncope 2018; Brignole et al. Europace 2018"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: ORTHOSTATIC_HYPOTENSION
+    label: "Orthostatic Hypotension"
+    population_reference: "Freeman et al. NEJM 2008; India OH prevalence in DM+HTN 20-30%"
+    priors:
+      DM_HTN_base: 0.22
+
+  - id: AORTIC_STENOSIS
+    label: "Aortic Stenosis (Structural Cardiac)"
+    population_reference: "ACC/AHA Valvular Heart Disease 2020"
+    priors:
+      DM_HTN_base: 0.10
+
+  - id: OTHER
+    label: "Other (Seizure, Metabolic, Psychogenic)"
+    population_reference: "ESC Syncope 2018"
+    priors:
+      DM_HTN_base: 0.08
+
+# ===============================================================
+# G1: Safety floor clamping
+# Cardiac arrhythmia posterior NEVER drops below 0.05
+# Rationale: Arrhythmic syncope carries sudden death risk; cannot
+# be excluded by history alone without ECG/telemetry.
+# ===============================================================
+safety_floors:
+  CARDIAC_ARRHYTHMIA: 0.05
+  AORTIC_STENOSIS: 0.03
+
+# ===============================================================
+# Safety triggers
+# ===============================================================
+safety_triggers:
+  - id: RF01_CARDIAC_SYNCOPE
+    type: BOOLEAN
+    condition: "CARDIAC_ARRHYTHMIA.posterior > 0.40"
+    severity: IMMEDIATE
+    recommended_action: "Urgent ECG and cardiology referral. Rule out ventricular arrhythmia. SNOMED: 271594007"
+
+  - id: RF02_EXERTIONAL_SYNCOPE
+    type: BOOLEAN
+    condition: "Q002=YES"
+    severity: IMMEDIATE
+    recommended_action: "Exertional syncope - urgent echocardiography and cardiology evaluation. Suspect structural cardiac disease."
+
+  - id: RF03_RECURRENT_SYNCOPE_INJURY
+    type: BOOLEAN
+    condition: "Q007=YES AND Q008=YES"
+    severity: URGENT
+    recommended_action: "Recurrent syncope with injury. Consider admission for telemetry monitoring and specialist evaluation."
+
+# ===============================================================
+# Questions — Binary (YES / NO / PATA_NAHI)
+# LR values for ALL differentials per question
+# ===============================================================
+questions:
+  - id: Q001
+    text_en: "Before fainting, did you feel lightheaded, warm, nauseous, or sweaty?"
+    text_hi: "Behoshi se pehle kya aapko chakkar, garmi, ji machalna, ya paseena aaya?"
+    mandatory: true
+    lr_source: "Sheldon et al. JACC 2006; Calgary Syncope Score"
+    lr_positive:
+      VASOVAGAL: 3.20
+      CARDIAC_ARRHYTHMIA: 0.50
+      ORTHOSTATIC_HYPOTENSION: 1.80
+      AORTIC_STENOSIS: 0.40
+      OTHER: 1.10
+    lr_negative:
+      VASOVAGAL: 0.40
+      CARDIAC_ARRHYTHMIA: 1.50
+      ORTHOSTATIC_HYPOTENSION: 0.80
+      AORTIC_STENOSIS: 1.20
+      OTHER: 0.95
+
+  - id: Q002
+    text_en: "Did the fainting happen during physical exertion or exercise?"
+    text_hi: "Kya behoshi mehnat ya exercise ke dauraan hui?"
+    mandatory: true
+    lr_source: "ACC/AHA Valvular Heart Disease 2020; ESC Syncope 2018"
+    lr_positive:
+      VASOVAGAL: 0.40
+      CARDIAC_ARRHYTHMIA: 2.80
+      ORTHOSTATIC_HYPOTENSION: 0.60
+      AORTIC_STENOSIS: 5.20
+      OTHER: 0.70
+    lr_negative:
+      VASOVAGAL: 1.15
+      CARDIAC_ARRHYTHMIA: 0.75
+      ORTHOSTATIC_HYPOTENSION: 1.10
+      AORTIC_STENOSIS: 0.50
+      OTHER: 1.05
+
+  - id: Q003
+    text_en: "Did the fainting happen when you stood up from sitting or lying down?"
+    text_hi: "Kya behoshi baithne ya lete hue se uthne par hui?"
+    mandatory: true
+    lr_source: "Freeman et al. NEJM 2008; Consensus statement on OH"
+    lr_positive:
+      VASOVAGAL: 0.80
+      CARDIAC_ARRHYTHMIA: 0.50
+      ORTHOSTATIC_HYPOTENSION: 4.50
+      AORTIC_STENOSIS: 0.60
+      OTHER: 0.90
+    lr_negative:
+      VASOVAGAL: 1.05
+      CARDIAC_ARRHYTHMIA: 1.15
+      ORTHOSTATIC_HYPOTENSION: 0.35
+      AORTIC_STENOSIS: 1.10
+      OTHER: 1.05
+
+  - id: Q004
+    text_en: "Did your heart feel like it was racing or pounding before you fainted?"
+    text_hi: "Kya behoshi se pehle dil tez ya zor se dhadak raha tha?"
+    mandatory: false
+    lr_source: "Brignole et al. Europace 2018"
+    lr_positive:
+      VASOVAGAL: 0.60
+      CARDIAC_ARRHYTHMIA: 3.50
+      ORTHOSTATIC_HYPOTENSION: 0.70
+      AORTIC_STENOSIS: 1.50
+      OTHER: 1.20
+    lr_negative:
+      VASOVAGAL: 1.10
+      CARDIAC_ARRHYTHMIA: 0.55
+      ORTHOSTATIC_HYPOTENSION: 1.10
+      AORTIC_STENOSIS: 0.90
+      OTHER: 0.95
+
+  - id: Q005
+    text_en: "Did you recover quickly (within 1-2 minutes) and feel normal afterwards?"
+    text_hi: "Kya aap 1-2 minute mein theek ho gaye aur baad mein normal mehsoos hua?"
+    mandatory: false
+    lr_source: "ESC Syncope 2018; Sheldon JACC 2006"
+    lr_positive:
+      VASOVAGAL: 2.50
+      CARDIAC_ARRHYTHMIA: 1.80
+      ORTHOSTATIC_HYPOTENSION: 2.20
+      AORTIC_STENOSIS: 1.40
+      OTHER: 0.50
+    lr_negative:
+      VASOVAGAL: 0.50
+      CARDIAC_ARRHYTHMIA: 0.80
+      ORTHOSTATIC_HYPOTENSION: 0.60
+      AORTIC_STENOSIS: 0.85
+      OTHER: 1.80
+
+  - id: Q006
+    text_en: "Were you in a crowded, hot, or stuffy place when you fainted?"
+    text_hi: "Kya behoshi ke waqt aap bheed, garmi, ya band jagah mein the?"
+    mandatory: false
+    lr_source: "Sheldon et al. JACC 2006; Calgary Syncope Score"
+    lr_positive:
+      VASOVAGAL: 3.80
+      CARDIAC_ARRHYTHMIA: 0.30
+      ORTHOSTATIC_HYPOTENSION: 0.80
+      AORTIC_STENOSIS: 0.40
+      OTHER: 0.90
+    lr_negative:
+      VASOVAGAL: 0.65
+      CARDIAC_ARRHYTHMIA: 1.20
+      ORTHOSTATIC_HYPOTENSION: 1.05
+      AORTIC_STENOSIS: 1.15
+      OTHER: 1.05
+
+  - id: Q007
+    text_en: "Has fainting happened more than once in the last 6 months?"
+    text_hi: "Kya pichle 6 mahine mein ek se zyada baar behoshi aayi hai?"
+    mandatory: false
+    lr_source: "ESC Syncope 2018"
+    lr_positive:
+      VASOVAGAL: 1.60
+      CARDIAC_ARRHYTHMIA: 2.20
+      ORTHOSTATIC_HYPOTENSION: 2.50
+      AORTIC_STENOSIS: 1.80
+      OTHER: 1.40
+    lr_negative:
+      VASOVAGAL: 0.80
+      CARDIAC_ARRHYTHMIA: 0.70
+      ORTHOSTATIC_HYPOTENSION: 0.60
+      AORTIC_STENOSIS: 0.75
+      OTHER: 0.85
+
+  - id: Q008
+    text_en: "Have you injured yourself during a fainting episode (fallen, hit your head)?"
+    text_hi: "Kya behoshi ke dauraan aapko chot lagi hai (girna, sir lagana)?"
+    mandatory: false
+    lr_source: "Brignole et al. Europace 2018"
+    lr_positive:
+      VASOVAGAL: 0.60
+      CARDIAC_ARRHYTHMIA: 2.80
+      ORTHOSTATIC_HYPOTENSION: 1.50
+      AORTIC_STENOSIS: 2.00
+      OTHER: 1.30
+    lr_negative:
+      VASOVAGAL: 1.15
+      CARDIAC_ARRHYTHMIA: 0.65
+      ORTHOSTATIC_HYPOTENSION: 0.85
+      AORTIC_STENOSIS: 0.75
+      OTHER: 0.90

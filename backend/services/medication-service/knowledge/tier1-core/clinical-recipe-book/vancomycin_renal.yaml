@@ -1,0 +1,198 @@
+recipe_id: "vancomycin-renal-v2"
+version: "2.0.0"
+last_updated: "2024-01-15"
+medication_code: "vancomycin"
+recipe_name: "Vancomycin Renal-Adjusted Dosing"
+description: "Kidney function-adjusted vancomycin dosing with nephrotoxicity prevention"
+
+# Clinical indication for this recipe
+indications:
+  - "sepsis"
+  - "endocarditis" 
+  - "osteomyelitis"
+  - "cdiff_colitis"
+
+# Patient conditions that trigger this recipe
+triggering_conditions:
+  - "chronic_kidney_disease"
+  - "acute_kidney_injury"
+  - "renal_impairment"
+  - "dialysis"
+
+# Algorithm type and parameters
+algorithm:
+  type: "renal_adjusted_dosing"
+  base_calculation: "weight_based"
+  
+  # Base dosing parameters
+  parameters:
+    base_dose_mg_per_kg: 15.0
+    loading_dose_mg_per_kg: 25.0
+    target_trough_mg_per_l: [15.0, 20.0]  # Range for serious infections
+    frequency_hours: 12
+    
+  # Renal adjustment table based on creatinine clearance
+  renal_adjustments:
+    - creatinine_clearance_min: 80
+      creatinine_clearance_max: 999
+      dose_adjustment_factor: 1.0
+      frequency_hours: 12
+      monitoring_frequency: "every_3rd_dose"
+      
+    - creatinine_clearance_min: 50
+      creatinine_clearance_max: 79
+      dose_adjustment_factor: 0.75
+      frequency_hours: 18
+      monitoring_frequency: "every_2nd_dose"
+      
+    - creatinine_clearance_min: 30
+      creatinine_clearance_max: 49
+      dose_adjustment_factor: 0.5
+      frequency_hours: 24
+      monitoring_frequency: "every_dose"
+      
+    - creatinine_clearance_min: 15
+      creatinine_clearance_max: 29
+      dose_adjustment_factor: 0.25
+      frequency_hours: 48
+      monitoring_frequency: "every_dose"
+      
+    - creatinine_clearance_min: 0
+      creatinine_clearance_max: 14
+      dose_adjustment_factor: 0.0
+      frequency_hours: 0
+      monitoring_frequency: "contraindicated"
+      special_instructions: "Consider alternative antibiotic"
+
+# Required clinical context data
+required_context:
+  patient_demographics:
+    - "weight_kg"
+    - "age_years"
+    - "gender"
+  
+  laboratory_values:
+    - "creatinine_clearance"
+    - "serum_creatinine"
+    - "bun"
+    
+  clinical_status:
+    - "dialysis_status"
+    - "infection_severity"
+    - "hemodynamic_status"
+
+# Safety checks and validations
+safety_checks:
+  - check_id: "dose_limits"
+    description: "Validate dose limits for vancomycin"
+    type: "dose_validation"
+    severity: "critical"
+    action: "reject_if_exceeded"
+
+  - check_id: "contraindications_absolute"
+    description: "Check for absolute contraindications"
+    type: "contraindication_check"
+    severity: "critical"
+    action: "reject"
+
+  - check_id: "contraindications_relative"
+    description: "Check for relative contraindications"
+    type: "contraindication_check"
+    severity: "warning"
+    action: "warn_and_monitor"
+
+# Monitoring requirements
+monitoring:
+  required: true
+  frequency: "daily"
+  parameters:
+    - parameter: "vancomycin_trough"
+      type: "laboratory"
+      normal_range: [15.0, 20.0]
+      critical_range: [25.0, 999.0]
+    - parameter: "creatinine"
+      type: "laboratory"
+      normal_range: [0.6, 1.2]
+      critical_range: [2.0, 999.0]
+    - parameter: "hearing_assessment"
+      type: "clinical"
+      normal_range: "baseline"
+      critical_range: "hearing_loss"
+  alerts:
+    - alert_id: "nephrotoxicity"
+      condition: "creatinine > 1.5 * baseline"
+      severity: "critical"
+      action: "hold_dose_and_notify"
+      message: "Potential nephrotoxicity - hold vancomycin"
+    - alert_id: "ototoxicity"
+      condition: "hearing_loss_detected"
+      severity: "critical"
+      action: "discontinue_and_notify"
+      message: "Potential ototoxicity - discontinue vancomycin"
+
+# Expected outcomes and targets
+clinical_targets:
+  efficacy:
+    trough_level: [15.0, 20.0]  # mg/L for serious infections
+    clinical_response: "48_to_72_hours"
+    
+  safety:
+    creatinine_increase: "<25%"
+    hearing_preservation: "no_change"
+
+# Drug interaction considerations
+interactions:
+  nephrotoxic_drugs:
+    drugs:
+      - "aminoglycosides"
+      - "amphotericin_b"
+      - "cisplatin"
+      - "cyclosporine"
+    action: "avoid_or_monitor_closely"
+
+  ototoxic_drugs:
+    drugs:
+      - "furosemide"
+      - "aminoglycosides"
+      - "cisplatin"
+    action: "monitor_hearing_function"
+
+# Clinical decision support
+decision_support:
+  rationale: "Vancomycin requires renal dose adjustment due to 90% renal elimination and nephrotoxicity risk"
+  evidence_level: "HIGH"
+  guideline_source: "IDSA Vancomycin Guidelines 2020"
+  
+  alternatives:
+    - medication: "linezolid"
+      indication: "if_creatinine_clearance_<15"
+    - medication: "daptomycin"  
+      indication: "if_nephrotoxicity_develops"
+    - medication: "ceftaroline"
+      indication: "if_mrsa_coverage_needed"
+
+# Audit and quality metrics
+quality_metrics:
+  target_trough_achievement: ">80%"
+  nephrotoxicity_rate: "<15%"
+  clinical_cure_rate: ">85%"
+  
+audit_points:
+  - "dose_calculation_accuracy"
+  - "monitoring_compliance"
+  - "safety_alert_response"
+  - "clinical_outcome_tracking"
+
+# Version control and approval
+approval:
+  clinical_pharmacist: "required"
+  infectious_disease: "recommended"
+  nephrology: "if_ckd_stage_4_or_5"
+  
+change_log:
+  - version: "2.0.0"
+    date: "2024-01-15"
+    changes: "Updated renal adjustment table, added safety checks"
+  - version: "1.0.0"
+    date: "2023-01-01"
+    changes: "Initial recipe implementation"

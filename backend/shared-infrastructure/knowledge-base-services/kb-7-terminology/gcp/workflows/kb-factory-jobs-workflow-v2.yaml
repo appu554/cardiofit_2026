@@ -1,0 +1,611 @@
+# KB-7 Knowledge Factory Workflow - Cloud Run Jobs Version 2.4
+# Orchestrates parallel terminology downloads and passes results to GitHub dispatcher
+# Updated: 2025-11-27 - Fixed GCS JSON auto-parsing, URL encoding, gcs_key extraction, and GitHub repo
+#
+# Key Fixes:
+# 1. GCS Auto-Parsing: When GCS objects have Content-Type: application/json, Workflows
+#    automatically parses JSON. We access gcs_content directly as a map (no json.decode).
+# 2. URL Encoding: Object names with slashes (e.g., "workflow-results/file.json") MUST
+#    be URL-encoded using text.url_encode() for googleapis.storage.v1.objects.get API.
+# 3. Removed Cloud Run API fallback which misinterpreted "Completed=False" as "failed".
+# 4. Fixed gcs_key extraction: Access nested path body.data.gcs_key (not body.gcs_key).
+# 5. Updated default GitHub repo: onkarshahi-IND/knowledge-factory (not placeholder).
+
+main:
+  params: [input]
+  steps:
+    - init:
+        assign:
+          - project_id: "sincere-hybrid-477206-h2"
+          - timestamp: ${text.split(time.format(sys.now()), "T")[0]}
+          - trigger: ${default(map.get(input, "trigger"), "manual")}
+          - environment: "production"
+          - region: "us-central1"
+          - source_bucket: "sincere-hybrid-477206-h2-kb-sources-production"
+          - github_repo: ${default(map.get(input, "github_repo"), "onkarshahi-IND/knowledge-factory")}
+          # Job resource names
+          - snomed_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-snomed-job-production"}
+          - rxnorm_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-rxnorm-job-production"}
+          - loinc_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-loinc-job-production"}
+          - github_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-github-dispatcher-job-production"}
+
+    - log_start:
+        call: sys.log
+        args:
+          text: "Starting KB-7 Knowledge Factory workflow with Cloud Run Jobs"
+          severity: INFO
+
+    - init_results:
+        assign:
+          - snomed_execution: null
+          - rxnorm_execution: null
+          - loinc_execution: null
+          - snomed_status: "pending"
+          - rxnorm_status: "pending"
+          - loinc_status: "pending"
+
+    # Phase 1: Parallel Job Executions
+    - parallel_job_executions:
+        parallel:
+          shared: [snomed_execution, rxnorm_execution, loinc_execution, snomed_status, rxnorm_status, loinc_status]
+          branches:
+            # SNOMED CT Download Job
+            - snomed_branch:
+                steps:
+                  - log_snomed_start:
+                      call: sys.log
+                      args:
+                        text: "Starting SNOMED CT job execution"
+                        severity: INFO
+
+                  - execute_snomed_job:
+                      try:
+                        steps:
+                          - run_snomed:
+                              call: googleapis.run.v2.projects.locations.jobs.run
+                              args:
+                                name: ${snomed_job}
+                              result: snomed_execution
+
+                          - log_snomed_execution_created:
+                              call: sys.log
+                              args:
+                                text: ${"SNOMED execution created - " + snomed_execution.name}
+                                severity: INFO
+
+                          - wait_snomed:
+                              call: wait_for_job_completion
+                              args:
+                                execution_name: ${snomed_execution.name}
+                                job_name: "kb7-snomed-job-production"
+                              result: snomed_final_status
+
+                          - update_snomed_status:
+                              assign:
+                                - snomed_status: ${snomed_final_status.status}
+
+                      except:
+                        as: e
+                        steps:
+                          - log_snomed_error:
+                              call: sys.log
+                              args:
+                                text: ${"SNOMED job failed - " + json.encode_to_string(e)}
+                                severity: ERROR
+                          - assign_snomed_error:
+                              assign:
+                                - snomed_status: "failed"
+
+                  - log_snomed_complete:
+                      call: sys.log
+                      args:
+                        text: "SNOMED job completed"
+                        severity: INFO
+
+            # RxNorm Download Job
+            - rxnorm_branch:
+                steps:
+                  - log_rxnorm_start:
+                      call: sys.log
+                      args:
+                        text: "Starting RxNorm job execution"
+                        severity: INFO
+
+                  - execute_rxnorm_job:
+                      try:
+                        steps:
+                          - run_rxnorm:
+                              call: googleapis.run.v2.projects.locations.jobs.run
+                              args:
+                                name: ${rxnorm_job}
+                              result: rxnorm_execution
+
+                          - wait_rxnorm:
+                              call: wait_for_job_completion
+                              args:
+                                execution_name: ${rxnorm_execution.name}
+                                job_name: "kb7-rxnorm-job-production"
+                              result: rxnorm_final_status
+
+                          - update_rxnorm_status:
+                              assign:
+                                - rxnorm_status: ${rxnorm_final_status.status}
+
+                      except:
+                        as: e
+                        steps:
+                          - log_rxnorm_error:
+                              call: sys.log
+                              args:
+                                text: ${"RxNorm job failed - " + json.encode_to_string(e)}
+                                severity: ERROR
+                          - assign_rxnorm_error:
+                              assign:
+                                - rxnorm_status: "failed"
+
+                  - log_rxnorm_complete:
+                      call: sys.log
+                      args:
+                        text: "RxNorm job completed"
+                        severity: INFO
+
+            # LOINC Download Job
+            - loinc_branch:
+                steps:
+                  - log_loinc_start:
+                      call: sys.log
+                      args:
+                        text: "Starting LOINC job execution"
+                        severity: INFO
+
+                  - execute_loinc_job:
+                      try:
+                        steps:
+                          - run_loinc:
+                              call: googleapis.run.v2.projects.locations.jobs.run
+                              args:
+                                name: ${loinc_job}
+                              result: loinc_execution
+
+                          - wait_loinc:
+                              call: wait_for_job_completion
+                              args:
+                                execution_name: ${loinc_execution.name}
+                                job_name: "kb7-loinc-job-production"
+                              result: loinc_final_status
+
+                          - update_loinc_status:
+                              assign:
+                                - loinc_status: ${loinc_final_status.status}
+
+                      except:
+                        as: e
+                        steps:
+                          - log_loinc_error:
+                              call: sys.log
+                              args:
+                                text: ${"LOINC job failed - " + json.encode_to_string(e)}
+                                severity: ERROR
+                          - assign_loinc_error:
+                              assign:
+                                - loinc_status: "failed"
+
+                  - log_loinc_complete:
+                      call: sys.log
+                      args:
+                        text: "LOINC job completed"
+                        severity: INFO
+
+    # Phase 2: Check Execution Results
+    - check_execution_status:
+        switch:
+          - condition: ${snomed_status == "failed" OR rxnorm_status == "failed" OR loinc_status == "failed"}
+            next: handle_execution_failure
+
+    # Phase 3: Read Download Results from GCS
+    - log_read_results:
+        call: sys.log
+        args:
+          text: "Reading download results from GCS"
+          severity: INFO
+
+    - read_download_results:
+        try:
+          steps:
+            - read_snomed_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Fsnomed-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: snomed_result_response
+
+            - read_rxnorm_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Frxnorm-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: rxnorm_result_response
+
+            - read_loinc_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Floinc-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: loinc_result_response
+
+            - extract_gcs_keys:
+                assign:
+                  - snomed_gcs_key: ${snomed_result_response.body.data.gcs_key}
+                  - rxnorm_gcs_key: ${rxnorm_result_response.body.data.gcs_key}
+                  - loinc_gcs_key: ${loinc_result_response.body.data.gcs_key}
+
+            - log_extracted_keys:
+                call: sys.log
+                args:
+                  text: ${"Extracted GCS keys - SNOMED=" + snomed_gcs_key + " RxNorm=" + rxnorm_gcs_key + " LOINC=" + loinc_gcs_key}
+                  severity: INFO
+
+        except:
+          as: e
+          steps:
+            - log_read_error:
+                call: sys.log
+                args:
+                  text: ${"Failed to read result files - " + e.message}
+                  severity: ERROR
+            - assign_default_keys:
+                assign:
+                  - snomed_gcs_key: "unknown"
+                  - rxnorm_gcs_key: "unknown"
+                  - loinc_gcs_key: "unknown"
+
+    # Phase 4: GitHub Dispatcher Job with Download Results
+    - log_github_start:
+        call: sys.log
+        args:
+          text: "Starting GitHub dispatcher job with download results"
+          severity: INFO
+
+    - execute_github_dispatcher:
+        try:
+          steps:
+            - run_github_job:
+                call: googleapis.run.v2.projects.locations.jobs.run
+                args:
+                  name: ${github_job}
+                  body:
+                    overrides:
+                      containerOverrides:
+                        - env:
+                            - name: "PROJECT_ID"
+                              value: ${project_id}
+                            - name: "ENVIRONMENT"
+                              value: ${environment}
+                            - name: "GITHUB_REPO"
+                              value: ${github_repo}
+                            - name: "SECRET_NAME"
+                              value: "kb7-github-token-production"
+                            - name: "SNOMED_KEY"
+                              value: ${snomed_gcs_key}
+                            - name: "RXNORM_KEY"
+                              value: ${rxnorm_gcs_key}
+                            - name: "LOINC_KEY"
+                              value: ${loinc_gcs_key}
+                result: github_execution
+
+            - wait_github:
+                call: wait_for_job_completion
+                args:
+                  execution_name: ${github_execution.name}
+                  job_name: "kb7-github-dispatcher-job-production"
+                result: github_final_status
+
+            - log_github_complete:
+                call: sys.log
+                args:
+                  text: "GitHub dispatcher completed"
+                  severity: INFO
+
+        except:
+          as: e
+          steps:
+            - log_github_error:
+                call: sys.log
+                args:
+                  text: ${"GitHub dispatcher failed - " + json.encode_to_string(e)}
+                  severity: WARNING
+
+    # Phase 5: Log Success and Return
+    - log_all_success:
+        call: sys.log
+        args:
+          text: "All terminology download jobs and GitHub dispatch completed successfully"
+          severity: INFO
+
+    - prepare_success_result:
+        assign:
+          - snomed_exec_name: "not_executed"
+          - rxnorm_exec_name: "not_executed"
+          - loinc_exec_name: "not_executed"
+
+    - set_snomed_name:
+        switch:
+          - condition: ${snomed_execution != null}
+            assign:
+              - snomed_exec_name: ${snomed_execution.name}
+
+    - set_rxnorm_name:
+        switch:
+          - condition: ${rxnorm_execution != null}
+            assign:
+              - rxnorm_exec_name: ${rxnorm_execution.name}
+
+    - set_loinc_name:
+        switch:
+          - condition: ${loinc_execution != null}
+            assign:
+              - loinc_exec_name: ${loinc_execution.name}
+
+    - return_success:
+        return:
+          status: "success"
+          trigger: ${trigger}
+          timestamp: ${timestamp}
+          downloads:
+            snomed:
+              gcs_key: ${snomed_gcs_key}
+              status: ${snomed_status}
+            rxnorm:
+              gcs_key: ${rxnorm_gcs_key}
+              status: ${rxnorm_status}
+            loinc:
+              gcs_key: ${loinc_gcs_key}
+              status: ${loinc_status}
+          executions:
+            snomed:
+              status: ${snomed_status}
+              execution_name: ${snomed_exec_name}
+            rxnorm:
+              status: ${rxnorm_status}
+              execution_name: ${rxnorm_exec_name}
+            loinc:
+              status: ${loinc_status}
+              execution_name: ${loinc_exec_name}
+
+    # Error Handling
+    - handle_execution_failure:
+        steps:
+          - log_failure:
+              call: sys.log
+              args:
+                text: "One or more job executions failed"
+                severity: ERROR
+
+          - prepare_failure_result:
+              assign:
+                - snomed_exec_name: "not_started"
+                - rxnorm_exec_name: "not_started"
+                - loinc_exec_name: "not_started"
+
+          - set_snomed_name_failure:
+              switch:
+                - condition: ${snomed_execution != null}
+                  assign:
+                    - snomed_exec_name: ${snomed_execution.name}
+
+          - set_rxnorm_name_failure:
+              switch:
+                - condition: ${rxnorm_execution != null}
+                  assign:
+                    - rxnorm_exec_name: ${rxnorm_execution.name}
+
+          - set_loinc_name_failure:
+              switch:
+                - condition: ${loinc_execution != null}
+                  assign:
+                    - loinc_exec_name: ${loinc_execution.name}
+
+          - return_failure:
+              return:
+                status: "failed"
+                trigger: ${trigger}
+                timestamp: ${timestamp}
+                executions:
+                  snomed:
+                    status: ${snomed_status}
+                    execution_name: ${snomed_exec_name}
+                  rxnorm:
+                    status: ${rxnorm_status}
+                    execution_name: ${rxnorm_exec_name}
+                  loinc:
+                    status: ${loinc_status}
+                    execution_name: ${loinc_exec_name}
+                error: "Job execution failures detected"
+
+# Subworkflow: Wait for job completion
+wait_for_job_completion:
+  params: [execution_name, job_name]
+  steps:
+    - init_wait:
+        assign:
+          - max_attempts: 120  # 120 attempts = 120 minutes maximum wait
+          - attempt: 0
+          - sleep_seconds: 60  # Check every minute
+          - final_status: null
+          - is_terminal: false
+
+    - initial_delay:
+        call: sys.sleep
+        args:
+          seconds: 10
+
+    # Flattened loop structure - all steps are siblings to avoid nesting violations
+    - check_loop_condition:
+        switch:
+          - condition: ${attempt >= max_attempts}
+            next: timeout_error
+        next: log_poll_attempt
+
+    - log_poll_attempt:
+        call: sys.log
+        args:
+          text: ${"Polling job execution - attempt " + string(attempt + 1)}
+          severity: INFO
+
+    - get_execution_status:
+        try:
+          call: googleapis.run.v2.projects.locations.jobs.executions.get
+          args:
+            name: ${execution_name}
+          result: exec_response
+        except:
+          as: e
+          steps:
+            - log_error:
+                call: sys.log
+                args:
+                  text: ${"API error - will retry in " + string(sleep_seconds) + "s - " + json.encode_to_string(e)}
+                  severity: WARNING
+            - jump_to_retry:
+                next: increment_retry
+
+    - analyze_conditions:
+        steps:
+          - init_flags:
+              assign:
+                - is_succeeded: false
+                - is_failed: false
+                - is_cancelled: false
+                - completion_message: "Running"
+                - gcs_status_file: ""
+
+          - determine_gcs_file:
+              switch:
+                - condition: ${job_name == "kb7-snomed-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/snomed-latest.json"
+                - condition: ${job_name == "kb7-rxnorm-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/rxnorm-latest.json"
+                - condition: ${job_name == "kb7-loinc-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/loinc-latest.json"
+                - condition: ${job_name == "kb7-github-dispatcher-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/github-dispatcher-latest.json"
+
+          - read_gcs_status:
+              try:
+                steps:
+                  - get_status_file:
+                      call: googleapis.storage.v1.objects.get
+                      args:
+                        bucket: "sincere-hybrid-477206-h2-kb-sources-production"
+                        object: ${text.url_encode(gcs_status_file)}
+                        alt: "media"
+                      result: gcs_content
+
+                  - parse_json_status:
+                      assign:
+                        - status_data: ${gcs_content}
+                        - job_status: ${default(status_data.status, "unknown")}
+
+                  - log_gcs_status:
+                      call: sys.log
+                      args:
+                        text: '${"GCS Status for " + job_name + ": " + job_status + " (from " + gcs_status_file + ")"}'
+                        severity: INFO
+
+                  - check_gcs_status:
+                      switch:
+                        - condition: ${job_status == "success" OR job_status == "succeeded"}
+                          assign:
+                            - is_succeeded: true
+                            - completion_message: "Job completed successfully (from GCS)"
+
+                        - condition: ${job_status == "failed" OR job_status == "error"}
+                          assign:
+                            - is_failed: true
+                            - completion_message: "Job failed (from GCS)"
+
+                        - condition: ${job_status == "skipped"}
+                          assign:
+                            - is_succeeded: true
+                            - completion_message: "Job completed - file already exists (from GCS)"
+
+              except:
+                as: e
+                steps:
+                  - log_gcs_error:
+                      call: sys.log
+                      args:
+                        text: '${"GCS status file not found yet for " + job_name + " - will retry. Error: " + json.encode_to_string(e)}'
+                        severity: INFO
+
+                  # Note: We continue polling - don't mark as failed
+                  # Job may still be running and hasn't written status file yet
+
+          - log_status:
+              call: sys.log
+              args:
+                text: '${"Status: " + completion_message + " | succeeded=" + string(is_succeeded) + " failed=" + string(is_failed) + " cancelled=" + string(is_cancelled)}'
+                severity: INFO
+
+          - set_terminal_if_complete:
+              switch:
+                - condition: ${is_succeeded}
+                  assign:
+                    - final_status:
+                        status: "succeeded"
+                        execution: ${exec_response}
+                    - is_terminal: true
+
+                - condition: ${is_failed}
+                  assign:
+                    - final_status:
+                        status: "failed"
+                        execution: ${exec_response}
+                    - is_terminal: true
+
+                - condition: ${is_cancelled}
+                  assign:
+                    - final_status:
+                        status: "cancelled"
+                        execution: ${exec_response}
+                    - is_terminal: true
+
+          - log_terminal_status:
+              call: sys.log
+              args:
+                text: '${"is_terminal=" + string(is_terminal)}'
+                severity: INFO
+
+    - check_if_terminal:
+        switch:
+          - condition: ${is_terminal}
+            next: return_status
+        next: increment_retry
+
+    - increment_retry:
+        steps:
+          - sleep:
+              call: sys.sleep
+              args:
+                seconds: ${sleep_seconds}
+
+          - increment:
+              assign:
+                - attempt: ${attempt + 1}
+
+          - loop_back:
+              next: check_loop_condition
+
+    - timeout_error:
+        raise:
+          message: "Job execution timeout after 120 minutes"
+
+    - return_status:
+        return: ${final_status}

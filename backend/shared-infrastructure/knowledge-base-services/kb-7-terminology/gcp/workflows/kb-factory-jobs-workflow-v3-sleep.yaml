@@ -1,0 +1,234 @@
+# KB-7 Knowledge Factory Workflow - Cloud Run Jobs Version 3.0
+# Orchestrates parallel terminology downloads with sleep-based waiting
+# Updated: 2025-11-26 - Simplified to use fixed sleep instead of complex polling
+
+main:
+  params: [input]
+  steps:
+    - init:
+        assign:
+          - project_id: "sincere-hybrid-477206-h2"
+          - timestamp: ${text.split(time.format(sys.now()), "T")[0]}
+          - trigger: ${default(map.get(input, "trigger"), "manual")}
+          - environment: "production"
+          - region: "us-central1"
+          - source_bucket: "sincere-hybrid-477206-h2-kb-sources-production"
+          - github_repo: ${default(map.get(input, "github_repo"), "onkarshahi-IND/knowledge-factory")}
+          # Job resource names
+          - snomed_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-snomed-job-production"}
+          - rxnorm_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-rxnorm-job-production"}
+          - loinc_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-loinc-job-production"}
+          - github_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-github-dispatcher-job-production"}
+          # Timing configuration
+          - job_wait_seconds: 180  # 3 minutes: 90s provision + 30s execute + buffer
+
+    - log_start:
+        call: sys.log
+        args:
+          text: "Starting KB-7 Knowledge Factory workflow with Cloud Run Jobs"
+          severity: INFO
+
+    # Phase 1: Start All Download Jobs in Parallel
+    - log_starting_jobs:
+        call: sys.log
+        args:
+          text: "Starting all terminology download jobs in parallel"
+          severity: INFO
+
+    - start_download_jobs:
+        parallel:
+          branches:
+            - snomed_start:
+                steps:
+                  - run_snomed:
+                      call: googleapis.run.v2.projects.locations.jobs.run
+                      args:
+                        name: ${snomed_job}
+                      result: snomed_execution
+                  - log_snomed_started:
+                      call: sys.log
+                      args:
+                        text: ${"SNOMED job started - " + snomed_execution.name}
+                        severity: INFO
+
+            - rxnorm_start:
+                steps:
+                  - run_rxnorm:
+                      call: googleapis.run.v2.projects.locations.jobs.run
+                      args:
+                        name: ${rxnorm_job}
+                      result: rxnorm_execution
+                  - log_rxnorm_started:
+                      call: sys.log
+                      args:
+                        text: ${"RxNorm job started - " + rxnorm_execution.name}
+                        severity: INFO
+
+            - loinc_start:
+                steps:
+                  - run_loinc:
+                      call: googleapis.run.v2.projects.locations.jobs.run
+                      args:
+                        name: ${loinc_job}
+                      result: loinc_execution
+                  - log_loinc_started:
+                      call: sys.log
+                      args:
+                        text: ${"LOINC job started - " + loinc_execution.name}
+                        severity: INFO
+
+    # Phase 2: Wait for Jobs to Complete (Provisioning + Execution)
+    - log_waiting:
+        call: sys.log
+        args:
+          text: ${"Waiting " + string(job_wait_seconds) + " seconds for job provisioning and execution"}
+          severity: INFO
+
+    - wait_for_completion:
+        call: sys.sleep
+        args:
+          seconds: ${job_wait_seconds}
+
+    - log_wait_complete:
+        call: sys.log
+        args:
+          text: "Wait complete - jobs should have finished, reading results from GCS"
+          severity: INFO
+
+    # Phase 3: Read Download Results from GCS (Source of Truth)
+    - read_download_results:
+        try:
+          steps:
+            - read_snomed_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Fsnomed-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: snomed_result_response
+
+            - read_rxnorm_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Frxnorm-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: rxnorm_result_response
+
+            - read_loinc_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Floinc-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: loinc_result_response
+
+            - extract_gcs_keys:
+                assign:
+                  - snomed_gcs_key: ${snomed_result_response.body.gcs_key}
+                  - rxnorm_gcs_key: ${rxnorm_result_response.body.gcs_key}
+                  - loinc_gcs_key: ${loinc_result_response.body.gcs_key}
+                  - snomed_status: ${snomed_result_response.body.status}
+                  - rxnorm_status: ${rxnorm_result_response.body.status}
+                  - loinc_status: ${loinc_result_response.body.status}
+
+            - log_extracted_keys:
+                call: sys.log
+                args:
+                  text: ${"Download results - SNOMED=" + snomed_status + " RxNorm=" + rxnorm_status + " LOINC=" + loinc_status}
+                  severity: INFO
+
+        except:
+          as: e
+          steps:
+            - log_read_error:
+                call: sys.log
+                args:
+                  text: ${"Failed to read GCS result files - " + e.message}
+                  severity: ERROR
+            - assign_default_keys:
+                assign:
+                  - snomed_gcs_key: "unknown"
+                  - rxnorm_gcs_key: "unknown"
+                  - loinc_gcs_key: "unknown"
+                  - snomed_status: "unknown"
+                  - rxnorm_status: "unknown"
+                  - loinc_status: "unknown"
+
+    # Phase 4: GitHub Dispatcher Job with Download Results
+    - log_github_start:
+        call: sys.log
+        args:
+          text: "Starting GitHub dispatcher with download results"
+          severity: INFO
+
+    - execute_github_dispatcher:
+        try:
+          steps:
+            - run_github_job:
+                call: googleapis.run.v2.projects.locations.jobs.run
+                args:
+                  name: ${github_job}
+                  body:
+                    overrides:
+                      containerOverrides:
+                        - env:
+                            - name: "PROJECT_ID"
+                              value: ${project_id}
+                            - name: "ENVIRONMENT"
+                              value: ${environment}
+                            - name: "GITHUB_REPO"
+                              value: ${github_repo}
+                            - name: "SECRET_NAME"
+                              value: "kb7-github-token-production"
+                            - name: "SNOMED_KEY"
+                              value: ${snomed_gcs_key}
+                            - name: "RXNORM_KEY"
+                              value: ${rxnorm_gcs_key}
+                            - name: "LOINC_KEY"
+                              value: ${loinc_gcs_key}
+                result: github_execution
+
+            - log_github_started:
+                call: sys.log
+                args:
+                  text: ${"GitHub dispatcher started - " + github_execution.name}
+                  severity: INFO
+
+            - wait_for_github:
+                call: sys.sleep
+                args:
+                  seconds: 30  # GitHub dispatcher is quick, 30s should be enough
+
+            - log_github_complete:
+                call: sys.log
+                args:
+                  text: "GitHub dispatcher wait complete"
+                  severity: INFO
+
+        except:
+          as: e
+          steps:
+            - log_github_error:
+                call: sys.log
+                args:
+                  text: ${"GitHub dispatcher error - " + e.message}
+                  severity: WARNING
+
+    # Phase 5: Return Results
+    - return_success:
+        return:
+          status: "success"
+          trigger: ${trigger}
+          timestamp: ${timestamp}
+          downloads:
+            snomed:
+              gcs_key: ${snomed_gcs_key}
+              status: ${snomed_status}
+            rxnorm:
+              gcs_key: ${rxnorm_gcs_key}
+              status: ${rxnorm_status}
+            loinc:
+              gcs_key: ${loinc_gcs_key}
+              status: ${loinc_status}
+          message: "All jobs started and completed, results read from GCS"

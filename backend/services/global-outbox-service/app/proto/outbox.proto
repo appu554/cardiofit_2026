@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package clinical_hub.outbox.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Global Outbox Service for centralized event publishing
+service GlobalOutboxService {
+  // Publish an event to the outbox for guaranteed delivery
+  rpc PublishEvent(PublishEventRequest) returns (PublishEventResponse);
+  
+  // Health check for service monitoring
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Get outbox statistics for monitoring and debugging
+  rpc GetOutboxStats(OutboxStatsRequest) returns (OutboxStatsResponse);
+  
+  // Get events by correlation ID for debugging
+  rpc GetEventsByCorrelation(GetEventsByCorrelationRequest) returns (GetEventsByCorrelationResponse);
+}
+
+// Request to publish an event
+message PublishEventRequest {
+  // Unique key for idempotency (UUID recommended)
+  string idempotency_key = 1;
+  
+  // Service originating the event (e.g., "patient-service")
+  string origin_service = 2;
+  
+  // Target Kafka topic for the event
+  string kafka_topic = 3;
+  
+  // Kafka message key (typically patient_id for partitioning)
+  string kafka_key = 4;
+  
+  // Serialized event payload (Avro or JSON bytes)
+  bytes event_payload = 5;
+  
+  // Event metadata for tracing and context
+  google.protobuf.Struct metadata = 6;
+  
+  // Correlation ID for distributed tracing
+  string correlation_id = 7;
+  
+  // Event type for monitoring and routing
+  string event_type = 8;
+  
+  // Optional causation ID for event sourcing
+  string causation_id = 9;
+  
+  // Optional subject for the event (e.g., patient ID)
+  string subject = 10;
+  
+  // Priority level (0=low, 1=normal, 2=high, 3=critical)
+  int32 priority = 11;
+  
+  // Optional scheduled delivery time
+  google.protobuf.Timestamp scheduled_at = 12;
+}
+
+// Response after event is stored in outbox
+message PublishEventResponse {
+  // Unique ID of the outbox record
+  string outbox_record_id = 1;
+  
+  // Status of the operation
+  string status = 2; // "QUEUED", "SCHEDULED", "ERROR"
+  
+  // Optional error message if status is ERROR
+  string error_message = 3;
+  
+  // Timestamp when event was accepted
+  google.protobuf.Timestamp accepted_at = 4;
+  
+  // Estimated delivery time
+  google.protobuf.Timestamp estimated_delivery_at = 5;
+}
+
+// Health check request
+message HealthCheckRequest {
+  // Optional service name for specific health check
+  string service = 1;
+}
+
+// Health check response
+message HealthCheckResponse {
+  // Overall health status
+  string status = 1; // "HEALTHY", "UNHEALTHY", "DEGRADED"
+  
+  // Optional health message
+  string message = 2;
+  
+  // Component health details
+  map<string, string> components = 3;
+  
+  // Timestamp of health check
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// Request for outbox statistics
+message OutboxStatsRequest {
+  // Optional service filter
+  string service_filter = 1;
+  
+  // Optional time range filter (hours)
+  int32 time_range_hours = 2;
+}
+
+// Outbox statistics response
+message OutboxStatsResponse {
+  // Queue depths by service
+  map<string, int32> queue_depths = 1;
+  
+  // Success rates by service (0.0 to 1.0)
+  map<string, double> success_rates = 2;
+  
+  // Total events processed
+  int64 total_events_processed = 3;
+  
+  // Total events failed
+  int64 total_events_failed = 4;
+  
+  // Average processing latency in milliseconds
+  double avg_processing_latency_ms = 5;
+  
+  // Events in dead letter queue
+  int64 dead_letter_count = 6;
+  
+  // Statistics timestamp
+  google.protobuf.Timestamp timestamp = 7;
+  
+  // Per-service detailed stats
+  map<string, ServiceStats> service_stats = 8;
+}
+
+// Detailed statistics for a specific service
+message ServiceStats {
+  string service_name = 1;
+  int32 queue_depth = 2;
+  double success_rate = 3;
+  int64 events_processed_24h = 4;
+  int64 events_failed_24h = 5;
+  double avg_latency_ms = 6;
+  int32 dead_letter_count = 7;
+  google.protobuf.Timestamp last_event_at = 8;
+}
+
+// Request to get events by correlation ID
+message GetEventsByCorrelationRequest {
+  // Correlation ID to search for
+  string correlation_id = 1;
+  
+  // Optional limit on number of results
+  int32 limit = 2;
+}
+
+// Response with events matching correlation ID
+message GetEventsByCorrelationResponse {
+  // List of matching events
+  repeated OutboxEvent events = 1;
+  
+  // Total count of matching events
+  int32 total_count = 2;
+}
+
+// Outbox event details
+message OutboxEvent {
+  string id = 1;
+  string origin_service = 2;
+  string event_type = 3;
+  string kafka_topic = 4;
+  string kafka_key = 5;
+  string status = 6;
+  string correlation_id = 7;
+  string causation_id = 8;
+  string subject = 9;
+  int32 retry_count = 10;
+  string last_error = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp processed_at = 13;
+  google.protobuf.Struct metadata = 14;
+}

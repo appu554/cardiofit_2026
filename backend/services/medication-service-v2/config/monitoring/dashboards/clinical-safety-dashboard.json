@@ -1,0 +1,404 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Medication Service V2 - Clinical Safety Dashboard",
+    "tags": ["healthcare", "medication-service", "safety", "clinical"],
+    "style": "dark",
+    "timezone": "UTC",
+    "refresh": "15s",
+    "time": {
+      "from": "now-4h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "🚨 Critical Safety Indicators",
+        "type": "stat",
+        "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "increase(medication_service_safety_violations_total[1h])",
+            "legendFormat": "Safety Violations (1h)",
+            "refId": "A"
+          },
+          {
+            "expr": "medication_service_dosage_calculation_accuracy",
+            "legendFormat": "Dosage Accuracy",
+            "refId": "B"
+          },
+          {
+            "expr": "increase(medication_service_validation_failures_total{validation_type=\"clinical\"}[1h])",
+            "legendFormat": "Clinical Validation Failures (1h)",
+            "refId": "C"
+          },
+          {
+            "expr": "increase(medication_service_compliance_checks_total{status=\"failed\"}[1h])",
+            "legendFormat": "Compliance Failures (1h)",
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 1},
+                {"color": "orange", "value": 3},
+                {"color": "red", "value": 5}
+              ]
+            },
+            "unit": "none"
+          },
+          "overrides": [
+            {
+              "matcher": {"id": "byName", "options": "Dosage Accuracy"},
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "percentunit"
+                },
+                {
+                  "id": "min",
+                  "value": 0.9
+                },
+                {
+                  "id": "max", 
+                  "value": 1
+                },
+                {
+                  "id": "thresholds",
+                  "value": {
+                    "steps": [
+                      {"color": "red", "value": null},
+                      {"color": "yellow", "value": 0.95},
+                      {"color": "green", "value": 0.98}
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": 2,
+        "title": "Safety Violations Over Time",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+        "targets": [
+          {
+            "expr": "rate(medication_service_safety_violations_total[5m]) * 60",
+            "legendFormat": "{{violation_type}} - {{severity}}",
+            "refId": "A"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Violations per minute",
+            "min": 0
+          },
+          {"show": false}
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "query": {"params": ["A", "5m", "now"]},
+              "reducer": {"params": [], "type": "avg"},
+              "evaluator": {"params": [0], "type": "gt"}
+            }
+          ],
+          "executionErrorState": "alerting",
+          "noDataState": "no_data",
+          "frequency": "10s",
+          "handler": 1,
+          "name": "Safety Violations Alert",
+          "message": "Safety violations detected in medication service"
+        },
+        "thresholds": [
+          {
+            "value": 0,
+            "colorMode": "critical",
+            "op": "gt",
+            "fill": true,
+            "line": true
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Dosage Calculation Accuracy",
+        "type": "gauge",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+        "targets": [
+          {
+            "expr": "avg(medication_service_dosage_calculation_accuracy)",
+            "legendFormat": "Overall Accuracy",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.95},
+                {"color": "green", "value": 0.98}
+              ]
+            },
+            "unit": "percentunit",
+            "min": 0.9,
+            "max": 1
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Clinical Decision Processing Times",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(medication_service_clinical_calculation_duration_seconds_bucket[5m]))",
+            "legendFormat": "P50 Clinical Calculation",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(medication_service_clinical_calculation_duration_seconds_bucket[5m]))",
+            "legendFormat": "P95 Clinical Calculation",
+            "refId": "B"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(medication_service_proposal_processing_duration_seconds_bucket[5m]))",
+            "legendFormat": "P95 Proposal Processing",
+            "refId": "C"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Processing Time (seconds)",
+            "min": 0
+          },
+          {"show": false}
+        ],
+        "thresholds": [
+          {
+            "value": 0.25,
+            "colorMode": "critical",
+            "op": "gt",
+            "line": true,
+            "fill": true
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Data Freshness Score",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+        "targets": [
+          {
+            "expr": "avg(medication_service_clinical_data_freshness_score)",
+            "legendFormat": "Overall Data Freshness",
+            "refId": "A"
+          },
+          {
+            "expr": "medication_service_clinical_data_freshness_score",
+            "legendFormat": "{{data_source}}",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "yellow", "value": 0.7},
+                {"color": "green", "value": 0.85}
+              ]
+            },
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Patient Context Age Distribution",
+        "type": "heatmap",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 22},
+        "targets": [
+          {
+            "expr": "increase(medication_service_patient_context_age_seconds_bucket[5m])",
+            "legendFormat": "{{le}}",
+            "refId": "A"
+          }
+        ],
+        "yAxis": {
+          "unit": "s"
+        },
+        "dataFormat": "tsbuckets"
+      },
+      {
+        "id": 7,
+        "title": "Compliance Check Status",
+        "type": "piechart",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 22},
+        "targets": [
+          {
+            "expr": "increase(medication_service_compliance_checks_total[1h])",
+            "legendFormat": "{{regulation}} - {{status}}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"],
+            "fields": ""
+          },
+          "pieType": "pie",
+          "displayLabels": ["name", "value"]
+        }
+      },
+      {
+        "id": 8,
+        "title": "🏥 Clinical Safety Alerts",
+        "type": "logs",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 30},
+        "targets": [
+          {
+            "expr": "{job=\"medication-service-v2\", level=\"warn\", alert_category=\"patient_safety\"}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "sortOrder": "Descending"
+        }
+      },
+      {
+        "id": 9,
+        "title": "Validation Failures by Type",
+        "type": "bargauge",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+        "targets": [
+          {
+            "expr": "increase(medication_service_validation_failures_total[1h])",
+            "legendFormat": "{{validation_type}} - {{reason}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 5},
+                {"color": "red", "value": 10}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Safety System Health",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+        "targets": [
+          {
+            "expr": "up{job=\"clinical-engine\"}",
+            "legendFormat": "Clinical Engine",
+            "refId": "A"
+          },
+          {
+            "expr": "up{job=\"safety-gateway\"}",
+            "legendFormat": "Safety Gateway", 
+            "refId": "B"
+          },
+          {
+            "expr": "up{job=\"rule-engine\"}",
+            "legendFormat": "Rule Engine",
+            "refId": "C"
+          },
+          {
+            "expr": "up{job=\"audit-system\"}",
+            "legendFormat": "Audit System",
+            "refId": "D"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": null},
+                {"color": "green", "value": 1}
+              ]
+            },
+            "mappings": [
+              {
+                "type": "value",
+                "value": "0",
+                "text": "DOWN"
+              },
+              {
+                "type": "value", 
+                "value": "1",
+                "text": "UP"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "severity",
+          "type": "query",
+          "query": "label_values(medication_service_safety_violations_total, severity)",
+          "current": {
+            "selected": false,
+            "text": "All",
+            "value": "$__all"
+          },
+          "includeAll": true
+        },
+        {
+          "name": "violation_type",
+          "type": "query",
+          "query": "label_values(medication_service_safety_violations_total, violation_type)",
+          "current": {
+            "selected": false,
+            "text": "All", 
+            "value": "$__all"
+          },
+          "includeAll": true
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Safety Incidents",
+          "datasource": "Prometheus",
+          "expr": "increase(medication_service_safety_violations_total{severity=\"critical\"}[1m])",
+          "step": "60s",
+          "iconColor": "red",
+          "tags": ["safety", "critical"]
+        }
+      ]
+    }
+  }
+}

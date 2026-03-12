@@ -1,0 +1,491 @@
+package api
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/pelletier/go-toml/v2"
+	"github.com/sirupsen/logrus"
+
+	"kb-drug-rules/internal/models"
+	"kb-drug-rules/internal/services"
+)
+
+// getDrugRules handles GET /v1/items/{drug_id}
+func (s *Server) getDrugRules(c *gin.Context) {
+	drugID := c.Param("drug_id")
+	if drugID == "" {
+		s.respondWithError(c, http.StatusBadRequest, "drug_id is required", nil)
+		return
+	}
+
+	// Parse query parameters
+	var params models.GetRulesParams
+	if err := c.ShouldBindQuery(&params); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid query parameters", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("drug_rules_requests_total", map[string]string{
+		"drug_id": drugID,
+		"region":  getStringValue(params.Region),
+	})
+
+	// Check cache first
+	cacheKey := fmt.Sprintf("drug_rules:%s:%s:%s", drugID, 
+		getStringValue(params.Version), getStringValue(params.Region))
+	
+	if cachedData, err := s.cache.Get(cacheKey); err == nil && cachedData != nil {
+		s.metrics.IncrementCounter("cache_hits_total", map[string]string{"type": "drug_rules"})
+		
+		var response models.DrugRulesResponse
+		if err := json.Unmarshal(cachedData, &response); err == nil {
+			s.setCacheHeaders(c, response.ETag, 3600)
+			s.respondWithSuccess(c, response)
+			return
+		}
+	}
+	s.metrics.IncrementCounter("cache_misses_total", map[string]string{"type": "drug_rules"})
+
+	// Get from database
+	ruleService := services.NewRuleService(s.db, s.cache, s.logger)
+	rulePack, err := ruleService.GetDrugRules(drugID, params.Version, params.Region)
+	if err != nil {
+		if err == services.ErrRuleNotFound {
+			s.respondWithError(c, http.StatusNotFound, "Drug rules not found", map[string]string{
+				"drug_id": drugID,
+			})
+			return
+		}
+		s.logger.WithError(err).Error("Failed to get drug rules")
+		s.respondWithError(c, http.StatusInternalServerError, "Internal server error", nil)
+		return
+	}
+
+	// Verify signature if strict mode
+	strictSignature := params.StrictSignature != nil && *params.StrictSignature
+	if strictSignature && !rulePack.SignatureValid {
+		s.respondWithError(c, http.StatusPreconditionFailed, "Invalid signature", map[string]string{
+			"drug_id": drugID,
+			"version": rulePack.Version,
+		})
+		return
+	}
+
+	// Apply regional filtering if specified
+	content := rulePack.Content
+	selectedRegion := params.Region
+	if params.Region != nil {
+		if override, exists := content.RegionalVariations[*params.Region]; exists {
+			content = applyRegionalOverride(content, override)
+		} else {
+			// Try fallback hierarchy: specific -> jurisdiction -> global
+			if fallbackRegion := findFallbackRegion(*params.Region); fallbackRegion != "" {
+				if override, exists := content.RegionalVariations[fallbackRegion]; exists {
+					content = applyRegionalOverride(content, override)
+					selectedRegion = &fallbackRegion
+				}
+			}
+		}
+	}
+
+	// Build response
+	response := models.DrugRulesResponse{
+		DrugID:         drugID,
+		Version:        rulePack.Version,
+		ContentSHA:     rulePack.ContentSHA,
+		SignatureValid: rulePack.SignatureValid,
+		SelectedRegion: selectedRegion,
+		Content:        content,
+		CacheControl:   "public, max-age=3600",
+		ETag:           rulePack.ContentSHA,
+	}
+
+	// Cache the response
+	if responseData, err := json.Marshal(response); err == nil {
+		s.cache.Set(cacheKey, responseData, 3600*time.Second)
+	}
+
+	// Set cache headers and respond
+	s.setCacheHeaders(c, response.ETag, 3600)
+	s.respondWithSuccess(c, response)
+}
+
+// validateRules handles POST /v1/validate - Enhanced with comprehensive TOML validation
+func (s *Server) validateRules(c *gin.Context) {
+	if !s.validateContentType(c, "application/json") {
+		return
+	}
+
+	var request models.ValidationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request body", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("validation_requests_total", nil)
+
+	// Enhanced TOML validation with comprehensive error reporting
+	validationResult := s.validateTOMLContent(request.Content)
+	if !validationResult.IsValid {
+		s.respondWithError(c, http.StatusBadRequest, "TOML validation failed", map[string]interface{}{
+			"errors":   validationResult.Errors,
+			"warnings": validationResult.Warnings,
+		})
+		return
+	}
+
+	// Parse TOML content after validation
+	var content models.DrugRuleContent
+	if err := toml.Unmarshal([]byte(request.Content), &content); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid TOML content", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Validate content
+	validator := services.NewValidationService(s.db, s.logger)
+	result, err := validator.ValidateRuleContent(&content, request.Regions)
+	if err != nil {
+		s.logger.WithError(err).Error("Validation failed")
+		s.respondWithError(c, http.StatusInternalServerError, "Validation failed", nil)
+		return
+	}
+
+	// Record validation result
+	if result.Valid {
+		s.metrics.IncrementCounter("validation_success_total", nil)
+	} else {
+		s.metrics.IncrementCounter("validation_failure_total", nil)
+	}
+
+	s.respondWithSuccess(c, result)
+}
+
+// hotloadRules handles POST /v1/hotload
+func (s *Server) hotloadRules(c *gin.Context) {
+	if !s.validateContentType(c, "application/json") {
+		return
+	}
+
+	var request models.HotloadRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request body", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("hotload_requests_total", map[string]string{
+		"drug_id": request.DrugID,
+	})
+
+	// Extract user info for audit
+	userInfo := s.extractUserInfo(c)
+
+	// Check governance approval
+	if approved, err := s.governance.IsApproved(request.DrugID, request.Version); err != nil || !approved {
+		s.respondWithError(c, http.StatusForbidden, "Governance approval required", map[string]string{
+			"drug_id": request.DrugID,
+			"version": request.Version,
+		})
+		return
+	}
+
+	// Verify signature
+	if valid, err := s.governance.VerifySignature(request.Content, request.Signature, request.SignedBy); err != nil || !valid {
+		s.metrics.IncrementCounter("signature_validation_failures_total", nil)
+		s.respondWithError(c, http.StatusPreconditionFailed, "Invalid signature", map[string]string{
+			"signed_by": request.SignedBy,
+		})
+		return
+	}
+	s.metrics.IncrementCounter("signature_validations_total", nil)
+
+	// Parse and validate content
+	var content models.DrugRuleContent
+	if err := toml.Unmarshal([]byte(request.Content), &content); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid TOML content", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Calculate content hash
+	hash := sha256.Sum256([]byte(request.Content))
+	contentSHA := hex.EncodeToString(hash[:])
+
+	// Create rule pack
+	rulePack := &models.DrugRulePack{
+		DrugID:         request.DrugID,
+		Version:        request.Version,
+		ContentSHA:     contentSHA,
+		SignedBy:       request.SignedBy,
+		SignatureValid: true,
+		Regions:        request.Regions,
+		Content:        content,
+		Signature:      request.Signature,
+	}
+
+	// Get approval details
+	if approval, err := s.governance.GetApproval(request.DrugID, request.Version); err == nil {
+		rulePack.ClinicalReviewer = approval.ClinicalReviewer
+		rulePack.ClinicalReviewDate = &approval.ClinicalReviewDate
+	}
+
+	// Save to database
+	ruleService := services.NewRuleService(s.db, s.cache, s.logger)
+	if err := ruleService.SaveRulePack(rulePack); err != nil {
+		s.logger.WithError(err).Error("Failed to save rule pack")
+		s.respondWithError(c, http.StatusInternalServerError, "Failed to save rule pack", nil)
+		return
+	}
+
+	// Invalidate cache
+	s.cache.InvalidatePattern(fmt.Sprintf("drug_rules:%s:*", request.DrugID))
+
+	// Emit event
+	if err := s.emitRulePackUpdatedEvent(rulePack, userInfo); err != nil {
+		s.logger.WithError(err).Warn("Failed to emit event")
+	}
+
+	// Record success metrics
+	s.metrics.IncrementCounter("hotload_success_total", map[string]string{
+		"drug_id": request.DrugID,
+	})
+
+	// Build response
+	response := models.HotloadResponse{
+		Success:        true,
+		DrugID:         request.DrugID,
+		Version:        request.Version,
+		ContentSHA:     contentSHA,
+		RegionsUpdated: request.Regions,
+		Message:        "Rule pack successfully deployed",
+	}
+
+	s.respondWithSuccess(c, response)
+}
+
+// promoteVersion handles POST /v1/promote
+func (s *Server) promoteVersion(c *gin.Context) {
+	// TODO: Implement version promotion logic
+	s.respondWithError(c, http.StatusNotImplemented, "Version promotion not yet implemented", nil)
+}
+
+// healthCheck handles GET /health
+func (s *Server) healthCheck(c *gin.Context) {
+	checks := make(map[string]string)
+	
+	// Check database
+	if sqlDB, err := s.db.DB(); err == nil {
+		if err := sqlDB.Ping(); err == nil {
+			checks["database"] = "healthy"
+		} else {
+			checks["database"] = "unhealthy: " + err.Error()
+		}
+	} else {
+		checks["database"] = "unhealthy: " + err.Error()
+	}
+	
+	// Check cache
+	if err := s.cache.Ping(); err == nil {
+		checks["cache"] = "healthy"
+	} else {
+		checks["cache"] = "unhealthy: " + err.Error()
+	}
+	
+	// Determine overall status
+	status := "healthy"
+	for _, check := range checks {
+		if check != "healthy" && !strings.HasPrefix(check, "healthy") {
+			status = "unhealthy"
+			break
+		}
+	}
+	
+	response := models.HealthResponse{
+		Status:    status,
+		Timestamp: time.Now(),
+		Version:   "1.0.0", // TODO: Get from build info
+		Checks:    checks,
+	}
+	
+	if status == "healthy" {
+		c.JSON(http.StatusOK, response)
+	} else {
+		c.JSON(http.StatusServiceUnavailable, response)
+	}
+}
+
+// readinessCheck handles GET /ready
+func (s *Server) readinessCheck(c *gin.Context) {
+	// Simple readiness check - service is ready if it can respond
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ready",
+		"timestamp": time.Now(),
+	})
+}
+
+// metricsHandler handles GET /metrics
+func (s *Server) metricsHandler(c *gin.Context) {
+	s.metrics.Handler()(c.Writer, c.Request)
+}
+
+// Helper functions
+
+func getStringValue(ptr *string) string {
+	if ptr == nil {
+		return ""
+	}
+	return *ptr
+}
+
+func applyRegionalOverride(base models.DrugRuleContent, override models.RegionalOverride) models.DrugRuleContent {
+	result := base
+	
+	if override.DoseCalculation != nil {
+		result.DoseCalculation = *override.DoseCalculation
+	}
+	
+	if override.SafetyVerification != nil {
+		result.SafetyVerification = *override.SafetyVerification
+	}
+	
+	if override.MonitoringReq != nil {
+		result.MonitoringRequirements = override.MonitoringReq
+	}
+	
+	return result
+}
+
+func findFallbackRegion(region string) string {
+	// Simple fallback logic - in production, use more sophisticated hierarchy
+	fallbacks := map[string]string{
+		"CA": "US",  // Canada falls back to US
+		"AU": "US",  // Australia falls back to US
+		"UK": "EU",  // UK falls back to EU
+	}
+	
+	return fallbacks[region]
+}
+
+func (s *Server) emitRulePackUpdatedEvent(rulePack *models.DrugRulePack, userInfo map[string]string) error {
+	// TODO: Implement event emission to Kafka
+	s.logger.WithFields(logrus.Fields{
+		"drug_id": rulePack.DrugID,
+		"version": rulePack.Version,
+		"user_id": userInfo["user_id"],
+	}).Info("Rule pack updated event")
+	
+	return nil
+}
+
+// submitForApproval submits rules for governance approval
+func (s *Server) submitForApproval(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Governance approval not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}
+
+// reviewSubmission reviews a governance submission
+func (s *Server) reviewSubmission(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Governance review not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}
+
+// getApprovalStatus gets the status of a governance approval
+func (s *Server) getApprovalStatus(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Approval status not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}
+
+// listVersions lists all versions for a drug
+func (s *Server) listVersions(c *gin.Context) {
+	drugID := c.Param("drug_id")
+
+	c.JSON(http.StatusOK, gin.H{
+		"drug_id": drugID,
+		"versions": []string{"1.0.0"},
+		"message": "Version listing not fully implemented yet",
+	})
+}
+
+// deleteVersion deletes a specific version
+func (s *Server) deleteVersion(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Version deletion not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}
+
+// listSupportedRegions lists supported regions
+func (s *Server) listSupportedRegions(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"regions": []string{"US", "EU", "CA", "AU"},
+		"default_region": "US",
+	})
+}
+
+// getServiceStats gets service statistics
+func (s *Server) getServiceStats(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"service": "kb-drug-rules",
+		"version": "1.0.0",
+		"uptime": "running",
+		"database": "connected",
+		"cache": "connected",
+	})
+}
+
+// invalidateCache invalidates the cache
+func (s *Server) invalidateCache(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Cache invalidation not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}
+
+// getCacheStats gets cache statistics
+func (s *Server) getCacheStats(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"cache_type": "redis",
+		"status": "connected",
+		"stats": "not implemented yet",
+	})
+}
+
+// governanceOverride provides governance override functionality
+func (s *Server) governanceOverride(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Governance override not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}
+
+// getAuditLog gets the audit log
+func (s *Server) getAuditLog(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": "Audit log not implemented yet",
+		"message": "This endpoint will be implemented in a future version",
+	})
+}

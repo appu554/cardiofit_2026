@@ -1,0 +1,122 @@
+# Enhanced ORB Rule: Tuberculosis Treatment with Knowledge Manifest
+# This demonstrates knowledge_manifest requiring ALL 7 KBs including resistance profiles
+# File: /orb/infectious-disease/tb-rules-v1.0.yaml
+
+metadata:
+  version: "1.0"
+  last_updated: "2024-01-15"
+  description: "Tuberculosis treatment rules with complete Knowledge Manifest"
+  author: "Infectious Disease Team"
+  validation_status: "approved"
+  clinical_importance: "critical"
+
+rules:
+  - id: "tb-drug-sensitive-initial-selection-v1"
+    priority: 500
+    conditions:
+      all_of:
+        - { fact: "diagnosis", operator: "equal", value: "PULMONARY_TUBERCULOSIS" }
+        - { fact: "drug_sensitivity", operator: "equal", value: "SENSITIVE" }
+        - { fact: "patient.age_years", operator: "gte", value: 18 }
+    action:
+      generate_manifest:
+        intent: "tb_initial_therapy"
+        recipe_id: "tb-drug-sensitive-v2.0"
+        variant: "standard_4_drug"
+        
+        # Comprehensive data requirements for TB treatment
+        data_manifest:
+          required:
+            - "demographics.weight.actual_kg"
+            - "patient.flags.hiv_status"
+            - "labs.liver_function[latest]"
+            - "labs.serum_creatinine[latest]"
+            - "conditions.hepatic_impairment"
+            - "conditions.renal_impairment"
+            - "microbiology.tb_culture[latest]"
+            - "microbiology.drug_sensitivity[latest]"
+            - "imaging.chest_xray[latest]"
+        
+        # CRITICAL: TB requires ALL 7 KBs including resistance profiles
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"           # TB drug information
+            - "kb_dosing_rules_v1"          # TB dosing protocols
+            - "kb_ddi_v1"                   # Drug interactions (critical for TB)
+            - "kb_formulary_stock_v1"       # TB drug availability
+            - "kb_patient_safe_checks_v1"   # Hepatotoxicity monitoring
+            - "kb_guideline_evidence_v1"    # WHO/CDC TB guidelines
+            - "kb_resistance_profiles_v1"   # CRITICAL: Local resistance patterns
+
+  - id: "tb-mdr-treatment-selection-v1"
+    priority: 600
+    conditions:
+      all_of:
+        - { fact: "diagnosis", operator: "equal", value: "PULMONARY_TUBERCULOSIS" }
+        - { fact: "drug_sensitivity", operator: "equal", value: "MDR" }
+    action:
+      generate_manifest:
+        intent: "tb_mdr_therapy"
+        recipe_id: "tb-mdr-treatment-v2.0"
+        variant: "individualized"
+        
+        data_manifest:
+          required:
+            - "demographics.weight.actual_kg"
+            - "patient.flags.hiv_status"
+            - "labs.liver_function[latest]"
+            - "labs.kidney_function[latest]"
+            - "labs.hearing_assessment[baseline]"
+            - "microbiology.tb_culture[latest]"
+            - "microbiology.drug_sensitivity[comprehensive]"
+            - "microbiology.resistance_profile[detailed]"
+        
+        # MDR-TB absolutely requires ALL KBs, especially resistance profiles
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"           # Second-line TB drugs
+            - "kb_dosing_rules_v1"          # Complex MDR dosing
+            - "kb_ddi_v1"                   # Multiple drug interactions
+            - "kb_formulary_stock_v1"       # Second-line drug availability
+            - "kb_patient_safe_checks_v1"   # Extensive monitoring protocols
+            - "kb_guideline_evidence_v1"    # Latest MDR-TB guidelines
+            - "kb_resistance_profiles_v1"   # ESSENTIAL: Resistance patterns
+
+  - id: "tb-hiv-coinfection-v1"
+    priority: 550
+    conditions:
+      all_of:
+        - { fact: "diagnosis", operator: "equal", value: "PULMONARY_TUBERCULOSIS" }
+        - { fact: "patient.flags.hiv_status", operator: "equal", value: "POSITIVE" }
+    action:
+      generate_manifest:
+        intent: "tb_hiv_coinfection"
+        recipe_id: "tb-hiv-coinfection-v1.0"
+        variant: "art_compatible"
+        
+        data_manifest:
+          required:
+            - "demographics.weight.actual_kg"
+            - "patient.flags.hiv_status"
+            - "labs.cd4_count[latest]"
+            - "labs.viral_load[latest]"
+            - "medications.antiretrovirals[active]"
+            - "labs.liver_function[latest]"
+            - "microbiology.tb_culture[latest]"
+        
+        # HIV-TB coinfection requires all KBs for complex interactions
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"           # TB-HIV drug interactions
+            - "kb_dosing_rules_v1"          # Modified dosing for HIV patients
+            - "kb_ddi_v1"                   # Critical TB-ART interactions
+            - "kb_formulary_stock_v1"       # Compatible formulations
+            - "kb_patient_safe_checks_v1"   # Enhanced monitoring
+            - "kb_guideline_evidence_v1"    # TB-HIV treatment guidelines
+            - "kb_resistance_profiles_v1"   # Resistance in HIV patients
+
+rule_evaluation:
+  evaluation_order: "priority_desc"
+  stop_on_first_match: true
+  evaluation_timeout_ms: 200
+  clinical_validation_required: true

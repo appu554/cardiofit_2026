@@ -1,0 +1,248 @@
+package com.cardiofit.flink.config;
+
+import org.apache.flink.configuration.Configuration;
+
+/**
+ * Google Healthcare API configuration for Flink EHR Intelligence Engine
+ * Reads configuration from patient-service compatible environment variables
+ */
+public class GoogleHealthcareConfig {
+
+    // Configuration keys matching patient-service settings
+    private static final String USE_GOOGLE_HEALTHCARE_API_KEY = "USE_GOOGLE_HEALTHCARE_API";
+    private static final String GOOGLE_CLOUD_PROJECT_ID_KEY = "GOOGLE_CLOUD_PROJECT_ID";
+    private static final String GOOGLE_CLOUD_LOCATION_KEY = "GOOGLE_CLOUD_LOCATION";
+    private static final String GOOGLE_CLOUD_DATASET_ID_KEY = "GOOGLE_CLOUD_DATASET_ID";
+    private static final String GOOGLE_CLOUD_FHIR_STORE_ID_KEY = "GOOGLE_CLOUD_FHIR_STORE_ID";
+    private static final String GOOGLE_CLOUD_CREDENTIALS_PATH_KEY = "GOOGLE_CLOUD_CREDENTIALS_PATH";
+
+    // Default values from patient-service configuration
+    private static final String DEFAULT_PROJECT_ID = "cardiofit-905a8";
+    private static final String DEFAULT_LOCATION = "us-central1";
+    private static final String DEFAULT_DATASET_ID = "clinical_synthesis_hub";
+    private static final String DEFAULT_FHIR_STORE_ID = "fhir_store";
+    private static final String DEFAULT_CREDENTIALS_PATH = "credentials/google-credentials.json";
+
+    private final boolean useGoogleHealthcareApi;
+    private final String projectId;
+    private final String location;
+    private final String datasetId;
+    private final String fhirStoreId;
+    private final String credentialsPath;
+
+    public GoogleHealthcareConfig() {
+        // Read from environment variables (same as patient-service)
+        this.useGoogleHealthcareApi = Boolean.parseBoolean(
+            System.getenv().getOrDefault(USE_GOOGLE_HEALTHCARE_API_KEY, "true"));
+
+        this.projectId = System.getenv().getOrDefault(GOOGLE_CLOUD_PROJECT_ID_KEY, DEFAULT_PROJECT_ID);
+        this.location = System.getenv().getOrDefault(GOOGLE_CLOUD_LOCATION_KEY, DEFAULT_LOCATION);
+        this.datasetId = System.getenv().getOrDefault(GOOGLE_CLOUD_DATASET_ID_KEY, DEFAULT_DATASET_ID);
+        this.fhirStoreId = System.getenv().getOrDefault(GOOGLE_CLOUD_FHIR_STORE_ID_KEY, DEFAULT_FHIR_STORE_ID);
+        this.credentialsPath = System.getenv().getOrDefault(GOOGLE_CLOUD_CREDENTIALS_PATH_KEY, DEFAULT_CREDENTIALS_PATH);
+    }
+
+    public GoogleHealthcareConfig(Configuration flinkConfig) {
+        // Read from Flink configuration with fallback to environment variables
+        this.useGoogleHealthcareApi = flinkConfig.getBoolean(USE_GOOGLE_HEALTHCARE_API_KEY,
+            Boolean.parseBoolean(System.getenv().getOrDefault(USE_GOOGLE_HEALTHCARE_API_KEY, "true")));
+
+        this.projectId = flinkConfig.getString(GOOGLE_CLOUD_PROJECT_ID_KEY,
+            System.getenv().getOrDefault(GOOGLE_CLOUD_PROJECT_ID_KEY, DEFAULT_PROJECT_ID));
+
+        this.location = flinkConfig.getString(GOOGLE_CLOUD_LOCATION_KEY,
+            System.getenv().getOrDefault(GOOGLE_CLOUD_LOCATION_KEY, DEFAULT_LOCATION));
+
+        this.datasetId = flinkConfig.getString(GOOGLE_CLOUD_DATASET_ID_KEY,
+            System.getenv().getOrDefault(GOOGLE_CLOUD_DATASET_ID_KEY, DEFAULT_DATASET_ID));
+
+        this.fhirStoreId = flinkConfig.getString(GOOGLE_CLOUD_FHIR_STORE_ID_KEY,
+            System.getenv().getOrDefault(GOOGLE_CLOUD_FHIR_STORE_ID_KEY, DEFAULT_FHIR_STORE_ID));
+
+        this.credentialsPath = flinkConfig.getString(GOOGLE_CLOUD_CREDENTIALS_PATH_KEY,
+            System.getenv().getOrDefault(GOOGLE_CLOUD_CREDENTIALS_PATH_KEY, DEFAULT_CREDENTIALS_PATH));
+    }
+
+    // Getters
+    public boolean isUseGoogleHealthcareApi() {
+        return useGoogleHealthcareApi;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public String getLocation() {
+        return location;
+    }
+
+    public String getDatasetId() {
+        return datasetId;
+    }
+
+    public String getFhirStoreId() {
+        return fhirStoreId;
+    }
+
+    public String getCredentialsPath() {
+        return credentialsPath;
+    }
+
+    /**
+     * Get the full FHIR store path for Google Healthcare API
+     */
+    public String getFhirStorePath() {
+        return String.format("projects/%s/locations/%s/datasets/%s/fhirStores/%s",
+                projectId, location, datasetId, fhirStoreId);
+    }
+
+    /**
+     * Get the parent path for dataset operations
+     */
+    public String getDatasetPath() {
+        return String.format("projects/%s/locations/%s/datasets/%s",
+                projectId, location, datasetId);
+    }
+
+    /**
+     * Validate configuration
+     */
+    public void validate() throws IllegalStateException {
+        if (useGoogleHealthcareApi) {
+            if (projectId == null || projectId.trim().isEmpty()) {
+                throw new IllegalStateException("Google Cloud Project ID is required when using Healthcare API");
+            }
+            if (location == null || location.trim().isEmpty()) {
+                throw new IllegalStateException("Google Cloud Location is required when using Healthcare API");
+            }
+            if (datasetId == null || datasetId.trim().isEmpty()) {
+                throw new IllegalStateException("Google Cloud Dataset ID is required when using Healthcare API");
+            }
+            if (fhirStoreId == null || fhirStoreId.trim().isEmpty()) {
+                throw new IllegalStateException("Google Cloud FHIR Store ID is required when using Healthcare API");
+            }
+
+            // Validate ID formats (from Google Healthcare setup documentation)
+            if (!isValidId(datasetId)) {
+                throw new IllegalStateException("Dataset ID must match pattern ^[\\p{L}\\p{N}_\\-\\.]{1,256}$: " + datasetId);
+            }
+            if (!isValidId(fhirStoreId)) {
+                throw new IllegalStateException("FHIR Store ID must match pattern ^[\\p{L}\\p{N}_\\-\\.]{1,256}$: " + fhirStoreId);
+            }
+        }
+    }
+
+    /**
+     * Validate Google Cloud resource ID format
+     */
+    private boolean isValidId(String id) {
+        return id != null && id.matches("^[\\p{L}\\p{N}_\\-\\.]{1,256}$");
+    }
+
+    /**
+     * Create configuration for development environment
+     */
+    public static GoogleHealthcareConfig createDevelopmentConfig() {
+        GoogleHealthcareConfig config = new GoogleHealthcareConfig();
+        config.validate();
+        return config;
+    }
+
+    /**
+     * Create configuration for production environment
+     */
+    public static GoogleHealthcareConfig createProductionConfig(Configuration flinkConfig) {
+        GoogleHealthcareConfig config = new GoogleHealthcareConfig(flinkConfig);
+        config.validate();
+        return config;
+    }
+
+    @Override
+    public String toString() {
+        return "GoogleHealthcareConfig{" +
+                "useGoogleHealthcareApi=" + useGoogleHealthcareApi +
+                ", projectId='" + projectId + '\'' +
+                ", location='" + location + '\'' +
+                ", datasetId='" + datasetId + '\'' +
+                ", fhirStoreId='" + fhirStoreId + '\'' +
+                ", credentialsPath='" + credentialsPath + '\'' +
+                ", fhirStorePath='" + getFhirStorePath() + '\'' +
+                '}';
+    }
+
+    /**
+     * Environment configuration builder for easy setup
+     */
+    public static class Builder {
+        private boolean useGoogleHealthcareApi = true;
+        private String projectId = DEFAULT_PROJECT_ID;
+        private String location = DEFAULT_LOCATION;
+        private String datasetId = DEFAULT_DATASET_ID;
+        private String fhirStoreId = DEFAULT_FHIR_STORE_ID;
+        private String credentialsPath = DEFAULT_CREDENTIALS_PATH;
+
+        public Builder useGoogleHealthcareApi(boolean use) {
+            this.useGoogleHealthcareApi = use;
+            return this;
+        }
+
+        public Builder projectId(String projectId) {
+            this.projectId = projectId;
+            return this;
+        }
+
+        public Builder location(String location) {
+            this.location = location;
+            return this;
+        }
+
+        public Builder datasetId(String datasetId) {
+            this.datasetId = datasetId;
+            return this;
+        }
+
+        public Builder fhirStoreId(String fhirStoreId) {
+            this.fhirStoreId = fhirStoreId;
+            return this;
+        }
+
+        public Builder credentialsPath(String credentialsPath) {
+            this.credentialsPath = credentialsPath;
+            return this;
+        }
+
+        public GoogleHealthcareConfig build() {
+            // Set environment variables to match the configuration
+            if (useGoogleHealthcareApi) {
+                System.setProperty(USE_GOOGLE_HEALTHCARE_API_KEY, String.valueOf(useGoogleHealthcareApi));
+                System.setProperty(GOOGLE_CLOUD_PROJECT_ID_KEY, projectId);
+                System.setProperty(GOOGLE_CLOUD_LOCATION_KEY, location);
+                System.setProperty(GOOGLE_CLOUD_DATASET_ID_KEY, datasetId);
+                System.setProperty(GOOGLE_CLOUD_FHIR_STORE_ID_KEY, fhirStoreId);
+                System.setProperty(GOOGLE_CLOUD_CREDENTIALS_PATH_KEY, credentialsPath);
+            }
+
+            GoogleHealthcareConfig config = new GoogleHealthcareConfig();
+            config.validate();
+            return config;
+        }
+    }
+
+    /**
+     * Configuration constants for easy reference
+     */
+    public static class Constants {
+        public static final String CARDIOFIT_PROJECT_ID = "cardiofit-905a8";
+        public static final String US_CENTRAL1_LOCATION = "us-central1";
+        public static final String CLINICAL_SYNTHESIS_HUB_DATASET = "clinical_synthesis_hub";
+        public static final String DEFAULT_FHIR_STORE = "fhir_store";
+        public static final String SERVICE_ACCOUNT_EMAIL = "healthcare-api-client@cardiofit-905a8.iam.gserviceaccount.com";
+
+        // Required IAM roles for the service account
+        public static final String[] REQUIRED_ROLES = {
+            "roles/healthcare.datasetAdmin",
+            "roles/healthcare.fhirStoreAdmin",
+            "roles/healthcare.fhirResourceEditor"
+        };
+    }
+}

@@ -1,0 +1,838 @@
+{
+  "info": {
+    "_postman_id": "kb16-lab-interpretation-2025",
+    "name": "KB-16 Lab Interpretation Service",
+    "description": "Clinical Validation Test Suite for KB-16 Lab Interpretation & Trending Service.\n\nPort: 8095\nVersion: 1.0.0\n\nThis collection contains automated tests for:\n- Core lab interpretation\n- Panel intelligence\n- Context-aware analysis\n- Critical value governance\n- Performance benchmarks",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8095",
+      "type": "string"
+    },
+    {
+      "key": "kb8Url",
+      "value": "http://localhost:8088",
+      "type": "string"
+    },
+    {
+      "key": "kb14Url",
+      "value": "http://localhost:8093",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Status",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Service is healthy', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.status).to.eql('healthy');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          }
+        },
+        {
+          "name": "Readiness Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Service is ready', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.ready).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/ready",
+              "host": ["{{baseUrl}}"],
+              "path": ["ready"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 1 - KB-8 Integration",
+      "item": [
+        {
+          "name": "P1.5 - eGFR Male CKD-EPI",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('eGFR calculated within 5% of reference', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    // Expected eGFR for creatinine=1.2, age=55, male ~65-75",
+                  "    pm.expect(jsonData.calculatedValues.egfr).to.be.above(60);",
+                  "    pm.expect(jsonData.calculatedValues.egfr).to.be.below(85);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2160-0\",\n  \"value\": 1.2,\n  \"unit\": \"mg/dL\",\n  \"patientContext\": {\n    \"age\": 55,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P1.9 - High Anion Gap Detection",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('High anion gap detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.calculatedValues.anionGap).to.be.above(16);",
+                  "    pm.expect(jsonData.patterns).to.include('HIGH_ANION_GAP_METABOLIC_ACIDOSIS');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"panelType\": \"BMP\",\n  \"labs\": [\n    {\"code\": \"2951-2\", \"value\": 140, \"unit\": \"mEq/L\"},\n    {\"code\": \"2075-0\", \"value\": 95, \"unit\": \"mEq/L\"},\n    {\"code\": \"1963-8\", \"value\": 18, \"unit\": \"mEq/L\"}\n  ],\n  \"patientContext\": {\n    \"age\": 60,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/panels/assemble",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "panels", "assemble"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 2 - Core Interpretation",
+      "item": [
+        {
+          "name": "P2.6 - Platelets Critical Low",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Critical low flag set', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.interpretation.flag).to.eql('CRITICAL_LOW');",
+                  "    pm.expect(jsonData.interpretation.isCritical).to.be.true;",
+                  "    pm.expect(jsonData.interpretation.severity).to.eql('CRITICAL');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"777-3\",\n  \"value\": 15000,\n  \"unit\": \"/uL\",\n  \"patientContext\": {\n    \"age\": 60,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P2.8 - Sodium Critical Low",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Critical low sodium detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.interpretation.flag).to.eql('CRITICAL_LOW');",
+                  "    pm.expect(jsonData.interpretation.isCritical).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2951-2\",\n  \"value\": 118,\n  \"unit\": \"mEq/L\",\n  \"patientContext\": {\n    \"age\": 65,\n    \"sex\": \"female\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P2.10 - Potassium Critical High",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Critical high potassium detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.interpretation.flag).to.eql('CRITICAL_HIGH');",
+                  "    pm.expect(jsonData.interpretation.isCritical).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2823-3\",\n  \"value\": 7.2,\n  \"unit\": \"mEq/L\",\n  \"patientContext\": {\n    \"age\": 68,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P2.13 - Glucose Critical Low",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Hypoglycemia detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.interpretation.flag).to.eql('CRITICAL_LOW');",
+                  "    pm.expect(jsonData.interpretation.isCritical).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2345-7\",\n  \"value\": 35,\n  \"unit\": \"mg/dL\",\n  \"patientContext\": {\n    \"age\": 45,\n    \"sex\": \"female\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 3 - Panel Intelligence",
+      "item": [
+        {
+          "name": "P3.6 - CBC Pancytopenia",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Pancytopenia pattern detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.patterns).to.include('PANCYTOPENIA');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"panelType\": \"CBC\",\n  \"labs\": [\n    {\"code\": \"6690-2\", \"value\": 2.0, \"unit\": \"10^9/L\"},\n    {\"code\": \"718-7\", \"value\": 8.0, \"unit\": \"g/dL\"},\n    {\"code\": \"777-3\", \"value\": 80000, \"unit\": \"/uL\"}\n  ],\n  \"patientContext\": {\n    \"age\": 65,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/panels/assemble",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "panels", "assemble"]
+            }
+          }
+        },
+        {
+          "name": "P3.15 - Rising Troponin (Acute MI)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Acute MI troponin rise detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.patterns).to.include('ACUTE_MI_TROPONIN_RISE');",
+                  "    pm.expect(jsonData.interpretation.isCritical).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patientId\": \"test-patient-001\",\n  \"panelType\": \"CARDIAC\",\n  \"serialLabs\": [\n    {\"code\": \"10839-9\", \"value\": 0.04, \"unit\": \"ng/mL\", \"collectedAt\": \"2025-12-31T08:00:00Z\"},\n    {\"code\": \"10839-9\", \"value\": 0.15, \"unit\": \"ng/mL\", \"collectedAt\": \"2025-12-31T11:00:00Z\"},\n    {\"code\": \"10839-9\", \"value\": 0.45, \"unit\": \"ng/mL\", \"collectedAt\": \"2025-12-31T14:00:00Z\"}\n  ],\n  \"patientContext\": {\n    \"age\": 62,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/panels/serial",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "panels", "serial"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 4 - Context-Aware",
+      "item": [
+        {
+          "name": "P4.5 - CKD Electrolyte Risk",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('CKD context applied to potassium', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    // Potassium 5.8 in CKD Stage 4 should be HIGH severity",
+                  "    pm.expect(jsonData.interpretation.severity).to.be.oneOf(['HIGH', 'CRITICAL']);",
+                  "    pm.expect(jsonData.contextApplied).to.include('CKD_STAGE_4');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2823-3\",\n  \"value\": 5.8,\n  \"unit\": \"mEq/L\",\n  \"patientContext\": {\n    \"age\": 70,\n    \"sex\": \"male\",\n    \"conditions\": [\"CKD\"],\n    \"ckdStage\": 4\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P4.7 - Sepsis Markers Combined",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Sepsis pattern detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.patterns).to.include.oneOf(['SEPSIS_SUSPECTED', 'SEVERE_INFECTION']);",
+                  "    pm.expect(jsonData.interpretation.severity).to.eql('CRITICAL');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"panelType\": \"SEPSIS\",\n  \"labs\": [\n    {\"code\": \"2524-7\", \"value\": 4.5, \"unit\": \"mmol/L\"},\n    {\"code\": \"1988-5\", \"value\": 180, \"unit\": \"mg/L\"},\n    {\"code\": \"6690-2\", \"value\": 22, \"unit\": \"10^9/L\"}\n  ],\n  \"patientContext\": {\n    \"age\": 72,\n    \"sex\": \"female\",\n    \"sepsisSuspected\": true\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/panels/assemble",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "panels", "assemble"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 5 - Severity Tiering",
+      "item": [
+        {
+          "name": "P5.5 - Critical Classification",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Critical color classification', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.colorCode).to.eql('CRITICAL');",
+                  "    pm.expect(jsonData.interpretation.isCritical).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2823-3\",\n  \"value\": 7.5,\n  \"unit\": \"mEq/L\",\n  \"patientContext\": {\n    \"age\": 55,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 6 - Care Gap Intelligence",
+      "item": [
+        {
+          "name": "P6.1 - Diabetic HbA1c Overdue",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('HbA1c care gap detected', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    var hba1cGap = jsonData.careGaps.find(g => g.type.includes('HbA1c'));",
+                  "    pm.expect(hba1cGap).to.not.be.undefined;",
+                  "    pm.expect(hba1cGap.status).to.eql('OVERDUE');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patientId\": \"test-diabetic-001\",\n  \"patientContext\": {\n    \"age\": 55,\n    \"sex\": \"male\",\n    \"conditions\": [\"diabetes\"]\n  },\n  \"labHistory\": {\n    \"lastHbA1c\": \"2024-09-01T00:00:00Z\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-gaps/detect",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "care-gaps", "detect"]
+            }
+          }
+        },
+        {
+          "name": "P6.9 - Metformin B12 Monitoring",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('B12 monitoring gap detected for metformin', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    var b12Gap = jsonData.careGaps.find(g => g.type.includes('B12'));",
+                  "    pm.expect(b12Gap).to.not.be.undefined;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patientId\": \"test-metformin-001\",\n  \"patientContext\": {\n    \"age\": 60,\n    \"sex\": \"female\",\n    \"medications\": [\"metformin\"]\n  },\n  \"labHistory\": {\n    \"lastB12\": \"2024-06-01T00:00:00Z\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/care-gaps/detect",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "care-gaps", "detect"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 7 - Governance",
+      "item": [
+        {
+          "name": "P7.1 - Critical Value Creates Task",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('KB-14 task created for critical value', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.governance.taskCreated).to.be.true;",
+                  "    pm.expect(jsonData.governance.kb14TaskId).to.not.be.empty;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2823-3\",\n  \"value\": 7.0,\n  \"unit\": \"mEq/L\",\n  \"patientId\": \"test-patient-critical-001\",\n  \"patientContext\": {\n    \"age\": 65,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P7.5 - Critical Value SLA Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('SLA is 60 minutes for critical values', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.governance.slaMinutes).to.eql(60);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/governance/sla-policy",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "governance", "sla-policy"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 8 - Performance",
+      "item": [
+        {
+          "name": "P8.1 - Single Interpretation < 100ms",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response time under 100ms', function() {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(100);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"718-7\",\n  \"value\": 14.5,\n  \"unit\": \"g/dL\",\n  \"patientContext\": {\n    \"age\": 40,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P8.3 - Batch 20 Labs < 2 Seconds",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Batch response time under 2 seconds', function() {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(2000);",
+                  "});",
+                  "",
+                  "pm.test('All 20 labs interpreted', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.results.length).to.eql(20);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labs\": [\n    {\"code\": \"718-7\", \"value\": 14.5, \"unit\": \"g/dL\"},\n    {\"code\": \"6690-2\", \"value\": 7.5, \"unit\": \"10^9/L\"},\n    {\"code\": \"777-3\", \"value\": 250000, \"unit\": \"/uL\"},\n    {\"code\": \"2951-2\", \"value\": 140, \"unit\": \"mEq/L\"},\n    {\"code\": \"2823-3\", \"value\": 4.2, \"unit\": \"mEq/L\"},\n    {\"code\": \"2160-0\", \"value\": 1.0, \"unit\": \"mg/dL\"},\n    {\"code\": \"2345-7\", \"value\": 95, \"unit\": \"mg/dL\"},\n    {\"code\": \"1963-8\", \"value\": 24, \"unit\": \"mEq/L\"},\n    {\"code\": \"2075-0\", \"value\": 100, \"unit\": \"mEq/L\"},\n    {\"code\": \"3094-0\", \"value\": 15, \"unit\": \"mg/dL\"},\n    {\"code\": \"1920-8\", \"value\": 25, \"unit\": \"U/L\"},\n    {\"code\": \"1742-6\", \"value\": 22, \"unit\": \"U/L\"},\n    {\"code\": \"6768-6\", \"value\": 75, \"unit\": \"U/L\"},\n    {\"code\": \"1975-2\", \"value\": 0.8, \"unit\": \"mg/dL\"},\n    {\"code\": \"1751-7\", \"value\": 4.0, \"unit\": \"g/dL\"},\n    {\"code\": \"3016-3\", \"value\": 2.5, \"unit\": \"mIU/L\"},\n    {\"code\": \"4548-4\", \"value\": 5.5, \"unit\": \"%\"},\n    {\"code\": \"2093-3\", \"value\": 180, \"unit\": \"mg/dL\"},\n    {\"code\": \"2085-9\", \"value\": 55, \"unit\": \"mg/dL\"},\n    {\"code\": \"13457-7\", \"value\": 100, \"unit\": \"mg/dL\"}\n  ],\n  \"patientContext\": {\n    \"age\": 50,\n    \"sex\": \"female\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret/batch",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret", "batch"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Phase 9 - Edge Cases",
+      "item": [
+        {
+          "name": "P9.1 - Hemolyzed Sample Warning",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Hemolysis warning present for potassium', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.specimenWarnings).to.include.oneOf(['HEMOLYSIS_WARNING', 'SPECIMEN_QUALITY_ISSUE']);",
+                  "    pm.expect(jsonData.interpretation.clinicalComment).to.include('hemoly');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"2823-3\",\n  \"value\": 6.2,\n  \"unit\": \"mEq/L\",\n  \"specimenQuality\": \"hemolyzed\",\n  \"patientContext\": {\n    \"age\": 55,\n    \"sex\": \"male\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        },
+        {
+          "name": "P9.9 - Neonatal Bilirubin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Neonatal bilirubin thresholds applied', function() {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.contextApplied).to.include('NEONATAL');",
+                  "    // Bilirubin 15 at 3 days old is concerning in neonates",
+                  "    pm.expect(jsonData.interpretation.severity).to.be.oneOf(['HIGH', 'CRITICAL']);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"labCode\": \"1975-2\",\n  \"value\": 15.0,\n  \"unit\": \"mg/dL\",\n  \"patientContext\": {\n    \"age\": 0,\n    \"ageUnit\": \"days\",\n    \"ageInDays\": 3,\n    \"sex\": \"male\",\n    \"isNeonate\": true\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/interpret",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "interpret"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

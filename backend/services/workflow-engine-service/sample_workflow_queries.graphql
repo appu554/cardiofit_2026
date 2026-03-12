@@ -1,0 +1,293 @@
+# Sample GraphQL Queries for Patient-Workflow Integration Testing
+
+# 1. Basic Patient Information
+query GetBasicPatient($patientId: ID!) {
+  patient(id: $patientId) {
+    id
+    resourceType
+    name {
+      family
+      given
+      use
+    }
+    gender
+    birthDate
+    active
+    telecom {
+      system
+      value
+      use
+    }
+  }
+}
+
+# 2. Patient with Workflow Tasks and Instances
+query GetPatientWithWorkflows($patientId: ID!) {
+  patient(id: $patientId) {
+    id
+    name {
+      family
+      given
+    }
+    gender
+    birthDate
+    active
+    
+    # Workflow-related data
+    tasks(status: READY) {
+      id
+      description
+      priority
+      status
+      authoredOn
+      lastModified
+      for {
+        reference
+        display
+      }
+      owner {
+        reference
+        display
+      }
+    }
+    
+    workflowInstances(status: ACTIVE) {
+      id
+      definitionId
+      status
+      startTime
+      endTime
+      createdBy
+    }
+  }
+}
+
+# 3. Comprehensive Patient Query with Vitals, Encounters, and Workflows
+query GetComprehensivePatient($patientId: ID!) {
+  patient(id: $patientId) {
+    id
+    name {
+      family
+      given
+    }
+    gender
+    birthDate
+    active
+    
+    # Encounters
+    encounters {
+      id
+      status
+      class {
+        code
+        display
+      }
+      type {
+        coding {
+          code
+          display
+          system
+        }
+      }
+      period {
+        start
+        end
+      }
+      location {
+        location {
+          reference
+          display
+        }
+      }
+    }
+    
+    # Observations (Vitals)
+    observations {
+      id
+      status
+      category {
+        coding {
+          code
+          display
+          system
+        }
+      }
+      code {
+        coding {
+          code
+          display
+          system
+        }
+      }
+      valueQuantity {
+        value
+        unit
+        system
+      }
+      effectiveDateTime
+      issued
+    }
+    
+    # Workflow Tasks
+    tasks {
+      id
+      description
+      priority
+      status
+      authoredOn
+      lastModified
+      businessStatus {
+        coding {
+          code
+          display
+        }
+      }
+      for {
+        reference
+        display
+      }
+      owner {
+        reference
+        display
+      }
+    }
+    
+    # Active Workflows
+    workflowInstances(status: ACTIVE) {
+      id
+      definitionId
+      status
+      startTime
+      endTime
+      createdBy
+    }
+  }
+}
+
+# 4. Get Available Workflow Definitions
+query GetWorkflowDefinitions {
+  workflowDefinitions {
+    id
+    name
+    version
+    status
+    category
+    description
+    createdAt
+    updatedAt
+  }
+}
+
+# 5. Get All Tasks for a User
+query GetUserTasks($userId: ID!) {
+  user(id: $userId) {
+    id
+    assignedTasks(status: READY) {
+      id
+      description
+      priority
+      status
+      authoredOn
+      lastModified
+      for {
+        reference
+        display
+      }
+      businessStatus {
+        coding {
+          code
+          display
+        }
+      }
+    }
+  }
+}
+
+# 6. Get Tasks by Assignee
+query GetTasksByAssignee($assignee: ID!, $status: TaskStatus) {
+  tasks(assignee: $assignee, status: $status) {
+    id
+    description
+    priority
+    status
+    authoredOn
+    lastModified
+    for {
+      reference
+      display
+    }
+    owner {
+      reference
+      display
+    }
+  }
+}
+
+# 7. Get Workflow Instances
+query GetWorkflowInstances($status: WorkflowStatus, $patientId: ID) {
+  workflowInstances(status: $status, patientId: $patientId) {
+    id
+    definitionId
+    patientId
+    status
+    startTime
+    endTime
+    createdBy
+  }
+}
+
+# 8. Start a Workflow (Mutation)
+mutation StartPatientWorkflow($definitionId: ID!, $patientId: ID!, $variables: [KeyValuePairInput]) {
+  startWorkflow(
+    definitionId: $definitionId
+    patientId: $patientId
+    initialVariables: $variables
+  ) {
+    id
+    definitionId
+    patientId
+    status
+    startTime
+    createdBy
+  }
+}
+
+# 9. Complete a Task (Mutation)
+mutation CompleteTask($taskId: ID!, $outputVariables: [KeyValuePairInput]) {
+  completeTask(taskId: $taskId, outputVariables: $outputVariables) {
+    id
+    status
+    lastModified
+  }
+}
+
+# 10. Claim a Task (Mutation)
+mutation ClaimTask($taskId: ID!) {
+  claimTask(taskId: $taskId) {
+    id
+    status
+    owner {
+      reference
+      display
+    }
+  }
+}
+
+# Variables for testing:
+# {
+#   "patientId": "patient-test-123",
+#   "userId": "doctor-test-456",
+#   "assignee": "doctor-test-456",
+#   "status": "READY",
+#   "definitionId": "patient-admission-workflow",
+#   "variables": [
+#     {"key": "patientName", "value": "John Doe"},
+#     {"key": "admissionType", "value": "emergency"},
+#     {"key": "priority", "value": "high"}
+#   ],
+#   "taskId": "task-123",
+#   "outputVariables": [
+#     {"key": "reviewResult", "value": "approved"},
+#     {"key": "notes", "value": "Patient data verified"}
+#   ]
+# }

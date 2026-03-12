@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'KB-7 Knowledge Factory - Lambda Functions for Terminology Downloads'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+    Description: Environment name
+
+  SourceBucketName:
+    Type: String
+    Description: S3 bucket name for source files (from s3-buckets stack)
+
+  SecretsStackName:
+    Type: String
+    Default: kb7-secrets
+    Description: Name of the secrets manager stack for credential imports
+
+Resources:
+  # IAM Role for Lambda Functions
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'KB7-Lambda-Execution-Role-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${SourceBucketName}/*'
+                  - !Sub 'arn:aws:s3:::${SourceBucketName}'
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:kb7/*'
+        - PolicyName: CloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+
+  # Lambda Function: SNOMED Downloader
+  SNOMEDDownloaderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'kb7-snomed-downloader-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 900  # 15 minutes (max for Lambda)
+      MemorySize: 10240  # 10GB RAM for large SNOMED downloads
+      EphemeralStorage:
+        Size: 10240  # 10GB ephemeral storage
+      Code:
+        ZipFile: |
+          # Placeholder - actual code deployed separately
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "SNOMED downloader not yet deployed"}
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref SourceBucketName
+          ENVIRONMENT: !Ref EnvironmentName
+          NHS_TRUD_SECRET_NAME: !Sub '${SecretsStackName}/nhs-trud-api-key'
+      Tags:
+        - Key: Project
+          Value: CardioFit-KB7
+        - Key: Component
+          Value: SNOMED-Downloader
+
+  # Lambda Function: RxNorm Downloader
+  RxNormDownloaderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'kb7-rxnorm-downloader-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 600  # 10 minutes
+      MemorySize: 3072  # 3GB RAM
+      EphemeralStorage:
+        Size: 5120  # 5GB ephemeral storage
+      Code:
+        ZipFile: |
+          # Placeholder - actual code deployed separately
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "RxNorm downloader not yet deployed"}
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref SourceBucketName
+          ENVIRONMENT: !Ref EnvironmentName
+          UMLS_SECRET_NAME: !Sub '${SecretsStackName}/umls-api-key'
+      Tags:
+        - Key: Project
+          Value: CardioFit-KB7
+        - Key: Component
+          Value: RxNorm-Downloader
+
+  # Lambda Function: LOINC Downloader
+  LOINCDownloaderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'kb7-loinc-downloader-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300  # 5 minutes
+      MemorySize: 2048  # 2GB RAM
+      EphemeralStorage:
+        Size: 3072  # 3GB ephemeral storage
+      Code:
+        ZipFile: |
+          # Placeholder - actual code deployed separately
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "LOINC downloader not yet deployed"}
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref SourceBucketName
+          ENVIRONMENT: !Ref EnvironmentName
+          LOINC_SECRET_NAME: !Sub '${SecretsStackName}/loinc-credentials'
+      Tags:
+        - Key: Project
+          Value: CardioFit-KB7
+        - Key: Component
+          Value: LOINC-Downloader
+
+  # Lambda Function: GitHub Dispatcher
+  GitHubDispatcherFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'kb7-github-dispatcher-${EnvironmentName}'
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300  # 5 minutes
+      MemorySize: 1024  # 1GB RAM (minimal for API call)
+      Code:
+        ZipFile: |
+          # Placeholder - actual code deployed separately
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "GitHub dispatcher not yet deployed"}
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref SourceBucketName
+          ENVIRONMENT: !Ref EnvironmentName
+          GITHUB_SECRET_NAME: !Sub '${SecretsStackName}/github-pat'
+          GITHUB_REPO_OWNER: cardiofit
+          GITHUB_REPO_NAME: knowledge-factory
+      Tags:
+        - Key: Project
+          Value: CardioFit-KB7
+        - Key: Component
+          Value: GitHub-Dispatcher
+
+  # CloudWatch Log Groups for Lambda Functions
+  SNOMEDLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/kb7-snomed-downloader-${EnvironmentName}'
+      RetentionInDays: 30
+
+  RxNormLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/kb7-rxnorm-downloader-${EnvironmentName}'
+      RetentionInDays: 30
+
+  LOINCLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/kb7-loinc-downloader-${EnvironmentName}'
+      RetentionInDays: 30
+
+  GitHubLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/kb7-github-dispatcher-${EnvironmentName}'
+      RetentionInDays: 30
+
+  # CloudWatch Alarms for Lambda Duration (Early Warning)
+  SNOMEDDurationAlarm:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      FilterPattern: '[time, request_id, level = ERROR*, ...]'
+      LogGroupName: !Ref SNOMEDLogGroup
+      MetricTransformations:
+        - MetricName: SNOMEDDownloadErrors
+          MetricNamespace: KB7/KnowledgeFactory
+          MetricValue: '1'
+          DefaultValue: 0
+
+  SNOMEDDurationCloudWatchAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'KB7-SNOMED-Duration-High-${EnvironmentName}'
+      AlarmDescription: 'SNOMED Lambda approaching timeout (>10 minutes)'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 600000  # 10 minutes in milliseconds (warn before 15min timeout)
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SNOMEDDownloaderFunction
+      TreatMissingData: notBreaching
+
+Outputs:
+  SNOMEDFunctionArn:
+    Description: ARN of SNOMED downloader Lambda function
+    Value: !GetAtt SNOMEDDownloaderFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SNOMEDFunctionArn'
+
+  RxNormFunctionArn:
+    Description: ARN of RxNorm downloader Lambda function
+    Value: !GetAtt RxNormDownloaderFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RxNormFunctionArn'
+
+  LOINCFunctionArn:
+    Description: ARN of LOINC downloader Lambda function
+    Value: !GetAtt LOINCDownloaderFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LOINCFunctionArn'
+
+  GitHubFunctionArn:
+    Description: ARN of GitHub dispatcher Lambda function
+    Value: !GetAtt GitHubDispatcherFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-GitHubFunctionArn'
+
+  LambdaExecutionRoleArn:
+    Description: ARN of Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaRoleArn'

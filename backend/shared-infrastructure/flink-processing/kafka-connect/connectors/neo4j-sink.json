@@ -1,0 +1,29 @@
+{
+  "name": "neo4j-clinical-events-sink",
+  "config": {
+    "connector.class": "streams.kafka.connect.sink.Neo4jSinkConnector",
+    "topics": "prod.ehr.graph.mutations,prod.ehr.events.enriched",
+    "neo4j.server.uri": "bolt://localhost:7687",
+    "neo4j.authentication.type": "BASIC",
+    "neo4j.authentication.basic.username": "neo4j",
+    "neo4j.authentication.basic.password": "CardioFit2024!",
+    "neo4j.database": "cardiofit",
+    "neo4j.topic.cypher.prod.ehr.graph.mutations": "MERGE (p:Patient {patientId: event.patientId}) MERGE (e:Event {id: event.id, type: event.sourceEventType, timestamp: event.routingTime}) MERGE (p)-[:HAS_EVENT]->(e) SET e.priority = event.priority, e.payload = event.originalPayload",
+    "neo4j.topic.cypher.prod.ehr.events.enriched": "MERGE (p:Patient {patientId: event.patientId}) ON CREATE SET p.createdAt = datetime() MERGE (e:Event {id: event.id}) ON CREATE SET e.type = event.sourceEventType, e.timestamp = event.routingTime, e.payload = event.originalPayload MERGE (p)-[:HAS_EVENT]->(e)",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": false,
+    "transforms": "routeToNeo4j,addTimestamp",
+    "transforms.routeToNeo4j.type": "org.apache.kafka.connect.transforms.Filter",
+    "transforms.routeToNeo4j.predicate": "has-destinations",
+    "transforms.routeToNeo4j.predicate.destinations": "neo4j,graph,knowledge,relationships,care-pathway",
+    "transforms.addTimestamp.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+    "transforms.addTimestamp.field": "routingTime",
+    "transforms.addTimestamp.target.type": "Timestamp",
+    "errors.retry.timeout": "60000",
+    "errors.retry.delay.max.ms": "10000",
+    "errors.tolerance": "all",
+    "errors.log.enable": true,
+    "errors.log.include.messages": true
+  }
+}

@@ -1,0 +1,103 @@
+# V4.3 Pipeline 1 — Lightweight Docker Stack for MonkeyOCR Full Guide Run
+# Skips Snow Owl (L4) — only needs Ollama (Channel F) + the pipeline itself.
+#
+# Usage:
+#   docker compose -f docker-compose.pipeline1.yml up -d ollama
+#   docker compose -f docker-compose.pipeline1.yml exec ollama ollama pull nuextract
+#   docker compose -f docker-compose.pipeline1.yml run pipeline
+#   # Logs saved to: data/output/pipeline_run.log (survives OOM/crash)
+#   # After crash: docker logs v4-pipeline-fullguide
+#
+# Mounts host HuggingFace cache to skip re-downloading 3GB+ of models.
+# Mounts fixed source code with runtime config fix for MonkeyOCR.
+# Mounts persistent L1 cache so OCR results survive container restarts.
+
+services:
+  # Ollama sidecar for Channel F NuExtract
+  ollama:
+    image: ollama/ollama:latest
+    container_name: v4-ollama-p1
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - p1-network
+    restart: unless-stopped
+
+  # V4.4 Pipeline — MonkeyOCR L1 (from GitHub) + Full Multi-Channel
+  pipeline:
+    image: v4-pipeline:4.4-monkeyocr
+    build:
+      context: ../..
+      dockerfile: tools/guideline-atomiser/Dockerfile.pipeline1
+    container_name: v4-pipeline-fullguide
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GLINER_MODEL=urchade/gliner_mediumv2.1
+      - GLINER_DEVICE=cpu
+      - OLLAMA_URL=http://ollama:11434
+      - NUEXTRACT_MODEL=nuextract
+      - PYTHONPATH=/app:/app/guideline-atomiser
+      # Force CPU — no MPS in Docker
+      - MONKEYOCR_DEVICE=cpu
+    volumes:
+      # ── Host HuggingFace cache (skip 3GB+ model download) ──
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+
+      # ── Fixed source code overlay (runtime config fix) ──
+      - ./monkeyocr_extractor.py:/app/guideline-atomiser/monkeyocr_extractor.py:ro
+      - ./marker_extractor.py:/app/guideline-atomiser/marker_extractor.py:ro
+      - ./l1_completeness_oracle.py:/app/guideline-atomiser/l1_completeness_oracle.py:ro
+      - ./coverage_guard.py:/app/guideline-atomiser/coverage_guard.py:ro
+      - ./fact_extractor.py:/app/guideline-atomiser/fact_extractor.py:ro
+      - ./data/run_pipeline_targeted.py:/app/guideline-atomiser/data/run_pipeline_targeted.py:ro
+      - ./data/run_chunked_l1.py:/app/guideline-atomiser/data/run_chunked_l1.py:ro
+
+      # ── Source PDFs ──
+      - ./data/pdfs:/data/pdfs:ro
+
+      # ── Guideline profiles + trained ML models ──
+      - ./data/profiles:/app/guideline-atomiser/data/profiles:ro
+      - ./data/models:/app/guideline-atomiser/data/models:ro
+
+      # ── Output + L1 cache (persistent across restarts) ──
+      - ./data/output:/data/output
+      - ./data/l1_cache:/app/guideline-atomiser/data/l1_cache
+
+      # ── Real-time pipeline log (survives container crash/OOM) ──
+      - ./data/output/pipeline_run.log:/data/pipeline_run.log
+
+      # ── magic-pdf.json config ──
+      - ./magic-pdf.json:/root/magic-pdf.json:ro
+
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - p1-network
+    # No restart — run once and exit.  Do NOT use --rm so container persists for crash debugging.
+    # Two-phase approach: chunked L1 (OOM-safe) → full pipeline (L2-L3 with L1 cache hit)
+    command: >
+      bash -c "set -eo pipefail;
+      echo '=== Phase 1: Chunked L1 OCR (OOM-safe) ===' | tee /data/pipeline_run.log;
+      python -u /app/guideline-atomiser/data/run_chunked_l1.py
+      --guideline kdigo_2024_ckd.yaml --source delta-pages 2>&1 | tee -a /data/pipeline_run.log;
+      echo '=== Phase 2: Full Pipeline L2-L3 (L1 cache hit) ===' | tee -a /data/pipeline_run.log;
+      python -u /app/guideline-atomiser/data/run_pipeline_targeted.py
+      --pipeline 1 --source delta-pages --l1 monkeyocr
+      --guideline kdigo_2024_ckd.yaml 2>&1 | tee -a /data/pipeline_run.log"
+
+networks:
+  p1-network:
+    driver: bridge
+
+volumes:
+  ollama-models:
+    name: v4-ollama-models

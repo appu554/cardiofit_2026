@@ -1,0 +1,173 @@
+# postgres-queries.yaml
+# Custom PostgreSQL queries for CDC-specific metrics collection
+
+pg_replication_slots:
+  query: |
+    SELECT
+      slot_name,
+      slot_type,
+      database,
+      active::int as active,
+      CASE
+        WHEN confirmed_flush_lsn IS NULL THEN 0
+        ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)
+      END as lag_bytes,
+      CASE
+        WHEN restart_lsn IS NULL THEN 0
+        ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+      END as retained_wal_bytes
+    FROM pg_replication_slots
+    WHERE slot_type = 'logical';
+  metrics:
+    - slot_name:
+        usage: "LABEL"
+        description: "Name of the replication slot"
+    - slot_type:
+        usage: "LABEL"
+        description: "Type of the replication slot"
+    - database:
+        usage: "LABEL"
+        description: "Database name"
+    - active:
+        usage: "GAUGE"
+        description: "Whether the replication slot is active (1) or not (0)"
+    - lag_bytes:
+        usage: "GAUGE"
+        description: "Replication lag in bytes"
+    - retained_wal_bytes:
+        usage: "GAUGE"
+        description: "Amount of WAL retained by this slot in bytes"
+
+pg_stat_replication:
+  query: |
+    SELECT
+      application_name,
+      client_addr::text,
+      state,
+      sync_state,
+      pg_wal_lsn_diff(sent_lsn, write_lsn) as write_lag_bytes,
+      pg_wal_lsn_diff(write_lsn, flush_lsn) as flush_lag_bytes,
+      pg_wal_lsn_diff(flush_lsn, replay_lsn) as replay_lag_bytes,
+      EXTRACT(EPOCH FROM (now() - backend_start)) as connection_age_seconds
+    FROM pg_stat_replication;
+  metrics:
+    - application_name:
+        usage: "LABEL"
+        description: "Name of the application"
+    - client_addr:
+        usage: "LABEL"
+        description: "Client IP address"
+    - state:
+        usage: "LABEL"
+        description: "Current WAL sender state"
+    - sync_state:
+        usage: "LABEL"
+        description: "Synchronous state"
+    - write_lag_bytes:
+        usage: "GAUGE"
+        description: "Write lag in bytes"
+    - flush_lag_bytes:
+        usage: "GAUGE"
+        description: "Flush lag in bytes"
+    - replay_lag_bytes:
+        usage: "GAUGE"
+        description: "Replay lag in bytes"
+    - connection_age_seconds:
+        usage: "GAUGE"
+        description: "Age of replication connection in seconds"
+
+pg_publication_stats:
+  query: |
+    SELECT
+      pubname,
+      COUNT(*) as table_count
+    FROM pg_publication_tables
+    GROUP BY pubname;
+  metrics:
+    - pubname:
+        usage: "LABEL"
+        description: "Publication name"
+    - table_count:
+        usage: "GAUGE"
+        description: "Number of tables in publication"
+
+pg_database_size:
+  query: |
+    SELECT
+      datname,
+      pg_database_size(datname) as size_bytes
+    FROM pg_database
+    WHERE datname NOT IN ('template0', 'template1', 'postgres');
+  metrics:
+    - datname:
+        usage: "LABEL"
+        description: "Database name"
+    - size_bytes:
+        usage: "GAUGE"
+        description: "Database size in bytes"
+
+pg_wal_activity:
+  query: |
+    SELECT
+      COUNT(*) as wal_file_count,
+      SUM(size) as wal_size_bytes
+    FROM pg_ls_waldir();
+  metrics:
+    - wal_file_count:
+        usage: "GAUGE"
+        description: "Number of WAL files"
+    - wal_size_bytes:
+        usage: "GAUGE"
+        description: "Total size of WAL files in bytes"
+
+pg_table_stats:
+  query: |
+    SELECT
+      schemaname,
+      relname,
+      n_live_tup as live_tuples,
+      n_dead_tup as dead_tuples,
+      n_tup_ins as inserts,
+      n_tup_upd as updates,
+      n_tup_del as deletes,
+      last_vacuum,
+      last_autovacuum
+    FROM pg_stat_user_tables;
+  metrics:
+    - schemaname:
+        usage: "LABEL"
+        description: "Schema name"
+    - relname:
+        usage: "LABEL"
+        description: "Table name"
+    - live_tuples:
+        usage: "GAUGE"
+        description: "Estimated number of live rows"
+    - dead_tuples:
+        usage: "GAUGE"
+        description: "Estimated number of dead rows"
+    - inserts:
+        usage: "COUNTER"
+        description: "Number of rows inserted"
+    - updates:
+        usage: "COUNTER"
+        description: "Number of rows updated"
+    - deletes:
+        usage: "COUNTER"
+        description: "Number of rows deleted"
+
+pg_locks:
+  query: |
+    SELECT
+      mode,
+      COUNT(*) as lock_count
+    FROM pg_locks
+    WHERE database IS NOT NULL
+    GROUP BY mode;
+  metrics:
+    - mode:
+        usage: "LABEL"
+        description: "Lock mode"
+    - lock_count:
+        usage: "GAUGE"
+        description: "Number of locks"

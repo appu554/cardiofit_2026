@@ -1,0 +1,215 @@
+// KB-7 Terminology Service Audit Contract
+// Integration with Evidence Envelope for audit trail logging
+
+syntax = "proto3";
+
+package kb7.audit;
+
+option go_package = "github.com/clinical-platform/kb-services/kb7/audit";
+
+// Audit logging service integration
+service AuditService {
+  // Log terminology lookup events
+  rpc LogTerminologyEvent(AuditEvent) returns (AuditResponse);
+  
+  // Log batch operation events  
+  rpc LogBatchEvent(BatchAuditEvent) returns (AuditResponse);
+  
+  // Query audit trail
+  rpc QueryAuditTrail(AuditQuery) returns (AuditTrailResponse);
+}
+
+// Event types for terminology service
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  CODE_LOOKUP = 1;
+  BATCH_LOOKUP = 2;
+  TERMINOLOGY_SEARCH = 3;
+  CODE_VALIDATION = 4;
+  HIERARCHY_ACCESS = 5;
+  CROSS_MAPPING = 6;
+  SCHEMA_VALIDATION = 7;
+  AUTHENTICATION_EVENT = 8;
+  AUTHORIZATION_EVENT = 9;
+  ERROR_EVENT = 10;
+}
+
+// Audit event for individual operations
+message AuditEvent {
+  string event_id = 1;       // Unique event identifier
+  EventType event_type = 2;
+  int64 timestamp = 3;       // Unix timestamp
+  string user_id = 4;        // User or system identifier
+  string session_id = 5;     // Session identifier
+  string service_name = 6;   // "kb-7-terminology"
+  string service_version = 7;
+  
+  // Event details
+  EventDetails details = 8;
+  
+  // Request metadata
+  RequestMetadata request_metadata = 9;
+  
+  // Response metadata
+  ResponseMetadata response_metadata = 10;
+}
+
+// Batch audit event for bulk operations
+message BatchAuditEvent {
+  string batch_id = 1;
+  EventType event_type = 2;
+  int64 timestamp = 3;
+  string user_id = 4;
+  string session_id = 5;
+  string service_name = 6;
+  string service_version = 7;
+  
+  int32 total_items = 8;
+  int32 successful_items = 9;
+  int32 failed_items = 10;
+  
+  repeated AuditEvent individual_events = 11;
+}
+
+// Event-specific details
+message EventDetails {
+  oneof details {
+    CodeLookupDetails code_lookup = 1;
+    SearchDetails search = 2;
+    ValidationDetails validation = 3;
+    HierarchyDetails hierarchy = 4;
+    MappingDetails mapping = 5;
+    ErrorDetails error = 6;
+  }
+}
+
+message CodeLookupDetails {
+  string code = 1;
+  string system = 2;
+  bool found = 3;
+  bool include_hierarchy = 4;
+}
+
+message SearchDetails {
+  string query = 1;
+  repeated string systems = 2;
+  int32 max_results = 3;
+  int32 actual_results = 4;
+  bool fuzzy_matching = 5;
+}
+
+message ValidationDetails {
+  repeated string codes = 1;
+  repeated string systems = 2;
+  int32 valid_codes = 3;
+  int32 invalid_codes = 4;
+}
+
+message HierarchyDetails {
+  string code = 1;
+  string system = 2;
+  int32 depth = 3;
+  string direction = 4;
+}
+
+message MappingDetails {
+  string source_code = 1;
+  string source_system = 2;
+  string target_system = 3;
+  string mapping_type = 4;
+  int32 mappings_found = 5;
+}
+
+message ErrorDetails {
+  string error_code = 1;
+  string error_message = 2;
+  string stack_trace = 3;
+  map<string, string> context = 4;
+}
+
+// Request metadata
+message RequestMetadata {
+  string request_id = 1;
+  string client_ip = 2;
+  string user_agent = 3;
+  map<string, string> headers = 4;
+  int32 payload_size_bytes = 5;
+  string endpoint = 6;
+  string method = 7;
+}
+
+// Response metadata
+message ResponseMetadata {
+  int32 status_code = 1;
+  int64 response_time_ms = 2;
+  int32 payload_size_bytes = 3;
+  bool cache_hit = 4;
+  string cache_level = 5; // L1, L2, L3
+}
+
+// Audit response
+message AuditResponse {
+  bool success = 1;
+  string audit_id = 2;
+  string error = 3;
+}
+
+// Audit trail query
+message AuditQuery {
+  // Filter criteria
+  string user_id = 1;
+  string session_id = 2;
+  repeated EventType event_types = 3;
+  int64 start_timestamp = 4;
+  int64 end_timestamp = 5;
+  
+  // Pagination
+  int32 page_size = 6;
+  string page_token = 7;
+  
+  // Sorting
+  enum SortOrder {
+    SORT_ORDER_UNSPECIFIED = 0;
+    ASCENDING = 1;
+    DESCENDING = 2;
+  }
+  SortOrder sort_order = 8;
+}
+
+// Audit trail response
+message AuditTrailResponse {
+  repeated AuditEvent events = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// Compliance reporting structures
+message ComplianceReport {
+  string report_id = 1;
+  int64 generated_at = 2;
+  string period_start = 3; // ISO 8601 date
+  string period_end = 4;   // ISO 8601 date
+  
+  ComplianceMetrics metrics = 5;
+  repeated ComplianceViolation violations = 6;
+}
+
+message ComplianceMetrics {
+  int64 total_events = 1;
+  int64 successful_operations = 2;
+  int64 failed_operations = 3;
+  int64 unauthorized_attempts = 4;
+  int64 unique_users = 5;
+  double average_response_time_ms = 6;
+  map<string, int64> event_counts_by_type = 7;
+}
+
+message ComplianceViolation {
+  string violation_id = 1;
+  string violation_type = 2;
+  string description = 3;
+  int64 timestamp = 4;
+  string user_id = 5;
+  string severity = 6; // LOW, MEDIUM, HIGH, CRITICAL
+  bool resolved = 7;
+}

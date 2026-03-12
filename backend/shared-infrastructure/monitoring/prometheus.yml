@@ -1,0 +1,105 @@
+# Prometheus Configuration for CardioFit Data Stores Monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'cardiofit-platform'
+    environment: 'shared-infrastructure'
+
+rule_files:
+  - "alerts/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Neo4j Metrics
+  - job_name: 'neo4j'
+    static_configs:
+      - targets: ['neo4j:2004']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+    scrape_timeout: 10s
+    params:
+      format: ['prometheus']
+
+  # ClickHouse Metrics
+  - job_name: 'clickhouse'
+    static_configs:
+      - targets: ['clickhouse:8123']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+    scrape_timeout: 10s
+
+  # Redis Metrics (using redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-master:6379', 'redis-replica:6379']
+    scrape_interval: 30s
+    params:
+      target: ['redis://redis-master:6379', 'redis://redis-replica:6379']
+
+  # Elasticsearch Metrics
+  - job_name: 'elasticsearch'
+    static_configs:
+      - targets: ['elasticsearch:9200']
+    scrape_interval: 30s
+    metrics_path: '/_prometheus/metrics'
+    scrape_timeout: 10s
+
+  # Ontotext GraphDB Metrics
+  - job_name: 'graphdb'
+    static_configs:
+      - targets: ['graphdb:7200']
+    scrape_interval: 30s
+    metrics_path: '/rest/monitor/infrastructure'
+    scrape_timeout: 10s
+
+  # Docker Container Metrics (cAdvisor)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Node Exporter for System Metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+
+  # Healthcare-specific custom metrics
+  - job_name: 'cardiofit-custom-metrics'
+    static_configs:
+      - targets: []  # Will be populated by services
+    scrape_interval: 15s
+    honor_labels: true
+    params:
+      module: ['cardiofit_health']
+
+  # Flink Metrics (when running)
+  - job_name: 'flink'
+    static_configs:
+      - targets: ['flink-jobmanager:8081', 'flink-taskmanager:8081']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+    honor_labels: true
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus
+    retention.time: 30d
+    retention.size: 10GB
+    wal-compression: true

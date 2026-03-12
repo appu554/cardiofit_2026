@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 Login</title>
+    <script src="https://cdn.auth0.com/js/lock/12.0.2/lock.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0063b1;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 4px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        .hidden {
+            display: none;
+        }
+        .api-test {
+            margin-top: 20px;
+        }
+        input[type="text"] {
+            padding: 8px;
+            width: 300px;
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Auth0 Login</h1>
+            <p>Use this page to authenticate with Auth0 and test the auth service.</p>
+            <div>
+                <button id="login">Login</button>
+                <button id="logout" class="hidden">Logout</button>
+            </div>
+        </div>
+
+        <div id="user-info" class="card hidden">
+            <h2>User Information</h2>
+            <pre id="profile">Not logged in</pre>
+        </div>
+
+        <div id="token-info" class="card hidden">
+            <h2>Token Information</h2>
+            <button id="get-token">Get Access Token</button>
+            <pre id="token">No token</pre>
+        </div>
+
+        <div id="api-test" class="card hidden">
+            <h2>API Test</h2>
+            <div>
+                <input type="text" id="api-url" value="http://localhost:8000/api/auth/me">
+                <button id="call-api">Call API</button>
+            </div>
+            <pre id="api-response">No response</pre>
+        </div>
+    </div>
+
+    <script>
+        // Auth0 configuration
+        const auth0Domain = 'dev-hfw6wda5wtf8l13c.au.auth0.com';
+        const auth0ClientId = 'qysYE1GswykrgR7OmfrSw475cBPjVRxl';
+        const auth0Audience = 'https://clinical-synthesis-hub-api';
+
+        // Debug information
+        console.log('Auth0 Configuration:');
+        console.log('Domain:', auth0Domain);
+        console.log('Client ID:', auth0ClientId);
+        console.log('Audience:', auth0Audience);
+        console.log('Redirect URL:', window.location.href);
+
+        // Initialize Auth0 Lock
+        const lock = new Auth0Lock(auth0ClientId, auth0Domain, {
+            auth: {
+                redirectUrl: window.location.href,
+                responseType: 'token id_token',
+                audience: auth0Audience,
+                params: {
+                    scope: 'openid profile email'
+                }
+            },
+            languageDictionary: {
+                title: 'Clinical Synthesis Hub'
+            },
+            theme: {
+                logo: 'https://cdn.auth0.com/blog/auth0-brand/assets/img/auth0-shield.svg',
+                primaryColor: '#0078d7'
+            },
+            allowShowPassword: true,
+            allowSignUp: true,
+            allowForgotPassword: true,
+            closable: true,
+            autoclose: false
+        });
+
+        // Add error event listener
+        lock.on('authorization_error', function(error) {
+            console.error('Auth0 Authorization Error:', error);
+            alert('Authorization Error: ' + error.error_description);
+        });
+
+        lock.on('unrecoverable_error', function(error) {
+            console.error('Auth0 Unrecoverable Error:', error);
+            alert('Unrecoverable Error: ' + error.error_description);
+        });
+
+        // DOM elements
+        const loginButton = document.getElementById('login');
+        const logoutButton = document.getElementById('logout');
+        const getTokenButton = document.getElementById('get-token');
+        const callApiButton = document.getElementById('call-api');
+        const userInfoSection = document.getElementById('user-info');
+        const tokenInfoSection = document.getElementById('token-info');
+        const apiTestSection = document.getElementById('api-test');
+        const profileElement = document.getElementById('profile');
+        const tokenElement = document.getElementById('token');
+        const apiResponseElement = document.getElementById('api-response');
+        const apiUrlInput = document.getElementById('api-url');
+
+        // Store tokens and user info
+        let accessToken = '';
+        let idToken = '';
+        let userProfile = null;
+
+        // Event listeners
+        loginButton.addEventListener('click', () => lock.show());
+        logoutButton.addEventListener('click', logout);
+        getTokenButton.addEventListener('click', displayToken);
+        callApiButton.addEventListener('click', callApi);
+
+        // Check if user is authenticated on page load
+        window.addEventListener('load', function() {
+            // Parse the URL hash
+            const hash = window.location.hash;
+            if (hash.includes('access_token=')) {
+                // Extract tokens from URL hash
+                const hashParams = hash.substring(1).split('&').reduce((result, item) => {
+                    const parts = item.split('=');
+                    result[parts[0]] = decodeURIComponent(parts[1]);
+                    return result;
+                }, {});
+
+                accessToken = hashParams.access_token;
+                idToken = hashParams.id_token;
+
+                // Remove hash from URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+                // Get user profile
+                lock.getUserInfo(accessToken, (error, profile) => {
+                    if (error) {
+                        console.error('Error getting user profile:', error);
+                        return;
+                    }
+
+                    userProfile = profile;
+                    updateUI(true);
+                });
+            } else {
+                // Check if we have a stored session
+                lock.checkSession({}, (err, authResult) => {
+                    if (err || !authResult) {
+                        updateUI(false);
+                        return;
+                    }
+
+                    accessToken = authResult.accessToken;
+                    idToken = authResult.idToken;
+
+                    lock.getUserInfo(accessToken, (error, profile) => {
+                        if (error) {
+                            console.error('Error getting user profile:', error);
+                            updateUI(false);
+                            return;
+                        }
+
+                        userProfile = profile;
+                        updateUI(true);
+                    });
+                });
+            }
+        });
+
+        // Auth0 Lock events
+        lock.on('authenticated', function(authResult) {
+            accessToken = authResult.accessToken;
+            idToken = authResult.idToken;
+
+            lock.getUserInfo(accessToken, function(error, profile) {
+                if (error) {
+                    console.error('Error getting user profile:', error);
+                    return;
+                }
+
+                userProfile = profile;
+                updateUI(true);
+            });
+        });
+
+        // Update UI based on authentication state
+        function updateUI(isAuthenticated) {
+            if (isAuthenticated && userProfile) {
+                loginButton.classList.add('hidden');
+                logoutButton.classList.remove('hidden');
+                userInfoSection.classList.remove('hidden');
+                tokenInfoSection.classList.remove('hidden');
+                apiTestSection.classList.remove('hidden');
+
+                profileElement.textContent = JSON.stringify(userProfile, null, 2);
+            } else {
+                loginButton.classList.remove('hidden');
+                logoutButton.classList.add('hidden');
+                userInfoSection.classList.add('hidden');
+                tokenInfoSection.classList.add('hidden');
+                apiTestSection.classList.add('hidden');
+
+                profileElement.textContent = 'Not logged in';
+                tokenElement.textContent = 'No token';
+                apiResponseElement.textContent = 'No response';
+
+                accessToken = '';
+                idToken = '';
+                userProfile = null;
+            }
+        }
+
+        // Display the access token
+        function displayToken() {
+            if (accessToken) {
+                tokenElement.textContent = accessToken;
+            } else {
+                tokenElement.textContent = 'No token available. Please login first.';
+            }
+        }
+
+        // Logout function
+        function logout() {
+            lock.logout({
+                returnTo: window.location.href
+            });
+        }
+
+        // Call API function
+        async function callApi() {
+            if (!accessToken) {
+                apiResponseElement.textContent = 'No token available. Please login first.';
+                return;
+            }
+
+            const apiUrl = apiUrlInput.value;
+
+            try {
+                apiResponseElement.textContent = 'Loading...';
+
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+
+                const data = await response.json();
+                apiResponseElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API Error:', error);
+                apiResponseElement.textContent = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # OntoNext GraphDB - Semantic Triplestore
+  graphdb:
+    image: ontotext/graphdb:10.7.0
+    container_name: kb7-graphdb
+    ports:
+      - "7200:7200"  # GraphDB Workbench
+      - "7300:7300"  # GraphDB Connector
+    volumes:
+      - graphdb-data:/opt/graphdb/home
+      - graphdb-work:/opt/graphdb/work
+      - ./semantic/ontologies:/opt/graphdb/ontologies:ro
+      - ./semantic/config:/opt/graphdb/configs:ro
+    environment:
+      - GDB_HEAP_SIZE=4g
+      - GDB_JAVA_OPTS=-Xmx4g -Xms2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+      - GDB_LICENSE_FILE=/opt/graphdb/configs/graphdb.license
+    networks:
+      - kb7-semantic
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/repositories"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # GraphDB Cluster Node (for HA)
+  graphdb-worker:
+    image: ontotext/graphdb:10.7.0
+    container_name: kb7-graphdb-worker
+    ports:
+      - "7201:7200"
+    volumes:
+      - graphdb-worker-data:/opt/graphdb/home
+      - ./semantic/ontologies:/opt/graphdb/ontologies:ro
+      - ./semantic/config:/opt/graphdb/configs:ro
+    environment:
+      - GDB_HEAP_SIZE=2g
+      - GDB_JAVA_OPTS=-Xmx2g -Xms1g -XX:+UseG1GC
+      - GDB_CLUSTER_ENABLED=true
+      - GDB_CLUSTER_NODE_ID=worker-1
+      - GDB_CLUSTER_MASTER_NODE=graphdb:7300
+    networks:
+      - kb7-semantic
+    depends_on:
+      graphdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # SPARQL Proxy Service
+  sparql-proxy:
+    build:
+      context: .
+      dockerfile: ./semantic/Dockerfile.sparql-proxy
+    container_name: kb7-sparql-proxy
+    ports:
+      - "8095:8095"  # SPARQL endpoint
+    environment:
+      - GRAPHDB_URL=http://graphdb:7200
+      - REPOSITORY_ID=kb7-terminology
+      - LOG_LEVEL=INFO
+      - CACHE_TTL=300
+    networks:
+      - kb7-semantic
+    depends_on:
+      graphdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # RDF4J Server (for additional RDF operations)
+  rdf4j-server:
+    image: eclipse/rdf4j-workbench:4.3.8
+    container_name: kb7-rdf4j
+    ports:
+      - "8082:8080"
+    volumes:
+      - rdf4j-data:/var/rdf4j
+    environment:
+      - JAVA_OPTS=-Xmx1g
+    networks:
+      - kb7-semantic
+    restart: unless-stopped
+
+  # Redis for semantic caching
+  redis-semantic:
+    image: redis:7.2-alpine
+    container_name: kb7-redis-semantic
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-semantic-data:/data
+      - ./semantic/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - kb7-semantic
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ROBOT Tool Service
+  robot-service:
+    build:
+      context: .
+      dockerfile: ./semantic/Dockerfile.robot
+    container_name: kb7-robot
+    volumes:
+      - ./semantic/ontologies:/workspace/ontologies
+      - ./semantic/robot-configs:/workspace/configs:ro
+      - robot-output:/workspace/output
+    environment:
+      - ROBOT_JAVA_ARGS=-Xmx2g
+      - GRAPHDB_URL=http://graphdb:7200
+      - REPOSITORY_ID=kb7-terminology
+    networks:
+      - kb7-semantic
+    depends_on:
+      - graphdb
+    restart: unless-stopped
+
+volumes:
+  graphdb-data:
+    driver: local
+  graphdb-work:
+    driver: local
+  graphdb-worker-data:
+    driver: local
+  rdf4j-data:
+    driver: local
+  redis-semantic-data:
+    driver: local
+  robot-output:
+    driver: local
+
+networks:
+  kb7-semantic:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

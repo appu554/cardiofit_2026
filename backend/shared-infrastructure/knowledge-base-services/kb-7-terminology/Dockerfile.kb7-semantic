@@ -1,0 +1,91 @@
+# KB-7 Semantic Infrastructure Container
+# All-in-one container with GraphDB, SPARQL Proxy, and ROBOT tools
+
+FROM openjdk:17-jdk-slim
+
+# Set environment variables
+ENV GRAPHDB_VERSION=10.7.0
+ENV ROBOT_VERSION=1.9.5
+ENV GRAPHDB_HOME=/opt/graphdb
+ENV ROBOT_HOME=/opt/robot
+ENV GO_VERSION=1.21.0
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    unzip \
+    python3 \
+    python3-pip \
+    redis-server \
+    supervisor \
+    nginx \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go
+RUN wget https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz && \
+    rm go${GO_VERSION}.linux-amd64.tar.gz
+ENV PATH=$PATH:/usr/local/go/bin
+
+# Create application directories
+RUN mkdir -p ${GRAPHDB_HOME} ${ROBOT_HOME} /app/sparql-proxy /app/ontologies /app/config
+
+# Install GraphDB
+WORKDIR ${GRAPHDB_HOME}
+RUN wget https://maven.ontotext.com/repository/owlim-releases/com/ontotext/graphdb/graphdb/${GRAPHDB_VERSION}/graphdb-${GRAPHDB_VERSION}-dist.zip && \
+    unzip graphdb-${GRAPHDB_VERSION}-dist.zip && \
+    mv graphdb-${GRAPHDB_VERSION}/* . && \
+    rm -rf graphdb-${GRAPHDB_VERSION}* && \
+    chmod +x bin/graphdb
+
+# Install ROBOT
+WORKDIR ${ROBOT_HOME}
+RUN wget https://github.com/ontodev/robot/releases/download/v${ROBOT_VERSION}/robot.jar && \
+    wget https://raw.githubusercontent.com/ontodev/robot/master/bin/robot && \
+    chmod +x robot && \
+    ln -s ${ROBOT_HOME}/robot /usr/local/bin/robot
+
+# Install Python dependencies
+RUN pip3 install requests rdflib owlready2 SPARQLWrapper
+
+# Copy application files
+COPY semantic/config/ /app/config/
+COPY semantic/ontologies/ /app/ontologies/
+COPY semantic/sparql-proxy/ /app/sparql-proxy/
+
+# Build SPARQL Proxy
+WORKDIR /app/sparql-proxy
+RUN if [ -f go.mod ]; then go mod download && go build -o sparql-proxy .; fi
+
+# Copy supervisor configuration
+COPY docker/kb7-supervisor.conf /etc/supervisor/conf.d/kb7.conf
+
+# Copy startup script
+COPY docker/kb7-startup.sh /app/startup.sh
+RUN chmod +x /app/startup.sh
+
+# Create Redis configuration
+RUN echo "port 6379" > /etc/redis/redis-kb7.conf && \
+    echo "bind 0.0.0.0" >> /etc/redis/redis-kb7.conf && \
+    echo "maxmemory 512mb" >> /etc/redis/redis-kb7.conf && \
+    echo "maxmemory-policy allkeys-lru" >> /etc/redis/redis-kb7.conf
+
+# Create GraphDB repository configuration
+RUN mkdir -p ${GRAPHDB_HOME}/data && \
+    mkdir -p ${GRAPHDB_HOME}/work && \
+    mkdir -p ${GRAPHDB_HOME}/logs
+
+# Expose ports
+EXPOSE 7200 8095 6379
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:7200/rest/repositories || exit 1
+
+# Set working directory
+WORKDIR /app
+
+# Start services using supervisor
+CMD ["/app/startup.sh"]

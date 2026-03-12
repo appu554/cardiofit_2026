@@ -1,0 +1,932 @@
+# ============================================================
+# COPD EXACERBATION PROTOCOL - ENHANCED CDS-COMPLIANT VERSION
+# ============================================================
+
+protocol_id: "COPD-EXACERBATION-001"
+name: "COPD Exacerbation Management"
+category: "RESPIRATORY"
+specialty: "PULMONARY"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# TRIGGER CRITERIA (Enhanced with AND/OR logic)
+# ============================================================
+trigger_criteria:
+  match_logic: "ANY_OF"  # Any symptom complex triggers protocol
+
+  conditions:
+    - condition_id: "COPD-TRIG-001"
+      description: "Acute respiratory symptom worsening (Anthonisen criteria)"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "copd_diagnosis_confirmed"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "dyspnea_increased"
+              operator: "=="
+              threshold: true
+            - parameter: "sputum_volume_increased"
+              operator: "=="
+              threshold: true
+            - parameter: "sputum_purulence_increased"
+              operator: "=="
+              threshold: true
+
+    - condition_id: "COPD-TRIG-002"
+      description: "Objective respiratory compromise"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "spo2"
+          operator: "<"
+          threshold: 90
+          unit: "%"
+          source: "vital_signs"
+
+        - parameter: "respiratory_rate"
+          operator: ">"
+          threshold: 25
+          unit: "breaths/min"
+          source: "vital_signs"
+
+        - parameter: "accessory_muscle_use"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+    - condition_id: "COPD-TRIG-003"
+      description: "Severe exacerbation indicators"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "spo2"
+          operator: "<"
+          threshold: 85
+          unit: "%"
+
+        - parameter: "altered_mental_status"
+          operator: "=="
+          threshold: true
+
+        - parameter: "respiratory_rate"
+          operator: ">"
+          threshold: 30
+          unit: "breaths/min"
+
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "systolic_bp"
+              operator: "<"
+              threshold: 90
+              unit: "mmHg"
+            - parameter: "poor_perfusion"
+              operator: "=="
+              threshold: true
+
+# ============================================================
+# CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.80
+
+  modifiers:
+    - modifier_id: "COPD-CONF-001"
+      description: "Severe hypoxemia increases confidence and urgency"
+      condition:
+        parameter: "spo2"
+        operator: "<"
+        threshold: 85
+        unit: "%"
+      adjustment: 0.15
+
+    - modifier_id: "COPD-CONF-002"
+      description: "Respiratory acidosis on ABG confirms severe exacerbation"
+      condition:
+        match_logic: "ALL_OF"
+        conditions:
+          - parameter: "arterial_ph"
+            operator: "<"
+            threshold: 7.35
+          - parameter: "paco2"
+            operator: ">"
+            threshold: 45
+            unit: "mmHg"
+      adjustment: 0.12
+
+    - modifier_id: "COPD-CONF-003"
+      description: "Purulent sputum suggests bacterial infection"
+      condition:
+        parameter: "sputum_purulence"
+        operator: "=="
+        threshold: "purulent"
+      adjustment: 0.08
+
+    - modifier_id: "COPD-CONF-004"
+      description: "Previous exacerbations within 1 year"
+      condition:
+        parameter: "exacerbations_past_year"
+        operator: ">="
+        threshold: 2
+      adjustment: 0.05
+
+  activation_threshold: 0.70
+
+# ============================================================
+# EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "Global Initiative for Chronic Obstructive Lung Disease (GOLD) 2024"
+  guideline_version: "GOLD 2024"
+  publication_date: "2024-01"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "COPD-CITE-001"
+      authors: "GOLD Scientific Committee"
+      title: "Global Strategy for Prevention, Diagnosis and Management of COPD"
+      journal: "GOLD Report"
+      year: 2024
+      doi: "10.1007/s00408-024-00657-y"
+
+  last_review_date: "2024-01-01"
+  next_review_date: "2026-01-01"
+
+# ============================================================
+# ACTIONS
+# ============================================================
+actions:
+  # ==========================================================
+  # DIAGNOSTIC ACTIONS
+  # ==========================================================
+  - action_id: "COPD-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 15
+
+    diagnostic:
+      test_name: "Arterial blood gas (ABG) or venous blood gas (VBG)"
+      test_code: "LOINC-24336-0"
+      sample_type: "arterial blood"
+      urgency: "STAT"
+      instructions: "Assess oxygenation, ventilation, and acid-base balance; note FiO2 at time of draw"
+
+  - action_id: "COPD-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "Chest X-ray (portable)"
+      urgency: "STAT"
+      instructions: "Exclude pneumonia, pneumothorax, heart failure, pleural effusion"
+
+  - action_id: "COPD-ACT-003"
+    type: "DIAGNOSTIC"
+    priority: "HIGH"
+    sequence_number: 3
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "CBC, BMP, procalcitonin"
+      urgency: "STAT"
+      instructions: "Assess infection, electrolytes, renal function; procalcitonin >0.25 ng/mL suggests bacterial infection"
+
+  # ==========================================================
+  # OXYGEN THERAPY
+  # ==========================================================
+  - action_id: "COPD-ACT-004"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 5
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "MILD_HYPOXEMIA"
+          description: "Controlled oxygen for mild hypoxemia"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "spo2"
+                operator: "<"
+                threshold: 88
+                unit: "%"
+              - parameter: "spo2"
+                operator: ">="
+                threshold: 85
+                unit: "%"
+
+          primary_medication:
+            name: "Supplemental Oxygen - Nasal Cannula"
+            dose: "1-2"
+            dose_unit: "L/min"
+            route: "Inhalation"
+            frequency: "Continuous"
+            administration_instructions: "Start 1-2 L/min; titrate to SpO2 88-92%; AVOID >92% to prevent hypercapnia"
+
+        - criteria_id: "MODERATE_HYPOXEMIA"
+          description: "Venturi mask for precise FiO2 control"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "spo2"
+                operator: "<"
+                threshold: 85
+                unit: "%"
+              - parameter: "spo2"
+                operator: ">="
+                threshold: 80
+                unit: "%"
+
+          primary_medication:
+            name: "Supplemental Oxygen - Venturi Mask"
+            dose: "24-28%"
+            dose_unit: "FiO2"
+            route: "Inhalation"
+            frequency: "Continuous"
+            administration_instructions: "Venturi mask 24-28% FiO2; target SpO2 88-92%; reassess ABG in 30-60 min"
+
+        - criteria_id: "SEVERE_HYPOXEMIA"
+          description: "High-flow oxygen transiently for severe hypoxemia"
+
+          condition:
+            parameter: "spo2"
+            operator: "<"
+            threshold: 80
+            unit: "%"
+
+          primary_medication:
+            name: "High-Flow Oxygen - Non-Rebreather (Temporary)"
+            dose: "10-15"
+            dose_unit: "L/min"
+            route: "Inhalation"
+            frequency: "Transient use only"
+            administration_instructions: "Use transiently; reassess ABG within 15 min; prepare for NIV if PaCO2 rises; titrate down ASAP"
+            indication: "Severe hypoxemia requiring immediate oxygen; transition to controlled therapy"
+
+  # ==========================================================
+  # BRONCHODILATORS
+  # ==========================================================
+  - action_id: "COPD-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 15
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "STANDARD_BRONCHODILATOR"
+          description: "Combination SABA + SAMA first-line"
+
+          condition:
+            parameter: "bronchodilator_allergy"
+            operator: "=="
+            threshold: false
+
+          primary_medication:
+            name: "Albuterol + Ipratropium (DuoNeb)"
+            generic_name: "SABA + SAMA combination"
+            dose: "Albuterol 2.5 mg + Ipratropium 0.5 mg"
+            dose_unit: "mg"
+            route: "Inhalation (nebulized)"
+            frequency: "Every 4 hours initially (may increase to q2-4h for first 24 hours if severe)"
+            administration_instructions: "Nebulize with 3-4 mL normal saline over 10-15 min; or 4-8 puffs MDI via spacer"
+
+        - criteria_id: "SEVERE_TACHYCARDIA"
+          description: "Ipratropium alone if severe tachycardia"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "heart_rate"
+                operator: ">"
+                threshold: 130
+                unit: "bpm"
+              - parameter: "cardiac_arrhythmia"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Ipratropium (Atrovent)"
+            dose: "0.5"
+            dose_unit: "mg"
+            route: "Inhalation (nebulized)"
+            frequency: "Every 6 hours"
+            indication: "Severe tachycardia - avoid beta-agonist"
+            administration_instructions: "Ipratropium alone; monitor cardiac status"
+
+  # ==========================================================
+  # SYSTEMIC CORTICOSTEROIDS
+  # ==========================================================
+  - action_id: "COPD-ACT-006"
+    type: "MEDICATION"
+    priority: "HIGH"
+    sequence_number: 6
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "ORAL_STEROID_PREFERRED"
+          description: "Oral prednisone for patients tolerating PO"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "npo_status"
+                operator: "=="
+                threshold: false
+              - parameter: "severe_respiratory_distress"
+                operator: "=="
+                threshold: false
+
+          primary_medication:
+            name: "Prednisone"
+            dose: "40"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Once daily"
+            duration: "5 days (no taper needed)"
+            administration_instructions: "Give with food to reduce GI upset; 5-day course equivalent to 14-day course"
+
+        - criteria_id: "IV_STEROID_SEVERE"
+          description: "IV methylprednisolone for severe exacerbation"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "npo_status"
+                operator: "=="
+                threshold: true
+              - parameter: "severe_respiratory_distress"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Methylprednisolone"
+            dose: "125"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "Initially, then 40 mg IV q6h"
+            duration: "Until able to transition to oral, then complete 5-day course"
+            administration_instructions: "125 mg IV initially, then 40 mg IV q6h; transition to PO prednisone when able"
+
+  # ==========================================================
+  # ANTIBIOTICS
+  # ==========================================================
+  - action_id: "COPD-ACT-007"
+    type: "MEDICATION"
+    priority: "HIGH"
+    sequence_number: 7
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 120
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "NO_RISK_FACTORS"
+          description: "First-line antibiotic for uncomplicated exacerbation"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - match_logic: "ANY_OF"
+                conditions:
+                  - parameter: "sputum_purulence"
+                    operator: "=="
+                    threshold: "purulent"
+                  - parameter: "procalcitonin"
+                    operator: ">="
+                    threshold: 0.25
+                    unit: "ng/mL"
+
+              - parameter: "recent_antibiotic_use"
+                operator: "=="
+                threshold: false
+
+              - parameter: "exacerbations_past_year"
+                operator: "<"
+                threshold: 2
+
+          primary_medication:
+            name: "Azithromycin"
+            dose: "500"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Once daily"
+            duration: "5 days"
+            administration_instructions: "Azithromycin 500 mg PO daily x 5 days; covers typical pathogens (H. influenzae, S. pneumoniae, M. catarrhalis)"
+
+          alternative_medication:
+            name: "Doxycycline"
+            dose: "100"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Twice daily"
+            duration: "5-7 days"
+            indication: "Alternative for macrolide allergy or QT prolongation concern"
+
+        - criteria_id: "RISK_FACTORS_PRESENT"
+          description: "Broader coverage for high-risk patients"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "recent_antibiotic_use"
+                operator: "=="
+                threshold: true
+
+              - parameter: "exacerbations_past_year"
+                operator: ">="
+                threshold: 2
+
+              - parameter: "fev1_percent_predicted"
+                operator: "<"
+                threshold: 50
+
+          primary_medication:
+            name: "Amoxicillin-Clavulanate"
+            dose: "875/125"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Twice daily"
+            duration: "5-7 days"
+            administration_instructions: "Amox-clav 875/125 mg PO BID x 5-7 days; with food to reduce GI upset"
+
+          alternative_medication:
+            name: "Levofloxacin"
+            dose: "750"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Once daily"
+            duration: "5 days"
+            indication: "Alternative for beta-lactam allergy or broader coverage needed"
+
+        - criteria_id: "SEVERE_HOSPITALIZED"
+          description: "IV antibiotics for severe exacerbation requiring hospitalization"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "icu_admission"
+                operator: "=="
+                threshold: true
+
+              - parameter: "niv_required"
+                operator: "=="
+                threshold: true
+
+              - parameter: "severe_respiratory_failure"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Levofloxacin IV"
+            dose: "750"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "Once daily"
+            duration: "5 days (transition to PO when able)"
+            administration_instructions: "Levofloxacin 750 mg IV daily; covers hospital-acquired pathogens; transition to PO when clinically improved"
+
+          alternative_medication:
+            name: "Ceftriaxone + Azithromycin"
+            dose: "Ceftriaxone 1 g IV daily + Azithromycin 500 mg IV/PO daily"
+            dose_unit: "g/mg"
+            route: "IV/PO"
+            frequency: "Once daily"
+            duration: "5-7 days"
+            indication: "Broader coverage for severe exacerbation; covers pseudomonas risk"
+
+  # ==========================================================
+  # NON-INVASIVE VENTILATION (NIV)
+  # ==========================================================
+  - action_id: "COPD-ACT-008"
+    type: "PROCEDURE"
+    priority: "CRITICAL"
+    sequence_number: 8
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    procedure:
+      procedure_name: "Non-Invasive Positive Pressure Ventilation (BiPAP)"
+      indication: "Persistent respiratory acidosis (pH <7.35, PaCO2 >45) despite optimal medical therapy"
+      urgency: "URGENT"
+      consent_required: false
+      estimated_duration_minutes: 120
+      location: "ICU or monitored unit"
+
+  # ==========================================================
+  # MONITORING
+  # ==========================================================
+  - action_id: "COPD-ACT-009"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "HIGH"
+    sequence_number: 9
+
+    timing:
+      window: "IMMEDIATE"
+
+    clinical_assessment:
+      assessment_type: "Continuous monitoring and reassessment"
+      frequency: "Continuous SpO2; vitals q15-30min initially; ABG 30-60 min after oxygen changes"
+      specific_parameters:
+        - "SpO2 (target 88-92%)"
+        - "Respiratory rate and work of breathing"
+        - "Heart rate and blood pressure"
+        - "Mental status"
+
+# ============================================================
+# TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "COPD-TIME-001"
+    bundle_name: "Hour-1 Initial Management"
+    description: "Critical interventions within 1 hour"
+    offset_minutes: 60
+    critical: true
+
+    required_actions:
+      - action_id: "COPD-ACT-001"
+        description: "ABG obtained"
+      - action_id: "COPD-ACT-004"
+        description: "Oxygen therapy initiated"
+      - action_id: "COPD-ACT-005"
+        description: "Bronchodilators administered"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 30
+      critical_alert_at_minutes: 0
+      missed_deadline_message: "Hour-1 COPD exacerbation bundle not completed"
+
+# ============================================================
+# CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "COPD-CONTRA-001"
+    condition_description: "QT prolongation for azithromycin"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "qtc_interval"
+          operator: ">"
+          threshold: 500
+          unit: "ms"
+        - parameter: "qt_prolonging_medications"
+          operator: "=="
+          threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "COPD-ACT-007"
+
+    alternative_action:
+      action_id: "COPD-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "Amoxicillin-Clavulanate OR Doxycycline"
+        dose: "875/125 mg BID OR 100 mg BID"
+        route: "PO"
+        frequency: "BID"
+      rationale: "Avoid azithromycin if QTc >500 ms; risk of torsades de pointes"
+
+  - contraindication_id: "COPD-CONTRA-002"
+    condition_description: "Untreated pneumothorax for NIV"
+
+    trigger_condition:
+      parameter: "pneumothorax_present"
+      operator: "=="
+      threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "COPD-ACT-008"
+
+    alternative_action:
+      action_id: "COPD-ALT-002"
+      type: "PROCEDURE"
+      medication:
+        name: "Chest tube placement BEFORE NIV"
+      rationale: "Positive pressure ventilation can worsen pneumothorax; chest tube required first"
+
+# ============================================================
+# MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "COPD-MON-001"
+    parameter: "spo2"
+
+    target_range:
+      min: 88
+      max: 92
+      unit: "%"
+
+    frequency: "continuous"
+    duration_hours: 24
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "spo2"
+          operator: "<"
+          threshold: 85
+        - parameter: "spo2"
+          operator: ">"
+          threshold: 92
+
+  - monitoring_id: "COPD-MON-002"
+    parameter: "arterial_blood_gas"
+
+    target_range:
+      min: null
+      max: null
+      unit: null
+
+    frequency: "30-60 min after oxygen initiation, then q4-6h if on NIV"
+
+  - monitoring_id: "COPD-MON-003"
+    parameter: "respiratory_rate"
+
+    target_range:
+      min: null
+      max: 25
+      unit: "breaths/min"
+
+    frequency: "q15-30min initially, then hourly"
+
+# ============================================================
+# SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "ELDERLY"
+    description: "Patients ≥65 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "COPD-ACT-006"
+        modification_type: "CAUTION"
+        rationale: "Increased risk of steroid-induced hyperglycemia, delirium"
+
+        new_parameters:
+          monitoring: "Monitor blood glucose daily; assess mental status closely; lower threshold for complications"
+
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients with COPD exacerbation"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "COPD-ACT-007"
+        modification_type: "CONTRAINDICATION"
+        rationale: "Doxycycline contraindicated in pregnancy (Category D)"
+
+        contraindications:
+          - "Doxycycline (Category D - tooth discoloration, bone growth issues)"
+
+        alternative_medication:
+          name: "Amoxicillin-Clavulanate OR Azithromycin"
+          dose: "875/125 mg BID OR 500 mg daily"
+          route: "PO"
+          frequency: "BID or daily"
+          pregnancy_category: "B (Amox-clav), B (Azithromycin)"
+
+  - population_id: "RENAL_IMPAIRMENT"
+    description: "Chronic kidney disease (CrCl <50 mL/min)"
+
+    inclusion_criteria:
+      parameter: "creatinine_clearance"
+      operator: "<"
+      threshold: 50
+      unit: "mL/min"
+
+    modifications:
+      - action_id: "COPD-ACT-007"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Fluoroquinolone dose adjustment for renal impairment"
+
+        new_parameters:
+          dose_adjustment: "Levofloxacin: 750 mg loading dose, then 500 mg daily if CrCl 20-50; no adjustment for azithromycin"
+
+  - population_id: "HEART_FAILURE"
+    description: "Concurrent decompensated heart failure"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "ejection_fraction"
+          operator: "<"
+          threshold: 40
+        - parameter: "heart_failure_decompensation"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "COPD-ACT-004"
+        modification_type: "CAUTION"
+        rationale: "Differentiate COPD from cardiac pulmonary edema; may need diuretics"
+
+        new_parameters:
+          monitoring: "BNP/NT-proBNP; echocardiogram; may need IV diuretics if pulmonary edema present"
+
+# ============================================================
+# ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "COPD-ESC-001"
+    description: "ICU transfer for severe respiratory acidosis or NIV failure"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "arterial_ph"
+              operator: "<"
+              threshold: 7.30
+            - parameter: "paco2"
+              operator: ">"
+              threshold: 60
+              unit: "mmHg"
+
+        - parameter: "niv_failure"
+          operator: "=="
+          threshold: true
+
+        - parameter: "altered_mental_status"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "ICU_TRANSFER"
+      urgency: "IMMEDIATE"
+      rationale: "Severe acidosis or NIV failure requires ICU-level care for potential intubation"
+
+      required_interventions:
+        - "ICU bed and continuous monitoring"
+        - "NIV initiation or escalation"
+        - "Prepare for intubation if NIV fails"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "ICU admission for severe COPD exacerbation and potential mechanical ventilation"
+
+  - rule_id: "COPD-ESC-002"
+    description: "Pulmonary consultation for complex cases"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "no_improvement_after_hours"
+          operator: ">="
+          threshold: 24
+
+        - parameter: "recurrent_exacerbations"
+          operator: ">="
+          threshold: 3
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Complex COPD or recurrent exacerbations need pulmonology input"
+
+      specialist_consultation:
+        - specialty: "PULMONARY"
+          urgency: "URGENT"
+          specific_question: "Optimize COPD management and prevent future exacerbations"
+
+# ============================================================
+# DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "COPD-DE-ESC-001"
+    description: "Wean NIV when clinical improvement"
+
+    conditions:
+      - parameter: "arterial_ph"
+        operator: ">"
+        threshold: 7.35
+
+      - parameter: "paco2"
+        operator: "<="
+        threshold: 50
+        unit: "mmHg"
+
+      - parameter: "respiratory_rate"
+        operator: "<"
+        threshold: 25
+        unit: "breaths/min"
+
+      - parameter: "patient_comfortable"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Wean NIV gradually; trial periods off NIV; transition to supplemental oxygen"
+      rationale: "Clinical improvement allows NIV de-escalation"
+
+# ============================================================
+# OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "COPD-OUT-001"
+      metric: "clinical_improvement"
+      target: "Improved dyspnea, respiratory rate <25 within 24-72 hours"
+      benchmark_source: "GOLD 2024"
+
+    - outcome_id: "COPD-OUT-002"
+      metric: "niv_success_rate"
+      target: ">80% avoid intubation"
+      benchmark_source: "GOLD 2024"
+
+  process_measures:
+    - measure_id: "COPD-PROC-001"
+      description: "Time to bronchodilator administration"
+      target: "<15 minutes from recognition"
+
+  balancing_measures:
+    - measure_id: "COPD-BAL-001"
+      description: "Hypercapnia from excess oxygen"
+      target: "<10% develop worsening hypercapnia"
+
+# ============================================================
+# METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: false
+  estimated_implementation_time_minutes: 30
+  review_cycle_months: 12
+
+  tags:
+    - "respiratory-emergency"
+    - "niv-capable"
+    - "antibiotic-stewardship"
+
+  related_protocols:
+    - protocol_id: "ASTHMA-EXACERBATION-001"
+      relationship: "ALTERNATIVE_TO"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Enhanced to CDS-compliant format"
+        - "Added confidence scoring and medication_selection"
+        - "Added special populations and escalation rules"
+
+# ============================================================
+# END OF COPD EXACERBATION PROTOCOL
+# ============================================================

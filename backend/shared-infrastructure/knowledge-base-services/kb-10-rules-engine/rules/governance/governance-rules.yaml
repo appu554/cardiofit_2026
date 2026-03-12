@@ -1,0 +1,257 @@
+type: rules
+version: "1.0.0"
+description: Governance and approval workflow rules
+
+rules:
+  # High-Risk Medication Approval
+  - id: VALIDATION-HIGH-RISK-MED
+    name: High-Risk Medication Validation
+    description: Requires approval for high-risk medication orders
+    type: VALIDATION
+    category: GOVERNANCE
+    severity: HIGH
+    status: ACTIVE
+    priority: 5
+
+    conditions:
+      - field: medications
+        operator: IN
+        value:
+          - warfarin
+          - heparin
+          - insulin
+          - chemotherapy
+          - opioids
+
+    actions:
+      - type: ALERT
+        message: "High-risk medication requires pharmacist verification"
+        priority: HIGH
+
+      - type: ESCALATE
+        parameters:
+          level: PHARMACIST
+          urgency: ROUTINE
+        recipients:
+          - clinical_pharmacist
+        channel: WORKLIST
+
+    evidence:
+      level: HIGH
+      source: "ISMP High-Alert Medications List"
+
+    tags:
+      - medication-safety
+      - high-risk
+      - approval
+      - pharmacy
+
+  # Controlled Substance Documentation
+  - id: VALIDATION-CONTROLLED-SUBSTANCE
+    name: Controlled Substance Documentation
+    description: Ensures controlled substance orders have required documentation
+    type: VALIDATION
+    category: GOVERNANCE
+    severity: HIGH
+    status: ACTIVE
+    priority: 3
+
+    conditions:
+      - field: medications.drug_class
+        operator: IN
+        value:
+          - opioid
+          - benzodiazepine
+          - stimulant
+          - schedule_ii
+
+    actions:
+      - type: ALERT
+        message: "Controlled substance requires pain contract and PDMP check"
+        priority: HIGH
+
+      - type: RECOMMEND
+        message: "Verify PDMP check completed, pain contract signed, and indication documented"
+
+    evidence:
+      level: HIGH
+      source: "DEA Controlled Substance Regulations"
+
+    tags:
+      - controlled-substance
+      - opioid
+      - compliance
+      - documentation
+
+  # Elderly High-Risk Medication Warning
+  - id: VALIDATION-BEERS-CRITERIA
+    name: Beers Criteria Medication Warning
+    description: Flags potentially inappropriate medications for elderly patients
+    type: VALIDATION
+    category: GOVERNANCE
+    severity: MODERATE
+    status: ACTIVE
+    priority: 10
+
+    conditions:
+      - field: patient.age
+        operator: AGE_GT
+        value: 65
+      - field: medications
+        operator: IN
+        value:
+          - diphenhydramine
+          - amitriptyline
+          - diazepam
+          - alprazolam
+          - cyclobenzaprine
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "Beers Criteria: Potentially inappropriate medication for elderly patient"
+        priority: MODERATE
+
+      - type: RECOMMEND
+        message: "Consider alternative medication or dose reduction per AGS Beers Criteria"
+
+    evidence:
+      level: HIGH
+      source: "AGS Beers Criteria 2023"
+
+    tags:
+      - beers-criteria
+      - geriatrics
+      - medication-safety
+      - polypharmacy
+
+  # Renal Dose Adjustment Required
+  - id: VALIDATION-RENAL-DOSE
+    name: Renal Dose Adjustment Validation
+    description: Flags medications requiring renal dose adjustment
+    type: VALIDATION
+    category: GOVERNANCE
+    severity: HIGH
+    status: ACTIVE
+    priority: 8
+
+    conditions:
+      - field: labs.egfr.value
+        operator: LT
+        value: 30
+      - field: medications
+        operator: IN
+        value:
+          - metformin
+          - gabapentin
+          - enoxaparin
+          - vancomycin
+          - acyclovir
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "Renal impairment: Medication requires dose adjustment for eGFR {{.Context.Labs.egfr.value}}"
+        priority: HIGH
+
+      - type: ESCALATE
+        parameters:
+          level: PHARMACIST
+        recipients:
+          - clinical_pharmacist
+
+      - type: RECOMMEND
+        message: "Consult renal dosing guidelines or pharmacy"
+
+    evidence:
+      level: HIGH
+      source: "Lexicomp Renal Dosing Guidelines"
+
+    tags:
+      - renal-dosing
+      - ckd
+      - medication-safety
+      - pharmacy
+
+  # Critical Result Acknowledgment
+  - id: ESCALATION-CRITICAL-RESULT-ACK
+    name: Critical Result Acknowledgment Escalation
+    description: Escalates unacknowledged critical lab results
+    type: ESCALATION
+    category: GOVERNANCE
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: labs
+        operator: EXISTS
+      - field: custom_data.critical_result_acknowledged
+        operator: EQ
+        value: false
+      - field: custom_data.critical_result_time
+        operator: BEFORE_DAYS
+        value: 0.02  # ~30 minutes
+
+    actions:
+      - type: ESCALATE
+        message: "CRITICAL: Unacknowledged critical lab result requires immediate attention"
+        parameters:
+          level: ATTENDING_PHYSICIAN
+          urgency: STAT
+        recipients:
+          - attending_physician
+          - charge_nurse
+          - medical_director
+        channel: PAGER
+
+    evidence:
+      level: HIGH
+      source: "Joint Commission NPSG"
+
+    tags:
+      - critical-result
+      - escalation
+      - compliance
+      - npsg
+
+  # Documentation Completeness Check
+  - id: VALIDATION-DOCUMENTATION-COMPLETE
+    name: Documentation Completeness Validation
+    description: Validates required documentation is complete before discharge
+    type: VALIDATION
+    category: GOVERNANCE
+    severity: MODERATE
+    status: ACTIVE
+    priority: 15
+
+    conditions:
+      - field: encounter.status
+        operator: EQ
+        value: discharge_pending
+      - field: custom_data.discharge_summary_complete
+        operator: NEQ
+        value: true
+
+    actions:
+      - type: ALERT
+        message: "Discharge blocked: Required documentation incomplete"
+        priority: HIGH
+
+      - type: NOTIFY
+        message: "Discharge summary and medication reconciliation required before discharge"
+        recipients:
+          - attending_physician
+          - case_manager
+
+    evidence:
+      level: MODERATE
+      source: "CMS Discharge Planning Requirements"
+
+    tags:
+      - documentation
+      - discharge
+      - compliance
+      - case-management

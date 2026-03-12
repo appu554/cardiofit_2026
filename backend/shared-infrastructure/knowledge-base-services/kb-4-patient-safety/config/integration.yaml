@@ -1,0 +1,413 @@
+# KB-4 Patient Safety Service Integration Configuration
+
+# Service Integration Framework Configuration
+framework:
+  health_check_interval: 30s
+  circuit_breaker_timeout: 60s
+  retry_max_attempts: 3
+  retry_base_delay: 100ms
+  service_discovery_ttl: 300s
+  load_balancer_strategy: "adaptive"
+  metrics_enabled: true
+  tracing_enabled: true
+
+# Integration Service HTTP Configuration
+http:
+  port: 8096
+  host: "0.0.0.0"
+  read_timeout: 30s
+  write_timeout: 30s
+  idle_timeout: 60s
+  enable_metrics: true
+  enable_profiling: false
+  cors_enabled: true
+
+# Mesh Configuration
+mesh:
+  enable_tracing: true
+  enable_metrics: true
+  enable_circuit_breakers: true
+  enable_retries: true
+  enable_load_balancing: true
+  enable_health_checks: true
+  orchestration_enabled: true
+  
+  # Service Dependencies
+  service_dependency_map:
+    kb4-cache-service:
+      - redis
+      - database
+    kb4-signal-service:
+      - database
+      - cache
+    kb4-rules-service:
+      - database
+      - cache
+    kb4-override-service:
+      - database
+      - auth
+    kb4-graphql-service:
+      - cache
+      - signal
+      - rules
+    kb4-grpc-service:
+      - cache
+      - signal
+      - rules
+
+  # Failover Policy
+  failover_policy:
+    enabled: true
+    max_failover_attempts: 3
+    failover_timeout: 30s
+    preferred_regions: []
+    cross_region_enabled: false
+    health_threshold: 0.7
+
+  # Security Policy
+  security_policy:
+    tls_enabled: true
+    mutual_tls: false
+    authentication_required: true
+    allowed_services: []
+    blocked_services: []
+    rate_limiting:
+      kb4-override-service: 100  # requests per minute
+      default: 1000
+
+# Component Configuration
+components:
+  
+  # Cache Component
+  cache_config:
+    memory_limit_mb: 512
+    redis_address: "localhost:6379"
+    database_dsn: "postgres://user:pass@localhost:5432/kb4_safety"
+    ttl_default: 30m
+    enable_metrics: true
+    
+  # Override Component
+  override_config:
+    database_dsn: "postgres://user:pass@localhost:5432/kb4_safety"
+    l1_daily_limit: 50
+    l2_daily_limit: 20
+    l3_daily_limit: 5
+    l1_concurrent_limit: 10
+    l2_concurrent_limit: 5
+    l3_concurrent_limit: 2
+    audit_retention: 168h  # 7 days
+    enable_metrics: true
+    
+  # Rules Component
+  rules_config:
+    rule_directory: "/app/rules"
+    cache_size: 1000
+    compilation_timeout: 30s
+    enable_metrics: true
+    
+  # Signal Component
+  signal_config:
+    database_dsn: "postgres://user:pass@localhost:5432/kb4_safety"
+    scan_interval: 5m
+    batch_size: 1000
+    enable_metrics: true
+
+# Circuit Breaker Configuration per Service Type
+circuit_breakers:
+  cache:
+    failure_threshold: 5
+    success_threshold: 3
+    timeout: 30s
+    half_open_requests: 3
+    reset_timeout: 60s
+    max_concurrent_requests: 100
+    
+  signal:
+    failure_threshold: 3
+    success_threshold: 2
+    timeout: 45s
+    half_open_requests: 2
+    reset_timeout: 90s
+    max_concurrent_requests: 50
+    
+  rules:
+    failure_threshold: 2
+    success_threshold: 2
+    timeout: 60s
+    half_open_requests: 1
+    reset_timeout: 120s
+    max_concurrent_requests: 20
+    
+  override:
+    failure_threshold: 1
+    success_threshold: 3
+    timeout: 30s
+    half_open_requests: 1
+    reset_timeout: 300s
+    max_concurrent_requests: 10
+    
+  auth:
+    failure_threshold: 2
+    success_threshold: 3
+    timeout: 30s
+    half_open_requests: 2
+    reset_timeout: 60s
+    max_concurrent_requests: 200
+    
+  database:
+    failure_threshold: 10
+    success_threshold: 5
+    timeout: 10s
+    half_open_requests: 5
+    reset_timeout: 30s
+    max_concurrent_requests: 500
+    
+  graphql:
+    failure_threshold: 5
+    success_threshold: 3
+    timeout: 30s
+    half_open_requests: 3
+    reset_timeout: 60s
+    max_concurrent_requests: 100
+    
+  grpc:
+    failure_threshold: 3
+    success_threshold: 2
+    timeout: 45s
+    half_open_requests: 2
+    reset_timeout: 90s
+    max_concurrent_requests: 75
+
+# Retry Configuration per Service Type
+retry_strategies:
+  cache:
+    max_attempts: 3
+    base_delay: 100ms
+    max_delay: 2s
+    backoff_type: "exponential"
+    jitter_enabled: true
+    jitter_max_percent: 0.1
+    retryable_errors:
+      - "timeout"
+      - "connection_error"
+      - "temporary_failure"
+      
+  signal:
+    max_attempts: 4
+    base_delay: 200ms
+    max_delay: 5s
+    backoff_type: "exponential"
+    jitter_enabled: true
+    jitter_max_percent: 0.15
+    retryable_errors:
+      - "timeout"
+      - "rate_limit"
+      - "temporary_failure"
+      
+  rules:
+    max_attempts: 5
+    base_delay: 300ms
+    max_delay: 10s
+    backoff_type: "exponential"
+    jitter_enabled: true
+    jitter_max_percent: 0.2
+    retryable_errors:
+      - "timeout"
+      - "compilation_error"
+      - "temporary_failure"
+      
+  override:
+    max_attempts: 2
+    base_delay: 50ms
+    max_delay: 500ms
+    backoff_type: "linear"
+    jitter_enabled: false
+    jitter_max_percent: 0
+    retryable_errors:
+      - "timeout"
+      
+  auth:
+    max_attempts: 3
+    base_delay: 150ms
+    max_delay: 3s
+    backoff_type: "exponential"
+    jitter_enabled: true
+    jitter_max_percent: 0.1
+    retryable_errors:
+      - "timeout"
+      - "rate_limit"
+      - "temporary_failure"
+
+# Load Balancer Configuration
+load_balancer:
+  default_strategy: "adaptive"
+  health_check_integration: true
+  latency_tracking: true
+  
+  # Service-specific strategies
+  service_strategies:
+    kb4-override-service: "health_first"    # Safety-critical
+    kb4-cache-service: "latency_based"      # Performance-critical
+    kb4-signal-service: "round_robin"       # Balanced distribution
+    kb4-rules-service: "weighted_random"    # Load-aware distribution
+
+  # Adaptive Thresholds
+  adaptive_thresholds:
+    latency_threshold: 500ms
+    error_rate_threshold: 0.1
+    load_threshold: 0.8
+    adaptation_interval: 5m
+
+# Health Check Configuration
+health_checks:
+  global_interval: 30s
+  
+  # Per-service health check configuration
+  services:
+    kb4-cache-service:
+      endpoint: "/health"
+      interval: 20s
+      timeout: 5s
+      failure_threshold: 3
+      success_threshold: 2
+      
+    kb4-signal-service:
+      endpoint: "/health"
+      interval: 30s
+      timeout: 10s
+      failure_threshold: 3
+      success_threshold: 2
+      
+    kb4-rules-service:
+      endpoint: "/health"
+      interval: 30s
+      timeout: 15s
+      failure_threshold: 3
+      success_threshold: 2
+      
+    kb4-override-service:
+      endpoint: "/health"
+      interval: 15s  # More frequent for critical service
+      timeout: 5s
+      failure_threshold: 2
+      success_threshold: 3
+      
+    kb4-graphql-service:
+      endpoint: "/health"
+      interval: 30s
+      timeout: 10s
+      failure_threshold: 3
+      success_threshold: 2
+      
+    kb4-grpc-service:
+      endpoint: "/health"
+      interval: 30s
+      timeout: 10s
+      failure_threshold: 3
+      success_threshold: 2
+
+# Orchestration Rules
+orchestration_rules:
+  - rule_id: "high-error-rate-isolation"
+    name: "High Error Rate Isolation"
+    description: "Isolate services with high error rates"
+    trigger_services: ["*"]
+    conditions:
+      - type: "error_rate"
+        field: "error_rate"
+        operator: ">"
+        value: 0.5
+    actions:
+      - type: "circuit_breaker"
+        target: "self"
+        parameters:
+          action: "trip"
+        timeout: 30s
+      - type: "notify"
+        target: "alerting"
+        parameters:
+          severity: "critical"
+          message: "Service isolated due to high error rate"
+    priority: 10
+    enabled: true
+    
+  - rule_id: "service-dependency-failover"
+    name: "Service Dependency Failover"
+    description: "Handle failures in dependent services"
+    trigger_services:
+      - "kb4-cache-service"
+      - "kb4-signal-service"
+      - "kb4-rules-service"
+    conditions:
+      - type: "health"
+        field: "status"
+        operator: "=="
+        value: "unhealthy"
+    actions:
+      - type: "failover"
+        target: "dependent_services"
+        parameters:
+          strategy: "degraded_mode"
+        timeout: 60s
+    priority: 8
+    enabled: true
+    
+  - rule_id: "override-service-protection"
+    name: "Override Service Protection"
+    description: "Special protection for critical override service"
+    trigger_services: ["kb4-override-service"]
+    conditions:
+      - type: "latency"
+        field: "average_latency"
+        operator: ">"
+        value: "2s"
+    actions:
+      - type: "notify"
+        target: "emergency_alerting"
+        parameters:
+          severity: "critical"
+          message: "Override service experiencing high latency"
+          escalate: true
+    priority: 10
+    enabled: true
+    
+  - rule_id: "adaptive-load-balancing"
+    name: "Adaptive Load Balancing"
+    description: "Adjust load balancing strategies based on performance"
+    trigger_services: ["*"]
+    conditions:
+      - type: "latency"
+        field: "average_latency"
+        operator: ">"
+        value: "1s"
+    actions:
+      - type: "adjust_load_balancing"
+        target: "load_balancer"
+        parameters:
+          strategy: "latency_based"
+    priority: 5
+    enabled: true
+
+# Monitoring Configuration
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    metrics_path: "/metrics"
+    
+  jaeger:
+    enabled: false
+    agent_host: "localhost"
+    agent_port: 6831
+    
+  logging:
+    level: "info"
+    format: "json"
+    output: "stdout"
+
+# Development/Testing Configuration
+development:
+  mock_external_services: false
+  enable_debug_endpoints: false
+  disable_authentication: false
+  log_all_requests: true

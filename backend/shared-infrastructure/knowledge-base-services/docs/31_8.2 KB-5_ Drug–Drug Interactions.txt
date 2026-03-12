@@ -1,0 +1,494 @@
+﻿Absolutely—here’s a production-ready, **Final Proposal for KB-5 (Drug–Drug Interactions)** that **reviews and strengthens your draft** while keeping perfect fit with our GO Orchestrator, Safety Gateway, Unified ETL, and KB-7 (Terminology) stack.
+
+
+I’ve kept your excellent core (purpose, scope, PostgreSQL + materialized views, gRPC contract, Redis caching, governance, SLOs) and expanded it with: (1) richer clinical semantics (route/dose/context, PGx, food/herbal, class/class rules, exception lists), (2) stricter provenance/versioning with Evidence Envelopes, (3) high-throughput data plane mechanics (atomic, double-buffered datasets; hot/warm caches), (4) harmonization & institutional override layering, (5) observability/QA you can run tomorrow, and (6) seed data + executable schemas.
+(Your original elements are referenced where retained/extended.)&#x20;
+
+
+---
+
+
+# KB-5: Drug–Drug Interactions — Final Proposal (v1.0)
+
+
+## 1) Purpose & Scope (Reviewed ✅)
+
+
+* **Purpose**: Authoritative, low-latency DDI service for **CAE in Safety Gateway** (Validate phase) and **CandidateBuilder** (early hard-stop screening).&#x20;
+* **In scope**: pairwise DDIs, **class↔drug** and **class↔class** rules, **pharmacogenomics (PGx)**, **food/alcohol/herbal** modifiers, **mechanism, clinical effects, management** with severity + confidence.
+* **Out of scope**: dosing (KB-1), absolute non-interaction-based contraindications (KB-4), guideline selection logic (KB-3).&#x20;
+
+
+### What’s new
+
+
+* **Context qualifiers**: route, formulation, **dose thresholds**, chronic vs. acute use.
+* **Patient-modifiers**: age bands, hepatic/renal stage (for mechanism relevance), **PGx phenotypes**.
+* **Evidence & confidence**: level/grade + **provenance** and **recency** fields (ties into Evidence Envelope).
+
+
+---
+
+
+## 2) Data Model & Schema (Hardened 🔧)
+
+
+Primary store remains **PostgreSQL** with **specialized indexing + materialized views**.&#x20;
+
+
+### 2.1 Core Tables (DDL excerpts)
+
+
+```sql
+-- Canonical concepts are RxNorm (ingredient/clinicalDrug) and ATC for classes (via KB-7).
+
+
+create type ddi_severity as enum ('contraindicated','major','moderate','minor','unknown');
+create type evidence_level as enum ('A','B','C','D','ExpertOpinion','Unknown');
+create type mechanism_type as enum ('PK','PD','PK_PD','Unknown');
+create type context_use as enum ('acute','chronic','unspecified');
+
+
+create table ddi_interactions (
+  id bigserial primary key,
+  dataset_version text not null,                  -- ties to Evidence Envelope
+  drug1_code text not null,                       -- RxCUI (ingredient or clinical drug)
+  drug2_code text not null,                       -- normalized & ordered (min, max)
+  severity ddi_severity not null,
+  mechanism mechanism_type not null,
+  mechanism_note text,
+  clinical_effects text,
+  management_strategy text not null,
+  evidence evidence_level not null,
+  confidence numeric(3,2) default 0.80,           -- 0-1 confidence from vendor harmonizer
+  route_restriction text[],                       -- e.g., ['oral','iv']
+  min_dose1_mg numeric,                           -- dose thresholds (optional)
+  min_dose2_mg numeric,
+  context context_use default 'unspecified',
+  pgx_required boolean default false,
+  pgx_markers jsonb,                              -- e.g., {"CYP2D6":"ultrarapid"}
+  food_alcohol_herbal jsonb,                      -- {"grapefruit":"avoid","ethanol":"caution"}
+  contraindication_reason text,
+  source_vendor_ids text[],                       -- lineage/provenance
+  created_at timestamptz default now(),
+  unique (dataset_version, drug1_code, drug2_code)
+);
+
+
+create table ddi_class_rules (
+  id bigserial primary key,
+  dataset_version text not null,
+  object_type text not null check (object_type in ('drug','class')),
+  object_code text not null,                      -- RxCUI or ATC
+  subject_type text not null check (subject_type in ('drug','class')),
+  subject_code text not null,
+  severity ddi_severity not null,
+  mechanism mechanism_type not null,
+  clinical_effects text,
+  management_strategy text not null,
+  qualifiers jsonb,                               -- e.g., {"route":"oral","dose1_mg":">=40"}
+  evidence evidence_level not null,
+  confidence numeric(3,2) default 0.75,
+  source_vendor_ids text[],
+  unique (dataset_version, object_type, object_code, subject_type, subject_code)
+);
+
+
+create table ddi_pharmacogenomic_rules (
+  id bigserial primary key,
+  dataset_version text not null,
+  drug_code text not null,
+  gene text not null,
+  phenotype text not null,                        -- e.g., "CYP2D6_ultrarapid"
+  interaction_with text,                          -- optional second drug/class
+  severity ddi_severity not null,
+  clinical_effects text,
+  management_strategy text not null,
+  evidence evidence_level not null,
+  source_vendor_ids text[],
+  unique (dataset_version, drug_code, gene, phenotype, coalesce(interaction_with,'NA'))
+);
+
+
+create table ddi_modifiers (
+  id bigserial primary key,
+  dataset_version text not null,
+  modifier_type text not null check (modifier_type in ('food','alcohol','herbal','disease')),
+  modifier_code text,                             -- optional controlled term (SNOMED, etc.)
+  drug_code text not null,
+  effect text not null,                           -- e.g., "↑AUC", "risk_of_bleeding↑"
+  management_strategy text not null,
+  severity ddi_severity not null,
+  evidence evidence_level not null,
+  source_vendor_ids text[]
+);
+
+
+-- Institutional overrides layered above vendor data
+create table ddi_overrides (
+  id bigserial primary key,
+  dataset_version text not null,                  -- becomes the synthesized dataset_version
+  scope text not null check (scope in ('pair','class','pgx','modifier')),
+  selector jsonb not null,                        -- match clauses; see Harmonizer
+  action text not null check (action in ('replace','suppress','amend')),
+  payload jsonb not null,                         -- new fields or fields to nullify
+  rationale text not null,
+  approver text not null,
+  approved_at timestamptz not null default now()
+);
+```
+
+
+### 2.2 Performance Objects
+
+
+```sql
+-- Precomputed, join-free “decision plane”
+create materialized view ddi_interaction_matrix as
+select dataset_version, drug1_code, drug2_code, severity, management_strategy
+     , evidence, confidence
+from   ddi_interactions;
+
+
+create index on ddi_interaction_matrix (dataset_version, drug1_code, drug2_code);
+create index on ddi_interactions using gin (route_restriction);
+```
+
+
+Your **interaction\_matrix** concept is preserved and expanded for join-free critical reads.&#x20;
+
+
+---
+
+
+## 3) Query & API Contracts (Refined 🚀)
+
+
+We retain **gRPC + Protobuf** with **strict contracts**.&#x20;
+
+
+```proto
+syntax = "proto3";
+package kb5.v1;
+
+
+message PatientContext {
+  map<string,string> pgx;       // {"CYP2D6":"ultrarapid"}
+  string hepatic_stage;         // e.g., "ChildPugh_B"
+  string renal_stage;           // e.g., "CKD_3b"
+  string age_band;              // "adult", "older_adult"
+}
+
+
+message InteractionCheckRequest {
+  string transaction_id = 1;
+  repeated string drug_codes = 2;  // RxNorm/ATC normalized by KB-7
+  PatientContext patient_context = 3;
+  string dataset_version = 4;      // Evidence Envelope pin
+  bool expand_classes = 5;         // resolve ATC classes to members
+  bool include_contextuals = 6;    // include route/dose-specific flags
+}
+
+
+message InteractionDetail {
+  string drug1_code = 1;
+  string drug2_code = 2;
+  string severity = 3;
+  string mechanism = 4;
+  string clinical_effects = 5;
+  string management_strategy = 6;
+  string evidence = 7;
+  double confidence = 8;
+  map<string,string> qualifiers = 9;   // route, dose thresholds, acute/chronic
+  repeated string sources = 10;        // provenance
+}
+
+
+message ConflictTrail {
+  string synthesized_from_version = 1; // vendor_version -> harmonized_version
+  repeated string vendor_evidence_ids = 2;
+  repeated string overrides_applied = 3; // institutional rule ids
+}
+
+
+message InteractionCheckResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;
+  repeated InteractionDetail interactions = 3;
+  ConflictTrail conflict_trail = 4;
+}
+```
+
+
+* **SLO**: p95 **< 80 ms** maintained (Redis + materialized view first; fallback to SQL path).&#x20;
+* **Hard-stop predicate**: `severity == contraindicated` → immediate **FAIL** to CAE with management strategy.
+
+
+---
+
+
+## 4) Read Path (Critical-Hot)
+
+
+1. **Normalize** (KB-7): codes → canonical RxCUI/ATC.
+2. **Redis lookup**: `ddi:{dataset_version}:{min(drugA,drugB)}:{max(drugA,drugB)}` → direct hit returns InteractionDetail(s).
+3. **SQL fallback**: **`ddi_interaction_matrix`** by (dataset\_version, drug1\_code, drug2\_code).&#x20;
+4. **Contextual filter**: apply route/dose/PGx qualifiers in memory (fast).
+5. **Assemble Evidence Envelope + ConflictTrail** (sources + overrides list).
+
+
+---
+
+
+## 5) Security & Privacy (mTLS + L7 Auth)
+
+
+* **mTLS** + service account allowlist (**Safety Gateway**, **Medication Service**) as in your draft.&#x20;
+* **Minimal PHI**: only **non-identifying** patient context fields required for evaluation.&#x20;
+
+
+---
+
+
+## 6) Harmonizer & Versioning (Double-Buffered 📦)
+
+
+* **Vendor ingest → Staging dataset\_version (e.g., `2025Q3.vendorA`)**
+* **Harmonizer**:
+
+
+  * Normalize to KB-7 codes (RxNorm/ATC)
+  * **Merge** multi-vendor rows → choose **max severity**, most recent evidence, **compose management** (or mark conflict)
+  * Apply **institutional overrides** (replace/suppress/amend) → **`2025Q3.harmonized`**
+  * Emit **Provenance Map** per interaction (vendor IDs + override IDs)
+* **Cutover**: Blue/Green switch of **`current_dataset_version`**, invalidate/refresh Redis hotset. (You proposed cache invalidation tied to ETL—retained.)&#x20;
+
+
+---
+
+
+## 7) Caching Strategy (Hot/Warm 🔥)
+
+
+* **Hot**: Redis for top 50k pairs (Pareto of request distribution).
+* **Warm**: Postgres `ddi_interaction_matrix`.
+* **TTL**: None (pinned by version). Rotate on dataset cutover (atomic key-space swap).
+
+
+---
+
+
+## 8) Observability (Clinical + SRE)
+
+
+* **Tech**: p95 latency, error rate, SQL time, Redis hit rate. (kept)&#x20;
+* **Clinical**: detection rate, severity mix, **top 20 hard-stops**, **override hit counts**, **PGx-conditioned flags**.
+* **Audit**: per-request Evidence Envelope + ConflictTrail persisted to **decision log**.
+
+
+---
+
+
+## 9) Failure Modes (Fail-Safe)
+
+
+Your WARN fallback is preserved; added **graded behavior**:
+
+
+* If KB-5 unreachable: **CAE** returns **WARN** for >1 med proposals with explicit instruction to **pharmacist consult** and blocks only **known never-together** pairs from a **local emergency denylist** (bundled with Safety Gateway).&#x20;
+
+
+---
+
+
+## 10) CI/CD & Testing (Actionable)
+
+
+* **Contract tests** (gRPC) on golden fixtures.
+* **Determinism suite**: top 200 clinical pairs (e.g., **sildenafil+nitrates**, **linezolid+SSRI**, **warfarin+amiodarone**, **clarithromycin+simvastatin**, **“triple whammy”** ACEi+diuretic+NSAID) return **exact** severity/strategy. (You mentioned canonical pairs—expanded into formal suite.)&#x20;
+* **Migration tests**: old→new dataset replay against **Evidence Envelope pin**.
+* **Performance load**: 1k RPS, p95 < 80 ms.
+
+
+---
+
+
+## 11) Example Seeds (Minimal but Useful)
+
+
+These are **vendor-agnostic harmonized** seeds to validate the full pipeline.
+
+
+```yaml
+# seeds/kb5_harmonized_2025Q3.yaml
+dataset_version: "2025Q3.harmonized"
+interactions:
+  - drug1_code: "RxCUI:855332"   # sildenafil
+    drug2_code: "ATC:C01DA02"    # nitrates (glyceryl trinitrate class proxy)
+    severity: "contraindicated"
+    mechanism: "PD"
+    mechanism_note: "Synergistic vasodilation -> profound hypotension"
+    clinical_effects: "Severe hypotension, syncope, ischemia"
+    management_strategy: "Do NOT coadminister. Separate by 24-48h depending on PDE5 t1/2."
+    evidence: "A"
+    confidence: 0.95
+    qualifiers: {route: "oral"}
+    sources: ["vendorA:INT-0001"]
+  - drug1_code: "RxCUI:11289"    # warfarin
+    drug2_code: "RxCUI:704"      # amiodarone
+    severity: "major"
+    mechanism: "PK"
+    mechanism_note: "CYP2C9 inhibition increases warfarin exposure"
+    clinical_effects: "↑INR, bleeding"
+    management_strategy: "Reduce warfarin dose 25-50%; monitor INR q3-4 days then weekly."
+    evidence: "A"
+    confidence: 0.9
+    sources: ["vendorA:INT-0002"]
+  - drug1_code: "RxCUI:203496"   # linezolid
+    drug2_code: "ATC:N06AB"      # SSRIs
+    severity: "contraindicated"
+    mechanism: "PD"
+    clinical_effects: "Serotonin syndrome"
+    management_strategy: "Avoid. If essential, hold SSRI; monitor closely 2 weeks."
+    evidence: "A"
+    confidence: 0.9
+    sources: ["vendorA:INT-0003"]
+  - drug1_code: "RxCUI:6915"     # clarithromycin
+    drug2_code: "RxCUI:36567"    # simvastatin
+    severity: "major"
+    mechanism: "PK"
+    clinical_effects: "↑simvastatin -> myopathy/rhabdo"
+    management_strategy: "Avoid; choose pravastatin/rosuvastatin or hold statin."
+    evidence: "A"
+    confidence: 0.9
+    sources: ["vendorA:INT-0004"]
+class_rules:
+  - object_type: "class"
+    object_code: "ATC:C09AA"     # ACE inhibitors
+    subject_type: "class"
+    subject_code: "ATC:M01AE"    # NSAIDs (propionic acids)
+    severity: "moderate"
+    mechanism: "PD"
+    clinical_effects: "Renal perfusion ↓, BP control loss"
+    management_strategy: "Avoid chronic combo; monitor BP/renal; use acetaminophen."
+    evidence: "B"
+    confidence: 0.8
+  - object_type: "class"
+    object_code: "ATC:C03"       # Diuretics
+    subject_type: "class"
+    subject_code: "ATC:M01A"     # NSAIDs (broad)
+    severity: "moderate"
+    mechanism: "PD"
+    clinical_effects: "‘Triple whammy’ risk (with ACEi) for AKI"
+    management_strategy: "Avoid triple combo; monitor creatinine within 3-7 days."
+    evidence: "B"
+    confidence: 0.75
+pgx_rules:
+  - drug_code: "RxCUI:2670"      # codeine
+    gene: "CYP2D6"
+    phenotype: "ultrarapid"
+    interaction_with: null
+    severity: "major"
+    clinical_effects: "Toxic morphine levels"
+    management_strategy: "Avoid codeine; use non-CYP2D6 opioid."
+    evidence: "A"
+modifiers:
+  - modifier_type: "food"
+    modifier_code: "SNOMED:102259006"  # tyramine-rich foods
+    drug_code: "RxCUI:5781"            # phenelzine (MAOI)
+    effect: "Hypertensive crisis"
+    management_strategy: "Avoid tyramine-rich foods during MAOI therapy."
+    severity: "major"
+    evidence: "A"
+overrides:
+  - scope: "pair"
+    selector: {drug1_code: "RxCUI:203496", subject: "class:ATC:N06AB"}
+    action: "amend"
+    payload: {"management_strategy": "Contraindicated unless no alternatives AND inpatient monitoring."}
+    rationale: "Institutional safety policy for linezolid use"
+    approver: "P&T-2025-08-31"
+```
+
+
+---
+
+
+## 12) Safety Gateway Integration (CAE & Protocol Reasoners)
+
+
+* **CAE** calls **KB-5** with the **same dataset\_version** pinned in the **Evidence Envelope** to ensure decision reproducibility.
+* **Neo4j Assertions** can store “never-together” edges for **ultra-hard stops**; KB-5 remains source of truth and feeds those edges during ETL.
+
+
+---
+
+
+## 13) Runbooks (Ops)
+
+
+* **Hotfix**: Apply override (scope=pair) with `action=replace` → Harmonizer composes **new harmonized dataset\_version** → flip pointer → refresh Redis keys with new namespace.
+* **Rollback**: Reinstate previous `dataset_version` pointer. DB and Redis are version-qualified → instant revert.
+
+
+---
+
+
+## 14) Example SQL Helper (Fast Path)
+
+
+```sql
+create or replace function check_pair(v text, a text, b text)
+returns table (severity ddi_severity, management_strategy text, evidence evidence_level, confidence numeric)
+language sql stable as $$
+  select severity, management_strategy, evidence, confidence
+  from   ddi_interaction_matrix
+  where  dataset_version = v
+  and    drug1_code = least(a,b)
+  and    drug2_code = greatest(a,b)
+$$;
+```
+
+
+---
+
+
+## 15) Unit/Contract Fixtures (Excerpt)
+
+
+```json
+{
+  "name": "sildenafil + nitrates = contraindicated",
+  "request": {
+    "dataset_version": "2025Q3.harmonized",
+    "drug_codes": ["RxCUI:855332","ATC:C01DA02"]
+  },
+  "expect": {
+    "severity": "contraindicated",
+    "evidence": "A",
+    "management_strategy_contains": "Do NOT coadminister"
+  }
+}
+```
+
+
+---
+
+
+### What This Improves Over Your Draft
+
+
+* **Richer schema** (route/dose/context, PGx, food/herbal, qualifiers, confidence).
+* **Institutional override layer** with **selector/action/payload** semantics for safe edits.
+* **Deterministic versioning** (double-buffered dataset versions + cache namespacing).
+* **Evidence Envelope + ConflictTrail** returned on every call (explainability).
+* **Operational readiness** (runbooks, rollback, clinical dashboards).
+* **Seed data** to validate end-to-end ingest → harmonize → serve → audit.
+
+
+Your original principles (Postgres + materialized views, Redis, gRPC, p95 target, governance, failure behavior) are preserved and concretely implemented here.&#x20;
+
+
+---
+
+
+If you’d like, I can also drop in the **Kubernetes manifests** for blue/green dataset switches and the **GitHub Actions** job that runs the ETL + contract tests on PR.

@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  # Flink 2.1.0 JobManager - orchestrates the distributed stream processing
+  jobmanager:
+    image: flink:2.1.0-scala_2.12-java17
+    hostname: jobmanager
+    container_name: flink-jobmanager-2.1
+    ports:
+      - "8081:8081"  # Flink Web UI
+      - "6123:6123"  # RPC port for TaskManager communication
+    command: jobmanager
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+      - MIMIC_MODEL_PATH=/opt/flink/models
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        jobmanager.rpc.port: 6123
+        jobmanager.memory.process.size: 2g
+        taskmanager.numberOfTaskSlots: 16
+        parallelism.default: 4
+        state.backend: rocksdb
+        state.checkpoints.dir: file:///checkpoints
+        state.savepoints.dir: file:///savepoints
+        execution.checkpointing.interval: 30000
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.timeout: 60000
+        metrics.reporters: prom
+        metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+        metrics.reporter.prom.port: 9249
+    volumes:
+      - ./checkpoints:/checkpoints
+      - ./savepoints:/savepoints
+      - ./target:/opt/flink/usrlib
+      - ./logs:/opt/flink/log
+      - ./credentials:/app/credentials:ro
+      - ./models:/opt/flink/models:ro
+    networks:
+      - kafka_cardiofit-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Flink 2.1.0 TaskManager 1
+  taskmanager-1:
+    image: flink:2.1.0-scala_2.12-java17
+    hostname: taskmanager-1
+    container_name: flink-taskmanager-1-2.1
+    depends_on:
+      jobmanager:
+        condition: service_healthy
+    command: taskmanager
+    deploy:
+      resources:
+        limits:
+          memory: 16g
+        reservations:
+          memory: 14g
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+      - MIMIC_MODEL_PATH=/opt/flink/models
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        jobmanager.rpc.port: 6123
+        taskmanager.memory.process.size: 15g
+        taskmanager.memory.managed.fraction: 0.10
+        taskmanager.memory.framework.off-heap.size: 1g
+        taskmanager.numberOfTaskSlots: 8
+        state.backend.rocksdb.localdir: /tmp/rocksdb
+        metrics.reporter.prom.port: 9250
+    volumes:
+      - ./checkpoints:/checkpoints
+      - ./target:/opt/flink/usrlib
+      - ./logs:/opt/flink/log
+      - rocksdb-1:/tmp/rocksdb
+      - ./credentials:/app/credentials:ro
+      - ./models:/opt/flink/models:ro
+    networks:
+      - kafka_cardiofit-network
+
+  # Flink 2.1.0 TaskManager 2
+  taskmanager-2:
+    image: flink:2.1.0-scala_2.12-java17
+    hostname: taskmanager-2
+    container_name: flink-taskmanager-2-2.1
+    depends_on:
+      jobmanager:
+        condition: service_healthy
+    command: taskmanager
+    deploy:
+      resources:
+        limits:
+          memory: 16g
+        reservations:
+          memory: 10g
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+      - MIMIC_MODEL_PATH=/opt/flink/models
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        jobmanager.rpc.port: 6123
+        taskmanager.memory.process.size: 15g
+        taskmanager.memory.managed.fraction: 0.10
+        taskmanager.memory.framework.off-heap.size: 1g
+        taskmanager.numberOfTaskSlots: 24
+        state.backend.rocksdb.localdir: /tmp/rocksdb
+        metrics.reporter.prom.port: 9251
+    volumes:
+      - ./checkpoints:/checkpoints
+      - ./target:/opt/flink/usrlib
+      - ./logs:/opt/flink/log
+      - rocksdb-2:/tmp/rocksdb
+      - ./credentials:/app/credentials:ro
+      - ./models:/opt/flink/models:ro
+    networks:
+      - kafka_cardiofit-network
+
+volumes:
+  rocksdb-1:
+  rocksdb-2:
+
+networks:
+  kafka_cardiofit-network:
+    external: true

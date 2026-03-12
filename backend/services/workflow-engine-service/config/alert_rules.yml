@@ -1,0 +1,192 @@
+# Prometheus Alert Rules for Calculate > Validate > Commit Workflow
+
+groups:
+  - name: workflow_performance_alerts
+    rules:
+      # High workflow error rate
+      - alert: HighWorkflowErrorRate
+        expr: (
+          rate(workflow_requests_total{status="error"}[5m]) / 
+          rate(workflow_requests_total[5m])
+        ) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          service: workflow-engine
+        annotations:
+          summary: "High workflow error rate detected"
+          description: "Workflow error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # Workflow performance target violations
+      - alert: WorkflowPerformanceTargetMiss
+        expr: workflow_performance_target_adherence_ratio < 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: workflow-engine
+        annotations:
+          summary: "Workflow performance targets not being met"
+          description: "Only {{ $value | humanizePercentage }} of workflows meeting performance targets for phase {{ $labels.phase }}"
+
+      # High phase execution time
+      - alert: HighPhaseExecutionTime
+        expr: histogram_quantile(0.95, rate(workflow_phase_duration_seconds_bucket[5m])) > 0.2
+        for: 3m
+        labels:
+          severity: warning
+          service: workflow-engine
+        annotations:
+          summary: "High {{ $labels.phase }} phase execution time"
+          description: "95th percentile execution time for {{ $labels.phase }} phase is {{ $value }}s"
+
+      # Safety Gateway validation errors
+      - alert: HighSafetyGatewayErrorRate
+        expr: (
+          rate(safety_gateway_validations_total{verdict="error"}[5m]) /
+          rate(safety_gateway_validations_total[5m])
+        ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          service: safety-gateway
+        annotations:
+          summary: "High Safety Gateway validation error rate"
+          description: "Safety Gateway error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # Too many unsafe validations
+      - alert: HighUnsafeValidationRate
+        expr: (
+          rate(safety_gateway_validations_total{verdict="unsafe"}[10m]) /
+          rate(safety_gateway_validations_total[10m])
+        ) > 0.15
+        for: 5m
+        labels:
+          severity: warning
+          service: safety-gateway
+        annotations:
+          summary: "High rate of unsafe validations"
+          description: "{{ $value | humanizePercentage }} of validations returning UNSAFE verdict over last 10 minutes"
+
+  - name: system_health_alerts
+    rules:
+      # Service down
+      - alert: WorkflowServiceDown
+        expr: up{job="workflow-engine"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: workflow-engine
+        annotations:
+          summary: "Workflow Engine Service is down"
+          description: "Workflow Engine Service has been down for more than 1 minute"
+
+      - alert: SafetyGatewayDown
+        expr: up{job="safety-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: safety-gateway
+        annotations:
+          summary: "Safety Gateway is down"
+          description: "Safety Gateway has been down for more than 1 minute"
+
+      # High response time
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(workflow_phase_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: workflow-engine
+        annotations:
+          summary: "High response times detected"
+          description: "95th percentile response time is {{ $value }}s for {{ $labels.phase }} phase"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: (
+          (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / 
+          node_memory_MemTotal_bytes
+        ) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 90% (current: {{ $value | humanizePercentage }})"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: (
+          100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+        ) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is above 80% (current: {{ $value }}%)"
+
+  - name: database_alerts
+    rules:
+      # Database connection issues
+      - alert: DatabaseConnectionErrors
+        expr: increase(proposal_operations_total{status="error"}[5m]) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: database
+        annotations:
+          summary: "Database connection errors detected"
+          description: "{{ $value }} database operation errors in the last 5 minutes"
+
+      # Slow database queries
+      - alert: SlowDatabaseQueries
+        expr: histogram_quantile(0.95, rate(proposal_operation_duration_seconds_bucket[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          service: database
+        annotations:
+          summary: "Slow database queries detected"
+          description: "95th percentile database query time is {{ $value }}s"
+
+  - name: business_logic_alerts
+    rules:
+      # Unusual validation verdict distribution
+      - alert: UnusualValidationPattern
+        expr: (
+          rate(safety_gateway_validations_total{verdict="unsafe"}[1h]) /
+          rate(safety_gateway_validations_total[1h])
+        ) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          service: safety-gateway
+        annotations:
+          summary: "Unusual validation pattern detected"
+          description: "{{ $value | humanizePercentage }} of validations returning UNSAFE over the last hour"
+
+      # Low workflow throughput
+      - alert: LowWorkflowThroughput
+        expr: rate(workflow_requests_total[5m]) < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: workflow-engine
+        annotations:
+          summary: "Low workflow throughput"
+          description: "Workflow request rate is {{ $value }} requests/second over the last 5 minutes"
+
+      # High proposal creation failure rate
+      - alert: HighProposalCreationFailures
+        expr: (
+          rate(proposal_operations_total{operation="create",status="error"}[5m]) /
+          rate(proposal_operations_total{operation="create"}[5m])
+        ) > 0.1
+        for: 3m
+        labels:
+          severity: critical
+          service: medication-service
+        annotations:
+          summary: "High proposal creation failure rate"
+          description: "{{ $value | humanizePercentage }} of proposal creations are failing"

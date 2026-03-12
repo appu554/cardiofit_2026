@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: module8-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: module8_clinical
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks:
+      - module8-network
+
+  mongodb-projector:
+    build: .
+    container_name: module8-mongodb-projector
+    ports:
+      - "8051:8051"
+    environment:
+      # Service
+      SERVICE_NAME: mongodb-projector
+      SERVICE_PORT: 8051
+
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      KAFKA_TOPIC: prod.ehr.events.enriched
+      KAFKA_GROUP_ID: mongodb-projector-group
+      KAFKA_AUTO_OFFSET_RESET: earliest
+      KAFKA_ENABLE_AUTO_COMMIT: "false"
+      KAFKA_MAX_POLL_RECORDS: 100
+      KAFKA_SESSION_TIMEOUT_MS: 30000
+
+      # MongoDB
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DATABASE: module8_clinical
+      MONGODB_MAX_POOL_SIZE: 50
+      MONGODB_MIN_POOL_SIZE: 10
+      MONGODB_CONNECT_TIMEOUT_MS: 5000
+      MONGODB_SERVER_SELECTION_TIMEOUT_MS: 5000
+
+      # Batch Processing
+      BATCH_SIZE: 50
+      BATCH_TIMEOUT_SECONDS: 10
+      MAX_RETRIES: 3
+      RETRY_DELAY_SECONDS: 5
+
+      # Patient Timeline
+      MAX_EVENTS_PER_PATIENT: 1000
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8051/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - module8-network
+    restart: unless-stopped
+
+  # MongoDB Express (optional web UI)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: module8-mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+    depends_on:
+      - mongodb
+    networks:
+      - module8-network
+    profiles:
+      - ui
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  module8-network:
+    driver: bridge

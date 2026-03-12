@@ -1,0 +1,250 @@
+# P04 Irregular Heart Rate - HPI Node Definition
+# Bayesian differential for irregular heart rhythm detected by Channel B (B-16).
+# Triggered by: B-16 sentinel (kb22_trigger=1 in PhysioResult) when confirmed
+#               irregular rhythm is detected.
+# Output: posterior probability of AF → feeds PG-16 via KB-23.
+
+node_id: P04_IRREGULAR_HR
+version: "1.0.0"
+description: "Irregular heart rhythm differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.85
+posterior_gap_threshold: 0.30
+convergence_logic: BOTH
+max_questions: 15
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_AF_2024"
+
+# Differentials with per-stratum priors (F-05)
+# AF prevalence increases with age, HTN, CKD, and DM comorbidity.
+# CKD patients have 2-3x higher AF risk (Bansal et al, JACC 2013).
+differentials:
+  - id: ATRIAL_FIBRILLATION
+    label: "Atrial Fibrillation"
+    population_reference: "ESC AF Guidelines 2024; Bansal et al, JACC 2013"
+    priors:
+      DM_ONLY: 0.25
+      DM_HTN: 0.40
+      DM_HTN_CKD: 0.50
+
+  - id: ATRIAL_FLUTTER
+    label: "Atrial Flutter"
+    population_reference: "ESC SVT Guidelines 2019"
+    priors:
+      DM_ONLY: 0.08
+      DM_HTN: 0.12
+      DM_HTN_CKD: 0.12
+
+  - id: FREQUENT_ECTOPICS
+    label: "Frequent Premature Atrial/Ventricular Complexes"
+    population_reference: "Dewland et al, JACC 2013"
+    priors:
+      DM_ONLY: 0.35
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.18
+
+  - id: SINUS_ARRHYTHMIA
+    label: "Sinus Arrhythmia (Physiological)"
+    population_reference: "Braunwald's Heart Disease 2024"
+    priors:
+      DM_ONLY: 0.20
+      DM_HTN: 0.12
+      DM_HTN_CKD: 0.08
+
+  - id: OTHER_SVT
+    label: "Other Supraventricular Tachycardia"
+    population_reference: "ESC SVT Guidelines 2019"
+    priors:
+      DM_ONLY: 0.07
+      DM_HTN: 0.06
+      DM_HTN_CKD: 0.05
+
+  - id: ARTEFACT
+    label: "Measurement Artefact"
+    population_reference: "Device reliability data"
+    priors:
+      DM_ONLY: 0.05
+      DM_HTN: 0.05
+      DM_HTN_CKD: 0.07
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Is the rhythm irregularly irregular (completely chaotic) or has a regular pattern?"
+    text_hi: "क्या लय अनियमित रूप से अनियमित है (पूरी तरह अराजक) या नियमित पैटर्न है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "IRREGULARLY_IRREGULAR"
+        label_en: "Irregularly irregular (no pattern)"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 5.0
+          ATRIAL_FLUTTER: 0.5
+          FREQUENT_ECTOPICS: 1.2
+          SINUS_ARRHYTHMIA: 0.2
+          OTHER_SVT: 0.3
+          ARTEFACT: 0.5
+      - value: "REGULARLY_IRREGULAR"
+        label_en: "Regularly irregular (some pattern)"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 0.3
+          ATRIAL_FLUTTER: 3.0
+          FREQUENT_ECTOPICS: 2.5
+          SINUS_ARRHYTHMIA: 2.0
+          OTHER_SVT: 1.5
+          ARTEFACT: 0.8
+
+  - question_id: Q02
+    text_en: "What is the ventricular rate?"
+    text_hi: "हृदय गति क्या है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "FAST_GT_100"
+        label_en: "Fast (>100 bpm)"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 2.5
+          ATRIAL_FLUTTER: 2.0
+          FREQUENT_ECTOPICS: 0.8
+          SINUS_ARRHYTHMIA: 0.3
+          OTHER_SVT: 3.0
+          ARTEFACT: 0.5
+      - value: "NORMAL_60_100"
+        label_en: "Normal (60-100 bpm)"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 1.0
+          ATRIAL_FLUTTER: 1.2
+          FREQUENT_ECTOPICS: 1.5
+          SINUS_ARRHYTHMIA: 1.5
+          OTHER_SVT: 0.8
+          ARTEFACT: 1.0
+      - value: "SLOW_LT_60"
+        label_en: "Slow (<60 bpm)"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 0.5
+          ATRIAL_FLUTTER: 0.3
+          FREQUENT_ECTOPICS: 1.0
+          SINUS_ARRHYTHMIA: 1.2
+          OTHER_SVT: 0.2
+          ARTEFACT: 1.5
+
+  - question_id: Q03
+    text_en: "Does the patient report palpitations, dizziness, or syncope?"
+    text_hi: "क्या रोगी को धड़कन, चक्कर, या बेहोशी की शिकायत है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_SYMPTOMATIC"
+        label_en: "Yes, symptomatic"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 2.0
+          ATRIAL_FLUTTER: 2.5
+          FREQUENT_ECTOPICS: 1.5
+          SINUS_ARRHYTHMIA: 0.3
+          OTHER_SVT: 3.0
+          ARTEFACT: 0.1
+      - value: "NO_ASYMPTOMATIC"
+        label_en: "No symptoms"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 0.7
+          ATRIAL_FLUTTER: 0.5
+          FREQUENT_ECTOPICS: 0.8
+          SINUS_ARRHYTHMIA: 2.0
+          OTHER_SVT: 0.4
+          ARTEFACT: 2.0
+
+  - question_id: Q04
+    text_en: "Is there a prior history of atrial fibrillation or flutter?"
+    text_hi: "क्या एट्रियल फिब्रिलेशन या फ्लटर का पूर्व इतिहास है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_PRIOR_AF"
+        label_en: "Yes, documented prior AF/AFL"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 6.0
+          ATRIAL_FLUTTER: 3.0
+          FREQUENT_ECTOPICS: 0.3
+          SINUS_ARRHYTHMIA: 0.2
+          OTHER_SVT: 0.5
+          ARTEFACT: 0.2
+      - value: "NO"
+        label_en: "No prior AF/AFL"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 0.6
+          ATRIAL_FLUTTER: 0.7
+          FREQUENT_ECTOPICS: 1.3
+          SINUS_ARRHYTHMIA: 1.5
+          OTHER_SVT: 1.2
+          ARTEFACT: 1.2
+
+  - question_id: Q05
+    text_en: "Is there variation with respiration (irregularity increases/decreases with breathing)?"
+    text_hi: "क्या श्वास के साथ अनियमितता बदलती है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_RESPIRATORY"
+        label_en: "Yes, varies with breathing"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 0.2
+          ATRIAL_FLUTTER: 0.3
+          FREQUENT_ECTOPICS: 0.5
+          SINUS_ARRHYTHMIA: 8.0
+          OTHER_SVT: 0.3
+          ARTEFACT: 0.5
+      - value: "NO"
+        label_en: "No respiratory pattern"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 1.3
+          ATRIAL_FLUTTER: 1.2
+          FREQUENT_ECTOPICS: 1.2
+          SINUS_ARRHYTHMIA: 0.2
+          OTHER_SVT: 1.2
+          ARTEFACT: 1.0
+
+  - question_id: Q06
+    text_en: "Is the patient on a beta-blocker or rate-controlling medication?"
+    text_hi: "क्या रोगी बीटा-ब्लॉकर या हृदय गति नियंत्रण की दवा पर है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_RATE_CONTROL"
+        label_en: "Yes, on rate-controlling medication"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 1.5
+          ATRIAL_FLUTTER: 1.5
+          FREQUENT_ECTOPICS: 0.8
+          SINUS_ARRHYTHMIA: 0.5
+          OTHER_SVT: 0.8
+          ARTEFACT: 0.8
+      - value: "NO"
+        label_en: "No rate-controlling medication"
+        likelihood_ratios:
+          ATRIAL_FIBRILLATION: 0.8
+          ATRIAL_FLUTTER: 0.8
+          FREQUENT_ECTOPICS: 1.1
+          SINUS_ARRHYTHMIA: 1.2
+          OTHER_SVT: 1.1
+          ARTEFACT: 1.1
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "CONFIRM_AF_CHECK_ANTICOAGULATION"
+    description: "AF posterior > 0.70 → confirm with ECG, assess CHA2DS2-VASc, check anticoagulation status. If no anticoagulation → set AFConfirmedNoAnticoagulation=true for PG-16."
+  - threshold: 0.50
+    action: "RECOMMEND_ECG"
+    description: "Moderate AF probability. Recommend 12-lead ECG or ambulatory Holter monitor."
+  - threshold: 0.30
+    action: "MONITOR"
+    description: "Low AF probability. Continue rhythm monitoring via Channel B. Reassess if pattern persists."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "ATRIAL_FIBRILLATION posterior > 0.70 AND patient has palpitations"
+    trigger_node: "P05_PALPITATIONS"
+    rationale: "High AF probability with palpitations warrants comprehensive palpitation assessment."
+
+# CHA2DS2-VASc integration (ESC AF 2024)
+# When AF is confirmed, V-MCU orchestrator should compute CHA2DS2-VASc score:
+#   C (CHF) +1, H (HTN) +1, A2 (Age≥75) +2, D (DM) +1, S2 (Stroke) +2,
+#   V (Vascular) +1, A (Age 65-74) +1, Sc (Sex female) +1
+# DM+HTN patients start at CHA2DS2-VASc ≥ 2 → anticoagulation recommended.
+cha2ds2_vasc_note: "All CardioFit DM+HTN patients have CHA2DS2-VASc ≥ 2 (D+H). Anticoagulation indicated per ESC AF 2024 if AF confirmed."

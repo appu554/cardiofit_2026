@@ -1,0 +1,941 @@
+# Default values for medication-service-v2
+# Healthcare-grade configuration with production-ready defaults
+
+# Global configuration
+global:
+  # Image registry and repository
+  imageRegistry: "cardiofit.azurecr.io"  # Change to your registry
+  imageRepository: "cardiofit"
+  imagePullSecrets: 
+    - name: "cardiofit-registry-secret"
+  
+  # Environment settings
+  environment: "production"  # dev, staging, production
+  region: "us-central1"
+  cluster: "cardiofit-prod"
+  
+  # Healthcare compliance settings
+  compliance:
+    hipaa: true
+    soc2: true
+    iso27001: true
+    gdpr: true
+    fips140: false  # Set to true if FIPS 140-2 compliance required
+    
+  # Security configuration
+  security:
+    podSecurityStandards: "restricted"
+    networkPolicies: true
+    serviceAccountAnnotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/medication-service-v2-role"
+  
+  # Storage configuration
+  storageClass: "fast-ssd-retain"
+  backupStorageClass: "backup-storage"
+  
+  # Monitoring and observability
+  monitoring:
+    enabled: true
+    namespace: "monitoring"
+    retention: "30d"
+  
+  # Networking
+  networking:
+    domain: "cardiofit.health"
+    internalDomain: "internal.cardiofit.health"
+    loadBalancerClass: "nginx"
+    
+# Application configuration
+app:
+  name: "medication-service-v2"
+  version: "1.0.0"
+  
+  # Image configuration
+  image:
+    repository: "medication-service-v2"
+    tag: "1.0.0"
+    pullPolicy: "IfNotPresent"
+    digest: ""  # Use digest for production deployments
+  
+  # Deployment strategy
+  strategy:
+    type: "RollingUpdate"
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  
+  # Replica configuration
+  replicaCount: 3
+  minReplicas: 3
+  maxReplicas: 10
+  
+  # Resource allocation
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+      ephemeralStorage: "1Gi"
+    limits:
+      memory: "512Mi"  
+      cpu: "500m"
+      ephemeralStorage: "2Gi"
+  
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  
+  # Health checks
+  livenessProbe:
+    httpGet:
+      path: "/health/live"
+      port: 8005
+      scheme: HTTPS
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readinessProbe:
+    httpGet:
+      path: "/health/ready"
+      port: 8005
+      scheme: HTTPS
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 3
+    successThreshold: 1
+  
+  startupProbe:
+    httpGet:
+      path: "/health/startup"
+      port: 8005
+      scheme: HTTPS
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 12
+    successThreshold: 1
+
+# Service configuration
+service:
+  type: "ClusterIP"
+  ports:
+    http: 80
+    https: 443
+    grpc: 50005
+    metrics: 8005
+  
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8005"
+    prometheus.io/path: "/metrics"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    
+  sessionAffinity: "ClientIP"
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 300
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  
+  # Main public ingress
+  public:
+    enabled: true
+    hosts:
+      - host: "api-medication.cardiofit.health"
+        paths:
+          - path: "/api/v1"
+            pathType: "Prefix"
+          - path: "/health"
+            pathType: "Prefix"
+      - host: "medication-v2.cardiofit.health"
+        paths:
+          - path: "/"
+            pathType: "Prefix"
+    
+    tls:
+      - secretName: "medication-service-v2-tls"
+        hosts:
+          - "api-medication.cardiofit.health"
+          - "medication-v2.cardiofit.health"
+    
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/rate-limit: "100"
+      nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+      nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+      nginx.ingress.kubernetes.io/whitelist-source-range: "0.0.0.0/0"  # Restrict in production
+  
+  # Internal service-to-service ingress
+  internal:
+    enabled: true
+    className: "nginx-internal"
+    hosts:
+      - host: "medication-service-v2.internal"
+        paths:
+          - path: "/"
+            pathType: "Prefix"
+    
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+      nginx.ingress.kubernetes.io/rate-limit: "1000"
+      nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+  
+  # gRPC ingress
+  grpc:
+    enabled: true
+    className: "nginx-grpc"
+    hosts:
+      - host: "grpc-medication.cardiofit.health"
+        paths:
+          - path: "/"
+            pathType: "Prefix"
+    
+    tls:
+      - secretName: "medication-service-v2-grpc-tls"
+        hosts:
+          - "grpc-medication.cardiofit.health"
+    
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+      nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+      nginx.ingress.kubernetes.io/grpc-backend: "true"
+
+# Auto-scaling configuration
+autoscaling:
+  enabled: true
+  
+  # Horizontal Pod Autoscaler
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    metrics:
+      - type: "Resource"
+        resource:
+          name: "cpu"
+          target:
+            type: "Utilization"
+            averageUtilization: 70
+      - type: "Resource"
+        resource:
+          name: "memory"
+          target:
+            type: "Utilization"
+            averageUtilization: 80
+    
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+          - type: "Percent"
+            value: 50
+            periodSeconds: 60
+      scaleUp:
+        stabilizationWindowSeconds: 60
+        policies:
+          - type: "Percent"
+            value: 100
+            periodSeconds: 15
+          - type: "Pods"
+            value: 2
+            periodSeconds: 60
+  
+  # Vertical Pod Autoscaler
+  vpa:
+    enabled: false  # Enable if VPA is available
+    updatePolicy:
+      updateMode: "Auto"
+    resourcePolicy:
+      containerPolicies:
+        - containerName: "medication-service"
+          maxAllowed:
+            cpu: "1"
+            memory: "1Gi"
+          minAllowed:
+            cpu: "100m"
+            memory: "128Mi"
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Node scheduling
+nodeSelector:
+  workload-type: "healthcare"
+  compliance: "hipaa"
+  security-level: "high"
+
+tolerations:
+  - key: "healthcare-workload"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: "app.kubernetes.io/name"
+                operator: "In"
+                values:
+                  - "medication-service-v2"
+          topologyKey: "kubernetes.io/hostname"
+
+# Configuration
+config:
+  # Service configuration
+  service:
+    name: "medication-service-v2"
+    version: "1.0.0"
+    port: 8005
+    mode: "release"
+    
+  # Performance settings
+  performance:
+    maxConcurrentCalculations: 100
+    requestTimeoutSeconds: 30
+    gomaxprocs: 4
+    gogc: 100
+    gomemlimit: "450MiB"
+  
+  # Cache configuration
+  cache:
+    enabled: true
+    l1Size: 1000
+    l1TtlMinutes: 5
+    l2TtlHours: 1
+    promotionThreshold: 3
+    demotionTimeoutMinutes: 15
+    encryptionEnabled: true
+    auditEnabled: true
+    performanceOpt: true
+    optimizeForLatency: true
+    hotCacheSize: 500
+    hotCacheTtlMinutes: 10
+    analyticsEnabled: true
+    monitoringEnabled: true
+    warmupEnabled: true
+    warmupIntervalMinutes: 15
+  
+  # Healthcare & compliance
+  healthcare:
+    hipaaCompliance: true
+    clinicalAuditEnabled: true
+    mandatoryDoubleCheck: true
+    requireSupervisorApproval: false
+  
+  # Feature flags
+  features:
+    recipeCaching: true
+    snapshotValidation: true
+    clinicalIntelligence: true
+    safetyChecks: true
+    auditLogging: true
+  
+  # Rate limiting
+  rateLimit:
+    requestsPerMinute: 100
+    burst: 10
+    clinicalRequestsPerMinute: 50
+  
+  # TLS configuration
+  tls:
+    enabled: true
+    certPath: "/app/certs/tls.crt"
+    keyPath: "/app/certs/tls.key"
+  
+  # External services
+  externalServices:
+    contextGateway:
+      url: "http://context-gateway-service:8020"
+      timeout: "10s"
+    apolloFederation:
+      url: "http://apollo-federation-service:4000/graphql"
+      timeout: "10s"
+    rustEngine:
+      url: "http://rust-engine-service:8095"
+      timeout: "5s"
+    flow2GoEngine:
+      url: "http://flow2-go-engine-service:8085"
+      timeout: "10s"
+    safetyGateway:
+      url: "http://safety-gateway-service:8030"
+      timeout: "15s"
+    kbDrugRules:
+      url: "http://kb-drug-rules-service:8086"
+      timeout: "5s"
+    kbGuidelines:
+      url: "http://kb-guidelines-service:8089"
+      timeout: "5s"
+
+# Secrets configuration
+secrets:
+  # Database credentials
+  database:
+    enabled: true
+    secretName: "medication-service-secrets"
+    passwordKey: "DB_PASSWORD"
+    
+  # Redis credentials
+  redis:
+    enabled: true
+    secretName: "medication-service-secrets"
+    passwordKey: "REDIS_PASSWORD"
+  
+  # JWT and encryption
+  auth:
+    enabled: true
+    secretName: "medication-service-secrets"
+    jwtSecretKey: "JWT_SECRET"
+    encryptionKey: "ENCRYPTION_KEY"
+  
+  # External service API keys
+  external:
+    enabled: true
+    secretName: "external-service-secrets"
+    googleServiceAccountKey: "GOOGLE_SERVICE_ACCOUNT_KEY"
+    apiKey: "API_KEY"
+  
+  # TLS certificates
+  tls:
+    enabled: true
+    secretName: "medication-service-tls"
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    caKey: "ca.crt"
+  
+  # External secrets operator
+  externalSecrets:
+    enabled: false  # Enable if using external secrets
+    secretStore:
+      name: "vault-secret-store"
+      kind: "SecretStore"
+    refreshInterval: "30s"
+
+# Database configuration (PostgreSQL)
+postgresql:
+  enabled: true  # Set to false to use external database
+  
+  # High availability configuration
+  architecture: "replication"  # standalone, replication
+  replication:
+    enabled: true
+    readReplicas: 2
+    synchronousCommit: "on"
+    
+  # Authentication
+  auth:
+    postgresPassword: ""  # Set via external secrets
+    username: "medication_user"
+    password: ""          # Set via external secrets  
+    database: "medication_v2"
+    replicationUsername: "replicator"
+    replicationPassword: ""  # Set via external secrets
+  
+  # Primary configuration
+  primary:
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd-retain"
+      size: "100Gi"
+      accessModes:
+        - "ReadWriteOnce"
+    
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1"
+    
+    # Security configuration
+    securityContext:
+      enabled: true
+      runAsUser: 70
+      runAsGroup: 70
+      runAsNonRoot: true
+      readOnlyRootFilesystem: false
+      allowPrivilegeEscalation: false
+    
+    # PostgreSQL configuration
+    extraEnvVars:
+      - name: "POSTGRES_INITDB_ARGS"
+        value: "--auth-host=scram-sha-256 --auth-local=peer"
+    
+    configuration: |
+      # Connection Settings
+      listen_addresses = '*'
+      max_connections = 200
+      
+      # Memory Settings
+      shared_buffers = 256MB
+      effective_cache_size = 1GB
+      work_mem = 4MB
+      maintenance_work_mem = 64MB
+      
+      # SSL Settings
+      ssl = on
+      ssl_cert_file = '/opt/bitnami/postgresql/certs/tls.crt'
+      ssl_key_file = '/opt/bitnami/postgresql/certs/tls.key'
+      ssl_ca_file = '/opt/bitnami/postgresql/certs/ca.crt'
+      password_encryption = scram-sha-256
+      
+      # Logging for HIPAA compliance
+      logging_collector = on
+      log_statement = 'all'
+      log_min_messages = warning
+      log_connections = on
+      log_disconnections = on
+      log_lock_waits = on
+      log_checkpoints = on
+      log_min_duration_statement = 1000
+    
+    # TLS configuration
+    tls:
+      enabled: true
+      certificatesSecret: "postgres-ssl-certs"
+      certFilename: "tls.crt"
+      certKeyFilename: "tls.key"
+      certCAFilename: "ca.crt"
+    
+    # Init scripts for schema setup
+    initdb:
+      scripts:
+        01-init.sql: |
+          -- Create extension for UUID generation
+          CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+          
+          -- Create extension for cryptographic functions
+          CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+          
+          -- Create audit schema
+          CREATE SCHEMA IF NOT EXISTS audit;
+          
+          -- Grant permissions
+          GRANT CONNECT ON DATABASE medication_v2 TO medication_user;
+          GRANT USAGE ON SCHEMA public TO medication_user;
+          GRANT CREATE ON SCHEMA public TO medication_user;
+          GRANT USAGE ON SCHEMA audit TO medication_user;
+          GRANT CREATE ON SCHEMA audit TO medication_user;
+  
+  # Read replica configuration
+  readReplicas:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd-retain"
+      size: "100Gi"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+  
+  # Monitoring
+  metrics:
+    enabled: true
+    image:
+      repository: "prometheuscommunity/postgres-exporter"
+      tag: "v0.12.0"
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+      limits:
+        memory: "128Mi"
+        cpu: "100m"
+
+# Cache configuration (Redis)
+redis:
+  enabled: true  # Set to false to use external Redis
+  
+  # Architecture
+  architecture: "replication"  # standalone, replication, sentinel
+  
+  # Authentication
+  auth:
+    enabled: true
+    password: ""  # Set via external secrets
+    sentinel: true
+  
+  # Master configuration
+  master:
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd-retain"
+      size: "20Gi"
+    
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+    
+    # Security configuration
+    securityContext:
+      enabled: true
+      runAsUser: 999
+      runAsGroup: 999
+      runAsNonRoot: true
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+    
+    # Redis configuration
+    configuration: |
+      # Memory
+      maxmemory 512mb
+      maxmemory-policy allkeys-lru
+      
+      # Persistence
+      appendonly yes
+      appendfsync everysec
+      auto-aof-rewrite-percentage 100
+      auto-aof-rewrite-min-size 64mb
+      
+      # Network
+      tcp-keepalive 60
+      timeout 300
+      
+      # Security
+      rename-command FLUSHDB ""
+      rename-command FLUSHALL ""
+      rename-command DEBUG ""
+      rename-command CONFIG ""
+  
+  # Replica configuration
+  replica:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd-retain" 
+      size: "20Gi"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "125m"
+      limits:
+        memory: "512Mi"
+        cpu: "250m"
+  
+  # Monitoring
+  metrics:
+    enabled: true
+    image:
+      repository: "oliver006/redis_exporter"
+      tag: "v1.55.0-alpine"
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "25m"
+      limits:
+        memory: "64Mi"
+        cpu: "50m"
+
+# Monitoring stack
+monitoring:
+  # Prometheus
+  prometheus:
+    enabled: true
+    
+    # Server configuration
+    server:
+      retention: "30d"
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "300m"
+        limits:
+          memory: "1Gi"
+          cpu: "500m"
+      
+      persistentVolume:
+        enabled: true
+        storageClass: "fast-ssd-retain"
+        size: "50Gi"
+    
+    # Service monitor
+    serviceMonitor:
+      enabled: true
+      interval: "30s"
+      path: "/metrics"
+      labels:
+        release: "prometheus"
+    
+    # AlertManager
+    alertmanager:
+      enabled: true
+      config:
+        global:
+          smtp_smarthost: 'localhost:587'
+          smtp_from: 'alerts@cardiofit.health'
+        route:
+          group_by: ['alertname']
+          group_wait: 10s
+          group_interval: 10s
+          repeat_interval: 1h
+          receiver: 'medication-service-alerts'
+        receivers:
+        - name: 'medication-service-alerts'
+          email_configs:
+          - to: 'admin@cardiofit.health'
+            subject: 'Medication Service Alert: {{ .GroupLabels.alertname }}'
+            body: 'Alert details: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+  
+  # Grafana
+  grafana:
+    enabled: true
+    
+    # Admin configuration
+    adminUser: "admin"
+    adminPassword: ""  # Set via external secrets
+    
+    # Datasources
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://prometheus-server:80
+          access: proxy
+          isDefault: true
+        - name: Jaeger
+          type: jaeger
+          url: http://jaeger-query:16686
+          access: proxy
+    
+    # Dashboards
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+        - name: 'default'
+          orgId: 1
+          folder: ''
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+    
+    # Resources
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "200m"
+      limits:
+        memory: "512Mi"
+        cpu: "300m"
+  
+  # Jaeger (Distributed Tracing)
+  jaeger:
+    enabled: true
+    
+    # Storage configuration
+    storage:
+      type: "badger"
+      badger:
+        ephemeral: false
+        
+    # Collector
+    collector:
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "100m"
+        limits:
+          memory: "256Mi"
+          cpu: "200m"
+    
+    # Query service
+    query:
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "50m"
+        limits:
+          memory: "128Mi"
+          cpu: "100m"
+
+# Security configuration
+security:
+  # Pod Security Standards
+  podSecurityPolicy:
+    enabled: true
+    policy: "restricted"
+  
+  # Network Policies
+  networkPolicy:
+    enabled: true
+    policyTypes:
+      - "Ingress"
+      - "Egress"
+    ingress:
+      - from:
+        - namespaceSelector:
+            matchLabels:
+              name: "ingress-nginx"
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: "ingress-nginx"
+        ports:
+        - protocol: "TCP"
+          port: 8005
+        - protocol: "TCP" 
+          port: 50005
+    egress:
+      - to: []
+        ports:
+        - protocol: "UDP"
+          port: 53
+        - protocol: "TCP"
+          port: 443
+  
+  # Cert Manager
+  certManager:
+    enabled: true
+    issuer:
+      name: "letsencrypt-prod"
+      email: "admin@cardiofit.health"
+      server: "https://acme-v02.api.letsencrypt.org/directory"
+  
+  # External Secrets
+  externalSecrets:
+    enabled: false  # Enable if using external secrets operator
+    secretStore:
+      name: "vault-secret-store"
+      provider: "vault"
+      vault:
+        server: "https://vault.cardiofit.internal:8200"
+        path: "secret"
+        version: "v2"
+        auth:
+          kubernetes:
+            mountPath: "kubernetes"
+            role: "medication-service-v2"
+  
+  # Falco (Runtime Security)
+  falco:
+    enabled: false  # Enable if Falco is available
+    driver:
+      kind: "ebpf"
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+
+# Backup configuration
+backup:
+  enabled: true
+  
+  # Schedule (cron format)
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  
+  # Retention policy
+  retention:
+    daily: 7
+    weekly: 4
+    monthly: 12
+  
+  # Storage configuration
+  storage:
+    type: "s3"  # s3, gcs, azure
+    s3:
+      bucket: "cardiofit-medication-backups-prod"
+      region: "us-east-1"
+      storageClass: "STANDARD_IA"
+    
+    # Encryption
+    encryption:
+      enabled: true
+      kmsKeyId: "arn:aws:kms:us-east-1:123456789012:key/key-id"
+  
+  # Resources
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "200m"
+
+# Testing configuration
+testing:
+  enabled: false  # Enable for test deployments
+  
+  # Test suite configuration
+  suite:
+    image:
+      repository: "medication-service-v2-tests"
+      tag: "1.0.0"
+    
+    tests:
+      - name: "health-check"
+        command: ["./test-health.sh"]
+      - name: "api-integration"
+        command: ["./test-api.sh"]
+      - name: "performance"
+        command: ["./test-performance.sh"]
+    
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+
+# Development overrides (not used in production)
+development:
+  enabled: false
+  
+  # Override settings for development
+  replicaCount: 1
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  
+  # Use smaller storage
+  postgresql:
+    primary:
+      persistence:
+        size: "10Gi"
+  
+  redis:
+    master:
+      persistence:
+        size: "5Gi"

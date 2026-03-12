@@ -1,0 +1,39 @@
+# Dockerfile for Custom RDF Converters
+# Purpose: Convert RxNorm RRF and LOINC CSV to RDF/Turtle
+# Base: Python 3.11
+
+FROM python:3.11-slim-bookworm
+
+LABEL maintainer="kb7-team@cardiofit.ai"
+LABEL description="Custom RDF converters for RxNorm and LOINC"
+LABEL version="1.0.0"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    unzip \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    rdflib==7.0.0 \
+    pandas==2.1.4 \
+    click==8.1.7 \
+    requests==2.31.0
+
+# Copy transformation scripts
+COPY scripts/transform-rxnorm.py /app/scripts/
+COPY scripts/transform-loinc.py /app/scripts/
+RUN chmod +x /app/scripts/*.py
+
+# Create workspace directories
+RUN mkdir -p /input /output /workspace
+
+WORKDIR /workspace
+
+# Verify installations
+RUN python -c "import rdflib; import pandas; print('Dependencies installed successfully')"
+
+ENTRYPOINT ["/bin/bash"]
+CMD ["-c", "echo 'RDF Converters ready. Use /app/scripts/transform-*.py'"]

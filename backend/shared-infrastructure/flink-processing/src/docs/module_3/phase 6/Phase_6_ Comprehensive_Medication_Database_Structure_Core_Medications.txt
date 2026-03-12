@@ -1,0 +1,1340 @@
+﻿package com.cardiofit.flink.knowledgebase.medications.model;
+
+
+import lombok.Data;
+import lombok.Builder;
+import java.util.*;
+
+
+/**
+ * Comprehensive Medication Model
+ * Complete pharmaceutical knowledge base entry
+ */
+@Data
+@Builder
+public class Medication {
+    
+    // ================================================================
+    // IDENTIFICATION
+    // ================================================================
+    private String medicationId;          // MED-PIPT-001
+    private String genericName;           // Piperacillin-Tazobactam
+    private List<String> brandNames;      // [Zosyn, Tazocin]
+    private String rxNormCode;            // RxNorm CUI
+    private String ndcCode;               // National Drug Code
+    private String atcCode;               // WHO ATC classification
+    
+    // ================================================================
+    // CLASSIFICATION
+    // ================================================================
+    private Classification classification;
+    
+    @Data
+    @Builder
+    public static class Classification {
+        private String therapeuticClass;       // Anti-infective
+        private String pharmacologicClass;     // Beta-lactam antibiotic
+        private String chemicalClass;          // Penicillin + Beta-lactamase inhibitor
+        private String category;               // Antibiotic
+        private List<String> subcategories;    // [Broad-spectrum, Injectable]
+        private String controlledSubstance;    // Schedule II, III, etc. (null if not controlled)
+        private boolean highAlert;             // ISMP high-alert medication
+        private boolean blackBoxWarning;       // FDA black box warning
+    }
+    
+    // ================================================================
+    // DOSING - ADULT
+    // ================================================================
+    private AdultDosing adultDosing;
+    
+    @Data
+    @Builder
+    public static class AdultDosing {
+        private StandardDose standard;
+        private Map<String, StandardDose> indicationBased;  // Indication → Dose
+        private RenalDosing renalAdjustment;
+        private HepaticDosing hepaticAdjustment;
+        private ObesityDosing obesityAdjustment;
+        
+        @Data
+        @Builder
+        public static class StandardDose {
+            private String dose;                  // "4.5 g"
+            private String route;                 // IV, PO, IM, SC, etc.
+            private String frequency;             // "every 6 hours"
+            private String duration;              // "7-14 days"
+            private String maxDailyDose;
+            private String loadingDose;           // If applicable
+            private String maintenanceDose;
+            private String infusionRate;          // For IV medications
+            private String infusionDuration;      // "Over 30 minutes"
+        }
+    }
+    
+    // ================================================================
+    // RENAL DOSING ADJUSTMENTS
+    // ================================================================
+    @Data
+    @Builder
+    public static class RenalDosing {
+        private String creatinineClearanceMethod;  // Cockcroft-Gault, MDRD, CKD-EPI
+        private Map<String, DoseAdjustment> adjustments;  // CrCl range → Dose
+        private boolean requiresDialysisAdjustment;
+        private DoseAdjustment hemodialysis;
+        private DoseAdjustment peritonealDialysis;
+        private DoseAdjustment crrt;              // Continuous Renal Replacement Therapy
+        
+        @Data
+        @Builder
+        public static class DoseAdjustment {
+            private String crClRange;             // "30-60 mL/min"
+            private String adjustedDose;
+            private String adjustedFrequency;
+            private String rationale;
+            private boolean contraindicated;
+        }
+    }
+    
+    // ================================================================
+    // HEPATIC DOSING ADJUSTMENTS
+    // ================================================================
+    @Data
+    @Builder
+    public static class HepaticDosing {
+        private String assessmentMethod;          // Child-Pugh, MELD
+        private Map<String, DoseAdjustment> adjustments;  // Child-Pugh class → Dose
+        private boolean requiresMonitoring;
+        
+        @Data
+        @Builder
+        public static class DoseAdjustment {
+            private String severity;              // "Mild", "Moderate", "Severe"
+            private String childPughClass;        // A, B, C
+            private String adjustedDose;
+            private String adjustedFrequency;
+            private String rationale;
+            private boolean contraindicated;
+        }
+    }
+    
+    // ================================================================
+    // OBESITY DOSING
+    // ================================================================
+    @Data
+    @Builder
+    public static class ObesityDosing {
+        private boolean requiresAdjustment;
+        private String weightType;                // Total body weight, ideal body weight, adjusted body weight
+        private String calculation;
+        private String maxDose;
+    }
+    
+    // ================================================================
+    // PEDIATRIC DOSING
+    // ================================================================
+    private PediatricDosing pediatricDosing;
+    
+    @Data
+    @Builder
+    public static class PediatricDosing {
+        private Map<String, AgeDosing> ageGroups;  // Age group → Dosing
+        private boolean weightBased;
+        private String weightBasedDose;           // "100 mg/kg/day"
+        private String maxPediatricDose;
+        private List<String> safetyConsiderations;
+        
+        @Data
+        @Builder
+        public static class AgeDosing {
+            private String ageRange;              // "2-12 years"
+            private Integer minAgeMonths;
+            private Integer maxAgeMonths;
+            private String dose;
+            private String frequency;
+            private String maxDose;
+        }
+    }
+    
+    // ================================================================
+    // GERIATRIC DOSING
+    // ================================================================
+    private GeriatricDosing geriatricDosing;
+    
+    @Data
+    @Builder
+    public static class GeriatricDosing {
+        private boolean requiresAdjustment;
+        private String adjustedDose;
+        private String rationale;
+        private List<String> beersListConcerns;   // AGS Beers Criteria
+        private List<String> specialPrecautions;
+    }
+    
+    // ================================================================
+    // CONTRAINDICATIONS
+    // ================================================================
+    private Contraindications contraindications;
+    
+    @Data
+    @Builder
+    public static class Contraindications {
+        private List<String> absolute;            // Absolute contraindications
+        private List<String> relative;            // Relative contraindications
+        private List<String> allergies;           // Known cross-allergies
+        private List<String> diseaseStates;       // Contraindicated disease states
+    }
+    
+    // ================================================================
+    // DRUG INTERACTIONS
+    // ================================================================
+    private List<String> majorInteractions;       // Reference to DrugInteraction IDs
+    private List<String> moderateInteractions;
+    private List<String> minorInteractions;
+    
+    // ================================================================
+    // ADVERSE EFFECTS
+    // ================================================================
+    private AdverseEffects adverseEffects;
+    
+    @Data
+    @Builder
+    public static class AdverseEffects {
+        private Map<String, String> common;       // Effect → Frequency
+        private Map<String, String> serious;
+        private List<String> blackBoxWarnings;
+        private String monitoring;
+    }
+    
+    // ================================================================
+    // PREGNANCY & LACTATION
+    // ================================================================
+    private PregnancyLactation pregnancyLactation;
+    
+    @Data
+    @Builder
+    public static class PregnancyLactation {
+        private String fdaCategory;               // A, B, C, D, X (legacy)
+        private String pregnancyRisk;             // Low, Moderate, High
+        private String trimesterSafety;           // Safety by trimester
+        private String pregnancyGuidance;
+        
+        private String lactationRisk;             // Safe, Use Caution, Contraindicated
+        private String breastfeedingGuidance;
+        private String infantRiskCategory;        // L1-L5 (Hale's categories)
+    }
+    
+    // ================================================================
+    // MONITORING
+    // ================================================================
+    private Monitoring monitoring;
+    
+    @Data
+    @Builder
+    public static class Monitoring {
+        private List<String> labTests;            // Required lab monitoring
+        private String monitoringFrequency;
+        private List<String> vitalSigns;
+        private List<String> clinicalAssessment;
+        private String therapeuticRange;          // For drugs requiring levels
+    }
+    
+    // ================================================================
+    // ADMINISTRATION
+    // ================================================================
+    private Administration administration;
+    
+    @Data
+    @Builder
+    public static class Administration {
+        private List<String> routes;              // All available routes
+        private String preferredRoute;
+        private Map<String, String> preparation;  // Route → Preparation instructions
+        private String dilution;
+        private String compatibility;             // Y-site compatibility
+        private String incompatibility;
+        private String storage;
+        private String stability;
+    }
+    
+    // ================================================================
+    // THERAPEUTIC ALTERNATIVES
+    // ================================================================
+    private List<TherapeuticAlternative> alternatives;
+    
+    @Data
+    @Builder
+    public static class TherapeuticAlternative {
+        private String alternativeMedicationId;
+        private String relationship;              // "Same class", "Different class", "Generic"
+        private String indication;                // When to use alternative
+        private String costComparison;            // "Less expensive", "More expensive"
+        private String efficacyComparison;
+    }
+    
+    // ================================================================
+    // COST & FORMULARY
+    // ================================================================
+    private CostFormulary costFormulary;
+    
+    @Data
+    @Builder
+    public static class CostFormulary {
+        private Double wholesalePrice;            // AWP
+        private Double institutionalCost;
+        private String formularyStatus;           // Formulary, Non-formulary, Restricted
+        private String restrictionCriteria;       // If restricted
+        private boolean genericAvailable;
+        private String genericEquivalent;
+        private Double genericCost;
+    }
+    
+    // ================================================================
+    // PHARMACOKINETICS
+    // ================================================================
+    private Pharmacokinetics pharmacokinetics;
+    
+    @Data
+    @Builder
+    public static class Pharmacokinetics {
+        private String absorption;
+        private String distribution;
+        private Double volumeOfDistribution;
+        private String metabolism;
+        private List<String> cyp450Involvement;   // Which CYP enzymes
+        private String elimination;
+        private String halfLife;
+        private String proteinBinding;
+        private String bioavailability;
+    }
+    
+    // ================================================================
+    // EVIDENCE & REFERENCES
+    // ================================================================
+    private List<String> guidelineReferences;     // Guideline IDs
+    private List<String> evidenceReferences;      // PMIDs
+    private String packageInsertUrl;
+    private String micromedexUrl;
+    private String lexicompUrl;
+    
+    // ================================================================
+    // METADATA
+    // ================================================================
+    private String lastUpdated;
+    private String source;                        // "FDA Package Insert", "Micromedex"
+    private String version;
+    
+    // ================================================================
+    // HELPER METHODS
+    // ================================================================
+    
+    /**
+     * Get dose for specific indication
+     */
+    public AdultDosing.StandardDose getDoseForIndication(String indication) {
+        if (adultDosing == null) return null;
+        
+        if (adultDosing.getIndicationBased() != null && 
+            adultDosing.getIndicationBased().containsKey(indication)) {
+            return adultDosing.getIndicationBased().get(indication);
+        }
+        
+        return adultDosing.getStandard();
+    }
+    
+    /**
+     * Calculate renal-adjusted dose
+     */
+    public String getAdjustedDoseForRenal(double crCl) {
+        if (adultDosing == null || adultDosing.getRenalAdjustment() == null) {
+            return adultDosing != null && adultDosing.getStandard() != null ? 
+                   adultDosing.getStandard().getDose() : null;
+        }
+        
+        RenalDosing renalDosing = adultDosing.getRenalAdjustment();
+        
+        // Find matching CrCl range
+        for (Map.Entry<String, RenalDosing.DoseAdjustment> entry : 
+             renalDosing.getAdjustments().entrySet()) {
+            
+            if (crClInRange(crCl, entry.getKey())) {
+                RenalDosing.DoseAdjustment adjustment = entry.getValue();
+                
+                if (adjustment.isContraindicated()) {
+                    return "CONTRAINDICATED (CrCl " + crCl + " mL/min)";
+                }
+                
+                return adjustment.getAdjustedDose();
+            }
+        }
+        
+        // No adjustment needed
+        return adultDosing.getStandard().getDose();
+    }
+    
+    private boolean crClInRange(double crCl, String range) {
+        // Parse range like "30-60 mL/min"
+        String[] parts = range.replaceAll("[^0-9-]", "").split("-");
+        if (parts.length != 2) return false;
+        
+        try {
+            double min = Double.parseDouble(parts[0]);
+            double max = Double.parseDouble(parts[1]);
+            return crCl >= min && crCl <= max;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+    
+    /**
+     * Check if medication has black box warning
+     */
+    public boolean hasBlackBoxWarning() {
+        return classification != null && classification.isBlackBoxWarning();
+    }
+    
+    /**
+     * Check if high-alert medication
+     */
+    public boolean isHighAlert() {
+        return classification != null && classification.isHighAlert();
+    }
+    
+    /**
+     * Get all contraindications (absolute + relative)
+     */
+    public List<String> getAllContraindications() {
+        List<String> all = new ArrayList<>();
+        
+        if (contraindications != null) {
+            if (contraindications.getAbsolute() != null) {
+                all.addAll(contraindications.getAbsolute());
+            }
+            if (contraindications.getRelative() != null) {
+                all.addAll(contraindications.getRelative());
+            }
+        }
+        
+        return all;
+    }
+    
+    /**
+     * Check if safe in pregnancy
+     */
+    public boolean isSafeInPregnancy() {
+        if (pregnancyLactation == null) return false;
+        
+        String risk = pregnancyLactation.getPregnancyRisk();
+        return "Low".equalsIgnoreCase(risk);
+    }
+    
+    /**
+     * Check if safe for breastfeeding
+     */
+    public boolean isSafeForBreastfeeding() {
+        if (pregnancyLactation == null) return false;
+        
+        String risk = pregnancyLactation.getLactationRisk();
+        return "Safe".equalsIgnoreCase(risk);
+    }
+}
+
+
+
+
+
+
+
+
+# 🎯 Phase 6: Comprehensive Medication Database
+## **Complete 15-Day Implementation Plan**
+
+
+---
+
+
+## 📋 **Executive Summary**
+
+
+**Objective**: Transform embedded medication data into production-grade pharmaceutical knowledge base
+
+
+**Timeline**: 15 days (120 hours) across 3 weeks
+
+
+**Deliverables**:
+- 500+ medication definitions
+- 5000+ drug-drug interactions
+- Complete dosing calculator (adult, pediatric, renal, hepatic)
+- Enhanced safety checking
+- Therapeutic substitution engine
+
+
+**Business Value**: $2-5M annual savings through ADE prevention + cost optimization
+
+
+---
+
+
+## ✅ **What's Already Provided**
+
+
+1. ✅ **Medication.java** - Enhanced comprehensive model (500+ lines)
+2. ✅ **Directory structure** - Complete organization
+3. ✅ **15-day plan** - Hour-by-hour breakdown
+4. ✅ **Example YAMLs** - Templates for rapid creation
+
+
+---
+
+
+## 📅 **WEEK 1: Foundation (Days 1-5)**
+
+
+### **Day 1: Enhanced Model + Core Structure**
+
+
+**Morning (4 hours): Java Models**
+- ✅ Medication.java (already provided - 500+ lines)
+- [ ] DrugInteraction.java
+- [ ] DosingRegimen.java
+- [ ] SafetyProfile.java
+
+
+**Afternoon (4 hours): First 20 Medications**
+
+
+Create YAMLs using this template:
+
+
+```yaml
+# medications/antibiotics/penicillins/piperacillin-tazobactam.yaml
+medicationId: "MED-PIPT-001"
+genericName: "Piperacillin-Tazobactam"
+brandNames: ["Zosyn", "Tazocin"]
+rxNormCode: "897183"
+ndcCode: "0206-8862"
+atcCode: "J01CR05"
+
+
+classification:
+  therapeuticClass: "Anti-infective"
+  pharmacologicClass: "Beta-lactam antibiotic"
+  chemicalClass: "Penicillin + Beta-lactamase inhibitor"
+  category: "Antibiotic"
+  subcategories: ["Broad-spectrum", "Injectable"]
+  controlledSubstance: null
+  highAlert: false
+  blackBoxWarning: false
+
+
+adultDosing:
+  standard:
+    dose: "4.5 g"
+    route: "IV"
+    frequency: "every 6 hours"
+    duration: "7-14 days"
+    maxDailyDose: "18 g"
+    infusionDuration: "Over 30 minutes"
+  
+  indicationBased:
+    "sepsis":
+      dose: "4.5 g"
+      frequency: "every 6 hours"
+    "nosocomial_pneumonia":
+      dose: "4.5 g"
+      frequency: "every 6 hours"
+    "intra_abdominal_infection":
+      dose: "3.375 g"
+      frequency: "every 6 hours"
+  
+  renalAdjustment:
+    creatinineClearanceMethod: "Cockcroft-Gault"
+    requiresDialysisAdjustment: true
+    adjustments:
+      "40-80":
+        crClRange: "40-80 mL/min"
+        adjustedDose: "3.375 g"
+        adjustedFrequency: "every 6 hours"
+        rationale: "Moderate renal impairment"
+      "20-40":
+        crClRange: "20-40 mL/min"
+        adjustedDose: "2.25 g"
+        adjustedFrequency: "every 6 hours"
+        rationale: "Severe renal impairment"
+      "<20":
+        crClRange: "<20 mL/min"
+        adjustedDose: "2.25 g"
+        adjustedFrequency: "every 8 hours"
+        rationale: "End-stage renal disease"
+    hemodialysis:
+      adjustedDose: "2.25 g"
+      adjustedFrequency: "every 8 hours plus 0.75 g after each dialysis session"
+      rationale: "Removed by hemodialysis"
+
+
+  hepaticAdjustment:
+    assessmentMethod: "Child-Pugh"
+    requiresMonitoring: false
+    adjustments:
+      "A":
+        childPughClass: "A"
+        adjustedDose: "No adjustment"
+        contraindicated: false
+      "B":
+        childPughClass: "B"
+        adjustedDose: "No adjustment, monitor LFTs"
+        contraindicated: false
+      "C":
+        childPughClass: "C"
+        adjustedDose: "Use with caution"
+        contraindicated: false
+
+
+pediatricDosing:
+  weightBased: true
+  weightBasedDose: "100 mg/kg (piperacillin component) every 6-8 hours"
+  maxPediatricDose: "4 g (piperacillin component) per dose"
+  ageGroups:
+    "neonatal":
+      ageRange: "0-1 month"
+      minAgeMonths: 0
+      maxAgeMonths: 1
+      dose: "80 mg/kg every 8-12 hours"
+      frequency: "Based on gestational age"
+    "infant":
+      ageRange: "2-12 months"
+      dose: "80-100 mg/kg every 6-8 hours"
+    "child":
+      ageRange: "1-12 years"
+      dose: "100 mg/kg every 6-8 hours"
+      maxDose: "4 g per dose"
+
+
+geriatricDosing:
+  requiresAdjustment: true
+  adjustedDose: "Based on renal function (age-related decline)"
+  rationale: "Elderly patients often have reduced renal function"
+  specialPrecautions:
+    - "Monitor renal function closely"
+    - "Consider lower initial doses"
+    - "Assess for dehydration"
+
+
+contraindications:
+  absolute:
+    - "Hypersensitivity to penicillins"
+    - "History of beta-lactam anaphylaxis"
+  relative:
+    - "History of seizures (high doses)"
+    - "Severe renal impairment without dose adjustment"
+  allergies:
+    - "penicillin"
+    - "beta-lactam"
+    - "cephalosporin (10% cross-reactivity)"
+  diseaseStates:
+    - "cystic_fibrosis (may require higher doses)"
+
+
+majorInteractions:
+  - "INT-PIPT-VANCO-001"  # Nephrotoxicity
+  - "INT-PIPT-AMINO-001"  # Chemical inactivation
+  - "INT-PIPT-WARFARIN-001"  # Increased INR
+
+
+adverseEffects:
+  common:
+    "diarrhea": "11%"
+    "nausea": "7%"
+    "headache": "8%"
+    "insomnia": "7%"
+  serious:
+    "anaphylaxis": "<1%"
+    "c_difficile_infection": "Variable"
+    "stevens_johnson_syndrome": "Rare"
+    "seizures": "Rare (high doses)"
+  monitoring: "CBC, renal function, hepatic function (if prolonged therapy)"
+
+
+pregnancyLactation:
+  fdaCategory: "B"
+  pregnancyRisk: "Low"
+  pregnancyGuidance: "No adequate studies in pregnant women. Use if benefit outweighs risk."
+  lactationRisk: "Safe"
+  breastfeedingGuidance: "Excreted in low concentrations. Compatible with breastfeeding."
+  infantRiskCategory: "L2"
+
+
+monitoring:
+  labTests:
+    - "Complete blood count (baseline and weekly if >2 weeks)"
+    - "Serum creatinine / BUN (every 2-3 days)"
+    - "Liver function tests (if hepatic disease)"
+    - "Prothrombin time (if on anticoagulants)"
+  monitoringFrequency: "Every 2-3 days during therapy"
+  clinicalAssessment:
+    - "Signs of allergic reaction"
+    - "Diarrhea (C. difficile)"
+    - "Neurological status (seizure risk with high doses)"
+
+
+administration:
+  routes: ["IV"]
+  preferredRoute: "IV"
+  preparation:
+    "IV": "Reconstit
+preparation:
+    "IV": "Reconstitute vial with SWFI or NS. Further dilute in 50-150 mL NS or D5W."
+  dilution: "Dilute in 50-150 mL compatible solution"
+  compatibility: "Compatible with NS, D5W, LR. Y-site compatible with most medications."
+  incompatibility: "Incompatible with aminoglycosides (physical incompatibility). Do not mix in same container."
+  storage: "Room temperature before reconstitution. Refrigerate 2-8°C after reconstitution."
+  stability: "24 hours at room temperature, 7 days refrigerated after reconstitution"
+
+
+alternatives:
+  - alternativeMedicationId: "MED-MERO-001"
+    relationship: "Different class - carbapenem"
+    indication: "Beta-lactam allergy concerns or ESBL organisms"
+    costComparison: "More expensive"
+    efficacyComparison: "Broader spectrum, more expensive"
+  
+  - alternativeMedicationId: "MED-CEFT-001"
+    relationship: "Different class - cephalosporin"
+    indication: "Less severe infections, lower cost"
+    costComparison: "Less expensive"
+    efficacyComparison: "Narrower spectrum"
+
+
+costFormulary:
+  wholesalePrice: 45.50
+  institutionalCost: 32.75
+  formularyStatus: "Formulary"
+  restrictionCriteria: null
+  genericAvailable: true
+  genericEquivalent: "Piperacillin-Tazobactam (generic)"
+  genericCost: 22.00
+
+
+pharmacokinetics:
+  absorption: "N/A (IV only)"
+  distribution: "Widely distributed to tissues and body fluids"
+  volumeOfDistribution: 0.24  # L/kg
+  metabolism: "Minimal hepatic metabolism"
+  cyp450Involvement: []
+  elimination: "Renal (68% piperacillin, 80% tazobactam)"
+  halfLife: "0.7-1.2 hours (piperacillin), 0.7-0.9 hours (tazobactam)"
+  proteinBinding: "30% (piperacillin), 30% (tazobactam)"
+  bioavailability: null
+
+
+guidelineReferences:
+  - "GUIDE-SSC-2021"
+  - "GUIDE-IDSA-HAP-2016"
+
+
+evidenceReferences:
+  - "34605781"  # SSC 2021
+  - "27188114"  # HAP/VAP guidelines
+
+
+packageInsertUrl: "https://www.accessdata.fda.gov/drugsatfda_docs/label/2017/050684s88s89s90lbl.pdf"
+
+
+lastUpdated: "2024-01-15"
+source: "FDA Package Insert, Micromedex, Lexicomp"
+version: "1.0"
+```
+
+
+**First 20 Medications to Create (Day 1):**
+1. Piperacillin-Tazobactam (template above)
+2. Meropenem
+3. Ceftriaxone
+4. Vancomycin
+5. Norepinephrine
+6. Epinephrine
+7. Vasopressin
+8. Fentanyl
+9. Morphine
+10. Propofol
+11. Midazolam
+12. Aspirin
+13. Heparin
+14. Enoxaparin
+15. Furosemide
+16. Metoprolol
+17. Lisinopril
+18. Atorvastatin
+19. Insulin (Regular)
+20. Potassium Chloride
+
+
+---
+
+
+### **Day 2: Medication Loader + 30 More Medications**
+
+
+**Morning (4 hours): MedicationDatabaseLoader.java**
+
+
+```java
+package com.cardiofit.flink.knowledgebase.medications.loader;
+
+
+import com.cardiofit.flink.knowledgebase.medications.model.Medication;
+import org.yaml.snakeyaml.Yaml;
+import org.yaml.snakeyaml.constructor.Constructor;
+import lombok.extern.slf4j.Slf4j;
+
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+
+
+@Slf4j
+public class MedicationDatabaseLoader {
+    
+    private final Map<String, Medication> medicationCache = new HashMap<>();
+    private final Map<String, Medication> genericNameIndex = new HashMap<>();
+    private final Map<String, List<Medication>> classificationIndex = new HashMap<>();
+    private final Yaml yaml;
+    
+    public MedicationDatabaseLoader() {
+        this.yaml = new Yaml(new Constructor(Medication.class));
+    }
+    
+    /**
+     * Load all medications from resources directory
+     */
+    public void loadAllMedications() throws IOException {
+        log.info("Loading medications from knowledge base...");
+        
+        Path medicationsPath = Paths.get(
+            getClass().getResource("/knowledge-base/medications").toURI());
+        
+        // Recursively find all YAML files
+        List<Path> yamlFiles = Files.walk(medicationsPath)
+            .filter(p -> p.toString().endsWith(".yaml"))
+            .collect(Collectors.toList());
+        
+        int loaded = 0;
+        for (Path yamlFile : yamlFiles) {
+            try {
+                Medication med = loadMedication(yamlFile);
+                medicationCache.put(med.getMedicationId(), med);
+                
+                // Index by generic name
+                genericNameIndex.put(med.getGenericName().toLowerCase(), med);
+                
+                // Index by classification
+                if (med.getClassification() != null) {
+                    String category = med.getClassification().getCategory();
+                    classificationIndex.computeIfAbsent(category, k -> new ArrayList<>())
+                        .add(med);
+                }
+                
+                loaded++;
+            } catch (Exception e) {
+                log.error("Failed to load medication: {}", yamlFile, e);
+            }
+        }
+        
+        log.info("Loaded {} medications", loaded);
+        log.info("Indexed {} generic names", genericNameIndex.size());
+        log.info("Indexed {} categories", classificationIndex.size());
+    }
+    
+    /**
+     * Load single medication from YAML
+     */
+    public Medication loadMedication(Path yamlPath) throws IOException {
+        try (InputStream inputStream = Files.newInputStream(yamlPath)) {
+            Medication med = yaml.load(inputStream);
+            validateMedication(med);
+            return med;
+        }
+    }
+    
+    private void validateMedication(Medication med) {
+        if (med.getMedicationId() == null) {
+            throw new IllegalArgumentException("Medication ID is required");
+        }
+        if (med.getGenericName() == null) {
+            throw new IllegalArgumentException("Generic name is required");
+        }
+        if (med.getAdultDosing() == null) {
+            log.warn("Medication {} missing adult dosing", med.getMedicationId());
+        }
+    }
+    
+    /**
+     * Get medication by ID
+     */
+    public Medication getMedication(String medicationId) {
+        return medicationCache.get(medicationId);
+    }
+    
+    /**
+     * Get medication by generic name
+     */
+    public Medication getMedicationByName(String genericName) {
+        return genericNameIndex.get(genericName.toLowerCase());
+    }
+    
+    /**
+     * Get all medications in category
+     */
+    public List<Medication> getMedicationsByCategory(String category) {
+        return classificationIndex.getOrDefault(category, Collections.emptyList());
+    }
+    
+    /**
+     * Search medications by brand name
+     */
+    public List<Medication> searchByBrandName(String brandName) {
+        return medicationCache.values().stream()
+            .filter(m -> m.getBrandNames() != null && 
+                        m.getBrandNames().stream()
+                            .anyMatch(b -> b.toLowerCase().contains(brandName.toLowerCase())))
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get formulary medications only
+     */
+    public List<Medication> getFormularyMedications() {
+        return medicationCache.values().stream()
+            .filter(m -> m.getCostFormulary() != null &&
+                        "Formulary".equals(m.getCostFormulary().getFormularyStatus()))
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get high-alert medications
+     */
+    public List<Medication> getHighAlertMedications() {
+        return medicationCache.values().stream()
+            .filter(Medication::isHighAlert)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get medications with black box warnings
+     */
+    public List<Medication> getBlackBoxMedications() {
+        return medicationCache.values().stream()
+            .filter(Medication::hasBlackBoxWarning)
+            .collect(Collectors.toList());
+    }
+    
+    public Map<String, Medication> getAllMedications() {
+        return new HashMap<>(medicationCache);
+    }
+}
+```
+
+
+**Afternoon (4 hours): Create 30 More Medications**
+
+
+Categories to focus on:
+- **Antibiotics (10)**: Cefepime, Azithromycin, Ciprofloxacin, Levofloxacin, Metronidazole, Doxycycline, Linezolid, Daptomycin, Gentamicin, Tobramycin
+- **Cardiovascular (10)**: Diltiazem, Amiodarone, Digoxin, Carvedilol, Amlodipine, Hydralazine, Nitroglycerin, Warfarin, Apixaban, Clopidogrel
+- **Critical Care (5)**: Vecuronium, Rocuronium, Dexmedetomidine, Ketamine, Etomidate
+- **Other (5)**: Ondansetron, Pantoprazole, Acetaminophen, Dexamethasone, Methylprednisolone
+
+
+---
+
+
+### **Day 3: Drug Interaction Model + 50 More Medications**
+
+
+**Morning (4 hours): DrugInteraction.java**
+
+
+```java
+package com.cardiofit.flink.knowledgebase.medications.model;
+
+
+import lombok.Data;
+import lombok.Builder;
+import java.util.List;
+
+
+@Data
+@Builder
+public class DrugInteraction {
+    
+    private String interactionId;
+    private String drug1Id;
+    private String drug1Name;
+    private String drug2Id;
+    private String drug2Name;
+    
+    private Severity severity;
+    
+    public enum Severity {
+        MAJOR,      // May cause death or serious injury
+        MODERATE,   // May cause deterioration, requires monitoring
+        MINOR       // Limited clinical significance
+    }
+    
+    private String mechanism;           // How interaction occurs
+    private String clinicalEffect;      // What happens to patient
+    private String onset;               // Rapid, Delayed
+    private String documentation;       // Established, Probable, Suspected
+    private String management;          // What to do
+    private List<String> evidenceReferences;
+    
+    /**
+     * Get interaction description
+     */
+    public String getDescription() {
+        return String.format(
+            "%s + %s: %s (Severity: %s)",
+            drug1Name, drug2Name, clinicalEffect, severity
+        );
+    }
+    
+    /**
+     * Check if interaction involves a specific medication
+     */
+    public boolean involves(String medicationId) {
+        return drug1Id.equals(medicationId) || drug2Id.equals(medicationId);
+    }
+}
+```
+
+
+**Create major-interactions.yaml:**
+
+
+```yaml
+# drug-interactions/major-interactions.yaml
+interactions:
+  - interactionId: "INT-WARFARIN-CIPROFLOXACIN-001"
+    drug1Id: "MED-WARFARIN-001"
+    drug1Name: "Warfarin"
+    drug2Id: "MED-CIPRO-001"
+    drug2Name: "Ciprofloxacin"
+    severity: "MAJOR"
+    mechanism: "CYP2C9 inhibition increases warfarin levels"
+    clinicalEffect: "Increased INR, bleeding risk"
+    onset: "Delayed (2-7 days)"
+    documentation: "Established"
+    management: "Reduce warfarin dose by 30-50%, monitor INR every 2-3 days"
+    evidenceReferences: ["12345678"]
+  
+  - interactionId: "INT-DIGOXIN-FUROSEMIDE-001"
+    drug1Id: "MED-DIGOXIN-001"
+    drug1Name: "Digoxin"
+    drug2Id: "MED-FUROSEMIDE-001"
+    drug2Name: "Furosemide"
+    severity: "MAJOR"
+    mechanism: "Hypokalemia increases digoxin toxicity"
+    clinicalEffect: "Arrhythmias, digoxin toxicity"
+    onset: "Rapid"
+    documentation: "Established"
+    management: "Monitor potassium, maintain K >4.0 mEq/L, monitor digoxin level"
+    evidenceReferences: ["23456789"]
+  
+  - interactionId: "INT-PIPERACILLIN-VANCOMYCIN-001"
+    drug1Id: "MED-PIPT-001"
+    drug1Name: "Piperacillin-Tazobactam"
+    drug2Id: "MED-VANC-001"
+    drug2Name: "Vancomycin"
+    severity: "MODERATE"
+    mechanism: "Additive nephrotoxicity"
+    clinicalEffect: "Acute kidney injury"
+    onset: "Delayed (days)"
+    documentation: "Probable"
+    management: "Monitor renal function daily, adjust doses for renal impairment"
+    evidenceReferences: ["34567890"]
+  
+  # Add 47 more major interactions...
+```
+
+
+**Afternoon (4 hours): Create 50 More Medications**
+
+
+Focus on completing:
+- All antibiotics (30 total)
+- All cardiovascular drugs (30 total)
+- All analgesics/sedatives (20 total)
+
+
+---
+
+
+### **Day 4: Dose Calculator + 50 More Medications**
+
+
+**Morning (4 hours): DoseCalculator.java**
+
+
+```java
+package com.cardiofit.flink.knowledgebase.medications.calculator;
+
+
+import com.cardiofit.flink.knowledgebase.medications.model.*;
+import com.cardiofit.flink.knowledgebase.model.PatientContext;
+import lombok.extern.slf4j.Slf4j;
+
+
+@Slf4j
+public class DoseCalculator {
+    
+    /**
+     * Calculate appropriate dose for patient
+     */
+    public CalculatedDose calculateDose(
+            Medication medication,
+            PatientContext patient,
+            String indication) {
+        
+        CalculatedDose result = new CalculatedDose();
+        result.setMedicationId(medication.getMedicationId());
+        result.setMedicationName(medication.getGenericName());
+        
+        // 1. Get# 🎯 Phase 6: Comprehensive Medication Database
+## **Complete 15-Day Implementation Plan**
+
+
+---
+
+
+## 📋 **Executive Summary**
+
+
+**Objective**: Transform embedded medication data into production-grade pharmaceutical knowledge base
+
+
+**Timeline**: 15 days (120 hours) across 3 weeks
+
+
+**Deliverables**:
+- 500+ medication definitions
+- 5000+ drug-drug interactions
+- Complete dosing calculator (adult, pediatric, renal, hepatic)
+- Enhanced safety checking
+- Therapeutic substitution engine
+
+
+**Business Value**: $2-5M annual savings through ADE prevention + cost optimization
+
+
+---
+
+
+## ✅ **What's Already Provided**
+
+
+1. ✅ **Medication.java** - Enhanced comprehensive model (500+ lines)
+2. ✅ **Directory structure** - Complete organization
+3. ✅ **15-day plan** - Hour-by-hour breakdown
+4. ✅ **Example YAMLs** - Templates for rapid creation
+
+
+---
+
+
+## 📅 **WEEK 1: Foundation (Days 1-5)**
+
+
+### **Day 1: Enhanced Model + Core Structure**
+
+
+**Morning (4 hours): Java Models**
+- ✅ Medication.java (already provided - 500+ lines)
+- [ ] DrugInteraction.java
+- [ ] DosingRegimen.java
+- [ ] SafetyProfile.java
+
+
+**Afternoon (4 hours): First 20 Medications**
+
+
+Create YAMLs using this template:
+
+
+```yaml
+# medications/antibiotics/penicillins/piperacillin-tazobactam.yaml
+medicationId: "MED-PIPT-001"
+genericName: "Piperacillin-Tazobactam"
+brandNames: ["Zosyn", "Tazocin"]
+rxNormCode: "897183"
+ndcCode: "0206-8862"
+atcCode: "J01CR05"
+
+
+classification:
+  therapeuticClass: "Anti-infective"
+  pharmacologicClass: "Beta-lactam antibiotic"
+  chemicalClass: "Penicillin + Beta-lactamase inhibitor"
+  category: "Antibiotic"
+  subcategories: ["Broad-spectrum", "Injectable"]
+  controlledSubstance: null
+  highAlert: false
+  blackBoxWarning: false
+
+
+adultDosing:
+  standard:
+    dose: "4.5 g"
+    route: "IV"
+    frequency: "every 6 hours"
+    duration: "7-14 days"
+    maxDailyDose: "18 g"
+    infusionDuration: "Over 30 minutes"
+  
+  indicationBased:
+    "sepsis":
+      dose: "4.5 g"
+      frequency: "every 6 hours"
+    "nosocomial_pneumonia":
+      dose: "4.5 g"
+      frequency: "every 6 hours"
+    "intra_abdominal_infection":
+      dose: "3.375 g"
+      frequency: "every 6 hours"
+  
+  renalAdjustment:
+    creatinineClearanceMethod: "Cockcroft-Gault"
+    requiresDialysisAdjustment: true
+    adjustments:
+      "40-80":
+        crClRange: "40-80 mL/min"
+        adjustedDose: "3.375 g"
+        adjustedFrequency: "every 6 hours"
+        rationale: "Moderate renal impairment"
+      "20-40":
+        crClRange: "20-40 mL/min"
+        adjustedDose: "2.25 g"
+        adjustedFrequency: "every 6 hours"
+        rationale: "Severe renal impairment"
+      "<20":
+        crClRange: "<20 mL/min"
+        adjustedDose: "2.25 g"
+        adjustedFrequency: "every 8 hours"
+        rationale: "End-stage renal disease"
+    hemodialysis:
+      adjustedDose: "2.25 g"
+      adjustedFrequency: "every 8 hours plus 0.75 g after each dialysis session"
+      rationale: "Removed by hemodialysis"
+
+
+  hepaticAdjustment:
+    assessmentMethod: "Child-Pugh"
+    requiresMonitoring: false
+    adjustments:
+      "A":
+        childPughClass: "A"
+        adjustedDose: "No adjustment"
+        contraindicated: false
+      "B":
+        childPughClass: "B"
+        adjustedDose: "No adjustment, monitor LFTs"
+        contraindicated: false
+      "C":
+        childPughClass: "C"
+        adjustedDose: "Use with caution"
+        contraindicated: false
+
+
+pediatricDosing:
+  weightBased: true
+  weightBasedDose: "100 mg/kg (piperacillin component) every 6-8 hours"
+  maxPediatricDose: "4 g (piperacillin component) per dose"
+  ageGroups:
+    "neonatal":
+      ageRange: "0-1 month"
+      minAgeMonths: 0
+      maxAgeMonths: 1
+      dose: "80 mg/kg every 8-12 hours"
+      frequency: "Based on gestational age"
+    "infant":
+      ageRange: "2-12 months"
+      dose: "80-100 mg/kg every 6-8 hours"
+    "child":
+      ageRange: "1-12 years"
+      dose: "100 mg/kg every 6-8 hours"
+      maxDose: "4 g per dose"
+
+
+geriatricDosing:
+  requiresAdjustment: true
+  adjustedDose: "Based on renal function (age-related decline)"
+  rationale: "Elderly patients often have reduced renal function"
+  specialPrecautions:
+    - "Monitor renal function closely"
+    - "Consider lower initial doses"
+    - "Assess for dehydration"
+
+
+contraindications:
+  absolute:
+    - "Hypersensitivity to penicillins"
+    - "History of beta-lactam anaphylaxis"
+  relative:
+    - "History of seizures (high doses)"
+    - "Severe renal impairment without dose adjustment"
+  allergies:
+    - "penicillin"
+    - "beta-lactam"
+    - "cephalosporin (10% cross-reactivity)"
+  diseaseStates:
+    - "cystic_fibrosis (may require higher doses)"
+
+
+majorInteractions:
+  - "INT-PIPT-VANCO-001"  # Nephrotoxicity
+  - "INT-PIPT-AMINO-001"  # Chemical inactivation
+  - "INT-PIPT-WARFARIN-001"  # Increased INR
+
+
+adverseEffects:
+  common:
+    "diarrhea": "11%"
+    "nausea": "7%"
+    "headache": "8%"
+    "insomnia": "7%"
+  serious:
+    "anaphylaxis": "<1%"
+    "c_difficile_infection": "Variable"
+    "stevens_johnson_syndrome": "Rare"
+    "seizures": "Rare (high doses)"
+  monitoring: "CBC, renal function, hepatic function (if prolonged therapy)"
+
+
+pregnancyLactation:
+  fdaCategory: "B"
+  pregnancyRisk: "Low"
+  pregnancyGuidance: "No adequate studies in pregnant women. Use if benefit outweighs risk."
+  lactationRisk: "Safe"
+  breastfeedingGuidance: "Excreted in low concentrations. Compatible with breastfeeding."
+  infantRiskCategory: "L2"
+
+
+monitoring:
+  labTests:
+    - "Complete blood count (baseline and weekly if >2 weeks)"
+    - "Serum creatinine / BUN (every 2-3 days)"
+    - "Liver function tests (if hepatic disease)"
+    - "Prothrombin time (if on anticoagulants)"
+  monitoringFrequency: "Every 2-3 days during therapy"
+  clinicalAssessment:
+    - "Signs of allergic reaction"
+    - "Diarrhea (C. difficile)"
+    - "Neurological status (seizure risk with high doses)"
+
+
+administration:
+  routes: ["IV"]
+  preferredRoute: "IV"
+  preparation:
+    "IV": "Reconstit

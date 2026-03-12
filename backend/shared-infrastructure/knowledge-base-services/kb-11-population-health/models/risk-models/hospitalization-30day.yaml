@@ -1,0 +1,188 @@
+# KB-11 Risk Model: 30-Day Hospitalization Risk
+# ══════════════════════════════════════════════════════════════════════════════
+# This model predicts the probability of hospital admission within 30 days.
+# All calculations are governed by KB-18 and must emit governance events.
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: hospitalization-30day
+type: HOSPITALIZATION
+version: "1.0.0"
+description: "30-day hospital admission risk prediction based on clinical and social factors"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GOVERNANCE METADATA (KB-18 Integration)
+# ──────────────────────────────────────────────────────────────────────────────
+governance:
+  owner: "Population Health Team"
+  clinical_reviewer: "CMO Office"
+  last_approved: "2025-01-01"
+  approval_id: "GOV-2025-001"
+  requires_validation: true
+  review_cycle_days: 90
+  clinical_evidence:
+    - "LACE Index validation study"
+    - "CMS Hospital Readmission Reduction Program"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RISK FACTORS
+# ──────────────────────────────────────────────────────────────────────────────
+factors:
+  - name: prior_admissions
+    description: "Number of hospital admissions in past year"
+    weight: 0.25
+    source: claims
+    lookback_days: 365
+    scoring:
+      - range: [0, 0]
+        score: 0.0
+      - range: [1, 1]
+        score: 0.3
+      - range: [2, 3]
+        score: 0.6
+      - range: [4, 999]
+        score: 1.0
+
+  - name: chronic_conditions
+    description: "Presence of high-risk chronic conditions"
+    weight: 0.20
+    source: diagnosis
+    conditions:
+      - code: "I50.*"
+        system: "ICD-10"
+        description: "Heart failure"
+        score: 0.8
+      - code: "J44.*"
+        system: "ICD-10"
+        description: "COPD"
+        score: 0.7
+      - code: "E11.*"
+        system: "ICD-10"
+        description: "Type 2 diabetes"
+        score: 0.5
+      - code: "N18.*"
+        system: "ICD-10"
+        description: "Chronic kidney disease"
+        score: 0.6
+      - code: "F32.*"
+        system: "ICD-10"
+        description: "Major depressive disorder"
+        score: 0.4
+
+  - name: age_factor
+    description: "Age-based risk adjustment"
+    weight: 0.15
+    source: demographics
+    thresholds:
+      - range: [0, 45]
+        score: 0.1
+      - range: [45, 65]
+        score: 0.2
+      - range: [65, 75]
+        score: 0.4
+      - range: [75, 85]
+        score: 0.7
+      - range: [85, 999]
+        score: 1.0
+
+  - name: medication_complexity
+    description: "Polypharmacy risk indicator"
+    weight: 0.15
+    source: medications
+    thresholds:
+      - range: [0, 4]
+        score: 0.1
+      - range: [5, 9]
+        score: 0.3
+      - range: [10, 14]
+        score: 0.6
+      - range: [15, 999]
+        score: 1.0
+    high_risk_medications:
+      - class: "anticoagulants"
+        multiplier: 1.2
+      - class: "insulin"
+        multiplier: 1.1
+      - class: "opioids"
+        multiplier: 1.3
+
+  - name: recent_ed_visits
+    description: "Emergency department utilization"
+    weight: 0.15
+    source: encounters
+    lookback_days: 90
+    thresholds:
+      - range: [0, 0]
+        score: 0.0
+      - range: [1, 1]
+        score: 0.3
+      - range: [2, 3]
+        score: 0.6
+      - range: [4, 999]
+        score: 1.0
+
+  - name: social_risk
+    description: "Social determinants of health risk"
+    weight: 0.10
+    source: sdoh
+    sdoh_factors:
+      - name: food_insecurity
+        z_code: "Z59.4"
+        score: 0.3
+      - name: housing_instability
+        z_code: "Z59.0"
+        score: 0.4
+      - name: transportation_barriers
+        z_code: "Z59.82"
+        score: 0.2
+      - name: social_isolation
+        z_code: "Z60.2"
+        score: 0.2
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RISK TIERS
+# ──────────────────────────────────────────────────────────────────────────────
+tiers:
+  LOW:
+    range: [0, 0.30]
+    intervention: "standard_preventive"
+    description: "Routine preventive care"
+    recommended_actions:
+      - "Annual wellness visit"
+      - "Standard screening protocols"
+
+  MODERATE:
+    range: [0.30, 0.50]
+    intervention: "enhanced_monitoring"
+    description: "Enhanced monitoring with care coordination"
+    recommended_actions:
+      - "Quarterly check-ins"
+      - "Medication reconciliation"
+      - "Care gap closure focus"
+
+  HIGH:
+    range: [0.50, 0.75]
+    intervention: "care_management"
+    description: "Active care management program"
+    recommended_actions:
+      - "Monthly care manager contact"
+      - "Chronic disease management enrollment"
+      - "Transition of care support"
+
+  VERY_HIGH:
+    range: [0.75, 1.00]
+    intervention: "intensive_coordination"
+    description: "Intensive care coordination with multidisciplinary team"
+    recommended_actions:
+      - "Weekly care team touchpoints"
+      - "Home health assessment"
+      - "Palliative care evaluation"
+      - "Complex case management"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MODEL CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+configuration:
+  cache_ttl_minutes: 60
+  recalculation_interval_days: 7
+  minimum_data_completeness: 0.7
+  confidence_threshold: 0.6

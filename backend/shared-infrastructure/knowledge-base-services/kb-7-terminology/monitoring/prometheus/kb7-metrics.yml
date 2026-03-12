@@ -1,0 +1,345 @@
+# KB-7 Prometheus Metrics Configuration
+# Purpose: Define metrics collection for KB-7 Terminology Service
+# Compatible with: Prometheus 2.x
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'cardiofit-kb7'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'alertmanager:9093'
+
+# Load alert rules
+rule_files:
+  - '/etc/prometheus/alerts/kb7-alerts.yml'
+
+# Scrape configurations
+scrape_configs:
+  # KB-7 API Server Metrics
+  - job_name: 'kb7-api'
+    static_configs:
+      - targets:
+          - 'kb7-api:8092'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # GraphDB Metrics
+  - job_name: 'kb7-graphdb'
+    static_configs:
+      - targets:
+          - 'graphdb:7200'
+    metrics_path: '/rest/monitor/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'graphdb_.*'
+        action: keep
+
+  # PostgreSQL Exporter
+  - job_name: 'kb7-postgresql'
+    static_configs:
+      - targets:
+          - 'postgres-exporter:9187'
+    scrape_interval: 30s
+    relabel_configs:
+      - source_labels: [datname]
+        target_label: database
+      - source_labels: [datname]
+        regex: 'kb7_terminology'
+        action: keep
+
+  # Redis Exporter
+  - job_name: 'kb7-redis'
+    static_configs:
+      - targets:
+          - 'redis-exporter:9121'
+    scrape_interval: 15s
+
+  # Custom KB-7 Metrics (Pushgateway)
+  - job_name: 'kb7-custom-metrics'
+    static_configs:
+      - targets:
+          - 'pushgateway:9091'
+    honor_labels: true
+    scrape_interval: 10s
+
+# Remote write configuration (optional - for long-term storage)
+# remote_write:
+#   - url: "https://prometheus-remote-storage.example.com/api/v1/write"
+#     basic_auth:
+#       username: 'kb7-metrics'
+#       password: '${PROMETHEUS_REMOTE_PASSWORD}'
+
+---
+# Alert Rules for KB-7 Service
+# File: /etc/prometheus/alerts/kb7-alerts.yml
+
+groups:
+  - name: kb7_graphdb
+    interval: 30s
+    rules:
+      # GraphDB Availability
+      - alert: GraphDBDown
+        expr: up{job="kb7-graphdb"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: graphdb
+        annotations:
+          summary: "GraphDB is down"
+          description: "GraphDB endpoint has been unavailable for more than 2 minutes"
+
+      # Triple Count Anomaly
+      - alert: TripleCountDrop
+        expr: |
+          (kb7_graphdb_triple_count{repository="kb7-terminology"}
+          - kb7_graphdb_triple_count{repository="kb7-terminology"} offset 1h)
+          / kb7_graphdb_triple_count{repository="kb7-terminology"} offset 1h
+          < -0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: graphdb
+        annotations:
+          summary: "Significant drop in triple count detected"
+          description: "Triple count decreased by more than 5% in the last hour (current: {{ $value }})"
+
+      # Repository Size Growth
+      - alert: RepositorySizeGrowthAnomaly
+        expr: |
+          rate(kb7_graphdb_repository_size_bytes{repository="kb7-terminology"}[1h])
+          > 1073741824
+        for: 15m
+        labels:
+          severity: warning
+          component: graphdb
+        annotations:
+          summary: "Unexpected repository size growth"
+          description: "Repository growing faster than 1GB/hour (rate: {{ humanize $value }}/hour)"
+
+  - name: kb7_query_performance
+    interval: 30s
+    rules:
+      # High Query Latency
+      - alert: HighQueryLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(kb7_query_latency_seconds_bucket[5m])
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High query latency detected"
+          description: "p95 query latency is {{ humanizeDuration $value }} (threshold: 100ms)"
+
+      # Very High Query Latency
+      - alert: VeryHighQueryLatency
+        expr: |
+          histogram_quantile(0.99,
+            rate(kb7_query_latency_seconds_bucket[5m])
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Very high query latency detected"
+          description: "p99 query latency is {{ humanizeDuration $value }} (threshold: 500ms)"
+
+      # High Error Rate
+      - alert: HighQueryErrorRate
+        expr: |
+          rate(kb7_query_errors_total[5m])
+          / rate(kb7_query_total[5m])
+          > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High query error rate"
+          description: "Query error rate is {{ humanizePercentage $value }} (threshold: 1%)"
+
+      # Critical Error Rate
+      - alert: CriticalQueryErrorRate
+        expr: |
+          rate(kb7_query_errors_total[5m])
+          / rate(kb7_query_total[5m])
+          > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Critical query error rate"
+          description: "Query error rate is {{ humanizePercentage $value }} (threshold: 5%)"
+
+  - name: kb7_cache
+    interval: 30s
+    rules:
+      # Low Cache Hit Ratio
+      - alert: LowCacheHitRatio
+        expr: |
+          rate(kb7_cache_hits_total[5m])
+          / (rate(kb7_cache_hits_total[5m]) + rate(kb7_cache_misses_total[5m]))
+          < 0.90
+        for: 15m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Low cache hit ratio"
+          description: "Cache hit ratio is {{ humanizePercentage $value }} (threshold: 90%)"
+
+      # Redis Down
+      - alert: RedisDown
+        expr: up{job="kb7-redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache is unavailable for more than 2 minutes"
+
+      # High Redis Memory Usage
+      - alert: HighRedisMemoryUsage
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "High Redis memory usage"
+          description: "Redis memory usage is {{ humanizePercentage $value }} of maximum"
+
+  - name: kb7_postgresql
+    interval: 30s
+    rules:
+      # PostgreSQL Down
+      - alert: PostgreSQLDown
+        expr: up{job="kb7-postgresql"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: postgresql
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL metadata registry is unavailable"
+
+      # High Connection Usage
+      - alert: HighPostgreSQLConnections
+        expr: |
+          pg_stat_database_numbackends{datname="kb7_terminology"}
+          / pg_settings_max_connections > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          component: postgresql
+        annotations:
+          summary: "High PostgreSQL connection usage"
+          description: "PostgreSQL connection usage is {{ humanizePercentage $value }} of maximum"
+
+      # Stale Snapshot
+      - alert: StaleActiveSnapshot
+        expr: |
+          time() - kb7_snapshot_activated_timestamp_seconds > 2678400
+        for: 1h
+        labels:
+          severity: warning
+          component: deployment
+        annotations:
+          summary: "Active snapshot is stale"
+          description: "Active kernel version has not been updated in over 31 days"
+
+  - name: kb7_deployment
+    interval: 60s
+    rules:
+      # Deployment Failure
+      - alert: DeploymentFailed
+        expr: |
+          increase(kb7_deployment_failures_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: deployment
+        annotations:
+          summary: "Kernel deployment failed"
+          description: "Deployment failed {{ $value }} times in the last hour"
+
+      # Low Deployment Success Rate
+      - alert: LowDeploymentSuccessRate
+        expr: |
+          sum(kb7_deployment_success_total{period="30d"})
+          / sum(kb7_deployment_total{period="30d"}) < 0.95
+        for: 1h
+        labels:
+          severity: warning
+          component: deployment
+        annotations:
+          summary: "Low deployment success rate"
+          description: "Deployment success rate is {{ humanizePercentage $value }} in last 30 days (threshold: 95%)"
+
+      # No Recent Deployment
+      - alert: NoRecentDeployment
+        expr: |
+          time() - kb7_last_deployment_timestamp_seconds > 3456000
+        for: 12h
+        labels:
+          severity: info
+          component: deployment
+        annotations:
+          summary: "No recent kernel deployment"
+          description: "No kernel deployment in the last 40 days (expected: monthly)"
+
+  - name: kb7_data_quality
+    interval: 60s
+    rules:
+      # Concept Count Below Threshold
+      - alert: LowConceptCount
+        expr: kb7_concept_count < 500000
+        for: 5m
+        labels:
+          severity: critical
+          component: data-quality
+        annotations:
+          summary: "Concept count below threshold"
+          description: "Total concept count is {{ humanize $value }} (minimum: 500,000)"
+
+      # SNOMED Concept Count Anomaly
+      - alert: SNOMEDConceptCountAnomaly
+        expr: |
+          (kb7_concept_count{terminology="SNOMED"}
+          - kb7_concept_count{terminology="SNOMED"} offset 30d)
+          / kb7_concept_count{terminology="SNOMED"} offset 30d
+          < -0.01
+        for: 1h
+        labels:
+          severity: warning
+          component: data-quality
+        annotations:
+          summary: "SNOMED concept count decreased"
+          description: "SNOMED concept count decreased by {{ humanizePercentage $value }} in last 30 days"
+
+      # Orphaned Concepts
+      - alert: TooManyOrphanedConcepts
+        expr: kb7_orphaned_concept_count > 10
+        for: 30m
+        labels:
+          severity: warning
+          component: data-quality
+        annotations:
+          summary: "Too many orphaned concepts"
+          description: "Orphaned concept count is {{ humanize $value }} (threshold: 10)"

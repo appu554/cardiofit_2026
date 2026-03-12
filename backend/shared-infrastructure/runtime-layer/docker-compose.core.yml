@@ -1,0 +1,141 @@
+# Core Infrastructure for Runtime Layer
+# Neo4j, GraphDB, Kafka, Redis, ClickHouse
+version: '3.8'
+
+services:
+  # Neo4j with dual database support for patient and semantic streams
+  neo4j:
+    image: neo4j:5.12-enterprise
+    container_name: runtime-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-runtime_password}
+      NEO4J_dbms_memory_heap_max__size: 4G
+      NEO4J_dbms_memory_pagecache_size: 4G
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+      NEO4J_dbms_default_database: patient_data
+      NEO4J_dbms_security_auth__enabled: "true"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-conf:/conf
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-runtime_password}", "RETURN 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-layer
+
+  # GraphDB for OWL reasoning and semantic mesh
+  graphdb:
+    image: ontotext/graphdb:11.1.1
+    container_name: runtime-graphdb
+    environment:
+      GDB_HEAP_SIZE: 4G
+      GDB_MIN_MEM: 2G
+      GDB_MAX_MEM: 4G
+      GDB_JAVA_OPTS: "-Xmx4g -Xms2g"
+    volumes:
+      - graphdb-data:/opt/graphdb/home
+      - graphdb-import:/opt/graphdb/import
+    ports:
+      - "7200:7200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-layer
+
+  # Kafka for event streaming and CDC
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: runtime-kafka
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-layer
+
+  # Zookeeper for Kafka coordination
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: runtime-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - runtime-layer
+
+  # Redis for L1/L2 caching
+  redis:
+    image: redis:7.0-alpine
+    container_name: runtime-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - runtime-layer
+
+  # ClickHouse for analytics and pre-computed scores
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: runtime-clickhouse
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-layer
+
+networks:
+  runtime-layer:
+    driver: bridge
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  neo4j-conf:
+  graphdb-data:
+  graphdb-import:
+  redis-data:
+  clickhouse-data:
+  clickhouse-logs:

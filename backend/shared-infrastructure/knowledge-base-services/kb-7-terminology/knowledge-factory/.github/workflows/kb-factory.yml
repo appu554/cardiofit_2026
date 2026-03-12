@@ -1,0 +1,997 @@
+name: KB-7 Knowledge Factory Pipeline
+
+on:
+  repository_dispatch:
+    types: [terminology-update]
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Target region for kernel build'
+        required: true
+        type: choice
+        options:
+          - us
+          - au
+          - in
+        default: us
+      full_rebuild:
+        description: 'Force full rebuild (ignore cache)'
+        type: boolean
+        default: false
+  schedule:
+    # US: Monday 2 AM EST (Monday 7 AM UTC)
+    - cron: '0 7 * * 1'
+    # AU: Wednesday 2 AM AEST (Tuesday 4 PM UTC)
+    - cron: '0 16 * * 2'
+    # IN: Thursday 2 AM IST (Wednesday 8:30 PM UTC)
+    - cron: '30 20 * * 3'
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+  actions: write
+
+env:
+  GCS_BUCKET_SOURCES: sincere-hybrid-477206-h2-kb-sources-production
+  GCS_BUCKET_ARTIFACTS: sincere-hybrid-477206-h2-kb-artifacts-production
+  GCP_PROJECT_ID: sincere-hybrid-477206-h2
+  SNAPSHOT_VERSION: ${{ github.event.client_payload.version || github.run_number }}
+  REGISTRY_OWNER: ${{ github.repository_owner }}
+  DOCKER_IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ============================================================================
+  # STAGE 0: DETECT REGION - Determine target region from schedule or input
+  # ============================================================================
+  detect-region:
+    name: "Stage 0: Detect Region"
+    runs-on: ubuntu-latest
+    outputs:
+      region: ${{ steps.detect.outputs.region }}
+      region_display: ${{ steps.detect.outputs.region_display }}
+    steps:
+      - name: Detect region from trigger
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            REGION="${{ github.event.inputs.region }}"
+          elif [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            REGION="${{ github.event.client_payload.region || 'us' }}"
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            # Detect region from schedule cron expression
+            HOUR=$(date -u +%H)
+            MINUTE=$(date -u +%M)
+            DAY=$(date -u +%u)  # 1=Monday, 7=Sunday
+
+            # AU: Tuesday 16:00 UTC (cron: 0 16 * * 2)
+            if [ "$DAY" == "2" ] && [ "$HOUR" == "16" ]; then
+              REGION="au"
+            # IN: Wednesday 20:30 UTC (cron: 30 20 * * 3)
+            elif [ "$DAY" == "3" ] && [ "$HOUR" == "20" ]; then
+              REGION="in"
+            # US: Monday 07:00 UTC (cron: 0 7 * * 1)
+            else
+              REGION="us"
+            fi
+          else
+            REGION="us"  # Default fallback
+          fi
+
+          echo "region=$REGION" >> $GITHUB_OUTPUT
+
+          # Set display name for logs
+          case $REGION in
+            au) echo "region_display=Australia (AU)" >> $GITHUB_OUTPUT ;;
+            in) echo "region_display=India (IN)" >> $GITHUB_OUTPUT ;;
+            us) echo "region_display=United States (US)" >> $GITHUB_OUTPUT ;;
+            *) echo "region_display=Unknown ($REGION)" >> $GITHUB_OUTPUT ;;
+          esac
+
+          echo "🌏 Target Region: $REGION"
+
+  # ============================================================================
+  # STAGE 0b: CLEANUP - Delete old artifacts to free quota
+  # ============================================================================
+  cleanup:
+    name: "Stage 0b: Cleanup Old Artifacts"
+    needs: detect-region
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+    steps:
+      - name: Delete old artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const region = process.env.REGION;
+
+            console.log(`🧹 Cleaning up ${region} artifacts for ${owner}/${repo}...`);
+
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            console.log(`Found ${artifacts.data.total_count} artifacts`);
+
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - 1);
+
+            let deleted = 0;
+            for (const artifact of artifacts.data.artifacts) {
+              const createdAt = new Date(artifact.created_at);
+
+              // Region-specific artifact names
+              const knownArtifacts = [
+                `source-files-${region}`, `transformed-ontologies-${region}`,
+                `merged-ontology-${region}`, `inferred-ontology-${region}`,
+                `validation-results-${region}`, `packaged-kernel-${region}`,
+                // Legacy non-region artifacts
+                'source-files', 'transformed-ontologies', 'merged-ontology',
+                'inferred-ontology', 'validation-results', 'packaged-kernel'
+              ];
+
+              if (createdAt < cutoffDate || knownArtifacts.includes(artifact.name)) {
+                try {
+                  await github.rest.actions.deleteArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id
+                  });
+                  console.log(`✅ Deleted: ${artifact.name} (${artifact.id})`);
+                  deleted++;
+                } catch (error) {
+                  console.log(`⚠️ Could not delete ${artifact.name}: ${error.message}`);
+                }
+              }
+            }
+
+            console.log(`\n🎉 Cleanup complete! Deleted ${deleted} artifacts.`);
+
+  # ============================================================================
+  # STAGE 1: DOWNLOAD - Pull region-specific source files from GCS
+  # ============================================================================
+  download:
+    name: "Stage 1: Download ${{ needs.detect-region.outputs.region_display }} Sources"
+    needs: [detect-region, cleanup]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+    outputs:
+      snomed_zip: ${{ steps.download.outputs.snomed_zip }}
+      drug_dir: ${{ steps.download.outputs.drug_dir }}
+      loinc_dir: ${{ steps.download.outputs.loinc_dir }}
+      snomed_version: ${{ steps.extract_versions.outputs.snomed_version }}
+      drug_version: ${{ steps.extract_versions.outputs.drug_version }}
+      loinc_version: ${{ steps.extract_versions.outputs.loinc_version }}
+      drug_system: ${{ steps.download.outputs.drug_system }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download region-specific source files from GCS
+        id: download
+        run: |
+          set -e
+          mkdir -p sources/extracted
+
+          REGION="${{ env.REGION }}"
+          echo "🌏 Downloading sources for region: $REGION"
+
+          case $REGION in
+            # ================================================================
+            # AUSTRALIA: SNOMED CT-AU + AMT
+            # ================================================================
+            au)
+              echo "📥 Downloading Australian sources..."
+
+              # SNOMED CT-AU (includes international + AU extension)
+              SNOMED_KEY="${{ github.event.client_payload.snomed_key || 'au/snomed-au/latest/SnomedCT_Release_AU.zip' }}"
+              echo "  SNOMED CT-AU: $SNOMED_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$SNOMED_KEY" ./sources/ || {
+                echo "⚠️ AU SNOMED not found, falling back to international"
+                gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/us/snomed-us/latest/SnomedCT_InternationalRF2_PRODUCTION_latest.zip" ./sources/
+              }
+
+              # AMT (Australian Medicines Terminology) - RF2 format
+              AMT_KEY="${{ github.event.client_payload.amt_key || 'au/amt/latest/AMT_Release.zip' }}"
+              echo "  AMT: $AMT_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$AMT_KEY" ./sources/ || echo "⚠️ AMT not found"
+
+              # Extract AMT
+              mkdir -p sources/extracted/amt
+              AMT_FILE=$(find sources/ -maxdepth 1 -name "AMT*.zip" | head -1)
+              if [ -n "$AMT_FILE" ]; then
+                unzip -q "$AMT_FILE" -d sources/extracted/amt || echo "AMT extraction issue"
+              fi
+
+              echo "drug_dir=sources/extracted/amt" >> $GITHUB_OUTPUT
+              echo "drug_system=AMT" >> $GITHUB_OUTPUT
+              ;;
+
+            # ================================================================
+            # INDIA: SNOMED CT-IN + CDCI (future)
+            # ================================================================
+            in)
+              echo "📥 Downloading Indian sources..."
+
+              # SNOMED CT-IN (when available from CDSCO)
+              SNOMED_KEY="${{ github.event.client_payload.snomed_key || 'in/snomed-in/latest/SnomedCT_Release_IN.zip' }}"
+              echo "  SNOMED CT-IN: $SNOMED_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$SNOMED_KEY" ./sources/ || {
+                echo "⚠️ IN SNOMED not found, falling back to international"
+                gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/us/snomed-us/latest/SnomedCT_InternationalRF2_PRODUCTION_latest.zip" ./sources/
+              }
+
+              # CDCI (Central Drug Standard Control Index) - future
+              CDCI_KEY="${{ github.event.client_payload.cdci_key || 'in/cdci/latest/CDCI_Release.zip' }}"
+              echo "  CDCI: $CDCI_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$CDCI_KEY" ./sources/ || echo "⚠️ CDCI not found (not yet available)"
+
+              # Extract CDCI when available
+              mkdir -p sources/extracted/cdci
+              CDCI_FILE=$(find sources/ -maxdepth 1 -name "CDCI*.zip" | head -1)
+              if [ -n "$CDCI_FILE" ]; then
+                unzip -q "$CDCI_FILE" -d sources/extracted/cdci || echo "CDCI extraction issue"
+              fi
+
+              echo "drug_dir=sources/extracted/cdci" >> $GITHUB_OUTPUT
+              echo "drug_system=CDCI" >> $GITHUB_OUTPUT
+              ;;
+
+            # ================================================================
+            # USA: SNOMED CT-US + RxNorm + LOINC
+            # ================================================================
+            us|*)
+              echo "📥 Downloading US sources..."
+
+              # SNOMED CT-US
+              SNOMED_KEY="${{ github.event.client_payload.snomed_key || 'us/snomed-us/latest/SnomedCT_InternationalRF2_PRODUCTION_latest.zip' }}"
+              echo "  SNOMED CT-US: $SNOMED_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$SNOMED_KEY" ./sources/
+
+              # RxNorm (US drug terminology)
+              RXNORM_KEY="${{ github.event.client_payload.rxnorm_key || 'us/rxnorm/latest/RxNorm_full_latest.zip' }}"
+              echo "  RxNorm: $RXNORM_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$RXNORM_KEY" ./sources/
+
+              # LOINC (lab tests - US primary, international)
+              LOINC_KEY="${{ github.event.client_payload.loinc_key || 'us/loinc/latest/loinc-complete-latest.zip' }}"
+              echo "  LOINC: $LOINC_KEY"
+              gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$LOINC_KEY" ./sources/
+
+              # Extract RxNorm and LOINC
+              mkdir -p sources/extracted/{rxnorm,loinc}
+
+              RXNORM_FILE=$(find sources/ -maxdepth 1 -name "RxNorm*.zip" | head -1)
+              LOINC_FILE=$(find sources/ -maxdepth 1 -name "loinc*.zip" | head -1)
+
+              unzip -q "$RXNORM_FILE" -d sources/extracted/rxnorm || echo "RxNorm extraction failed"
+              unzip -q "$LOINC_FILE" -d sources/extracted/loinc || echo "LOINC extraction failed"
+
+              echo "drug_dir=sources/extracted/rxnorm" >> $GITHUB_OUTPUT
+              echo "loinc_dir=sources/extracted/loinc" >> $GITHUB_OUTPUT
+              echo "drug_system=RXNORM" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+          # SNOMED ZIP stays in sources/ directory
+          SNOMED_FILE=$(find sources/ -maxdepth 1 -name "SnomedCT*.zip" | head -1)
+          echo "snomed_zip=$SNOMED_FILE" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "✅ Download complete for region: $REGION"
+          ls -lh sources/
+
+      - name: Extract terminology versions
+        id: extract_versions
+        run: |
+          set -e
+          REGION="${{ env.REGION }}"
+          echo "📋 Extracting terminology versions for $REGION..."
+
+          # ============================================================
+          # SNOMED Version (same logic for all regions - RF2 format)
+          # ============================================================
+          SNOMED_FILE=$(find sources/ -maxdepth 1 -name "SnomedCT*.zip" | head -1)
+          if [ -n "$SNOMED_FILE" ]; then
+            SNOMED_VERSION=$(basename "$SNOMED_FILE" | grep -oP '(?<=PRODUCTION_)\d{8}' || \
+                            basename "$SNOMED_FILE" | grep -oP '(?<=Release_)\d{8}' || \
+                            echo "unknown")
+          else
+            SNOMED_VERSION="unknown"
+          fi
+          echo "  SNOMED Version: $SNOMED_VERSION"
+          echo "snomed_version=$SNOMED_VERSION" >> $GITHUB_OUTPUT
+
+          # ============================================================
+          # Drug Terminology Version (region-specific)
+          # ============================================================
+          case $REGION in
+            au)
+              # AMT Version
+              AMT_DIR="sources/extracted/amt"
+              if [ -d "$AMT_DIR" ]; then
+                DRUG_VERSION=$(find "$AMT_DIR" -name "*_version.txt" -exec cat {} \; | head -1 || echo "unknown")
+              else
+                DRUG_VERSION="unknown"
+              fi
+              ;;
+            in)
+              # CDCI Version
+              CDCI_DIR="sources/extracted/cdci"
+              if [ -d "$CDCI_DIR" ]; then
+                DRUG_VERSION=$(find "$CDCI_DIR" -name "*_version.txt" -exec cat {} \; | head -1 || echo "unknown")
+              else
+                DRUG_VERSION="unknown"
+              fi
+              ;;
+            us|*)
+              # RxNorm Version
+              RXNORM_DIR="sources/extracted/rxnorm"
+              if [ -d "$RXNORM_DIR" ]; then
+                if [ -f "$RXNORM_DIR/rrf/RELEASE_DATE.txt" ]; then
+                  DRUG_VERSION=$(cat "$RXNORM_DIR/rrf/RELEASE_DATE.txt" | head -1)
+                else
+                  RXNORM_FILE=$(find sources/ -maxdepth 1 -name "RxNorm*.zip" | head -1)
+                  DRUG_VERSION=$(basename "$RXNORM_FILE" | grep -oP '\d{8}' | head -1 || echo "unknown")
+                fi
+              else
+                DRUG_VERSION="unknown"
+              fi
+              ;;
+          esac
+          echo "  Drug Version: $DRUG_VERSION"
+          echo "drug_version=$DRUG_VERSION" >> $GITHUB_OUTPUT
+
+          # ============================================================
+          # LOINC Version (US only)
+          # ============================================================
+          if [ "$REGION" == "us" ]; then
+            LOINC_DIR="sources/extracted/loinc"
+            if [ -d "$LOINC_DIR" ]; then
+              if [ -f "$LOINC_DIR/LoincVersion.txt" ]; then
+                LOINC_VERSION=$(cat "$LOINC_DIR/LoincVersion.txt" | head -1)
+              else
+                LOINC_FILE=$(find sources/ -maxdepth 1 -name "loinc*.zip" | head -1)
+                LOINC_VERSION=$(basename "$LOINC_FILE" | grep -oP '(?<=loinc-)\d+\.\d+' | head -1 || echo "unknown")
+              fi
+            else
+              LOINC_VERSION="unknown"
+            fi
+          else
+            LOINC_VERSION="N/A"
+          fi
+          echo "  LOINC Version: $LOINC_VERSION"
+          echo "loinc_version=$LOINC_VERSION" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "✅ Version extraction complete for $REGION"
+
+      - name: Upload source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-files-${{ env.REGION }}
+          path: sources/
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 2: TRANSFORM - Convert sources to RDF/OWL (region-aware)
+  # ============================================================================
+  transform:
+    name: "Stage 2: Transform ${{ needs.detect-region.outputs.region_display }}"
+    needs: [detect-region, download]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+      DRUG_SYSTEM: ${{ needs.download.outputs.drug_system }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download source files
+        uses: actions/download-artifact@v4
+        with:
+          name: source-files-${{ env.REGION }}
+          path: sources/
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Transform SNOMED-CT RF2 to OWL
+        run: |
+          echo "🔄 Transforming SNOMED-CT for region: ${{ env.REGION }}"
+          docker run --rm \
+            -v $(pwd)/sources:/input \
+            -v $(pwd)/output:/output \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:${{ env.DOCKER_IMAGE_TAG }}
+
+      # ================================================================
+      # Region-specific drug terminology transformation
+      # ================================================================
+      - name: Transform Drug Terminology (RxNorm - US)
+        if: env.REGION == 'us'
+        run: |
+          echo "🔄 Transforming RxNorm RRF to RDF..."
+          docker run --rm \
+            -v $(pwd)/sources/extracted/rxnorm:/input \
+            -v $(pwd)/output:/output \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:${{ env.DOCKER_IMAGE_TAG }} \
+            -c "python /app/scripts/transform-rxnorm.py"
+
+      - name: Transform Drug Terminology (AMT - AU)
+        if: env.REGION == 'au'
+        run: |
+          echo "🔄 Transforming AMT RF2 to OWL..."
+          # AMT uses RF2 format (same as SNOMED), so use snomed-toolkit
+          # AMT is an extension of SNOMED CT-AU
+          if [ -d "sources/extracted/amt" ] && [ "$(ls -A sources/extracted/amt)" ]; then
+            docker run --rm \
+              -v $(pwd)/sources/extracted/amt:/input \
+              -v $(pwd)/output:/output \
+              -e OUTPUT_PREFIX=amt \
+              ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:${{ env.DOCKER_IMAGE_TAG }}
+          else
+            echo "⚠️ AMT sources not available, skipping..."
+          fi
+
+      - name: Transform Drug Terminology (CDCI - IN)
+        if: env.REGION == 'in'
+        run: |
+          echo "🔄 Transforming CDCI to OWL..."
+          # CDCI transformation when available
+          if [ -d "sources/extracted/cdci" ] && [ "$(ls -A sources/extracted/cdci)" ]; then
+            docker run --rm \
+              -v $(pwd)/sources/extracted/cdci:/input \
+              -v $(pwd)/output:/output \
+              -e OUTPUT_PREFIX=cdci \
+              ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:${{ env.DOCKER_IMAGE_TAG }}
+          else
+            echo "⚠️ CDCI sources not available yet, skipping..."
+          fi
+
+      - name: Transform LOINC CSV to RDF (US only)
+        if: env.REGION == 'us'
+        run: |
+          echo "🔄 Transforming LOINC CSV to RDF..."
+          docker run --rm \
+            -v $(pwd)/sources/extracted/loinc:/input \
+            -v $(pwd)/output:/output \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:${{ env.DOCKER_IMAGE_TAG }} \
+            -c "python /app/scripts/transform-loinc.py"
+
+      - name: Upload transformed ontologies
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformed-ontologies-${{ env.REGION }}
+          path: output/
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 3: MERGE - Combine ontologies (region-specific)
+  # ============================================================================
+  merge:
+    name: "Stage 3: Merge ${{ needs.detect-region.outputs.region_display }} Ontologies"
+    needs: [detect-region, transform]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download transformed ontologies
+        uses: actions/download-artifact@v4
+        with:
+          name: transformed-ontologies-${{ env.REGION }}
+          path: output/
+
+      - name: Merge with ROBOT (region-aware)
+        run: |
+          echo "🔄 Merging ontologies for region: ${{ env.REGION }}"
+          docker run --rm \
+            -v $(pwd)/output:/workspace \
+            -e REGION=${{ env.REGION }} \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:${{ env.DOCKER_IMAGE_TAG }} \
+            /app/scripts/merge-ontologies.sh
+
+      - name: Upload merged ontology
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-ontology-${{ env.REGION }}
+          path: output/kb7-merged.ttl
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 4b: GCS REASONING DOWNLOAD - Use pre-computed reasoning from GCS
+  # ============================================================================
+  gcs-reasoning:
+    name: "Stage 4: Download ${{ needs.detect-region.outputs.region_display }} Reasoning"
+    needs: [detect-region, merge]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Download pre-computed reasoning from GCS
+        run: |
+          REGION="${{ env.REGION }}"
+          echo "📥 Downloading pre-computed reasoning for $REGION..."
+          echo "📍 Source: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/local-reasoning/kb7-inferred.ttl"
+
+          gsutil cp "gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/local-reasoning/kb7-inferred.ttl" output/ || {
+            echo "⚠️ Region-specific reasoning not found, trying legacy path..."
+            gsutil cp "gs://${{ env.GCS_BUCKET_ARTIFACTS }}/local-reasoning/kb7-inferred.ttl" output/
+          }
+
+          gsutil cp "gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/local-reasoning/manifest.json" output/ || echo "No manifest found"
+
+          echo "✅ Download complete"
+          ls -lh output/
+
+      - name: Verify downloaded file
+        run: |
+          if [ ! -f output/kb7-inferred.ttl ]; then
+            echo "❌ ERROR: kb7-inferred.ttl not found"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s output/kb7-inferred.ttl)
+          echo "📊 File size: $FILE_SIZE bytes"
+
+          # Minimum expected sizes vary by region
+          case ${{ env.REGION }} in
+            us) MIN_SIZE=1000000000 ;;  # ~1GB for US (SNOMED + RxNorm + LOINC)
+            au) MIN_SIZE=500000000 ;;   # ~500MB for AU (SNOMED-AU + AMT)
+            in) MIN_SIZE=300000000 ;;   # ~300MB for IN (SNOMED-IN + CDCI)
+          esac
+
+          if [ $FILE_SIZE -lt $MIN_SIZE ]; then
+            echo "⚠️ WARNING: File smaller than expected for ${{ env.REGION }}"
+          fi
+
+          echo "✅ Pre-computed reasoning verified for ${{ env.REGION }}"
+
+      - name: Upload inferred ontology artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: inferred-ontology-${{ env.REGION }}
+          path: output/kb7-inferred.ttl
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 5: VALIDATION - Run quality gates (region-aware)
+  # ============================================================================
+  validation:
+    name: "Stage 5: Validate ${{ needs.detect-region.outputs.region_display }}"
+    needs: [detect-region, gcs-reasoning]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download inferred ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: inferred-ontology-${{ env.REGION }}
+          path: output/
+
+      - name: Run lightweight validation
+        run: |
+          mkdir -p output/validation-results
+          REGION="${{ env.REGION }}"
+
+          echo "🔍 Running validation on kb7-inferred.ttl for $REGION..."
+
+          FILE="output/kb7-inferred.ttl"
+
+          # Check 1: File exists
+          if [ ! -f "$FILE" ]; then
+            echo "❌ FAIL: kb7-inferred.ttl not found"
+            exit 1
+          fi
+          echo "✅ File exists: $FILE"
+
+          # Check 2: File size
+          FILE_SIZE=$(stat -f%z "$FILE" 2>/dev/null || stat -c%s "$FILE")
+          echo "✅ File size: $(numfmt --to=iec $FILE_SIZE 2>/dev/null || echo "$FILE_SIZE bytes")"
+
+          # Check 3: Line count
+          LINE_COUNT=$(wc -l < "$FILE")
+          echo "✅ Line count: $LINE_COUNT"
+
+          # Check 4: Verify key namespaces (region-specific)
+          echo ""
+          echo "🔍 Checking namespace presence for $REGION..."
+
+          # SNOMED is present in all regions
+          if grep -q "http://snomed.info/id/" "$FILE"; then
+            SNOMED_COUNT=$(grep -c "http://snomed.info/id/" "$FILE" || echo "0")
+            echo "✅ SNOMED namespace present (~$SNOMED_COUNT occurrences)"
+          else
+            echo "❌ FAIL: No SNOMED concepts found"
+            exit 1
+          fi
+
+          # Region-specific drug terminology checks
+          case $REGION in
+            us)
+              if grep -q "http://purl.bioontology.org/ontology/RXNORM/" "$FILE"; then
+                RXNORM_COUNT=$(grep -c "http://purl.bioontology.org/ontology/RXNORM/" "$FILE" || echo "0")
+                echo "✅ RxNorm namespace present (~$RXNORM_COUNT occurrences)"
+              else
+                echo "⚠️ WARNING: No RxNorm concepts found"
+              fi
+              if grep -q "http://loinc.org/" "$FILE"; then
+                LOINC_COUNT=$(grep -c "http://loinc.org/" "$FILE" || echo "0")
+                echo "✅ LOINC namespace present (~$LOINC_COUNT occurrences)"
+              fi
+              ;;
+            au)
+              # AMT uses SNOMED URIs with specific module IDs
+              if grep -q "900062011000036103" "$FILE"; then
+                echo "✅ AMT module present (900062011000036103)"
+              else
+                echo "⚠️ WARNING: AMT module ID not found"
+              fi
+              ;;
+            in)
+              # CDCI namespace check when available
+              echo "ℹ️ CDCI validation pending (terminology not yet integrated)"
+              ;;
+          esac
+
+          # Check 5: Valid Turtle format
+          if ! grep -q "@prefix" "$FILE"; then
+            echo "❌ FAIL: No @prefix declarations - not valid Turtle"
+            exit 1
+          fi
+          echo "✅ Turtle format validated"
+
+          echo ""
+          echo "✅ Lightweight validation PASSED for $REGION"
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-results-${{ env.REGION }}
+          path: output/validation-results/
+          retention-days: 7
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 6: PACKAGE - Create regional kernel
+  # ============================================================================
+  package:
+    name: "Stage 6: Package ${{ needs.detect-region.outputs.region_display }} Kernel"
+    needs: [detect-region, download, validation]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+    outputs:
+      kernel_version: ${{ steps.package.outputs.version }}
+      concept_count: ${{ steps.package.outputs.concept_count }}
+      triple_count: ${{ steps.package.outputs.triple_count }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download inferred ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: inferred-ontology-${{ env.REGION }}
+          path: output/
+
+      - name: Package kernel
+        id: package
+        run: |
+          REGION="${{ env.REGION }}"
+
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v $(pwd)/output:/workspace \
+            -e REGION=$REGION \
+            -e OUTPUT_FILE="kb7-kernel-$REGION.ttl" \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:${{ env.DOCKER_IMAGE_TAG }} \
+            /app/scripts/package-kernel.sh
+
+      - name: Generate metadata manifest
+        run: |
+          REGION="${{ env.REGION }}"
+          VERSION=$(date +%Y%m%d)
+
+          # Read counts from package script output
+          CONCEPT_COUNT=$(cat output/kb7-manifest.json | jq -r '.concept_count')
+          TRIPLE_COUNT=$(cat output/kb7-manifest.json | jq -r '.triple_count')
+          FILE_SIZE=$(cat output/kb7-manifest.json | jq -r '.file_size')
+          CHECKSUM=$(cat output/kb7-manifest.json | jq -r '.checksum_sha256')
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "concept_count=$CONCEPT_COUNT" >> $GITHUB_OUTPUT
+          echo "triple_count=$TRIPLE_COUNT" >> $GITHUB_OUTPUT
+
+          # Terminology versions from download stage
+          SNOMED_VERSION="${{ needs.download.outputs.snomed_version }}"
+          DRUG_VERSION="${{ needs.download.outputs.drug_version }}"
+          DRUG_SYSTEM="${{ needs.download.outputs.drug_system }}"
+          LOINC_VERSION="${{ needs.download.outputs.loinc_version }}"
+
+          # Region-specific manifest
+          cat > output/kb7-manifest.json <<EOF
+          {
+            "version": "$VERSION",
+            "region": "$REGION",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "built_by": "${{ github.actor }}",
+            "kernel_uri": "http://cardiofit.ai/kernels/$REGION/$VERSION",
+            "concept_count": $CONCEPT_COUNT,
+            "triple_count": $TRIPLE_COUNT,
+            "file_size": $FILE_SIZE,
+            "checksum_sha256": "$CHECKSUM",
+            "terminologies": {
+              "snomed": {
+                "version": "$SNOMED_VERSION",
+                "uri": "http://snomed.info/"
+              },
+              "drug": {
+                "system": "$DRUG_SYSTEM",
+                "version": "$DRUG_VERSION"
+              },
+              "loinc": {
+                "version": "$LOINC_VERSION",
+                "uri": "http://loinc.org/"
+              }
+            },
+            "reasoner": "ELK v0.5.0 (via ROBOT v1.9.5)",
+            "git_commit": "${{ github.sha }}",
+            "workflow_run": "${{ github.run_id }}"
+          }
+          EOF
+
+          echo "✅ Manifest generated for $REGION"
+          cat output/kb7-manifest.json | jq '.'
+
+      - name: Create versioned snapshot
+        run: |
+          REGION="${{ env.REGION }}"
+          VERSION=$(date +%Y%m%d)
+
+          mkdir -p artifacts/$VERSION
+          cp output/kb7-kernel-$REGION.ttl artifacts/$VERSION/ 2>/dev/null || cp output/kb7-kernel.ttl artifacts/$VERSION/kb7-kernel-$REGION.ttl
+          cp output/kb7-manifest.json artifacts/$VERSION/
+          tar -czf artifacts/kb7-$REGION-$VERSION.tar.gz -C artifacts/$VERSION .
+
+      - name: Upload packaged kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-kernel-${{ env.REGION }}
+          path: artifacts/
+          retention-days: 7
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 7: UPLOAD - Push to region-specific GCS path
+  # ============================================================================
+  upload:
+    name: "Stage 7: Upload ${{ needs.detect-region.outputs.region_display }} to GCS"
+    needs: [detect-region, package]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download packaged kernel
+        uses: actions/download-artifact@v4
+        with:
+          name: packaged-kernel-${{ env.REGION }}
+          path: artifacts/
+
+      - name: Upload to GCS (region-specific path)
+        run: |
+          REGION="${{ env.REGION }}"
+          VERSION=$(date +%Y%m%d)
+
+          mkdir -p ~/.gsutil/tracker-files
+          chmod 755 ~/.gsutil/tracker-files
+
+          cat > ~/.boto <<EOF
+          [GSUtil]
+          parallel_composite_upload_threshold = 0
+          resumable_threshold = 0
+          EOF
+
+          echo "📤 Uploading $REGION kernel version $VERSION..."
+
+          # Upload versioned kernel to region-specific path
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-manifest.json \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/$VERSION/kb7-manifest.json
+
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-kernel-$REGION.ttl \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/$VERSION/kb7-kernel-$REGION.ttl
+
+          echo "📤 Updating 'latest' pointer for $REGION..."
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-kernel-$REGION.ttl \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/latest/kb7-kernel-$REGION.ttl
+
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-manifest.json \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/latest/kb7-manifest.json
+
+          echo "✅ Uploaded $REGION kernel version $VERSION to GCS"
+          echo "📍 URI: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$REGION/$VERSION/"
+
+      - name: Pipeline complete notification
+        run: |
+          echo "✅ KB-7 Pipeline Complete for ${{ env.REGION }}"
+          echo "Version: $(date +%Y%m%d)"
+          echo "GCS: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/${{ env.REGION }}/$(date +%Y%m%d)/"
+
+  # ============================================================================
+  # STAGE 8: DEPLOY - GraphDB import + CDC (region-aware)
+  # ============================================================================
+  deploy:
+    name: "Stage 8: Deploy ${{ needs.detect-region.outputs.region_display }} to Neo4j"
+    needs: [detect-region, download, package, upload]
+    runs-on: ubuntu-latest
+    env:
+      REGION: ${{ needs.detect-region.outputs.region }}
+    if: ${{ success() && vars.GRAPHDB_DEPLOY_ENABLED == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests google-cloud-storage google-auth psycopg2-binary
+
+      - name: Deploy to region-specific database
+        env:
+          REGION: ${{ env.REGION }}
+          # Region-specific Neo4j URLs from secrets
+          NEO4J_URL_AU: ${{ secrets.NEO4J_URL_AU }}
+          NEO4J_URL_IN: ${{ secrets.NEO4J_URL_IN }}
+          NEO4J_URL_US: ${{ secrets.NEO4J_URL_US }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD_AU: ${{ secrets.NEO4J_PASSWORD_AU }}
+          NEO4J_PASSWORD_IN: ${{ secrets.NEO4J_PASSWORD_IN }}
+          NEO4J_PASSWORD_US: ${{ secrets.NEO4J_PASSWORD_US }}
+          VERSION_ID: ${{ needs.package.outputs.kernel_version }}
+          SNOMED_VERSION: ${{ needs.download.outputs.snomed_version }}
+          DRUG_VERSION: ${{ needs.download.outputs.drug_version }}
+          LOINC_VERSION: ${{ needs.download.outputs.loinc_version }}
+          CONCEPT_COUNT: ${{ needs.package.outputs.concept_count }}
+          ENABLE_CDC: ${{ vars.ENABLE_CDC || 'false' }}
+        run: |
+          REGION="${{ env.REGION }}"
+
+          echo "🚀 Deploying KB-7 kernel to Neo4j for $REGION..."
+          echo "   Version: $VERSION_ID"
+
+          # Select region-specific Neo4j connection
+          case $REGION in
+            au)
+              export NEO4J_URL="$NEO4J_URL_AU"
+              export NEO4J_PASSWORD="$NEO4J_PASSWORD_AU"
+              export NEO4J_DATABASE="kb7-au"
+              ;;
+            in)
+              export NEO4J_URL="$NEO4J_URL_IN"
+              export NEO4J_PASSWORD="$NEO4J_PASSWORD_IN"
+              export NEO4J_DATABASE="kb7-in"
+              ;;
+            us|*)
+              export NEO4J_URL="$NEO4J_URL_US"
+              export NEO4J_PASSWORD="$NEO4J_PASSWORD_US"
+              export NEO4J_DATABASE="kb7-us"
+              ;;
+          esac
+
+          echo "   Target: $NEO4J_URL (database: $NEO4J_DATABASE)"
+
+          python scripts/deploy_neo4j.py
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "✅ KB-7 Deployment Complete for ${{ env.REGION }}"
+          echo "═══════════════════════════════════════════"
+          echo "   Region:         ${{ env.REGION }}"
+          echo "   Version:        ${{ needs.package.outputs.kernel_version }}"
+          echo "   Concepts:       ${{ needs.package.outputs.concept_count }}"
+          echo "   SNOMED:         ${{ needs.download.outputs.snomed_version }}"
+          echo "   Drug:           ${{ needs.download.outputs.drug_version }}"
+          echo "   LOINC:          ${{ needs.download.outputs.loinc_version }}"

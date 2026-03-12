@@ -1,0 +1,120 @@
+# Runtime Layer Monitoring & SLA
+# SLA Monitoring, Prometheus, Grafana
+version: '3.8'
+
+services:
+  # SLA Monitoring Service
+  sla-monitoring:
+    build:
+      context: ./sla-monitoring-service
+      dockerfile: Dockerfile
+    container_name: runtime-sla-monitoring
+    ports:
+      - "8050:8050"
+    environment:
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=INFO
+      - ENVIRONMENT=development
+      # Database Configuration
+      - MONGODB_URL=mongodb://mongodb-sla:27017
+      - MONGODB_DATABASE=cardiofit_sla_monitoring
+      - REDIS_URL=redis://redis:6379/3
+      # Monitoring targets
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-runtime_password}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - FLINK_JOBMANAGER_URL=http://flink-jobmanager:8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - mongodb-sla
+    networks:
+      - runtime-layer
+    external_links:
+      - runtime-redis:redis
+      - runtime-neo4j:neo4j
+      - runtime-clickhouse:clickhouse
+      - runtime-kafka:kafka
+
+  # MongoDB for SLA metrics
+  mongodb-sla:
+    image: mongo:7.0
+    container_name: runtime-mongodb-sla
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-admin_password}
+      MONGO_INITDB_DATABASE: cardiofit_sla_monitoring
+    volumes:
+      - mongodb-sla-data:/data/db
+    ports:
+      - "27019:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-layer
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: runtime-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-layer
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: runtime-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - prometheus
+    networks:
+      - runtime-layer
+
+networks:
+  runtime-layer:
+    external: true
+
+volumes:
+  mongodb-sla-data:
+  prometheus-data:
+  grafana-data:

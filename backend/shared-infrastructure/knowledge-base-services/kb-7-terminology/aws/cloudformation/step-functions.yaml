@@ -1,0 +1,336 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'KB-7 Knowledge Factory - Step Functions Orchestration Workflow'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+    Description: Environment name
+
+  LambdaStackName:
+    Type: String
+    Default: kb7-lambda
+    Description: Name of the Lambda functions stack for imports
+
+Resources:
+  # IAM Role for Step Functions
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'KB7-StepFunctions-Role-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambdaFunctions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub '{{resolve:ssm:/kb7/${EnvironmentName}/lambda/snomed-arn}}'
+                  - !Sub '{{resolve:ssm:/kb7/${EnvironmentName}/lambda/rxnorm-arn}}'
+                  - !Sub '{{resolve:ssm:/kb7/${EnvironmentName}/lambda/loinc-arn}}'
+                  - !Sub '{{resolve:ssm:/kb7/${EnvironmentName}/lambda/github-arn}}'
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/stepfunctions/*'
+
+  # Step Functions State Machine
+  KnowledgeFactoryStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub 'kb7-knowledge-factory-${EnvironmentName}'
+      RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
+      StateMachineType: STANDARD
+      LoggingConfiguration:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StepFunctionsLogGroup.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "KB-7 Knowledge Factory - Parallel terminology downloads then GitHub dispatch",
+          "StartAt": "ParallelDownloads",
+          "States": {
+            "ParallelDownloads": {
+              "Type": "Parallel",
+              "Comment": "Download SNOMED, RxNorm, and LOINC in parallel",
+              "Branches": [
+                {
+                  "StartAt": "DownloadSNOMED",
+                  "States": {
+                    "DownloadSNOMED": {
+                      "Type": "Task",
+                      "Resource": "{{resolve:ssm:/kb7/${EnvironmentName}/lambda/snomed-arn}}",
+                      "TimeoutSeconds": 900,
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.Timeout", "Lambda.ServiceException"],
+                          "IntervalSeconds": 120,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 1.5
+                        }
+                      ],
+                      "Catch": [
+                        {
+                          "ErrorEquals": ["States.ALL"],
+                          "ResultPath": "$.error",
+                          "Next": "SNOMEDFailed"
+                        }
+                      ],
+                      "ResultPath": "$.snomed",
+                      "End": true
+                    },
+                    "SNOMEDFailed": {
+                      "Type": "Fail",
+                      "Error": "SNOMEDDownloadFailed",
+                      "Cause": "SNOMED download exceeded timeout or failed after retries"
+                    }
+                  }
+                },
+                {
+                  "StartAt": "DownloadRxNorm",
+                  "States": {
+                    "DownloadRxNorm": {
+                      "Type": "Task",
+                      "Resource": "{{resolve:ssm:/kb7/${EnvironmentName}/lambda/rxnorm-arn}}",
+                      "TimeoutSeconds": 600,
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.Timeout", "Lambda.ServiceException"],
+                          "IntervalSeconds": 60,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 1.5
+                        }
+                      ],
+                      "Catch": [
+                        {
+                          "ErrorEquals": ["States.ALL"],
+                          "ResultPath": "$.error",
+                          "Next": "RxNormFailed"
+                        }
+                      ],
+                      "ResultPath": "$.rxnorm",
+                      "End": true
+                    },
+                    "RxNormFailed": {
+                      "Type": "Fail",
+                      "Error": "RxNormDownloadFailed",
+                      "Cause": "RxNorm download exceeded timeout or failed after retries"
+                    }
+                  }
+                },
+                {
+                  "StartAt": "DownloadLOINC",
+                  "States": {
+                    "DownloadLOINC": {
+                      "Type": "Task",
+                      "Resource": "{{resolve:ssm:/kb7/${EnvironmentName}/lambda/loinc-arn}}",
+                      "TimeoutSeconds": 300,
+                      "Retry": [
+                        {
+                          "ErrorEquals": ["States.Timeout", "Lambda.ServiceException"],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 1.5
+                        }
+                      ],
+                      "Catch": [
+                        {
+                          "ErrorEquals": ["States.ALL"],
+                          "ResultPath": "$.error",
+                          "Next": "LOINCFailed"
+                        }
+                      ],
+                      "ResultPath": "$.loinc",
+                      "End": true
+                    },
+                    "LOINCFailed": {
+                      "Type": "Fail",
+                      "Error": "LOINCDownloadFailed",
+                      "Cause": "LOINC download exceeded timeout or failed after retries"
+                    }
+                  }
+                }
+              ],
+              "Next": "CheckDownloadResults",
+              "ResultPath": "$.downloads"
+            },
+            "CheckDownloadResults": {
+              "Type": "Choice",
+              "Comment": "Verify all downloads succeeded",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.downloads[0].snomed.statusCode",
+                      "NumericEquals": 200
+                    },
+                    {
+                      "Variable": "$.downloads[1].rxnorm.statusCode",
+                      "NumericEquals": 200
+                    },
+                    {
+                      "Variable": "$.downloads[2].loinc.statusCode",
+                      "NumericEquals": 200
+                    }
+                  ],
+                  "Next": "DispatchGitHub"
+                }
+              ],
+              "Default": "DownloadsFailed"
+            },
+            "DispatchGitHub": {
+              "Type": "Task",
+              "Comment": "Trigger GitHub Actions workflow via repository_dispatch",
+              "Resource": "{{resolve:ssm:/kb7/${EnvironmentName}/lambda/github-arn}}",
+              "TimeoutSeconds": 300,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.Timeout", "Lambda.ServiceException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "ResultPath": "$.github",
+              "Next": "PipelineSuccess"
+            },
+            "PipelineSuccess": {
+              "Type": "Succeed",
+              "Comment": "Knowledge Factory pipeline completed successfully"
+            },
+            "DownloadsFailed": {
+              "Type": "Fail",
+              "Error": "DownloadValidationFailed",
+              "Cause": "One or more terminology downloads failed validation"
+            }
+          }
+        }
+
+  # CloudWatch Log Group for Step Functions
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/stepfunctions/kb7-knowledge-factory-${EnvironmentName}'
+      RetentionInDays: 30
+
+  # CloudWatch Events Rule for Monthly Cron
+  MonthlyScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'kb7-monthly-terminology-update-${EnvironmentName}'
+      Description: 'Trigger KB-7 Knowledge Factory on 1st of every month at 2 AM UTC'
+      ScheduleExpression: 'cron(0 2 1 * ? *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt KnowledgeFactoryStateMachine.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: KB7KnowledgeFactory
+          Input: |
+            {
+              "trigger": "monthly-scheduled",
+              "timestamp": "$$.State.EnteredTime"
+            }
+
+  # IAM Role for EventBridge to invoke Step Functions
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'KB7-EventBridge-Role-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStepFunctions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !GetAtt KnowledgeFactoryStateMachine.Arn
+
+  # CloudWatch Alarm for Step Functions Failures
+  StateMachineFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'KB7-StateMachine-Failed-${EnvironmentName}'
+      AlarmDescription: 'KB-7 Knowledge Factory state machine execution failed'
+      MetricName: ExecutionsFailed
+      Namespace: AWS/States
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !GetAtt KnowledgeFactoryStateMachine.Arn
+      TreatMissingData: notBreaching
+
+  # CloudWatch Alarm for Long Execution Duration
+  StateMachineDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'KB7-StateMachine-LongDuration-${EnvironmentName}'
+      AlarmDescription: 'KB-7 Knowledge Factory execution exceeding 30 minutes'
+      MetricName: ExecutionTime
+      Namespace: AWS/States
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1800000  # 30 minutes in milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !GetAtt KnowledgeFactoryStateMachine.Arn
+      TreatMissingData: notBreaching
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Knowledge Factory state machine
+    Value: !GetAtt KnowledgeFactoryStateMachine.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-StateMachineArn'
+
+  StateMachineName:
+    Description: Name of the Knowledge Factory state machine
+    Value: !GetAtt KnowledgeFactoryStateMachine.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-StateMachineName'
+
+  MonthlyScheduleRuleArn:
+    Description: ARN of the monthly schedule EventBridge rule
+    Value: !GetAtt MonthlyScheduleRule.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-MonthlyScheduleArn'
+
+  StepFunctionsLogGroupName:
+    Description: CloudWatch Log Group for Step Functions
+    Value: !Ref StepFunctionsLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'

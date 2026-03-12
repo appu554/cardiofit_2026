@@ -1,0 +1,88 @@
+# KB-6 Formulary Prometheus Configuration
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'kb6-formulary-monitor'
+    environment: 'development'
+
+rule_files:
+  - "formulary_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+  # KB-6 Formulary Service metrics
+  - job_name: 'kb6-formulary'
+    static_configs:
+      - targets: ['kb6-formulary:8087']
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    scheme: 'http'
+    scrape_timeout: 5s
+    
+  # PostgreSQL metrics via postgres_exporter
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    scrape_interval: 15s
+    params:
+      'module': ['default']
+    
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 15s
+    
+  # Elasticsearch metrics
+  - job_name: 'elasticsearch'
+    static_configs:
+      - targets: ['elasticsearch:9200']
+    scrape_interval: 30s
+    metrics_path: '/_prometheus/metrics'
+    basic_auth:
+      username: 'elastic'
+      password: 'changeme'
+    
+  # Node exporter for system metrics (if available)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 10s
+    
+  # Grafana metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+# Formulary-specific metric relabeling
+metric_relabel_configs:
+  # Add service labels
+  - source_labels: [__name__]
+    regex: 'kb6_formulary_(.*)'
+    target_label: 'service'
+    replacement: 'formulary'
+    
+  - source_labels: [__name__]
+    regex: 'kb6_inventory_(.*)'
+    target_label: 'service'
+    replacement: 'inventory'
+    
+  # Add environment labels
+  - source_labels: [job]
+    regex: 'kb6-formulary'
+    target_label: 'environment'
+    replacement: 'development'

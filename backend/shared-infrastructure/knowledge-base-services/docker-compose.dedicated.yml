@@ -1,0 +1,176 @@
+version: '3.8'
+
+services:
+  # ==================== DEDICATED MONGODB FOR KB2 ====================
+  kb2-mongodb:
+    image: mongo:7.0
+    container_name: kb2-dedicated-mongodb
+    restart: unless-stopped
+    ports:
+      - "27018:27017"  # Different port from context gateway
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: kb2admin
+      MONGO_INITDB_ROOT_PASSWORD: kb2_mongodb_password
+      MONGO_INITDB_DATABASE: kb2_clinical_context
+    volumes:
+      - kb2_mongodb_data:/data/db
+    networks:
+      - kb2-dedicated-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/kb2_clinical_context --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== DEDICATED REDIS FOR KB2 ====================
+  kb2-redis:
+    image: redis:7-alpine
+    container_name: kb2-dedicated-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"  # Different port from context gateway
+    volumes:
+      - kb2_redis_data:/data
+    networks:
+      - kb2-dedicated-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # ==================== DEDICATED POSTGRESQL FOR KB3 ====================
+  kb3-postgres:
+    image: postgres:15-alpine
+    container_name: kb3-dedicated-postgres
+    environment:
+      - POSTGRES_USER=kb3admin
+      - POSTGRES_PASSWORD=kb3_postgres_password
+      - POSTGRES_DB=kb3_guidelines
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5434:5432"  # Different port from knowledge bases
+    volumes:
+      - kb3_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb3admin -d kb3_guidelines"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - kb3-dedicated-network
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=100
+      -c shared_buffers=128MB
+      -c effective_cache_size=512MB
+
+  # ==================== DEDICATED NEO4J FOR KB3 ====================
+  kb3-neo4j:
+    image: neo4j:5.15-community  # Using community edition to avoid license issues
+    container_name: kb3-dedicated-neo4j
+    restart: unless-stopped
+    ports:
+      - "7475:7474"  # HTTP - different port
+      - "7688:7687"  # Bolt - different port
+    environment:
+      NEO4J_AUTH: neo4j/kb3_neo4j_password
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: 'true'
+      NEO4J_apoc_import_file_enabled: 'true'
+      NEO4J_apoc_import_file_use__neo4j__config: 'true'
+    volumes:
+      - kb3_neo4j_data:/data
+      - kb3_neo4j_logs:/logs
+      - kb3_neo4j_import:/var/lib/neo4j/import
+      - kb3_neo4j_plugins:/plugins
+    networks:
+      - kb3-dedicated-network
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p kb3_neo4j_password 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== DEDICATED REDIS FOR CLINICAL DATA HUB ====================
+  clinical-hub-redis:
+    image: redis:7-alpine
+    container_name: clinical-hub-dedicated-redis
+    command: redis-server --appendonly yes --maxmemory 1GB --maxmemory-policy allkeys-lru
+    ports:
+      - "6382:6379"  # Another different port
+    volumes:
+      - clinical_hub_redis_data:/data
+    networks:
+      - clinical-hub-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # ==================== DEDICATED POSTGRESQL FOR CLINICAL DATA HUB ====================
+  clinical-hub-postgres:
+    image: postgres:15-alpine
+    container_name: clinical-hub-dedicated-postgres
+    environment:
+      - POSTGRES_USER=clinicalhub
+      - POSTGRES_PASSWORD=clinical_hub_postgres_password
+      - POSTGRES_DB=clinical_data_hub
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5435:5432"  # Yet another different port
+    volumes:
+      - clinical_hub_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinicalhub -d clinical_data_hub"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - clinical-hub-network
+
+volumes:
+  kb2_mongodb_data:
+    driver: local
+  kb2_redis_data:
+    driver: local
+  kb3_postgres_data:
+    driver: local
+  kb3_neo4j_data:
+    driver: local
+  kb3_neo4j_logs:
+    driver: local
+  kb3_neo4j_import:
+    driver: local
+  kb3_neo4j_plugins:
+    driver: local
+  clinical_hub_redis_data:
+    driver: local
+  clinical_hub_postgres_data:
+    driver: local
+
+networks:
+  kb2-dedicated-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+  kb3-dedicated-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.23.0.0/16
+  clinical-hub-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.24.0.0/16

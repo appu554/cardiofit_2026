@@ -1,0 +1,147 @@
+Of course. Let's proceed with the deep dive into KB-5: Drug-Drug Interactions (DDI). This is a performance-critical service that is essential for the platform's safety.
+This guide provides the detailed design and implementation plan for KB-5, adhering to the Universal Framework and synthesizing all the architectural decisions we've made.
+
+Implementation Guide: KB-5 Drug-Drug Interactions
+
+Sunday, August 31, 2025, 10:00 PM AEST, Sydney, NSW
+This document provides the detailed design and implementation plan for the KB-5 Drug-Drug Interactions microservice, following the 13-section Universal Framework 2.0.
+
+1. Purpose & Scope
+
+Purpose: To serve as the platform's single, authoritative, and high-performance source for identifying and managing drug-drug, drug-class, and pharmacogenetic interactions1. Its primary function is to provide the
+
+Safety Gateway's CAE Engine with rapid, accurate interaction checks22.
+
+
+In Scope:
+Pairwise drug-drug interactions (DDIs).
+Broader drug-class interactions.
+Interaction modifiers (e.g., related to food or specific conditions).
+Pharmacogenetic interactions (e.g., related to specific gene variants) 3.
+
+
+Severity levels, clinical effects, and management advice for all interactions.
+Out of Scope:
+Dose calculation or adjustment (KB-1).
+Patient-specific allergies or absolute contraindications unrelated to an interaction (KB-4).
+Guideline compliance (KB-3).
+
+2. Data Model & Schema
+
+Primary Technology: PostgreSQL with specialized indexing, materialized views, and high-performance functions4.
+
+
+Data Sourcing: The data is licensed from a reputable third-party vendor and processed via the Unified ETL Pipeline5. The pipeline's Harmonizer is responsible for normalizing vendor data into this schema.
+
+
+Schema Implementation: The following tables from the Database Architecture for 7 KB Services document will be implemented:
+drug_interactions: The core repository for pairwise DDI data, including severity, mechanism, and management strategies 6.
+
+
+drug_class_interactions: Stores rules for interactions between entire classes of drugs 7.
+
+
+interaction_modifiers: A table for rules that modify interactions based on other factors like food or specific patient conditions 8.
+
+
+pharmacogenetic_interactions: A dedicated table for interactions linked to specific genetic markers 9.
+
+
+interaction_matrix: A crucial materialized view that pre-computes the most critical and frequently checked interactions for optimized lookups 10.
+
+
+
+3. Cross-Component Integration
+
+Primary Consumer: The Clinical Safety Gateway's CAE Engine. During the
+Validate phase, it makes a high-priority call to KB-5 to check all proposed medications against the patient's existing regimen11111111.
+
+
+Secondary Consumer: The Medication Service's CandidateBuilder. During the
+Calculate phase, it may perform a preliminary check for a small number of absolutely contraindicated "never-together" pairs to perform early filtering12.
+
+
+Dependency: KB-5 is highly dependent on KB-7 (Terminology). The Unified ETL pipeline must use KB-7 to normalize all drug codes from the vendor source into our canonical RxNorm/ATC standards before loading the data into KB-5.
+
+4. API & Query Contracts
+
+Technology: gRPC is the mandated protocol for its high performance and strict Protobuf contracts, which are essential for this high-throughput, low-latency service.
+Primary Endpoint: rpc CheckInteractions(InteractionCheckRequest) returns (InteractionCheckResponse)
+Protobuf Definition:
+Protocol Buffers
+message InteractionCheckRequest {
+  string transaction_id = 1;
+  repeated string drug_codes = 2; // List of all proposed & existing RxNorm/ATC codes
+  PatientContext patient_context = 3; // Includes genetic markers, etc.
+  string version_pin = 4; // From the Evidence Envelope
+}
+
+message InteractionCheckResponse {
+  string transaction_id = 1;
+  repeated Interaction interactions = 2;
+}
+
+message Interaction {
+  string drug1_code = 1;
+  string drug2_code = 2;
+  string severity = 3; // "major", "moderate", "minor"
+  string mechanism = 4;
+  string clinical_effects = 5;
+  string management_strategy = 6;
+}
+
+
+Service Level Objective (SLO): A p95 latency of < 80ms is required 13.
+
+
+
+5. Security & Privacy by Design
+
+Access Control: Strict mTLS is required. Access is limited to the Safety Gateway and the Medication Service.
+Data Minimization: The request payload contains only the list of drug codes and non-identifiable patient context (like genetic markers) needed to evaluate interactions.
+
+6. Performance & Caching Strategy
+
+Database: Performance is primarily driven by querying the interaction_matrix materialized view via the highly optimized check_drug_interactions PostgreSQL function 14. This pre-joined and indexed view provides extremely fast lookups.
+
+
+Caching: A Redis cache is used to store the interaction matrix for the most common drug pairs, providing O(1) lookups for the vast majority of requests. The cache is invalidated and refreshed by the ETL pipeline after a new version of the DDI data is successfully committed to PostgreSQL 15151515.
+
+
+
+7. Testing & Quality Assurance Strategy
+
+Data Validation: The primary testing focus is on the Unified ETL pipeline's transformation of vendor data. A suite of tests will compare a "golden set" of vendor records against the final data in the PostgreSQL tables to ensure 100% accuracy.
+Functional Testing: A dedicated test suite will continuously run checks for a list of known, critical interactions (e.g., Warfarin + Amiodarone, SSRIs + MAOIs) to ensure they are always flagged correctly and never missed due to a regression.
+
+8. Governance & Maintenance
+
+Data Source: The primary governance involves the selection, vetting, and regular review of the third-party data vendor.
+Update Cadence: The knowledge is updated based on the vendor's release schedule (e.g., quarterly). This update is managed entirely by the Unified ETL Pipeline, including the Harmonizer step.
+Institutional Overrides: The schema includes tables that allow the institution's P&T Committee to add or modify interaction rules, which are then layered on top of the vendor data by the Harmonizer.
+
+9. CI/CD Pipeline & Deployment
+
+Data Pipeline: The DDI data is deployed via the Unified ETL Pipeline.
+Service Pipeline: The CI/CD pipeline for the KB-5 service code itself follows the standard pattern: [Lint -> Test -> Security Scan -> Deploy].
+
+10. Monitoring & Observability
+
+Technical Metrics: gRPC latency (p95), error rate, PostgreSQL query time, Redis cache hit rate.
+Clinical/Operational Metrics:
+Interaction Check Rate (number of checks per hour/day).
+Positive Hit Rate (percentage of checks that find at least one interaction).
+Severity Distribution (count of minor, moderate, major, and contraindicated interactions detected).
+
+11. Failure Modes
+
+Fail-Safe: If the KB-5 service is unavailable, the Safety Gateway's circuit breaker must trip. The gateway must then return a WARN verdict for any proposal containing more than one medication, with a clear message: "Drug interaction check could not be completed. Proceed with extreme caution and consult a pharmacist."
+
+12. Data Lifecycle
+
+New data versions from the vendor supersede old ones. All old versions of the DDI dataset are permanently archived in S3 to ensure that any past decision can be replayed using the exact Evidence Envelope from that point in time.
+
+13. Supply Chain Security
+
+Vendor Management: A formal process must be in place to review the security and quality assurance practices of the third-party data vendor.
+Data Integrity: The ETL pipeline must verify the checksum of every data file received from the vendor to ensure it has not been corrupted or tampered with during transit.

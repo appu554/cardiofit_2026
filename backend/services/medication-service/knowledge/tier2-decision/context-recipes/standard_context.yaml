@@ -1,0 +1,183 @@
+recipe_id: "standard-context-v1"
+version: "1.0.0"
+last_updated: "2024-01-15"
+description: "Standard context data requirements for common medications"
+
+# Standard context for medications like acetaminophen, ibuprofen, etc.
+base_requirements:
+  - field: "age_years"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "weight_kg"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "gender"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: false
+
+  - field: "pain_severity"
+    source: "clinical_service"
+    endpoint: "/api/clinical/{patient_id}/pain_assessment"
+    required: false
+
+  - field: "fever_temperature"
+    source: "vitals_service"
+    endpoint: "/api/vitals/{patient_id}/latest"
+    required: false
+    max_age_hours: 2
+
+  - field: "concurrent_medications"
+    source: "medication_service"
+    endpoint: "/api/medications/{patient_id}/current"
+    required: true
+
+  - field: "allergy_history"
+    source: "allergy_service"
+    endpoint: "/api/allergies/{patient_id}"
+    required: true
+
+# Medication-specific requirements
+medication_specific_requirements:
+  acetaminophen:
+    additional_requirements:
+      - field: "liver_function_status"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/liver_status"
+        required: true
+        
+      - field: "alcohol_use_history"
+        source: "social_history_service"
+        endpoint: "/api/social/{patient_id}/alcohol"
+        required: true
+        
+      - field: "acetaminophen_containing_medications"
+        source: "medication_service"
+        endpoint: "/api/medications/{patient_id}/acetaminophen_check"
+        required: true
+        
+    conditional_requirements:
+      - condition: "liver_disease_present"
+        additional_fields:
+          - field: "liver_function_tests"
+            source: "lab_service"
+            endpoint: "/api/labs/{patient_id}/liver"
+            max_age_hours: 48
+            
+  ibuprofen:
+    additional_requirements:
+      - field: "renal_function_status"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/renal_status"
+        required: true
+        
+      - field: "cardiovascular_risk"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/cv_risk"
+        required: true
+        
+      - field: "gi_bleeding_history"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/gi_history"
+        required: true
+
+# Simplified data sources for standard medications
+data_sources:
+  patient_service:
+    base_url: "http://patient-service:8003"
+    timeout_ms: 1500
+    retry_attempts: 2
+    
+  clinical_service:
+    base_url: "http://clinical-service:8015"
+    timeout_ms: 2000
+    retry_attempts: 2
+    
+  vitals_service:
+    base_url: "http://vitals-service:8016"
+    timeout_ms: 1000
+    retry_attempts: 2
+    
+  medication_service:
+    base_url: "http://medication-service:8009"
+    timeout_ms: 1500
+    retry_attempts: 2
+    
+  allergy_service:
+    base_url: "http://allergy-service:8017"
+    timeout_ms: 1000
+    retry_attempts: 2
+    
+  social_history_service:
+    base_url: "http://social-service:8020"
+    timeout_ms: 1500
+    retry_attempts: 2
+
+# Basic validation rules
+validation_rules:
+  age_years:
+    min_value: 0
+    max_value: 120
+    
+  weight_kg:
+    min_value: 0.5
+    max_value: 300
+    
+  pain_severity:
+    min_value: 0
+    max_value: 10
+    
+  fever_temperature:
+    min_value: 95.0
+    max_value: 110.0
+    units: "fahrenheit"
+
+# Caching configuration for standard context
+caching:
+  patient_demographics:
+    ttl_minutes: 120
+    cache_key: "demographics_{patient_id}"
+    
+  allergy_history:
+    ttl_minutes: 60
+    cache_key: "allergies_{patient_id}"
+    
+  concurrent_medications:
+    ttl_minutes: 30
+    cache_key: "current_meds_{patient_id}"
+
+# Performance optimization for simple medications
+optimization:
+  parallel_requests: true
+  max_concurrent_requests: 4
+  request_timeout_ms: 2000
+  
+  priority_order:
+    - "patient_demographics"
+    - "allergy_history"
+    - "concurrent_medications"
+    - "clinical_factors"
+
+# Quality metrics for standard context
+quality_metrics:
+  data_completeness_target: ">90%"
+  response_time_target: "<300ms"
+  cache_hit_rate_target: ">80%"
+  
+# Error handling for standard medications
+error_handling:
+  missing_weight:
+    action: "estimate_from_age_gender"
+    fallback_source: "demographic_estimation_service"
+    
+  missing_allergies:
+    action: "assume_no_known_allergies"
+    log_warning: true
+    
+  service_timeout:
+    action: "proceed_with_available_data"
+    minimum_required: ["age", "weight"]

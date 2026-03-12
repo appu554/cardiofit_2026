@@ -1,0 +1,234 @@
+{
+  "uid": "kb23-decision-cards",
+  "title": "KB-23 Decision Cards Engine",
+  "description": "Decision card generation, MCU gate lifecycle, safety fast-paths, and upstream KB dependencies",
+  "tags": ["kb-23", "decision-cards", "vaidshala", "clinical-runtime"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "Prometheus", "value": "Prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Card Generation",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "Cards Generated / min",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "targets": [
+        { "expr": "rate(kb23_cards_generated_total[1m]) * 60", "legendFormat": "{{source}} / {{template_id}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cpm" } }
+    },
+    {
+      "title": "Card Generation Latency",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(kb23_card_generation_latency_ms_bucket[5m]))", "legendFormat": "P50" },
+        { "expr": "histogram_quantile(0.95, rate(kb23_card_generation_latency_ms_bucket[5m]))", "legendFormat": "P95" },
+        { "expr": "histogram_quantile(0.99, rate(kb23_card_generation_latency_ms_bucket[5m]))", "legendFormat": "P99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "title": "Templates Loaded",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "targets": [
+        { "expr": "kb23_templates_loaded", "legendFormat": "templates" }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{"color": "red", "value": 0}, {"color": "green", "value": 5}] } } }
+    },
+    {
+      "title": "Template Reloads",
+      "type": "stat",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "targets": [
+        { "expr": "kb23_template_reloads_total", "legendFormat": "reloads" }
+      ]
+    },
+    {
+      "title": "Cards by Source",
+      "type": "piechart",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 5 },
+      "targets": [
+        { "expr": "sum by (source) (kb23_cards_generated_total)", "legendFormat": "{{source}}" }
+      ]
+    },
+    {
+      "title": "MCU Gate & Safety",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false
+    },
+    {
+      "title": "Gate Transitions / min",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "targets": [
+        { "expr": "rate(kb23_gate_transitions_total[1m]) * 60", "legendFormat": "{{from_gate}} -> {{to_gate}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cpm" } }
+    },
+    {
+      "title": "Gate Query Latency (target < 5ms)",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(kb23_gate_query_latency_ms_bucket[5m]))", "legendFormat": "P50" },
+        { "expr": "histogram_quantile(0.95, rate(kb23_gate_query_latency_ms_bucket[5m]))", "legendFormat": "P95" },
+        { "expr": "histogram_quantile(0.99, rate(kb23_gate_query_latency_ms_bucket[5m]))", "legendFormat": "P99" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": { "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 3}, {"color": "red", "value": 5}] }
+        }
+      }
+    },
+    {
+      "title": "Safety Alerts",
+      "type": "bargauge",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "targets": [
+        { "expr": "sum by (severity) (kb23_hypoglycaemia_alerts_total)", "legendFormat": "Hypo: {{severity}}" },
+        { "expr": "sum by (response_class) (kb23_behavioral_gap_alerts_total)", "legendFormat": "Gap: {{response_class}}" }
+      ]
+    },
+    {
+      "title": "Safety Alert Latency (SLA < 2s)",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(kb23_safety_alert_latency_ms_bucket[5m]))", "legendFormat": "P95" },
+        { "expr": "histogram_quantile(0.99, rate(kb23_safety_alert_latency_ms_bucket[5m]))", "legendFormat": "P99" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": { "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 1500}, {"color": "red", "value": 2000}] }
+        }
+      }
+    },
+    {
+      "title": "Hysteresis Engine",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "targets": [
+        { "expr": "rate(kb23_hysteresis_blocked_total[5m]) * 60", "legendFormat": "Blocked/min" },
+        { "expr": "rate(kb23_hysteresis_allowed_total[5m]) * 60", "legendFormat": "Allowed/min" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cpm" } }
+    },
+    {
+      "title": "Upstream KB Dependencies",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 },
+      "collapsed": false
+    },
+    {
+      "title": "KB-19 Publish Latency",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 27 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(kb23_kb19_publish_latency_ms_bucket[5m]))", "legendFormat": "P95" },
+        { "expr": "histogram_quantile(0.99, rate(kb23_kb19_publish_latency_ms_bucket[5m]))", "legendFormat": "P99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "title": "KB-20 Fetch Latency",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 27 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(kb23_kb20_fetch_latency_ms_bucket[5m]))", "legendFormat": "P95" },
+        { "expr": "histogram_quantile(0.99, rate(kb23_kb20_fetch_latency_ms_bucket[5m]))", "legendFormat": "P99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "title": "KB-19 Publish Errors",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 27 },
+      "targets": [
+        { "expr": "rate(kb23_kb19_publish_errors_total[5m]) * 60", "legendFormat": "errors/min" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cpm",
+          "thresholds": { "steps": [{"color": "green", "value": 0}, {"color": "red", "value": 1}] }
+        }
+      }
+    },
+    {
+      "title": "Perturbations & Composite Cards",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "collapsed": false
+    },
+    {
+      "title": "Perturbations Received",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 36 },
+      "targets": [
+        { "expr": "rate(kb23_perturbations_received_total[5m]) * 60", "legendFormat": "received/min" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cpm" } }
+    },
+    {
+      "title": "Perturbation Query Latency (target < 3ms)",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 36 },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, rate(kb23_perturbation_query_latency_ms_bucket[5m]))", "legendFormat": "P95" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": { "steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 2}, {"color": "red", "value": 3}] }
+        }
+      }
+    },
+    {
+      "title": "Composite Cards & Urgency Upgrades",
+      "type": "timeseries",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 36 },
+      "targets": [
+        { "expr": "rate(kb23_composite_cards_created_total[5m]) * 60", "legendFormat": "composites/min" },
+        { "expr": "rate(kb23_urgency_upgrades_total[5m]) * 60", "legendFormat": "upgrades/min" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "cpm" } }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

@@ -1,0 +1,143 @@
+# KDIGO 2024 CKD Evaluation and Management — GuidelineProfile definition
+#
+# Published: Kidney Int. 2024;105(4S):S117-S314
+# DOI: 10.1016/j.kint.2023.10.018
+#
+# This is a comprehensive update to the 2012 KDIGO CKD guideline.
+# Key new content: SGLT2i/GLP-1 RA recommendations for CKD progression,
+# updated eGFR staging thresholds, and expanded cardiorenal syndrome management.
+#
+# Usage:
+#   python run_pipeline_targeted.py --pipeline 1 \
+#     --source full-guide \
+#     --guideline profiles/kdigo_2024_ckd.yaml
+
+profile_id: kdigo_2024_ckd_eval_mgmt
+display_name: "KDIGO 2024 CKD Evaluation and Management"
+authority: KDIGO
+document_title: "KDIGO 2024 Clinical Practice Guideline for the Evaluation and Management of CKD"
+effective_date: "2024-03-01"
+doi: "10.1016/j.kint.2023.10.018"
+version: "2024"
+
+# PDF filenames (resolved relative to the pipeline's pdfs_dir)
+pdf_sources:
+  full-guide: "KDIGO-2024-CKD-Guideline.pdf"
+  exec-summary: "KDIGO-2024-CKD-Guideline-Executive-Summary.pdf"
+  # 53 targeted pages extracted from full-guide — new content only, skips ~60% already
+  # covered by the Diabetes 2022 extraction. Run this source for delta extraction:
+  #   Ch4 (pp.131-139) + Sec 3.6-3.7 (pp.96-101) + Sec 3.11 (pp.109-113)
+  #   + Sec 3.15-3.16 (pp.121-130) + Sec 1.2 eGFR (pp.54-70)
+  #   + Sec 3.10 Metabolic Acidosis (pp.107-108)
+  #   + Sec 3.12-3.14 Anemia/CKD-MBD/Hyperuricemia (pp.114-117)
+  delta-pages: "KDIGO-2024-CKD-Delta-53pages.pdf"
+
+# Channel B: CKD 2024 introduces finerenone (nsMRA) prominently and spartasentan
+# as novel drugs not yet in the base Channel B dictionary.
+extra_drug_ingredients:
+  finerenone: "2563978"      # nsMRA, RxNorm CUI
+  spartasentan: null         # endothelin/angiotensin dual antagonist (no RxNorm yet)
+  dapagliflozin: "1488564"   # SGLT2i — reinforce if not already in base dict
+  empagliflozin: "1545653"   # SGLT2i — reinforce
+  semaglutide: "2200644"     # GLP-1 RA — reinforce (oral + injectable)
+  liraglutide: "475968"      # GLP-1 RA
+  dulaglutide: "1551373"     # GLP-1 RA
+
+# Channel B: Additional class variant spellings used in this guideline
+extra_drug_classes:
+  "non-steroidal MRA": "nsMRA"
+  "non-steroidal mineralocorticoid receptor antagonist": "nsMRA"
+  "endothelin receptor antagonist": "ERA"
+  "dual endothelin/angiotensin receptor antagonist": "ERA"
+  "SGLT-2 inhibitor": "SGLT2i"
+  "sodium-glucose co-transporter 2 inhibitor": "SGLT2i"
+  "glucagon-like peptide-1 receptor agonist": "GLP-1 RA"
+  "GLP1RA": "GLP-1 RA"
+  "renin-angiotensin-aldosterone system inhibitor": "RASi"
+  "RAASi": "RASi"
+  "RAAS inhibitor": "RASi"
+
+# Channel C: CKD 2024 uses specific numeric threshold patterns not in the base grammar.
+# Format: [pattern_regex, confidence, category]
+extra_patterns:
+  # eGFR thresholds specific to CKD staging (G1-G5)
+  - ["eGFR\\s*[<>≥≤]\\s*\\d+\\s*mL/min", 0.88, "lab_threshold"]
+  # UACR thresholds for albuminuria categories (A1-A3)
+  - ["UACR\\s*[<>≥≤]\\s*\\d+\\s*mg/g", 0.88, "lab_threshold"]
+  - ["albumin-to-creatinine ratio\\s*[<>≥≤]\\s*\\d+", 0.82, "lab_threshold"]
+  # Finerenone dosing pattern (10 mg / 20 mg)
+  - ["finerenone\\s+\\d+\\s*mg", 0.90, "dosing"]
+
+# Drug class names to skip during RxNorm pre-lookup (KB-7).
+# This guideline covers more classes than the 2022 Diabetes profile.
+drug_class_skip_list:
+  # Cardiorenal / RAAS
+  - acei
+  - arb
+  - rasi
+  - "raasi"
+  # Sodium-glucose inhibitors
+  - sglt2i
+  - "sglt-2i"
+  # GLP-1 agents
+  - "glp-1 ra"
+  - "glp-1ra"
+  - glp1ra
+  # MRA / nsMRA
+  - mra
+  - nsmra
+  # Other metabolic
+  - "dpp-4i"
+  - sulfonylurea
+  - tzd
+  - insulin
+  # Cardiovascular
+  - beta-blocker
+  - ccb
+  - diuretic
+  - "loop diuretic"
+  - "thiazide diuretic"
+  - statin
+  # Pain / inflammation
+  - nsaid
+  # Mineral metabolism
+  - "phosphate binder"
+  - "vitamin d analog"
+  - calcimimetic
+  # Anemia
+  - esa
+  - "iron supplement"
+
+# Section headings indicating non-clinical reference zones.
+reference_section_headings:
+  - References
+  - Bibliography
+  - "Supplementary Materials"
+  - "Summary of Practice Points"
+  - "Abbreviations"
+  - "Work Group Members"
+  - "Evidence Grading"
+
+# Tiering: shadow mode — rule-based is authoritative, trained model logs for comparison.
+# Switch to "trained" when agreement rate > 95% for 2 consecutive weeks.
+tiering_classifier: shadow
+tiering_golden_dataset: "models/tier_assigner.joblib"
+
+# Chunked L1 configuration for delta-pages source (53 pages).
+# These boundaries are manually tuned for the CKD 2024 delta PDF:
+#   - chunk-b4 (p19) uses pymupdf: dense Table 28 OOMs with MonkeyOCR
+#   - chunk-d1..d4 (pp31-53) use pymupdf: born-digital eGFR chapters
+# For new guidelines without manual boundaries, remove chunk_defs
+# and the auto-chunker will compute boundaries deterministically.
+chunk_defs:
+  - {start: 0,  end: 9,  name: "chunk-a",  extractor: monkeyocr, description: "Ch4 Medication Management"}
+  - {start: 9,  end: 15, name: "chunk-b1", extractor: monkeyocr, description: "Sec 3.3-3.7 Sodium/BP/RASi/SGLT2i"}
+  - {start: 15, end: 17, name: "chunk-b2", extractor: monkeyocr, description: "Sec 3.8-3.9 HyperK Tables 25-26"}
+  - {start: 17, end: 18, name: "chunk-b3", extractor: monkeyocr, description: "Sec 3.10 HyperK Table 27"}
+  - {start: 18, end: 19, name: "chunk-b4", extractor: pymupdf,   description: "Sec 3.11 HyperK Table 28 (dense)"}
+  - {start: 19, end: 20, name: "chunk-b5", extractor: monkeyocr, description: "Sec 3.11 Figure 32"}
+  - {start: 20, end: 30, name: "chunk-c",  extractor: monkeyocr, description: "Sec 3.15-3.16 CVD/NOACs"}
+  - {start: 30, end: 35, name: "chunk-d1", extractor: pymupdf,   description: "Ch1 eGFR intro pp31-35"}
+  - {start: 35, end: 37, name: "chunk-d2", extractor: pymupdf,   description: "Ch1 eGFR dense tables pp36-37"}
+  - {start: 37, end: 45, name: "chunk-d3", extractor: pymupdf,   description: "Ch1 eGFR mid pp38-45"}
+  - {start: 45, end: 53, name: "chunk-d4", extractor: pymupdf,   description: "Ch1 eGFR end pp46-53"}

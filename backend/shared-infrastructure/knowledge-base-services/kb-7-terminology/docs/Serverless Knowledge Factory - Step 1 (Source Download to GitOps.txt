@@ -1,0 +1,2470 @@
+﻿# System Design: Serverless Knowledge Factory - Step 1 (Source Download to GitOps CI/CD)
+
+
+Let me design a **completely serverless, infrastructure-less** system for downloading terminology sources and triggering the Knowledge Factory pipeline through GitOps.
+
+
+---
+
+
+## 🎯 Design Objectives
+
+
+### **Requirements**:
+1. ✅ **No persistent servers** - Use serverless functions and managed services only
+2. ✅ **Automated downloads** - Monthly scheduled downloads from NCTS, NIH, LOINC
+3. ✅ **Secure credential management** - API keys and passwords stored securely
+4. ✅ **GitOps integration** - Downloads trigger GitHub Actions pipeline
+5. ✅ **Artifact storage** - Raw files stored in S3 with versioning
+6. ✅ **Verification** - SHA-256 checksum validation
+7. ✅ **Audit trail** - Every download logged for compliance
+
+
+### **Architecture Principles**:
+- **Event-driven**: Downloads triggered by CloudWatch Events (cron schedule)
+- **Stateless**: No long-running processes or databases required
+- **Pay-per-use**: Only pay when downloads actually happen
+- **Self-contained**: Each source (SNOMED, RxNorm, LOINC) is an independent function
+
+
+---
+
+
+## 🏗️ High-Level Architecture
+
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ TRIGGER LAYER (Scheduled & Manual)                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────────┐        ┌──────────────────┐             │
+│  │ CloudWatch Event │        │ GitHub Webhook   │             │
+│  │ (Cron Schedule)  │        │ (Manual Trigger) │             │
+│  └────────┬─────────┘        └────────┬─────────┘             │
+│           │                           │                         │
+│           └───────────┬───────────────┘                         │
+│                       │                                         │
+└───────────────────────┼─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ ORCHESTRATION LAYER (AWS Step Functions)                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  State Machine: "KB7_Source_Download_Orchestrator"             │
+│                                                                 │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐         │
+│  │   Parallel  │   │   Parallel  │   │   Parallel  │         │
+│  │   Branch 1  │   │   Branch 2  │   │   Branch 3  │         │
+│  │             │   │             │   │             │         │
+│  │   SNOMED    │   │   RxNorm    │   │   LOINC     │         │
+│  │   Download  │   │   Download  │   │   Download  │         │
+│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘         │
+│         │                 │                 │                  │
+│         └─────────────────┼─────────────────┘                  │
+│                           ↓                                     │
+│                  ┌────────────────┐                            │
+│                  │ Wait For All   │                            │
+│                  │ (Aggregation)  │                            │
+│                  └────────┬───────┘                            │
+│                           ↓                                     │
+│                  ┌────────────────┐                            │
+│                  │ Trigger GitOps │                            │
+│                  │ (GitHub Action)│                            │
+│                  └────────────────┘                            │
+└─────────────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ EXECUTION LAYER (AWS Lambda Functions)                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────────────────────────────────────────┐         │
+│  │ Lambda 1: SNOMED_Downloader                      │         │
+│  │ Runtime: Python 3.11                             │         │
+│  │ Memory: 1024MB, Timeout: 15 minutes              │         │
+│  │                                                   │         │
+│  │ Actions:                                          │         │
+│  │ 1. Retrieve credentials from Secrets Manager     │         │
+│  │ 2. Authenticate with NCTS (Healthterminologies)  │         │
+│  │ 3. Download SnomedCT_AU_Release_YYYYMMDD.zip     │         │
+│  │ 4. Verify SHA-256 checksum                       │         │
+│  │ 5. Upload to S3 with metadata tags               │         │
+│  │ 6. Return download metadata                      │         │
+│  └──────────────────────────────────────────────────┘         │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────┐         │
+│  │ Lambda 2: RxNorm_Downloader                      │         │
+│  │ Runtime: Python 3.11                             │         │
+│  │ Memory: 1024MB, Timeout: 15 minutes              │         │
+│  │                                                   │         │
+│  │ Actions:                                          │         │
+│  │ 1. Retrieve UMLS API key from Secrets Manager    │         │
+│  │ 2. Authenticate with UMLS Terminology Services   │         │
+│  │ 3. Download RxNorm_full_YYYYMMDD.zip             │         │
+│  │ 4. Verify SHA-256 checksum                       │         │
+│  │ 5. Upload to S3 with metadata tags               │         │
+│  │ 6. Return download metadata                      │         │
+│  └──────────────────────────────────────────────────┘         │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────┐         │
+│  │ Lambda 3: LOINC_Downloader                       │         │
+│  │ Runtime: Python 3.11                             │         │
+│  │ Memory: 512MB, Timeout: 10 minutes               │         │
+│  │                                                   │         │
+│  │ Actions:                                          │         │
+│  │ 1. Retrieve credentials from Secrets Manager     │         │
+│  │ 2. Authenticate with LOINC.org                   │         │
+│  │ 3. Download LOINC_2.XX.zip                       │         │
+│  │ 4. Verify SHA-256 checksum                       │         │
+│  │ 5. Upload to S3 with metadata tags               │         │
+│  │ 6. Return download metadata                      │         │
+│  └──────────────────────────────────────────────────┘         │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────┐         │
+│  │ Lambda 4: GitHub_Dispatcher                      │         │
+│  │ Runtime: Python 3.11                             │         │
+│  │ Memory: 256MB, Timeout: 2 minutes                │         │
+│  │                                                   │         │
+│  │ Actions:                                          │         │
+│  │ 1. Receive download metadata from Step Functions │         │
+│  │ 2. Create Git commit with manifest.json          │         │
+│  │ 3. Push to GitHub (trigger workflow)             │         │
+│  │ 4. Send notifications (Slack/Email)              │         │
+│  └──────────────────────────────────────────────────┘         │
+└─────────────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STORAGE LAYER (S3 Buckets)                                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  S3 Bucket: cardiofit-kb-sources                               │
+│  Structure:                                                     │
+│    /snomed/                                                     │
+│      /20240331/                                                 │
+│        SnomedCT_AU_Release_20240331.zip                        │
+│        checksum.txt                                             │
+│        metadata.json                                            │
+│    /rxnorm/                                                     │
+│      /20240304/                                                 │
+│        RxNorm_full_20240304.zip                                │
+│        checksum.txt                                             │
+│        metadata.json                                            │
+│    /loinc/                                                      │
+│      /2.77/                                                     │
+│        LOINC_2.77.zip                                          │
+│        checksum.txt                                             │
+│        metadata.json                                            │
+│                                                                 │
+│  Features:                                                      │
+│  - Versioning enabled (retain previous releases)               │
+│  - Lifecycle policy (archive to Glacier after 90 days)         │
+│  - Encryption at rest (SSE-S3)                                  │
+│  - Access logging enabled                                       │
+└─────────────────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ GITOPS LAYER (GitHub Repository)                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Repository: cardiofit/knowledge-factory                        │
+│                                                                 │
+│  File: sources/manifest.json (Updated by Lambda)               │
+│  {                                                              │
+│    "release_id": "2024-04-01",                                 │
+│    "sources": {                                                 │
+│      "snomed": {                                                │
+│        "version": "20240331",                                   │
+│        "s3_uri": "s3://cardiofit-kb-sources/snomed/20240331/", │
+│        "checksum": "sha256:abc123...",                         │
+│        "downloaded_at": "2024-04-01T10:00:00Z"                 │
+│      },                                                         │
+│      "rxnorm": { ... },                                         │
+│      "loinc": { ... }                                           │
+│    }                                                            │
+│  }                                                              │
+│                                                                 │
+│  GitHub Actions Workflow: .github/workflows/kb-factory.yml     │
+│  Triggers:                                                      │
+│    - push:                                                      │
+│        paths: ['sources/manifest.json']                         │
+│  Jobs:                                                          │
+│    1. Download sources from S3                                  │
+│    2. Run Knowledge Factory pipeline (3-tool process)           │
+│    3. Upload artifacts to S3                                    │
+│    4. Trigger CDC pipeline                                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+
+---
+
+
+## 📋 Detailed Component Design
+
+
+### **Component 1: CloudWatch Event Rule (Scheduler)**
+
+
+**Purpose**: Trigger downloads on a monthly schedule
+
+
+**Configuration**:
+```
+Event Rule: KB7_Monthly_Download
+Schedule: cron(0 2 1 * ? *)  // 2 AM UTC on 1st of every month
+Target: Step Functions State Machine
+Input: {
+  "trigger_type": "scheduled",
+  "sources": ["snomed", "rxnorm", "loinc"]
+}
+```
+
+
+**Why monthly?**
+- SNOMED-CT AU releases: Monthly (around 1st of month)
+- RxNorm releases: Monthly (typically between 1st-5th)
+- LOINC releases: Biannually (June, December), but check monthly
+
+
+**Manual trigger option**:
+```
+AWS CLI Command:
+aws events put-events \
+  --entries "Source=manual,DetailType=KB7Download,Detail='{\"sources\":[\"snomed\"]}'"
+```
+
+
+---
+
+
+### **Component 2: AWS Step Functions State Machine**
+
+
+**Purpose**: Orchestrate parallel downloads and handle errors
+
+
+**State Machine Definition** (simplified):
+
+
+```
+Step 1: Parallel Download Branches
+  ├─ Branch A: Invoke SNOMED_Downloader Lambda
+  ├─ Branch B: Invoke RxNorm_Downloader Lambda
+  └─ Branch C: Invoke LOINC_Downloader Lambda
+
+
+Step 2: Wait for All Branches to Complete
+  - Aggregates results from all 3 branches
+  - If any branch fails, mark as partial success
+  - Continue even if 1-2 sources fail (don't block entire pipeline)
+
+
+Step 3: Check Download Status
+  - Decision: All succeeded? Some failed? All failed?
+  
+Step 4A: If at least 1 succeeded
+  - Invoke GitHub_Dispatcher Lambda
+  - Send success notification
+  
+Step 4B: If all failed
+  - Send failure alert (PagerDuty)
+  - Do not trigger GitOps
+
+
+Step 5: Record Execution Metadata
+  - Write to DynamoDB audit table
+  - Include: execution ID, sources downloaded, timestamps, errors
+```
+
+
+**Error Handling Strategy**:
+
+
+```
+Per-Lambda Retry Policy:
+  - Max attempts: 3
+  - Backoff rate: 2.0 (exponential)
+  - Interval: 10 seconds
+  
+Scenario 1: SNOMED download fails due to network timeout
+  Action: Retry 3 times
+  If still fails: Continue pipeline with RxNorm + LOINC only
+  Notification: "Partial download - SNOMED failed, manual intervention needed"
+
+
+Scenario 2: All downloads timeout (vendor sites down)
+  Action: Do not trigger GitOps pipeline
+  Notification: "Full download failure - all vendor sites unreachable"
+  Retry: Automatic retry in 6 hours (separate CloudWatch rule)
+
+
+Scenario 3: Checksum mismatch (file corrupted)
+  Action: Delete S3 object, retry download
+  If retry fails: Mark as failed, alert team
+```
+
+
+**State Machine Execution Timeline**:
+
+
+```
+T+0s:      CloudWatch triggers Step Functions
+T+1s:      State machine starts, spawns 3 parallel Lambda invocations
+T+2s:      All 3 Lambdas start simultaneously
+
+
+--- SNOMED Branch ---
+T+10s:     SNOMED Lambda authenticates with NCTS
+T+30s:     Begins downloading 450MB zip file
+T+180s:    Download complete (150 seconds for 450MB = ~3MB/s)
+T+185s:    SHA-256 verification in progress
+T+195s:    Upload to S3 begins (streaming upload)
+T+270s:    S3 upload complete
+T+275s:    Lambda returns success
+
+
+--- RxNorm Branch ---
+T+15s:     RxNorm Lambda authenticates with UMLS
+T+45s:     Begins downloading 800MB zip file
+T+320s:    Download complete (275 seconds for 800MB = ~2.9MB/s)
+T+325s:    SHA-256 verification in progress
+T+335s:    Upload to S3 begins
+T+450s:    S3 upload complete
+T+455s:    Lambda returns success
+
+
+--- LOINC Branch ---
+T+8s:      LOINC Lambda authenticates with loinc.org
+T+20s:     Begins downloading 120MB zip file
+T+60s:     Download complete (40 seconds for 120MB = 3MB/s)
+T+62s:     SHA-256 verification
+T+64s:     Upload to S3
+T+80s:     S3 upload complete
+T+82s:     Lambda returns success
+
+
+T+455s:    All branches complete (longest = RxNorm at 455s)
+T+456s:    Aggregation step collects all results
+T+457s:    GitHub_Dispatcher Lambda invoked
+T+460s:    Git commit pushed to GitHub
+T+461s:    GitHub Actions workflow triggered
+T+462s:    Step Functions execution complete
+
+
+Total Duration: ~7.5 minutes
+```
+
+
+---
+
+
+### **Component 3: Lambda Function - SNOMED Downloader**
+
+
+**Architecture**:
+
+
+```
+Lambda Configuration:
+  Function Name: KB7_SNOMED_Downloader
+  Runtime: Python 3.11
+  Memory: 1024 MB
+  Timeout: 15 minutes (900 seconds)
+  Ephemeral Storage: 2048 MB (for temp file storage)
+  Environment Variables:
+    S3_BUCKET: cardiofit-kb-sources
+    SECRETS_ARN: arn:aws:secretsmanager:...:secret:kb7/ncts
+    
+IAM Role Permissions:
+  - secretsmanager:GetSecretValue (for NCTS credentials)
+  - s3:PutObject (for uploading to S3)
+  - s3:PutObjectTagging (for metadata)
+  - logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents
+```
+
+
+**Execution Flow**:
+
+
+```
+Phase 1: Initialize
+  1. Read input event (contains source type)
+  2. Retrieve credentials from Secrets Manager
+     - Secret: { "username": "...", "password": "...", "api_key": "..." }
+  3. Initialize S3 client with boto3
+  4. Set up temp directory in /tmp/
+
+
+Phase 2: Vendor Authentication
+  For SNOMED-CT AU (NCTS):
+    1. POST to https://www.healthterminologies.gov.au/auth
+       Headers: { "Authorization": "Bearer <api_key>" }
+    
+    2. Receive session token
+       Response: { "session_token": "abc123...", "expires_in": 3600 }
+    
+    3. Check for new releases
+       GET /api/releases?product=SNOMED_CT_AU&format=RF2
+       Response: [
+         {
+           "version": "20240331",
+           "release_date": "2024-03-31",
+           "download_url": "https://ncts.../snomed_20240331.zip",
+           "checksum_url": "https://ncts.../snomed_20240331.sha256",
+           "size_bytes": 471859200
+         }
+       ]
+    
+    4. Determine if new release available
+       - Query S3: HEAD s3://cardiofit-kb-sources/snomed/20240331/
+       - If exists: Skip download (already have this version)
+       - If not exists: Proceed with download
+
+
+Phase 3: Download Streaming
+  Why streaming?
+    - SNOMED zip is 450MB
+    - Lambda ephemeral storage limit is 10GB
+    - But we want to avoid filling /tmp/ unnecessarily
+    - Stream directly from vendor → Lambda → S3
+  
+  Implementation:
+    1. Open download stream
+       response = requests.get(download_url, stream=True, timeout=300)
+    
+    2. Create multipart upload to S3
+       upload_id = s3.create_multipart_upload(
+         Bucket='cardiofit-kb-sources',
+         Key='snomed/20240331/SnomedCT_AU_Release_20240331.zip'
+       )
+    
+    3. Stream in chunks while computing checksum
+       sha256_hash = hashlib.sha256()
+       part_number = 1
+       parts = []
+       
+       for chunk in response.iter_content(chunk_size=10*1024*1024):  # 10MB chunks
+         sha256_hash.update(chunk)
+         
+         # Upload chunk as part
+         part_response = s3.upload_part(
+           Bucket='cardiofit-kb-sources',
+           Key='snomed/20240331/SnomedCT_AU_Release_20240331.zip',
+           PartNumber=part_number,
+           UploadId=upload_id,
+           Body=chunk
+         )
+         
+         parts.append({
+           'PartNumber': part_number,
+           'ETag': part_response['ETag']
+         })
+         
+         part_number += 1
+       
+       computed_checksum = sha256_hash.hexdigest()
+    
+    4. Complete multipart upload
+       s3.complete_multipart_upload(
+         Bucket='cardiofit-kb-sources',
+         Key='snomed/20240331/SnomedCT_AU_Release_20240331.zip',
+         UploadId=upload_id,
+         MultipartUpload={'Parts': parts}
+       )
+
+
+Phase 4: Checksum Verification
+  1. Download vendor's published checksum
+     GET https://ncts.../snomed_20240331.sha256
+     Response: "7f8d9ab3c2e1f45a6b9d8c7e5a4f3d2c..."
+  
+  2. Compare with computed checksum
+     if computed_checksum != vendor_checksum:
+       # Corruption detected
+       - Delete S3 object
+       - Log error with details
+       - Return failure to Step Functions
+       - Step Functions will retry
+  
+  3. If match: Write checksum file to S3
+     s3.put_object(
+       Bucket='cardiofit-kb-sources',
+       Key='snomed/20240331/checksum.txt',
+       Body=computed_checksum
+     )
+
+
+Phase 5: Metadata Storage
+  Create metadata.json:
+    {
+      "source": "SNOMED_CT_AU",
+      "version": "20240331",
+      "release_date": "2024-03-31",
+      "downloaded_at": "2024-04-01T10:04:35Z",
+      "size_bytes": 471859200,
+      "checksum_sha256": "7f8d9ab3c2e1f45a...",
+      "vendor_url": "https://www.healthterminologies.gov.au",
+      "license": "SNOMED International MLDS",
+      "lambda_request_id": "abc-123-def-456",
+      "download_duration_seconds": 270
+    }
+  
+  Upload to S3:
+    s3.put_object(
+      Bucket='cardiofit-kb-sources',
+      Key='snomed/20240331/metadata.json',
+      Body=json.dumps(metadata),
+      ContentType='application/json'
+    )
+
+
+Phase 6: Return Result
+  Return to Step Functions:
+    {
+      "source": "snomed",
+      "status": "success",
+      "version": "20240331",
+      "s3_uri": "s3://cardiofit-kb-sources/snomed/20240331/",
+      "checksum": "7f8d9ab3c2e1f45a...",
+      "size_bytes": 471859200,
+      "duration_seconds": 275
+    }
+```
+
+
+**Error Scenarios**:
+
+
+```
+Error 1: Authentication Failure
+  Trigger: Invalid API key, expired credentials
+  Detection: HTTP 401 response from NCTS
+  Action:
+    - Log error: "NCTS authentication failed - check credentials"
+    - Send SNS notification to ops team
+    - Return error to Step Functions
+    - Step Functions retries after 10 seconds
+  Prevention:
+    - Monitor secret expiration dates
+    - Alert 30 days before credential renewal
+
+
+Error 2: Network Timeout
+  Trigger: Slow vendor download, network instability
+  Detection: requests.exceptions.Timeout after 300 seconds
+  Action:
+    - Log error with partial download size
+    - Delete incomplete S3 multipart upload
+    - Return error to Step Functions
+    - Step Functions retries (exponential backoff)
+
+
+Error 3: Checksum Mismatch
+  Trigger: File corruption during download
+  Detection: computed_checksum != vendor_checksum
+  Action:
+    - Log error: "Checksum mismatch - computed: X, expected: Y"
+    - Delete corrupted S3 object
+    - Return error to Step Functions
+    - Step Functions retries immediately (no backoff needed)
+
+
+Error 4: S3 Upload Failure
+  Trigger: S3 service issue, IAM permission problem
+  Detection: boto3 exception during multipart upload
+  Action:
+    - Log error with boto3 exception details
+    - Abort multipart upload (cleanup)
+    - Return error to Step Functions
+    - Step Functions retries after backoff
+
+
+Error 5: No New Release Available
+  Trigger: Latest version already downloaded
+  Detection: S3 HEAD request finds existing version
+  Action:
+    - Log info: "SNOMED 20240331 already exists, skipping"
+    - Return success with flag: { "status": "skipped", "reason": "already_downloaded" }
+    - Step Functions continues (not an error)
+```
+
+
+---
+
+
+### **Component 4: Lambda Function - GitHub Dispatcher**
+
+
+**Purpose**: Create Git commit and trigger GitHub Actions workflow
+
+
+**Architecture**:
+
+
+```
+Lambda Configuration:
+  Function Name: KB7_GitHub_Dispatcher
+  Runtime: Python 3.11
+  Memory: 256 MB
+  Timeout: 2 minutes
+  Environment Variables:
+    GITHUB_TOKEN_SECRET_ARN: arn:aws:secretsmanager:...:secret:kb7/github
+    GITHUB_REPO: cardiofit/knowledge-factory
+    GITHUB_BRANCH: main
+```
+
+
+**Execution Flow**:
+
+
+```
+Phase 1: Aggregate Download Results
+  Input from Step Functions:
+    {
+      "downloads": [
+        {
+          "source": "snomed",
+          "status": "success",
+          "version": "20240331",
+          "s3_uri": "s3://cardiofit-kb-sources/snomed/20240331/",
+          "checksum": "7f8d9ab3..."
+        },
+        {
+          "source": "rxnorm",
+          "status": "success",
+          "version": "20240304",
+          "s3_uri": "s3://cardiofit-kb-sources/rxnorm/20240304/",
+          "checksum": "abc456..."
+        },
+        {
+          "source": "loinc",
+          "status": "success",
+          "version": "2.77",
+          "s3_uri": "s3://cardiofit-kb-sources/loinc/2.77/",
+          "checksum": "def789..."
+        }
+      ],
+      "execution_id": "step-func-abc-123",
+      "started_at": "2024-04-01T10:00:00Z",
+      "completed_at": "2024-04-01T10:07:35Z"
+    }
+
+
+Phase 2: Generate Manifest File
+  Create sources/manifest.json:
+    {
+      "release_id": "2024-04-01",
+      "execution_id": "step-func-abc-123",
+      "sources": {
+        "snomed": {
+          "version": "20240331",
+          "s3_uri": "s3://cardiofit-kb-sources/snomed/20240331/",
+          "checksum": "sha256:7f8d9ab3...",
+          "downloaded_at": "2024-04-01T10:04:35Z",
+          "size_bytes": 471859200
+        },
+        "rxnorm": {
+          "version": "20240304",
+          "s3_uri": "s3://cardiofit-kb-sources/rxnorm/20240304/",
+          "checksum": "sha256:abc456...",
+          "downloaded_at": "2024-04-01T10:07:20Z",
+          "size_bytes": 838860800
+        },
+        "loinc": {
+          "version": "2.77",
+          "s3_uri": "s3://cardiofit-kb-sources/loinc/2.77/",
+          "checksum": "sha256:def789...",
+          "downloaded_at": "2024-04-01T10:01:20Z",
+          "size_bytes": 125829120
+        }
+      },
+      "pipeline_triggered_at": "2024-04-01T10:07:35Z"
+    }
+
+
+Phase 3: GitHub API Interaction
+  1. Retrieve GitHub token from Secrets Manager
+     token = boto3.client('secretsmanager').get_secret_value(
+       SecretId='kb7/github'
+     )['SecretString']
+  
+  2. Get current HEAD commit SHA
+     GET https://api.github.com/repos/cardiofit/knowledge-factory/git/ref/heads/main
+     Response: {
+       "object": {
+         "sha": "a1b2c3d4..."
+       }
+     }
+  
+  3. Get base tree
+     GET https://api.github.com/repos/cardiofit/knowledge-factory/git/commits/a1b2c3d4
+     Response: {
+       "tree": {
+         "sha": "tree-sha-123"
+       }
+     }
+  
+  4. Create blob for manifest.json
+     POST https://api.github.com/repos/cardiofit/knowledge-factory/git/blobs
+     Body: {
+       "content": "<base64 encoded manifest.json>",
+       "encoding": "base64"
+     }
+     Response: {
+       "sha": "blob-sha-456"
+     }
+  
+  5. Create new tree
+     POST https://api.github.com/repos/cardiofit/knowledge-factory/git/trees
+     Body: {
+       "base_tree": "tree-sha-123",
+       "tree": [
+         {
+           "path": "sources/manifest.json",
+           "mode": "100644",
+           "type": "blob",
+           "sha": "blob-sha-456"
+         }
+       ]
+     }
+     Response: {
+       "sha": "new-tree-sha-789"
+     }
+  
+  6. Create commit
+     POST https://api.github.com/repos/cardiofit/knowledge-factory/git/commits
+     Body: {
+       "message": "chore: Update KB sources manifest\n\n- SNOMED: 20240331\n- RxNorm: 20240304\n- LOINC: 2.77\n\nTriggered by: step-func-abc-123",
+       "tree": "new-tree-sha-789",
+       "parents": ["a1b2c3d4"]
+     }
+     Response: {
+       "sha": "new-commit-sha-abc"
+     }
+  
+  7. Update reference (push commit)
+     PATCH https://api.github.com/repos/cardiofit/knowledge-factory/git/refs/heads/main
+     Body: {
+       "sha": "new-commit-sha-abc",
+       "force": false
+     }
+     Response: {
+       "object": {
+         "sha": "new-commit-sha-abc"
+       }
+     }
+
+
+Phase 4: Verify Workflow Trigger
+  1. Wait 5 seconds for GitHub Actions to detect commit
+  
+  2. Query workflow runs
+     GET https://api.github.com/repos/cardiofit/knowledge-factory/actions/runs?event=push&branch=main
+     
+     Filter for most recent run triggered by our commit
+  
+  3. If workflow started:
+       - Log success: "GitHub Actions workflow #1234 triggered"
+       - Return success
+     
+     If workflow not started after 30 seconds:
+       - Log warning: "Workflow trigger timeout"
+       - Send alert (workflow may need manual trigger)
+       - Return partial success
+
+
+Phase 5: Send Notifications
+  1. Publish to SNS topic: kb7-pipeline-events
+     Message: {
+       "event": "source_download_complete",
+       "sources": ["snomed", "rxnorm", "loinc"],
+       "github_commit": "new-commit-sha-abc",
+       "workflow_url": "https://github.com/cardiofit/knowledge-factory/actions/runs/1234"
+     }
+  
+  2. SNS topic subscribers:
+     - Email: knowledge-engineers@cardiofit.ai
+     - Slack webhook: #kb-
+
+
+```
+     - Slack webhook: #kb-pipeline channel
+     - PagerDuty (if any failures)
+
+
+Phase 6: Audit Logging
+  Write to DynamoDB table: kb7_download_audit
+  
+  Item:
+    {
+      "execution_id": "step-func-abc-123",  // Partition key
+      "timestamp": "2024-04-01T10:07:35Z",   // Sort key
+      "event_type": "source_download_complete",
+      "sources": {
+        "snomed": {"version": "20240331", "status": "success"},
+        "rxnorm": {"version": "20240304", "status": "success"},
+        "loinc": {"version": "2.77", "status": "success"}
+      },
+      "github_commit": "new-commit-sha-abc",
+      "github_workflow_run_id": 1234,
+      "total_size_bytes": 1436549120,
+      "total_duration_seconds": 455,
+      "triggered_by": "cloudwatch_scheduled_event",
+      "ttl": 1743523655  // 90 days from now (DynamoDB auto-delete)
+    }
+
+
+Phase 7: Return Result
+  Return to Step Functions:
+    {
+      "status": "success",
+      "github_commit": "new-commit-sha-abc",
+      "github_workflow_run_id": 1234,
+      "notification_sent": true,
+      "audit_logged": true
+    }
+```
+
+
+---
+
+
+### **Component 5: GitHub Actions Workflow**
+
+
+**Purpose**: Run Knowledge Factory pipeline when manifest.json changes
+
+
+**Workflow File**: `.github/workflows/kb-factory.yml`
+
+
+```yaml
+name: Knowledge Factory Pipeline
+
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sources/manifest.json'  # Only trigger on manifest changes
+  workflow_dispatch:  # Allow manual trigger
+
+
+env:
+  AWS_REGION: ap-southeast-2
+  S3_BUCKET: cardiofit-kb-sources
+  ARTIFACT_BUCKET: cardiofit-kb-artifacts
+
+
+jobs:
+  # Job 1: Validate Manifest
+  validate:
+    name: Validate Source Manifest
+    runs-on: ubuntu-latest
+    
+    outputs:
+      release_id: ${{ steps.parse.outputs.release_id }}
+      snomed_version: ${{ steps.parse.outputs.snomed_version }}
+      rxnorm_version: ${{ steps.parse.outputs.rxnorm_version }}
+      loinc_version: ${{ steps.parse.outputs.loinc_version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Parse manifest
+        id: parse
+        run: |
+          MANIFEST=$(cat sources/manifest.json)
+          echo "release_id=$(echo $MANIFEST | jq -r '.release_id')" >> $GITHUB_OUTPUT
+          echo "snomed_version=$(echo $MANIFEST | jq -r '.sources.snomed.version')" >> $GITHUB_OUTPUT
+          echo "rxnorm_version=$(echo $MANIFEST | jq -r '.sources.rxnorm.version')" >> $GITHUB_OUTPUT
+          echo "loinc_version=$(echo $MANIFEST | jq -r '.sources.loinc.version')" >> $GITHUB_OUTPUT
+      
+      - name: Validate checksums
+        run: |
+          # Verify manifest has all required fields
+          jq -e '.release_id' sources/manifest.json
+          jq -e '.sources.snomed.checksum' sources/manifest.json
+          jq -e '.sources.rxnorm.checksum' sources/manifest.json
+          jq -e '.sources.loinc.checksum' sources/manifest.json
+      
+      - name: Check for duplicate release
+        env:
+          RELEASE_ID: ${{ steps.parse.outputs.release_id }}
+        run: |
+          # Query S3 to see if this release already processed
+          aws s3 ls s3://${{ env.ARTIFACT_BUCKET }}/releases/$RELEASE_ID/ || echo "New release"
+
+
+  # Job 2: Download Sources from S3
+  download:
+    name: Download Source Files
+    runs-on: ubuntu-latest
+    needs: validate
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Download SNOMED from S3
+        run: |
+          SNOMED_URI=$(jq -r '.sources.snomed.s3_uri' sources/manifest.json)
+          aws s3 cp ${SNOMED_URI}SnomedCT_AU_Release_${{ needs.validate.outputs.snomed_version }}.zip ./input/
+          aws s3 cp ${SNOMED_URI}checksum.txt ./input/snomed_checksum.txt
+      
+      - name: Download RxNorm from S3
+        run: |
+          RXNORM_URI=$(jq -r '.sources.rxnorm.s3_uri' sources/manifest.json)
+          aws s3 cp ${RXNORM_URI}RxNorm_full_${{ needs.validate.outputs.rxnorm_version }}.zip ./input/
+          aws s3 cp ${RXNORM_URI}checksum.txt ./input/rxnorm_checksum.txt
+      
+      - name: Download LOINC from S3
+        run: |
+          LOINC_URI=$(jq -r '.sources.loinc.s3_uri' sources/manifest.json)
+          aws s3 cp ${LOINC_URI}LOINC_${{ needs.validate.outputs.loinc_version }}.zip ./input/
+          aws s3 cp ${LOINC_URI}checksum.txt ./input/loinc_checksum.txt
+      
+      - name: Verify checksums
+        run: |
+          # Verify SNOMED
+          EXPECTED=$(cat ./input/snomed_checksum.txt)
+          ACTUAL=$(sha256sum ./input/SnomedCT_AU_Release_*.zip | awk '{print $1}')
+          [ "$EXPECTED" = "$ACTUAL" ] || (echo "SNOMED checksum mismatch" && exit 1)
+          
+          # Verify RxNorm
+          EXPECTED=$(cat ./input/rxnorm_checksum.txt)
+          ACTUAL=$(sha256sum ./input/RxNorm_full_*.zip | awk '{print $1}')
+          [ "$EXPECTED" = "$ACTUAL" ] || (echo "RxNorm checksum mismatch" && exit 1)
+          
+          # Verify LOINC
+          EXPECTED=$(cat ./input/loinc_checksum.txt)
+          ACTUAL=$(sha256sum ./input/LOINC_*.zip | awk '{print $1}')
+          [ "$EXPECTED" = "$ACTUAL" ] || (echo "LOINC checksum mismatch" && exit 1)
+      
+      - name: Upload artifacts for next job
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-files
+          path: ./input/*.zip
+          retention-days: 1
+
+
+  # Job 3: Transform Sources (3-Tool Pipeline)
+  transform:
+    name: Transform to RDF/OWL
+    runs-on: ubuntu-latest
+    needs: [validate, download]
+    
+    # Use large runner for memory-intensive processing
+    # GitHub-hosted runners max at 16GB, may need self-hosted for larger datasets
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download source artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: source-files
+          path: ./input
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      # Parallel transformation using matrix strategy
+      - name: Transform SNOMED (RF2 → OWL)
+        run: |
+          docker run --rm \
+            -v $(pwd)/input:/data \
+            -v $(pwd)/output:/out \
+            snomed/owl-toolkit:latest \
+            -rf2-to-owl \
+            -rf2-snapshot-archives /data/SnomedCT_AU_Release_${{ needs.validate.outputs.snomed_version }}.zip \
+            -output-file /out/snomed-au-${{ needs.validate.outputs.snomed_version }}.owl
+      
+      - name: Transform RxNorm (RRF → RDF)
+        run: |
+          docker run --rm \
+            -v $(pwd)/input:/data \
+            -v $(pwd)/output:/out \
+            cardiofit/rxnorm-converter:latest \
+            --input /data/RxNorm_full_${{ needs.validate.outputs.rxnorm_version }}.zip \
+            --output /out/rxnorm-${{ needs.validate.outputs.rxnorm_version }}.ttl
+      
+      - name: Transform LOINC (CSV → OWL)
+        run: |
+          docker run --rm \
+            -v $(pwd)/input:/data \
+            -v $(pwd)/output:/out \
+            -v $(pwd)/templates:/templates \
+            obolibrary/robot:latest \
+            template \
+            --template /templates/loinc-mapping-template.csv \
+            --input /data/LOINC_${{ needs.validate.outputs.loinc_version }}.zip \
+            --output /out/loinc-${{ needs.validate.outputs.loinc_version }}.owl
+      
+      - name: Upload transformed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformed-ontologies
+          path: ./output/*.{owl,ttl}
+          retention-days: 1
+
+
+  # Job 4: Merge & Reason
+  merge:
+    name: Merge Ontologies & Run Reasoner
+    runs-on: ubuntu-latest
+    needs: [validate, transform]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download transformed ontologies
+        uses: actions/download-artifact@v4
+        with:
+          name: transformed-ontologies
+          path: ./ontologies
+      
+      - name: Merge ontologies with ROBOT
+        run: |
+          docker run --rm \
+            -v $(pwd)/ontologies:/work \
+            -v $(pwd)/output:/out \
+            -v $(pwd)/mappings:/mappings \
+            obolibrary/robot:latest \
+            merge \
+            --input /work/snomed-au-${{ needs.validate.outputs.snomed_version }}.owl \
+            --input /work/rxnorm-${{ needs.validate.outputs.rxnorm_version }}.ttl \
+            --input /work/loinc-${{ needs.validate.outputs.loinc_version }}.owl \
+            --input /mappings/snomed-icd10-crosswalk.ttl \
+            --output /out/merged-ontology.owl
+      
+      - name: Run ELK reasoner
+        run: |
+          docker run --rm \
+            -v $(pwd)/output:/work \
+            obolibrary/robot:latest \
+            reason \
+            --input /work/merged-ontology.owl \
+            --reasoner ELK \
+            --create-new-ontology false \
+            --annotate-inferred-axioms true \
+            --exclude-duplicate-axioms true \
+            --output /work/reasoned-ontology.owl
+      
+      - name: Generate statistics
+        run: |
+          docker run --rm \
+            -v $(pwd)/output:/work \
+            obolibrary/robot:latest \
+            query \
+            --input /work/reasoned-ontology.owl \
+            --query /work/stats.sparql /work/statistics.csv
+      
+      - name: Upload reasoned ontology
+        uses: actions/upload-artifact@v4
+        with:
+          name: reasoned-ontology
+          path: ./output/reasoned-ontology.owl
+          retention-days: 1
+
+
+  # Job 5: Validate (Quality Gates)
+  validate-ontology:
+    name: Run SPARQL Validation Queries
+    runs-on: ubuntu-latest
+    needs: [validate, merge]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download reasoned ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: reasoned-ontology
+          path: ./ontology
+      
+      - name: Run ROBOT verify
+        run: |
+          docker run --rm \
+            -v $(pwd)/ontology:/work \
+            -v $(pwd)/validation:/queries \
+            -v $(pwd)/results:/results \
+            obolibrary/robot:latest \
+            verify \
+            --input /work/reasoned-ontology.owl \
+            --queries /queries/*.sparql \
+            --output-dir /results/
+      
+      - name: Check validation results
+        run: |
+          # If any SPARQL query returned results, validation failed
+          if [ -n "$(find ./results -name '*.csv' -size +0)" ]; then
+            echo "Validation failed - errors detected"
+            cat ./results/*.csv
+            exit 1
+          else
+            echo "Validation passed - no errors"
+          fi
+      
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: ./results/
+          retention-days: 30
+
+
+  # Job 6: Package & Upload Artifacts
+  package:
+    name: Create KB7 Kernel Release
+    runs-on: ubuntu-latest
+    needs: [validate, validate-ontology]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download reasoned ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: reasoned-ontology
+          path: ./ontology
+      
+      - name: Generate kernel version
+        id: version
+        run: |
+          # Extract component versions from manifest
+          SNOMED_VER=$(jq -r '.sources.snomed.version' sources/manifest.json)
+          RXNORM_VER=$(jq -r '.sources.rxnorm.version' sources/manifest.json)
+          LOINC_VER=$(jq -r '.sources.loinc.version' sources/manifest.json)
+          
+          # Generate semantic version: v2.YYYYMM.patch
+          YEAR_MONTH=$(date +%Y%m)
+          KERNEL_VERSION="v2.${YEAR_MONTH}.0"
+          
+          echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
+          echo "snomed_version=$SNOMED_VER" >> $GITHUB_OUTPUT
+          echo "rxnorm_version=$RXNORM_VER" >> $GITHUB_OUTPUT
+          echo "loinc_version=$LOINC_VER" >> $GITHUB_OUTPUT
+      
+      - name: Convert to TriG format (for GraphDB)
+        run: |
+          docker run --rm \
+            -v $(pwd)/ontology:/work \
+            -v $(pwd)/output:/out \
+            eclipse/rdf4j:latest \
+            rdf4j convert \
+            --input /work/reasoned-ontology.owl \
+            --output /out/kb7-kernel-${{ steps.version.outputs.kernel_version }}.trig \
+            --format trig
+      
+      - name: Generate kernel metadata
+        run: |
+          cat > ./output/kernel-metadata.json <<EOF
+          {
+            "kernel_version": "${{ steps.version.outputs.kernel_version }}",
+            "release_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "components": {
+              "snomed_ct_au": "${{ steps.version.outputs.snomed_version }}",
+              "rxnorm": "${{ steps.version.outputs.rxnorm_version }}",
+              "loinc": "${{ steps.version.outputs.loinc_version }}"
+            },
+            "statistics": {
+              "triple_count": $(grep -c "<" ./ontology/reasoned-ontology.owl || echo 0),
+              "file_size_bytes": $(stat -f%z ./output/kb7-kernel-${{ steps.version.outputs.kernel_version }}.trig)
+            },
+            "build": {
+              "github_commit": "${{ github.sha }}",
+              "github_run_id": "${{ github.run_id }}",
+              "github_run_number": "${{ github.run_number }}",
+              "built_by": "github-actions"
+            }
+          }
+          EOF
+      
+      - name: Calculate checksum
+        run: |
+          cd ./output
+          sha256sum kb7-kernel-${{ steps.version.outputs.kernel_version }}.trig > checksum.txt
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Upload kernel to S3
+        run: |
+          aws s3 cp \
+            ./output/kb7-kernel-${{ steps.version.outputs.kernel_version }}.trig \
+            s3://${{ env.ARTIFACT_BUCKET }}/kernels/${{ steps.version.outputs.kernel_version }}/
+          
+          aws s3 cp \
+            ./output/kernel-metadata.json \
+            s3://${{ env.ARTIFACT_BUCKET }}/kernels/${{ steps.version.outputs.kernel_version }}/
+          
+          aws s3 cp \
+            ./output/checksum.txt \
+            s3://${{ env.ARTIFACT_BUCKET }}/kernels/${{ steps.version.outputs.kernel_version }}/
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.kernel_version }}
+          name: KB7 Kernel ${{ steps.version.outputs.kernel_version }}
+          body: |
+            ## KB7 Terminology Kernel Release
+            
+            **Version**: ${{ steps.version.outputs.kernel_version }}
+            **Release Date**: $(date -u +%Y-%m-%d)
+            
+            ### Component Versions
+            - SNOMED CT-AU: ${{ steps.version.outputs.snomed_version }}
+            - RxNorm: ${{ steps.version.outputs.rxnorm_version }}
+            - LOINC: ${{ steps.version.outputs.loinc_version }}
+            
+            ### Artifacts
+            - S3: s3://${{ env.ARTIFACT_BUCKET }}/kernels/${{ steps.version.outputs.kernel_version }}/
+            - GraphDB: Ready for import
+            
+            ### Next Steps
+            1. Load kernel into GraphDB (Layer 1)
+            2. Update PostgreSQL registry
+            3. Trigger CDC pipeline
+          files: |
+            ./output/kb7-kernel-${{ steps.version.outputs.kernel_version }}.trig
+            ./output/kernel-metadata.json
+            ./output/checksum.txt
+
+
+  # Job 7: Trigger CDC Pipeline
+  trigger-cdc:
+    name: Update PostgreSQL Registry (Trigger CDC)
+    runs-on: ubuntu-latest
+    needs: [validate, package]
+    
+    steps:
+      - name: Get kernel version
+        id: kernel
+        run: |
+          # Extract from package job output or reconstruct
+          YEAR_MONTH=$(date +%Y%m)
+          KERNEL_VERSION="v2.${YEAR_MONTH}.0"
+          echo "kernel_version=$KERNEL_VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Invoke Lambda to update PostgreSQL
+        run: |
+          aws lambda invoke \
+            --function-name KB7_PostgreSQL_Registry_Updater \
+            --payload '{
+              "kernel_version": "${{ steps.kernel.outputs.kernel_version }}",
+              "s3_uri": "s3://${{ env.ARTIFACT_BUCKET }}/kernels/${{ steps.kernel.outputs.kernel_version }}/",
+              "github_commit": "${{ github.sha }}",
+              "github_run_id": "${{ github.run_id }}"
+            }' \
+            response.json
+          
+          cat response.json
+      
+      - name: Wait for CDC propagation
+        run: |
+          # Give CDC pipeline time to propagate
+          echo "Waiting for CDC propagation (60 seconds)..."
+          sleep 60
+      
+      - name: Verify CDC success
+        run: |
+          # Query Prometheus metrics or health endpoint
+          # Verify that Neo4j, Flink broadcast state were updated
+          curl -f https://metrics.cardiofit.ai/api/v1/query?query=kb_kernel_version{layer="flink"}
+      
+      - name: Send success notification
+        if: success()
+        run: |
+          aws sns publish \
+            --topic-arn arn:aws:sns:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:kb7-pipeline-success \
+            --message "KB7 Kernel ${{ steps.kernel.outputs.kernel_version }} successfully deployed to production"
+      
+      - name: Send failure notification
+        if: failure()
+        run: |
+          aws sns publish \
+            --topic-arn arn:aws:sns:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:kb7-pipeline-failure \
+            --message "KB7 Kernel ${{ steps.kernel.outputs.kernel_version }} pipeline failed at CDC trigger stage"
+
+
+  # Job 8: Post-Deployment Validation
+  validate-deployment:
+    name: Validate Production Deployment
+    runs-on: ubuntu-latest
+    needs: [validate, trigger-cdc]
+    
+    steps:
+      - name: Query Neo4j for new kernel
+        run: |
+          # Verify Neo4j has the new kernel version
+          KERNEL_VERSION=$(curl -s https://metrics.cardiofit.ai/api/v1/query?query=kb_kernel_version{layer="neo4j"} | jq -r '.data.result[0].value[1]')
+          
+          if [ "$KERNEL_VERSION" != "${{ needs.package.outputs.kernel_version }}" ]; then
+            echo "Neo4j kernel version mismatch"
+            exit 1
+          fi
+      
+      - name: Test SNOMED concept lookup
+        run: |
+          # Sample query: Lookup "Essential Hypertension"
+          curl -X POST https://api.cardiofit.ai/graphql \
+            -H "Content-Type: application/json" \
+            -d '{
+              "query": "{ terminologyConcept(system: \"SNOMED_CT\", code: \"38341003\") { display, mappings { target } } }"
+            }' | jq '.data.terminologyConcept.display' | grep -q "Essential"
+      
+      - name: Verify Flink snapshot metadata
+        run: |
+          # Check that new snapshots include updated KB version
+          # This would query a test snapshot endpoint
+          SNAPSHOT=$(curl -s https://api.cardiofit.ai/v1/snapshots/test-snapshot-id)
+          KB_VERSION=$(echo $SNAPSHOT | jq -r '.metadata.kb_versions.kb7_terminology')
+          
+          if [ "$KB_VERSION" != "${{ needs.package.outputs.kernel_version }}" ]; then
+            echo "Flink snapshots not using new kernel version"
+            exit 1
+          fi
+```
+
+
+---
+
+
+## **Component 6: Secrets Management**
+
+
+**AWS Secrets Manager Structure**:
+
+
+```
+Secret: kb7/ncts (SNOMED credentials)
+{
+  "api_key": "ncts_api_key_abc123...",
+  "username": "cardiofit@example.com",
+  "organization": "CardioFit Health Systems"
+}
+
+
+Secret: kb7/umls (RxNorm credentials)
+{
+  "api_key": "umls_api_key_def456...",
+  "umls_username": "cardiofit_umls",
+  "tgt_endpoint": "https://utslogin.nlm.nih.gov/cas/v1/api-key"
+}
+
+
+Secret: kb7/loinc (LOINC credentials)
+{
+  "username": "cardiofit@example.com",
+  "password": "secure_password_here"
+}
+
+
+Secret: kb7/github (GitHub token for API access)
+{
+  "token": "ghp_abc123def456...",
+  "repo": "cardiofit/knowledge-factory",
+  "permissions": ["contents:write", "actions:write"]
+}
+```
+
+
+**Secret Rotation Policy**:
+```
+Rotation Schedule:
+  - NCTS API key: Every 90 days
+  - UMLS API key: Every 180 days
+  - LOINC password: Every 90 days
+  - GitHub token: Every 365 days
+
+
+Rotation Process (Automated):
+  1. CloudWatch Event triggers rotation Lambda 7 days before expiry
+  2. Lambda generates new credentials with vendor
+  3. Lambda updates Secrets Manager with new version
+  4. Lambda tests new credentials
+  5. Old credentials marked for deletion after 7-day grace period
+  6. SNS notification sent to ops team
+
+
+Monitoring:
+  - CloudWatch alarm if secret not rotated within window
+  - PagerDuty alert if credential test fails
+```
+
+
+---
+
+
+## **Component 7: Monitoring & Observability**
+
+
+### **CloudWatch Dashboards**
+
+
+**Dashboard 1: Source Download Health**
+
+
+```
+Widgets:
+  1. Download Success Rate (Last 24 hours)
+     Metric: AWS/Lambda/Invocations (filtered by function name)
+     Visualization: Pie chart (success vs. failure)
+     Target: >99% success rate
+  
+  2. Download Duration by Source
+     Metrics:
+       - KB7_SNOMED_Downloader duration
+       - KB7_RxNorm_Downloader duration
+       - KB7_LOINC_Downloader duration
+     Visualization: Line chart
+     Baseline: SNOMED ~270s, RxNorm ~450s, LOINC ~80s
+  
+  3. Step Functions Execution Status
+     Metric: AWS/States/ExecutionsFailed
+     Visualization: Number widget
+     Alert: If > 0
+  
+  4. S3 Upload Throughput
+     Metric: AWS/S3/BytesUploaded
+     Visualization: Stacked area chart
+     Breakdown: By source (SNOMED, RxNorm, LOINC)
+  
+  5. Lambda Error Rate
+     Metric: AWS/Lambda/Errors
+     Visualization: Line chart
+     Alert: If > 1% error rate
+  
+  6. Secrets Manager Access
+     Metric: AWS/SecretsManager/GetSecretValue
+     Visualization: Bar chart
+     Purpose: Detect credential access anomalies
+```
+
+
+**Dashboard 2: GitHub Actions Pipeline Health**
+
+
+```
+Widgets:
+  1. Workflow Run Status
+     Source: GitHub Actions API via Lambda
+     Metric: Workflow success/failure count
+     Visualization: Stacked bar chart
+     Target: >95% success rate
+  
+  2. Pipeline Duration by Stage
+     Metrics:
+       - Download stage duration
+       - Transform stage duration
+       - Merge stage duration
+       - Validate stage duration
+       - Package stage duration
+     Visualization: Horizontal bar chart
+     Target: Total < 60 minutes
+  
+  3. ROBOT Validation Failures
+     Source: Parsed from validation artifacts
+     Metric: Count of SPARQL violations
+     Visualization: Time series
+     Alert: If > 0 violations
+  
+  4. Artifact Size Trend
+     Metric: KB7 kernel file size over time
+     Visualization: Line chart
+     Purpose: Detect unexpected growth
+  
+  5. CDC Propagation Lag
+     Metric: Time from PostgreSQL INSERT to Flink broadcast update
+     Visualization: Line chart
+     Target: < 5 minutes
+```
+
+
+### **CloudWatch Alarms**
+
+
+```
+Alarm 1: Lambda Function Failure
+  Metric: AWS/Lambda/Errors
+  Threshold: > 0 in 5 minutes
+  Action: SNS topic → PagerDuty
+  Severity: P2
+
+
+Alarm 2: Step Functions Execution Timeout
+  Metric: AWS/States/ExecutionTime
+  Threshold: > 900,000 ms (15 minutes)
+  Action: SNS topic → Email ops team
+  Severity: P3
+
+
+Alarm 3: S3 Upload Failure
+  Metric: Custom metric from Lambda
+  Threshold: > 0 upload failures
+  Action: SNS topic → Slack channel
+  Severity: P2
+
+
+Alarm 4: Checksum Mismatch
+  Metric: Custom metric from Lambda
+  Threshold: > 0 checksum failures
+  Action: SNS topic → PagerDuty
+  Severity: P1 (data integrity issue)
+
+
+Alarm 5: GitHub Actions Workflow Failure
+  Metric: Custom metric from GitHub API
+  Threshold: Workflow status = "failure"
+  Action: SNS topic → Slack + Email
+  Severity: P2
+
+
+Alarm 6: Secret Expiration Warning
+  Metric: Days until secret expiration
+  Threshold: < 7 days
+  Action: SNS topic → Email ops team
+  Severity: P3
+```
+
+
+---
+
+
+## **Cost Optimization**
+
+
+### **Monthly Cost Breakdown (Estimated)**
+
+
+```
+AWS Lambda:
+  - SNOMED Downloader: 1 invocation/month × 15 min × $0.0000166667/GB-second
+    Memory: 1024MB (1GB) × 900 seconds = 900 GB-seconds
+    Cost: 900 × $0.0000166667 = $0.015
+  
+  - RxNorm Downloader: 1 invocation/month × 15 min × $0.0000166667/GB-second
+    Cost: $0.015
+  
+  - LOINC Downloader: 1 invocation/month × 10 min × $0.0000166667/GB-second
+    Memory: 512MB × 600 seconds = 300 GB-seconds
+    Cost: 300 × $0.0000166667 = $0.005
+  
+  - GitHub Dispatcher: 1 invocation/month × 2 min × $0.0000166667/GB-second
+    Memory: 256MB × 120 seconds = 30 GB-seconds
+    Cost: 30 × $0.0000166667 = $0.0005
+  
+  Total Lambda: ~$0.04/month
+
+
+AWS Step Functions:
+  - State transitions: ~10 transitions per execution × 1 execution/month
+  - Cost: 10 × $0.000025 = $0.00025/month
+
+
+AWS Secrets Manager:
+  - 4 secrets × $0.40/secret/month = $1.60/month
+  - API calls: ~10/month × $0.05/10,000 = negligible
+
+
+S3 Storage:
+  - Source files: 1.4GB/month (SNOMED 450MB + RxNorm 800MB + LOINC 120MB)
+  - Retention: 90 days (3 months of releases)
+  - Total: 1.4GB × 3 = 4.2GB
+  - Cost: 4.2GB × $0.023/GB/month = $0.10/month
+  
+  - Artifacts (kernels): 1.5GB/month
+  - Retention: 12 months
+  - Total: 1.5GB × 12 = 18GB
+  - Cost: 18GB × $0.023/GB/month = $0.41/month
+  
+  Total S3: ~$0.51/month
+
+
+S3 Data Transfer:
+  - Upload from Lambda: 1.4GB/month (within AWS, free)
+  - Download to GitHub Actions: 1.4GB/month
+  - Cost: 1.4GB × $0.09/GB = $0.13/month
+
+
+CloudWatch:
+  - Logs: ~100MB/month × $0.50/GB = $0.05/month
+  - Metrics:
+```
+  - Metrics: ~50 custom metrics × $0.30/metric/month = $15.00/month
+  - Dashboards: 2 dashboards × $3.00/dashboard/month = $6.00/month
+  - Alarms: 6 alarms × $0.10/alarm/month = $0.60/month
+  
+  Total CloudWatch: ~$21.65/month
+
+
+DynamoDB (Audit Table):
+  - Storage: ~1MB/month × $0.25/GB/month = negligible
+  - Read/Write: On-demand pricing
+    - Writes: 1 record/month × $1.25/million = negligible
+    - Reads: ~100 queries/month × $0.25/million = negligible
+  
+  Total DynamoDB: ~$0.01/month
+
+
+SNS (Notifications):
+  - Topics: 3 topics (free tier)
+  - Messages: ~10/month
+  - Email deliveries: ~20/month (free tier)
+  - Slack webhooks: HTTPS endpoints (free)
+  
+  Total SNS: $0.00/month (within free tier)
+
+
+GitHub Actions:
+  - Minutes used: ~45 minutes/month (single workflow run)
+  - Cost: Included in GitHub plan (2,000 minutes/month free for public repos)
+  
+  Total GitHub: $0.00/month
+
+
+TOTAL MONTHLY COST: ~$23.31/month
+```
+
+
+**Cost Optimization Strategies**:
+
+
+```
+1. Use S3 Intelligent-Tiering
+   - Auto-move old source files to Infrequent Access tier after 30 days
+   - Savings: ~30% on storage costs
+   - New S3 cost: ~$0.36/month
+
+
+2. Reduce CloudWatch Metric Retention
+   - Keep detailed metrics for 15 days instead of 30
+   - Aggregate older data to 1-hour resolution
+   - Savings: ~$5/month
+   - New CloudWatch cost: ~$16.65/month
+
+
+3. Use Reserved Capacity for Step Functions
+   - If running more frequently (weekly instead of monthly)
+   - Step Functions Express Workflows: 1 million state transitions for $1
+   - Only beneficial if >40,000 transitions/month
+
+
+4. Optimize Lambda Memory Allocation
+   - Profile actual memory usage
+   - Right-size memory (may reduce SNOMED from 1024MB to 768MB)
+   - Savings: ~25% on Lambda costs
+   - New Lambda cost: ~$0.03/month
+
+
+Optimized Total: ~$17.00/month (27% reduction)
+```
+
+
+---
+
+
+## **Disaster Recovery & Backup Strategy**
+
+
+### **Backup Components**
+
+
+```
+Component 1: S3 Versioning
+  What: Enable versioning on cardiofit-kb-sources bucket
+  Why: Protect against accidental deletion, file corruption
+  
+  Configuration:
+    - Versioning: Enabled
+    - Object Lock: Enabled (compliance mode)
+    - Retention: 90 days minimum (FDA requirement)
+    - MFA Delete: Enabled (require MFA to delete versions)
+  
+  Recovery:
+    - Accidental deletion: Restore previous version
+    - Time to recover: <5 minutes
+    - RTO: 5 minutes, RPO: 0 (no data loss)
+
+
+Component 2: S3 Cross-Region Replication
+  What: Replicate source files to backup region
+  Why: Protect against regional AWS outage
+  
+  Configuration:
+    - Primary region: ap-southeast-2 (Sydney)
+    - Replica region: us-west-2 (Oregon)
+    - Replication rule: All objects in /snomed/, /rxnorm/, /loinc/
+    - Delete marker replication: Enabled
+  
+  Recovery:
+    - Regional failure: Switch Lambda functions to backup region
+    - Time to recover: ~15 minutes (update Lambda env vars)
+    - RTO: 15 minutes, RPO: <1 minute (async replication)
+
+
+Component 3: DynamoDB Point-in-Time Recovery
+  What: Enable PITR on kb7_download_audit table
+  Why: Recover from accidental data corruption
+  
+  Configuration:
+    - PITR window: 35 days
+    - Backup frequency: Continuous (every second)
+  
+  Recovery:
+    - Data corruption: Restore table to any point in last 35 days
+    - Time to recover: ~10 minutes
+    - RTO: 10 minutes, RPO: 1 second
+
+
+Component 4: Secrets Manager Automatic Backup
+  What: Secrets Manager built-in versioning
+  Why: Rollback to previous credential version
+  
+  Configuration:
+    - Version stages: AWSCURRENT, AWSPREVIOUS
+    - Rotation: Automatic with grace period
+  
+  Recovery:
+    - Bad credential rotation: Revert to AWSPREVIOUS
+    - Time to recover: <1 minute
+    - RTO: 1 minute, RPO: 0
+
+
+Component 5: GitHub Repository Backup
+  What: Mirror repository to backup Git remote
+  Why: Protect against GitHub outage or account compromise
+  
+  Configuration:
+    - Primary: github.com/cardiofit/knowledge-factory
+    - Mirror: gitlab.com/cardiofit/knowledge-factory (read-only)
+    - Sync frequency: On every push (GitHub Actions)
+  
+  Recovery:
+    - GitHub outage: Switch workflows to GitLab CI
+    - Time to recover: ~30 minutes (reconfigure CI/CD)
+    - RTO: 30 minutes, RPO: 0 (real-time sync)
+
+
+Component 6: Lambda Function Backup
+  What: Store Lambda deployment packages in S3
+  Why: Rollback to previous Lambda version
+  
+  Configuration:
+    - Every Lambda deployment uploads .zip to S3
+    - Bucket: cardiofit-lambda-backups
+    - Versioning: Enabled
+    - Lifecycle: Archive to Glacier after 90 days
+  
+  Recovery:
+    - Bad Lambda deployment: Redeploy from backup .zip
+    - Time to recover: ~5 minutes
+    - RTO: 5 minutes, RPO: 0
+```
+
+
+### **Disaster Recovery Scenarios**
+
+
+**Scenario 1: Complete S3 Bucket Deletion**
+
+
+```
+Event: Malicious actor with AWS credentials deletes entire bucket
+
+
+Detection:
+  - CloudWatch alarm: S3 bucket not found
+  - Time to detect: <1 minute
+
+
+Response:
+  1. Disable compromised IAM credentials (1 minute)
+  2. Restore bucket from cross-region replica (5 minutes)
+  3. Verify checksums of restored files (10 minutes)
+  4. Re-run Step Functions to validate integrity (5 minutes)
+  5. Investigate security incident (parallel)
+
+
+Recovery Time: 15 minutes
+Data Loss: None (cross-region replica is synchronous)
+Cost: $0 (replication already configured)
+```
+
+
+**Scenario 2: Lambda Function Corruption**
+
+
+```
+Event: Bad deployment breaks SNOMED downloader function
+
+
+Detection:
+  - CloudWatch alarm: Lambda errors > 0
+  - Time to detect: <5 minutes (first invocation fails)
+
+
+Response:
+  1. Retrieve previous Lambda version from S3 backup (1 minute)
+  2. Deploy previous version using AWS CLI (2 minutes)
+  3. Test function with sample input (1 minute)
+  4. Re-run failed Step Functions execution (automatic retry)
+
+
+Recovery Time: 4 minutes
+Data Loss: None (Step Functions retries automatically)
+Cost: $0.05 (Lambda invocation costs)
+```
+
+
+**Scenario 3: Secrets Manager Credential Corruption**
+
+
+```
+Event: Automated rotation creates invalid credentials
+
+
+Detection:
+  - Lambda function fails authentication with vendor
+  - CloudWatch alarm: Lambda errors > 0
+  - Time to detect: <1 minute (first download attempt fails)
+
+
+Response:
+  1. Check Secrets Manager version history (1 minute)
+  2. Revert to AWSPREVIOUS version (1 minute)
+  3. Test credentials manually (2 minutes)
+  4. Disable automatic rotation temporarily (1 minute)
+  5. Contact vendor to resolve credential issue (parallel)
+  6. Re-run Step Functions execution (automatic retry)
+
+
+Recovery Time: 5 minutes
+Data Loss: None (execution retries with valid credentials)
+Cost: $0 (no additional AWS costs)
+```
+
+
+**Scenario 4: GitHub Actions Workflow Failure**
+
+
+```
+Event: GitHub Actions unable to download from S3 (IAM role expired)
+
+
+Detection:
+  - Workflow fails at download stage
+  - Slack notification sent
+  - Time to detect: <2 minutes (workflow runtime)
+
+
+Response:
+  1. Check IAM role trust policy (2 minutes)
+  2. Renew OIDC trust relationship if expired (5 minutes)
+  3. Manually trigger workflow retry (1 minute)
+  
+  Alternative (if GitHub down):
+  1. Switch to GitLab mirror repository (5 minutes)
+  2. Configure GitLab CI with same pipeline (10 minutes)
+  3. Run pipeline on GitLab (parallel)
+
+
+Recovery Time: 8 minutes (IAM fix) or 15 minutes (GitLab fallback)
+Data Loss: None (source files already in S3)
+Cost: $0
+```
+
+
+**Scenario 5: Vendor Site Outage (NCTS Down)**
+
+
+```
+Event: NCTS website down, SNOMED download fails
+
+
+Detection:
+  - Lambda timeout after 15 minutes
+  - Step Functions marks SNOMED branch as failed
+  - Time to detect: 15 minutes
+
+
+Response:
+  1. Verify vendor status page (1 minute)
+  2. Check if RxNorm and LOINC succeeded (they run in parallel)
+  3. Options:
+     a. If partial success: Continue with RxNorm + LOINC only
+        - Update manifest.json with note about SNOMED unavailable
+        - Pipeline continues, SNOMED added in next run
+     
+     b. If vendor expected up soon: Schedule retry
+        - CloudWatch scheduled event in 6 hours
+        - Step Functions automatically retries
+     
+     c. If vendor down >24 hours: Use previous SNOMED version
+        - Copy previous month's SNOMED from S3
+        - Update manifest with note about reusing old version
+
+
+Recovery Time: 
+  - Partial success: 0 minutes (pipeline continues)
+  - Scheduled retry: 6 hours (vendor recovery time)
+  - Use old version: 5 minutes
+
+
+Data Loss: 
+  - Partial success: SNOMED outdated by 1 month
+  - Scheduled retry: None (eventual consistency)
+  - Use old version: SNOMED outdated by 1 month
+
+
+Cost: $0.04 (retry Lambda invocations)
+```
+
+
+---
+
+
+## **Security Considerations**
+
+
+### **IAM Policies (Principle of Least Privilege)**
+
+
+```
+Policy 1: Lambda Execution Role (SNOMED Downloader)
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:*:secret:kb7/ncts-*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectTagging"
+      ],
+      "Resource": "arn:aws:s3:::cardiofit-kb-sources/snomed/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/KB7_SNOMED_Downloader:*"
+    }
+  ]
+}
+
+
+Note: No permission to:
+  - Delete S3 objects (prevents accidental deletion)
+  - Access other secrets (principle of separation)
+  - Modify IAM policies (prevents privilege escalation)
+```
+
+
+```
+Policy 2: GitHub Actions OIDC Role
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::cardiofit-kb-sources/snomed/*",
+        "arn:aws:s3:::cardiofit-kb-sources/rxnorm/*",
+        "arn:aws:s3:::cardiofit-kb-sources/loinc/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::cardiofit-kb-artifacts/kernels/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": "arn:aws:lambda:*:*:function:KB7_PostgreSQL_Registry_Updater"
+    }
+  ]
+}
+
+
+Trust Policy:
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:cardiofit/knowledge-factory:ref:refs/heads/main"
+        }
+      }
+    }
+  ]
+}
+
+
+Note: Trust policy restricts to:
+  - Specific repository (cardiofit/knowledge-factory)
+  - Specific branch (main)
+  - Prevents unauthorized workflow runs from accessing AWS
+```
+
+
+```
+Policy 3: Step Functions Execution Role
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "arn:aws:lambda:*:*:function:KB7_SNOMED_Downloader",
+        "arn:aws:lambda:*:*:function:KB7_RxNorm_Downloader",
+        "arn:aws:lambda:*:*:function:KB7_LOINC_Downloader",
+        "arn:aws:lambda:*:*:function:KB7_GitHub_Dispatcher"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/kb7_download_audit"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sns:Publish"
+      ],
+      "Resource": "arn:aws:sns:*:*:kb7-pipeline-*"
+    }
+  ]
+}
+
+
+Note: No access to:
+  - S3 directly (Lambdas handle S3 access)
+  - Secrets Manager (Lambdas retrieve secrets)
+```
+
+
+### **Network Security**
+
+
+```
+VPC Configuration (Optional but Recommended):
+
+
+Lambda Functions in VPC:
+  - VPC: vpc-kb7-production
+  - Subnets: 2 private subnets (Multi-AZ)
+  - Security Group: sg-lambda-kb7
+    - Egress: HTTPS (443) to vendor sites
+    - Egress: HTTPS (443) to AWS services (via VPC endpoints)
+    - No ingress (Lambda functions are invoked, not accessed)
+
+
+VPC Endpoints:
+  1. S3 Gateway Endpoint (free)
+     - Allows Lambda → S3 without internet gateway
+     - Reduces data transfer costs
+  
+  2. Secrets Manager Interface Endpoint ($7.50/month)
+     - Allows Lambda → Secrets Manager privately
+     - Reduces exposure to internet
+  
+  3. DynamoDB Gateway Endpoint (free)
+     - Allows Step Functions → DynamoDB privately
+
+
+NAT Gateway (for vendor site access):
+  - Required: Yes (Lambda needs internet for NCTS, UMLS, LOINC)
+  - Configuration: Single NAT Gateway in public subnet
+  - Cost: ~$32/month ($0.045/hour) + data transfer
+  
+  Alternative (cost optimization):
+  - Skip VPC entirely for this use case
+  - Lambda functions have AWS-managed security by default
+  - Vendor API calls over public internet with TLS
+  - Savings: ~$40/month
+
+
+Recommendation: Skip VPC for this serverless pipeline
+  - Low frequency (monthly execution)
+  - No sensitive data in transit (files encrypted with TLS)
+  - VPC adds complexity and cost without significant security benefit
+```
+
+
+### **Encryption**
+
+
+```
+Encryption at Rest:
+
+
+S3 Buckets:
+  - Method: SSE-S3 (AES-256)
+  - Key Management: AWS-managed keys
+  - Cost: Free (included with S3)
+  
+  Why not SSE-KMS?
+    - SSE-KMS adds $0.03 per 10,000 requests
+    - For monthly downloads, minimal security benefit
+    - SSE-S3 sufficient for non-PHI data
+
+
+Secrets Manager:
+  - Method: AWS KMS encryption (automatic)
+  - Key: AWS-managed KMS key (free tier)
+  - Cost: $0 (included with Secrets Manager)
+
+
+DynamoDB:
+  - Method: Encryption at rest (automatic)
+  - Key: AWS-managed key
+  - Cost: Free
+
+
+Lambda Environment Variables:
+  - Method: KMS encryption (automatic)
+  - Key: AWS-managed Lambda service key
+  - Cost: Free
+
+
+Encryption in Transit:
+
+
+Lambda → Vendor Sites:
+  - TLS 1.2+ required
+  - Certificate validation enabled
+  - No self-signed certificates accepted
+
+
+Lambda → AWS Services:
+  - TLS 1.2+ (enforced by AWS SDKs)
+  - AWS Signature V4 authentication
+
+
+GitHub → AWS (OIDC):
+  - HTTPS only (GitHub → AWS STS)
+  - Short-lived tokens (1 hour expiry)
+```
+
+
+### **Audit Logging**
+
+
+```
+CloudTrail:
+  - Trails: All AWS API calls logged
+  - Retention: 90 days in CloudTrail, 7 years in S3
+  - Events to monitor:
+    - Secrets Manager GetSecretValue (who accessed credentials)
+    - S3 PutObject (what was uploaded)
+    - Lambda InvokeFunction (when functions ran)
+    - IAM policy changes (security changes)
+  
+  Alerting:
+    - Alarm: Secrets accessed from unknown IP
+    - Alarm: S3 objects deleted
+    - Alarm: IAM policy modified outside business hours
+
+
+VPC Flow Logs (if using VPC):
+  - Capture: All network traffic to/from Lambda functions
+  - Retention: 30 days
+  - Analysis: Use for troubleshooting, not routine monitoring
+  - Cost: ~$0.50/GB ingested
+
+
+Lambda Function Logs:
+  - Destination: CloudWatch Logs
+  - Retention: 30 days (detailed), 1 year (aggregated)
+  - Log Level: INFO (not DEBUG to reduce noise)
+  - Structured Logging: JSON format for parsing
+  
+  Example Log Entry:
+  {
+    "timestamp": "2024-04-01T10:04:35Z",
+    "level": "INFO",
+    "function": "KB7_SNOMED_Downloader",
+    "request_id": "abc-123-def-456",
+    "event": "download_complete",
+    "details": {
+      "source": "snomed",
+      "version": "20240331",
+      "size_bytes": 471859200,
+      "duration_seconds": 270,
+      "checksum": "7f8d9ab3..."
+    }
+  }
+
+
+DynamoDB Audit Table:
+  - Purpose: Long-term audit trail (90 days to 7 years)
+  - Queryable: By execution_id, date range, source
+  - Export: To S3 for compliance reporting
+  - Point-in-Time Recovery: 35 days
+```
+
+
+---
+
+
+## **Implementation Roadmap**
+
+
+### **Phase 1: Foundation (Week 1)**
+
+
+```
+Day 1-2: AWS Infrastructure Setup
+  ☐ Create S3 buckets (sources, artifacts)
+  ☐ Configure bucket policies and versioning
+  ☐ Set up cross-region replication
+  ☐ Create DynamoDB audit table
+  ☐ Configure Secrets Manager with vendor credentials
+  ☐ Test credential retrieval
+
+
+Day 3-4: Lambda Functions Development
+  ☐ Develop SNOMED downloader Lambda
+  ☐ Develop RxNorm downloader Lambda
+  ☐ Develop LOINC downloader Lambda
+  ☐ Develop GitHub dispatcher Lambda
+  ☐ Unit test each function locally
+  ☐ Create deployment packages
+
+
+Day 5: Step Functions State Machine
+  ☐ Design state machine JSON definition
+  ☐ Create IAM roles for Step Functions
+  ☐ Deploy state machine
+  ☐ Test parallel execution with mock data
+
+
+Day 6-7: Integration Testing
+  ☐ End-to-end test: CloudWatch → Step Functions → Lambdas → S3
+  ☐ Test error scenarios (network timeout, checksum mismatch)
+  ☐ Verify retry logic
+  ☐ Test GitHub dispatcher with test repository
+```
+
+
+### **Phase 2: GitHub Actions Pipeline (Week 2)**
+
+
+```
+Day 8-9: Workflow Development
+  ☐ Create .github/workflows/kb-factory.yml
+  ☐ Develop Docker images for converters (RxNorm, LOINC)
+  ☐ Configure ROBOT transformation steps
+  ☐ Test workflow locally with act (GitHub Actions emulator)
+
+
+Day 10-11: AWS Integration
+  ☐ Configure OIDC identity provider in AWS IAM
+  ☐ Create IAM role for GitHub Actions
+  ☐ Test S3 download from workflow
+  ☐ Test artifact upload to S3
+
+
+Day 12: Validation & Testing
+  ☐ Create SPARQL validation queries
+  ☐ Test ROBOT verify step
+  ☐ Validate kernel metadata generation
+  ☐ Test GitHub release creation
+
+
+Day 13-14: End-to-End Testing
+  ☐ Trigger full pipeline: Download → Transform → Validate → Package
+  ☐ Measure pipeline duration (target: <60 minutes)
+  ☐ Verify CDC trigger Lambda invocation
+  ☐ Test failure scenarios and rollback
+```
+
+
+### **Phase 3: Monitoring & Operations (Week 3)**
+
+
+```
+Day 15-16: Observability
+  ☐ Create CloudWatch dashboards
+  ☐ Configure CloudWatch alarms
+  ☐ Set up SNS topics for notifications
+  ☐ Integrate with Slack (webhook)
+  ☐ Configure PagerDuty integration
+
+
+Day 17-18: Documentation
+  ☐ Write runbooks for common failures
+  ☐ Document secret rotation procedures
+  ☐ Create architecture diagrams
+  ☐ Write operational procedures guide
+
+
+Day 19: Security Hardening
+  ☐ Review IAM policies (least privilege)
+  ☐ Enable MFA delete on S3 buckets
+  ☐ Configure CloudTrail for audit logging
+  ☐ Security scan with AWS Security Hub
+
+
+Day 20-21: Disaster Recovery Testing
+  ☐ Test S3 bucket restoration from replica
+  ☐ Test Lambda rollback from backup
+  ☐ Test secret rotation failure recovery
+  ☐ Test vendor site outage scenario
+  ☐ Document recovery procedures
+```
+
+
+### **Phase 4: Production Deployment (Week 4)**
+
+
+```
+Day 22: Pre-Production Validation
+  ☐ Review all IAM policies
+  ☐ Verify CloudWatch alarms configured
+  ☐ Test notification channels (email, Slack, PagerDuty)
+  ☐ Conduct tabletop disaster recovery exercise
+
+
+Day 23: Production Cutover
+  ☐ Schedule first production run (low-traffic window)
+  ☐ Monitor CloudWatch metrics in real-time
+  ☐ Validate downloaded files
+  ☐ Verify GitHub Actions workflow completes successfully
+  ☐ Confirm CDC propagation to Neo4j/Flink
+
+
+Day 24-25: Post-Deployment Monitoring
+  ☐ Monitor first 48 hours for any issues
+  ☐ Review CloudWatch logs for errors/warnings
+  ☐ Validate kernel loaded into GraphDB correctly
+  ☐ Verify Flink snapshots using new KB version
+
+
+Day 26-28: Optimization & Tuning
+  ☐ Analyze Lambda execution times
+  ☐ Optimize memory allocation if needed
+  ☐ Review CloudWatch costs and adjust retention
+  ☐ Gather feedback from knowledge engineers
+  ☐ Document lessons learned
+```
+
+
+---
+
+
+## **Success Criteria**
+
+
+```
+Functional Requirements:
+  ✅ Download SNOMED, RxNorm, LOINC automatically on monthly schedule
+  ✅ Verify file integrity with SHA-256 checksums
+  ✅ Transform sources to RDF/OWL using 3-tool pipeline
+  ✅ Validate ontology with SPARQL queries (zero errors)
+  ✅ Upload kernel artifact to S3
+  ✅ Trigger CDC pipeline (PostgreSQL → Flink → Neo4j)
+  ✅ Complete end-to-end in <60 minutes
+
+
+Non-Functional Requirements:
+  ✅ Zero persistent servers (fully serverless)
+  ✅ Total cost <$25/month
+  ✅ 99.9% success rate for downloads
+  ✅ RTO <15 minutes for any component failure
+  ✅ RPO <1 minute (minimal data loss)
+  ✅ Complete audit trail (CloudTrail + DynamoDB)
+  ✅ Secrets rotation without downtime
+
+
+Operational Requirements:
+  ✅ CloudWatch dashboards for monitoring
+  ✅ PagerDuty integration for critical alerts
+  ✅ Runbooks for common failure scenarios
+  ✅ Disaster recovery procedures tested
+  ✅ Security scan passing (AWS Security Hub)
+  ✅ Knowledge engineers trained on system
+```
+
+
+---
+
+
+## **Summary: Serverless Knowledge Factory Architecture**
+
+
+This design achieves your requirements:
+
+
+✅ **No servers**: 100% serverless using Lambda, Step Functions, S3, and GitHub Actions  
+✅ **Automated**: Monthly scheduled downloads with zero manual intervention  
+✅ **Secure**: Credentials in Secrets Manager, encryption everywhere, least-privilege IAM  
+✅ **Cost-effective**: ~$23/month for entire pipeline  
+✅ **GitOps-driven**: Single source of truth in Git, infrastructure-as-code  
+✅ **Resilient**: Automatic retries, cross-region replication, point-in-time recovery  
+✅ **Observable**: CloudWatch dashboards, alarms, audit logs  
+✅ **Compliant**: FDA audit trail, version control, complete provenance  
+
+
+**Next Step**: Begin Phase 1 implementation (AWS infrastructure setup) while Workflow 2 (Snapshot Manager) is being developed in parallel.

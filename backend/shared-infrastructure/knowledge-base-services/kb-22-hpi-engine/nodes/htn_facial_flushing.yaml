@@ -1,0 +1,140 @@
+# P10 HTN Facial Flushing - HPI Node Definition
+# Bayesian differential for facial flushing in hypertensive patients.
+# Triggered by: patient self-report of facial flushing/redness.
+# Output: posterior probability of CCB side effect -> feeds KB-23 decision cards.
+
+node_id: P10_HTN_FLUSHING
+version: "1.0"
+description: "Facial flushing differential in hypertensive cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 6
+
+# Safety classification
+safety_criticality: LOW
+
+# Guideline prior source (N-01)
+guideline_prior_source: "NICE_HTN_NG136_2022_CCB_SIDE_EFFECTS"
+
+# Differentials with per-stratum priors (F-05)
+# CCB flushing: common with dihydropyridines (amlodipine, nifedipine).
+# Affects adherence but not clinically dangerous.
+differentials:
+  - id: CCB_SIDE_EFFECT
+    label: "Calcium Channel Blocker (Amlodipine) Flushing"
+    population_reference: "Sica DA, J Clin Hypertens 2003; Messerli FH, J Am Coll Cardiol 2002"
+    priors:
+      DM_ONLY: 0.25
+      DM_HTN: 0.45
+      DM_HTN_CKD: 0.40
+    conditional_priors:
+      - condition: "on_ccb == true"
+        override: 0.55
+      - condition: "on_ccb == false"
+        override: 0.10
+
+  - id: ANXIETY
+    label: "Anxiety / Stress Response"
+    population_reference: "Wilkin JK, Arch Dermatol 1988"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.25
+
+  - id: MENOPAUSAL
+    label: "Menopausal Flushing (Hot Flashes)"
+    population_reference: "Freedman RR, Am J Human Biol 2001"
+    priors:
+      DM_ONLY: 0.25
+      DM_HTN: 0.20
+      DM_HTN_CKD: 0.20
+
+# Enrichment fields pulled from KB-20 patient profile
+enrichment_fields:
+  - on_ccb
+  - on_amlodipine
+  - sex
+  - age
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Does the facial flushing or redness occur within 1-3 hours of taking your blood pressure medication?"
+    text_hi: "क्या चेहरे की लालिमा या फ्लशिंग रक्तचाप की दवा लेने के 1-3 घंटे बाद होती है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_POST_MEDICATION"
+        label_en: "Yes, timing correlates with medication"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 5.0
+          ANXIETY: 0.3
+          MENOPAUSAL: 0.4
+      - value: "NO_CORRELATION"
+        label_en: "No correlation with medication timing"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.3
+          ANXIETY: 1.5
+          MENOPAUSAL: 1.5
+      - value: "UNSURE"
+        label_en: "Not sure / haven't tracked timing"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 1.0
+          ANXIETY: 1.0
+          MENOPAUSAL: 1.0
+
+  - question_id: Q02
+    text_en: "Do you experience sudden waves of heat spreading over your face, neck, and chest (hot flashes)?"
+    text_hi: "क्या आपको अचानक चेहरे, गर्दन और छाती पर गर्मी की लहर महसूस होती है (हॉट फ्लैशेस)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_HOT_FLASHES"
+        label_en: "Yes, hot flashes with sweating"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.8
+          ANXIETY: 0.6
+          MENOPAUSAL: 4.5
+      - value: "NO_JUST_REDNESS"
+        label_en: "No, just facial redness without heat wave"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 1.8
+          ANXIETY: 1.2
+          MENOPAUSAL: 0.3
+
+  - question_id: Q03
+    text_en: "Does the flushing happen when you feel stressed, anxious, or embarrassed?"
+    text_hi: "क्या फ्लशिंग तब होती है जब आप तनाव, चिंता या शर्मिंदगी महसूस करते हैं?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_STRESS_RELATED"
+        label_en: "Yes, strongly linked to emotional triggers"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 0.4
+          ANXIETY: 4.0
+          MENOPAUSAL: 0.8
+      - value: "NO_NOT_EMOTIONAL"
+        label_en: "No, not linked to emotions"
+        likelihood_ratios:
+          CCB_SIDE_EFFECT: 1.5
+          ANXIETY: 0.3
+          MENOPAUSAL: 1.2
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_FLUSHING_ADHERENCE_CARD"
+    description: "Posterior > 0.70 for CCB side effect -> generate decision card addressing adherence risk. Suggest dose timing adjustment or switch to lercanidipine/non-DHP CCB if affecting compliance."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Counsel patient on benign nature if CCB-related. Explore menopausal or anxiety management if those differentials are elevated."
+  - threshold: 0.30
+    action: "REASSURE_AND_MONITOR"
+    description: "Low CCB probability. Reassure patient. Document for adherence tracking. No medication change needed."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "CCB_SIDE_EFFECT posterior > 0.50"
+    trigger_node: "P07_HTN_OEDEMA"
+    rationale: "CCB flushing and ankle oedema frequently co-occur. Assess for peripheral oedema to build complete CCB side-effect profile."

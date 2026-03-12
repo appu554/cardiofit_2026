@@ -1,0 +1,164 @@
+# Prometheus Configuration for Context Services Monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'context-services'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Rule files
+rule_files:
+  - "rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Nginx Load Balancer
+  - job_name: 'nginx-context-gateway'
+    static_configs:
+      - targets: ['nginx-context-gateway:8090']
+    metrics_path: /nginx_status
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Go Context Gateway Service
+  - job_name: 'context-gateway-go'
+    static_configs:
+      - targets: ['context-gateway-go:8117']
+    metrics_path: /metrics
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      format: ['prometheus']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: context-gateway-go:8117
+
+  # Rust Clinical Data Hub Service
+  - job_name: 'clinical-data-hub-rust'
+    static_configs:
+      - targets: ['clinical-data-hub-rust:8118']
+    metrics_path: /metrics
+    scrape_interval: 10s  # Higher frequency for performance monitoring
+    scrape_timeout: 5s
+    params:
+      format: ['prometheus']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: clinical-data-hub-rust:8118
+
+  # Redis Cluster Monitoring
+  - job_name: 'redis-cluster'
+    static_configs:
+      - targets: ['redis-cluster:6379']
+    metrics_path: /metrics
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'redis_(.*)'
+        target_label: __name__
+        replacement: 'context_redis_${1}'
+
+  # MongoDB Context Storage
+  - job_name: 'mongo-context'
+    static_configs:
+      - targets: ['mongo-context:27017']
+    metrics_path: /metrics
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'mongodb_(.*)'
+        target_label: __name__
+        replacement: 'context_mongo_${1}'
+
+  # PostgreSQL Clinical Hub Storage
+  - job_name: 'postgres-hub'
+    static_configs:
+      - targets: ['postgres-hub:5432']
+    metrics_path: /metrics
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'pg_(.*)'
+        target_label: __name__
+        replacement: 'clinical_postgres_${1}'
+
+  # Kafka Stream Processing
+  - job_name: 'kafka-context'
+    static_configs:
+      - targets: ['kafka-context:9092']
+    metrics_path: /metrics
+    scrape_interval: 30s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'kafka_(.*)'
+        target_label: __name__
+        replacement: 'context_kafka_${1}'
+
+  # Consul Service Discovery
+  - job_name: 'consul-context'
+    static_configs:
+      - targets: ['consul-context:8500']
+    metrics_path: /v1/agent/metrics
+    scrape_interval: 30s
+    params:
+      format: ['prometheus']
+
+  # Combined Context Services Health Check
+  - job_name: 'context-services-health'
+    static_configs:
+      - targets: ['nginx-context-gateway:8090']
+    metrics_path: /health/detailed
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'health_(.*)'
+        target_label: __name__
+        replacement: 'context_health_${1}'
+
+# Remote write configuration (optional - for centralized metrics)
+# remote_write:
+#   - url: "https://prometheus-remote.example.com/api/v1/write"
+#     basic_auth:
+#       username: "context-services"
+#       password: "secure-password"
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus
+    retention.time: 30d
+    retention.size: 10GB
+    wal-compression: true
+
+# Performance tuning
+global:
+  # Increase scrape timeout for high-latency networks
+  scrape_timeout: 10s
+  
+  # External labels for federation
+  external_labels:
+    service_tier: 'context-services'
+    deployment: 'production'
+    region: 'primary'

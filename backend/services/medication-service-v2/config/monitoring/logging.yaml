@@ -1,0 +1,280 @@
+# Logging Configuration for Medication Service V2
+# Healthcare-grade logging with HIPAA compliance
+
+logging:
+  # Basic configuration
+  level: "info"
+  environment: "production"
+  service_name: "medication-service-v2"
+  service_version: "2.0.0"
+  
+  # Output configuration
+  enable_console: true
+  enable_file: true
+  enable_audit_file: true
+  log_directory: "/var/log/medication-service"
+  
+  # File rotation settings
+  max_file_size_mb: 100
+  max_backups: 30
+  max_age_days: 90
+  compress_backups: true
+  
+  # Healthcare compliance
+  enable_hipaa: true
+  enable_audit_trail: true
+  retention_days: 2555  # 7 years for healthcare records
+  
+  # Security and privacy
+  enable_sanitization: true
+  sanitize_fields:
+    - "patient_id"
+    - "ssn"
+    - "medical_record_number"
+    - "patient_name"
+    - "date_of_birth"
+    - "phone_number"
+    - "email"
+    - "address"
+    - "insurance_number"
+    - "credit_card"
+    - "auth_token"
+    - "session_id"
+    - "api_key"
+
+# Structured logging schema for different event types
+log_schemas:
+  # Clinical decision logging
+  clinical_decision:
+    required_fields:
+      - event_id
+      - timestamp
+      - patient_id_hash  # Hashed patient ID
+      - indication
+      - decision_type
+      - rules_applied
+      - confidence_score
+      - safety_checks_performed
+      - correlation_id
+    optional_fields:
+      - warnings
+      - alerts
+      - input_data_sanitized
+      - output_data_sanitized
+      - processing_time_ms
+      - user_id
+    
+  # Audit event logging (HIPAA compliance)
+  audit_event:
+    required_fields:
+      - event_id
+      - event_type
+      - event_category
+      - timestamp
+      - user_id
+      - operation
+      - outcome
+      - correlation_id
+      - service_name
+    optional_fields:
+      - resource_type
+      - resource_id
+      - patient_id_hash
+      - clinical_context
+      - safety_impact
+      - compliance_flags
+      - ip_address
+      - user_agent
+      - session_id
+      
+  # Security event logging
+  security_event:
+    required_fields:
+      - event_id
+      - event_type
+      - severity
+      - timestamp
+      - threat_level
+      - action
+      - service_name
+      - correlation_id
+    optional_fields:
+      - user_id
+      - ip_address
+      - user_agent
+      - resource
+      - metadata
+      
+  # Performance monitoring
+  performance_event:
+    required_fields:
+      - timestamp
+      - operation
+      - duration_ms
+      - status
+      - correlation_id
+    optional_fields:
+      - endpoint
+      - method
+      - response_size
+      - cpu_usage
+      - memory_usage
+      - cache_hit
+
+# Log levels and routing
+log_routing:
+  # Critical events (always logged)
+  critical:
+    - "patient_safety_violations"
+    - "medication_errors"
+    - "dosage_calculation_failures"
+    - "audit_trail_failures"
+    - "security_breaches"
+    - "data_integrity_violations"
+    
+  # Important business events
+  important:
+    - "clinical_decisions"
+    - "medication_proposals"
+    - "compliance_checks"
+    - "validation_failures"
+    - "external_service_failures"
+    
+  # Operational events
+  operational:
+    - "api_requests"
+    - "database_operations"
+    - "cache_operations"
+    - "service_health_checks"
+    - "performance_metrics"
+    
+  # Debug events (development only)
+  debug:
+    - "detailed_execution_traces"
+    - "variable_values"
+    - "internal_state_changes"
+
+# Audit trail specific configuration
+audit_trail:
+  # Events requiring audit logging
+  auditable_events:
+    - "patient_data_access"
+    - "clinical_decision_made"
+    - "medication_recommendation"
+    - "safety_violation_detected"
+    - "compliance_check_performed"
+    - "user_authentication"
+    - "authorization_failure"
+    - "data_modification"
+    - "system_configuration_change"
+    
+  # Audit log format
+  format:
+    timestamp_format: "RFC3339"
+    timezone: "UTC"
+    include_stack_trace: false
+    include_caller_info: true
+    
+  # Audit log integrity
+  checksum_enabled: true
+  digital_signature_enabled: false  # Would require PKI setup
+  
+  # Retention and archival
+  retention_policy:
+    active_retention_days: 365
+    archive_retention_years: 7
+    archive_storage_path: "/var/log/archive/medication-service"
+    compression_enabled: true
+
+# Integration configurations
+integrations:
+  # ELK Stack integration
+  elasticsearch:
+    enabled: true
+    endpoint: "https://elasticsearch.hospital.com:9200"
+    index_pattern: "medication-service-logs-%{+yyyy.MM.dd}"
+    
+  # Splunk integration (healthcare environments)
+  splunk:
+    enabled: false
+    hec_endpoint: "https://splunk.hospital.com:8088"
+    index: "healthcare_medication_service"
+    
+  # SIEM integration
+  siem:
+    enabled: true
+    endpoint: "https://siem.hospital.com/api/events"
+    format: "cef"  # Common Event Format for security events
+    
+  # Compliance monitoring
+  compliance_monitor:
+    enabled: true
+    endpoint: "https://compliance.hospital.com/api/events"
+    
+# Development vs Production differences
+environments:
+  development:
+    level: "debug"
+    enable_console: true
+    enable_file: false
+    enable_audit_file: false
+    enable_sanitization: false
+    
+  staging:
+    level: "info"
+    enable_console: true
+    enable_file: true
+    enable_audit_file: true
+    enable_sanitization: true
+    
+  production:
+    level: "info"
+    enable_console: false
+    enable_file: true
+    enable_audit_file: true
+    enable_sanitization: true
+    max_file_size_mb: 500
+    max_backups: 90
+    
+# Performance considerations
+performance:
+  # Async logging to avoid blocking application
+  async_logging: true
+  buffer_size: 10000
+  flush_interval_ms: 1000
+  
+  # Sampling for high-volume events
+  sampling:
+    enabled: true
+    rules:
+      - event_type: "api_request"
+        sample_rate: 0.1  # Sample 10% of API requests
+      - event_type: "clinical_decision"
+        sample_rate: 1.0  # Always log clinical decisions
+      - event_type: "security_event"
+        sample_rate: 1.0  # Always log security events
+      - event_type: "audit_event"
+        sample_rate: 1.0  # Always log audit events
+
+# Monitoring and alerting for logging system itself
+log_monitoring:
+  # Monitor log ingestion health
+  health_checks:
+    - check_disk_space: true
+      threshold_percent: 85
+    - check_log_rotation: true
+      max_file_age_hours: 24
+    - check_audit_integrity: true
+      verification_interval_hours: 1
+      
+  # Alert on logging issues
+  alerts:
+    - name: "log_disk_space_low"
+      condition: "disk_usage > 90%"
+      severity: "critical"
+    - name: "audit_log_failure"
+      condition: "audit_write_failures > 0"
+      severity: "critical"
+    - name: "log_ingestion_delayed"
+      condition: "log_processing_delay > 60s"
+      severity: "high"

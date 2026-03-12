@@ -1,0 +1,138 @@
+# KB-9 Care Gaps Service - Docker Compose
+# Provides local development environment with all dependencies
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose up kb-9-care-gaps  # Start KB-9 only
+#   docker-compose logs -f            # Follow logs
+#   docker-compose down               # Stop all services
+
+services:
+  # ============================================================
+  # KB-9 Care Gaps Service
+  # ============================================================
+  kb-9-care-gaps:
+    image: kb-9-care-gaps:latest
+    build:
+      context: ../../../..
+      dockerfile: backend/shared-infrastructure/knowledge-base-services/kb-9-care-gaps/Dockerfile
+    container_name: kb-9-care-gaps
+    ports:
+      - "8089:8089"
+    environment:
+      # Server Configuration
+      - PORT=8089
+      - ENVIRONMENT=development
+      - LOG_LEVEL=info
+
+      # FHIR Server (Google Healthcare API)
+      - FHIR_SERVER_URL=${FHIR_SERVER_URL:-http://hapi-fhir:8080/fhir}
+      - FHIR_TIMEOUT=30s
+      - GOOGLE_CLOUD_PROJECT_ID=${GOOGLE_CLOUD_PROJECT_ID}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-us-central1}
+      - GOOGLE_CLOUD_DATASET_ID=${GOOGLE_CLOUD_DATASET_ID}
+      - GOOGLE_CLOUD_FHIR_STORE_ID=${GOOGLE_CLOUD_FHIR_STORE_ID}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+
+      # KB-7 Terminology Service
+      - TERMINOLOGY_URL=http://kb-7-terminology:8087
+
+      # KB-3 Temporal/Guidelines Service (Tier 7 Integration)
+      - KB3_URL=http://kb-3-guidelines:8083
+      - KB3_TIMEOUT=10s
+      - KB3_ENABLED=true
+
+      # Redis Cache
+      - REDIS_URL=redis://kb-redis:6379/9
+      - CACHE_TTL=5m
+
+      # CQL Engine
+      - USE_CQL_ENGINE=true
+      - REGION=${REGION:-US}
+
+      # GraphQL Federation
+      - FEDERATION_ENABLED=true
+      - PLAYGROUND_ENABLED=true
+
+      # Metrics
+      - METRICS_ENABLED=true
+    volumes:
+      - ./credentials:/app/credentials:ro
+    depends_on:
+      kb-redis:
+        condition: service_healthy
+    networks:
+      - kb-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8089/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  # ============================================================
+  # Redis Cache
+  # ============================================================
+  kb-redis:
+    image: redis:7-alpine
+    container_name: kb-9-redis
+    ports:
+      - "6389:6379"  # Different port to avoid conflicts
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - kb9-redis-data:/data
+    networks:
+      - kb-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # HAPI FHIR Server (Optional - for local testing)
+  # ============================================================
+  hapi-fhir:
+    image: hapiproject/hapi:latest
+    container_name: kb-9-hapi-fhir
+    ports:
+      - "8080:8080"
+    environment:
+      - hapi.fhir.default_encoding=json
+      - hapi.fhir.allow_cascading_deletes=true
+      - hapi.fhir.allow_multiple_delete=true
+      - hapi.fhir.cql_enabled=true
+      - spring.datasource.url=jdbc:h2:mem:fhirdb;DB_CLOSE_DELAY=-1
+    networks:
+      - kb-network
+    profiles:
+      - fhir  # Only start with: docker-compose --profile fhir up
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/fhir/metadata"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+networks:
+  kb-network:
+    name: kb9-network
+    driver: bridge
+
+volumes:
+  kb9-redis-data:
+    driver: local

@@ -1,0 +1,318 @@
+package com.cardiofit.flink.state;
+
+import com.cardiofit.flink.models.EncounterContext;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
+import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
+import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
+import org.apache.flink.core.memory.DataInputView;
+import org.apache.flink.core.memory.DataOutputView;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * TypeSerializer for EncounterContext with Field Removal Migration Pattern.
+ *
+ * <p><b>Migration Scenario:</b> Removing deprecated fields from state schema.
+ *
+ * <p><b>Schema Evolution:</b>
+ * <pre>
+ * V1: EncounterContext {
+ *   encounterId: String
+ *   legacyId: String        ← DEPRECATED (from old EMR migration)
+ *   encounterType: String
+ *   department: String
+ *   admissionTime: long
+ * }
+ *
+ * V2: EncounterContext {
+ *   encounterId: String
+ *   // legacyId removed
+ *   encounterType: String
+ *   department: String
+ *   admissionTime: long
+ * }
+ * </pre>
+ *
+ * <p><b>Migration Strategy:</b> Field removal is handled by simply SKIPPING the deprecated
+ * field during deserialization. The serializer reads the field from the binary stream but
+ * doesn't store it in the new object.
+ *
+ * <p><b>Key Pattern:</b>
+ * <ul>
+ *   <li><b>V1 Deserialization:</b> Read legacyId but discard it (don't set on object)</li>
+ *   <li><b>V2 Serialization:</b> Don't write legacyId (not in schema anymore)</li>
+ *   <li><b>Backward Compatible:</b> Can read V1 state even after V2 deployment</li>
+ *   <li><b>Forward Compatible:</b> V1 code cannot read V2 state (but that's OK for removal)</li>
+ * </ul>
+ *
+ * <p><b>Clinical Context:</b>
+ * The legacyId field was used during migration from an old EMR system to track original
+ * encounter IDs. After 2 years in production, all encounters have been migrated and the
+ * field is no longer needed. Removing it saves ~20 bytes per encounter state.
+ *
+ * <p><b>Production Impact:</b>
+ * <ul>
+ *   <li>State size reduction: ~20 bytes/encounter (for 100K encounters = 2MB saved)</li>
+ *   <li>Zero downtime migration (V1 state readable by V2 code)</li>
+ *   <li>No data loss (legacyId wasn't used anymore anyway)</li>
+ * </ul>
+ *
+ * @see EncounterContext V2 data model (without legacyId)
+ */
+public class EncounterContextSerializer extends TypeSerializer<EncounterContext> {
+
+    private static final long serialVersionUID = 2L; // V2 serializer
+
+    private static final int CURRENT_VERSION = 2;
+
+    // ========================================================================================
+    // SERIALIZATION (V2 - does NOT write legacyId)
+    // ========================================================================================
+
+    @Override
+    public void serialize(EncounterContext record, DataOutputView target) throws IOException {
+        // Write version header
+        target.writeInt(CURRENT_VERSION);
+
+        // Write V2 fields (no legacyId)
+        target.writeUTF(record.getEncounterId() != null ? record.getEncounterId() : "");
+        target.writeUTF(record.getEncounterType() != null ? record.getEncounterType() : "");
+        target.writeUTF(record.getDepartment() != null ? record.getDepartment() : "");
+        target.writeUTF(record.getRoom() != null ? record.getRoom() : "");
+        target.writeUTF(record.getBed() != null ? record.getBed() : "");
+        target.writeLong(record.getAdmissionTime());
+
+        // Write discharge time (nullable)
+        boolean hasDischargeTime = record.getDischargeTime() != null;
+        target.writeBoolean(hasDischargeTime);
+        if (hasDischargeTime) {
+            target.writeLong(record.getDischargeTime());
+        }
+
+        // Write attending physician
+        target.writeUTF(record.getAttendingPhysician() != null ? record.getAttendingPhysician() : "");
+
+        // Write care team
+        List<String> careTeam = record.getCareTeam();
+        if (careTeam == null) {
+            target.writeInt(0);
+        } else {
+            target.writeInt(careTeam.size());
+            for (String providerId : careTeam) {
+                target.writeUTF(providerId);
+            }
+        }
+
+        // Write admission reason
+        target.writeUTF(record.getAdmissionReason() != null ? record.getAdmissionReason() : "");
+    }
+
+    // ========================================================================================
+    // DESERIALIZATION (V1 and V2 backward compatible)
+    // ========================================================================================
+
+    @Override
+    public EncounterContext deserialize(DataInputView source) throws IOException {
+        int version = source.readInt();
+
+        EncounterContext context = new EncounterContext();
+
+        // Read common fields (present in both V1 and V2)
+        context.setEncounterId(source.readUTF());
+
+        if (version == 1) {
+            // ============================================================
+            // V1 FORMAT: Has legacyId field that we need to SKIP
+            // ============================================================
+            String legacyId = source.readUTF(); // Read but DISCARD
+            // NOTE: legacyId is read from stream but NOT stored in context
+            // This is the key pattern for field removal
+        }
+
+        // Continue reading remaining fields (same in V1 and V2)
+        context.setEncounterType(source.readUTF());
+        context.setDepartment(source.readUTF());
+        context.setRoom(source.readUTF());
+        context.setBed(source.readUTF());
+        context.setAdmissionTime(source.readLong());
+
+        // Read discharge time (nullable)
+        boolean hasDischargeTime = source.readBoolean();
+        if (hasDischargeTime) {
+            context.setDischargeTime(source.readLong());
+        }
+
+        // Read attending physician
+        context.setAttendingPhysician(source.readUTF());
+
+        // Read care team
+        int careTeamSize = source.readInt();
+        List<String> careTeam = new ArrayList<>(careTeamSize);
+        for (int i = 0; i < careTeamSize; i++) {
+            careTeam.add(source.readUTF());
+        }
+        context.setCareTeam(careTeam);
+
+        // Read admission reason
+        context.setAdmissionReason(source.readUTF());
+
+        return context;
+    }
+
+    // ========================================================================================
+    // TYPE SERIALIZER METHODS
+    // ========================================================================================
+
+    @Override
+    public EncounterContext deserialize(
+            EncounterContext reuse,
+            DataInputView source) throws IOException {
+        // For mutable types, we could reuse the object
+        // For simplicity, we just create a new one
+        return deserialize(source);
+    }
+
+    @Override
+    public void copy(DataInputView source, DataOutputView target) throws IOException {
+        // Read version
+        int version = source.readInt();
+        target.writeInt(CURRENT_VERSION); // Always write current version
+
+        // Copy encounter ID
+        target.writeUTF(source.readUTF());
+
+        if (version == 1) {
+            // V1: Read and DISCARD legacyId (don't write it to target)
+            source.readUTF(); // Read but don't write
+        }
+
+        // Copy remaining fields
+        target.writeUTF(source.readUTF()); // encounterType
+        target.writeUTF(source.readUTF()); // department
+        target.writeUTF(source.readUTF()); // room
+        target.writeUTF(source.readUTF()); // bed
+        target.writeLong(source.readLong()); // admissionTime
+
+        // Copy discharge time
+        boolean hasDischargeTime = source.readBoolean();
+        target.writeBoolean(hasDischargeTime);
+        if (hasDischargeTime) {
+            target.writeLong(source.readLong());
+        }
+
+        // Copy attending physician
+        target.writeUTF(source.readUTF());
+
+        // Copy care team
+        int careTeamSize = source.readInt();
+        target.writeInt(careTeamSize);
+        for (int i = 0; i < careTeamSize; i++) {
+            target.writeUTF(source.readUTF());
+        }
+
+        // Copy admission reason
+        target.writeUTF(source.readUTF());
+    }
+
+    @Override
+    public EncounterContext copy(EncounterContext from) {
+        // Deep copy
+        EncounterContext copy = new EncounterContext();
+        copy.setEncounterId(from.getEncounterId());
+        copy.setEncounterType(from.getEncounterType());
+        copy.setDepartment(from.getDepartment());
+        copy.setRoom(from.getRoom());
+        copy.setBed(from.getBed());
+        copy.setAdmissionTime(from.getAdmissionTime());
+        copy.setDischargeTime(from.getDischargeTime());
+        copy.setAttendingPhysician(from.getAttendingPhysician());
+        copy.setCareTeam(new ArrayList<>(from.getCareTeam()));
+        copy.setAdmissionReason(from.getAdmissionReason());
+        return copy;
+    }
+
+    @Override
+    public EncounterContext copy(EncounterContext from, EncounterContext reuse) {
+        return copy(from);
+    }
+
+    @Override
+    public int getLength() {
+        return -1; // Variable length
+    }
+
+    @Override
+    public boolean isImmutableType() {
+        return false;
+    }
+
+    @Override
+    public EncounterContext createInstance() {
+        return new EncounterContext();
+    }
+
+    @Override
+    public int hashCode() {
+        return getClass().hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return obj != null && obj.getClass() == getClass();
+    }
+
+    @Override
+    public TypeSerializer<EncounterContext> duplicate() {
+        return this; // Stateless, can return same instance
+    }
+
+    @Override
+    public TypeSerializerSnapshot<EncounterContext> snapshotConfiguration() {
+        return new EncounterContextSerializerSnapshot();
+    }
+
+    // ========================================================================================
+    // SERIALIZER SNAPSHOT
+    // ========================================================================================
+
+    /**
+     * Snapshot for schema evolution tracking.
+     */
+    public static class EncounterContextSerializerSnapshot
+            implements TypeSerializerSnapshot<EncounterContext> {
+
+        private static final int CURRENT_VERSION = 2;
+
+        @Override
+        public int getCurrentVersion() {
+            return CURRENT_VERSION;
+        }
+
+        @Override
+        public void writeSnapshot(DataOutputView out) throws IOException {
+            out.writeInt(CURRENT_VERSION);
+        }
+
+        @Override
+        public void readSnapshot(int readVersion, DataInputView in, ClassLoader userCodeClassLoader)
+                throws IOException {
+            // No additional state to read
+        }
+
+        @Override
+        public TypeSerializer<EncounterContext> restoreSerializer() {
+            return new EncounterContextSerializer();
+        }
+
+        @Override
+        public TypeSerializerSchemaCompatibility<EncounterContext> resolveSchemaCompatibility(
+                TypeSerializer<EncounterContext> newSerializer) {
+
+            // V2 serializer is backward compatible with V1 state
+            return TypeSerializerSchemaCompatibility.compatibleAsIs();
+        }
+    }
+}

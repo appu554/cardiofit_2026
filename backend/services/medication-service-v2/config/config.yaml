@@ -1,0 +1,227 @@
+# Medication Service V2 Configuration
+# Healthcare-grade configuration for clinical medication management
+
+service:
+  name: "medication-service-v2"
+  version: "1.0.0"
+  port: "8005"
+
+# Server configuration
+server:
+  http:
+    port: "8005"
+    host: "0.0.0.0"
+    read_timeout: "30s"
+    write_timeout: "30s"
+    idle_timeout: "120s"
+    cors:
+      allowed_origins:
+        - "http://localhost:4200"
+        - "https://*.cardiofit.health"
+        - "https://cardiofit-staging.health"
+      allowed_methods:
+        - "GET"
+        - "POST" 
+        - "PUT"
+        - "DELETE"
+        - "OPTIONS"
+      allowed_headers:
+        - "Content-Type"
+        - "Authorization"
+        - "X-Requested-With"
+        - "X-Patient-ID"
+        - "X-Clinical-Context"
+      allow_credentials: true
+      max_age: "24h"
+  grpc:
+    port: "50005"
+    host: "0.0.0.0"
+
+# Database configuration
+database:
+  url: "${DATABASE_URL:-postgresql://medication_user:medication_pass@localhost:5434/medication_v2?sslmode=disable}"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: "1h"
+  conn_max_idle_time: "30m"
+  migrations_path: "./migrations"
+
+# Redis configuration
+redis:
+  url: "${REDIS_URL:-redis://localhost:6381/0}"
+  password: "${REDIS_PASSWORD:-}"
+  db: 0
+  pool_size: 10
+  max_retries: 3
+  dial_timeout: "5s"
+
+# External service configurations
+external_services:
+  context_gateway:
+    url: "${CONTEXT_GATEWAY_URL:-http://localhost:8020}"
+    timeout: "30s"
+    max_retries: 3
+    circuit_breaker:
+      enabled: true
+      max_requests: 3
+      interval: "60s"
+      timeout: "10s"
+      failure_threshold: 0.6
+  apollo_federation:
+    url: "${APOLLO_FEDERATION_URL:-http://localhost:4000/graphql}"
+    timeout: "15s"
+    max_retries: 2
+    circuit_breaker:
+      enabled: true
+      max_requests: 5
+      interval: "30s"
+      timeout: "5s"
+      failure_threshold: 0.5
+  rust_engine:
+    url: "${RUST_ENGINE_URL:-http://localhost:8095}"
+    timeout: "10s"
+    max_retries: 2
+    circuit_breaker:
+      enabled: true
+      max_requests: 10
+      interval: "30s"
+      timeout: "5s"
+      failure_threshold: 0.4
+  flow2_go_engine:
+    url: "${FLOW2_GO_ENGINE_URL:-http://localhost:8085}"
+    timeout: "20s"
+    max_retries: 3
+    circuit_breaker:
+      enabled: true
+      max_requests: 5
+      interval: "60s"
+      timeout: "10s"
+      failure_threshold: 0.5
+  safety_gateway:
+    url: "${SAFETY_GATEWAY_URL:-http://localhost:8030}"
+    timeout: "15s"
+    max_retries: 3
+    circuit_breaker:
+      enabled: true
+      max_requests: 3
+      interval: "60s"
+      timeout: "10s"
+      failure_threshold: 0.6
+
+# Recipe resolver configuration
+recipe_resolver:
+  cache_enabled: true
+  cache_ttl: "10m"
+  default_ttl: "1h"
+  max_recipe_size: 1048576  # 1MB
+  validation_level: "strict"
+
+# Clinical engine configuration
+clinical_engine:
+  rust_engine_url: "${RUST_ENGINE_URL:-http://localhost:8095}"
+  timeout: "30s"
+  max_retries: 3
+  max_concurrent_requests: 100
+  performance_targets:
+    end_to_end_latency_p95: "250ms"
+    recipe_resolution: "10ms"
+    snapshot_creation: "100ms"
+    clinical_calculations: "50ms"
+    target_throughput_rps: 1000
+
+# Knowledge base configuration
+knowledge_bases:
+  drug_rules_url: "${KB_DRUG_RULES_URL:-http://localhost:8086}"
+  guidelines_url: "${KB_GUIDELINES_URL:-http://localhost:8089}"
+  apollo_federation_url: "${APOLLO_FEDERATION_URL:-http://localhost:4000/graphql}"
+  cache_enabled: true
+  cache_ttl: "30m"
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  metrics_path: "/metrics"
+  health_path: "/health"
+  jaeger_endpoint: "${JAEGER_ENDPOINT:-http://localhost:14268/api/traces}"
+  sample_rate: 0.1
+
+# Logging configuration
+logging:
+  level: "${LOG_LEVEL:-info}"
+  format: "json"
+  development: false
+  audit_trail:
+    enabled: true
+    log_path: "./logs/audit.log"
+    max_size: 100      # MB
+    max_backups: 30
+    max_age: 90        # days
+
+# Performance configuration
+performance:
+  max_concurrent_calculations: 100
+  cache_ttl: "300s"
+  snapshot_expiry_hours: 24
+  connection_pooling:
+    max_idle_conns: 10
+    max_open_conns: 100
+    conn_max_lifetime: "1h"
+
+# Healthcare-specific settings
+healthcare:
+  # HIPAA compliance settings
+  hipaa:
+    encryption_at_rest: true
+    encryption_in_transit: true
+    audit_logging: true
+    access_logging: true
+    minimum_necessary: true
+    
+  # Clinical safety settings
+  safety:
+    mandatory_double_check: true
+    allergy_check_required: true
+    interaction_check_required: true
+    dosage_range_validation: true
+    pregnancy_check_required: true
+    
+  # Data retention policies
+  retention:
+    proposal_retention_days: 2555  # 7 years
+    snapshot_retention_days: 2555  # 7 years
+    audit_log_retention_days: 2555 # 7 years
+    cache_retention_hours: 24
+    
+  # Quality assurance
+  quality:
+    validation_level: "strict"
+    require_evidence_citations: true
+    clinical_review_required: true
+    automated_testing: true
+
+# Development/staging overrides
+development:
+  database:
+    url: "postgresql://dev_user:dev_pass@localhost:5432/medication_v2_dev?sslmode=disable"
+  redis:
+    url: "redis://localhost:6379/1"
+  logging:
+    level: "debug"
+    development: true
+  monitoring:
+    sample_rate: 1.0  # Sample all traces in development
+
+# Production overrides
+production:
+  logging:
+    level: "warn"
+  monitoring:
+    sample_rate: 0.01  # Sample 1% of traces in production
+  performance:
+    max_concurrent_calculations: 500
+    connection_pooling:
+      max_open_conns: 200
+  healthcare:
+    safety:
+      mandatory_double_check: true
+      require_supervisor_approval: true

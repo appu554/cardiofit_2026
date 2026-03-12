@@ -1,0 +1,363 @@
+package com.cardiofit.flink.utils;
+
+import com.cardiofit.flink.config.GoogleHealthcareConfig;
+import com.clickhouse.jdbc.ClickHouseDataSource;
+import org.apache.http.HttpHost;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.CredentialsProvider;
+import org.apache.http.impl.client.BasicCredentialsProvider;
+import org.elasticsearch.client.RequestOptions;
+import org.elasticsearch.client.RestClient;
+import org.elasticsearch.client.RestClientBuilder;
+import org.elasticsearch.client.RestHighLevelClient;
+import org.neo4j.driver.AuthTokens;
+import org.neo4j.driver.Driver;
+import org.neo4j.driver.GraphDatabase;
+import org.neo4j.driver.Session;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.Properties;
+
+/**
+ * Utility class to test connections to all data stores used by Flink EHR Intelligence Engine
+ * This helps validate the shared infrastructure setup before running Flink jobs
+ */
+public class DataStoreConnectionTest {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DataStoreConnectionTest.class);
+
+    // Connection configuration
+    private static final String NEO4J_URI = System.getenv().getOrDefault("NEO4J_URI", "bolt://localhost:7687");
+    private static final String NEO4J_USERNAME = System.getenv().getOrDefault("NEO4J_USERNAME", "neo4j");
+    private static final String NEO4J_PASSWORD = System.getenv().getOrDefault("NEO4J_PASSWORD", "CardioFit2024!");
+    private static final String NEO4J_DATABASE = System.getenv().getOrDefault("NEO4J_DATABASE", "cardiofit");
+
+    private static final String CLICKHOUSE_HOST = System.getenv().getOrDefault("CLICKHOUSE_HOST", "localhost");
+    private static final int CLICKHOUSE_PORT = Integer.parseInt(System.getenv().getOrDefault("CLICKHOUSE_PORT", "8123"));
+    private static final String CLICKHOUSE_USERNAME = System.getenv().getOrDefault("CLICKHOUSE_USERNAME", "cardiofit_user");
+    private static final String CLICKHOUSE_PASSWORD = System.getenv().getOrDefault("CLICKHOUSE_PASSWORD", "ClickHouse2024!");
+    private static final String CLICKHOUSE_DATABASE = System.getenv().getOrDefault("CLICKHOUSE_DATABASE", "cardiofit_analytics");
+
+    private static final String ELASTICSEARCH_HOST = System.getenv().getOrDefault("ELASTICSEARCH_HOST", "localhost");
+    private static final int ELASTICSEARCH_PORT = Integer.parseInt(System.getenv().getOrDefault("ELASTICSEARCH_PORT", "9200"));
+    private static final String ELASTICSEARCH_USERNAME = System.getenv().getOrDefault("ELASTICSEARCH_USERNAME", "elastic");
+    private static final String ELASTICSEARCH_PASSWORD = System.getenv().getOrDefault("ELASTICSEARCH_PASSWORD", "ElasticCardioFit2024!");
+
+    private static final String REDIS_HOST = System.getenv().getOrDefault("REDIS_HOST", "localhost");
+    private static final int REDIS_PORT = Integer.parseInt(System.getenv().getOrDefault("REDIS_PORT", "6379"));
+    private static final String REDIS_PASSWORD = System.getenv().getOrDefault("REDIS_PASSWORD", "RedisCardioFit2024!");
+    private static final int REDIS_DATABASE = Integer.parseInt(System.getenv().getOrDefault("REDIS_DATABASE", "0"));
+
+    private static final String REDIS_REPLICA_HOST = System.getenv().getOrDefault("REDIS_REPLICA_HOST", "localhost");
+    private static final int REDIS_REPLICA_PORT = Integer.parseInt(System.getenv().getOrDefault("REDIS_REPLICA_PORT", "6380"));
+
+    public static void main(String[] args) {
+        LOG.info("🔧 Testing Data Store Connections for Flink EHR Intelligence Engine");
+        LOG.info("=================================================================");
+
+        boolean allConnectionsSuccessful = true;
+
+        // Test all connections
+        allConnectionsSuccessful &= testNeo4jConnection();
+        allConnectionsSuccessful &= testClickHouseConnection();
+        allConnectionsSuccessful &= testElasticsearchConnection();
+        allConnectionsSuccessful &= testRedisConnection();
+        allConnectionsSuccessful &= testRedisReplicaConnection();
+        allConnectionsSuccessful &= testGoogleFHIRStoreConfig();
+
+        LOG.info("=================================================================");
+        if (allConnectionsSuccessful) {
+            LOG.info("✅ All data store connections successful!");
+            LOG.info("🚀 Flink EHR Intelligence Engine is ready to process clinical data");
+            System.exit(0);
+        } else {
+            LOG.error("❌ One or more data store connections failed!");
+            LOG.error("🛑 Please check the shared infrastructure setup and configuration");
+            System.exit(1);
+        }
+    }
+
+    private static boolean testNeo4jConnection() {
+        LOG.info("🗄️ Testing Neo4j connection to {}...", NEO4J_URI);
+
+        try (Driver driver = GraphDatabase.driver(NEO4J_URI, AuthTokens.basic(NEO4J_USERNAME, NEO4J_PASSWORD))) {
+            try (Session session = driver.session()) {
+                var result = session.run("RETURN 'Neo4j connection successful' as message, datetime() as timestamp");
+                var record = result.single();
+                String message = record.get("message").asString();
+                String timestamp = record.get("timestamp").asString();
+
+                LOG.info("✅ Neo4j: {} at {}", message, timestamp);
+
+                // Test database creation
+                session.run("CREATE DATABASE " + NEO4J_DATABASE + " IF NOT EXISTS");
+                LOG.info("✅ Neo4j: Database '{}' verified/created", NEO4J_DATABASE);
+
+                return true;
+            }
+        } catch (Exception e) {
+            LOG.error("❌ Neo4j connection failed: {}", e.getMessage());
+            LOG.error("   URI: {}", NEO4J_URI);
+            LOG.error("   Username: {}", NEO4J_USERNAME);
+            LOG.error("   Database: {}", NEO4J_DATABASE);
+            return false;
+        }
+    }
+
+    private static boolean testClickHouseConnection() {
+        LOG.info("📈 Testing ClickHouse connection to {}:{}...", CLICKHOUSE_HOST, CLICKHOUSE_PORT);
+
+        String jdbcUrl = String.format("jdbc:clickhouse://%s:%d/%s", CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_DATABASE);
+
+        try {
+            Properties properties = new Properties();
+            properties.setProperty("user", CLICKHOUSE_USERNAME);
+            properties.setProperty("password", CLICKHOUSE_PASSWORD);
+
+            ClickHouseDataSource dataSource = new ClickHouseDataSource(jdbcUrl, properties);
+
+            try (Connection connection = dataSource.getConnection();
+                 Statement statement = connection.createStatement()) {
+
+                ResultSet result = statement.executeQuery("SELECT 'ClickHouse connection successful' as message, now() as timestamp");
+
+                if (result.next()) {
+                    String message = result.getString("message");
+                    String timestamp = result.getString("timestamp");
+                    LOG.info("✅ ClickHouse: {} at {}", message, timestamp);
+                }
+
+                // Test database exists
+                ResultSet dbResult = statement.executeQuery("SHOW DATABASES LIKE '" + CLICKHOUSE_DATABASE + "'");
+                if (dbResult.next()) {
+                    LOG.info("✅ ClickHouse: Database '{}' exists", CLICKHOUSE_DATABASE);
+                } else {
+                    LOG.warn("⚠️ ClickHouse: Database '{}' does not exist - will be created when first table is created", CLICKHOUSE_DATABASE);
+                }
+
+                return true;
+            }
+        } catch (Exception e) {
+            LOG.error("❌ ClickHouse connection failed: {}", e.getMessage());
+            LOG.error("   JDBC URL: {}", jdbcUrl);
+            LOG.error("   Username: {}", CLICKHOUSE_USERNAME);
+            return false;
+        }
+    }
+
+    private static boolean testElasticsearchConnection() {
+        LOG.info("🔍 Testing Elasticsearch connection to {}:{}...", ELASTICSEARCH_HOST, ELASTICSEARCH_PORT);
+
+        try {
+            RestClientBuilder builder = RestClient.builder(new HttpHost(ELASTICSEARCH_HOST, ELASTICSEARCH_PORT, "http"));
+
+            // Add authentication
+            CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+            credentialsProvider.setCredentials(AuthScope.ANY,
+                new UsernamePasswordCredentials(ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD));
+
+            builder.setHttpClientConfigCallback(httpClientBuilder ->
+                httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider));
+
+            try (RestHighLevelClient client = new RestHighLevelClient(builder)) {
+                // Test cluster health
+                var response = client.cluster().health(
+                    new org.elasticsearch.action.admin.cluster.health.ClusterHealthRequest(),
+                    RequestOptions.DEFAULT
+                );
+
+                LOG.info("✅ Elasticsearch: Cluster '{}' status: {}",
+                    response.getClusterName(), response.getStatus());
+
+                // Test index operations
+                String testIndex = "cardiofit-connection-test";
+                try {
+                    var indexRequest = new org.elasticsearch.action.index.IndexRequest(testIndex)
+                        .id("test-doc")
+                        .source("message", "Connection test successful", "timestamp", System.currentTimeMillis());
+
+                    client.index(indexRequest, RequestOptions.DEFAULT);
+                    LOG.info("✅ Elasticsearch: Test document indexed successfully");
+
+                    // Clean up test index
+                    var deleteRequest = new org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest(testIndex);
+                    client.indices().delete(deleteRequest, RequestOptions.DEFAULT);
+
+                } catch (Exception e) {
+                    LOG.warn("⚠️ Elasticsearch: Index test failed (cluster may be read-only): {}", e.getMessage());
+                }
+
+                return true;
+            }
+        } catch (Exception e) {
+            LOG.error("❌ Elasticsearch connection failed: {}", e.getMessage());
+            LOG.error("   Host: {}:{}", ELASTICSEARCH_HOST, ELASTICSEARCH_PORT);
+            LOG.error("   Username: {}", ELASTICSEARCH_USERNAME);
+            return false;
+        }
+    }
+
+    private static boolean testRedisConnection() {
+        LOG.info("🚀 Testing Redis Master connection to {}:{}...", REDIS_HOST, REDIS_PORT);
+
+        try {
+            JedisPoolConfig poolConfig = new JedisPoolConfig();
+            poolConfig.setMaxTotal(10);
+            poolConfig.setTestOnBorrow(true);
+
+            try (JedisPool jedisPool = new JedisPool(poolConfig, REDIS_HOST, REDIS_PORT, 2000, REDIS_PASSWORD, REDIS_DATABASE);
+                 Jedis jedis = jedisPool.getResource()) {
+
+                // Test basic operations
+                String pong = jedis.ping();
+                LOG.info("✅ Redis Master: PING response: {}", pong);
+
+                // Test set/get
+                String testKey = "cardiofit:connection:test";
+                String testValue = "Connection test at " + System.currentTimeMillis();
+
+                jedis.setex(testKey, 60, testValue);
+                String retrievedValue = jedis.get(testKey);
+
+                if (testValue.equals(retrievedValue)) {
+                    LOG.info("✅ Redis Master: SET/GET operations successful");
+                    jedis.del(testKey); // Clean up
+                } else {
+                    LOG.error("❌ Redis Master: SET/GET operations failed");
+                    return false;
+                }
+
+                // Test database selection
+                jedis.select(REDIS_DATABASE);
+                LOG.info("✅ Redis Master: Database {} selected", REDIS_DATABASE);
+
+                return true;
+            }
+        } catch (Exception e) {
+            LOG.error("❌ Redis Master connection failed: {}", e.getMessage());
+            LOG.error("   Host: {}:{}", REDIS_HOST, REDIS_PORT);
+            LOG.error("   Database: {}", REDIS_DATABASE);
+            return false;
+        }
+    }
+
+    private static boolean testRedisReplicaConnection() {
+        LOG.info("🚀 Testing Redis Replica connection to {}:{}...", REDIS_REPLICA_HOST, REDIS_REPLICA_PORT);
+
+        try {
+            JedisPoolConfig poolConfig = new JedisPoolConfig();
+            poolConfig.setMaxTotal(10);
+            poolConfig.setTestOnBorrow(true);
+
+            try (JedisPool jedisPool = new JedisPool(poolConfig, REDIS_REPLICA_HOST, REDIS_REPLICA_PORT, 2000, REDIS_PASSWORD, REDIS_DATABASE);
+                 Jedis jedis = jedisPool.getResource()) {
+
+                // Test basic operations
+                String pong = jedis.ping();
+                LOG.info("✅ Redis Replica: PING response: {}", pong);
+
+                // Test replication info
+                String info = jedis.info("replication");
+                if (info.contains("role:slave") || info.contains("role:replica")) {
+                    LOG.info("✅ Redis Replica: Confirmed as replica/slave");
+                } else if (info.contains("role:master")) {
+                    LOG.warn("⚠️ Redis Replica: Connected to master instead of replica");
+                }
+
+                // Test read operations (replicas are read-only)
+                try {
+                    jedis.select(REDIS_DATABASE);
+                    LOG.info("✅ Redis Replica: Database {} selected", REDIS_DATABASE);
+                } catch (Exception e) {
+                    LOG.warn("⚠️ Redis Replica: Database selection failed: {}", e.getMessage());
+                }
+
+                return true;
+            }
+        } catch (Exception e) {
+            LOG.error("❌ Redis Replica connection failed: {}", e.getMessage());
+            LOG.error("   Host: {}:{}", REDIS_REPLICA_HOST, REDIS_REPLICA_PORT);
+            LOG.error("   Database: {}", REDIS_DATABASE);
+            return false;
+        }
+    }
+
+    private static boolean testGoogleFHIRStoreConfig() {
+        LOG.info("🏥 Testing Google FHIR Store configuration...");
+
+        try {
+            GoogleHealthcareConfig config = GoogleHealthcareConfig.createDevelopmentConfig();
+            config.validate();
+
+            LOG.info("✅ Google FHIR Store: Configuration validation successful");
+            LOG.info("   Project ID: {}", config.getProjectId());
+            LOG.info("   Location: {}", config.getLocation());
+            LOG.info("   Dataset: {}", config.getDatasetId());
+            LOG.info("   FHIR Store: {}", config.getFhirStoreId());
+            LOG.info("   Full Path: {}", config.getFhirStorePath());
+
+            if (config.getCredentialsPath() != null && !config.getCredentialsPath().isEmpty()) {
+                java.io.File credFile = new java.io.File(config.getCredentialsPath());
+                if (credFile.exists()) {
+                    LOG.info("✅ Google FHIR Store: Credentials file found at {}", config.getCredentialsPath());
+                } else {
+                    LOG.warn("⚠️ Google FHIR Store: Credentials file not found at {} - will use application default credentials", config.getCredentialsPath());
+                }
+            } else {
+                LOG.info("✅ Google FHIR Store: Using application default credentials");
+            }
+
+            return true;
+
+        } catch (Exception e) {
+            LOG.error("❌ Google FHIR Store configuration failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Test individual data store connection
+     */
+    public static boolean testConnection(String storeName) {
+        switch (storeName.toLowerCase()) {
+            case "neo4j":
+                return testNeo4jConnection();
+            case "clickhouse":
+                return testClickHouseConnection();
+            case "elasticsearch":
+                return testElasticsearchConnection();
+            case "redis":
+                return testRedisConnection();
+            case "redis-replica":
+                return testRedisReplicaConnection();
+            case "fhir":
+            case "google-fhir":
+                return testGoogleFHIRStoreConfig();
+            default:
+                LOG.error("Unknown data store: {}", storeName);
+                return false;
+        }
+    }
+
+    /**
+     * Get connection summary for all data stores
+     */
+    public static void printConnectionSummary() {
+        LOG.info("📊 Data Store Connection Summary:");
+        LOG.info("================================");
+        LOG.info("• Neo4j:              {}", NEO4J_URI);
+        LOG.info("• ClickHouse:         {}:{}", CLICKHOUSE_HOST, CLICKHOUSE_PORT);
+        LOG.info("• Elasticsearch:      {}:{}", ELASTICSEARCH_HOST, ELASTICSEARCH_PORT);
+        LOG.info("• Redis Master:       {}:{}", REDIS_HOST, REDIS_PORT);
+        LOG.info("• Redis Replica:      {}:{}", REDIS_REPLICA_HOST, REDIS_REPLICA_PORT);
+        LOG.info("• Google FHIR Store:  {}", GoogleHealthcareConfig.createDevelopmentConfig().getFhirStorePath());
+    }
+}

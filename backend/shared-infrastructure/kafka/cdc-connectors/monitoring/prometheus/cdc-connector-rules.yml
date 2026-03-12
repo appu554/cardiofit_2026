@@ -1,0 +1,259 @@
+# cdc-connector-rules.yml
+# Prometheus alerting rules for CDC connector monitoring
+# Alerts for connector failures, replication lag, and performance issues
+
+groups:
+  - name: cdc_connector_health
+    interval: 30s
+    rules:
+      # Connector is down or failed
+      - alert: CDCConnectorDown
+        expr: kafka_connect_connector_status{state!="RUNNING"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "CDC Connector {{ $labels.connector }} is down"
+          description: "Connector {{ $labels.connector }} has been in {{ $labels.state }} state for more than 2 minutes"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-connector-down"
+
+      # Connector task is failed
+      - alert: CDCConnectorTaskFailed
+        expr: kafka_connect_connector_task_status{state="FAILED"} == 1
+        for: 1m
+        labels:
+          severity: critical
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "CDC Connector task failed for {{ $labels.connector }}"
+          description: "Task {{ $labels.task }} for connector {{ $labels.connector }} has failed"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-task-failed"
+
+      # Connector is paused unexpectedly
+      - alert: CDCConnectorPaused
+        expr: kafka_connect_connector_status{state="PAUSED"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "CDC Connector {{ $labels.connector }} is paused"
+          description: "Connector {{ $labels.connector }} has been paused for more than 5 minutes"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-connector-paused"
+
+  - name: cdc_replication_lag
+    interval: 60s
+    rules:
+      # High replication lag
+      - alert: CDCReplicationLagHigh
+        expr: kafka_connect_source_connector_replication_lag_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "High replication lag for {{ $labels.connector }}"
+          description: "Replication lag is {{ $value }}s (threshold: 300s) for connector {{ $labels.connector }}"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-replication-lag"
+
+      # Critical replication lag
+      - alert: CDCReplicationLagCritical
+        expr: kafka_connect_source_connector_replication_lag_seconds > 900
+        for: 2m
+        labels:
+          severity: critical
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "Critical replication lag for {{ $labels.connector }}"
+          description: "Replication lag is {{ $value }}s (threshold: 900s) for connector {{ $labels.connector }}"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-replication-lag-critical"
+
+      # Lag is increasing
+      - alert: CDCReplicationLagIncreasing
+        expr: rate(kafka_connect_source_connector_replication_lag_seconds[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "Replication lag is increasing for {{ $labels.connector }}"
+          description: "Replication lag is increasing at {{ $value }}s/s for connector {{ $labels.connector }}"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-lag-increasing"
+
+  - name: cdc_postgresql_health
+    interval: 60s
+    rules:
+      # PostgreSQL replication slot is inactive
+      - alert: PostgreSQLReplicationSlotInactive
+        expr: pg_replication_slots_active{slot_type="logical"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: postgresql
+          team: data-engineering
+        annotations:
+          summary: "PostgreSQL replication slot {{ $labels.slot_name }} is inactive"
+          description: "Logical replication slot {{ $labels.slot_name }} on {{ $labels.instance }} has been inactive for 5 minutes"
+          runbook: "https://docs.cardiofit.com/runbooks/pg-replication-slot-inactive"
+
+      # Replication slot lag is high
+      - alert: PostgreSQLReplicationSlotLagHigh
+        expr: pg_replication_slots_lag_bytes{slot_type="logical"} > 104857600  # 100MB
+        for: 10m
+        labels:
+          severity: warning
+          component: postgresql
+          team: data-engineering
+        annotations:
+          summary: "High replication slot lag for {{ $labels.slot_name }}"
+          description: "Replication slot {{ $labels.slot_name }} has {{ $value }} bytes lag (threshold: 100MB)"
+          runbook: "https://docs.cardiofit.com/runbooks/pg-slot-lag-high"
+
+      # Replication slot is consuming too much WAL
+      - alert: PostgreSQLReplicationSlotWALAccumulation
+        expr: pg_replication_slots_lag_bytes{slot_type="logical"} > 1073741824  # 1GB
+        for: 5m
+        labels:
+          severity: critical
+          component: postgresql
+          team: data-engineering
+        annotations:
+          summary: "Critical WAL accumulation for {{ $labels.slot_name }}"
+          description: "Replication slot {{ $labels.slot_name }} has accumulated {{ $value }} bytes WAL (threshold: 1GB)"
+          runbook: "https://docs.cardiofit.com/runbooks/pg-wal-accumulation"
+
+  - name: cdc_kafka_topics
+    interval: 60s
+    rules:
+      # Topic partition is under-replicated
+      - alert: CDCTopicUnderReplicated
+        expr: kafka_topic_partition_under_replicated_partition{topic=~"cdc\\..*"} > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: kafka
+          team: data-engineering
+        annotations:
+          summary: "CDC topic {{ $labels.topic }} is under-replicated"
+          description: "Topic {{ $labels.topic }} partition {{ $labels.partition }} is under-replicated"
+          runbook: "https://docs.cardiofit.com/runbooks/kafka-under-replicated"
+
+      # No messages in CDC topic for extended period
+      - alert: CDCTopicNoActivity
+        expr: rate(kafka_topic_partition_current_offset{topic=~"cdc\\..*"}[30m]) == 0
+        for: 1h
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "No activity in CDC topic {{ $labels.topic }}"
+          description: "CDC topic {{ $labels.topic }} has received no messages for 1 hour"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-no-activity"
+
+  - name: cdc_connector_performance
+    interval: 60s
+    rules:
+      # High error rate
+      - alert: CDCConnectorHighErrorRate
+        expr: rate(kafka_connect_connector_task_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "High error rate for {{ $labels.connector }}"
+          description: "Connector {{ $labels.connector }} is experiencing {{ $value }} errors/second"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-high-error-rate"
+
+      # Slow record processing
+      - alert: CDCConnectorSlowProcessing
+        expr: rate(kafka_connect_source_connector_source_record_poll_total[5m]) < 1
+        for: 10m
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "Slow record processing for {{ $labels.connector }}"
+          description: "Connector {{ $labels.connector }} is processing {{ $value }} records/second (threshold: 1)"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-slow-processing"
+
+      # High memory usage
+      - alert: KafkaConnectHighMemory
+        expr: kafka_connect_jvm_memory_usage_after_gc > 0.9
+        for: 10m
+        labels:
+          severity: critical
+          component: kafka-connect
+          team: data-engineering
+        annotations:
+          summary: "Kafka Connect high memory usage"
+          description: "Kafka Connect worker is using {{ $value }}% memory after GC"
+          runbook: "https://docs.cardiofit.com/runbooks/kafka-connect-memory"
+
+  - name: cdc_data_quality
+    interval: 300s
+    rules:
+      # Schema evolution detected
+      - alert: CDCSchemaEvolution
+        expr: increase(kafka_connect_connector_schema_changes_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: info
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "Schema change detected for {{ $labels.connector }}"
+          description: "{{ $value }} schema changes detected in the last hour for {{ $labels.connector }}"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-schema-change"
+
+      # Snapshot in progress for too long
+      - alert: CDCSnapshotStuck
+        expr: kafka_connect_connector_snapshot_running_time_seconds > 3600
+        for: 10m
+        labels:
+          severity: warning
+          component: cdc
+          team: data-engineering
+        annotations:
+          summary: "CDC snapshot taking too long for {{ $labels.connector }}"
+          description: "Snapshot for {{ $labels.connector }} has been running for {{ $value }}s (threshold: 3600s)"
+          runbook: "https://docs.cardiofit.com/runbooks/cdc-snapshot-stuck"
+
+  - name: cdc_infrastructure
+    interval: 60s
+    rules:
+      # Kafka Connect cluster is degraded
+      - alert: KafkaConnectClusterDegraded
+        expr: count(kafka_connect_worker_connector_count) < 2
+        for: 5m
+        labels:
+          severity: critical
+          component: kafka-connect
+          team: platform
+        annotations:
+          summary: "Kafka Connect cluster is degraded"
+          description: "Only {{ $value }} Kafka Connect worker(s) available (expected: 2+)"
+          runbook: "https://docs.cardiofit.com/runbooks/kafka-connect-degraded"
+
+      # Kafka Connect worker is not in sync
+      - alert: KafkaConnectWorkerOutOfSync
+        expr: kafka_connect_worker_rebalancing == 1
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka-connect
+          team: platform
+        annotations:
+          summary: "Kafka Connect worker is rebalancing"
+          description: "Kafka Connect cluster has been rebalancing for more than 10 minutes"
+          runbook: "https://docs.cardiofit.com/runbooks/kafka-connect-rebalancing"

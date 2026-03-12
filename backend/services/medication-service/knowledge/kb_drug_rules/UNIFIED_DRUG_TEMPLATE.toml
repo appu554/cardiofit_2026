@@ -1,0 +1,252 @@
+# UNIFIED DRUG RULES TEMPLATE - PRODUCTION READY
+# Based on: UNIFIED_DOSE_SAFETY_ENGINE_IMPLEMENTATION.md
+# Version: 3.0.0 - Unified Clinical Engine Compatible
+# Last Updated: 2025-08-16
+# 
+# This template follows the exact structure required by the Unified Clinical Engine
+# All sections marked as REQUIRED must be present for successful loading
+# Optional sections can be omitted if not applicable
+
+# ============================================================================
+# META SECTION - REQUIRED
+# ============================================================================
+[meta]
+drug_id = "DRUG_NAME_LOWERCASE"                    # REQUIRED: Unique drug identifier
+generic_name = "Drug Name"                         # REQUIRED: Generic drug name
+version = "3.0.0"                                  # REQUIRED: Rule version
+evidence_sources = [                               # REQUIRED: Evidence sources
+    "FDA-Label-2024",
+    "Clinical-Guidelines-2024",
+    "Cochrane-Review-2023"
+]
+last_updated = "2025-08-16"                        # REQUIRED: Last update date
+clinical_reviewer = "Dr. [Name], [Credentials]"    # REQUIRED: Clinical reviewer
+
+# ============================================================================
+# DOSE CALCULATION SECTION - OPTIONAL
+# ============================================================================
+[dose_calculation]
+strategy = "indication_weight_renal_adjusted"      # Strategy: standard_rules, pk_guided, etc.
+
+# Indication-based starting doses
+[[dose_calculation.indication_doses]]
+indication = "primary_indication"
+starting_dose_mg = 500
+frequency_per_day = 2
+titration_schedule = "weekly_increments"
+max_dose_mg_per_day = 2000
+
+[[dose_calculation.indication_doses]]
+indication = "secondary_indication"
+starting_dose_mg = 250
+frequency_per_day = 1
+max_dose_mg_per_day = 1000
+
+# Weight-based adjustments
+[dose_calculation.weight_adjustments]
+enabled = true
+reference_weight_kg = 70
+min_weight_kg = 40
+max_weight_kg = 150
+adjustment_factor_per_kg = 0.02
+
+# Age-based adjustments
+[dose_calculation.age_adjustments]
+enabled = true
+
+[[dose_calculation.age_adjustments.bands]]
+min_age = 65
+max_age = 999
+dose_reduction_factor = 0.8
+reason = "reduced_clearance_elderly"
+
+[[dose_calculation.age_adjustments.bands]]
+min_age = 18
+max_age = 64
+dose_reduction_factor = 1.0
+reason = "standard_adult_dosing"
+
+# Renal function adjustments
+[dose_calculation.renal_adjustments]
+enabled = true
+metric = "egfr_ckd_epi"
+
+[[dose_calculation.renal_adjustments.bands]]
+min_egfr = 60
+max_egfr = 999
+adjustment_factor = 1.0
+
+[[dose_calculation.renal_adjustments.bands]]
+min_egfr = 30
+max_egfr = 59
+adjustment_factor = 0.5
+max_dose_mg_per_day = 1000
+
+[[dose_calculation.renal_adjustments.bands]]
+min_egfr = 0
+max_egfr = 29
+adjustment_factor = 0.0
+action = "contraindicated"
+
+# Hepatic function adjustments
+[dose_calculation.hepatic_adjustments]
+enabled = true
+
+[[dose_calculation.hepatic_adjustments.child_pugh_adjustments]]
+class = "A"
+dose_reduction_factor = 1.0
+contraindicated = false
+
+[[dose_calculation.hepatic_adjustments.child_pugh_adjustments]]
+class = "B"
+dose_reduction_factor = 0.7
+contraindicated = false
+
+[[dose_calculation.hepatic_adjustments.child_pugh_adjustments]]
+class = "C"
+dose_reduction_factor = 0.0
+contraindicated = true
+
+# ============================================================================
+# SAFETY VERIFICATION SECTION - REQUIRED
+# ============================================================================
+[safety_verification]
+
+# Absolute contraindications - REQUIRED FIELD
+[safety_verification.absolute_contraindications]
+pregnancy = false                                   # true = contraindicated in pregnancy
+breastfeeding = false                              # true = contraindicated in breastfeeding
+allergy_classes = ["drug_class", "related_drugs"]  # Drug classes that contraindicate
+conditions = [                                     # Medical conditions that contraindicate
+    "severe_condition_1",
+    "severe_condition_2"
+]
+
+# Renal safety monitoring - OPTIONAL
+[safety_verification.renal_safety]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 0
+max_egfr = 29
+action = "contraindicated"
+reason = "severe_renal_impairment_risk"
+evidence = ["FDA-BLACK-BOX-2024"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 30
+max_egfr = 59
+action = "dose_reduction"
+dose_reduction_factor = 0.5
+monitoring_required = ["renal_function_monthly"]
+
+# Hepatic safety monitoring - OPTIONAL
+[safety_verification.hepatic_safety]
+
+[[safety_verification.hepatic_safety.child_pugh_restrictions]]
+class = "C"
+action = "contraindicated"
+dose_reduction_factor = 0.0
+
+[[safety_verification.hepatic_safety.child_pugh_restrictions]]
+class = "B"
+action = "dose_reduction"
+dose_reduction_factor = 0.7
+
+# Drug interactions - OPTIONAL (UNIFIED FIELD NAME: 'interactions')
+[safety_verification.interactions]
+
+[[safety_verification.interactions.major]]
+interacting_drug_classes = ["dangerous_class_1", "dangerous_class_2"]
+action = "avoid_concurrent_use"
+duration_hours = 24
+reason = "Serious adverse reaction risk"
+
+[[safety_verification.interactions.major]]
+interacting_drug_classes = ["warfarin", "anticoagulants"]
+action = "monitor_closely"
+duration_hours = 168
+reason = "Bleeding risk elevation"
+
+[[safety_verification.interactions.moderate]]
+interacting_drug_classes = ["moderate_interaction_class"]
+action = "monitor_closely"
+monitoring_required = ["specific_lab", "clinical_signs"]
+reason = "Moderate interaction potential"
+
+# Monitoring requirements - REQUIRED FIELD (must be present, can be empty array)
+[[safety_verification.monitoring_requirements]]
+lab_test = "primary_lab"
+frequency = "weekly"
+alert_threshold_low = 10.0
+alert_threshold_high = 50.0
+action_on_alert = "dose_adjustment"
+reason = "Therapeutic monitoring required"
+
+[[safety_verification.monitoring_requirements]]
+lab_test = "safety_lab"
+frequency = "monthly"
+alert_threshold_high = 3.0
+action_on_alert = "consider_discontinuation"
+reason = "Safety monitoring"
+
+# ============================================================================
+# ADDITIONAL SECTIONS - ALL OPTIONAL
+# ============================================================================
+
+# Special population considerations
+[safety_verification.special_populations]
+
+[safety_verification.special_populations.pediatric]
+age_range_years = { min = 0, max = 17 }
+weight_based_dosing = true
+dose_mg_per_kg = { min = 5.0, max = 15.0 }
+monitoring_requirements = ["growth_parameters"]
+
+[safety_verification.special_populations.geriatric]
+age_range_years = { min = 65, max = 120 }
+dose_reduction_factor = 0.8
+monitoring_frequency_hours = 12
+special_considerations = ["cognitive_assessment", "fall_risk"]
+
+[safety_verification.special_populations.pregnancy]
+category = "B"                                     # FDA pregnancy category
+trimester_specific = false
+breastfeeding_compatible = true
+monitoring_requirements = ["fetal_monitoring"]
+
+# Administration guidelines
+[administration]
+route = "oral"                                     # oral, iv, im, etc.
+timing = "with_food"                              # with_food, empty_stomach, etc.
+preparation_instructions = "Standard preparation"
+compatibility_solutions = ["normal_saline", "d5w"]
+incompatible_drugs = ["incompatible_drug_1"]
+
+# Clinical decision support
+[clinical_decision_support]
+indication_verification = true
+duration_optimization = true
+therapeutic_drug_monitoring = false
+
+[[clinical_decision_support.alerts]]
+condition = "prolonged_therapy"
+threshold_days = 30
+message = "Consider specialist consultation for prolonged therapy"
+severity = "warning"
+
+[[clinical_decision_support.alerts]]
+condition = "high_dose"
+threshold_mg_per_day = 2000
+message = "High dose - verify indication and monitor closely"
+severity = "critical"
+
+# Quality metrics
+[quality_metrics]
+target_therapeutic_response_days = 7
+target_efficacy_rate_percent = 85.0
+acceptable_adverse_event_rate_percent = 5.0
+
+[quality_metrics.stewardship]
+indication_appropriateness_required = true
+duration_justification_required = true
+de_escalation_consideration_days = 7

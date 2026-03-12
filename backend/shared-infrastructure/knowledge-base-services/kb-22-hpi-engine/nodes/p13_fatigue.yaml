@@ -1,0 +1,286 @@
+# P13 Fatigue - HPI Node Definition
+# Bayesian differential for fatigue/tiredness in cardio-renal-metabolic patients
+# Binary question format (YES/NO/PATA_NAHI) with lr_positive / lr_negative
+# Priors sum to 0.90 (Other bucket reserves 0.10)
+
+node_id: P13_FATIGUE
+version: "1.0.0"
+title_en: "Fatigue Differential Diagnosis"
+title_hi: "Thakaan Vibhedak Nidaan"
+description: "Bayesian differential for persistent fatigue in DM+HTN cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Supported strata
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "KDIGO_CKD_2024"
+
+# ===============================================================
+# Differentials with per-stratum priors (F-05)
+# Sum = 0.90; Other bucket = 0.10 -> total 1.00
+# ===============================================================
+differentials:
+  - id: ANAEMIA
+    label: "Anaemia (Iron-deficiency / CKD-related)"
+    population_reference: "KDIGO Anemia in CKD 2012; WHO anaemia prevalence India"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: HYPOTHYROID
+    label: "Hypothyroidism"
+    population_reference: "ATA Thyroid Guidelines 2017; Indian prevalence 10-11%"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: MEDICATION_SIDE_EFFECT
+    label: "Medication Side Effect (Beta-blocker, Statin, Diuretic)"
+    population_reference: "SPL beta-blocker fatigue 10-20%; statin myalgia 5-10%"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: UNCONTROLLED_DM
+    label: "Uncontrolled Diabetes Mellitus (Hyperglycemia)"
+    population_reference: "ADA Standards of Care 2024; ICMR India DM guidelines"
+    priors:
+      DM_HTN_base: 0.16
+
+  - id: DEPRESSION
+    label: "Depression"
+    population_reference: "PHQ-9 validation; Anderson et al. Diabetes Care 2001 (DM doubles depression risk)"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: CKD_URAEMIA
+    label: "CKD Uraemia"
+    population_reference: "KDIGO CKD Guidelines 2024; uraemic fatigue in eGFR<30"
+    priors:
+      DM_HTN_base: 0.08
+
+  - id: OTHER
+    label: "Other (Sleep Apnoea, Malignancy, Adrenal Insufficiency)"
+    population_reference: "Clinical practice review"
+    priors:
+      DM_HTN_base: 0.07
+
+# ===============================================================
+# G1: Safety floor clamping
+# Anaemia floor at 0.05 — treatable and can mask cardiac disease.
+# CKD_URAEMIA floor at 0.04 — progressive and requires intervention.
+# ===============================================================
+safety_floors:
+  ANAEMIA: 0.05
+  CKD_URAEMIA: 0.04
+
+# ===============================================================
+# Safety triggers
+# ===============================================================
+safety_triggers:
+  - id: RF01_SEVERE_ANAEMIA
+    type: BOOLEAN
+    condition: "ANAEMIA.posterior > 0.45 AND Q002=YES"
+    severity: IMMEDIATE
+    recommended_action: "Suspected severe anaemia with exertional symptoms. Order urgent CBC, reticulocyte count, iron studies. SNOMED: 271737000"
+
+  - id: RF02_URAEMIC_ENCEPHALOPATHY
+    type: BOOLEAN
+    condition: "CKD_URAEMIA.posterior > 0.35 AND Q008=YES"
+    severity: IMMEDIATE
+    recommended_action: "Suspected uraemic encephalopathy. Urgent BMP, BUN, creatinine. Consider nephrology referral. SNOMED: 43225006"
+
+  - id: RF03_SUICIDAL_SCREENING
+    type: BOOLEAN
+    condition: "DEPRESSION.posterior > 0.40 AND Q006=YES"
+    severity: URGENT
+    recommended_action: "Depression with loss of interest — screen for suicidal ideation (PHQ-9 Q9). Refer to mental health if positive."
+
+# ===============================================================
+# Questions — Binary (YES / NO / PATA_NAHI)
+# LR values for ALL differentials per question
+# ===============================================================
+questions:
+  - id: Q001
+    text_en: "Do you feel tired all day long, even after a full night of sleep?"
+    text_hi: "Kya aap poori raat sone ke baad bhi din bhar thake rehte hain?"
+    mandatory: true
+    lr_source: "Clinical practice; ADA 2024"
+    lr_positive:
+      ANAEMIA: 1.80
+      HYPOTHYROID: 2.50
+      MEDICATION_SIDE_EFFECT: 1.40
+      UNCONTROLLED_DM: 1.60
+      DEPRESSION: 2.80
+      CKD_URAEMIA: 2.20
+      OTHER: 1.30
+    lr_negative:
+      ANAEMIA: 0.70
+      HYPOTHYROID: 0.50
+      MEDICATION_SIDE_EFFECT: 0.80
+      UNCONTROLLED_DM: 0.65
+      DEPRESSION: 0.40
+      CKD_URAEMIA: 0.55
+      OTHER: 0.85
+
+  - id: Q002
+    text_en: "Do you get breathless or your heart races with mild activity like walking or climbing stairs?"
+    text_hi: "Kya halki mehnat jaise chalne ya seedhi chadhne mein saans phoolti hai ya dil tez dhadakta hai?"
+    mandatory: true
+    lr_source: "KDIGO Anemia 2012; ESC HF 2023"
+    lr_positive:
+      ANAEMIA: 3.50
+      HYPOTHYROID: 0.80
+      MEDICATION_SIDE_EFFECT: 1.20
+      UNCONTROLLED_DM: 0.90
+      DEPRESSION: 0.50
+      CKD_URAEMIA: 1.80
+      OTHER: 1.10
+    lr_negative:
+      ANAEMIA: 0.40
+      HYPOTHYROID: 1.10
+      MEDICATION_SIDE_EFFECT: 0.90
+      UNCONTROLLED_DM: 1.05
+      DEPRESSION: 1.15
+      CKD_URAEMIA: 0.75
+      OTHER: 0.95
+
+  - id: Q003
+    text_en: "Have you noticed weight gain, feeling cold, or constipation recently?"
+    text_hi: "Kya haal mein wajan badhna, thand lagana, ya qabz ki shikayat hui hai?"
+    mandatory: true
+    lr_source: "ATA Thyroid Guidelines 2017; hypothyroid symptom cluster"
+    lr_positive:
+      ANAEMIA: 0.70
+      HYPOTHYROID: 4.80
+      MEDICATION_SIDE_EFFECT: 0.60
+      UNCONTROLLED_DM: 0.50
+      DEPRESSION: 1.20
+      CKD_URAEMIA: 0.90
+      OTHER: 0.80
+    lr_negative:
+      ANAEMIA: 1.10
+      HYPOTHYROID: 0.35
+      MEDICATION_SIDE_EFFECT: 1.10
+      UNCONTROLLED_DM: 1.10
+      DEPRESSION: 0.90
+      CKD_URAEMIA: 1.05
+      OTHER: 1.05
+
+  - id: Q004
+    text_en: "Did the tiredness start or worsen after starting or changing any medication?"
+    text_hi: "Kya thakaan kisi nayi dawai shuru karne ya dose badalne ke baad shuru hui ya badhi?"
+    mandatory: true
+    lr_source: "SPL beta-blocker; statin fatigue association"
+    lr_positive:
+      ANAEMIA: 0.50
+      HYPOTHYROID: 0.60
+      MEDICATION_SIDE_EFFECT: 5.50
+      UNCONTROLLED_DM: 0.70
+      DEPRESSION: 0.80
+      CKD_URAEMIA: 0.60
+      OTHER: 0.90
+    lr_negative:
+      ANAEMIA: 1.15
+      HYPOTHYROID: 1.10
+      MEDICATION_SIDE_EFFECT: 0.30
+      UNCONTROLLED_DM: 1.10
+      DEPRESSION: 1.05
+      CKD_URAEMIA: 1.10
+      OTHER: 1.05
+
+  - id: Q005
+    text_en: "Are you frequently thirsty, urinating often, or has your sugar been running high?"
+    text_hi: "Kya aapko zyada pyaas lagti hai, baar baar peshab aata hai, ya sugar badhi hui hai?"
+    mandatory: false
+    lr_source: "ADA Standards 2024; hyperglycemia symptom triad"
+    lr_positive:
+      ANAEMIA: 0.60
+      HYPOTHYROID: 0.50
+      MEDICATION_SIDE_EFFECT: 0.70
+      UNCONTROLLED_DM: 5.20
+      DEPRESSION: 0.60
+      CKD_URAEMIA: 1.40
+      OTHER: 0.80
+    lr_negative:
+      ANAEMIA: 1.10
+      HYPOTHYROID: 1.10
+      MEDICATION_SIDE_EFFECT: 1.10
+      UNCONTROLLED_DM: 0.35
+      DEPRESSION: 1.10
+      CKD_URAEMIA: 0.85
+      OTHER: 1.05
+
+  - id: Q006
+    text_en: "Have you lost interest in activities you used to enjoy, or do you feel hopeless?"
+    text_hi: "Kya aapka un cheezon mein mann nahi lagta jo pehle achhi lagti thi, ya nirasha mehsoos hoti hai?"
+    mandatory: false
+    lr_source: "PHQ-9 Item 1-2; Anderson et al. Diabetes Care 2001"
+    lr_positive:
+      ANAEMIA: 0.70
+      HYPOTHYROID: 1.30
+      MEDICATION_SIDE_EFFECT: 0.80
+      UNCONTROLLED_DM: 0.90
+      DEPRESSION: 5.80
+      CKD_URAEMIA: 0.80
+      OTHER: 1.00
+    lr_negative:
+      ANAEMIA: 1.10
+      HYPOTHYROID: 0.90
+      MEDICATION_SIDE_EFFECT: 1.05
+      UNCONTROLLED_DM: 1.05
+      DEPRESSION: 0.25
+      CKD_URAEMIA: 1.05
+      OTHER: 1.00
+
+  - id: Q007
+    text_en: "Do you have muscle aches, cramps, or general body pain along with the tiredness?"
+    text_hi: "Kya thakaan ke saath maansapeshiyon mein dard, akdan, ya shareer mein dard bhi hai?"
+    mandatory: false
+    lr_source: "SPL statin myalgia; KDIGO CKD 2024 uraemic myopathy"
+    lr_positive:
+      ANAEMIA: 1.20
+      HYPOTHYROID: 2.20
+      MEDICATION_SIDE_EFFECT: 2.80
+      UNCONTROLLED_DM: 1.10
+      DEPRESSION: 1.50
+      CKD_URAEMIA: 2.00
+      OTHER: 1.10
+    lr_negative:
+      ANAEMIA: 0.85
+      HYPOTHYROID: 0.60
+      MEDICATION_SIDE_EFFECT: 0.55
+      UNCONTROLLED_DM: 0.95
+      DEPRESSION: 0.80
+      CKD_URAEMIA: 0.65
+      OTHER: 0.95
+
+  - id: Q008
+    text_en: "Do you have trouble concentrating, feel confused, or notice a metallic taste in your mouth?"
+    text_hi: "Kya dhyan lagane mein dikkat hai, confuse feel hota hai, ya munh mein dhaatu jaisa swaad aata hai?"
+    mandatory: false
+    lr_source: "KDIGO CKD 2024; uraemic encephalopathy features"
+    lr_positive:
+      ANAEMIA: 0.80
+      HYPOTHYROID: 1.40
+      MEDICATION_SIDE_EFFECT: 0.90
+      UNCONTROLLED_DM: 1.30
+      DEPRESSION: 1.50
+      CKD_URAEMIA: 4.50
+      OTHER: 1.20
+    lr_negative:
+      ANAEMIA: 1.05
+      HYPOTHYROID: 0.85
+      MEDICATION_SIDE_EFFECT: 1.05
+      UNCONTROLLED_DM: 0.90
+      DEPRESSION: 0.80
+      CKD_URAEMIA: 0.40
+      OTHER: 0.90

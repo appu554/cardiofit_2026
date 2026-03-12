@@ -1,0 +1,524 @@
+# Universal Knowledge Base Framework v2.0
+# KB-7 Terminology Service Implementation
+
+framework_version: "2.0.0"
+template_type: "knowledge_base"
+created: "2025-01-15T00:00:00Z"
+last_updated: "2025-01-15T12:00:00Z"
+
+# Service Identity
+service_identity:
+  component_name: "KB-7 Terminology Service"
+  service_id: "kb-7-terminology"
+  version: "1.0.0"
+  owner_team: "clinical-platform-team"
+  clinical_lead: "clinical-informatics-team"
+  next_review: "2025-04-15"
+
+# Section 1: Purpose & Scope
+1_purpose_and_scope:
+  purpose: "Clinical terminology management and code resolution for SNOMED CT, ICD-10, RxNorm, and LOINC"
+  clinical_value: "Provides standardized clinical code lookups, validation, and mapping for consistent data interpretation across all clinical systems"
+  scope:
+    includes:
+      - "RxNorm drug terminology with brand/generic mappings"
+      - "SNOMED CT clinical terminology with hierarchical relationships"
+      - "ICD-10 diagnosis codes with search capabilities"
+      - "LOINC laboratory codes with component details"
+      - "Full-text search across all terminologies"
+      - "Code validation and cross-mapping"
+      - "ETL pipeline for terminology updates"
+    excludes:
+      - "Custom institutional terminologies"
+      - "Real-time terminology authoring"
+      - "Terminology versioning beyond standard releases"
+      - "Patient-specific code assignments"
+    success_criteria:
+      - "Zero failed code lookups for valid standard codes"
+      - "P95 search response time under 25ms"
+      - ">99.8% service availability"
+      - "Clinical user satisfaction >4.8/5.0"
+  critical_requirements:
+    - "99.9% terminology lookup accuracy"
+    - "Sub-15ms P95 response times for code resolution"
+    - "Complete UMLS compliance"
+    - "Automated terminology updates without service disruption"
+
+# Section 2: Data Model & Schema
+2_data_model:
+  primary_format: "JSON"
+  schema_location: "./schemas/terminology-schema.json"
+  validation_strategy: "json_schema"
+  version_strategy: "semantic"
+  data_classifications:
+    phi_data: false
+    clinical_data: true
+    operational_data: false
+  storage_requirements:
+    encryption_at_rest: true
+    backup_strategy: "continuous"
+    retention_period: "permanent"  # Standard terminologies are permanent
+  schema_evolution:
+    backward_compatibility: true
+    migration_strategy: "automated"
+
+# Section 3: API & Query Contracts
+3_api_contracts:
+  specification_format: "openapi_3.0"
+  specification_location: "./api/openapi.yaml"
+  base_path: "/v1"
+  authentication: "api_key"
+  rate_limiting: true
+  endpoints:
+    primary_endpoints:
+      - path: "/health"
+        method: "GET"
+        sla: "1ms p95"
+        purpose: "Health check"
+      - path: "/metrics"
+        method: "GET"
+        sla: "5ms p95"
+        purpose: "Prometheus metrics"
+      - path: "/v1/lookup"
+        method: "GET"
+        sla: "10ms p95"
+        purpose: "Code lookup by ID"
+      - path: "/v1/search"
+        method: "POST"
+        sla: "25ms p95"
+        purpose: "Full-text terminology search"
+      - path: "/v1/validate"
+        method: "POST"
+        sla: "5ms p95"
+        purpose: "Code validation"
+      - path: "/v1/map"
+        method: "POST"
+        sla: "15ms p95"
+        purpose: "Cross-terminology mapping"
+      - path: "/v1/hierarchy/{code}"
+        method: "GET"
+        sla: "20ms p95"
+        purpose: "Get hierarchical relationships"
+    batch_endpoints:
+      - path: "/v1/batch/lookup"
+        method: "POST"
+        max_batch_size: 1000
+        sla: "100ms p95"
+      - path: "/v1/batch/validate"
+        method: "POST"
+        max_batch_size: 500
+        sla: "50ms p95"
+  versioning:
+    strategy: "uri"
+    deprecation_policy: "90_days_notice"
+  error_handling:
+    standard_codes: true
+    error_format: "rfc7807"
+
+# Section 4: Cross-Component Integration
+4_integration_map:
+  dependencies:
+    required:
+      - service: "Evidence Envelope"
+        contract: "./contracts/audit.proto"
+        purpose: "Audit trail logging"
+        fallback_strategy: "async_queue"
+    optional:
+      - service: "KB-2 Clinical Context"
+        contract: "./contracts/context.proto"
+        purpose: "Context-aware terminology suggestions"
+        fallback_strategy: "standard_search"
+  consumers:
+    internal:
+      - service: "KB-1 Drug Rules"
+        contract: "./contracts/drug-terminology.proto"
+        usage_pattern: "high_frequency"
+      - service: "KB-2 Clinical Context"
+        contract: "./contracts/terminology.proto"
+        usage_pattern: "high_frequency"
+      - service: "KB-3 Guidelines"
+        contract: "./contracts/terminology.proto"
+        usage_pattern: "moderate_frequency"
+      - service: "KB-4 Patient Safety"
+        contract: "./contracts/terminology.proto"
+        usage_pattern: "high_frequency"
+      - service: "KB-5 Drug Interactions"
+        contract: "./contracts/terminology.proto"
+        usage_pattern: "high_frequency"
+      - service: "KB-6 Formulary"
+        contract: "./contracts/terminology.proto"
+        usage_pattern: "moderate_frequency"
+    external:
+      - service: "Flow2 Orchestrator"
+        contract: "./contracts/orchestrator.proto"
+        usage_pattern: "very_high_frequency"
+      - service: "Safety Gateway"
+        contract: "./contracts/safety.proto"
+        usage_pattern: "high_frequency"
+  integration_patterns:
+    synchronous: ["code_lookup", "validation", "mapping"]
+    asynchronous: ["audit_logging", "analytics"]
+    event_driven: ["terminology_updates", "cache_invalidation"]
+
+# Section 5: Performance & Caching
+5_performance:
+  latency_targets:
+    p50: "3ms"
+    p95: "15ms"
+    p99: "50ms"
+    timeout: "30s"
+  throughput_targets:
+    rps_target: 25000
+    concurrent_connections: 2000
+  caching_strategy:
+    levels:
+      - name: "L1 In-Memory"
+        ttl: "10m"
+        size_mb: 500
+        hit_rate_target: 0.95
+      - name: "L2 Redis"
+        ttl: "4h"
+        size_mb: 2000
+        hit_rate_target: 0.98
+      - name: "L3 PostgreSQL"
+        ttl: "permanent"
+        hit_rate_target: 0.99
+    invalidation: "event"
+  resource_limits:
+    cpu: "4 cores"
+    memory: "8GB"
+    storage: "100GB"
+    network: "1Gbps"
+
+# Section 6: Testing Strategy
+6_testing:
+  test_levels:
+    unit:
+      coverage_target: 0.95
+      framework: "go_test"
+    integration:
+      test_data_strategy: "anonymized"
+      external_services: "mocked"
+    contract:
+      consumer_tests: true
+      provider_tests: true
+    performance:
+      load_testing: true
+      stress_testing: true
+      chaos_engineering: false
+  clinical_validation:
+    required: true
+    validation_scenarios: "./tests/clinical/terminology-scenarios/"
+    sign_off_required: true
+    regulatory_testing: true
+    validation_data:
+      - "SNOMED CT validation set (10,000 codes)"
+      - "ICD-10 clinical scenarios (1,000 cases)"
+      - "RxNorm drug mapping accuracy (5,000 drugs)"
+      - "LOINC laboratory test validation (2,000 tests)"
+  test_automation:
+    ci_integration: true
+    automated_regression: true
+    smoke_tests: true
+
+# Section 7: Governance & Maintenance
+7_governance:
+  ownership:
+    technical_owner: "platform-team"
+    clinical_owner: "clinical-informatics"
+    business_owner: "clinical-operations"
+  change_management:
+    change_types:
+      - type: "terminology_update"
+        approval: ["clinical_informatics_lead"]
+        timeline: "quarterly"
+      - type: "schema_change"
+        approval: ["technical_lead", "clinical_lead"]
+        timeline: "next_sprint"
+      - type: "api_breaking_change"
+        approval: ["technical_lead", "clinical_lead", "integration_team"]
+        timeline: "next_quarter"
+    documentation_required: true
+    impact_assessment: true
+  review_cycles:
+    technical_review: "monthly"
+    clinical_review: "quarterly"
+    security_review: "annually"
+    terminology_accuracy_review: "semi_annually"
+  deprecation:
+    notice_period: "90_days"
+    migration_support: true
+    sunset_timeline: "6_months"
+
+# Section 8: CI/CD Pipeline
+8_cicd:
+  pipeline_definition: ".github/workflows/kb7-terminology-pipeline.yaml"
+  stages:
+    - name: "validate"
+      tasks: ["framework_validation", "schema_validation", "terminology_validation"]
+    - name: "test"
+      tasks: ["unit_tests", "integration_tests", "clinical_validation_tests"]
+    - name: "etl_validation"
+      tasks: ["etl_pipeline_test", "data_quality_checks"]
+    - name: "build"
+      tasks: ["compile", "package", "sign_artifacts"]
+    - name: "deploy"
+      tasks: ["deploy_staging", "terminology_smoke_tests", "deploy_production"]
+  deployment_strategy: "blue_green"
+  rollback:
+    automated_rollback: true
+    rollback_triggers: ["error_rate", "latency", "terminology_accuracy"]
+    max_rollback_time: "3_minutes"
+  artifact_management:
+    registry: "docker_hub"
+    retention: "30_days"
+    signing: true
+
+# Section 9: Monitoring & Observability
+9_monitoring:
+  metrics:
+    endpoint: "/metrics"
+    format: "prometheus"
+    custom_metrics:
+      - name: "terminology_lookups_total"
+        type: "counter"
+        labels: ["code_system", "found", "cached"]
+      - name: "search_queries_total"
+        type: "counter"
+        labels: ["query_type", "results_count_range"]
+      - name: "search_results_histogram"
+        type: "histogram"
+        labels: ["terminology_type"]
+      - name: "code_validation_accuracy"
+        type: "gauge"
+        labels: ["code_system"]
+      - name: "etl_pipeline_duration_seconds"
+        type: "histogram"
+        labels: ["pipeline_stage", "terminology_type"]
+      - name: "terminology_cache_hit_rate"
+        type: "gauge"
+        labels: ["cache_level"]
+    sla_metrics:
+      - name: "availability"
+        target: 0.999
+      - name: "lookup_latency_p95"
+        target: "15ms"
+      - name: "search_latency_p95" 
+        target: "25ms"
+      - name: "terminology_accuracy"
+        target: 0.999
+  logging:
+    level: "info"
+    format: "json"
+    retention: "90_days"
+    pii_scrubbing: true
+  tracing:
+    enabled: true
+    sampling_rate: 0.1
+    trace_retention: "7_days"
+  alerting:
+    notification_channels: ["slack", "email"]
+    escalation_policy: true
+    alert_fatigue_prevention: true
+    critical_alerts:
+      - "Terminology accuracy below 99.8%"
+      - "ETL pipeline failures"
+      - "Cache hit rate below 90%"
+      - "P95 latency above 25ms"
+  dashboards:
+    operational: "./monitoring/terminology-operational-dashboard.json"
+    clinical: "./monitoring/terminology-clinical-dashboard.json"
+    executive: "./monitoring/terminology-executive-dashboard.json"
+
+# Section 10: Security & Privacy By Design
+10_security_privacy:
+  data_classification:
+    phi_handling: "none"
+    data_residency: "us"
+    consent_management: false
+  encryption:
+    at_rest:
+      algorithm: "AES-256"
+      key_management: "aws_kms"
+    in_transit:
+      tls_version: "1.3"
+      mutual_auth: false
+  access_control:
+    authentication: "api_key"
+    authorization: "rbac"
+    audit_logging: true
+    access_matrix:
+      read: ["clinical_user", "system_integrator", "kb_services"]
+      write: ["terminology_admin", "etl_service"]
+      admin: ["system_admin", "clinical_informatics_lead"]
+  vulnerability_management:
+    scanning_frequency: "daily"
+    patch_management: "automated"
+    penetration_testing: "annually"
+  privacy_controls:
+    data_minimization: true
+    purpose_limitation: true
+    right_to_erasure: false  # Standard terminologies are permanent
+
+# Section 11: Failure Modes & Recovery
+11_failure_modes:
+  failure_scenarios:
+    - scenario: "database_unavailable"
+      degradation: "serve_cached_responses"
+      recovery: "automatic_failover"
+    - scenario: "memory_exhaustion"
+      degradation: "reject_new_requests"
+      recovery: "pod_restart"
+    - scenario: "etl_pipeline_failure"
+      degradation: "use_previous_dataset"
+      recovery: "manual_intervention"
+    - scenario: "search_index_corruption"
+      degradation: "fallback_to_exact_match"
+      recovery: "index_rebuild"
+    - scenario: "cache_cluster_failure"
+      degradation: "direct_database_queries"
+      recovery: "cache_rebuild"
+  circuit_breakers:
+    enabled: true
+    failure_threshold: 0.5
+    recovery_timeout: "30s"
+    monitoring: true
+  graceful_degradation:
+    levels:
+      - level: 1
+        description: "Serve from L1 cache only"
+        functionality: 0.9
+      - level: 2
+        description: "Exact match queries only"
+        functionality: 0.7
+      - level: 3
+        description: "Core terminologies only (RxNorm, ICD-10)"
+        functionality: 0.5
+  disaster_recovery:
+    rto: "10_minutes"
+    rpo: "1_hour"
+    backup_frequency: "hourly"
+    geo_redundancy: false
+
+# Section 12: Data Lifecycle Management
+12_data_lifecycle:
+  retention_policies:
+    terminology_data: "permanent"  # Standard terminologies
+    query_logs: "90_days"
+    audit_logs: "7_years"
+    metrics_data: "2_years"
+    cache_data: "as_configured"
+    etl_logs: "1_year"
+  archival_strategy:
+    trigger: "age_based"
+    destination: "s3_glacier"
+    compression: true
+    encryption: true
+  deletion_workflows:
+    soft_delete: false  # Not applicable for standard terminologies
+    hard_delete_delay: "30_days"  # For logs only
+    verification_required: true
+    audit_trail: true
+  data_quality:
+    validation_rules: "./schemas/terminology-validation-rules.json"
+    quality_metrics: true
+    anomaly_detection: true
+    accuracy_monitoring: true
+  compliance_tracking:
+    gdpr_compliance: false  # Public terminologies
+    hipaa_compliance: true  # Part of clinical system
+    sox_compliance: false
+
+# Section 13: Supply Chain Security
+13_supply_chain:
+  dependency_management:
+    manifest_location: "./go.mod"
+    vulnerability_scanning:
+      tool: "snyk"
+      frequency: "on_commit"
+      block_on_critical: true
+    license_compliance: true
+    update_policy: "security_patches_immediate"
+  software_bill_of_materials:
+    format: "spdx"
+    location: "./sbom.json"
+    generation: "automated"
+    signing: true
+  artifact_integrity:
+    signing_method: "cosign"
+    verification_required: true
+    key_management: "aws_kms"
+  source_code_security:
+    static_analysis: true
+    secret_detection: true
+    code_signing: true
+    branch_protection: true
+  terminology_sources:
+    sources:
+      - name: "UMLS"
+        verification: "checksum_validation"
+        update_frequency: "quarterly"
+      - name: "SNOMED International"
+        verification: "digital_signature"
+        update_frequency: "biannually"
+      - name: "WHO ICD-11"
+        verification: "official_download"
+        update_frequency: "annually"
+
+# Implementation Checklist
+implementation_checklist:
+  framework_setup:
+    - "[DONE] framework.yaml created"
+    - "[DONE] API specification (api/openapi.yaml)"
+    - "[DONE] Data schema (schemas/terminology-schema.json)"
+    - "[TODO] Integration contracts defined"
+  development:
+    - "[DONE] Core ETL logic implemented"
+    - "[DONE] Database schema created"
+    - "[DONE] Basic API endpoints implemented"
+    - "[TODO] Multi-tier caching layer"
+    - "[TODO] Unit tests (target: >95% coverage)"
+  security:
+    - "[TODO] Encryption configuration"
+    - "[TODO] Access controls implemented"
+    - "[DONE] No PHI handling required"
+    - "[TODO] Vulnerability scanning enabled"
+    - "[TODO] Security review completed"
+  clinical_validation:
+    - "[TODO] Terminology accuracy tests"
+    - "[TODO] Clinical validation scenarios"
+    - "[TODO] Clinical sign-off obtained"
+    - "[TODO] Regulatory compliance verified"
+  operations:
+    - "[TODO] Monitoring dashboards"
+    - "[TODO] Alerting configuration"
+    - "[TODO] CI/CD pipeline setup"
+    - "[TODO] Backup procedures tested"
+    - "[TODO] Incident response plan"
+  governance:
+    - "[TODO] Change management process"
+    - "[TODO] Review cycles scheduled"
+    - "[DONE] Technical ownership assigned"
+    - "[TODO] Clinical ownership assigned"
+    - "[TODO] Documentation completed"
+
+# Validation Rules
+validation_rules:
+  required_sections: [
+    "1_purpose_and_scope",
+    "2_data_model", 
+    "3_api_contracts",
+    "4_integration_map",
+    "5_performance",
+    "6_testing",
+    "7_governance",
+    "8_cicd",
+    "9_monitoring",
+    "10_security_privacy",
+    "11_failure_modes",
+    "12_data_lifecycle",
+    "13_supply_chain"
+  ]
+  version_compatibility: "2.0.x"
+  clinical_safety_required: true
+  audit_trail_required: true

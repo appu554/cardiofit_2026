@@ -1,0 +1,549 @@
+﻿// ============================================================================
+// STATE MIGRATION STRATEGIES FOR SCHEMA EVOLUTION
+// ============================================================================
+
+
+package com.ehr.flink.migration;
+
+
+import org.apache.flink.api.common.state.*;
+import org.apache.flink.api.common.typeutils.*;
+import org.apache.flink.core.memory.*;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.state.api.*;
+
+
+import java.io.IOException;
+import java.util.*;
+
+
+// ============================================================================
+// SCENARIO 1: Adding New Fields to Existing State
+// ============================================================================
+
+
+/**
+ * Evolution: PatientSnapshot V1 → V2
+ * Change: Adding socialDeterminants field
+ * 
+ * V1: PatientSnapshot { demographics, conditions, medications, vitals }
+ * V2: PatientSnapshot { demographics, conditions, medications, vitals, socialDeterminants }
+ */
+
+
+// V1 State Schema (Original)
+public class PatientSnapshotV1 {
+    private String patientId;
+    private Demographics demographics;
+    private Set<String> activeConditions;
+    private Map<String, MedicationEntry> activeMedications;
+    private List<VitalReading> recentVitals;
+    // No socialDeterminants field
+}
+
+
+// V2 State Schema (New)
+public class PatientSnapshotV2 {
+    private String patientId;
+    private Demographics demographics;
+    private Set<String> activeConditions;
+    private Map<String, MedicationEntry> activeMedications;
+    private List<VitalReading> recentVitals;
+    private SocialDeterminants socialDeterminants; // NEW FIELD
+}
+
+
+/**
+ * TypeSerializer for backward compatibility
+ * Handles reading V1 state and converting to V2
+ */
+public class PatientSnapshotSerializer extends TypeSerializer<PatientSnapshotV2> {
+    
+    private static final int VERSION = 2;
+    
+    @Override
+    public void serialize(PatientSnapshotV2 record, DataOutputView target) throws IOException {
+        // Write version first
+        target.writeInt(VERSION);
+        
+        // Serialize all fields including new ones
+        target.writeUTF(record.getPatientId());
+        serializeDemographics(record.getDemographics(), target);
+        serializeConditions(record.getActiveConditions(), target);
+        serializeMedications(record.getActiveMedications(), target);
+        serializeVitals(record.getRecentVitals(), target);
+        serializeSocialDeterminants(record.getSocialDeterminants(), target); // New
+    }
+    
+    @Override
+    public PatientSnapshotV2 deserialize(DataInputView source) throws IOException {
+        int version = source.readInt();
+        
+        PatientSnapshotV2 snapshot = new PatientSnapshotV2();
+        snapshot.setPatientId(source.readUTF());
+        snapshot.setDemographics(deserializeDemographics(source));
+        snapshot.setActiveConditions(deserializeConditions(source));
+        snapshot.setActiveMedications(deserializeMedications(source));
+        snapshot.setRecentVitals(deserializeVitals(source));
+        
+        if (version >= 2) {
+            // V2 format includes socialDeterminants
+            snapshot.setSocialDeterminants(deserializeSocialDeterminants(source));
+        } else {
+            // V1 format - initialize with defaults
+            snapshot.setSocialDeterminants(SocialDeterminants.empty());
+        }
+        
+        return snapshot;
+    }
+    
+    @Override
+    public TypeSerializerSnapshot<PatientSnapshotV2> snapshotConfiguration() {
+        return new PatientSnapshotSerializerSnapshot();
+    }
+}
+
+
+/**
+ * Serializer snapshot for state evolution tracking
+ */
+public static class PatientSnapshotSerializerSnapshot 
+        extends SimpleTypeSerializerSnapshot<PatientSnapshotV2> {
+    
+    public PatientSnapshotSerializerSnapshot() {
+        super(() -> new PatientSnapshotSerializer());
+    }
+}
+
+
+// ============================================================================
+// SCENARIO 2: Removing Fields from State (Deprecation)
+// ============================================================================
+
+
+/**
+ * Evolution: EncounterContext V1 → V2
+ * Change: Removing deprecated 'legacyId' field
+ * 
+ * V1: EncounterContext { encounterId, legacyId, patientId, status, ... }
+ * V2: EncounterContext { encounterId, patientId, status, ... }
+ */
+
+
+public class EncounterContextSerializer extends TypeSerializer<EncounterContextV2> {
+    
+    @Override
+    public EncounterContextV2 deserialize(DataInputView source) throws IOException {
+        int version = source.readInt();
+        
+        EncounterContextV2 context = new EncounterContextV2();
+        context.setEncounterId(source.readUTF());
+        
+        if (version == 1) {
+            // V1 had legacyId - read it but discard
+            source.readUTF(); // Skip legacyId
+        }
+        
+        context.setPatientId(source.readUTF());
+        context.setStatus(EncounterStatus.values()[source.readInt()]);
+        // ... rest of fields
+        
+        return context;
+    }
+}
+
+
+// ============================================================================
+// SCENARIO 3: Changing Field Types (Complex Migration)
+// ============================================================================
+
+
+/**
+ * Evolution: VitalReading V1 → V2
+ * Change: bloodPressure from String "120/80" → BloodPressure { systolic, diastolic }
+ * 
+ * V1: VitalReading { timestamp, heartRate, bloodPressure: String }
+ * V2: VitalReading { timestamp, heartRate, bloodPressure: BloodPressure }
+ */
+
+
+public class VitalReadingSerializer extends TypeSerializer<VitalReadingV2> {
+    
+    @Override
+    public VitalReadingV2 deserialize(DataInputView source) throws IOException {
+        int version = source.readInt();
+        
+        VitalReadingV2 vital = new VitalReadingV2();
+        vital.setTimestamp(source.readLong());
+        vital.setHeartRate(source.readInt());
+        
+        if (version == 1) {
+            // V1: bloodPressure was a String "120/80"
+            String bpString = source.readUTF();
+            BloodPressure bp = parseBloodPressure(bpString);
+            vital.setBloodPressure(bp);
+        } else {
+            // V2: bloodPressure is structured
+            int systolic = source.readInt();
+            int diastolic = source.readInt();
+            vital.setBloodPressure(new BloodPressure(systolic, diastolic));
+        }
+        
+        return vital;
+    }
+    
+    private BloodPressure parseBloodPressure(String bpString) {
+        // Parse "120/80" format
+        String[] parts = bpString.split("/");
+        return new BloodPressure(
+            Integer.parseInt(parts[0]),
+            Integer.parseInt(parts[1])
+        );
+    }
+}
+
+
+// ============================================================================
+// SCENARIO 4: State Processor API - Offline Migration
+// ============================================================================
+
+
+/**
+ * Use Flink State Processor API to migrate state offline from savepoint.
+ * This approach is necessary for complex transformations that can't be done
+ * incrementally during normal processing.
+ */
+
+
+public class OfflineStateMigration {
+    
+    /**
+     * Migrate PatientSnapshot state from V1 to V2 schema
+     */
+    public static void migratePatientSnapshotState(
+            String savepointPath,
+            String outputPath,
+            ExecutionEnvironment env) throws Exception {
+        
+        // Read existing state from savepoint
+        ExistingSavepoint savepoint = Savepoint.load(env, savepointPath, 
+            new RocksDBStateBackend("file:///tmp/rocksdb"));
+        
+        // Read patient state operator
+        DataSet<PatientSnapshotV1> oldState = savepoint.readKeyedState(
+            "patient-context-assembler",
+            new PatientSnapshotV1ReaderFunction()
+        );
+        
+        // Transform to new schema
+        DataSet<PatientSnapshotV2> newState = oldState.map(new MapFunction<PatientSnapshotV1, PatientSnapshotV2>() {
+            @Override
+            public PatientSnapshotV2 map(PatientSnapshotV1 v1) throws Exception {
+                return PatientSnapshotV2.builder()
+                    .patientId(v1.getPatientId())
+                    .demographics(v1.getDemographics())
+                    .activeConditions(v1.getActiveConditions())
+                    .activeMedications(v1.getActiveMedications())
+                    .recentVitals(v1.getRecentVitals())
+                    .socialDeterminants(initializeSocialDeterminants(v1)) // New field
+                    .build();
+            }
+        });
+        
+        // Create new savepoint with transformed state
+        BootstrapTransformation<PatientSnapshotV2> transformation = 
+            OperatorTransformation
+                .bootstrapWith(newState)
+                .keyBy(PatientSnapshotV2::getPatientId)
+                .transform(new PatientSnapshotV2StateBootstrapper());
+        
+        // Write new savepoint
+        Savepoint.create(new RocksDBStateBackend("file:///tmp/rocksdb"), 128)
+            .withOperator("patient-context-assembler", transformation)
+            .write(outputPath);
+        
+        env.execute("Patient Snapshot State Migration");
+    }
+    
+    /**
+     * Initialize new fields with sensible defaults or derived data
+     */
+    private static SocialDeterminants initializeSocialDeterminants(PatientSnapshotV1 v1) {
+        // Option 1: Empty defaults
+        // return SocialDeterminants.empty();
+        
+        // Option 2: Derive from existing data
+        SocialDeterminants sd = new SocialDeterminants();
+        
+        // Check if patient has housing-related conditions
+        if (v1.getActiveConditions().contains("Z59.0")) { // Homelessness
+            sd.setHousingStatus("HOMELESS");
+        }
+        
+        // Check for food insecurity indicators
+        if (v1.getActiveConditions().contains("Z59.4")) { // Food insecurity
+            sd.setFoodInsecurity(true);
+        }
+        
+        return sd;
+    }
+}
+
+
+// ============================================================================
+// SCENARIO 5: Rolling Migration Strategy
+// ============================================================================
+
+
+/**
+ * Gradual migration without downtime using version-aware operators.
+ * Supports both V1 and V2 schemas simultaneously during transition period.
+ */
+
+
+public class VersionAwarePatientContextAssembler 
+        extends KeyedProcessFunction<String, ClinicalEvent, EnrichedEvent> {
+    
+    // Dual state handles - support both versions
+    private ValueState<PatientSnapshotV1> stateV1;
+    private ValueState<PatientSnapshotV2> stateV2;
+    private ValueState<Integer> versionState;
+    
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        super.open(parameters);
+        
+        // Register both state descriptors
+        ValueStateDescriptor<PatientSnapshotV1> descV1 = 
+            new ValueStateDescriptor<>("patient-snapshot-v1", PatientSnapshotV1.class);
+        ValueStateDescriptor<PatientSnapshotV2> descV2 = 
+            new ValueStateDescriptor<>("patient-snapshot-v2", PatientSnapshotV2.class);
+        ValueStateDescriptor<Integer> versionDesc = 
+            new ValueStateDescriptor<>("schema-version", Integer.class);
+        
+        stateV1 = getRuntimeContext().getState(descV1);
+        stateV2 = getRuntimeContext().getState(descV2);
+        versionState = getRuntimeContext().getState(versionDesc);
+    }
+    
+    @Override
+    public void processElement(ClinicalEvent event, Context ctx, Collector<EnrichedEvent> out) 
+            throws Exception {
+        
+        Integer version = versionState.value();
+        
+        if (version == null || version == 1) {
+            // Still using V1 schema
+            PatientSnapshotV1 snapshotV1 = stateV1.value();
+            
+            if (snapshotV1 == null) {
+                snapshotV1 = initializeV1(event);
+            }
+            
+            // Update V1 state
+            snapshotV1 = updateSnapshotV1(snapshotV1, event);
+            stateV1.update(snapshotV1);
+            
+            // Migrate to V2 if conditions met
+            if (shouldMigrateToV2(event)) {
+                migratePatientToV2(snapshotV1);
+            }
+            
+        } else if (version == 2) {
+            // Using V2 schema
+            PatientSnapshotV2 snapshotV2 = stateV2.value();
+            
+            if (snapshotV2 == null) {
+                snapshotV2 = initializeV2(event);
+            }
+            
+            // Update V2 state
+            snapshotV2 = updateSnapshotV2(snapshotV2, event);
+            stateV2.update(snapshotV2);
+        }
+        
+        // Emit enriched event (handle both versions)
+        out.collect(createEnrichedEvent(event, version));
+    }
+    
+    /**
+     * Migrate individual patient from V1 to V2
+     */
+    private void migratePatientToV2(PatientSnapshotV1 v1) throws Exception {
+        // Convert V1 to V2
+        PatientSnapshotV2 v2 = convertV1toV2(v1);
+        
+        // Update state
+        stateV2.update(v2);
+        versionState.update(2);
+        
+        // Clear old V1 state
+        stateV1.clear();
+        
+        logInfo(v1.getPatientId(), "Migrated patient state from V1 to V2");
+    }
+    
+    /**
+     * Determine if patient should be migrated to V2
+     * Options:
+     * 1. Time-based: after specific date
+     * 2. Event-based: on next admission
+     * 3. Load-based: migrate during low traffic periods
+     */
+    private boolean shouldMigrateToV2(ClinicalEvent event) {
+        // Strategy 1: Migrate on next admission
+        if (event.getEventType().equals("ADMISSION")) {
+            return true;
+        }
+        
+        // Strategy 2: Migrate after cutoff date
+        long cutoffDate = 1704067200000L; // Jan 1, 2024
+        if (event.getEventTimestamp() > cutoffDate) {
+            return true;
+        }
+        
+        // Strategy 3: Migrate based on patient ID hash (gradual rollout)
+        int hash = event.getPatientId().hashCode() & 0x7FFFFFFF;
+        int rolloutPercentage = 50; // Migrate 50% of patients
+        return (hash % 100) < rolloutPercentage;
+    }
+}
+
+
+// ============================================================================
+// SCENARIO 6: State Schema Registry
+// ============================================================================
+
+
+/**
+ * Centralized registry for managing state schema versions across operators
+ */
+
+
+public class StateSchemaRegistry {
+    
+    private static final Map<String, SchemaVersion> SCHEMAS = new HashMap<>();
+    
+    static {
+        // Register PatientSnapshot schemas
+        SCHEMAS.put("PatientSnapshot", new SchemaVersion(
+            2, // Current version
+            Map.of(
+                1, PatientSnapshotV1.class,
+                2, PatientSnapshotV2.class
+            ),
+            Map.of(
+                1, new PatientSnapshotV1Serializer(),
+                2, new PatientSnapshotV2Serializer()
+            )
+        ));
+        
+        // Register EncounterContext schemas
+        SCHEMAS.put("EncounterContext", new SchemaVersion(
+            2,
+            Map.of(
+                1, EncounterContextV1.class,
+                2, EncounterContextV2.class
+            ),
+            Map.of(
+                1, new EncounterContextV1Serializer(),
+                2, new EncounterContextV2Serializer()
+            )
+        ));
+    }
+    
+    public static SchemaVersion getSchema(String stateName) {
+        return SCHEMAS.get(stateName);
+    }
+    
+    public static int getCurrentVersion(String stateName) {
+        return SCHEMAS.get(stateName).getCurrentVersion();
+    }
+    
+    public static TypeSerializer<?> getSerializer(String stateName, int version) {
+        return SCHEMAS.get(stateName).getSerializer(version);
+    }
+}
+
+
+// ============================================================================
+// SCENARIO 7: Testing State Migration
+// ============================================================================
+
+
+/**
+ * Unit tests for state migration logic
+ */
+
+
+public class StateMigrationTest {
+    
+    @Test
+    public void testPatientSnapshotV1toV2Migration() throws Exception {
+        // Arrange - create V1 state
+        PatientSnapshotV1 v1 = new PatientSnapshotV1();
+        v1.setPatientId("PT-12345");
+        v1.setActiveConditions(Set.of("E11.9", "I10"));
+        v1.setActiveMedications(Map.of(
+            "metformin", new MedicationEntry("Metformin", "500mg BID")
+        ));
+        
+        // Act - migrate to V2
+        PatientSnapshotV2 v2 = OfflineStateMigration.convertV1toV2(v1);
+        
+        // Assert - all V1 fields preserved
+        assertThat(v2.getPatientId()).isEqualTo(v1.getPatientId());
+        assertThat(v2.getActiveConditions()).isEqualTo(v1.getActiveConditions());
+        assertThat(v2.getActiveMedications()).isEqualTo(v1.getActiveMedications());
+        
+        // Assert - new V2 fields initialized
+        assertThat(v2.getSocialDeterminants()).isNotNull();
+        assertThat(v2.getSocialDeterminants().getHousingStatus()).isNotNull();
+    }
+    
+    @Test
+    public void testSerializerBackwardCompatibility() throws Exception {
+        // Create V1 data
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        DataOutputViewStreamWrapper output = new DataOutputViewStreamWrapper(baos);
+        
+        PatientSnapshotV1Serializer v1Serializer = new PatientSnapshotV1Serializer();
+        PatientSnapshotV1 v1Data = createTestPatientV1();
+        v1Serializer.serialize(v1Data, output);
+        
+        // Read with V2 serializer
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        DataInputViewStreamWrapper input = new DataInputViewStreamWrapper(bais);
+        
+        PatientSnapshotV2Serializer v2Serializer = new PatientSnapshotV2Serializer();
+        PatientSnapshotV2 v2Data = v2Serializer.deserialize(input);
+        
+        // Assert successful deserialization with defaults for new fields
+        assertThat(v2Data.getPatientId()).isEqualTo(v1Data.getPatientId());
+        assertThat(v2Data.getSocialDeterminants()).isEqualTo(SocialDeterminants.empty());
+    }
+}
+
+
+// ============================================================================
+// MIGRATION DECISION MATRIX
+// ============================================================================
+
+
+/**
+ * Choose migration strategy based on requirements:
+ * 
+ * | Change Type          | State Size | Downtime OK? | Strategy                    |
+ * |----------------------|------------|--------------|------------------------------|
+ * | Add optional field   | Any        | No           | TypeSerializer evolution    |
+ * | Remove field         | Any        | No           | TypeSerializer (skip field) |
+ * | Change field type    | Small      | No           | TypeSerializer conversion   |
+ * | Change field type    | Large      | Yes          | Offline State Processor API |
+ * | Complex transform    | Any        | Yes          | Offline State Processor API |
+ * | Gradual rollout      | Any        | No           | Version-aware operators     |
+ * 
+ * Downtime estimates:
+ * - TypeSerializer: 0 min (hot migration)
+ * - State Processor: 5-30 min (depends on state size)
+ * - Version-aware: 0 min (gradual rollout over days/weeks)
+ */

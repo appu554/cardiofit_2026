@@ -1,0 +1,494 @@
+{
+	"info": {
+		"_postman_id": "workflow-engine-service-api",
+		"name": "Workflow Engine Service API",
+		"description": "Comprehensive API collection for the Workflow Engine Service with GraphQL queries and mutations for workflow management, task management, and federation integration.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// Set common headers for all requests",
+					"pm.request.headers.add({",
+					"    key: 'X-User-ID',",
+					"    value: pm.environment.get('user_id') || 'test-user-123'",
+					"});",
+					"",
+					"pm.request.headers.add({",
+					"    key: 'X-User-Role',",
+					"    value: pm.environment.get('user_role') || 'doctor'",
+					"});",
+					"",
+					"pm.request.headers.add({",
+					"    key: 'X-User-Roles',",
+					"    value: pm.environment.get('user_roles') || 'doctor,admin'",
+					"});",
+					"",
+					"pm.request.headers.add({",
+					"    key: 'X-User-Permissions',",
+					"    value: pm.environment.get('user_permissions') || 'patient:read,patient:write,task:read,task:write,workflow:read,workflow:write'",
+					"});"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8015",
+			"type": "string"
+		},
+		{
+			"key": "federation_url",
+			"value": "http://localhost:4000",
+			"type": "string"
+		},
+		{
+			"key": "workflow_definition_id",
+			"value": "patient-admission-workflow",
+			"type": "string"
+		},
+		{
+			"key": "workflow_instance_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "task_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "patient_id",
+			"value": "test-patient-123",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"item": [
+				{
+					"name": "Service Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"health"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Service Info",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/info",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"info"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Workflow Definitions",
+			"item": [
+				{
+					"name": "List Workflow Definitions",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetWorkflowDefinitions($category: String) {\\n    workflowDefinitions(category: $category) {\\n      id\\n      name\\n      description\\n      version\\n      category\\n      isActive\\n      createdAt\\n      updatedAt\\n    }\\n  }\",\n  \"variables\": {\n    \"category\": null\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Workflow Definition by ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetWorkflowDefinition($id: ID!) {\\n    workflowDefinition(id: $id) {\\n      id\\n      name\\n      description\\n      version\\n      bpmnXml\\n      category\\n      isActive\\n      createdAt\\n      updatedAt\\n    }\\n  }\",\n  \"variables\": {\n    \"id\": \"{{workflow_definition_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Workflow Definitions by Category",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetWorkflowDefinitionsByCategory($category: String) {\\n    workflowDefinitions(category: $category) {\\n      id\\n      name\\n      description\\n      version\\n      category\\n      isActive\\n    }\\n  }\",\n  \"variables\": {\n    \"category\": \"admission\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Workflow Instances",
+			"item": [
+				{
+					"name": "Start Workflow",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.startWorkflow) {",
+									"        pm.environment.set('workflow_instance_id', response.data.startWorkflow.id);",
+									"        console.log('Workflow instance ID set:', response.data.startWorkflow.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation StartWorkflow($definitionId: ID!, $patientId: ID!, $variables: [KeyValuePairInput]) {\\n    startWorkflow(definitionId: $definitionId, patientId: $patientId, initialVariables: $variables) {\\n      id\\n      definitionId\\n      patientId\\n      status\\n      variables\\n      createdAt\\n    }\\n  }\",\n  \"variables\": {\n    \"definitionId\": \"{{workflow_definition_id}}\",\n    \"patientId\": \"{{patient_id}}\",\n    \"variables\": [\n      {\n        \"key\": \"patientName\",\n        \"value\": \"John Doe\"\n      },\n      {\n        \"key\": \"admissionType\",\n        \"value\": \"emergency\"\n      },\n      {\n        \"key\": \"priority\",\n        \"value\": \"high\"\n      }\n    ]\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Workflow Instances",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetWorkflowInstances($status: WorkflowStatus, $patientId: ID) {\\n    workflowInstances(status: $status, patientId: $patientId) {\\n      id\\n      definitionId\\n      patientId\\n      status\\n      variables\\n      createdAt\\n      updatedAt\\n    }\\n  }\",\n  \"variables\": {\n    \"status\": null,\n    \"patientId\": null\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Workflow Instances by Patient",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetWorkflowInstancesByPatient($patientId: ID) {\\n    workflowInstances(patientId: $patientId) {\\n      id\\n      definitionId\\n      status\\n      variables\\n      createdAt\\n    }\\n  }\",\n  \"variables\": {\n    \"patientId\": \"{{patient_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Signal Workflow",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation SignalWorkflow($instanceId: ID!, $signalName: String!, $variables: [KeyValuePairInput]) {\\n    signalWorkflow(instanceId: $instanceId, signalName: $signalName, variables: $variables)\\n  }\",\n  \"variables\": {\n    \"instanceId\": \"{{workflow_instance_id}}\",\n    \"signalName\": \"patient_data_updated\",\n    \"variables\": [\n      {\n        \"key\": \"updateType\",\n        \"value\": \"medical_history\"\n      },\n      {\n        \"key\": \"updatedBy\",\n        \"value\": \"doctor-123\"\n      }\n    ]\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Tasks",
+			"item": [
+				{
+					"name": "List Tasks by Assignee",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetTasksByAssignee($assignee: ID!, $status: TaskStatus) {\\n    tasks(assignee: $assignee, status: $status) {\\n      id\\n      name\\n      description\\n      status\\n      assigneeId\\n      workflowInstanceId\\n      formData\\n      dueDate\\n      createdAt\\n      updatedAt\\n    }\\n  }\",\n  \"variables\": {\n    \"assignee\": \"test-user-123\",\n    \"status\": null\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Task by ID",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.task) {",
+									"        pm.environment.set('task_id', response.data.task.id);",
+									"        console.log('Task ID set:', response.data.task.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetTask($id: ID!) {\\n    task(id: $id) {\\n      id\\n      name\\n      description\\n      status\\n      assigneeId\\n      workflowInstanceId\\n      formData\\n      dueDate\\n      createdAt\\n      updatedAt\\n    }\\n  }\",\n  \"variables\": {\n    \"id\": \"{{task_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Claim Task",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation ClaimTask($taskId: ID!) {\\n    claimTask(taskId: $taskId) {\\n      id\\n      status\\n      assigneeId\\n      claimedAt\\n    }\\n  }\",\n  \"variables\": {\n    \"taskId\": \"{{task_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Complete Task",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CompleteTask($taskId: ID!, $outputVariables: [KeyValuePairInput]) {\\n    completeTask(taskId: $taskId, outputVariables: $outputVariables) {\\n      id\\n      status\\n      completedAt\\n      outputVariables\\n    }\\n  }\",\n  \"variables\": {\n    \"taskId\": \"{{task_id}}\",\n    \"outputVariables\": [\n      {\n        \"key\": \"reviewResult\",\n        \"value\": \"approved\"\n      },\n      {\n        \"key\": \"notes\",\n        \"value\": \"Patient data verified and approved for admission\"\n      },\n      {\n        \"key\": \"reviewedBy\",\n        \"value\": \"Dr. Smith\"\n      }\n    ]\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delegate Task",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation DelegateTask($taskId: ID!, $userId: ID!) {\\n    delegateTask(taskId: $taskId, userId: $userId) {\\n      id\\n      assigneeId\\n      delegatedAt\\n      delegatedBy\\n    }\\n  }\",\n  \"variables\": {\n    \"taskId\": \"{{task_id}}\",\n    \"userId\": \"supervisor-456\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"federation"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

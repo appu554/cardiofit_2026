@@ -1,0 +1,452 @@
+﻿# Final Implementation Guidelines: Snapshot Management Pattern
+
+
+This proposal correctly identifies the optimal architecture. Here are the concrete implementation guidelines to complete development:
+
+
+## 1. Core Implementation Components
+
+
+### 1.1 Snapshot Data Model
+
+
+```typescript
+// types/snapshot.ts
+interface ClinicalSnapshot {
+  id: string;                    // UUID
+  checksum: string;              // SHA-256 of canonical content
+  patientId: string;
+  createdAt: Date;
+  createdBy: string;             // Service identity
+  expiresAt: Date;               // TTL enforcement
+  
+  // Content manifest
+  includedFields: string[];      // What's in this snapshot
+  requiredFreshness: Map<string, number>; // Field -> max age in seconds
+  
+  // The actual data
+  data: {
+    medications: Medication[];
+    labs: LabResult[];
+    vitals: VitalSign[];
+    allergies: Allergy[];
+    conditions: Condition[];
+    // ... other clinical data
+  };
+  
+  // Governance
+  allowLiveFetch: boolean;
+  allowedLiveFields?: string[];
+  signature: string;             // Digital signature
+  evidenceEnvelope: EvidenceEnvelope;
+}
+
+
+interface SnapshotReference {
+  snapshotId: string;
+  checksum: string;
+  createdAt: Date;
+  ttlSeconds: number;
+  includedFields: string[];
+  signature: string;
+}
+```
+
+
+### 1.2 Medication Service Implementation
+
+
+```typescript
+class MedicationService {
+  private recipeResolver: RecipeResolver;
+  private contextGateway: ContextGateway;
+  private snapshotSigner: SnapshotSigner;
+  
+  async generateProposal(
+    intent: string, 
+    patientId: string
+  ): Promise<MedicationProposal> {
+    // Step 1: Resolve recipe for entire workflow
+    const workflowRecipe = this.recipeResolver.resolveWorkflowRecipe(intent);
+    
+    // Step 2: Create comprehensive snapshot
+    const snapshot = await this.createWorkflowSnapshot(
+      workflowRecipe,
+      patientId
+    );
+    
+    // Step 3: Generate proposals using snapshot
+    const therapies = await this.calculateTherapies(
+      snapshot.data,
+      intent
+    );
+    
+    // Step 4: Build proposal with snapshot reference
+    return {
+      proposalId: generateId(),
+      therapies,
+      snapshot: this.createSnapshotReference(snapshot),
+      evidenceEnvelope: this.createEvidenceEnvelope(snapshot)
+    };
+  }
+  
+  private async createWorkflowSnapshot(
+    recipe: WorkflowRecipe,
+    patientId: string
+  ): Promise<ClinicalSnapshot> {
+    // Fetch all required data
+    const data = await this.contextGateway.fetchFields(
+      patientId,
+      recipe.requiredFields
+    );
+    
+    // Create immutable snapshot
+    const snapshot: ClinicalSnapshot = {
+      id: generateId(),
+      patientId,
+      createdAt: new Date(),
+      createdBy: 'medication-service',
+      expiresAt: new Date(Date.now() + recipe.ttlSeconds * 1000),
+      includedFields: recipe.requiredFields,
+      requiredFreshness: recipe.freshnessRequirements,
+      data: Object.freeze(data), // Immutable
+      allowLiveFetch: recipe.allowLiveFetch,
+      allowedLiveFields: recipe.allowedLiveFields,
+      checksum: '',
+      signature: '',
+      evidenceEnvelope: this.getCurrentEvidenceEnvelope()
+    };
+    
+    // Calculate checksum
+    snapshot.checksum = this.calculateChecksum(snapshot);
+    
+    // Sign snapshot
+    snapshot.signature = await this.snapshotSigner.sign(snapshot);
+    
+    // Store snapshot
+    await this.contextGateway.storeSnapshot(snapshot);
+    
+    return snapshot;
+  }
+}
+```
+
+
+### 1.3 Safety Gateway Implementation
+
+
+```typescript
+class SafetyGateway {
+  private contextGateway: ContextGateway;
+  private snapshotCache: LRUCache<string, ClinicalSnapshot>;
+  
+  async validate(
+    proposal: MedicationProposal,
+    patientId: string
+  ): Promise<SafetyVerdict> {
+    // Step 1: Validate snapshot integrity
+    this.validateSnapshotReference(proposal.snapshot);
+    
+    // Step 2: Retrieve snapshot
+    const snapshot = await this.getSnapshot(proposal.snapshot.snapshotId);
+    
+    // Step 3: Verify checksum
+    if (snapshot.checksum !== proposal.snapshot.checksum) {
+      throw new SnapshotIntegrityError('Checksum mismatch');
+    }
+    
+    // Step 4: Check if snapshot has required fields
+    const missingFields = this.getMissingRequiredFields(
+      snapshot.includedFields
+    );
+    
+    // Step 5: Handle missing fields if any
+    let validationData = snapshot.data;
+    if (missingFields.length > 0) {
+      validationData = await this.handleMissingFields(
+        snapshot,
+        missingFields,
+        patientId
+      );
+    }
+    
+    // Step 6: Perform validation
+    const [caeResult, protocolResult] = await Promise.all([
+      this.caeEngine.evaluate(proposal, validationData),
+      this.protocolEngine.evaluate(proposal, validationData)
+    ]);
+    
+    // Step 7: Return verdict with evidence
+    return {
+      status: this.aggregateResults(caeResult, protocolResult),
+      details: { cae: caeResult, protocol: protocolResult },
+      evidenceEnvelope: {
+        snapshotId: snapshot.id,
+        snapshotChecksum: snapshot.checksum,
+        kbVersions: this.getCurrentKBVersions(),
+        decisionHash: this.calculateDecisionHash(proposal, snapshot)
+      }
+    };
+  }
+  
+  private async handleMissingFields(
+    snapshot: ClinicalSnapshot,
+    missingFields: string[],
+    patientId: string
+  ): Promise<any> {
+    // Check if live fetch is allowed
+    if (!snapshot.allowLiveFetch) {
+      throw new InsufficientDataError(
+        `Snapshot missing required fields: ${missingFields.join(', ')}`
+      );
+    }
+    
+    // Check if specific fields are allowed for live fetch
+    const unauthorizedFields = missingFields.filter(
+      field => !snapshot.allowedLiveFields?.includes(field)
+    );
+    
+    if (unauthorizedFields.length > 0) {
+      throw new UnauthorizedLiveFetchError(
+        `Cannot fetch fields: ${unauthorizedFields.join(', ')}`
+      );
+    }
+    
+    // Fetch missing fields
+    const liveData = await this.contextGateway.fetchFields(
+      patientId,
+      missingFields
+    );
+    
+    // Log the live fetch for audit
+    await this.auditLogger.logLiveFetch({
+      snapshotId: snapshot.id,
+      fieldsFetched: missingFields,
+      reason: 'missing_required_fields',
+      timestamp: new Date()
+    });
+    
+    // Merge with snapshot data
+    return { ...snapshot.data, ...liveData };
+  }
+  
+  private async getSnapshot(snapshotId: string): Promise<ClinicalSnapshot> {
+    // Check cache first
+    const cached = this.snapshotCache.get(snapshotId);
+    if (cached) {
+      return cached;
+    }
+    
+    // Fetch from Context Gateway
+    const snapshot = await this.contextGateway.getSnapshot(snapshotId);
+    
+    // Cache for TTL duration
+    const ttl = snapshot.expiresAt.getTime() - Date.now();
+    if (ttl > 0) {
+      this.snapshotCache.set(snapshotId, snapshot, ttl);
+    }
+    
+    return snapshot;
+  }
+}
+```
+
+
+## 2. Recipe Resolution Strategy
+
+
+### 2.1 Recipe Resolver Implementation
+
+
+```typescript
+class RecipeResolver {
+  resolveWorkflowRecipe(intent: string): WorkflowRecipe {
+    const baseRecipe = this.getBaseRecipe(intent);
+    const safetyFields = this.getSafetyRequiredFields(intent);
+    const auditFields = this.getAuditRequiredFields();
+    
+    return {
+      recipeId: `${intent}_workflow_v2`,
+      requiredFields: [
+        ...baseRecipe.fields,
+        ...safetyFields,
+        ...auditFields
+      ],
+      freshnessRequirements: this.mergeFreshnessRequirements(
+        baseRecipe.freshness,
+        this.getSafetyFreshness()
+      ),
+      ttlSeconds: 300, // 5 minutes default
+      allowLiveFetch: this.determineIfLiveFetchAllowed(intent),
+      allowedLiveFields: this.getAllowedLiveFields(intent)
+    };
+  }
+  
+  private getSafetyRequiredFields(intent: string): string[] {
+    // Fields required by Safety Gateway for this workflow
+    return [
+      'allergies',
+      'current_medications',
+      'recent_labs',
+      'kidney_function',
+      'liver_function',
+      'pregnancy_status',
+      'active_conditions'
+    ];
+  }
+}
+```
+
+
+## 3. Context Gateway Enhancements
+
+
+```typescript
+class ContextGateway {
+  private snapshotStore: SnapshotStore;
+  
+  async createSnapshot(
+    recipe: Recipe,
+    patientId: string
+  ): Promise<ClinicalSnapshot> {
+    // Atomic fetch with consistency guarantee
+    const data = await this.db.transaction(async (tx) => {
+      const fetchPromises = recipe.fields.map(field =>
+        this.fetchFieldWithFreshness(tx, patientId, field, recipe.freshness[field])
+      );
+      return Promise.all(fetchPromises);
+    });
+    
+    const snapshot = this.assembleSnapshot(recipe, patientId, data);
+    
+    // Store immutably
+    await this.snapshotStore.save(snapshot);
+    
+    return snapshot;
+  }
+  
+  async getSnapshot(snapshotId: string): Promise<ClinicalSnapshot> {
+    const snapshot = await this.snapshotStore.get(snapshotId);
+    
+    if (!snapshot) {
+      throw new SnapshotNotFoundError(snapshotId);
+    }
+    
+    if (snapshot.expiresAt < new Date()) {
+      throw new SnapshotExpiredError(snapshotId);
+    }
+    
+    return snapshot;
+  }
+  
+  async fetchFields(
+    patientId: string,
+    fields: string[]
+  ): Promise<any> {
+    // For live fetches only - tracked separately
+    const data = await this.fetchFromSources(patientId, fields);
+    
+    // Audit the live fetch
+    await this.auditLiveFetch(patientId, fields);
+    
+    return data;
+  }
+}
+```
+
+
+## 4. Testing Strategy
+
+
+```typescript
+describe('Snapshot Consistency', () => {
+  test('ensures same snapshot used throughout workflow', async () => {
+    const proposal = await medicationService.generateProposal(
+      'prescribe_medication',
+      'patient123'
+    );
+    
+    const safetyResult = await safetyGateway.validate(
+      proposal,
+      'patient123'
+    );
+    
+    // Verify same snapshot was used
+    expect(safetyResult.evidenceEnvelope.snapshotId)
+      .toBe(proposal.snapshot.snapshotId);
+    expect(safetyResult.evidenceEnvelope.snapshotChecksum)
+      .toBe(proposal.snapshot.checksum);
+  });
+  
+  test('detects snapshot tampering', async () => {
+    const proposal = await medicationService.generateProposal(
+      'prescribe_medication',
+      'patient123'
+    );
+    
+    // Tamper with checksum
+    proposal.snapshot.checksum = 'tampered';
+    
+    await expect(safetyGateway.validate(proposal, 'patient123'))
+      .rejects.toThrow('Checksum mismatch');
+  });
+  
+  test('handles expired snapshots appropriately', async () => {
+    const proposal = await medicationService.generateProposal(
+      'prescribe_medication',
+      'patient123'
+    );
+    
+    // Fast-forward time
+    jest.advanceTimersByTime(86400000); // 24 hours
+    
+    await expect(safetyGateway.validate(proposal, 'patient123'))
+      .rejects.toThrow('SnapshotExpiredError');
+  });
+});
+```
+
+
+## 5. Monitoring & Observability
+
+
+```yaml
+metrics:
+  snapshot_operations:
+    - snapshot_creation_latency_p95
+    - snapshot_size_bytes_p95
+    - snapshot_cache_hit_ratio
+    - snapshot_expiry_violations
+    
+  consistency:
+    - checksum_mismatches_per_hour
+    - live_fetch_frequency
+    - missing_field_errors
+    
+  performance:
+    - snapshot_retrieval_latency_p95
+    - cache_effectiveness
+    
+alerts:
+  - name: high_live_fetch_rate
+    condition: live_fetches_per_hour > 10
+    severity: warning
+    
+  - name: snapshot_integrity_failure
+    condition: checksum_mismatches > 0
+    severity: critical
+```
+
+
+## Summary
+
+
+This implementation ensures:
+1. **Data consistency** through immutable snapshots
+2. **Clean separation** with Medication Service owning snapshot creation
+3. **Performance optimization** through caching and snapshot reuse
+4. **Audit completeness** with full evidence envelopes
+5. **Operational flexibility** with controlled live fetch capabilities
+
+
+The pattern maintains service boundaries while guaranteeing that all services operate on consistent data, providing the foundation for safe, auditable clinical decisions.

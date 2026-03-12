@@ -1,0 +1,366 @@
+groups:
+  - name: safety_gateway_performance
+    rules:
+      # Critical P95 Latency Alert
+      - alert: HighP95Latency
+        expr: request_latency_p95_seconds{request_type="snapshot_request"} > 0.2
+        for: 2m
+        labels:
+          severity: critical
+          component: performance
+          service: safety-gateway
+        annotations:
+          summary: "P95 request latency exceeds 200ms threshold"
+          description: |
+            P95 latency is {{ $value | humanizeDuration }} which exceeds the 200ms SLA target.
+            This indicates performance degradation that may impact user experience.
+            Current value: {{ $value | humanizeDuration }}
+            Threshold: 200ms
+            Instance: {{ $labels.instance }}
+          runbook_url: "https://runbooks.safety-gateway.com/performance/high-latency"
+
+      # P99 Latency Warning
+      - alert: HighP99Latency
+        expr: request_latency_p99_seconds{request_type="snapshot_request"} > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: performance
+          service: safety-gateway
+        annotations:
+          summary: "P99 request latency exceeds 500ms threshold"
+          description: |
+            P99 latency is {{ $value | humanizeDuration }} which exceeds the 500ms threshold.
+            While not immediately critical, this indicates potential performance issues.
+            Current value: {{ $value | humanizeDuration }}
+            Threshold: 500ms
+
+      # Low Cache Hit Rate
+      - alert: LowCacheHitRate
+        expr: cache_hit_rate_current{cache_level="overall", time_window="1h"} < 85
+        for: 10m
+        labels:
+          severity: warning
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "Cache hit rate below 85% target"
+          description: |
+            Overall cache hit rate is {{ $value }}% which is below the 85% target.
+            This may indicate inefficient caching or need for cache optimization.
+            Current hit rate: {{ $value }}%
+            Target: 85%
+            Cache level: {{ $labels.cache_level }}
+
+      # Critical Cache Hit Rate
+      - alert: CriticalCacheHitRate
+        expr: cache_hit_rate_current{cache_level="overall", time_window="1h"} < 70
+        for: 5m
+        labels:
+          severity: critical
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "Cache hit rate critically low"
+          description: |
+            Overall cache hit rate is {{ $value }}% which is critically low.
+            Immediate investigation required as this will significantly impact performance.
+            Current hit rate: {{ $value }}%
+            Critical threshold: 70%
+
+      # High Memory Pressure
+      - alert: HighMemoryPressure
+        expr: system_memory_pressure_ratio > 0.85
+        for: 3m
+        labels:
+          severity: warning
+          component: system
+          service: safety-gateway
+        annotations:
+          summary: "System memory pressure is high"
+          description: |
+            Memory pressure is at {{ $value | humanizePercentage }}% which may affect performance.
+            Consider optimizing memory usage or scaling resources.
+            Current pressure: {{ $value | humanizePercentage }}%
+            Threshold: 85%
+
+      # Critical Memory Pressure
+      - alert: CriticalMemoryPressure
+        expr: system_memory_pressure_ratio > 0.95
+        for: 1m
+        labels:
+          severity: critical
+          component: system
+          service: safety-gateway
+        annotations:
+          summary: "Critical memory pressure detected"
+          description: |
+            Memory pressure is at {{ $value | humanizePercentage }}% - system may become unstable.
+            Immediate action required to prevent service degradation.
+            Current pressure: {{ $value | humanizePercentage }}%
+            Critical threshold: 95%
+
+      # SLA Compliance Violation
+      - alert: SLAComplianceViolation
+        expr: target_latency_compliance_ratio{service_tier="standard"} < 0.95
+        for: 5m
+        labels:
+          severity: warning
+          component: sla
+          service: safety-gateway
+        annotations:
+          summary: "SLA compliance below target"
+          description: |
+            SLA compliance is {{ $value | humanizePercentage }}% which is below the 95% target.
+            Service tier: {{ $labels.service_tier }}
+            Current compliance: {{ $value | humanizePercentage }}%
+            Target: 95%
+
+      # High Concurrent Requests
+      - alert: HighConcurrentRequests
+        expr: concurrent_requests_current > 100
+        for: 2m
+        labels:
+          severity: warning
+          component: throughput
+          service: safety-gateway
+        annotations:
+          summary: "High number of concurrent requests"
+          description: |
+            Currently processing {{ $value }} concurrent requests.
+            This may indicate high load or slow request processing.
+            Current: {{ $value }}
+            Threshold: 100
+
+      # Cache Eviction Rate Too High
+      - alert: HighCacheEvictionRate
+        expr: cache_eviction_rate_per_minute{cache_level="l1"} > 50
+        for: 5m
+        labels:
+          severity: warning
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "High cache eviction rate detected"
+          description: |
+            L1 cache eviction rate is {{ $value }} evictions/minute.
+            This may indicate insufficient cache size or poor cache efficiency.
+            Current rate: {{ $value }}/min
+            Threshold: 50/min
+            Cache level: {{ $labels.cache_level }}
+
+      # GC Pause Time Too High
+      - alert: HighGCPauseTime
+        expr: histogram_quantile(0.95, rate(gc_pause_time_seconds_bucket[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          component: gc
+          service: safety-gateway
+        annotations:
+          summary: "High garbage collection pause times"
+          description: |
+            P95 GC pause time is {{ $value | humanizeDuration }}.
+            This may affect request latency and overall performance.
+            Current P95: {{ $value | humanizeDuration }}
+            Threshold: 100ms
+
+      # No Cache Optimization Events
+      - alert: NoRecentCacheOptimization
+        expr: increase(cache_optimization_events_total[2h]) == 0
+        for: 30m
+        labels:
+          severity: info
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "No recent cache optimization events"
+          description: |
+            No cache optimization events have occurred in the last 2 hours.
+            This may indicate disabled auto-optimization or stable performance.
+            Consider manual optimization review if performance is suboptimal.
+
+      # Compression Ratio Too Low
+      - alert: LowCompressionRatio
+        expr: snapshot_compression_ratio{compression_algorithm="gzip"} < 1.5
+        for: 10m
+        labels:
+          severity: info
+          component: compression
+          service: safety-gateway
+        annotations:
+          summary: "Low compression ratio detected"
+          description: |
+            Compression ratio for {{ $labels.compression_algorithm }} is {{ $value }}.
+            Consider reviewing compression settings or data characteristics.
+            Current ratio: {{ $value }}
+            Minimum expected: 1.5
+            Algorithm: {{ $labels.compression_algorithm }}
+
+      # Request Processing Time Anomaly
+      - alert: RequestProcessingTimeAnomaly
+        expr: |
+          (
+            snapshot_processing_duration_seconds:rate5m
+            - 
+            snapshot_processing_duration_seconds:rate5m offset 1h
+          ) / snapshot_processing_duration_seconds:rate5m offset 1h > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: performance
+          service: safety-gateway
+        annotations:
+          summary: "Request processing time anomaly detected"
+          description: |
+            Request processing time has increased by more than 50% compared to 1 hour ago.
+            This indicates potential performance regression or increased load.
+            Current increase: {{ $value | humanizePercentage }}%
+            Threshold: 50%
+
+  - name: safety_gateway_cache_health
+    rules:
+      # Cache Connection Health
+      - alert: CacheConnectionUnhealthy
+        expr: connection_pool_health_score{pool_type="redis"} < 70
+        for: 2m
+        labels:
+          severity: critical
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "Cache connection pool unhealthy"
+          description: |
+            Redis connection pool health score is {{ $value }}%.
+            This may cause cache operations to fail and degrade performance.
+            Health score: {{ $value }}%
+            Minimum healthy: 70%
+            Pool type: {{ $labels.pool_type }}
+
+      # L1 Cache Memory Usage
+      - alert: L1CacheMemoryHigh
+        expr: cache_memory_usage_bytes{cache_level="l1"} / (1024*1024*1024) > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "L1 cache memory usage high"
+          description: |
+            L1 cache is using {{ $value | humanize }}GB of memory.
+            Consider reviewing cache size limits or optimization settings.
+            Current usage: {{ $value | humanize }}GB
+            Threshold: 2GB
+
+      # Cache Operation Latency High
+      - alert: CacheOperationLatencyHigh
+        expr: histogram_quantile(0.95, rate(cache_operation_duration_seconds_bucket{operation="get"}[5m])) > 0.01
+        for: 3m
+        labels:
+          severity: warning
+          component: cache
+          service: safety-gateway
+        annotations:
+          summary: "High cache operation latency"
+          description: |
+            P95 cache get operation latency is {{ $value | humanizeDuration }}.
+            This may indicate cache performance issues or network problems.
+            Current P95 latency: {{ $value | humanizeDuration }}
+            Threshold: 10ms
+            Operation: {{ $labels.operation }}
+
+  - name: safety_gateway_business_metrics
+    rules:
+      # User Experience Score Low
+      - alert: LowUserExperienceScore
+        expr: user_experience_score{metric_category="performance"} < 70
+        for: 10m
+        labels:
+          severity: warning
+          component: ux
+          service: safety-gateway
+        annotations:
+          summary: "User experience score below acceptable threshold"
+          description: |
+            User experience score is {{ $value }} which may indicate poor system performance.
+            Review performance metrics and optimization opportunities.
+            Current score: {{ $value }}
+            Minimum acceptable: 70
+            Category: {{ $labels.metric_category }}
+
+      # Engine Performance Score Low
+      - alert: LowEnginePerformanceScore
+        expr: engine_performance_score{metric_type="latency"} < 60
+        for: 5m
+        labels:
+          severity: warning
+          component: engine
+          service: safety-gateway
+        annotations:
+          summary: "Engine performance score low"
+          description: |
+            Engine {{ $labels.engine_id }} performance score is {{ $value }}.
+            This engine may need optimization or troubleshooting.
+            Engine: {{ $labels.engine_id }}
+            Score: {{ $value }}
+            Metric type: {{ $labels.metric_type }}
+            Minimum score: 60
+
+      # Snapshot Request Rate Anomaly
+      - alert: SnapshotRequestRateAnomaly
+        expr: |
+          abs(
+            rate(snapshot_requests_total[5m])
+            - 
+            rate(snapshot_requests_total[5m] offset 1d)
+          ) / rate(snapshot_requests_total[5m] offset 1d) > 2
+        for: 10m
+        labels:
+          severity: info
+          component: throughput
+          service: safety-gateway
+        annotations:
+          summary: "Unusual snapshot request rate pattern"
+          description: |
+            Snapshot request rate differs significantly from the same time yesterday.
+            This may indicate unusual usage patterns or system issues.
+            Current rate vs yesterday: {{ $value | humanizePercentage }}% difference
+            Threshold: 200% difference
+
+# Recording rules for derived metrics
+  - name: safety_gateway_recording_rules
+    rules:
+      # Request rate by status
+      - record: snapshot_requests:rate5m
+        expr: rate(snapshot_requests_total[5m])
+
+      # Processing duration rate
+      - record: snapshot_processing_duration_seconds:rate5m
+        expr: rate(snapshot_processing_duration_seconds_sum[5m]) / rate(snapshot_processing_duration_seconds_count[5m])
+
+      # Cache hit ratio
+      - record: cache:hit_ratio
+        expr: |
+          (
+            rate(cache_operations_total{result="hit"}[5m])
+            / 
+            rate(cache_operations_total[5m])
+          ) * 100
+
+      # SLA compliance calculation
+      - record: sla:latency_compliance
+        expr: |
+          (
+            rate(snapshot_processing_duration_seconds_bucket{le="0.2"}[5m])
+            / 
+            rate(snapshot_processing_duration_seconds_count[5m])
+          ) * 100
+
+      # Memory utilization
+      - record: memory:utilization_ratio
+        expr: cache_memory_usage_bytes / cache_memory_usage_bytes{cache_level="total"}
+
+      # Throughput per instance
+      - record: throughput:requests_per_instance
+        expr: sum(rate(snapshot_requests_total[5m])) by (instance)

@@ -1,0 +1,383 @@
+package com.cardiofit.flink.sinks;
+
+import com.cardiofit.flink.models.RoutedEvent;
+import com.cardiofit.flink.models.PatientContext;
+import com.cardiofit.stream.models.CanonicalEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.flink.api.connector.sink2.Sink;
+import org.apache.flink.api.connector.sink2.WriterInitContext;
+import org.apache.flink.api.connector.sink2.SinkWriter;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
+import redis.clients.jedis.Pipeline;
+import redis.clients.jedis.params.SetParams;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Redis sink for real-time caching and session management
+ * Stores patient context, recent events, and hot data for fast access
+ * Supports TTL-based cache expiration and pipeline batching
+ *
+ * Migrated to Flink 2.x Sink API (replaces RichSinkFunction)
+ */
+public class RedisCacheSink implements Sink<RoutedEvent> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RedisCacheSink.class);
+
+    // Configuration
+    private final String redisHost;
+    private final int redisPort;
+    private final String redisPassword;
+    private final int redisDatabase;
+    private final int defaultTTLSeconds;
+    private final String keyPrefix;
+    private final String redisReplicaHost;
+    private final int redisReplicaPort;
+
+    public RedisCacheSink(String host, int port, String password, int database) {
+        this.redisHost = host;
+        this.redisPort = port;
+        this.redisPassword = password;
+        this.redisDatabase = database;
+        this.defaultTTLSeconds = 3600; // 1 hour default TTL
+        this.keyPrefix = "cardiofit:";
+        this.redisReplicaHost = System.getenv().getOrDefault("REDIS_REPLICA_HOST", "localhost");
+        this.redisReplicaPort = Integer.parseInt(System.getenv().getOrDefault("REDIS_REPLICA_PORT", "6380"));
+    }
+
+    public RedisCacheSink() {
+        // Default configuration matching shared infrastructure setup
+        this.redisHost = System.getenv().getOrDefault("REDIS_HOST", "localhost");
+        this.redisPort = Integer.parseInt(System.getenv().getOrDefault("REDIS_PORT", "6379"));
+        this.redisPassword = System.getenv().getOrDefault("REDIS_PASSWORD", "RedisCardioFit2024!");
+        this.redisDatabase = Integer.parseInt(System.getenv().getOrDefault("REDIS_DATABASE", "0"));
+        this.defaultTTLSeconds = Integer.parseInt(System.getenv().getOrDefault("REDIS_TTL_SECONDS", "3600"));
+        this.keyPrefix = System.getenv().getOrDefault("REDIS_KEY_PREFIX", "cardiofit:");
+        this.redisReplicaHost = System.getenv().getOrDefault("REDIS_REPLICA_HOST", "localhost");
+        this.redisReplicaPort = Integer.parseInt(System.getenv().getOrDefault("REDIS_REPLICA_PORT", "6380"));
+    }
+
+    @Override
+    public SinkWriter<RoutedEvent> createWriter(WriterInitContext context) throws IOException {
+        return new RedisCacheSinkWriter(redisHost, redisPort, redisPassword, redisDatabase,
+                                       defaultTTLSeconds, keyPrefix);
+    }
+
+    /**
+     * SinkWriter implementation for Redis caching operations
+     */
+    private static class RedisCacheSinkWriter implements SinkWriter<RoutedEvent> {
+
+        private static final Logger LOG = LoggerFactory.getLogger(RedisCacheSinkWriter.class);
+
+        // Cache key patterns
+        private static final String PATIENT_CONTEXT_KEY = "patient:context:%s";
+        private static final String RECENT_EVENTS_KEY = "patient:events:%s";
+        private static final String CRITICAL_ALERTS_KEY = "alerts:critical:%s";
+        private static final String ML_PREDICTIONS_KEY = "predictions:%s:%s";
+        private static final String PATTERN_CACHE_KEY = "patterns:%s:%s";
+        private static final String SESSION_KEY = "session:%s";
+
+        private final String redisHost;
+        private final int redisPort;
+        private final String redisPassword;
+        private final int redisDatabase;
+        private final int defaultTTLSeconds;
+        private final String keyPrefix;
+
+        private transient JedisPool jedisPool;
+        private transient ObjectMapper objectMapper;
+
+        public RedisCacheSinkWriter(String host, int port, String password, int database,
+                                   int defaultTTLSeconds, String keyPrefix) {
+            this.redisHost = host;
+            this.redisPort = port;
+            this.redisPassword = password;
+            this.redisDatabase = database;
+            this.defaultTTLSeconds = defaultTTLSeconds;
+            this.keyPrefix = keyPrefix;
+
+            try {
+                initializeRedis();
+            } catch (Exception e) {
+                LOG.error("Failed to initialize Redis sink", e);
+                throw new RuntimeException("Redis initialization failed", e);
+            }
+        }
+
+        private void initializeRedis() {
+            // Configure Jedis pool
+            JedisPoolConfig poolConfig = new JedisPoolConfig();
+            poolConfig.setMaxTotal(128);
+            poolConfig.setMaxIdle(64);
+            poolConfig.setMinIdle(16);
+            poolConfig.setTestOnBorrow(true);
+            poolConfig.setTestOnReturn(true);
+            poolConfig.setTestWhileIdle(true);
+            poolConfig.setBlockWhenExhausted(true);
+
+            // Create Jedis pool
+            if (redisPassword != null && !redisPassword.isEmpty()) {
+                jedisPool = new JedisPool(poolConfig, redisHost, redisPort, 2000, redisPassword, redisDatabase);
+            } else {
+                jedisPool = new JedisPool(poolConfig, redisHost, redisPort, 2000, null, redisDatabase);
+            }
+
+            // Initialize object mapper
+            objectMapper = new ObjectMapper();
+
+            // Test connection
+            try (Jedis jedis = jedisPool.getResource()) {
+                jedis.ping();
+                LOG.info("Successfully connected to Redis at {}:{}/{}", redisHost, redisPort, redisDatabase);
+            }
+        }
+
+        @Override
+        public void write(RoutedEvent event, Context context) throws IOException, InterruptedException {
+            // Process events based on type and destination
+            try (Jedis jedis = jedisPool.getResource()) {
+                Pipeline pipeline = jedis.pipelined();
+
+                // Cache patient context updates
+                if (event.getSourceEventType().equals("PATIENT_CONTEXT")) {
+                    cachePatientContext(pipeline, event);
+                }
+
+                // Cache critical alerts for immediate access
+                if (event.getPriority() == RoutedEvent.Priority.CRITICAL) {
+                    cacheCriticalAlert(pipeline, event);
+                }
+
+                // Cache ML predictions for quick lookup
+                if (event.getSourceEventType().equals("ML_PREDICTION")) {
+                    cacheMLPrediction(pipeline, event);
+                }
+
+                // Cache detected patterns
+                if (event.getSourceEventType().equals("PATTERN_EVENT")) {
+                    cachePattern(pipeline, event);
+                }
+
+                // Update recent events list for patient
+                updateRecentEvents(pipeline, event);
+
+                // Update session data if applicable
+                if (event.hasDestination("clinical_workflow")) {
+                    updateSessionData(pipeline, event);
+                }
+
+                // Execute pipeline
+                pipeline.sync();
+
+                LOG.debug("Cached event {} for patient {} in Redis", event.getId(), ((CanonicalEvent)event).getPatientId());
+            } catch (Exception e) {
+                LOG.error("Failed to cache event {} in Redis", event.getId(), e);
+                // Don't throw - Redis caching failures shouldn't break the pipeline
+            }
+        }
+
+        private void cachePatientContext(Pipeline pipeline, RoutedEvent event) {
+            if (!(event.getOriginalPayload() instanceof PatientContext)) {
+                return;
+            }
+
+            PatientContext context = (PatientContext) event.getOriginalPayload();
+            String key = keyPrefix + String.format(PATIENT_CONTEXT_KEY, context.getPatientId());
+
+            try {
+                Map<String, String> contextMap = new HashMap<>();
+                contextMap.put("patient_id", context.getPatientId());
+                contextMap.put("last_update", String.valueOf(context.getLastUpdateTime()));
+                contextMap.put("demographics", objectMapper.writeValueAsString(context.getDemographics()));
+                contextMap.put("current_medications", objectMapper.writeValueAsString(context.getCurrentMedications()));
+                contextMap.put("active_conditions", objectMapper.writeValueAsString(context.getActiveConditions()));
+                contextMap.put("risk_scores", objectMapper.writeValueAsString(context.getRiskScores()));
+                contextMap.put("care_team", objectMapper.writeValueAsString(context.getCareTeam()));
+
+                // Cache with TTL
+                pipeline.hset(key, contextMap);
+                pipeline.expire(key, defaultTTLSeconds);
+
+                // Also cache as JSON for quick retrieval
+                String jsonKey = key + ":json";
+                String jsonValue = objectMapper.writeValueAsString(context);
+                pipeline.setex(jsonKey, defaultTTLSeconds, jsonValue);
+
+            } catch (Exception e) {
+                LOG.error("Failed to serialize patient context", e);
+            }
+        }
+
+        private void cacheCriticalAlert(Pipeline pipeline, RoutedEvent event) {
+            String key = keyPrefix + String.format(CRITICAL_ALERTS_KEY, ((CanonicalEvent)event).getPatientId());
+
+            try {
+                Map<String, Object> alert = new HashMap<>();
+                alert.put("alert_id", event.getId());
+                alert.put("timestamp", event.getRoutingTime());
+                alert.put("type", event.getSourceEventType());
+                alert.put("priority", event.getPriority().name());
+                alert.put("data", event.getOriginalPayload());
+
+                String alertJson = objectMapper.writeValueAsString(alert);
+
+                // Add to sorted set with timestamp as score (for time-based queries)
+                pipeline.zadd(key, (double) event.getRoutingTime(), alertJson);
+
+                // Keep only last 100 alerts
+                pipeline.zremrangeByRank(key, 0, -101);
+
+                // Set TTL for 24 hours for critical alerts
+                pipeline.expire(key, 86400);
+
+                // Also store in a hash for quick lookup by alert ID
+                String alertHashKey = keyPrefix + "alert:details:" + event.getId();
+                pipeline.setex(alertHashKey, 86400, alertJson);
+
+            } catch (Exception e) {
+                LOG.error("Failed to cache critical alert", e);
+            }
+        }
+
+        private void cacheMLPrediction(Pipeline pipeline, RoutedEvent event) {
+            Map<String, Object> prediction = (Map<String, Object>) event.getOriginalPayload();
+            String predictionType = (String) prediction.get("predictionType");
+            String key = keyPrefix + String.format(ML_PREDICTIONS_KEY, ((CanonicalEvent)event).getPatientId(), predictionType);
+
+            try {
+                String predictionJson = objectMapper.writeValueAsString(prediction);
+
+                // Cache with appropriate TTL based on prediction type
+                int ttl = getPredictionTTL(predictionType);
+                pipeline.setex(key, ttl, predictionJson);
+
+                // Also maintain a list of all predictions for the patient
+                String listKey = keyPrefix + "predictions:all:" + ((CanonicalEvent)event).getPatientId();
+                pipeline.lpush(listKey, event.getId());
+                pipeline.ltrim(listKey, 0, 49); // Keep last 50 predictions
+                pipeline.expire(listKey, defaultTTLSeconds);
+
+            } catch (Exception e) {
+                LOG.error("Failed to cache ML prediction", e);
+            }
+        }
+
+        private void cachePattern(Pipeline pipeline, RoutedEvent event) {
+            Map<String, Object> pattern = (Map<String, Object>) event.getOriginalPayload();
+            String patternType = (String) pattern.get("patternType");
+            String key = keyPrefix + String.format(PATTERN_CACHE_KEY, ((CanonicalEvent)event).getPatientId(), patternType);
+
+            try {
+                String patternJson = objectMapper.writeValueAsString(pattern);
+
+                // Cache detected pattern
+                pipeline.setex(key, defaultTTLSeconds * 2, patternJson); // 2 hours for patterns
+
+                // Maintain pattern history
+                String historyKey = keyPrefix + "patterns:history:" + ((CanonicalEvent)event).getPatientId();
+                pipeline.zadd(historyKey, (double) event.getRoutingTime(), patternJson);
+                pipeline.zremrangeByScore(historyKey, 0,
+                    System.currentTimeMillis() - TimeUnit.DAYS.toMillis(7)); // Keep 7 days
+                pipeline.expire(historyKey, (int) TimeUnit.DAYS.toSeconds(7));
+
+            } catch (Exception e) {
+                LOG.error("Failed to cache pattern", e);
+            }
+        }
+
+        private void updateRecentEvents(Pipeline pipeline, RoutedEvent event) {
+            String key = keyPrefix + String.format(RECENT_EVENTS_KEY, ((CanonicalEvent)event).getPatientId());
+
+            try {
+                Map<String, Object> eventSummary = new HashMap<>();
+                eventSummary.put("event_id", event.getId());
+                eventSummary.put("type", event.getSourceEventType());
+                eventSummary.put("timestamp", event.getRoutingTime());
+                eventSummary.put("priority", event.getPriority().name());
+
+                String eventJson = objectMapper.writeValueAsString(eventSummary);
+
+                // Add to list of recent events
+                pipeline.lpush(key, eventJson);
+                pipeline.ltrim(key, 0, 99); // Keep last 100 events
+                pipeline.expire(key, defaultTTLSeconds);
+
+            } catch (Exception e) {
+                LOG.error("Failed to update recent events", e);
+            }
+        }
+
+        private void updateSessionData(Pipeline pipeline, RoutedEvent event) {
+            String sessionId = extractSessionId(event);
+            if (sessionId == null) return;
+
+            String key = keyPrefix + String.format(SESSION_KEY, sessionId);
+
+            try {
+                Map<String, Object> sessionUpdate = new HashMap<>();
+                sessionUpdate.put("last_activity", System.currentTimeMillis());
+                sessionUpdate.put("patient_id", ((CanonicalEvent)event).getPatientId());
+                sessionUpdate.put("last_event_type", event.getSourceEventType());
+                sessionUpdate.put("last_event_id", event.getId());
+
+                for (Map.Entry<String, Object> entry : sessionUpdate.entrySet()) {
+                    pipeline.hset(key, entry.getKey(), objectMapper.writeValueAsString(entry.getValue()));
+                }
+
+                // Session timeout 30 minutes
+                pipeline.expire(key, 1800);
+
+            } catch (Exception e) {
+                LOG.error("Failed to update session data", e);
+            }
+        }
+
+        private String extractSessionId(RoutedEvent event) {
+            // Extract session ID from event metadata if available
+            if (event.getTransformationMetadata() != null) {
+                return (String) event.getTransformationMetadata().get("session_id");
+            }
+            return null;
+        }
+
+        private int getPredictionTTL(String predictionType) {
+            // Different TTLs for different prediction types
+            switch (predictionType) {
+                case "READMISSION_RISK":
+                    return 86400; // 24 hours
+                case "SEPSIS_RISK":
+                    return 3600; // 1 hour (more time-sensitive)
+                case "DETERIORATION_RISK":
+                    return 1800; // 30 minutes (very time-sensitive)
+                case "FALL_RISK":
+                    return 43200; // 12 hours
+                case "MORTALITY_RISK":
+                    return 86400; // 24 hours
+                default:
+                    return defaultTTLSeconds;
+            }
+        }
+
+        @Override
+        public void flush(boolean endOfInput) throws IOException, InterruptedException {
+            // Redis writes are synchronous via pipeline, no explicit flush needed
+            LOG.debug("Flush called (endOfInput: {})", endOfInput);
+        }
+
+        @Override
+        public void close() throws Exception {
+            if (jedisPool != null) {
+                jedisPool.close();
+            }
+            LOG.info("Redis cache sink closed");
+        }
+    }
+}

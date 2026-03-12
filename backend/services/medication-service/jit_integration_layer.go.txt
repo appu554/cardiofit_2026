@@ -1,0 +1,545 @@
+// jit_integration.go
+// Package integration provides the bridge between Go CandidateBuilder and Rust JIT Safety Engine
+package integration
+
+import (
+    "bytes"
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+    "time"
+    
+    "github.com/hashicorp/go-retryablehttp"
+    "go.uber.org/zap"
+    
+    "yourmodule/recommendation"
+)
+
+// ==================== JIT Safety Service Client ====================
+
+// JITSafetyClient provides interface to the Rust JIT Safety Engine
+type JITSafetyClient struct {
+    baseURL    string
+    httpClient *retryablehttp.Client
+    logger     *zap.Logger
+    timeout    time.Duration
+}
+
+// NewJITSafetyClient creates a new JIT safety client
+func NewJITSafetyClient(baseURL string, logger *zap.Logger) *JITSafetyClient {
+    retryClient := retryablehttp.NewClient()
+    retryClient.RetryMax = 3
+    retryClient.RetryWaitMin = 100 * time.Millisecond
+    retryClient.RetryWaitMax = 1 * time.Second
+    retryClient.Logger = nil // Use our own logger
+    
+    return &JITSafetyClient{
+        baseURL:    baseURL,
+        httpClient: retryClient,
+        logger:     logger,
+        timeout:    5 * time.Second,
+    }
+}
+
+// ==================== Request/Response Models ====================
+
+// JITSafetyRequest represents the request to the JIT safety engine
+type JITSafetyRequest struct {
+    Candidate      DrugCandidateDTO `json:"candidate"`
+    PatientContext PatientContextDTO `json:"patient_context"`
+    RequestID      string           `json:"request_id"`
+}
+
+// DrugCandidateDTO represents a drug candidate for JIT checking
+type DrugCandidateDTO struct {
+    DrugID           string             `json:"drug_id"`
+    Name             string             `json:"name"`
+    GenericName      string             `json:"generic_name"`
+    ProposedDoseMg   float64            `json:"proposed_dose_mg"`
+    ProposedDoseUnit string             `json:"proposed_dose_unit"`
+    Route            string             `json:"route"`
+    Frequency        FrequencyDTO       `json:"frequency"`
+    DurationDays     *int               `json:"duration_days,omitempty"`
+    Formulation      *string            `json:"formulation,omitempty"`
+    Provenance       map[string]string  `json:"provenance"`
+}
+
+// FrequencyDTO represents dosing frequency
+type FrequencyDTO struct {
+    TimesPerDay int     `json:"times_per_day"`
+    Schedule    *string `json:"schedule,omitempty"`
+    WithFood    *bool   `json:"with_food,omitempty"`
+}
+
+// PatientContextDTO represents patient clinical context
+type PatientContextDTO struct {
+    PatientID          string                     `json:"patient_id"`
+    AgeYears           int                        `json:"age_years"`
+    Sex                string                     `json:"sex"`
+    WeightKg           float64                    `json:"weight_kg"`
+    HeightCm           float64                    `json:"height_cm"`
+    PregnancyStatus    PregnancyStatusDTO         `json:"pregnancy_status"`
+    Breastfeeding      bool                       `json:"breastfeeding"`
+    Labs               LabResultsDTO              `json:"labs"`
+    Conditions         []string                   `json:"conditions"`
+    RecentProcedures   []ProcedureDTO             `json:"recent_procedures"`
+    ActiveMedications  []ActiveMedicationDTO      `json:"active_medications"`
+    Allergies          []AllergyDTO               `json:"allergies"`
+    Pharmacogenomics   *PharmacogenomicProfileDTO `json:"pharmacogenomics,omitempty"`
+    KBVersions         map[string]string          `json:"kb_versions"`
+    Timestamp          time.Time                  `json:"timestamp"`
+}
+
+// PregnancyStatusDTO represents pregnancy status
+type PregnancyStatusDTO struct {
+    Status    string `json:"status"` // "not_pregnant", "pregnant", "unknown"
+    Trimester *int   `json:"trimester,omitempty"`
+}
+
+// LabResultsDTO represents laboratory results
+type LabResultsDTO struct {
+    EgfrMlMin              *LabValueDTO `json:"egfr_ml_min,omitempty"`
+    SerumCreatinineMgDl    *LabValueDTO `json:"serum_creatinine_mg_dl,omitempty"`
+    SerumPotassiumMmolL    *LabValueDTO `json:"serum_potassium_mmol_l,omitempty"`
+    SerumSodiumMmolL       *LabValueDTO `json:"serum_sodium_mmol_l,omitempty"`
+    SerumMagnesiumMmolL    *LabValueDTO `json:"serum_magnesium_mmol_l,omitempty"`
+    AltUL                  *LabValueDTO `json:"alt_u_l,omitempty"`
+    AstUL                  *LabValueDTO `json:"ast_u_l,omitempty"`
+    TotalBilirubinMgDl     *LabValueDTO `json:"total_bilirubin_mg_dl,omitempty"`
+    AlbuminGDl             *LabValueDTO `json:"albumin_g_dl,omitempty"`
+    INR                    *LabValueDTO `json:"inr,omitempty"`
+    PlateletCount          *LabValueDTO `json:"platelet_count,omitempty"`
+    HemoglobinGDl          *LabValueDTO `json:"hemoglobin_g_dl,omitempty"`
+    HbA1cPercent           *LabValueDTO `json:"hba1c_percent,omitempty"`
+    TshMiuL                *LabValueDTO `json:"tsh_miu_l,omitempty"`
+    QtcMs                  *LabValueDTO `json:"qtc_ms,omitempty"`
+}
+
+// LabValueDTO represents a laboratory value with timestamp
+type LabValueDTO struct {
+    Value     float64   `json:"value"`
+    Timestamp time.Time `json:"timestamp"`
+    Unit      string    `json:"unit"`
+}
+
+// ProcedureDTO represents a recent procedure
+type ProcedureDTO struct {
+    Name            string    `json:"name"`
+    Code            string    `json:"code"`
+    Date            time.Time `json:"date"`
+    RequiresNPO     bool      `json:"requires_npo"`
+    AnesthesiaType  *string   `json:"anesthesia_type,omitempty"`
+}
+
+// ActiveMedicationDTO represents an active medication
+type ActiveMedicationDTO struct {
+    DrugID            string    `json:"drug_id"`
+    Name              string    `json:"name"`
+    GenericName       string    `json:"generic_name"`
+    DoseMg            float64   `json:"dose_mg"`
+    Route             string    `json:"route"`
+    Frequency         FrequencyDTO `json:"frequency"`
+    StartDate         time.Time `json:"start_date"`
+    LastTaken         *time.Time `json:"last_taken,omitempty"`
+    TherapeuticClass  []string  `json:"therapeutic_class"`
+    MechanismOfAction []string  `json:"mechanism_of_action"`
+}
+
+// AllergyDTO represents an allergy
+type AllergyDTO struct {
+    Allergen     string `json:"allergen"`
+    ReactionType string `json:"reaction_type"`
+    Severity     string `json:"severity"`
+}
+
+// PharmacogenomicProfileDTO represents pharmacogenomic data
+type PharmacogenomicProfileDTO struct {
+    CYP2D6Status  *string `json:"cyp2d6_status,omitempty"`
+    CYP2C19Status *string `json:"cyp2c19_status,omitempty"`
+    CYP2C9Status  *string `json:"cyp2c9_status,omitempty"`
+    CYP3A4Status  *string `json:"cyp3a4_status,omitempty"`
+    SLCO1B1Status *string `json:"slco1b1_status,omitempty"`
+    HLAB5701      *bool   `json:"hla_b5701,omitempty"`
+    TPMTStatus    *string `json:"tpmt_status,omitempty"`
+}
+
+// JITSafetyResponse represents the response from the JIT safety engine
+type JITSafetyResponse struct {
+    Action           SafetyActionDTO              `json:"action"`
+    Score            SafetyScoreDTO               `json:"score"`
+    Findings         []SafetyFindingDTO           `json:"findings"`
+    Recommendations  []ClinicalRecommendationDTO  `json:"recommendations"`
+    AuditTrail       AuditTrailDTO                `json:"audit_trail"`
+}
+
+// SafetyActionDTO represents the recommended action
+type SafetyActionDTO struct {
+    Type                string   `json:"type"`
+    Parameters          []string `json:"parameters,omitempty"`
+    RecommendedDoseMg   *float64 `json:"recommended_dose_mg,omitempty"`
+    Reason              *string  `json:"reason,omitempty"`
+    Urgency             *string  `json:"urgency,omitempty"`
+    AlternativeDrugIDs  []string `json:"alternative_drug_ids,omitempty"`
+    Specialty           *string  `json:"specialty,omitempty"`
+}
+
+// SafetyScoreDTO represents safety scoring
+type SafetyScoreDTO struct {
+    Overall    float64            `json:"overall"`
+    Components map[string]float64 `json:"components"`
+}
+
+// SafetyFindingDTO represents a safety finding
+type SafetyFindingDTO struct {
+    FindingID            string            `json:"finding_id"`
+    Category             string            `json:"category"`
+    Severity             string            `json:"severity"`
+    Code                 string            `json:"code"`
+    Message              string            `json:"message"`
+    ClinicalSignificance string            `json:"clinical_significance"`
+    EvidenceLevel        string            `json:"evidence_level"`
+    References           []string          `json:"references"`
+    Details              map[string]string `json:"details"`
+}
+
+// ClinicalRecommendationDTO represents a clinical recommendation
+type ClinicalRecommendationDTO struct {
+    RecommendationType string  `json:"recommendation_type"`
+    Description        string  `json:"description"`
+    Priority           string  `json:"priority"`
+    Timing             *string `json:"timing,omitempty"`
+}
+
+// AuditTrailDTO represents audit information
+type AuditTrailDTO struct {
+    RequestID       string            `json:"request_id"`
+    Timestamp       time.Time         `json:"timestamp"`
+    ChecksPerformed []string          `json:"checks_performed"`
+    KBVersions      map[string]string `json:"kb_versions"`
+    ProcessingTimeMs int64            `json:"processing_time_ms"`
+}
+
+// ==================== Main Integration Function ====================
+
+// RunJITSafetyCheck performs JIT safety verification for a selected candidate
+func (c *JITSafetyClient) RunJITSafetyCheck(
+    ctx context.Context,
+    candidate recommendation.CandidateProposal,
+    patientContext recommendation.PatientContext,
+    proposedDoseMg float64,
+) (*JITSafetyResponse, error) {
+    // Convert to DTOs
+    request := c.buildRequest(candidate, patientContext, proposedDoseMg)
+    
+    // Marshal request
+    reqBody, err := json.Marshal(request)
+    if err != nil {
+        c.logger.Error("Failed to marshal JIT request", zap.Error(err))
+        return nil, fmt.Errorf("marshal request: %w", err)
+    }
+    
+    // Create HTTP request
+    httpReq, err := retryablehttp.NewRequestWithContext(
+        ctx,
+        "POST",
+        fmt.Sprintf("%s/api/v1/safety/jit-check", c.baseURL),
+        bytes.NewReader(reqBody),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("create request: %w", err)
+    }
+    
+    httpReq.Header.Set("Content-Type", "application/json")
+    httpReq.Header.Set("X-Request-ID", patientContext.RequestID)
+    
+    // Add timeout
+    ctx, cancel := context.WithTimeout(ctx, c.timeout)
+    defer cancel()
+    
+    // Execute request
+    resp, err := c.httpClient.Do(httpReq.WithContext(ctx))
+    if err != nil {
+        c.logger.Error("JIT safety check request failed", 
+            zap.Error(err),
+            zap.String("drug_id", candidate.Drug.ID),
+        )
+        return nil, fmt.Errorf("execute request: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    // Read response
+    respBody, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return nil, fmt.Errorf("read response: %w", err)
+    }
+    
+    // Check status code
+    if resp.StatusCode != http.StatusOK {
+        c.logger.Error("JIT safety check returned error",
+            zap.Int("status_code", resp.StatusCode),
+            zap.String("response", string(respBody)),
+        )
+        return nil, fmt.Errorf("JIT check failed with status %d: %s", resp.StatusCode, string(respBody))
+    }
+    
+    // Parse response
+    var jitResp JITSafetyResponse
+    if err := json.Unmarshal(respBody, &jitResp); err != nil {
+        return nil, fmt.Errorf("unmarshal response: %w", err)
+    }
+    
+    c.logger.Info("JIT safety check completed",
+        zap.String("drug_id", candidate.Drug.ID),
+        zap.String("action", jitResp.Action.Type),
+        zap.Float64("safety_score", jitResp.Score.Overall),
+        zap.Int("findings", len(jitResp.Findings)),
+    )
+    
+    return &jitResp, nil
+}
+
+func (c *JITSafetyClient) buildRequest(
+    candidate recommendation.CandidateProposal,
+    patientContext recommendation.PatientContext,
+    proposedDoseMg float64,
+) JITSafetyRequest {
+    // Build drug candidate DTO
+    drugCandidate := DrugCandidateDTO{
+        DrugID:           candidate.Drug.ID,
+        Name:             candidate.Drug.Name,
+        GenericName:      candidate.Drug.GenericName,
+        ProposedDoseMg:   proposedDoseMg,
+        ProposedDoseUnit: "mg",
+        Route:            "Oral", // Would come from drug metadata
+        Frequency: FrequencyDTO{
+            TimesPerDay: 1, // Would be calculated based on drug
+        },
+        Provenance: candidate.Provenance,
+    }
+    
+    // Build patient context DTO
+    patientContextDTO := PatientContextDTO{
+        PatientID:    patientContext.PatientID,
+        AgeYears:     int(patientContext.Age),
+        Sex:          c.mapBiologicalSex(patientContext.Sex),
+        WeightKg:     patientContext.Weight,
+        HeightCm:     175.0, // Would come from patient data
+        PregnancyStatus: PregnancyStatusDTO{
+            Status: c.mapPregnancyStatus(patientContext.IsPregnant),
+        },
+        Breastfeeding: patientContext.IsBreastfeeding,
+        Labs:          c.buildLabResults(patientContext),
+        Conditions:    c.extractConditions(patientContext),
+        ActiveMedications: c.buildActiveMedications(patientContext.ActiveMeds),
+        Allergies:     c.buildAllergies(patientContext.Allergies),
+        KBVersions:    patientContext.LocalKBVersions,
+        Timestamp:     patientContext.Timestamp,
+    }
+    
+    // Check for recent procedures
+    if procedures := c.extractRecentProcedures(patientContext); len(procedures) > 0 {
+        patientContextDTO.RecentProcedures = procedures
+    }
+    
+    return JITSafetyRequest{
+        Candidate:      drugCandidate,
+        PatientContext: patientContextDTO,
+        RequestID:      patientContext.RequestID,
+    }
+}
+
+func (c *JITSafetyClient) mapBiologicalSex(sex string) string {
+    // Map from patient context to DTO format
+    switch sex {
+    case "M", "Male":
+        return "Male"
+    case "F", "Female":
+        return "Female"
+    default:
+        return "Other"
+    }
+}
+
+func (c *JITSafetyClient) mapPregnancyStatus(isPregnant bool) string {
+    if isPregnant {
+        return "pregnant"
+    }
+    return "not_pregnant"
+}
+
+func (c *JITSafetyClient) buildLabResults(pc recommendation.PatientContext) LabResultsDTO {
+    labs := LabResultsDTO{}
+    
+    if pc.eGFR > 0 {
+        labs.EgfrMlMin = &LabValueDTO{
+            Value:     pc.eGFR,
+            Timestamp: time.Now().Add(-24 * time.Hour), // Would come from actual lab timestamp
+            Unit:      "mL/min/1.73m2",
+        }
+    }
+    
+    // Map other labs from patient context
+    // This would be expanded based on actual patient data structure
+    
+    return labs
+}
+
+func (c *JITSafetyClient) extractConditions(pc recommendation.PatientContext) []string {
+    conditions := []string{}
+    
+    // Extract ICD-10 codes from patient flags
+    for flag, value := range pc.PatientFlags {
+        if value {
+            // Map flags to ICD-10 codes
+            switch flag {
+            case "DIABETES":
+                conditions = append(conditions, "E11")
+            case "HYPERTENSION":
+                conditions = append(conditions, "I10")
+            case "HEART_FAILURE":
+                conditions = append(conditions, "I50")
+            case "CHRONIC_KIDNEY_DISEASE":
+                conditions = append(conditions, "N18")
+            }
+        }
+    }
+    
+    return conditions
+}
+
+func (c *JITSafetyClient) buildActiveMedications(meds []recommendation.ActiveMedication) []ActiveMedicationDTO {
+    activeMeds := make([]ActiveMedicationDTO, 0, len(meds))
+    
+    for _, med := range meds {
+        activeMeds = append(activeMeds, ActiveMedicationDTO{
+            DrugID:      med.DrugID,
+            Name:        med.Name,
+            GenericName: med.Name, // Would parse generic from name
+            DoseMg:      100.0, // Would come from parsed dose
+            Route:       "Oral",
+            Frequency: FrequencyDTO{
+                TimesPerDay: med.FrequencyPerDay,
+            },
+            StartDate:        med.StartDate,
+            TherapeuticClass: []string{med.Class},
+            MechanismOfAction: []string{}, // Would be populated from KB
+        })
+    }
+    
+    return activeMeds
+}
+
+func (c *JITSafetyClient) buildAllergies(allergies map[string]bool) []AllergyDTO {
+    allergyList := []AllergyDTO{}
+    
+    for allergen, hasAllergy := range allergies {
+        if hasAllergy {
+            allergyList = append(allergyList, AllergyDTO{
+                Allergen:     allergen,
+                ReactionType: "Unknown", // Would come from patient data
+                Severity:     "Moderate", // Would come from patient data
+            })
+        }
+    }
+    
+    return allergyList
+}
+
+func (c *JITSafetyClient) extractRecentProcedures(pc recommendation.PatientContext) []ProcedureDTO {
+    procedures := []ProcedureDTO{}
+    
+    // Check for recent surgery flag
+    for flag, value := range pc.PatientFlags {
+        if value && strings.Contains(flag, "RECENT_SURGERY") {
+            procedures = append(procedures, ProcedureDTO{
+                Name:        "Surgery",
+                Code:        "00000", // Would be actual CPT code
+                Date:        time.Now().Add(-3 * 24 * time.Hour),
+                RequiresNPO: true,
+            })
+        }
+    }
+    
+    return procedures
+}
+
+// ==================== Safety Action Interpreter ====================
+
+// InterpretSafetyAction converts JIT safety response to actionable recommendation
+func InterpretSafetyAction(
+    response *JITSafetyResponse,
+    candidate recommendation.CandidateProposal,
+) recommendation.SafetyVerifiedProposal {
+    proposal := recommendation.SafetyVerifiedProposal{
+        Candidate:       candidate,
+        SafetyScore:     response.Score.Overall,
+        CanProceed:      false,
+        RequiresReview:  false,
+        Monitoring:      []string{},
+        Warnings:        []string{},
+        Contraindicated: false,
+    }
+    
+    // Interpret action type
+    switch response.Action.Type {
+    case "Proceed":
+        proposal.CanProceed = true
+        
+    case "ProceedWithMonitoring":
+        proposal.CanProceed = true
+        proposal.Monitoring = response.Action.Parameters
+        
+    case "AdjustDose":
+        proposal.CanProceed = true
+        proposal.RequiresReview = true
+        if response.Action.RecommendedDoseMg != nil {
+            proposal.AdjustedDoseMg = response.Action.RecommendedDoseMg
+        }
+        
+    case "HoldForClinician":
+        proposal.RequiresReview = true
+        proposal.ReviewUrgency = response.Action.Urgency
+        
+    case "AbortAndSwitch":
+        proposal.Contraindicated = true
+        proposal.AlternativeIDs = response.Action.AlternativeDrugIDs
+        
+    case "RequireSpecialistReview":
+        proposal.RequiresReview = true
+        proposal.SpecialistType = response.Action.Specialty
+    }
+    
+    // Extract warnings from findings
+    for _, finding := range response.Findings {
+        if finding.Severity == "Warning" || finding.Severity == "Major" {
+            proposal.Warnings = append(proposal.Warnings, finding.Message)
+        }
+    }
+    
+    // Extract recommendations
+    for _, rec := range response.Recommendations {
+        if rec.Priority == "Critical" || rec.Priority == "High" {
+            proposal.CriticalActions = append(proposal.CriticalActions, rec.Description)
+        }
+    }
+    
+    return proposal
+}
+
+// SafetyVerifiedProposal represents a candidate that has passed JIT safety checks
+type SafetyVerifiedProposal struct {
+    Candidate         recommendation.CandidateProposal
+    SafetyScore       float64
+    CanProceed        bool
+    RequiresReview    bool
+    ReviewUrgency     *string
+    SpecialistType    *string
+    Monitoring        []string
+    Warnings          []string
+    CriticalActions   []string
+    Contraindicated   bool
+    AlternativeIDs    []string
+    AdjustedDoseMg    *float64
+}

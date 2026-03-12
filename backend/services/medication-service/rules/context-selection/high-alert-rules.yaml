@@ -1,0 +1,184 @@
+# High-Alert Medication Context Selection Rules
+# These rules determine appropriate context recipes for high-alert medications
+# based on ISMP high-alert medication list and institutional safety protocols
+
+ruleSet:
+  id: "high-alert-context-rules"
+  version: "1.5"
+  medication:
+    class: "high_alert"
+    examples: ["insulin", "heparin", "chemotherapy", "opioids", "neuromuscular_blocking_agents"]
+  
+  metadata:
+    author: "Medication Safety Committee"
+    approvedDate: "2024-02-01"
+    nextReview: "2024-08-01"
+    evidence: ["ISMP High-Alert List 2024", "Joint Commission Standards"]
+    description: "Context selection rules for high-alert medications requiring enhanced safety measures"
+  
+  rules:
+    # Rule 1: Insulin in emergency situations
+    - id: "HIGH-ALERT-001"
+      name: "Insulin Emergency Protocol"
+      priority: 92
+      context_recipe: "insulin_emergency_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.name in insulin"
+          - "medication.is_high_alert == true"
+        any_of:
+          - "situation.urgency == emergency"
+          - "situation.urgency == stat"
+          - "context.clinical_flags in emergency_high_interaction_risk"
+      
+      scoring:
+        base_score: 90
+        modifiers:
+          - condition: "situation.time_criticality_score >= 0.8"
+            add_score: 10
+      
+      clinical_rationale: |
+        Emergency insulin administration requires immediate glucose monitoring,
+        hypoglycemia prevention protocols, and intensive nursing surveillance.
+        Context includes emergency glucose sources, monitoring frequency, and
+        endocrinology consultation triggers.
+      
+      evidence_level: "high"
+      guideline_refs: ["ADA Emergency Guidelines 2024"]
+    
+    # Rule 2: Chemotherapy high-risk protocols
+    - id: "HIGH-ALERT-002"
+      name: "Chemotherapy High-Risk"
+      priority: 95
+      context_recipe: "chemotherapy_high_risk_context_v3"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class == chemotherapy"
+          - "medication.is_high_alert == true"
+        any_of:
+          - "patient.age_group == elderly"
+          - "patient.renal_function != normal"
+          - "patient.hepatic_function != normal"
+      
+      scoring:
+        base_score: 88
+        modifiers:
+          - condition: "patient.age >= 70"
+            add_score: 12
+          - condition: "patient.renal_function == severe_impairment"
+            add_score: 15
+      
+      clinical_rationale: |
+        High-risk chemotherapy patients require comprehensive pre-treatment
+        assessment, organ function monitoring, and toxicity prevention protocols.
+        Context includes neutropenia precautions, organ toxicity screening,
+        and emergency management plans.
+      
+      evidence_level: "high"
+      guideline_refs: ["NCCN Guidelines 2024", "ASCO Safety Standards"]
+    
+    # Rule 3: Opioid high-alert protocols
+    - id: "HIGH-ALERT-003"
+      name: "Opioid High-Alert Safety"
+      priority: 88
+      context_recipe: "opioid_high_alert_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class in opioids"
+          - "medication.is_high_alert == true"
+        any_of:
+          - "patient.age_group == elderly"
+          - "situation.encounter_type == inpatient"
+      
+      scoring:
+        base_score: 85
+        modifiers:
+          - condition: "patient.age >= 75"
+            add_score: 10
+      
+      clinical_rationale: |
+        High-alert opioid use requires respiratory monitoring, sedation assessment,
+        and naloxone availability. Context includes pain assessment protocols,
+        respiratory monitoring frequency, and reversal agent accessibility.
+      
+      evidence_level: "high"
+      guideline_refs: ["CDC Opioid Guidelines 2024", "Joint Commission Standards"]
+    
+    # Rule 4: Neuromuscular blocking agents
+    - id: "HIGH-ALERT-004"
+      name: "Neuromuscular Blocking Agents"
+      priority: 98
+      context_recipe: "nmba_critical_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.pharmacologic_class == neuromuscular_blocking_agent"
+          - "medication.is_high_alert == true"
+      
+      scoring:
+        base_score: 95
+      
+      clinical_rationale: |
+        Neuromuscular blocking agents require continuous monitoring, ventilatory
+        support, and sedation protocols. Context includes train-of-four monitoring,
+        reversal agent availability, and anesthesia consultation requirements.
+      
+      evidence_level: "high"
+      guideline_refs: ["ASA Practice Guidelines 2024"]
+    
+    # Rule 5: Concentrated electrolytes
+    - id: "HIGH-ALERT-005"
+      name: "Concentrated Electrolytes"
+      priority: 90
+      context_recipe: "concentrated_electrolytes_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.pharmacologic_class == concentrated_electrolyte"
+          - "medication.is_high_alert == true"
+        any_of:
+          - "medication.name in potassium_chloride"
+          - "medication.name in magnesium_sulfate"
+          - "medication.name in calcium_gluconate"
+      
+      scoring:
+        base_score: 87
+        modifiers:
+          - condition: "situation.encounter_type == emergency"
+            add_score: 8
+      
+      clinical_rationale: |
+        Concentrated electrolytes require careful dilution, infusion rate control,
+        and cardiac monitoring. Context includes preparation protocols, infusion
+        pump requirements, and electrolyte monitoring schedules.
+      
+      evidence_level: "high"
+      guideline_refs: ["ISMP Safe Practice Guidelines 2024"]
+    
+    # Rule 6: General high-alert medication
+    - id: "HIGH-ALERT-006"
+      name: "General High-Alert Protocol"
+      priority: 70
+      context_recipe: "high_alert_general_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.is_high_alert == true"
+        none_of:
+          - "medication.therapeutic_class == anticoagulant"
+          - "medication.therapeutic_class == chemotherapy"
+          - "medication.therapeutic_class in opioids"
+      
+      scoring:
+        base_score: 72
+      
+      clinical_rationale: |
+        General high-alert medications require enhanced safety protocols including
+        independent double-checks, standardized concentrations, and clear labeling.
+        Context includes verification procedures and error prevention strategies.
+      
+      evidence_level: "moderate"
+      guideline_refs: ["ISMP High-Alert List 2024"]

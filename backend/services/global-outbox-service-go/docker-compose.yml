@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  global-outbox-service-go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: global-outbox-service-go
+    ports:
+      - "8042:8042"  # HTTP API
+      - "50052:50052"  # gRPC API
+    environment:
+      - PROJECT_NAME=Global Outbox Service Go
+      - VERSION=1.0.0
+      - ENVIRONMENT=production
+      - HOST=0.0.0.0
+      - PORT=8042
+      - GRPC_PORT=50052
+      - LOG_LEVEL=INFO
+      - DEBUG=false
+      
+      # Database Configuration (using existing Supabase)
+      - DATABASE_URL=postgresql://postgres.auugxeqzgrnknklgwqrh:9FTqQnA4LRCsu8sw@aws-0-ap-south-1.pooler.supabase.com:5432/postgres
+      - DATABASE_POOL_SIZE=20
+      - DATABASE_MAX_OVERFLOW=30
+      - DATABASE_POOL_TIMEOUT=30
+      
+      # Kafka Configuration (using existing Confluent Cloud)
+      - KAFKA_BOOTSTRAP_SERVERS=pkc-619z3.us-east1.gcp.confluent.cloud:9092
+      - KAFKA_API_KEY=LGJ3AQ2L6VRPW4S2
+      - KAFKA_API_SECRET=2hYzQLmG1XGyQ9oLZcjwAIBdAZUS6N4JoWD8oZQhk0qVBmmyVVHU7TqoLjYef0kl
+      - KAFKA_SECURITY_PROTOCOL=SASL_SSL
+      - KAFKA_SASL_MECHANISM=PLAIN
+      
+      # Publisher Configuration
+      - PUBLISHER_ENABLED=true
+      - PUBLISHER_POLL_INTERVAL=2s
+      - PUBLISHER_BATCH_SIZE=100
+      - PUBLISHER_MAX_WORKERS=4
+      
+      # Medical Circuit Breaker
+      - MEDICAL_CIRCUIT_BREAKER_ENABLED=true
+      - MEDICAL_CIRCUIT_BREAKER_MAX_QUEUE_DEPTH=1000
+      - MEDICAL_CIRCUIT_BREAKER_CRITICAL_THRESHOLD=0.8
+      - MEDICAL_CIRCUIT_BREAKER_RECOVERY_TIMEOUT=30
+      
+      # Monitoring
+      - ENABLE_METRICS=true
+      - METRICS_PORT=8043
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8042/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    networks:
+      - outbox-network
+    
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+networks:
+  outbox-network:
+    driver: bridge
+
+# Optional: If you want to run with local dependencies
+# Uncomment and modify as needed
+#
+# volumes:
+#   postgres_data:
+#     driver: local
+#
+# services:
+#   postgres:
+#     image: postgres:15-alpine
+#     container_name: outbox-postgres
+#     environment:
+#       POSTGRES_USER: outbox_user
+#       POSTGRES_PASSWORD: outbox_password
+#       POSTGRES_DB: outbox_db
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#     ports:
+#       - "5432:5432"
+#     networks:
+#       - outbox-network
+#
+#   redis:
+#     image: redis:7-alpine
+#     container_name: outbox-redis
+#     ports:
+#       - "6379:6379"
+#     networks:
+#       - outbox-network

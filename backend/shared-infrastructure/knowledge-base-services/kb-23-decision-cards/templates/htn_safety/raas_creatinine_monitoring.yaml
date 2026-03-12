@@ -1,0 +1,110 @@
+# KB-23 Decision Card Template: RAAS Creatinine Monitoring
+# Triggered when: PG-14 fires (RAAS creatinine tolerance applied)
+# Purpose: Notify clinician that B-03 AKI alarm was suppressed due to expected
+#          RAAS pharmacodynamics, and establish monitoring schedule.
+# Version: 1.0.0
+
+template_id: "dc-htn-raas-cr-monitoring-v1"
+node_id: "VMCU_PG14"
+differential_id: "RAAS_CREATININE_TOLERANCE"
+version: "1.0.0"
+clinical_reviewer: "dr.nephrology.lead"
+mcu_gate_default: "MODIFY"
+
+# This card is generated directly by V-MCU when PG-14 fires,
+# not through the standard KB-22 → KB-23 HPI pathway.
+card_source: "VMCU_PROTOCOL_GUARD"
+
+# No Bayesian thresholds — this is a protocol-triggered card
+confidence_thresholds:
+  firm_posterior: 0.0
+  firm_medication_change: 0.0
+  probable_posterior: 0.0
+  possible_posterior: 0.0
+
+recommendations:
+  - rec_type: "SAFETY_INSTRUCTION"
+    urgency: "URGENT"
+    target: "clinician"
+    action_text_en: |
+      RAAS Creatinine Tolerance Applied: The creatinine rise detected is within
+      expected range for recent ACEi/ARB initiation or uptitration. B-03 AKI alarm
+      has been downgraded from HALT to PAUSE. This is NOT a true AKI event if the
+      following conditions remain satisfied:
+        - Creatinine rise < 30% from pre-RAAS baseline
+        - Potassium < 5.5 mEq/L
+        - No oliguria reported by patient
+      If ANY of these conditions change, the system will automatically escalate to HALT.
+    action_text_hi: |
+      RAAS क्रिएटिनिन सहनशीलता लागू: पता लगाया गया क्रिएटिनिन वृद्धि हाल ही में
+      ACEi/ARB शुरू करने या खुराक बढ़ाने के लिए अपेक्षित सीमा में है। B-03 AKI
+      अलार्म को HALT से PAUSE में बदल दिया गया है।
+    rationale_en: "ACEi/ARB reduce efferent arteriolar tone, causing expected GFR decline of 10-30% within 14 days. This is haemodynamic, not structural kidney injury."
+    guideline_ref: "NICE CKD 2021, Section 1.6.1; KDIGO CKD 2024 S4.4"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 1
+
+  - rec_type: "MONITORING"
+    urgency: "URGENT"
+    target: "clinician"
+    action_text_en: |
+      RAAS Monitoring Schedule:
+        Day 7:  Repeat creatinine + potassium
+                → If Cr rise >30% OR K+ >5.5 → ESCALATE to HALT
+                → If Cr rise <30% AND K+ <5.5 → Continue monitoring
+        Day 14: Repeat creatinine + potassium + eGFR
+                → If Cr stabilised within 30% → RESOLVE monitoring
+                → If Cr still rising → Consider dose reduction or discontinuation
+        Day 30: Follow-up eGFR
+                → If eGFR >5% below pre-change AND declining → ESCALATE
+                → If eGFR stable → CLEAR monitoring window
+    action_text_hi: |
+      RAAS निगरानी अनुसूची:
+        दिन 7:  क्रिएटिनिन + पोटेशियम दोहराएं
+        दिन 14: क्रिएटिनिन + पोटेशियम + eGFR दोहराएं
+        दिन 30: अनुवर्ती eGFR
+    rationale_en: "Structured monitoring detects the minority of patients whose creatinine rise represents genuine nephrotoxicity rather than expected RAAS pharmacodynamics."
+    guideline_ref: "NICE CKD 2021, Section 1.6.1"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 2
+
+  - rec_type: "SAFETY_INSTRUCTION"
+    urgency: "ROUTINE"
+    target: "patient"
+    action_text_en: |
+      Your doctor has recently changed your blood pressure medication. A small
+      change in your kidney function test is expected and normal. Please:
+        - Report immediately if you notice reduced urine output
+        - Attend your scheduled blood test appointments (Day 7 and Day 14)
+        - Continue taking your medication as prescribed
+    action_text_hi: |
+      आपके डॉक्टर ने हाल ही में आपकी रक्तचाप की दवा बदली है। आपके गुर्दे के
+      कार्य परीक्षण में एक छोटा बदलाव अपेक्षित और सामान्य है। कृपया:
+        - यदि आप कम पेशाब आना देखें तो तुरंत बताएं
+        - अपनी निर्धारित रक्त परीक्षण नियुक्तियों में उपस्थित हों (दिन 7 और दिन 14)
+        - अपनी दवा निर्धारित अनुसार लेते रहें
+    rationale_en: "Patient education reduces anxiety about expected lab changes and ensures adherence to monitoring schedule."
+    guideline_ref: "NICE CKD 2021, Patient Information"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 3
+
+# Escalation criteria — consumed by V-MCU orchestrator
+escalation_triggers:
+  - event: "RAAS_MONITORING_ESCALATE"
+    condition: "creatinine_rise_pct > 30 OR potassium > 5.5 OR oliguria_reported"
+    action: "Upgrade PAUSE to HALT, generate AKI card"
+  - event: "RAAS_MONITORING_RESOLVED"
+    condition: "creatinine_stabilised AND day >= 14"
+    action: "Close monitoring window, resume normal titration"
+
+# Fragments for clinician/patient summaries
+fragments:
+  - fragment_type: "CLINICIAN"
+    text_en: "RAAS creatinine tolerance applied. Expected post-ACEi/ARB creatinine rise detected. Monitoring schedule initiated. B-03 downgraded HALT→PAUSE."
+    text_hi: "RAAS क्रिएटिनिन सहनशीलता लागू। अपेक्षित पोस्ट-ACEi/ARB क्रिएटिनिन वृद्धि। निगरानी अनुसूची शुरू।"
+  - fragment_type: "PATIENT"
+    text_en: "A small change in your kidney test is expected after your BP medication change. Your doctor is monitoring this closely."
+    text_hi: "आपकी BP दवा बदलने के बाद गुर्दे के परीक्षण में एक छोटा बदलाव अपेक्षित है। आपके डॉक्टर इसकी बारीकी से निगरानी कर रहे हैं।"

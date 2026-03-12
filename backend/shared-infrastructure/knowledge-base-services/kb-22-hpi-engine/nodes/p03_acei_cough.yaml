@@ -1,0 +1,230 @@
+# P03 ACEi Cough - HPI Node Definition
+# Bayesian differential for new/worsening cough in patients on ACE inhibitors.
+# Triggered by: clinician report of cough OR patient self-report via KB-21.
+# Output: posterior probability of ACEi-induced cough → feeds PG-15 via KB-23.
+
+node_id: P03_ACEI_COUGH
+version: "1.0.0"
+description: "Cough differential in ACEi-treated cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Guideline prior source (N-01)
+guideline_prior_source: "NICE_HTN_2022_ACEI_COUGH"
+
+# Differentials with per-stratum priors (F-05)
+# ACEi cough incidence: 5-35% in literature, higher in certain populations.
+# Priors calibrated for DM+HTN+CKD strata where ACEi use is common.
+differentials:
+  - id: ACEI_INDUCED_COUGH
+    label: "ACE Inhibitor-Induced Cough"
+    population_reference: "Dicpinigaitis PV, Chest 2006; Morimoto T, J Clin Pharm Ther 2004"
+    priors:
+      DM_ONLY: 0.50
+      DM_HTN: 0.60
+      DM_HTN_CKD: 0.55
+
+  - id: UPPER_RESPIRATORY_INFECTION
+    label: "Upper Respiratory Tract Infection"
+    population_reference: "NICE Cough Guidelines 2023"
+    priors:
+      DM_ONLY: 0.20
+      DM_HTN: 0.15
+      DM_HTN_CKD: 0.12
+
+  - id: CARDIAC_COUGH
+    label: "Cardiac Cough (Heart Failure)"
+    population_reference: "ESC Heart Failure 2023"
+    priors:
+      DM_ONLY: 0.08
+      DM_HTN: 0.12
+      DM_HTN_CKD: 0.18
+
+  - id: GERD_COUGH
+    label: "Gastroesophageal Reflux Cough"
+    population_reference: "ACG Clinical Guideline 2022"
+    priors:
+      DM_ONLY: 0.12
+      DM_HTN: 0.08
+      DM_HTN_CKD: 0.08
+
+  - id: OTHER
+    label: "Other Cause (Asthma, Post-nasal drip, etc.)"
+    population_reference: "ACCP Cough Guidelines 2018"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.05
+      DM_HTN_CKD: 0.07
+
+# Likelihood ratios for key discriminating features
+# These are used by the Bayesian engine to update posteriors per question.
+questions:
+  - question_id: Q01
+    text_en: "When did the cough start relative to ACEi initiation?"
+    text_hi: "ACEi शुरू करने के बाद खांसी कब शुरू हुई?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "WITHIN_4_WEEKS"
+        label_en: "Within 4 weeks of starting ACEi"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 3.5
+          UPPER_RESPIRATORY_INFECTION: 0.8
+          CARDIAC_COUGH: 0.6
+          GERD_COUGH: 0.7
+          OTHER: 0.5
+      - value: "1_TO_6_MONTHS"
+        label_en: "1-6 months after starting ACEi"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 2.8
+          UPPER_RESPIRATORY_INFECTION: 0.5
+          CARDIAC_COUGH: 1.0
+          GERD_COUGH: 0.8
+          OTHER: 0.6
+      - value: "AFTER_6_MONTHS"
+        label_en: "More than 6 months after starting ACEi"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 1.2
+          UPPER_RESPIRATORY_INFECTION: 0.9
+          CARDIAC_COUGH: 1.5
+          GERD_COUGH: 1.2
+          OTHER: 1.0
+      - value: "NO_TEMPORAL_LINK"
+        label_en: "No clear temporal link"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 0.3
+          UPPER_RESPIRATORY_INFECTION: 1.8
+          CARDIAC_COUGH: 1.2
+          GERD_COUGH: 1.5
+          OTHER: 1.5
+
+  - question_id: Q02
+    text_en: "Is the cough dry (non-productive) or productive with sputum?"
+    text_hi: "क्या खांसी सूखी है या बलगम के साथ है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "DRY"
+        label_en: "Dry, tickling cough"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 4.2
+          UPPER_RESPIRATORY_INFECTION: 0.5
+          CARDIAC_COUGH: 1.5
+          GERD_COUGH: 2.0
+          OTHER: 0.8
+      - value: "PRODUCTIVE"
+        label_en: "Productive with sputum"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 0.2
+          UPPER_RESPIRATORY_INFECTION: 3.5
+          CARDIAC_COUGH: 1.8
+          GERD_COUGH: 0.5
+          OTHER: 1.5
+
+  - question_id: Q03
+    text_en: "Is the cough worse at night or when lying down?"
+    text_hi: "क्या खांसी रात में या लेटने पर बदतर होती है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_NOCTURNAL"
+        label_en: "Yes, worse at night / lying down"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 1.5
+          UPPER_RESPIRATORY_INFECTION: 0.8
+          CARDIAC_COUGH: 3.0
+          GERD_COUGH: 2.5
+          OTHER: 1.2
+      - value: "NO"
+        label_en: "No nocturnal pattern"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 1.2
+          UPPER_RESPIRATORY_INFECTION: 1.0
+          CARDIAC_COUGH: 0.4
+          GERD_COUGH: 0.5
+          OTHER: 1.0
+
+  - question_id: Q04
+    text_en: "Has the patient had a previous ACEi cough episode?"
+    text_hi: "क्या रोगी को पहले भी ACEi से खांसी हुई थी?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_PRIOR_EPISODE"
+        label_en: "Yes, prior ACEi cough documented"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 8.0
+          UPPER_RESPIRATORY_INFECTION: 0.3
+          CARDIAC_COUGH: 0.5
+          GERD_COUGH: 0.3
+          OTHER: 0.2
+      - value: "NO"
+        label_en: "No prior ACEi cough"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 0.8
+          UPPER_RESPIRATORY_INFECTION: 1.2
+          CARDIAC_COUGH: 1.0
+          GERD_COUGH: 1.0
+          OTHER: 1.0
+
+  - question_id: Q05
+    text_en: "Does the patient have signs of fluid overload (ankle oedema, orthopnoea, JVP elevation)?"
+    text_hi: "क्या रोगी में द्रव अधिभार के लक्षण हैं (टखने की सूजन, ऑर्थोपनोइया, JVP बढ़ा हुआ)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_FLUID_OVERLOAD"
+        label_en: "Signs of fluid overload present"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 0.4
+          UPPER_RESPIRATORY_INFECTION: 0.5
+          CARDIAC_COUGH: 5.0
+          GERD_COUGH: 0.6
+          OTHER: 0.5
+      - value: "NO"
+        label_en: "No fluid overload signs"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 1.3
+          UPPER_RESPIRATORY_INFECTION: 1.1
+          CARDIAC_COUGH: 0.3
+          GERD_COUGH: 1.0
+          OTHER: 1.0
+
+  - question_id: Q06
+    text_en: "Has the cough persisted more than 3 weeks?"
+    text_hi: "क्या खांसी 3 सप्ताह से अधिक समय से है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_CHRONIC"
+        label_en: "Yes, more than 3 weeks"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 2.5
+          UPPER_RESPIRATORY_INFECTION: 0.3
+          CARDIAC_COUGH: 2.0
+          GERD_COUGH: 2.2
+          OTHER: 1.5
+      - value: "NO_ACUTE"
+        label_en: "No, less than 3 weeks"
+        likelihood_ratios:
+          ACEI_INDUCED_COUGH: 0.5
+          UPPER_RESPIRATORY_INFECTION: 3.0
+          CARDIAC_COUGH: 0.6
+          GERD_COUGH: 0.4
+          OTHER: 0.8
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_PG15_MODIFY"
+    description: "Posterior > 0.70 for ACEi cough → send probability to Channel C for PG-15 evaluation. Generate ARB switch decision card."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Continue questioning. Consider empirical ACEi withdrawal trial if patient symptomatic."
+  - threshold: 0.30
+    action: "INVESTIGATE_ALTERNATIVES"
+    description: "Low ACEi cough probability. Investigate cardiac cough (echo), GERD (trial PPI), or other causes."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "CARDIAC_COUGH posterior > 0.40"
+    trigger_node: "P01_CHEST_PAIN"
+    rationale: "Cardiac cough with moderate posterior warrants chest pain HPI pathway for heart failure assessment."

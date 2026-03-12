@@ -1,0 +1,939 @@
+
+package com.cardiofit.flink.operators;
+
+import com.cardiofit.flink.models.CanonicalEvent;
+import com.cardiofit.flink.models.EnrichedEvent;
+import com.cardiofit.flink.models.EventType;
+import com.cardiofit.flink.models.PatternEvent;
+import com.cardiofit.flink.models.SemanticEvent;
+import com.cardiofit.flink.patterns.ClinicalPatterns;
+import com.cardiofit.flink.utils.KafkaConfigLoader;
+import com.cardiofit.flink.utils.KafkaTopics;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.AggregateFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.cep.CEP;
+import org.apache.flink.cep.PatternSelectFunction;
+import org.apache.flink.cep.PatternStream;
+import org.apache.flink.cep.pattern.Pattern;
+import org.apache.flink.cep.pattern.conditions.SimpleCondition;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
+import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.util.Collector;
+import java.time.Duration;import org.apache.flink.util.OutputTag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Module 4: Pattern Detection (CEP & Windowed Analytics)
+ *
+ * Responsibilities:
+ * - Detect complex clinical patterns using Complex Event Processing (CEP)
+ * - Perform windowed analytics for trend detection
+ * - Identify deterioration patterns and early warning signs
+ * - Generate pathway adherence events
+ * - Detect anomalies and outliers in clinical data
+ * - Monitor clinical protocols and care pathways
+ */
+public class Module4_PatternDetection {
+    private static final Logger LOG = LoggerFactory.getLogger(Module4_PatternDetection.class);
+
+    // Output tags for different pattern types
+    private static final OutputTag<PatternEvent> DETERIORATION_PATTERN_TAG =
+        new OutputTag<PatternEvent>("deterioration-patterns"){};
+
+    private static final OutputTag<PatternEvent> PATHWAY_ADHERENCE_TAG =
+        new OutputTag<PatternEvent>("pathway-adherence"){};
+
+    private static final OutputTag<PatternEvent> ANOMALY_DETECTION_TAG =
+        new OutputTag<PatternEvent>("anomaly-detection"){};
+
+    private static final OutputTag<PatternEvent> TREND_ANALYSIS_TAG =
+        new OutputTag<PatternEvent>("trend-analysis"){};
+
+    public static void main(String[] args) throws Exception {
+        LOG.info("Starting Module 4: Pattern Detection (CEP & Windowed Analytics)");
+
+        // Set up execution environment
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Configure for pattern processing
+        env.setParallelism(8);
+        env.enableCheckpointing(30000);
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+
+        // Create pattern detection pipeline
+        createPatternDetectionPipeline(env);
+
+        // Execute the job
+        env.execute("Module 4: Pattern Detection");
+    }
+
+    public static void createPatternDetectionPipeline(StreamExecutionEnvironment env) {
+        LOG.info("Creating pattern detection pipeline");
+
+        // Input stream: semantic events from Module 3
+        DataStream<SemanticEvent> semanticEvents = createSemanticEventSource(env);
+
+        // Input stream: enriched events from Module 2 (for RiskIndicators-based patterns)
+        DataStream<EnrichedEvent> enrichedEvents = createEnrichedEventSource(env);
+
+        // Key by patient ID for pattern detection
+        DataStream<SemanticEvent> keyedSemanticEvents = semanticEvents
+            .keyBy(SemanticEvent::getPatientId);
+
+        // ===== Complex Event Processing (CEP) Patterns =====
+
+        // Clinical deterioration patterns
+        PatternStream<SemanticEvent> deteriorationPatterns = detectDeteriorationPatterns(keyedSemanticEvents);
+
+        // Acute Kidney Injury detection pattern (KDIGO criteria) - uses EnrichedEvent with RiskIndicators
+        PatternStream<EnrichedEvent> akiPatterns = ClinicalPatterns.detectAKIPattern(enrichedEvents);
+
+        // Medication adherence patterns
+        PatternStream<SemanticEvent> medicationPatterns = detectMedicationPatterns(keyedSemanticEvents);
+
+        // Vital signs trend patterns
+        PatternStream<SemanticEvent> vitalTrendPatterns = detectVitalTrendPatterns(keyedSemanticEvents);
+
+        // Clinical pathway compliance patterns
+        PatternStream<SemanticEvent> pathwayPatterns = detectPathwayCompliancePatterns(keyedSemanticEvents);
+
+        // ===== Windowed Analytics =====
+
+        // Trend analysis using sliding windows
+        DataStream<PatternEvent> trendAnalysis = performTrendAnalysis(keyedSemanticEvents);
+
+        // Anomaly detection using tumbling windows
+        DataStream<PatternEvent> anomalyDetection = performAnomalyDetection(keyedSemanticEvents);
+
+        // Clinical protocol monitoring
+        DataStream<PatternEvent> protocolMonitoring = monitorClinicalProtocols(keyedSemanticEvents);
+
+        // ===== Pattern Event Generation =====
+
+        // Convert CEP patterns to pattern events
+        DataStream<PatternEvent> deteriorationEvents = deteriorationPatterns
+            .select(new DeteriorationPatternSelectFunction())
+            .uid("Deterioration Pattern Events");
+
+        DataStream<PatternEvent> medicationEvents = medicationPatterns
+            .select(new MedicationPatternSelectFunction())
+            .uid("Medication Pattern Events");
+
+        DataStream<PatternEvent> vitalTrendEvents = vitalTrendPatterns
+            .select(new VitalTrendPatternSelectFunction())
+            .uid("Vital Trend Pattern Events");
+
+        DataStream<PatternEvent> pathwayEvents = pathwayPatterns
+            .select(new PathwayCompliancePatternSelectFunction())
+            .uid("Pathway Compliance Events");
+
+        DataStream<PatternEvent> akiEvents = akiPatterns
+            .select(new ClinicalPatterns.AKIPatternSelectFunction())
+            .uid("AKI Pattern Events");
+
+        // ===== Unified Pattern Stream =====
+
+        // Unified pattern stream (union operation does not support uid/name)
+        DataStream<PatternEvent> allPatternEvents = deteriorationEvents
+            .union(medicationEvents)
+            .union(vitalTrendEvents)
+            .union(pathwayEvents)
+            .union(akiEvents)
+            .union(trendAnalysis)
+            .union(anomalyDetection)
+            .union(protocolMonitoring);
+
+        // ===== Pattern Classification and Routing =====
+
+        SingleOutputStreamOperator<PatternEvent> classifiedPatterns = allPatternEvents
+            .map(new PatternClassificationFunction())
+            .uid("Pattern Classification");
+
+        // Route patterns to appropriate sinks
+        classifiedPatterns
+            .sinkTo(createPatternEventsSink())
+            .uid("Pattern Events Sink");
+
+        // Route specific pattern types to specialized topics
+        classifiedPatterns.getSideOutput(DETERIORATION_PATTERN_TAG)
+            .sinkTo(createDeteriorationPatternSink())
+            .uid("Deterioration Patterns Sink");
+
+        classifiedPatterns.getSideOutput(PATHWAY_ADHERENCE_TAG)
+            .sinkTo(createPathwayAdherenceSink())
+            .uid("Pathway Adherence Sink");
+
+        classifiedPatterns.getSideOutput(ANOMALY_DETECTION_TAG)
+            .sinkTo(createAnomalyDetectionSink())
+            .uid("Anomaly Detection Sink");
+
+        classifiedPatterns.getSideOutput(TREND_ANALYSIS_TAG)
+            .sinkTo(createTrendAnalysisSink())
+            .uid("Trend Analysis Sink");
+
+        LOG.info("Pattern detection pipeline created successfully");
+    }
+
+    /**
+     * Create semantic event source from Module 3
+     */
+    private static DataStream<SemanticEvent> createSemanticEventSource(StreamExecutionEnvironment env) {
+        KafkaSource<SemanticEvent> source = KafkaSource.<SemanticEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.SEMANTIC_MESH_UPDATES.getTopicName())
+            .setGroupId("pattern-detection")
+            .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
+            .setValueOnlyDeserializer(new SemanticEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("pattern-detection"))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy
+                .<SemanticEvent>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                .withTimestampAssigner((event, timestamp) -> event.getEventTime()),
+            "Semantic Events Source");
+    }
+
+    /**
+     * Create enriched event source from Module 2 for RiskIndicators-based patterns
+     */
+    private static DataStream<EnrichedEvent> createEnrichedEventSource(StreamExecutionEnvironment env) {
+        KafkaSource<EnrichedEvent> source = KafkaSource.<EnrichedEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.CLINICAL_PATTERNS.getTopicName())
+            .setGroupId("pattern-detection-enriched")
+            .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
+            .setValueOnlyDeserializer(new EnrichedEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("pattern-detection-enriched"))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy
+                .<EnrichedEvent>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                .withTimestampAssigner((event, timestamp) -> event.getEventTime()),
+            "Enriched Events Source");
+    }
+
+    // ===== CEP Pattern Definitions =====
+
+    /**
+     * Detect clinical deterioration patterns
+     */
+    private static PatternStream<SemanticEvent> detectDeteriorationPatterns(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> deteriorationPattern = Pattern
+            .<SemanticEvent>begin("baseline")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getClinicalSignificance() > 0.3 &&
+                           !event.getRiskLevel().equals("high");
+                }
+            })
+            .next("warning")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getClinicalSignificance() > 0.6 ||
+                           event.getRiskLevel().equals("moderate");
+                }
+            })
+            .followedBy("critical")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getClinicalSignificance() > 0.8 ||
+                           event.getRiskLevel().equals("high") ||
+                           event.hasClinicalAlerts();
+                }
+            })
+            .within(Duration.ofHours(6)); // Pattern must occur within 6 hours
+
+        return CEP.pattern(input, deteriorationPattern);
+    }
+
+    /**
+     * Detect medication adherence patterns
+     */
+    private static PatternStream<SemanticEvent> detectMedicationPatterns(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> medicationPattern = Pattern
+            .<SemanticEvent>begin("medication_ordered")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.MEDICATION_ORDERED;
+                }
+            })
+            .followedBy("administration_due")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.MEDICATION_ADMINISTERED ||
+                           event.getEventType() == EventType.MEDICATION_MISSED;
+                }
+            })
+            .within(Duration.ofHours(2)); // Medication should be administered within 2 hours
+
+        return CEP.pattern(input, medicationPattern);
+    }
+
+    /**
+     * Detect vital signs trend patterns
+     */
+    private static PatternStream<SemanticEvent> detectVitalTrendPatterns(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> vitalTrendPattern = Pattern
+            .<SemanticEvent>begin("vital1")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.VITAL_SIGN;
+                }
+            })
+            .next("vital2")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.VITAL_SIGN;
+                }
+            })
+            .next("vital3")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.VITAL_SIGN;
+                }
+            })
+            .within(Duration.ofHours(1)); // Three consecutive vital sign readings within 1 hour
+
+        return CEP.pattern(input, vitalTrendPattern);
+    }
+
+    /**
+     * Detect clinical pathway compliance patterns
+     */
+    private static PatternStream<SemanticEvent> detectPathwayCompliancePatterns(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> pathwayPattern = Pattern
+            .<SemanticEvent>begin("admission")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.PATIENT_ADMISSION;
+                }
+            })
+            .followedBy("assessment")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.VITAL_SIGN ||
+                           event.getEventType() == EventType.LAB_RESULT;
+                }
+            })
+            .followedBy("intervention")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return event.getEventType() == EventType.MEDICATION_ORDERED ||
+                           event.getEventType() == EventType.PROCEDURE_SCHEDULED;
+                }
+            })
+            .within(Duration.ofHours(24)); // Pathway should be completed within 24 hours
+
+        return CEP.pattern(input, pathwayPattern);
+    }
+
+    // ===== Windowed Analytics Functions =====
+
+    /**
+     * Perform trend analysis using sliding windows
+     */
+    private static DataStream<PatternEvent> performTrendAnalysis(DataStream<SemanticEvent> input) {
+        return input
+            .filter(event -> event.getEventType() == EventType.VITAL_SIGN ||
+                           event.getEventType() == EventType.LAB_RESULT)
+            .keyBy(SemanticEvent::getPatientId)
+            .window(SlidingEventTimeWindows.of(Duration.ofHours(4), Duration.ofHours(1)))
+            .apply(new TrendAnalysisWindowFunction())
+            .uid("Trend Analysis");
+    }
+
+    /**
+     * Perform anomaly detection using tumbling windows
+     */
+    private static DataStream<PatternEvent> performAnomalyDetection(DataStream<SemanticEvent> input) {
+        return input
+            .keyBy(SemanticEvent::getPatientId)
+            .window(TumblingEventTimeWindows.of(Time.minutes(30)))
+            .process(new AnomalyDetectionWindowFunction())
+            .uid("Anomaly Detection");
+    }
+
+    /**
+     * Monitor clinical protocols
+     */
+    private static DataStream<PatternEvent> monitorClinicalProtocols(DataStream<SemanticEvent> input) {
+        return input
+            .filter(event -> event.hasGuidelineRecommendations())
+            .keyBy(SemanticEvent::getPatientId)
+            .window(TumblingEventTimeWindows.of(Duration.ofHours(2)))
+            .apply(new ProtocolMonitoringWindowFunction())
+            .uid("Protocol Monitoring");
+    }
+
+    // ===== Pattern Select Functions =====
+
+    public static class DeteriorationPatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> baseline = pattern.get("baseline");
+            List<SemanticEvent> warning = pattern.get("warning");
+            List<SemanticEvent> critical = pattern.get("critical");
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("CLINICAL_DETERIORATION");
+            patternEvent.setPatientId(baseline.get(0).getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+            patternEvent.setSeverity("HIGH");
+            patternEvent.setConfidence(0.85);
+
+            // Calculate pattern details
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("baseline_significance", baseline.get(0).getClinicalSignificance());
+            patternDetails.put("warning_significance", warning.get(0).getClinicalSignificance());
+            patternDetails.put("critical_significance", critical.get(0).getClinicalSignificance());
+            patternDetails.put("deterioration_rate", calculateDeteriorationRate(baseline, warning, critical));
+            patternDetails.put("timespan_hours", calculateTimespan(baseline.get(0), critical.get(0)));
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(baseline.get(0).getId());
+            involvedEvents.add(warning.get(0).getId());
+            involvedEvents.add(critical.get(0).getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            patternEvent.setRecommendedActions(Arrays.asList(
+                "IMMEDIATE_ASSESSMENT_REQUIRED",
+                "ESCALATE_TO_PHYSICIAN",
+                "INCREASE_MONITORING_FREQUENCY"
+            ));
+
+            LOG.info("Detected clinical deterioration pattern for patient: {}", patternEvent.getPatientId());
+            return patternEvent;
+        }
+
+        private double calculateDeteriorationRate(List<SemanticEvent> baseline,
+                                                  List<SemanticEvent> warning,
+                                                  List<SemanticEvent> critical) {
+            double baselineScore = baseline.get(0).getClinicalSignificance();
+            double criticalScore = critical.get(0).getClinicalSignificance();
+            return criticalScore - baselineScore;
+        }
+
+        private double calculateTimespan(SemanticEvent first, SemanticEvent last) {
+            return (last.getEventTime() - first.getEventTime()) / (1000.0 * 3600.0);
+        }
+    }
+
+    public static class MedicationPatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> ordered = pattern.get("medication_ordered");
+            List<SemanticEvent> administered = pattern.get("administration_due");
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("MEDICATION_ADHERENCE");
+            patternEvent.setPatientId(ordered.get(0).getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+
+            boolean isMissed = administered.get(0).getEventType() == EventType.MEDICATION_MISSED;
+            patternEvent.setSeverity(isMissed ? "MODERATE" : "LOW");
+            patternEvent.setConfidence(0.9);
+
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("medication_status", isMissed ? "MISSED" : "ADMINISTERED");
+            patternDetails.put("time_to_administration",
+                (administered.get(0).getEventTime() - ordered.get(0).getEventTime()) / (1000.0 * 60.0));
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            if (isMissed) {
+                patternEvent.setRecommendedActions(Arrays.asList(
+                    "VERIFY_PATIENT_STATUS",
+                    "RESCHEDULE_MEDICATION",
+                    "ASSESS_ADHERENCE_BARRIERS"
+                ));
+            }
+
+            return patternEvent;
+        }
+    }
+
+    public static class VitalTrendPatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> vital1 = pattern.get("vital1");
+            List<SemanticEvent> vital2 = pattern.get("vital2");
+            List<SemanticEvent> vital3 = pattern.get("vital3");
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("VITAL_SIGNS_TREND");
+            patternEvent.setPatientId(vital1.get(0).getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+
+            // Analyze trend direction
+            String trendDirection = analyzeTrendDirection(vital1.get(0), vital2.get(0), vital3.get(0));
+            patternEvent.setSeverity(trendDirection.equals("DETERIORATING") ? "HIGH" : "LOW");
+            patternEvent.setConfidence(0.75);
+
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("trend_direction", trendDirection);
+            patternDetails.put("reading_count", 3);
+            patternDetails.put("timespan_minutes",
+                (vital3.get(0).getEventTime() - vital1.get(0).getEventTime()) / (1000.0 * 60.0));
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            if (trendDirection.equals("DETERIORATING")) {
+                patternEvent.setRecommendedActions(Arrays.asList(
+                    "INCREASE_VITAL_MONITORING",
+                    "CLINICAL_ASSESSMENT",
+                    "CONSIDER_INTERVENTION"
+                ));
+            }
+
+            return patternEvent;
+        }
+
+        private String analyzeTrendDirection(SemanticEvent v1, SemanticEvent v2, SemanticEvent v3) {
+            double s1 = v1.getClinicalSignificance();
+            double s2 = v2.getClinicalSignificance();
+            double s3 = v3.getClinicalSignificance();
+
+            if (s3 > s2 && s2 > s1 && (s3 - s1) > 0.2) {
+                return "DETERIORATING";
+            } else if (s1 > s2 && s2 > s3 && (s1 - s3) > 0.2) {
+                return "IMPROVING";
+            } else {
+                return "STABLE";
+            }
+        }
+    }
+
+    public static class PathwayCompliancePatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> admission = pattern.get("admission");
+            List<SemanticEvent> assessment = pattern.get("assessment");
+            List<SemanticEvent> intervention = pattern.get("intervention");
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("PATHWAY_COMPLIANCE");
+            patternEvent.setPatientId(admission.get(0).getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+            patternEvent.setSeverity("LOW");
+            patternEvent.setConfidence(0.8);
+
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("pathway_completed", true);
+            patternDetails.put("time_to_assessment",
+                (assessment.get(0).getEventTime() - admission.get(0).getEventTime()) / (1000.0 * 60.0));
+            patternDetails.put("time_to_intervention",
+                (intervention.get(0).getEventTime() - admission.get(0).getEventTime()) / (1000.0 * 60.0));
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            return patternEvent;
+        }
+    }
+
+    // ===== Window Functions =====
+
+    public static class TrendAnalysisWindowFunction
+            implements WindowFunction<SemanticEvent, PatternEvent, String, TimeWindow> {
+
+        @Override
+        public void apply(String patientId, TimeWindow window,
+                         Iterable<SemanticEvent> input, Collector<PatternEvent> out) {
+
+            List<SemanticEvent> events = new ArrayList<>();
+            for (SemanticEvent event : input) {
+                events.add(event);
+            }
+
+            if (events.size() < 3) return; // Need at least 3 points for trend analysis
+
+            // Sort by event time
+            events.sort((a, b) -> Long.compare(a.getEventTime(), b.getEventTime()));
+
+            PatternEvent trendEvent = new PatternEvent();
+            trendEvent.setId(UUID.randomUUID().toString());
+            trendEvent.setPatternType("TREND_ANALYSIS");
+            trendEvent.setPatientId(patientId);
+            trendEvent.setDetectionTime(System.currentTimeMillis());
+
+            // Calculate trend
+            TrendAnalysis trend = calculateTrend(events);
+            trendEvent.setSeverity(trend.getSeverity());
+            trendEvent.setConfidence(trend.getConfidence());
+
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("trend_slope", trend.getSlope());
+            patternDetails.put("trend_direction", trend.getDirection());
+            patternDetails.put("data_points", events.size());
+            patternDetails.put("window_start", window.getStart());
+            patternDetails.put("window_end", window.getEnd());
+
+            trendEvent.setPatternDetails(patternDetails);
+
+            if (!trend.getDirection().equals("STABLE")) {
+                out.collect(trendEvent);
+            }
+        }
+
+        private TrendAnalysis calculateTrend(List<SemanticEvent> events) {
+            // Simple linear regression for trend analysis
+            double n = events.size();
+            double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+            for (int i = 0; i < events.size(); i++) {
+                double x = i; // Time index
+                double y = events.get(i).getClinicalSignificance();
+
+                sumX += x;
+                sumY += y;
+                sumXY += x * y;
+                sumX2 += x * x;
+            }
+
+            double slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+
+            TrendAnalysis trend = new TrendAnalysis();
+            trend.setSlope(slope);
+
+            if (slope > 0.1) {
+                trend.setDirection("INCREASING");
+                trend.setSeverity("MODERATE");
+            } else if (slope < -0.1) {
+                trend.setDirection("DECREASING");
+                trend.setSeverity("LOW");
+            } else {
+                trend.setDirection("STABLE");
+                trend.setSeverity("LOW");
+            }
+
+            trend.setConfidence(Math.min(0.9, 0.5 + Math.abs(slope)));
+
+            return trend;
+        }
+    }
+
+    public static class AnomalyDetectionWindowFunction
+            extends ProcessWindowFunction<SemanticEvent, PatternEvent, String, TimeWindow> {
+
+        @Override
+        public void process(String patientId, Context context,
+                           Iterable<SemanticEvent> elements, Collector<PatternEvent> out) {
+
+            List<SemanticEvent> events = new ArrayList<>();
+            for (SemanticEvent event : elements) {
+                events.add(event);
+            }
+
+            if (events.size() < 5) return; // Need sufficient data for anomaly detection
+
+            // Calculate statistical baseline
+            double mean = events.stream()
+                .mapToDouble(SemanticEvent::getClinicalSignificance)
+                .average()
+                .orElse(0.0);
+
+            double variance = events.stream()
+                .mapToDouble(e -> Math.pow(e.getClinicalSignificance() - mean, 2))
+                .average()
+                .orElse(0.0);
+
+            double stdDev = Math.sqrt(variance);
+            double threshold = mean + 2 * stdDev; // 2 standard deviations
+
+            // Find anomalies
+            List<SemanticEvent> anomalies = events.stream()
+                .filter(e -> e.getClinicalSignificance() > threshold)
+                .collect(Collectors.toList());
+
+            if (!anomalies.isEmpty()) {
+                PatternEvent anomalyEvent = new PatternEvent();
+                anomalyEvent.setId(UUID.randomUUID().toString());
+                anomalyEvent.setPatternType("ANOMALY_DETECTION");
+                anomalyEvent.setPatientId(patientId);
+                anomalyEvent.setDetectionTime(System.currentTimeMillis());
+                anomalyEvent.setSeverity("MODERATE");
+                anomalyEvent.setConfidence(0.8);
+
+                Map<String, Object> patternDetails = new HashMap<>();
+                patternDetails.put("anomaly_count", anomalies.size());
+                patternDetails.put("statistical_threshold", threshold);
+                patternDetails.put("baseline_mean", mean);
+                patternDetails.put("baseline_stddev", stdDev);
+
+                anomalyEvent.setPatternDetails(patternDetails);
+                anomalyEvent.setInvolvedEvents(
+                    anomalies.stream().map(SemanticEvent::getId).collect(Collectors.toList())
+                );
+
+                out.collect(anomalyEvent);
+            }
+        }
+    }
+
+    public static class ProtocolMonitoringWindowFunction
+            implements WindowFunction<SemanticEvent, PatternEvent, String, TimeWindow> {
+
+        @Override
+        public void apply(String patientId, TimeWindow window,
+                         Iterable<SemanticEvent> input, Collector<PatternEvent> out) {
+
+            List<SemanticEvent> events = new ArrayList<>();
+            for (SemanticEvent event : input) {
+                events.add(event);
+            }
+
+            if (events.isEmpty()) return;
+
+            // Analyze protocol adherence
+            long recommendationsCount = events.stream()
+                .mapToLong(e -> e.getGuidelineRecommendations() != null ?
+                               e.getGuidelineRecommendations().size() : 0)
+                .sum();
+
+            if (recommendationsCount > 0) {
+                PatternEvent protocolEvent = new PatternEvent();
+                protocolEvent.setId(UUID.randomUUID().toString());
+                protocolEvent.setPatternType("PROTOCOL_MONITORING");
+                protocolEvent.setPatientId(patientId);
+                protocolEvent.setDetectionTime(System.currentTimeMillis());
+                protocolEvent.setSeverity("LOW");
+                protocolEvent.setConfidence(0.7);
+
+                Map<String, Object> patternDetails = new HashMap<>();
+                patternDetails.put("recommendations_count", recommendationsCount);
+                patternDetails.put("events_with_recommendations", events.size());
+                patternDetails.put("window_start", window.getStart());
+                patternDetails.put("window_end", window.getEnd());
+
+                protocolEvent.setPatternDetails(patternDetails);
+
+                out.collect(protocolEvent);
+            }
+        }
+    }
+
+    // ===== Pattern Classification Function =====
+
+    public static class PatternClassificationFunction implements MapFunction<PatternEvent, PatternEvent> {
+        @Override
+        public PatternEvent map(PatternEvent event) throws Exception {
+            // Classify patterns and route to side outputs if needed
+            switch (event.getPatternType()) {
+                case "CLINICAL_DETERIORATION":
+                    // Already handled in main stream
+                    break;
+                case "PATHWAY_COMPLIANCE":
+                    // Mark for pathway adherence tracking
+                    event.addTag("pathway_adherence");
+                    break;
+                case "ANOMALY_DETECTION":
+                    // Mark for anomaly processing
+                    event.addTag("anomaly");
+                    break;
+                case "TREND_ANALYSIS":
+                    // Mark for trend tracking
+                    event.addTag("trend");
+                    break;
+            }
+            return event;
+        }
+    }
+
+    // ===== Helper Classes =====
+
+    public static class TrendAnalysis {
+        private double slope;
+        private String direction;
+        private String severity;
+        private double confidence;
+
+        // Getters and setters
+        public double getSlope() { return slope; }
+        public void setSlope(double slope) { this.slope = slope; }
+
+        public String getDirection() { return direction; }
+        public void setDirection(String direction) { this.direction = direction; }
+
+        public String getSeverity() { return severity; }
+        public void setSeverity(String severity) { this.severity = severity; }
+
+        public double getConfidence() { return confidence; }
+        public void setConfidence(double confidence) { this.confidence = confidence; }
+    }
+
+    // ===== Sink Creation Methods =====
+
+    private static KafkaSink<PatternEvent> createPatternEventsSink() {
+        return KafkaSink.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.CLINICAL_PATTERNS.getTopicName())
+                .setKeySerializationSchema((SerializationSchema<PatternEvent>) event -> event.getPatientId().getBytes())
+                .setValueSerializationSchema(new PatternEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<PatternEvent> createDeteriorationPatternSink() {
+        return KafkaSink.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.ALERT_MANAGEMENT.getTopicName())
+                .setKeySerializationSchema((SerializationSchema<PatternEvent>) event -> event.getPatientId().getBytes())
+                .setValueSerializationSchema(new PatternEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<PatternEvent> createPathwayAdherenceSink() {
+        return KafkaSink.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.PATHWAY_ADHERENCE_EVENTS.getTopicName())
+                .setKeySerializationSchema((SerializationSchema<PatternEvent>) event -> event.getPatientId().getBytes())
+                .setValueSerializationSchema(new PatternEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<PatternEvent> createAnomalyDetectionSink() {
+        return KafkaSink.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.SAFETY_EVENTS.getTopicName())
+                .setKeySerializationSchema((SerializationSchema<PatternEvent>) event -> event.getPatientId().getBytes())
+                .setValueSerializationSchema(new PatternEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<PatternEvent> createTrendAnalysisSink() {
+        return KafkaSink.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.CLINICAL_REASONING_EVENTS.getTopicName())
+                .setKeySerializationSchema((SerializationSchema<PatternEvent>) event -> event.getPatientId().getBytes())
+                .setValueSerializationSchema(new PatternEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static String getBootstrapServers() {
+        return KafkaConfigLoader.isRunningInDocker()
+            ? "kafka1:29092,kafka2:29093,kafka3:29094"
+            : "localhost:9092,localhost:9093,localhost:9094";
+    }
+
+    // ===== Serialization Classes =====
+
+    private static class SemanticEventDeserializer implements DeserializationSchema<SemanticEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public SemanticEvent deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, SemanticEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(SemanticEvent nextElement) { return false; }
+
+        @Override
+        public TypeInformation<SemanticEvent> getProducedType() {
+            return TypeInformation.of(SemanticEvent.class);
+        }
+    }
+
+    private static class PatternEventSerializer implements SerializationSchema<PatternEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(SerializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(PatternEvent element) {
+            try {
+                return objectMapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize PatternEvent", e);
+            }
+        }
+    }
+
+    private static class EnrichedEventDeserializer implements DeserializationSchema<EnrichedEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public EnrichedEvent deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, EnrichedEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(EnrichedEvent nextElement) { return false; }
+
+        @Override
+        public TypeInformation<EnrichedEvent> getProducedType() {
+            return TypeInformation.of(EnrichedEvent.class);
+        }
+    }
+}

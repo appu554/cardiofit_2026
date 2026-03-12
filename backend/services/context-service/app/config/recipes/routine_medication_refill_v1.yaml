@@ -1,0 +1,224 @@
+# Clinical Context Recipe: Routine Medication Refill (Optimistic Pattern)
+# Implements fast optimistic execution for low-risk routine refill workflows
+# Approved by Clinical Governance Board for routine medication management
+
+recipe_id: "routine_medication_refill_v1"
+recipe_name: "Routine Medication Refill Context"
+version: "1.0"
+clinical_scenario: "medication_refill"
+workflow_category: "command_initiated"
+execution_pattern: "optimistic"
+
+# Performance requirements - Optimistic pattern
+sla_ms: 25  # Fast for routine tasks
+cache_duration_seconds: 300  # 5 minutes cache for routine
+real_data_only: true
+mock_data_detection: true
+safety_critical: false
+
+# Required data points for routine medication refill
+required_data_points:
+  - name: "patient_demographics"
+    source_type: "patient_service"
+    fields: ["age", "weight", "gender", "insurance_status"]
+    required: true
+    max_age_hours: 48  # Relaxed for routine refill
+    quality_threshold: 0.80
+    timeout_ms: 8000
+    retry_count: 2
+    fallback_sources: ["fhir_store"]
+
+  - name: "current_medications"
+    source_type: "medication_service"
+    fields: ["medication_name", "dosage", "frequency", "refills_remaining", "last_fill_date"]
+    required: true
+    max_age_hours: 24
+    quality_threshold: 0.85
+    timeout_ms: 10000
+    retry_count: 2
+    fallback_sources: ["fhir_store"]
+
+  - name: "provider_context"
+    source_type: "context_service_internal"
+    fields: ["provider_id", "prescribing_authority", "last_review_date"]
+    required: true
+    max_age_hours: 24
+    quality_threshold: 0.80
+    timeout_ms: 6000
+    retry_count: 1
+    fallback_sources: []
+
+  - name: "refill_history"
+    source_type: "medication_service"
+    fields: ["previous_refills", "adherence_pattern", "last_pickup_date", "pharmacy_info"]
+    required: false  # Optional for routine refill
+    max_age_hours: 168  # 1 week
+    quality_threshold: 0.70
+    timeout_ms: 8000
+    retry_count: 1
+    fallback_sources: []
+
+  - name: "insurance_coverage"
+    source_type: "patient_service"
+    fields: ["plan_id", "coverage_status", "copay_amount", "prior_auth_status"]
+    required: false  # Optional for routine refill
+    max_age_hours: 72
+    quality_threshold: 0.70
+    timeout_ms: 6000
+    retry_count: 1
+    fallback_sources: []
+
+# Conditional rules for refill scenarios
+conditional_rules:
+  - condition: "medication.refills_remaining == 0"
+    description: "No refills remaining requires provider authorization"
+    additional_data_points:
+      - name: "provider_authorization"
+        source_type: "context_service_internal"
+        fields: ["authorization_status", "new_prescription_required", "provider_contact"]
+        required: true
+        max_age_hours: 1
+        quality_threshold: 0.95
+        timeout_ms: 5000
+        retry_count: 2
+
+  - condition: "medication.controlled_substance == true"
+    description: "Controlled substance requires additional verification"
+    additional_data_points:
+      - name: "controlled_substance_verification"
+        source_type: "medication_service"
+        fields: ["dea_verification", "schedule_class", "quantity_limits", "early_refill_check"]
+        required: true
+        max_age_hours: 1
+        quality_threshold: 0.95
+        timeout_ms: 8000
+        retry_count: 2
+
+  - condition: "patient.age >= 65"
+    description: "Elderly patient may require medication review"
+    additional_data_points:
+      - name: "geriatric_review"
+        source_type: "medication_service"
+        fields: ["medication_appropriateness", "drug_interactions", "dosing_review"]
+        required: false
+        max_age_hours: 168  # 1 week
+        quality_threshold: 0.75
+        timeout_ms: 10000
+        retry_count: 1
+
+  - condition: "refill_history.adherence_pattern == 'poor'"
+    description: "Poor adherence requires counseling context"
+    additional_data_points:
+      - name: "adherence_counseling"
+        source_type: "context_service_internal"
+        fields: ["counseling_history", "barriers_identified", "intervention_plan"]
+        required: false
+        max_age_hours: 72
+        quality_threshold: 0.70
+        timeout_ms: 6000
+        retry_count: 1
+
+# Quality constraints - Relaxed for routine refill
+quality_constraints:
+  minimum_completeness: 0.75
+  maximum_age_hours: 48
+  required_fields: ["patient_demographics", "current_medications", "provider_context"]
+  accuracy_threshold: 0.80
+
+# Safety requirements - Optimistic approach
+safety_requirements:
+  minimum_completeness_score: 0.75
+  absolute_required_enforcement: "LENIENT"
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "FLAG_FOR_REVIEW"
+  stale_data_action: "ACCEPT"  # Accept stale data for routine refill
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Cache strategy - Longer TTL for routine operations
+cache_strategy:
+  l1_ttl_seconds: 300  # 5 minutes
+  l2_ttl_seconds: 600  # 10 minutes
+  l3_ttl_seconds: 1800 # 30 minutes
+  cache_key_pattern: "context:refill:{patient_id}:{medication_id}"
+  invalidation_events:
+    - "clinical-data-changes.patient.medication.refilled"
+    - "clinical-data-changes.patient.insurance.updated"
+    - "clinical-data-changes.patient.provider.changed"
+
+# Assembly rules - Optimized for routine operations
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 20  # 20ms of the 25ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: false  # Skip for speed in routine operations
+  enforce_quality_constraints: false  # Relaxed for routine
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2024-01-25T09:00:00Z"
+  version: "1.0"
+  effective_date: "2024-01-25T00:00:00Z"
+  expiry_date: "2025-01-25T00:00:00Z"
+  clinical_board_approval_id: "CGB-MED-REFILL-20240125"
+  tags: ["approved", "production", "routine", "refill", "optimistic"]
+  change_log:
+    - "v1.0: Initial approved version for routine medication refill workflows"
+
+# Data source endpoints
+data_sources:
+  - service: "patient_service"
+    endpoint: "http://localhost:8003"
+    timeout_ms: 8000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "medication_service"
+    endpoint: "http://localhost:8009"
+    timeout_ms: 10000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "context_service_internal"
+    endpoint: "http://localhost:8016"
+    timeout_ms: 6000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "fhir_store"
+    endpoint: "projects/cardiofit-905a8/locations/asia-south1/datasets/clinical-synthesis-hub/fhirStores/fhir-store"
+    timeout_ms: 8000
+    protocol: "google_healthcare_api"
+
+# Optimistic execution configuration
+optimistic_execution:
+  async_validation: true
+  compensation_on_unsafe: true
+  optimistic_ui_feedback: true
+  background_verification: true
+  rollback_capability: true
+
+# Routine operation features
+routine_features:
+  auto_refill_eligible: true
+  pharmacy_integration: true
+  insurance_verification: true
+  patient_notification: true
+  adherence_tracking: true
+
+# Quality assurance for routine operations
+quality_assurance:
+  periodic_review_required: true
+  medication_therapy_management: true
+  drug_utilization_review: true
+  cost_optimization: true
+  generic_substitution: true
+
+# Audit and compliance - Routine focused
+audit_requirements:
+  log_refill_requests: true
+  track_authorization_status: true
+  record_pharmacy_interactions: true
+  capture_patient_preferences: true
+  maintain_refill_history: true

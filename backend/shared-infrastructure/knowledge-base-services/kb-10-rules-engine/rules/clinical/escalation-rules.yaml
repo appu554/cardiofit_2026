@@ -1,0 +1,417 @@
+type: rules
+version: "1.0.0"
+description: Clinical escalation pathways for deteriorating patients and urgent conditions
+
+rules:
+  # Rapid Response Team Activation
+  - id: ESCALATION-RAPID-RESPONSE
+    name: Rapid Response Team Activation
+    description: Triggers rapid response team for acute clinical deterioration
+    type: ESCALATION
+    category: CLINICAL
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: vitals.heart_rate.value
+        operator: GT
+        value: 130
+        description: Severe tachycardia
+      - field: vitals.heart_rate.value
+        operator: LT
+        value: 40
+        description: Severe bradycardia
+      - field: vitals.respiratory_rate.value
+        operator: GT
+        value: 30
+        description: Severe tachypnea
+      - field: vitals.oxygen_saturation.value
+        operator: LT
+        value: 88
+        description: Severe hypoxemia
+      - field: vitals.bp_systolic.value
+        operator: LT
+        value: 80
+        description: Severe hypotension
+      - field: custom_data.acute_mental_status_change
+        operator: EQ
+        value: true
+        description: Acute altered mental status
+
+    condition_logic: "1 OR 2 OR 3 OR 4 OR 5 OR 6"
+
+    actions:
+      - type: ESCALATE
+        message: "RAPID RESPONSE: Acute clinical deterioration detected"
+        parameters:
+          level: RAPID_RESPONSE_TEAM
+          urgency: STAT
+        recipients:
+          - rapid_response_team
+          - attending_physician
+          - charge_nurse
+        channel: OVERHEAD_PAGE
+
+      - type: ALERT
+        message: "Critical vital sign abnormality - Rapid Response Team activated"
+        priority: STAT
+
+    evidence:
+      level: HIGH
+      source: "Institute for Healthcare Improvement RRT Guidelines"
+
+    tags:
+      - rapid-response
+      - deterioration
+      - critical-care
+      - emergency
+
+  # Code Blue - Cardiac Arrest
+  - id: ESCALATION-CODE-BLUE
+    name: Code Blue Cardiac Arrest
+    description: Activates code blue team for cardiac or respiratory arrest
+    type: ESCALATION
+    category: CLINICAL
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 0
+
+    conditions:
+      - field: vitals.heart_rate.value
+        operator: EQ
+        value: 0
+      - field: vitals.respiratory_rate.value
+        operator: EQ
+        value: 0
+      - field: custom_data.unresponsive
+        operator: EQ
+        value: true
+
+    condition_logic: "1 OR 2 OR 3"
+
+    actions:
+      - type: ESCALATE
+        message: "CODE BLUE: Cardiac/Respiratory Arrest"
+        parameters:
+          level: CODE_TEAM
+          urgency: STAT
+        recipients:
+          - code_team
+          - anesthesia
+          - respiratory_therapy
+          - icu_physician
+        channel: OVERHEAD_PAGE
+
+      - type: LOG
+        message: "Code Blue activated"
+        parameters:
+          level: CRITICAL
+
+    evidence:
+      level: HIGH
+      source: "AHA ACLS Guidelines 2020"
+
+    tags:
+      - code-blue
+      - cardiac-arrest
+      - emergency
+      - resuscitation
+
+  # Stroke Alert
+  - id: ESCALATION-STROKE-ALERT
+    name: Stroke Alert Activation
+    description: Activates stroke team for suspected acute stroke
+    type: ESCALATION
+    category: CLINICAL
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: custom_data.nihss_score
+        operator: GTE
+        value: 4
+      - field: custom_data.symptom_onset_hours
+        operator: LTE
+        value: 24
+      - field: custom_data.focal_neurologic_deficit
+        operator: EQ
+        value: true
+
+    condition_logic: "(1 OR 3) AND 2"
+
+    actions:
+      - type: ESCALATE
+        message: "STROKE ALERT: Suspected acute stroke, NIHSS {{.Context.CustomData.nihss_score}}"
+        parameters:
+          level: STROKE_TEAM
+          urgency: STAT
+        recipients:
+          - stroke_team
+          - neurology
+          - radiology
+          - er_physician
+        channel: PAGER
+
+      - type: RECOMMEND
+        message: "STAT CT head, establish IV access, check blood glucose, obtain coagulation studies"
+
+    evidence:
+      level: HIGH
+      source: "AHA/ASA Stroke Guidelines 2019"
+
+    tags:
+      - stroke
+      - neurology
+      - time-critical
+      - thrombolysis
+
+  # STEMI Alert
+  - id: ESCALATION-STEMI-ALERT
+    name: STEMI Alert Activation
+    description: Activates cardiac catheterization team for STEMI
+    type: ESCALATION
+    category: CLINICAL
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: custom_data.stemi_criteria_met
+        operator: EQ
+        value: true
+      - field: labs.troponin.value
+        operator: GT
+        value: 0.04
+        description: Elevated troponin
+
+    condition_logic: "1 OR 2"
+
+    actions:
+      - type: ESCALATE
+        message: "STEMI ALERT: Activate cardiac catheterization lab"
+        parameters:
+          level: CATH_LAB
+          urgency: STAT
+        recipients:
+          - interventional_cardiology
+          - cath_lab_team
+          - cardiology_fellow
+        channel: PAGER
+
+      - type: RECOMMEND
+        message: "Administer aspirin, heparin, initiate door-to-balloon time tracking"
+
+    evidence:
+      level: HIGH
+      source: "ACC/AHA STEMI Guidelines 2021"
+
+    tags:
+      - stemi
+      - cardiology
+      - pci
+      - time-critical
+
+  # Sepsis Bundle Activation
+  - id: ESCALATION-SEPSIS-BUNDLE
+    name: Sepsis Bundle Escalation
+    description: Escalates for sepsis bundle completion within 3 hours
+    type: ESCALATION
+    category: CLINICAL
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: labs.lactate.value
+        operator: GT
+        value: 2.0
+      - field: vitals.bp_systolic.value
+        operator: LT
+        value: 90
+      - field: custom_data.suspected_infection
+        operator: EQ
+        value: true
+
+    condition_logic: "(1 OR 2) AND 3"
+
+    actions:
+      - type: ESCALATE
+        message: "SEPSIS ALERT: Initiate sepsis bundle, lactate {{.Context.Labs.lactate.value}}"
+        parameters:
+          level: PHYSICIAN
+          urgency: URGENT
+        recipients:
+          - attending_physician
+          - rapid_response_team
+        channel: PAGER
+
+      - type: RECOMMEND
+        message: "Complete 3-hour bundle: Blood cultures x2, broad-spectrum antibiotics, 30mL/kg crystalloid if hypotensive"
+
+      - type: LOG
+        message: "Sepsis bundle escalation initiated"
+        parameters:
+          level: INFO
+          bundle_start_time: "{{.Context.Timestamp}}"
+
+    evidence:
+      level: HIGH
+      source: "Surviving Sepsis Campaign 2021"
+
+    tags:
+      - sepsis
+      - bundle
+      - infection
+      - time-critical
+
+  # ICU Transfer Recommendation
+  - id: ESCALATION-ICU-TRANSFER
+    name: ICU Transfer Escalation
+    description: Recommends ICU transfer for patients requiring higher level of care
+    type: ESCALATION
+    category: CLINICAL
+    severity: HIGH
+    status: ACTIVE
+    priority: 3
+
+    conditions:
+      - field: custom_data.fio2_requirement
+        operator: GT
+        value: 0.5
+        description: FiO2 > 50%
+      - field: custom_data.vasopressor_required
+        operator: EQ
+        value: true
+      - field: custom_data.invasive_monitoring_needed
+        operator: EQ
+        value: true
+      - field: labs.ph.value
+        operator: LT
+        value: 7.25
+        description: Severe acidosis
+
+    condition_logic: "1 OR 2 OR 3 OR 4"
+
+    actions:
+      - type: ESCALATE
+        message: "ICU TRANSFER RECOMMENDED: Patient requires higher level of care"
+        parameters:
+          level: ICU_ATTENDING
+          urgency: URGENT
+        recipients:
+          - icu_attending
+          - hospitalist
+          - charge_nurse
+        channel: PHONE
+
+      - type: NOTIFY
+        message: "ICU bed request initiated"
+        recipients:
+          - bed_management
+        channel: EHR_MESSAGE
+
+    evidence:
+      level: MODERATE
+      source: "SCCM ICU Admission Guidelines"
+
+    tags:
+      - icu
+      - transfer
+      - escalation-of-care
+
+  # Pharmacy Consult Escalation
+  - id: ESCALATION-PHARMACY-CONSULT
+    name: Pharmacy Consult Escalation
+    description: Escalates complex medication issues to clinical pharmacist
+    type: ESCALATION
+    category: CLINICAL
+    severity: MODERATE
+    status: ACTIVE
+    priority: 10
+
+    conditions:
+      - field: custom_data.polypharmacy_count
+        operator: GTE
+        value: 10
+        description: Patient on 10+ medications
+      - field: custom_data.drug_interaction_severity
+        operator: EQ
+        value: major
+      - field: custom_data.anticoagulation_complexity
+        operator: EQ
+        value: high
+
+    condition_logic: "1 OR 2 OR 3"
+
+    actions:
+      - type: ESCALATE
+        message: "Pharmacy consult recommended for complex medication management"
+        parameters:
+          level: PHARMACIST
+          urgency: ROUTINE
+        recipients:
+          - clinical_pharmacist
+        channel: WORKLIST
+
+      - type: RECOMMEND
+        message: "Clinical pharmacist review for medication optimization and safety"
+
+    evidence:
+      level: MODERATE
+      source: "ASHP Clinical Pharmacy Guidelines"
+
+    tags:
+      - pharmacy
+      - consult
+      - medication-management
+      - polypharmacy
+
+  # Palliative Care Escalation
+  - id: ESCALATION-PALLIATIVE-CARE
+    name: Palliative Care Consult Trigger
+    description: Triggers palliative care consult for appropriate patients
+    type: ESCALATION
+    category: CLINICAL
+    severity: LOW
+    status: ACTIVE
+    priority: 15
+
+    conditions:
+      - field: custom_data.readmission_count_30d
+        operator: GTE
+        value: 2
+      - field: conditions
+        operator: CONTAINS
+        value: metastatic_cancer
+      - field: custom_data.icu_los_days
+        operator: GT
+        value: 14
+      - field: conditions
+        operator: CONTAINS
+        value: end_stage_organ_failure
+
+    condition_logic: "1 OR 2 OR 3 OR 4"
+
+    actions:
+      - type: ESCALATE
+        message: "Palliative care consult may benefit this patient"
+        parameters:
+          level: PALLIATIVE_CARE
+          urgency: ROUTINE
+        recipients:
+          - palliative_care_team
+        channel: EHR_MESSAGE
+
+      - type: RECOMMEND
+        message: "Consider palliative care consultation for goals of care discussion"
+
+    evidence:
+      level: MODERATE
+      source: "National Consensus Project Palliative Care Guidelines"
+
+    tags:
+      - palliative-care
+      - goals-of-care
+      - quality-of-life

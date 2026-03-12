@@ -1,0 +1,238 @@
+# Clinical Context Recipe: CAE Integration Context (PRODUCTION)
+# Implements Clinical Assertion Engine integration for clinical reasoning
+# Based on ContextRecipeBook.txt specifications
+
+recipe_id: "cae_integration_context_v1"
+recipe_name: "Clinical Assertion Engine Integration Context"
+version: "1.0"
+clinical_scenario: "clinical_reasoning"
+workflow_category: "command_initiated"
+execution_pattern: "pessimistic"
+
+# Performance requirements (Production SLA)
+sla_ms: 200  # Context gathering budget
+cache_duration_seconds: 300
+real_data_only: true
+mock_data_detection: true
+mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Clinical recipe references
+clinical_recipe_refs:
+  - "cae-clinical-reasoning-v1.0"
+
+# Triggers
+triggers:
+  - domain: "medication"
+  - action: ["prescribe", "modify", "validate"]
+  - workflow_type: "command_initiated"
+  - requires_clinical_reasoning: true
+
+# Required data points for CAE integration
+required_data_points:
+  - name: "cae_comprehensive_check"
+    source_type: "cae_service"
+    endpoint: "localhost:8027"
+    fields: ["drug_interactions", "contraindications", "dosing_recommendations", "allergy_checks", "duplicate_therapy", "clinical_protocols"]
+    required: true
+    max_age_hours: 0  # Real-time
+    quality_threshold: 0.95
+    timeout_ms: 100
+    retry_count: 1
+    fallback_sources: []
+    protocol: "grpc"
+    critical: true
+    fallback: "fail_workflow"
+
+  - name: "safety_gateway_validation"
+    source_type: "safety_gateway"
+    endpoint: "http://localhost:8030/api/v1/validate"
+    fields: ["safety_status", "risk_score", "engine_results", "explanation"]
+    required: true
+    max_age_hours: 0  # Real-time
+    quality_threshold: 0.95
+    timeout_ms: 200
+    retry_count: 1
+    fallback_sources: []
+    protocol: "http"
+    critical: true
+
+  - name: "patient_clinical_context"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["demographics", "medications", "allergies", "conditions"]
+    required: true
+    max_age_hours: 0.5  # 30 minutes
+    quality_threshold: 0.90
+    timeout_ms: 80
+    retry_count: 2
+    fallback_sources: ["patient_service", "fhir_store"]
+    cache_strategy: "l1_l2"
+
+# Optional data points
+optional_data_points:
+  - name: "clinical_guidelines"
+    source_type: "cae_service"
+    endpoint: "localhost:8027"
+    fields: ["applicable_guidelines", "evidence_level", "recommendations"]
+    required: false
+    max_age_hours: 24
+    quality_threshold: 0.80
+    timeout_ms: 150
+    retry_count: 1
+    fallback_sources: []
+    protocol: "grpc"
+    fallback: "skip_guidelines"
+
+# Conditional rules for additional data requirements
+conditional_rules:
+  - condition: "medication.high_risk == true"
+    description: "High-risk medication requires enhanced CAE analysis"
+    additional_data_points:
+      - name: "enhanced_cae_analysis"
+        source_type: "cae_service"
+        endpoint: "localhost:8027"
+        fields: ["detailed_risk_assessment", "monitoring_requirements", "alternative_recommendations"]
+        required: true
+        max_age_hours: 0
+        quality_threshold: 0.98
+        timeout_ms: 150
+        retry_count: 1
+
+  - condition: "patient.multiple_conditions == true"
+    description: "Complex patient requires comprehensive interaction analysis"
+    additional_data_points:
+      - name: "complex_interaction_analysis"
+        source_type: "cae_service"
+        endpoint: "localhost:8027"
+        fields: ["multi_drug_interactions", "condition_drug_interactions", "cumulative_effects"]
+        required: true
+        max_age_hours: 0
+        quality_threshold: 0.95
+        timeout_ms: 200
+        retry_count: 1
+
+# Quality constraints
+quality_constraints:
+  minimum_completeness: 0.90
+  maximum_age_hours: 1
+  required_fields: ["cae_comprehensive_check", "safety_gateway_validation", "patient_clinical_context"]
+  accuracy_threshold: 0.95
+
+# Safety requirements (Production)
+safety_requirements:
+  minimum_completeness_score: 0.90
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "FAIL_WORKFLOW"
+  stale_data_action: "FLAG_FOR_REVIEW"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# High-performance strategy for CAE
+performance_strategy:
+  parallelization: true
+  sla_budget_ms: 200
+  circuit_breaker: true
+  retry_policy: "exponential_backoff"
+  fail_fast: true
+
+# Cache strategy (Production L1/L2/L3)
+cache_strategy:
+  l1_ttl_seconds: 300    # 5 minutes
+  l2_ttl_seconds: 1800   # 30 minutes
+  l3_ttl_seconds: 7200   # 2 hours
+  cache_key_pattern: "context:cae:{patient_id}:{medication_id}:{timestamp}"
+  invalidation_events:
+    - "clinical-data-changes.patient.medication.added"
+    - "clinical-data-changes.patient.medication.updated"
+    - "clinical-data-changes.patient.allergy.added"
+    - "clinical-data-changes.patient.condition.updated"
+    - "clinical-data-changes.cae.rules.updated"
+
+# Assembly rules (Production)
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 180  # 180ms of the 200ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: true
+  enforce_quality_constraints: true
+  fail_fast: true
+
+# QoS Tier (Highest priority for clinical reasoning)
+qos_tier: "platinum"
+max_latency: 200
+availability: "99.99%"
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2025-07-31T10:00:00Z"
+  version: "1.0"
+  effective_date: "2025-07-31T00:00:00Z"
+  expiry_date: "2026-07-31T00:00:00Z"
+  clinical_board_approval_id: "CGB-CAE-INTEGRATION-20250731"
+  tags: ["approved", "production", "cae", "clinical_reasoning", "safety"]
+  change_log:
+    - "v1.0: Initial production implementation with CAE and Safety Gateway integration"
+
+# Data source endpoints (Production)
+data_sources:
+  - service: "cae_service"
+    endpoint: "localhost:8027"
+    timeout_ms: 200
+    protocol: "grpc"
+
+  - service: "safety_gateway"
+    endpoint: "http://localhost:8030"
+    timeout_ms: 200
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    timeout_ms: 80
+    health_check: "/health"
+    protocol: "graphql"
+
+# Clinical decision support integration
+clinical_decision_support:
+  drug_interaction_checking: true
+  allergy_screening: true
+  dosing_validation: true
+  contraindication_checking: true
+  duplicate_therapy_checking: true
+  clinical_protocol_validation: true
+  evidence_based_recommendations: true
+
+# CAE-specific configuration
+cae_configuration:
+  reasoning_engines:
+    - "drug_drug_interaction"
+    - "allergy_checker"
+    - "dose_validator"
+    - "contraindication_checker"
+    - "duplicate_therapy_detector"
+    - "pathway_validator"
+    - "lab_validator"
+    - "order_validator"
+    - "clinical_context_analyzer"
+  
+  performance_targets:
+    - "sub_100ms_response"
+    - "parallel_execution"
+    - "multi_level_caching"
+  
+  safety_features:
+    - "fail_closed_on_error"
+    - "comprehensive_logging"
+    - "audit_trail"
+
+# Audit and compliance
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true
+  log_cae_decisions: true
+  track_clinical_reasoning: true

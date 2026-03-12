@@ -1,0 +1,134 @@
+﻿Of course. Let's proceed with the deep dive into KB-6: Formulary & Stock. This knowledge base is crucial for the platform's operational and financial intelligence, directly impacting the final ranking of medication proposals.
+This guide provides the detailed design and implementation plan for KB-6, adhering to the Universal Framework and synthesizing all the architectural decisions we've made.
+________________
+
+
+Implementation Guide: KB-6 Formulary & Stock
+
+
+Monday, September 1, 2025, 4:20 PM AEST, Sydney, NSW
+This document provides the detailed design and implementation plan for the KB-6 Formulary & Stock microservice, following the 13-section Universal Framework 2.0.
+
+
+1. Purpose & Scope
+
+
+* Purpose: To serve as the platform's single source of truth for all operational, financial, and logistical data related to medications. Its primary function is to provide the Medication Service's ScoringEngine with the necessary data to rank clinically-safe medication proposals based on cost, insurance coverage, and real-time availability.
+* In Scope:
+   * Insurance formulary status (e.g., preferred, non-preferred, not_covered) by plan.
+   * Medication tiering and copay information.
+   * Prior authorization and step therapy requirements.
+   * Real-time medication inventory levels by location (e.g., specific hospital pharmacy).
+   * Predictive analytics for stock requirements based on historical dispensing data.
+* Out of Scope:
+   * Clinical safety rules (responsibility of KB-4).
+   * Dosing calculations (responsibility of KB-1).
+   * Guideline evidence (responsibility of KB-3).
+
+
+2. Data Model & Schema
+
+
+* Primary Technology: A hybrid model using PostgreSQL for transactional data, Redis for real-time stock, and Elasticsearch for advanced search, as defined in the Database Architecture for 7 KB Services document.
+* Data Sourcing: Formulary data is licensed from third-party Pharmacy Benefit Managers (PBMs). Stock data is integrated from internal inventory management systems. Both are processed via the Unified ETL Pipeline.
+* Schema Implementation: The following tables from the Database Architecture for 7 KB Services document will be implemented in PostgreSQL:
+   * formulary: The master table for all plan-specific coverage rules, including tiers, prior auth, and cost information 1.
+
+   * inventory: Tracks real-time quantity on hand and allocated stock for specific drug lots at specific locations 2.
+
+   * dispensing_history: An anonymized, partitioned log of historical dispensing data used to train predictive models 3.
+
+   * stock_predictions: Stores the output of forecasting models for predicting future stock needs 4.
+
+   * formulary_optimization: A materialized view for analyzing cost and usage patterns 5.
+
+
+
+3. Cross-Component Integration
+
+
+   * Primary Consumer: The Medication Service's ScoringEngine. During Phase 3c of the 4-phase workflow, it queries KB-6 to obtain scores for cost, coverage, and availability, which are used to rank the final proposals 6.
+
+   * Dependency: KB-6 depends on KB-7 (Terminology). The Unified ETL pipeline must use KB-7 to normalize all drug codes from PBM and inventory systems into our canonical RxNorm/ATC standards.
+
+
+4. API & Query Contracts
+
+
+      * Technology: A combination of a RESTful API for direct lookups and a dedicated Elasticsearch endpoint for complex searching.
+      * Key API Endpoints:
+      * GET /api/v1/formulary/status?drug_code=:code&plan_id=:plan: Retrieves the detailed formulary status, tier, copay, and prior auth rules for a specific drug on a specific insurance plan.
+      * GET /api/v1/inventory/stock?drug_code=:code&location_id=:location: A low-latency endpoint that checks the Redis cache for the real-time quantity_available of a drug at a given pharmacy or ward.
+      * POST /api/v1/formulary/search: A rich search endpoint backed by Elasticsearch that allows finding therapeutic alternatives based on formulary status, cost tier, and other criteria.
+
+
+5. Security & Privacy by Design
+
+
+      * Access Control: The service requires strict mTLS and is primarily accessed by the ScoringEngine.
+      * Data Sensitivity: Formulary pricing and contract data is commercially sensitive and must be protected. The dispensing_history table contains anonymized data, but access to it should still be tightly controlled to prevent re-identification.
+
+
+6. Performance & Caching Strategy
+
+
+      * Database: The formulary_optimization materialized view is used for internal analytics. Queries from the ScoringEngine are highly indexed by drug_code and plan_id.
+      * Caching (Multi-Layer):
+      * Redis for Real-time Stock: The quantity_available from the inventory table is mirrored in Redis for millisecond-level stock checks. This data is updated in real-time by the inventory management system 7.
+
+      * Redis for Formulary "Hot" Data: The formulary status for the most common drugs and plans is cached in Redis with a 15-minute TTL to reduce database load 8888.
+
+      * Elasticsearch for Search: The entire formulary dataset is indexed into Elasticsearch to power the complex search API, providing sub-second responses that would be too slow for PostgreSQL 9.
+
+
+
+7. Testing & Quality Assurance Strategy
+
+
+         * Data Validation: The ETL pipeline must include rigorous validation steps to ensure data from PBMs is parsed correctly. This includes checks for valid drug codes, reasonable cost values, and consistent tiering information.
+         * Functional Testing: Unit tests for all API endpoints and integration tests to verify the contract with the ScoringEngine.
+
+
+8. Governance & Maintenance
+
+
+         * Data Source: Governance involves managing contracts and data feeds from PBMs and ensuring the data quality meets our standards.
+         * Update Cadence: Formulary data is typically updated monthly or quarterly via the Unified ETL Pipeline. Inventory data is updated in near real-time via a separate streaming process.
+
+
+9. CI/CD Pipeline & Deployment
+
+
+         * Data Pipeline: The formulary data is deployed via the Unified ETL Pipeline.
+         * Service Pipeline: The CI/CD for the KB-6 service code itself follows the standard pattern: [Lint -> Test -> Security Scan -> Deploy].
+
+
+10. Monitoring & Observability
+
+
+         * Technical Metrics: API latency, error rate, cache hit rates, Elasticsearch query performance.
+         * Operational Metrics:
+         * Formulary Coverage Rate (% of top prescribed drugs that are preferred).
+         * Stock-Out Rate (% of times a recommended drug is out of stock).
+         * Prior Authorization Rate (% of recommendations that require prior auth).
+
+
+11. Failure Modes
+
+
+         * Graceful Degradation: If KB-6 is unavailable, this is not a safety-critical failure. The ScoringEngine must degrade gracefully. It will proceed to rank therapies based on clinical factors from kb_clinical_context alone. It must attach a WARN to the final proposal indicating that cost and formulary status could not be verified. The workflow should not be blocked.
+
+
+12. Data Lifecycle
+
+
+         * Formulary data is time-sensitive. The
+formulary table is partitioned by effective_date10. Expired formulary versions must be archived for financial auditing and analysis but removed from the active query set.
+
+
+
+13. Supply Chain Security
+
+
+            * Vendor Management: A formal process is required to validate the security and data integrity of our PBM data providers.
+            * Data Integrity: The ETL pipeline must verify checksums for all data files received from vendors and inventory systems.

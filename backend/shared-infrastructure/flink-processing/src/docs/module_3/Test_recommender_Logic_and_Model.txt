@@ -1,0 +1,674 @@
+﻿package com.cds.knowledgebase.diagnostics.recommender;
+
+
+import com.cds.knowledgebase.diagnostics.model.*;
+import com.cds.knowledgebase.model.*;
+import lombok.extern.slf4j.Slf4j;
+import java.util.*;
+import java.util.stream.Collectors;
+
+
+/**
+ * Intelligent Diagnostic Test Recommender
+ * Recommends appropriate lab and imaging tests based on protocol and patient context
+ */
+@Slf4j
+public class TestRecommender {
+    
+    private final DiagnosticTestLoader testLoader;
+    private final TestOrderingRules orderingRules;
+    
+    public TestRecommender(DiagnosticTestLoader testLoader, TestOrderingRules orderingRules) {
+        this.testLoader = testLoader;
+        this.orderingRules = orderingRules;
+    }
+    
+    // ================================================================
+    // MAIN RECOMMENDATION ENGINE
+    // ================================================================
+    
+    /**
+     * Recommend all appropriate tests for a patient given matched protocol
+     */
+    public List<TestRecommendation> recommendTests(
+            PatientContext context,
+            Protocol protocol) {
+        
+        log.info("Generating test recommendations for protocol: {}", protocol.getName());
+        
+        List<TestRecommendation> recommendations = new ArrayList<>();
+        
+        // 1. Get tests from protocol actions
+        List<ProtocolAction> testActions = protocol.getActions().stream()
+            .filter(a -> "LAB_TEST".equals(a.getType()) || "IMAGING".equals(a.getType()))
+            .collect(Collectors.toList());
+        
+        for (ProtocolAction action : testActions) {
+            TestRecommendation recommendation = createRecommendation(action, context);
+            
+            if (recommendation != null && shouldRecommend(recommendation, context)) {
+                recommendations.add(recommendation);
+            }
+        }
+        
+        // 2. Add protocol-specific test panels
+        List<TestRecommendation> panelTests = orderingRules.getTestPanel(
+            protocol.getSpecialty(), context);
+        recommendations.addAll(panelTests);
+        
+        // 3. Apply ordering rules (avoid duplicates, check timing)
+        recommendations = applyOrderingRules(recommendations, context);
+        
+        // 4. Add reflex testing based on existing results
+        List<TestRecommendation> reflexTests = checkReflexTesting(context);
+        recommendations.addAll(reflexTests);
+        
+        // 5. Sort by priority and timing
+        recommendations.sort(Comparator
+            .comparing(TestRecommendation::getPriority)
+            .thenComparing(TestRecommendation::getUrgency));
+        
+        log.info("Generated {} test recommendations", recommendations.size());
+        return recommendations;
+    }
+    
+    // ================================================================
+    // RECOMMENDATION CREATION
+    // ================================================================
+    
+    private TestRecommendation createRecommendation(
+            ProtocolAction action,
+            PatientContext context) {
+        
+        if ("LAB_TEST".equals(action.getType())) {
+            return createLabRecommendation(action, context);
+        } else if ("IMAGING".equals(action.getType())) {
+            return createImagingRecommendation(action, context);
+        }
+        
+        return null;
+    }
+    
+    private TestRecommendation createLabRecommendation(
+            ProtocolAction action,
+            PatientContext context) {
+        
+        if (action.getLabTest() == null) return null;
+        
+        String testName = action.getLabTest().getTestName();
+        LabTest labTest = testLoader.getLabTest(testName);
+        
+        if (labTest == null) {
+            log.warn("Lab test not found: {}", testName);
+            return null;
+        }
+        
+        return TestRecommendation.builder()
+            .recommendationId(generateRecommendationId())
+            .testType("LAB_TEST")
+            .testId(labTest.getTestId())
+            .testName(labTest.getTestName())
+            .loincCode(labTest.getLoincCode())
+            .priority(action.getPriority())
+            .urgency(determineUrgency(action, labTest))
+            .rationale(action.getRationale())
+            .indication(action.getLabTest().getIndication())
+            .timeframeMinutes(action.getTimeframeMinutes())
+            .evidenceLevel(action.getEvidenceLevel())
+            .evidenceReferences(action.getEvidenceReferences())
+            .orderDetails(createLabOrderDetails(labTest, context))
+            .safetyChecks(performLabSafetyChecks(labTest, context))
+            .estimatedTurnaroundMinutes(labTest.getTiming().getTurnaroundTimeMinutes())
+            .costEstimate(labTest.getCost().getInstitutionalCost())
+            .build();
+    }
+    
+    private TestRecommendation createImagingRecommendation(
+            ProtocolAction action,
+            PatientContext context) {
+        
+        if (action.getImaging() == null) return null;
+        
+        String studyType = action.getImaging().getStudyType();
+        ImagingStudy imaging = testLoader.getImagingStudy(studyType);
+        
+        if (imaging == null) {
+            log.warn("Imaging study not found: {}", studyType);
+            return null;
+        }
+        
+        return TestRecommendation.builder()
+            .recommendationId(generateRecommendationId())
+            .testType("IMAGING")
+            .testId(imaging.getStudyId())
+            .testName(imaging.getStudyName())
+            .priority(action.getPriority())
+            .urgency(determineUrgency(action, imaging))
+            .rationale(action.getRationale())
+            .indication(action.getImaging().getIndication())
+            .timeframeMinutes(action.getTimeframeMinutes())
+            .evidenceLevel(action.getEvidenceLevel())
+            .evidenceReferences(action.getEvidenceReferences())
+            .orderDetails(createImagingOrderDetails(imaging, context))
+            .safetyChecks(performImagingSafetyChecks(imaging, context))
+            .appropriateness(assessAppropriateness(imaging, action.getImaging().getIndication()))
+            .estimatedTurnaroundMinutes(imaging.estimateTotalTimeMinutes(
+                "P0".equals(action.getPriority())))
+            .costEstimate(imaging.getCost().getInstitutionalCost())
+            .radiationExposure(imaging.getRadiationExposure().name())
+            .build();
+    }
+    
+    // ================================================================
+    // ORDERING RULES
+    // ================================================================
+    
+    private boolean shouldRecommend(
+            TestRecommendation recommendation,
+            PatientContext context) {
+        
+        // 1. Check if test was recently ordered
+        if (wasRecentlyOrdered(recommendation, context)) {
+            log.debug("Test {} recently ordered, skipping", recommendation.getTestName());
+            return false;
+        }
+        
+        // 2. Check safety
+        if (recommendation.getSafetyChecks() != null && 
+            !recommendation.getSafetyChecks().isSafe()) {
+            log.warn("Test {} failed safety checks", recommendation.getTestName());
+            return false;
+        }
+        
+        // 3. Check appropriateness (for imaging)
+        if ("IMAGING".equals(recommendation.getTestType())) {
+            String appropriateness = recommendation.getAppropriateness();
+            if ("USUALLY_NOT_APPROPRIATE".equals(appropriateness)) {
+                log.info("Imaging {} not appropriate for indication", recommendation.getTestName());
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    private List<TestRecommendation> applyOrderingRules(
+            List<TestRecommendation> recommendations,
+            PatientContext context) {
+        
+        List<TestRecommendation> filtered = new ArrayList<>();
+        Set<String> orderedTests = new HashSet<>();
+        
+        for (TestRecommendation rec : recommendations) {
+            // Deduplicate
+            String key = rec.getTestId();
+            if (orderedTests.contains(key)) {
+                log.debug("Duplicate test {} removed", rec.getTestName());
+                continue;
+            }
+            
+            orderedTests.add(key);
+            filtered.add(rec);
+        }
+        
+        return filtered;
+    }
+    
+    private boolean wasRecentlyOrdered(
+            TestRecommendation recommendation,
+            PatientContext context) {
+        
+        if (context.getLabs() == null) return false;
+        
+        // Check if test was done in last X hours
+        String testName = recommendation.getTestName();
+        PatientContext.LabResult result = context.getLab(testName);
+        
+        if (result == null) return false;
+        
+        // Get minimum interval from test definition
+        LabTest labTest = testLoader.getLabTest(testName);
+        if (labTest == null || labTest.getOrderingRules() == null) {
+            return false;
+        }
+        
+        Integer minIntervalHours = labTest.getOrderingRules().getMinimumIntervalHours();
+        if (minIntervalHours == null) return false;
+        
+        long hoursSinceTest = (System.currentTimeMillis() - result.getTimestamp()) / (1000 * 60 * 60);
+        
+        return hoursSinceTest < minIntervalHours;
+    }
+    
+    // ================================================================
+    // REFLEX TESTING
+    // ================================================================
+    
+    private List<TestRecommendation> checkReflexTesting(PatientContext context) {
+        List<TestRecommendation> reflexTests = new ArrayList<>();
+        
+        if (context.getLabs() == null) return reflexTests;
+        
+        // Example: Elevated lactate → Repeat lactate
+        PatientContext.LabResult lactate = context.getLab("Serum Lactate");
+        if (lactate != null && lactate.getValue() != null && lactate.getValue() > 2.0) {
+            
+            // Check if lactate was recent
+            long hoursSince = (System.currentTimeMillis() - lactate.getTimestamp()) / (1000 * 60 * 60);
+            
+            if (hoursSince >= 2) {  // Recommend repeat after 2 hours
+                LabTest lactateTest = testLoader.getLabTest("Serum Lactate");
+                
+                if (lactateTest != null) {
+                    reflexTests.add(TestRecommendation.builder()
+                        .recommendationId(generateRecommendationId())
+                        .testType("LAB_TEST")
+                        .testId(lactateTest.getTestId())
+                        .testName(lactateTest.getTestName())
+                        .loincCode(lactateTest.getLoincCode())
+                        .priority("P1")
+                        .urgency("URGENT")
+                        .rationale("Repeat lactate to assess clearance (initial value: " + 
+                                 lactate.getValue() + " mmol/L)")
+                        .indication("Lactate clearance monitoring")
+                        .timeframeMinutes(120)
+                        .evidenceLevel("A")
+                        .orderDetails(createLabOrderDetails(lactateTest, context))
+                        .isReflexTest(true)
+                        .build());
+                }
+            }
+        }
+        
+        // Example: Troponin elevated → Repeat troponin series
+        PatientContext.LabResult troponin = context.getLab("Troponin I");
+        if (troponin != null && troponin.getValue() != null && troponin.getValue() > 0.04) {
+            
+            long hoursSince = (System.currentTimeMillis() - troponin.getTimestamp()) / (1000 * 60 * 60);
+            
+            if (hoursSince >= 3) {  // Repeat every 3 hours
+                LabTest troponinTest = testLoader.getLabTest("Troponin I");
+                
+                if (troponinTest != null) {
+                    reflexTests.add(TestRecommendation.builder()
+                        .recommendationId(generateRecommendationId())
+                        .testType("LAB_TEST")
+                        .testId(troponinTest.getTestId())
+                        .testName(troponinTest.getTestName())
+                        .loincCode(troponinTest.getLoincCode())
+                        .priority("P1")
+                        .urgency("URGENT")
+                        .rationale("Serial troponin for trending (initial: " + 
+                                 troponin.getValue() + " ng/mL)")
+                        .indication("Troponin trending in ACS"
+                        .timeframeMinutes(180)
+                        .evidenceLevel("A")
+                        .orderDetails(createLabOrderDetails(troponinTest, context))
+                        .isReflexTest(true)
+                        .build());
+                }
+            }
+        }
+        
+        return reflexTests;
+    }
+    
+    // ================================================================
+    // ORDER DETAILS CREATION
+    // ================================================================
+    
+    private OrderDetails createLabOrderDetails(LabTest labTest, PatientContext context) {
+        return OrderDetails.builder()
+            .specimenType(labTest.getSpecimen() != null ? 
+                         labTest.getSpecimen().getSpecimenType() : "BLOOD")
+            .collectionMethod(labTest.getSpecimen() != null ? 
+                             labTest.getSpecimen().getCollection() : "Venipuncture")
+            .containerType(labTest.getSpecimen() != null ? 
+                          labTest.getSpecimen().getContainer() : "Standard")
+            .specialHandling(labTest.getSpecimen() != null ? 
+                            labTest.getSpecimen().getSpecialHandling() : null)
+            .fastingRequired(labTest.getSpecimen() != null && 
+                           labTest.getSpecimen().isFastingRequired())
+            .build();
+    }
+    
+    private OrderDetails createImagingOrderDetails(ImagingStudy imaging, PatientContext context) {
+        return OrderDetails.builder()
+            .modality(imaging.getModality())
+            .protocol(selectImagingProtocol(imaging, context))
+            .contrastRequired(imaging.getTechnical() != null && 
+                            imaging.getTechnical().isContrastRequired())
+            .contrastType(imaging.getTechnical() != null ? 
+                         imaging.getTechnical().getContrastType() : null)
+            .preparationRequired(imaging.getTechnical() != null && 
+                               imaging.getTechnical().isRequiresPrep())
+            .preparationInstructions(imaging.getTechnical() != null ? 
+                                   imaging.getTechnical().getPreparationInstructions() : null)
+            .portableAvailable(imaging.getTechnical() != null && 
+                             imaging.getTechnical().isPortableAvailable())
+            .build();
+    }
+    
+    private String selectImagingProtocol(ImagingStudy imaging, PatientContext context) {
+        if (imaging.getOrderingRules() == null || 
+            imaging.getOrderingRules().getProtocolSelection() == null) {
+            return "Standard";
+        }
+        
+        // Select protocol based on patient condition
+        Map<String, String> protocols = imaging.getOrderingRules().getProtocolSelection();
+        
+        if (context.getClinicalContext() != null && 
+            context.getClinicalContext().getLocation() != null) {
+            
+            String location = context.getClinicalContext().getLocation();
+            
+            if ("ICU".equals(location) || "ED".equals(location)) {
+                return protocols.getOrDefault("portable", "Standard");
+            }
+        }
+        
+        return protocols.getOrDefault("standard", "Standard");
+    }
+    
+    // ================================================================
+    // SAFETY CHECKS
+    // ================================================================
+    
+    private SafetyCheck performLabSafetyChecks(LabTest labTest, PatientContext context) {
+        SafetyCheck check = new SafetyCheck();
+        check.setSafe(true);
+        List<String> warnings = new ArrayList<>();
+        
+        // Check for contraindications
+        if (labTest.getOrderingRules() != null && 
+            labTest.getOrderingRules().getContraindications() != null) {
+            
+            for (String contraindication : labTest.getOrderingRules().getContraindications()) {
+                if (context.hasCondition(contraindication)) {
+                    check.setSafe(false);
+                    warnings.add("Contraindication: " + contraindication);
+                }
+            }
+        }
+        
+        // Check for interfering medications
+        if (labTest.getQuality() != null && 
+            labTest.getQuality().getInterferingMedications() != null) {
+            
+            for (String medication : labTest.getQuality().getInterferingMedications()) {
+                if (context.isOnMedication(medication)) {
+                    warnings.add("Warning: Patient on " + medication + 
+                               " which may interfere with test results");
+                }
+            }
+        }
+        
+        check.setWarnings(warnings);
+        return check;
+    }
+    
+    private SafetyCheck performImagingSafetyChecks(ImagingStudy imaging, PatientContext context) {
+        SafetyCheck check = new SafetyCheck();
+        check.setSafe(true);
+        List<String> warnings = new ArrayList<>();
+        
+        // Check if safe for patient
+        if (!imaging.isSafeFor(context)) {
+            check.setSafe(false);
+            warnings.add("Imaging contraindicated for this patient");
+        }
+        
+        // Check radiation exposure
+        if (imaging.getRadiationExposure() != ImagingStudy.RadiationExposure.NONE) {
+            if (context.getDemographics() != null && 
+                context.getDemographics().isPregnant()) {
+                warnings.add("CAUTION: Radiation exposure during pregnancy. " +
+                           "Consider alternative if available.");
+            }
+        }
+        
+        // Check contrast safety
+        if (imaging.getTechnical() != null && imaging.getTechnical().isContrastRequired()) {
+            
+            // Renal function check
+            if (context.getRenalFunction() != null && 
+                context.getRenalFunction().getEgfr() != null &&
+                context.getRenalFunction().getEgfr() < 30) {
+                warnings.add("CAUTION: Severe renal impairment (eGFR < 30). " +
+                           "Risk of contrast-induced nephropathy.");
+            }
+            
+            // Allergy check
+            if (context.hasAllergy("contrast") || context.hasAllergy("iodine")) {
+                check.setSafe(false);
+                warnings.add("Contrast allergy documented. Consider alternative imaging.");
+            }
+        }
+        
+        check.setWarnings(warnings);
+        return check;
+    }
+    
+    // ================================================================
+    // APPROPRIATENESS ASSESSMENT
+    // ================================================================
+    
+    private String assessAppropriateness(ImagingStudy imaging, String indication) {
+        if (imaging.getAppropriateness() == null) {
+            return "UNKNOWN";
+        }
+        
+        // Find matching clinical scenario
+        for (Map.Entry<String, ImagingStudy.AppropriatenessCriteria> entry : 
+             imaging.getAppropriateness().entrySet()) {
+            
+            if (indication.toLowerCase().contains(entry.getKey().toLowerCase())) {
+                return entry.getValue().getAppropriatenessRating();
+            }
+        }
+        
+        return "UNKNOWN";
+    }
+    
+    // ================================================================
+    // URGENCY DETERMINATION
+    // ================================================================
+    
+    private String determineUrgency(ProtocolAction action, LabTest labTest) {
+        // P0 actions are always STAT
+        if ("P0".equals(action.getPriority())) {
+            return "STAT";
+        }
+        
+        // P1 actions are URGENT
+        if ("P1".equals(action.getPriority())) {
+            return "URGENT";
+        }
+        
+        // Check if test has urgent TAT
+        if (labTest.getTiming() != null && 
+            labTest.getTiming().getUrgentTurnaroundMinutes() != null &&
+            labTest.getTiming().getUrgentTurnaroundMinutes() < 60) {
+            return "URGENT";
+        }
+        
+        return "ROUTINE";
+    }
+    
+    private String determineUrgency(ProtocolAction action, ImagingStudy imaging) {
+        // P0 actions are always STAT
+        if ("P0".equals(action.getPriority())) {
+            return "STAT";
+        }
+        
+        // P1 actions are URGENT
+        if ("P1".equals(action.getPriority())) {
+            return "URGENT";
+        }
+        
+        return "ROUTINE";
+    }
+    
+    // ================================================================
+    // HELPER METHODS
+    // ================================================================
+    
+    private String generateRecommendationId() {
+        return "TEST-REC-" + System.currentTimeMillis() + "-" + 
+               (int)(Math.random() * 1000);
+    }
+    
+    // ================================================================
+    // SUPPORTING CLASSES
+    // ================================================================
+    
+    @lombok.Data
+    @lombok.Builder
+    public static class OrderDetails {
+        // Lab-specific
+        private String specimenType;
+        private String collectionMethod;
+        private String containerType;
+        private String specialHandling;
+        private boolean fastingRequired;
+        
+        // Imaging-specific
+        private String modality;
+        private String protocol;
+        private boolean contrastRequired;
+        private String contrastType;
+        private boolean preparationRequired;
+        private String preparationInstructions;
+        private boolean portableAvailable;
+    }
+    
+    @lombok.Data
+    public static class SafetyCheck {
+        private boolean safe;
+        private List<String> warnings;
+        private List<String> contraindications;
+    }
+}
+
+
+
+
+package com.cds.knowledgebase.diagnostics.model;
+
+
+import lombok.Data;
+import lombok.Builder;
+import java.util.List;
+
+
+/**
+ * Test Recommendation
+ * Represents a recommended diagnostic test with all ordering details
+ */
+@Data
+@Builder
+public class TestRecommendation {
+    
+    // ================================================================
+    // IDENTIFICATION
+    // ================================================================
+    private String recommendationId;
+    private String testType;              // LAB_TEST, IMAGING
+    private String testId;                // LAB-LACTATE-001, IMG-CXR-001
+    private String testName;              // "Serum Lactate", "Chest X-Ray"
+    private String loincCode;             // For lab tests
+    
+    // ================================================================
+    // PRIORITY & TIMING
+    // ================================================================
+    private String priority;              // P0, P1, P2, P3, P4
+    private String urgency;               // STAT, URGENT, ROUTINE
+    private Integer timeframeMinutes;     // When test should be completed
+    private Integer estimatedTurnaroundMinutes;  // How long until results
+    
+    // ================================================================
+    // CLINICAL CONTEXT
+    // ================================================================
+    private String rationale;             // Why this test is recommended
+    private String indication;            // Clinical indication
+    private String appropriateness;       // For imaging (USUALLY_APPROPRIATE, etc.)
+    private String evidenceLevel;         // A, B, C
+    private List<String> evidenceReferences;  // PMIDs
+    
+    // ================================================================
+    // ORDERING DETAILS
+    // ================================================================
+    private TestRecommender.OrderDetails orderDetails;
+    
+    // ================================================================
+    // SAFETY & QUALITY
+    // ================================================================
+    private TestRecommender.SafetyCheck safetyChecks;
+    private String radiationExposure;     // For imaging (NONE, LOW, MODERATE, HIGH)
+    
+    // ================================================================
+    // COST
+    // ================================================================
+    private Double costEstimate;
+    
+    // ================================================================
+    // REFLEX TESTING
+    // ================================================================
+    private boolean isReflexTest;         // True if this is reflex/follow-up test
+    private String reflexTrigger;         // What triggered this reflex test
+    
+    // ================================================================
+    // WORKFLOW
+    // ================================================================
+    private String orderStatus;           // RECOMMENDED, ORDERED, COMPLETED, CANCELLED
+    private Long orderTimestamp;
+    private Long completionTimestamp;
+    
+    // ================================================================
+    // HELPER METHODS
+    // ================================================================
+    
+    /**
+     * Check if recommendation is urgent (needs action within 1 hour)
+     */
+    public boolean isUrgent() {
+        return "STAT".equals(urgency) || 
+               "URGENT".equals(urgency) ||
+               (timeframeMinutes != null && timeframeMinutes <= 60);
+    }
+    
+    /**
+     * Check if recommendation is critical (P0 priority)
+     */
+    public boolean isCritical() {
+        return "P0".equals(priority);
+    }
+    
+    /**
+     * Check if test is safe to order
+     */
+    public boolean isSafeToOrder() {
+        return safetyChecks == null || safetyChecks.isSafe();
+    }
+    
+    /**
+     * Get time remaining to complete test (minutes)
+     */
+    public Integer getTimeRemaining() {
+        if (timeframeMinutes == null || orderTimestamp == null) {
+            return timeframeMinutes;
+        }
+        
+        long elapsedMinutes = (System.currentTimeMillis() - orderTimestamp) / (1000 * 60);
+        return (int)(timeframeMinutes - elapsedMinutes);
+    }
+    
+    /**
+     * Check if test is overdue
+     */
+    public boolean isOverdue() {
+        Integer remaining = getTimeRemaining();
+        return remaining != null && remaining < 0;
+    }
+}

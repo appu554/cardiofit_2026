@@ -1,0 +1,602 @@
+# P01 Chest Pain - HPI Node Definition V2
+# Bayesian differential for chest pain presentations in CardioFit strata
+# V2: 10 differentials, RF01-RF06, AC01-AC06, SM01-SM03, CM01-CM10, safety floors
+# Priors sum to 0.85 (G15 Other bucket reserves 0.15)
+
+node_id: P01_CHEST_PAIN
+version: "2.0.0"
+title_en: "Chest Pain Differential Diagnosis"
+title_hi: "Seene ka Dard Vibhedak Nidaan"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.85
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 18
+
+# Supported strata — single-column for V2 (multi-stratum deferred to evidence harvest)
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket — open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.15
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ACS_ESC_2023"
+
+# ═══════════════════════════════════════════════════════════════
+# Differentials with per-stratum priors (F-05)
+# V2: 10 differentials, Indian DM+HTN base cohort
+# Original spec priors summed to 1.00; scaled by 0.85 for G15.
+# DX09, DX10 are medication-conditional (G3).
+# ═══════════════════════════════════════════════════════════════
+differentials:
+  - id: ACS
+    label: "Acute Coronary Syndrome"
+    population_reference: "Jaipur Heart Watch 2017; INTERHEART 2004 SA substudy"
+    priors:
+      DM_HTN_base: 0.153  # 0.18 * 0.85
+
+  - id: GERD
+    label: "GERD / Esophagitis"
+    population_reference: "Indian J Gastroenterol 2019; ICMR dietary survey"
+    priors:
+      DM_HTN_base: 0.2125  # 0.25 * 0.85
+
+  - id: STABLE_ANGINA
+    label: "Stable Angina / Chronic Coronary Syndrome"
+    population_reference: "ACC/AHA 2021; India Heart Study 2018"
+    priors:
+      DM_HTN_base: 0.17  # 0.20 * 0.85
+
+  - id: MSK
+    label: "Musculoskeletal (Costochondritis)"
+    population_reference: "McGee Ch. 21; Bruyninckx 2008"
+    priors:
+      DM_HTN_base: 0.153  # 0.18 * 0.85
+
+  - id: ANXIETY
+    label: "Anxiety / Panic Attack"
+    population_reference: "ACC/AHA 2021"
+    priors:
+      DM_HTN_base: 0.068  # 0.08 * 0.85
+
+  - id: PE
+    label: "Pulmonary Embolism"
+    population_reference: "ESC 2019 PE; Wells Score validation"
+    priors:
+      DM_HTN_base: 0.0425  # 0.05 * 0.85
+
+  - id: AORTIC_DISSECTION
+    label: "Aortic Dissection"
+    population_reference: "ACC/AHA 2021; Hagan IRAD 2000"
+    priors:
+      DM_HTN_base: 0.017  # 0.02 * 0.85
+
+  - id: PERICARDITIS
+    label: "Pericarditis"
+    population_reference: "McGee Ch. 21; ESC 2015 Pericarditis"
+    priors:
+      DM_HTN_base: 0.017  # 0.02 * 0.85
+
+  # G3: medication-conditional differentials
+  - id: EUGLYCEMIC_DKA
+    label: "Euglycemic DKA (SGLT2i-related)"
+    population_reference: "StatPearls SGLT2i; ADA 2024"
+    activation_condition: "med_class == SGLT2i"
+    priors:
+      DM_HTN_base: 0.0085  # 0.01 * 0.85
+
+  - id: LACTIC_ACIDOSIS
+    label: "Lactic Acidosis (Metformin-related)"
+    population_reference: "StatPearls Metformin; KDIGO 2024"
+    activation_condition: "med_class == Metformin AND eGFR < 30"
+    priors:
+      DM_HTN_base: 0.0085  # 0.01 * 0.85
+
+# ═══════════════════════════════════════════════════════════════
+# G1: Safety floor clamping
+# ACS posterior NEVER drops below 0.05 regardless of negative findings.
+# Rationale: Remote symptom assessment cannot rule out ACS in DM patients.
+# Only in-person ECG + troponin can.
+# ═══════════════════════════════════════════════════════════════
+safety_floors:
+  ACS: 0.05
+
+# ═══════════════════════════════════════════════════════════════
+# G2: Sex-modifier prior adjustments (OR-based log-odds deltas)
+# Applied once at session init after InitPriors, NOT per-question.
+# ═══════════════════════════════════════════════════════════════
+sex_modifiers:
+  - id: SM01
+    condition: "sex == Female"
+    adjustments:
+      ACS: 0.59  # OR 1.8 → log(1.8) = +0.59. Women present atypically; 42% no chest pain in MI <55
+    source: "INTERHEART 2004; Canto JAMA 2012"
+
+  - id: SM02
+    condition: "sex == Female AND age >= 50"
+    adjustments:
+      ACS: 0.41  # OR 1.5 → log(1.5) = +0.41. Post-menopausal CVD risk acceleration.
+    source: "Framingham Heart Study; AHA 2016 Women + CVD"
+
+  - id: SM03
+    condition: "sex == Male"
+    adjustments:
+      PE: 0.41  # OR 1.5 → log(1.5) = +0.41. Males have higher baseline PE risk.
+    source: "Wells PE risk stratification; ESC 2019 PE"
+
+# ═══════════════════════════════════════════════════════════════
+# Context Modifiers (CM01-CM10) — G14 log-odds composition
+# These are authored as probability deltas (magnitude field in [0,1)).
+# CMApplicator converts to log-odds shifts for correct composition.
+# ═══════════════════════════════════════════════════════════════
+context_modifiers:
+  - id: CM01
+    name: "Known CAD / Prior MI / Prior PCI/CABG"
+    description: "ACS odds x2.0 (+0.69 log-odds). Strongest historical predictor."
+    source: "Fanaroff JAMA 2015"
+    adjustments:
+      ACS: 0.20
+
+  - id: CM02
+    name: "DM duration > 10 years"
+    description: "ACS odds x1.5 (+0.41). Silent ischemia risk. FLAG: Consider silent ischemia."
+    source: "UKPDS; ADA 2024"
+    adjustments:
+      ACS: 0.15
+
+  - id: CM03
+    name: "eGFR < 45 (CKD 3b+)"
+    description: "ACS odds x1.8 (+0.59). Activates DX10 if on metformin. FLAG: Check creatinine/eGFR."
+    source: "ARIC CKD substudy; KDIGO 2024"
+    adjustments:
+      ACS: 0.18
+
+  - id: CM04
+    name: "On beta-blockers"
+    description: "Reduce HR discriminating power; bidirectional. FLAG: HR may be misleadingly normal."
+    source: "StatPearls Beta-Blockers"
+    adjustments:
+      ACS: 0.05
+
+  - id: CM05
+    name: "SGLT2i + recent illness/fasting/surgery"
+    description: "Activate DX09 (euglycemic DKA); set prior 0.03. SAFETY: Order ketone check."
+    source: "ADA 2024 DKA in SGLT2i"
+    adjustments:
+      EUGLYCEMIC_DKA: 0.25
+
+  - id: CM06
+    name: "PDE5i (sildenafil, tadalafil)"
+    description: "HARD_BLOCK on nitrate administration. SAFETY: No nitroglycerine."
+    source: "SPL sildenafil; ACC/AHA 2021"
+    effect_type: HARD_BLOCK
+    blocked_treatment: "NITRATE_THERAPY"
+    adjustments:
+      ACS: 0.01
+
+  - id: CM07
+    name: "Metformin + eGFR<30 or illness/dehydration"
+    description: "Activate DX10 (lactic acidosis); set prior 0.02. SAFETY: Order lactate level."
+    source: "KDIGO 2024; StatPearls Metformin"
+    adjustments:
+      LACTIC_ACIDOSIS: 0.20
+
+  - id: CM08
+    name: "Antiplatelet + concurrent NSAID"
+    description: "GERD/GI bleed odds x2.0 (+0.69). FLAG: Check Hb; ask about melena."
+    source: "SPL Aspirin; ACC/AHA 2021"
+    adjustments:
+      GERD: 0.20
+
+  - id: CM09
+    name: "Age >= 65 + antihypertensives >= 3"
+    description: "Orthostatic hypotension odds x1.8 (+0.59). Polypharmacy-driven postural drop."
+    source: "India Orthostatic Hypotension study; CONSENSUS"
+    adjustments:
+      MSK: 0.10
+
+  - id: CM10
+    name: "Current smoker or quit < 1 year"
+    description: "ACS odds x2.0 (+0.69). Strongest modifiable risk factor."
+    source: "INTERHEART 2004"
+    adjustments:
+      ACS: 0.20
+
+# ═══════════════════════════════════════════════════════════════
+# Red Flag Sweep (RF01-RF06) — evaluated FIRST before any questions
+# SNOMED-coded, all severity=IMMEDIATE
+# ═══════════════════════════════════════════════════════════════
+safety_triggers:
+  - id: RF01
+    type: BOOLEAN
+    condition: "Q_RF01_TEARING=YES"
+    severity: IMMEDIATE
+    recommended_action: "Aortic dissection protocol. STAT CT angiography. SNOMED: 95436002"
+
+  - id: RF02
+    type: BOOLEAN
+    condition: "Q_RF02_SUDDEN_DYSPNEA=YES"
+    severity: IMMEDIATE
+    recommended_action: "PE + ACS dual pathway. SNOMED: 267036007"
+
+  - id: RF03
+    type: BOOLEAN
+    condition: "Q_RF03_SYNCOPE=YES"
+    severity: IMMEDIATE
+    recommended_action: "Cardiac syncope protocol. SNOMED: 271594007"
+
+  - id: RF04
+    type: BOOLEAN
+    condition: "Q_RF04_FOCAL_NEURO=YES"
+    severity: IMMEDIATE
+    recommended_action: "Stroke + dissection protocol. SNOMED: 373606000"
+
+  - id: RF05
+    type: BOOLEAN
+    condition: "Q_RF05_GLUCOSE_LOW=YES"
+    severity: IMMEDIATE
+    recommended_action: "Level 2+ hypoglycemia + cardiac eval. SNOMED: 302866003"
+
+  - id: RF06
+    type: BOOLEAN
+    condition: "Q_RF06_HEMOPTYSIS=YES"
+    severity: IMMEDIATE
+    recommended_action: "PE + malignancy evaluation. SNOMED: 66857006"
+
+  # Legacy safety triggers (compound conditions)
+  - id: ST001
+    type: BOOLEAN
+    condition: "Q001=YES AND Q002=YES AND Q008=YES"
+    severity: IMMEDIATE
+    recommended_action: "STAT ECG and Troponin. Possible ACS - activate chest pain protocol."
+
+  - id: ST002
+    type: BOOLEAN
+    condition: "Q007=YES AND Q009=YES"
+    severity: URGENT
+    recommended_action: "Consider PE workup. Order D-dimer and CTPA if clinically indicated."
+
+  - id: ST003
+    type: BOOLEAN
+    condition: "Q001=YES AND Q013=YES"
+    severity: WARN
+    recommended_action: "ACS features present with autonomic symptoms. Monitor closely."
+
+# ═══════════════════════════════════════════════════════════════
+# Red Flag Questions (RF sweep — asked FIRST, mandatory)
+# These map 1:1 to RF01-RF06 safety triggers above.
+# ═══════════════════════════════════════════════════════════════
+questions:
+  # --- Red Flag Questions (RF sweep) ---
+  - id: Q_RF01_TEARING
+    text_en: "Is the pain tearing or ripping, radiating to the back?"
+    text_hi: "Kya dard cheerne jaisa hai jo peeth mein jaata hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_source: "ACC/AHA 2021; Hagan IRAD 2000"
+    lr_positive:
+      AORTIC_DISSECTION: 10.80
+      ACS: 0.80
+    lr_negative:
+      AORTIC_DISSECTION: 0.30
+      ACS: 1.05
+
+  - id: Q_RF02_SUDDEN_DYSPNEA
+    text_en: "Did you develop sudden severe shortness of breath with chest pain?"
+    text_hi: "Kya seene ke dard ke saath achanak tez saans phoolna shuru hua?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_source: "ESC 2019 PE; ACC/AHA 2021"
+    lr_positive:
+      PE: 3.20
+      ACS: 1.70
+    lr_negative:
+      PE: 0.55
+      ACS: 0.85
+
+  - id: Q_RF03_SYNCOPE
+    text_en: "Did you faint or nearly faint with the chest pain?"
+    text_hi: "Kya seene ke dard ke saath behoshi aayi ya aane wali thi?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_source: "ACC/AHA 2021; IRAD"
+    lr_positive:
+      ACS: 2.50
+      PE: 2.20
+      AORTIC_DISSECTION: 3.80
+    lr_negative:
+      ACS: 0.90
+      PE: 0.85
+      AORTIC_DISSECTION: 0.70
+
+  - id: Q_RF04_FOCAL_NEURO
+    text_en: "Do you have any new weakness, numbness, or difficulty speaking?"
+    text_hi: "Kya aapko nayi kamzori, sunn hona, ya bolne mein dikkat hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_source: "NICE Stroke; ACC/AHA 2021"
+    lr_positive:
+      AORTIC_DISSECTION: 5.50
+    lr_negative:
+      AORTIC_DISSECTION: 0.85
+
+  - id: Q_RF05_GLUCOSE_LOW
+    text_en: "Do you feel shaky, sweaty, or confused — could your sugar be low?"
+    text_hi: "Kya aap kaanp rahe hain, paseena aa raha hai, ya confused hain — kya sugar gir sakti hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_source: "ADA Standards 2024"
+    lr_positive:
+      ANXIETY: 1.80
+    lr_negative:
+      ANXIETY: 0.90
+
+  - id: Q_RF06_HEMOPTYSIS
+    text_en: "Have you coughed up blood?"
+    text_hi: "Kya khaansi mein khoon aaya hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_source: "ESC 2019 PE"
+    lr_positive:
+      PE: 4.50
+    lr_negative:
+      PE: 0.80
+
+  # --- Discriminating Questions (Bayesian LR update) ---
+  - id: Q001
+    text_en: "Is the chest pain crushing or pressure-like?"
+    text_hi: "Kya chhati ka dard dabav ya bhaaripan jaisa hai?"
+    cluster: CHARACTER
+    cluster_dampening: 0.85
+    mandatory: true
+    lr_source: "Swap et al. JAMA 2005"
+    lr_positive:
+      ACS: 2.35
+      STABLE_ANGINA: 1.80
+    lr_negative:
+      ACS: 0.53
+      STABLE_ANGINA: 0.60
+
+  - id: Q002
+    text_en: "Does the pain radiate to the left arm or jaw?"
+    text_hi: "Kya dard baayen haath ya jabde mein jaata hai?"
+    cluster: RADIATION
+    cluster_dampening: 0.80
+    mandatory: true
+    lr_source: "Swap et al. JAMA 2005"
+    lr_positive:
+      ACS: 4.70
+      STABLE_ANGINA: 2.10
+    lr_negative:
+      ACS: 0.68
+      STABLE_ANGINA: 0.80
+
+  - id: Q003
+    text_en: "Is the pain brought on by exertion and relieved by rest?"
+    text_hi: "Kya dard mehnat se hota hai aur aaram se theek hota hai?"
+    cluster: PROVOCATION
+    mandatory: true
+    lr_source: "ESC Chronic Coronary Syndromes 2019"
+    lr_positive:
+      ACS: 1.50
+      STABLE_ANGINA: 3.80
+    lr_negative:
+      ACS: 0.82
+      STABLE_ANGINA: 0.30
+
+  - id: Q004
+    text_en: "Is the pain worse after eating or when lying down?"
+    text_hi: "Kya dard khaana khaane ke baad ya lete waqt badh jaata hai?"
+    cluster: PROVOCATION
+    cluster_dampening: 0.80
+    mandatory: false
+    lr_source: "ACG Clinical Guideline 2022"
+    lr_positive:
+      GERD: 3.50
+    lr_negative:
+      GERD: 0.45
+      ACS: 1.10
+
+  - id: Q005
+    text_en: "Is the pain sharp and worsened by breathing or coughing?"
+    text_hi: "Kya dard tez hai aur saans lene ya khaansne se badh jaata hai?"
+    cluster: CHARACTER
+    cluster_dampening: 0.85
+    mandatory: false
+    lr_source: "ESC PE Guidelines 2019"
+    lr_positive:
+      PE: 2.80
+      PERICARDITIS: 3.20
+      MSK: 1.90
+    lr_negative:
+      PE: 0.55
+      PERICARDITIS: 0.40
+      ACS: 1.20
+
+  - id: Q006
+    text_en: "Can you reproduce the pain by pressing on the chest wall?"
+    text_hi: "Kya chhati ki deewar ko dabane se dard hota hai?"
+    cluster: PALPATION
+    mandatory: false
+    lr_source: "Bösner et al. BMJ 2010"
+    lr_positive:
+      MSK: 3.60
+    lr_negative:
+      MSK: 0.48
+      ACS: 1.15
+
+  - id: Q007
+    text_en: "Have you experienced sudden shortness of breath with the chest pain?"
+    text_hi: "Kya aapko chhati ke dard ke saath achaanak saans ki taklif hui?"
+    cluster: ASSOCIATED
+    mandatory: false
+    lr_source: "ESC PE Guidelines 2019"
+    lr_positive:
+      PE: 2.60
+      ACS: 1.70
+    lr_negative:
+      PE: 0.60
+      ACS: 0.85
+
+  - id: Q008
+    text_en: "Did the pain start suddenly at rest?"
+    text_hi: "Kya dard aaram mein achaanak shuru hua?"
+    cluster: ONSET
+    mandatory: false
+    lr_source: "ESC ACS Guidelines 2023"
+    lr_positive:
+      ACS: 2.10
+      PE: 1.90
+    lr_negative:
+      ACS: 0.75
+      STABLE_ANGINA: 1.30
+
+  - id: Q009
+    text_en: "Do you have swelling in one leg?"
+    text_hi: "Kya aapke ek pair mein sujan hai?"
+    cluster: PE_RISK
+    mandatory: false
+    lr_source: "Wells Score, Ann Intern Med 2001"
+    lr_positive:
+      PE: 4.20
+    lr_negative:
+      PE: 0.65
+
+  - id: Q010
+    text_en: "Have you recently been immobile for a long time (bed rest, long travel)?"
+    text_hi: "Kya aap haal mein lambe samay tak bina hile rahe (bistar par aaram, lambi yatra)?"
+    cluster: PE_RISK
+    cluster_dampening: 0.75
+    mandatory: false
+    lr_source: "Wells Score, Ann Intern Med 2001"
+    lr_positive:
+      PE: 2.50
+    lr_negative:
+      PE: 0.80
+
+  - id: Q011
+    text_en: "Does the pain improve when you lean forward?"
+    text_hi: "Kya dard aage jhukne par kam hota hai?"
+    cluster: POSITION
+    mandatory: false
+    lr_source: "ESC Pericardial Diseases 2015"
+    lr_positive:
+      PERICARDITIS: 5.40
+    lr_negative:
+      PERICARDITIS: 0.55
+
+  - id: Q012
+    text_en: "Are you feeling anxious or have you had a panic attack recently?"
+    text_hi: "Kya aap chintit hain ya haal mein ghabrahat ka daura aaya hai?"
+    cluster: PSYCH
+    mandatory: false
+    lr_source: "Huffman et al. Circulation 2021"
+    lr_positive:
+      ANXIETY: 3.80
+    lr_negative:
+      ANXIETY: 0.50
+      ACS: 1.05
+
+  - id: Q013
+    text_en: "Do you have nausea or sweating with the pain?"
+    text_hi: "Kya dard ke saath ji machalna ya paseena aata hai?"
+    cluster: ASSOCIATED
+    cluster_dampening: 0.80
+    mandatory: false
+    lr_source: "Swap et al. JAMA 2005"
+    lr_positive:
+      ACS: 2.00
+    lr_negative:
+      ACS: 0.64
+      GERD: 1.10
+
+# ═══════════════════════════════════════════════════════════════
+# Acuity/Context Questions (AC01-AC06)
+# These are categorical questions that narrow the differential category
+# (acute/subacute/chronic, ischemic/pleuritic/GI) before discriminating
+# questions refine individual posteriors.
+# Note: G7 (AcuityEngine) not yet implemented — these are stored as
+# metadata for the future acuity scoring track. For now they are included
+# in the questions list with safety_role: ACUITY to distinguish them.
+# ═══════════════════════════════════════════════════════════════
+  - id: AC01
+    text_en: "When did the chest pain start? Sudden or gradual?"
+    text_hi: "Yeh seene ka dard kab se hai? Achanak shuru hua ya dheere-dheere?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "ACC/AHA 2021"
+    lr_positive:
+      ACS: 1.30
+      PE: 1.40
+      AORTIC_DISSECTION: 2.50
+    lr_negative:
+      ACS: 0.85
+      PE: 0.80
+      AORTIC_DISSECTION: 0.50
+
+  - id: AC02
+    text_en: "What does the pain feel like — pressure, burning, or sharp?"
+    text_hi: "Dard kaisa lag raha hai — dabaav jaisa, jalan jaisi, ya chubhan jaisi?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "McGee: pressure LR+ 1.3 for ACS; sharp LR- 0.3 for ACS"
+    lr_positive:
+      ACS: 1.30
+      GERD: 1.50
+    lr_negative:
+      ACS: 0.70
+      GERD: 0.60
+
+  - id: AC03
+    text_en: "Does walking, climbing stairs, or exertion make the pain worse?"
+    text_hi: "Kya chalne, seedhi chadhne, ya mehnat karne se dard badhta hai?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "Fanaroff JAMA 2015: Exertional chest pain LR+ 2.4 for ischemia"
+    lr_positive:
+      STABLE_ANGINA: 2.40
+      ACS: 1.50
+    lr_negative:
+      STABLE_ANGINA: 0.40
+      ACS: 0.80
+
+  - id: AC04
+    text_en: "How long does each episode last?"
+    text_hi: "Ek baar mein dard kitni der rehta hai?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "ACC/AHA: 2-20 min is classic anginal window"
+    lr_positive:
+      STABLE_ANGINA: 1.80
+      ACS: 1.20
+    lr_negative:
+      STABLE_ANGINA: 0.50
+      MSK: 1.20
+
+  - id: AC05
+    text_en: "Does pain worsen after eating or when lying down?"
+    text_hi: "Kya dard khaana khaane ke baad badhta hai ya lete hue?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "ACG Clinical Guideline 2022; Indian cohort GERD/ACS overlap"
+    lr_positive:
+      GERD: 2.80
+    lr_negative:
+      GERD: 0.50
+      ACS: 1.05
+
+  - id: AC06
+    text_en: "Have any medications been started, stopped, or changed recently?"
+    text_hi: "Kya haal hi mein koi nayi dawai shuru hui hai ya dose badla hai?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "Highest yield in polypharmacy cohort"
+    lr_positive:
+      EUGLYCEMIC_DKA: 1.80
+      LACTIC_ACIDOSIS: 1.60
+    lr_negative:
+      EUGLYCEMIC_DKA: 0.70
+      LACTIC_ACIDOSIS: 0.75

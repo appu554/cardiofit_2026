@@ -1,0 +1,1073 @@
+openapi: 3.0.3
+info:
+  title: KB-2 Clinical Context Service API
+  description: |
+    Clinical phenotyping and risk stratification engine providing:
+    - Batch phenotype evaluation using CEL engine
+    - Enhanced risk assessment across multiple categories
+    - Treatment preference matching with institutional rules
+    - Complete clinical context assembly
+  version: 1.0.0
+  contact:
+    name: Clinical Synthesis Hub Team
+    email: support@clinicalsynthesis.com
+
+servers:
+  - url: http://localhost:8088/v1
+    description: Development server
+  - url: https://api.clinicalsynthesis.com/kb2/v1
+    description: Production server
+
+paths:
+  /health:
+    get:
+      summary: Service health check
+      description: Returns the health status of the service and its dependencies
+      operationId: getHealth
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /phenotypes/evaluate:
+    post:
+      summary: Batch phenotype evaluation
+      description: |
+        Evaluates phenotypes for up to 1000 patients using CEL-based rules.
+        SLA: 100ms p95 latency.
+      operationId: evaluatePhenotypes
+      tags:
+        - Phenotypes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhenotypeEvaluationRequest'
+      responses:
+        '200':
+          description: Phenotype evaluation successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PhenotypeEvaluationResult'
+                  processing_time:
+                    type: string
+                    example: "45ms"
+                  batch_size:
+                    type: integer
+                    example: 100
+                  sla_compliant:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /phenotypes/explain:
+    post:
+      summary: Phenotype reasoning explanation
+      description: |
+        Provides detailed reasoning chains for phenotype detection.
+        SLA: 150ms p95 latency.
+      operationId: explainPhenotypes
+      tags:
+        - Phenotypes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhenotypeEvaluationRequest'
+      responses:
+        '200':
+          description: Phenotype explanation successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patient_id:
+                    type: string
+                    example: "patient-123"
+                  explanation:
+                    $ref: '#/components/schemas/PhenotypeExplanation'
+                  processing_time:
+                    type: string
+                    example: "125ms"
+                  sla_compliant:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /phenotypes:
+    get:
+      summary: Get available phenotypes
+      description: Returns list of all available phenotype definitions
+      operationId: getAvailablePhenotypes
+      tags:
+        - Phenotypes
+      responses:
+        '200':
+          description: Phenotypes retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  phenotypes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PhenotypeDefinition'
+                  count:
+                    type: integer
+                    example: 25
+
+  /risk/assess:
+    post:
+      summary: Enhanced risk assessment
+      description: |
+        Performs comprehensive risk assessment across multiple categories.
+        SLA: 200ms p95 latency.
+      operationId: assessRisk
+      tags:
+        - Risk Assessment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RiskAssessmentRequest'
+      responses:
+        '200':
+          description: Risk assessment successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    $ref: '#/components/schemas/RiskAssessmentResult'
+                  processing_time:
+                    type: string
+                    example: "175ms"
+                  sla_compliant:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /treatment/preferences:
+    post:
+      summary: Treatment preference evaluation
+      description: |
+        Evaluates treatment options with institutional rules and conflict resolution.
+        SLA: 50ms p95 latency.
+      operationId: evaluateTreatmentPreferences
+      tags:
+        - Treatment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TreatmentPreferencesRequest'
+      responses:
+        '200':
+          description: Treatment preferences evaluated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    $ref: '#/components/schemas/TreatmentPreferencesResult'
+                  processing_time:
+                    type: string
+                    example: "35ms"
+                  sla_compliant:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /context/assemble:
+    post:
+      summary: Complete context assembly
+      description: |
+        Assembles complete clinical context combining phenotypes, risk, and treatment preferences.
+        SLA: 200ms p95 latency.
+      operationId: assembleContext
+      tags:
+        - Context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextAssemblyRequest'
+      responses:
+        '200':
+          description: Context assembled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  context:
+                    $ref: '#/components/schemas/ClinicalContext'
+                  processing_time:
+                    type: string
+                    example: "185ms"
+                  sla_compliant:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /context/history/{patient_id}:
+    get:
+      summary: Get patient context history
+      description: Retrieves historical clinical context for a patient
+      operationId: getContextHistory
+      tags:
+        - Context
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "patient-123"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          example: 10
+      responses:
+        '200':
+          description: Context history retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patient_id:
+                    type: string
+                    example: "patient-123"
+                  history:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ClinicalContext'
+                  count:
+                    type: integer
+                    example: 5
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: "1.0.0"
+        environment:
+          type: string
+          example: "development"
+        checks:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Check'
+
+    Check:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        response_time:
+          type: string
+          example: "2ms"
+        message:
+          type: string
+          example: "MongoDB connection successful"
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Patient:
+      type: object
+      required: [id, age, gender]
+      properties:
+        id:
+          type: string
+          example: "patient-123"
+        age:
+          type: integer
+          minimum: 0
+          maximum: 150
+          example: 65
+        gender:
+          type: string
+          enum: [male, female, other]
+          example: "female"
+        conditions:
+          type: array
+          items:
+            type: string
+          example: ["diabetes", "hypertension", "hyperlipidemia"]
+        medications:
+          type: array
+          items:
+            type: string
+          example: ["metformin", "lisinopril", "atorvastatin"]
+        labs:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/LabValue'
+        vitals:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/VitalValue'
+        allergies:
+          type: array
+          items:
+            type: string
+          example: ["penicillin", "sulfa"]
+        metadata:
+          type: object
+          additionalProperties: true
+
+    LabValue:
+      type: object
+      properties:
+        value:
+          type: number
+          example: 7.2
+        unit:
+          type: string
+          example: "%"
+        date:
+          type: string
+          format: date-time
+        reference:
+          $ref: '#/components/schemas/Range'
+
+    VitalValue:
+      type: object
+      properties:
+        value:
+          type: number
+          example: 140
+        unit:
+          type: string
+          example: "mmHg"
+        date:
+          type: string
+          format: date-time
+
+    Range:
+      type: object
+      properties:
+        min:
+          type: number
+          example: 4.0
+        max:
+          type: number
+          example: 6.5
+
+    PhenotypeDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "cardiovascular_risk"
+        name:
+          type: string
+          example: "High Cardiovascular Risk"
+        description:
+          type: string
+          example: "Identifies patients with high cardiovascular risk"
+        category:
+          type: string
+          example: "cardiovascular"
+        cel_rule:
+          type: string
+          example: "age > 65 && has_condition('hypertension') && lab_value('cholesterol') > 240"
+        priority:
+          type: integer
+          example: 1
+        metadata:
+          type: object
+          additionalProperties: true
+        version:
+          type: string
+          example: "1.2.0"
+
+    PhenotypeEvaluationRequest:
+      type: object
+      required: [patients]
+      properties:
+        patients:
+          type: array
+          items:
+            $ref: '#/components/schemas/Patient'
+          maxItems: 1000
+        phenotype_ids:
+          type: array
+          items:
+            type: string
+          example: ["cardiovascular_risk", "diabetes_complications"]
+        include_explanation:
+          type: boolean
+          default: false
+
+    PhenotypeEvaluationResult:
+      type: object
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        phenotypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/DetectedPhenotype'
+        explanation:
+          $ref: '#/components/schemas/PhenotypeExplanation'
+        processing_time:
+          type: string
+          example: "15ms"
+        errors:
+          type: array
+          items:
+            type: string
+
+    DetectedPhenotype:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "cardiovascular_risk"
+        name:
+          type: string
+          example: "High Cardiovascular Risk"
+        category:
+          type: string
+          example: "cardiovascular"
+        detected:
+          type: boolean
+          example: true
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.85
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceItem'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    EvidenceItem:
+      type: object
+      properties:
+        type:
+          type: string
+          example: "condition"
+        value:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+        description:
+          type: string
+          example: "Patient has condition: hypertension"
+        weight:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.8
+
+    PhenotypeExplanation:
+      type: object
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        reasoning_chains:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasoningChain'
+        generated_at:
+          type: string
+          format: date-time
+
+    ReasoningChain:
+      type: object
+      properties:
+        phenotype_id:
+          type: string
+          example: "cardiovascular_risk"
+        phenotype_name:
+          type: string
+          example: "High Cardiovascular Risk"
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasoningStep'
+        conclusion:
+          type: string
+          example: "Phenotype High Cardiovascular Risk detected with confidence 0.85"
+
+    ReasoningStep:
+      type: object
+      properties:
+        rule:
+          type: string
+          example: "evidence_gathering"
+        evaluation:
+          type: string
+          example: "Collected patient clinical data"
+        result:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+        explanation:
+          type: string
+          example: "Found 3 evidence items supporting the phenotype"
+
+    RiskAssessmentRequest:
+      type: object
+      required: [patient_id, patient_data]
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        patient_data:
+          $ref: '#/components/schemas/Patient'
+        risk_categories:
+          type: array
+          items:
+            type: string
+            enum: [cardiovascular, diabetes, medication, fall, bleeding]
+          example: ["cardiovascular", "diabetes"]
+        time_horizon:
+          type: string
+          enum: [1_year, 5_year, 10_year, lifetime]
+          example: "5_year"
+        include_factors:
+          type: boolean
+          default: false
+        custom_parameters:
+          type: object
+          additionalProperties: true
+
+    RiskAssessmentResult:
+      type: object
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        overall_risk:
+          $ref: '#/components/schemas/RiskScore'
+        category_risks:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/RiskScore'
+        risk_factors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiskFactor'
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recommendation'
+        processing_time:
+          type: string
+          example: "150ms"
+        generated_at:
+          type: string
+          format: date-time
+
+    RiskScore:
+      type: object
+      properties:
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.65
+        level:
+          type: string
+          enum: [low, moderate, high, very_high]
+          example: "high"
+        percentile:
+          type: number
+          minimum: 0
+          maximum: 100
+          example: 85.5
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.9
+        description:
+          type: string
+          example: "High risk"
+
+    RiskFactor:
+      type: object
+      properties:
+        factor:
+          type: string
+          example: "Advanced age"
+        impact:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.25
+        evidence:
+          type: string
+          example: "Age 75 years"
+        modifiable:
+          type: boolean
+          example: false
+
+    Recommendation:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: [prevention, monitoring, lifestyle, safety]
+          example: "prevention"
+        action:
+          type: string
+          example: "Consider cardioprotective therapy"
+        priority:
+          type: string
+          enum: [low, medium, high]
+          example: "high"
+        evidence:
+          type: string
+          example: "High cardiovascular risk"
+        expected_benefit:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.6
+
+    TreatmentPreferencesRequest:
+      type: object
+      required: [patient_id, patient_data, condition]
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        patient_data:
+          $ref: '#/components/schemas/Patient'
+        condition:
+          type: string
+          example: "diabetes"
+        treatment_categories:
+          type: array
+          items:
+            type: string
+          example: ["first_line", "second_line"]
+        institutional_rules:
+          type: array
+          items:
+            type: string
+          example: ["aha_guidelines", "cost_effectiveness"]
+        preference_profile:
+          type: object
+          additionalProperties: true
+          example:
+            once_daily: true
+            injectable: false
+            weight_neutral: true
+
+    TreatmentPreferencesResult:
+      type: object
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        condition:
+          type: string
+          example: "diabetes"
+        treatment_options:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreatmentOption'
+        preferred_treatments:
+          type: array
+          items:
+            $ref: '#/components/schemas/PreferredTreatment'
+        conflict_resolution:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConflictResolution'
+        processing_time:
+          type: string
+          example: "35ms"
+        generated_at:
+          type: string
+          format: date-time
+
+    TreatmentOption:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "metformin"
+        name:
+          type: string
+          example: "Metformin"
+        category:
+          type: string
+          example: "first_line"
+        suitability:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.9
+        contraindications:
+          type: array
+          items:
+            type: string
+          example: ["severe_kidney_disease"]
+        preferences:
+          type: array
+          items:
+            $ref: '#/components/schemas/PreferenceMatch'
+        evidence:
+          $ref: '#/components/schemas/EvidenceLevel'
+        cost:
+          $ref: '#/components/schemas/CostProfile'
+
+    PreferenceMatch:
+      type: object
+      properties:
+        preference:
+          type: string
+          example: "oral_medication"
+        match:
+          type: boolean
+          example: true
+        weight:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.8
+
+    EvidenceLevel:
+      type: object
+      properties:
+        grade:
+          type: string
+          enum: [A, B, C, D]
+          example: "A"
+        level:
+          type: integer
+          minimum: 1
+          maximum: 5
+          example: 1
+        description:
+          type: string
+          example: "Strong evidence from multiple RCTs"
+        references:
+          type: array
+          items:
+            type: string
+          example: ["ADA 2023", "EASD 2023"]
+
+    CostProfile:
+      type: object
+      properties:
+        category:
+          type: string
+          enum: [low, moderate, high, very_high]
+          example: "low"
+        estimated_cost:
+          type: number
+          minimum: 0
+          example: 15.0
+        currency:
+          type: string
+          example: "USD"
+
+    PreferredTreatment:
+      type: object
+      properties:
+        treatment_id:
+          type: string
+          example: "metformin"
+        rank:
+          type: integer
+          minimum: 1
+          example: 1
+        overall_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.92
+        rationale:
+          type: string
+          example: "Ranked #1 with score 0.92 due to: strong clinical evidence, cost-effective, first-line therapy"
+        alternative_ranks:
+          type: object
+          additionalProperties:
+            type: integer
+
+    ConflictResolution:
+      type: object
+      properties:
+        conflict_type:
+          type: string
+          enum: [cost_efficacy, preference_institutional, safety_efficacy]
+          example: "preference_institutional"
+        resolution:
+          type: string
+          example: "Institutional guideline takes precedence with patient education"
+        priority:
+          type: string
+          enum: [low, medium, high]
+          example: "high"
+        rationale:
+          type: string
+          example: "Patient preference conflicts with institutional guideline for metformin"
+        applied_rules:
+          type: array
+          items:
+            type: string
+          example: ["institutional_priority"]
+
+    ContextAssemblyRequest:
+      type: object
+      required: [patient_id, patient_data]
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        patient_data:
+          $ref: '#/components/schemas/Patient'
+        context_components:
+          type: array
+          items:
+            type: string
+            enum: [phenotypes, risks, treatments]
+          example: ["phenotypes", "risks", "treatments"]
+        include_phenotypes:
+          type: boolean
+          default: true
+        include_risks:
+          type: boolean
+          default: true
+        include_treatments:
+          type: boolean
+          default: true
+        detail_level:
+          type: string
+          enum: [basic, standard, comprehensive]
+          default: "standard"
+        custom_parameters:
+          type: object
+          additionalProperties: true
+
+    ClinicalContext:
+      type: object
+      properties:
+        patient_id:
+          type: string
+          example: "patient-123"
+        phenotype_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PhenotypeEvaluationResult'
+        risk_assessment:
+          $ref: '#/components/schemas/RiskAssessmentResult'
+        treatment_preferences:
+          $ref: '#/components/schemas/TreatmentPreferencesResult'
+        context_summary:
+          $ref: '#/components/schemas/ContextSummary'
+        processing_metrics:
+          $ref: '#/components/schemas/ProcessingMetrics'
+        generated_at:
+          type: string
+          format: date-time
+
+    ContextSummary:
+      type: object
+      properties:
+        key_findings:
+          type: array
+          items:
+            type: string
+          example: ["High-confidence phenotype detected: High Cardiovascular Risk (85%)"]
+        risk_highlights:
+          type: array
+          items:
+            type: string
+          example: ["High overall risk: 65.0% (High risk)"]
+        treatment_summary:
+          type: array
+          items:
+            type: string
+          example: ["Rank 1: Metformin (score: 92.0%)"]
+        clinical_alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClinicalAlert'
+        recommendations:
+          type: array
+          items:
+            type: string
+          example: ["Consider cardiovascular-specific protocols"]
+
+    ClinicalAlert:
+      type: object
+      properties:
+        level:
+          type: string
+          enum: [info, warning, critical]
+          example: "warning"
+        type:
+          type: string
+          enum: [risk, conflict, contraindication, interaction]
+          example: "risk"
+        message:
+          type: string
+          example: "High risk patient requires enhanced monitoring"
+        source:
+          type: string
+          example: "risk_assessment"
+        action:
+          type: string
+          example: "review_risk_factors"
+
+    ProcessingMetrics:
+      type: object
+      properties:
+        total_processing_time:
+          type: string
+          example: "185ms"
+        component_processing_times:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            phenotypes: "45ms"
+            risks: "125ms"
+            treatments: "35ms"
+        cache_hits:
+          type: integer
+          example: 12
+        cache_misses:
+          type: integer
+          example: 3
+        rules_evaluated:
+          type: integer
+          example: 157
+        phenotypes_evaluated:
+          type: integer
+          example: 25
+
+    APIError:
+      type: object
+      properties:
+        type:
+          type: string
+          example: "validation_error"
+        title:
+          type: string
+          example: "Validation Error"
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+          example: "Invalid phenotype evaluation request"
+        instance:
+          type: string
+          example: "/v1/phenotypes/evaluate"
+        timestamp:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+  responses:
+    ValidationError:
+      description: Validation error (RFC 7807)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+
+    InternalError:
+      description: Internal server error (RFC 7807)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/APIError'
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Health
+    description: Service health and readiness endpoints
+  - name: Phenotypes
+    description: Clinical phenotype evaluation and explanation
+  - name: Risk Assessment
+    description: Multi-category risk assessment
+  - name: Treatment
+    description: Treatment preference evaluation
+  - name: Context
+    description: Complete clinical context assembly

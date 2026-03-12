@@ -1,0 +1,744 @@
+# ============================================================
+# ENHANCED CLINICAL PROTOCOL: Community-Acquired Pneumonia Inpatient Management
+# ============================================================
+# Version: 2.0 (CDS-Compliant)
+# Based on: IDSA/ATS 2019 CAP Guidelines
+# Last Updated: 2025-10-21
+# ============================================================
+
+protocol_id: "CAP-INPATIENT-001"
+name: "Community-Acquired Pneumonia Inpatient Management"
+category: "INFECTIOUS"
+specialty: "INFECTIOUS_DISEASE"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# TRIGGER CRITERIA
+# ============================================================
+trigger_criteria:
+  match_logic: "ANY_OF"
+
+  conditions:
+    - condition_id: "CAP-TRIG-001"
+      description: "Radiographic infiltrate plus clinical features"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "infiltrate_on_cxr"
+          operator: "=="
+          threshold: true
+          source: "imaging"
+
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "fever"
+              operator: ">"
+              threshold: 38.0
+              unit: "celsius"
+            - parameter: "fever"
+              operator: "<"
+              threshold: 36.0
+              unit: "celsius"
+            - parameter: "cough"
+              operator: "=="
+              threshold: true
+            - parameter: "dyspnea"
+              operator: "=="
+              threshold: true
+            - parameter: "spo2"
+              operator: "<"
+              threshold: 90
+              unit: "percent"
+
+    - condition_id: "CAP-TRIG-002"
+      description: "CURB-65 score indicates inpatient management"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "curb65_score"
+          operator: ">="
+          threshold: 2
+          source: "clinical_assessment"
+
+        - parameter: "psi_class"
+          operator: ">="
+          threshold: 3
+          source: "clinical_assessment"
+
+    - condition_id: "CAP-TRIG-003"
+      description: "Severe CAP requiring ICU admission"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "septic_shock"
+          operator: "=="
+          threshold: true
+        - parameter: "mechanical_ventilation_required"
+          operator: "=="
+          threshold: true
+        - parameter: "severe_cap_minor_criteria_count"
+          operator: ">="
+          threshold: 3
+
+# ============================================================
+# CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.85
+
+  modifiers:
+    - modifier_id: "CAP-CONF-001"
+      description: "Sputum culture confirms bacterial pathogen"
+      condition:
+        parameter: "sputum_culture_positive"
+        operator: "=="
+        threshold: true
+      adjustment: 0.10
+
+    - modifier_id: "CAP-CONF-002"
+      description: "Blood culture positive for typical pneumonia pathogen"
+      condition:
+        parameter: "blood_culture_positive_pneumonia"
+        operator: "=="
+        threshold: true
+      adjustment: 0.08
+
+    - modifier_id: "CAP-CONF-003"
+      description: "High CURB-65 score increases confidence in severity assessment"
+      condition:
+        parameter: "curb65_score"
+        operator: ">="
+        threshold: 3
+      adjustment: 0.07
+
+  activation_threshold: 0.70
+
+# ============================================================
+# EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "IDSA/ATS Community-Acquired Pneumonia Guidelines 2019"
+  guideline_version: "2019.1"
+  publication_date: "2019-10"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "CITE-001"
+      authors: "Metlay JP, Waterer GW, Long AC, et al."
+      title: "Diagnosis and Treatment of Adults with Community-acquired Pneumonia"
+      journal: "Am J Respir Crit Care Med"
+      year: 2019
+      pmid: "31573350"
+      doi: "10.1164/rccm.201908-1581ST"
+
+  last_review_date: "2024-10-01"
+  next_review_date: "2026-10-01"
+
+# ============================================================
+# ACTIONS
+# ============================================================
+actions:
+  - action_id: "CAP-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "Chest X-ray PA and lateral"
+      test_code: "36643-5"
+      urgency: "STAT"
+      instructions: "Confirm infiltrate presence, assess pneumonia severity and complications"
+
+  - action_id: "CAP-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+      sequence: "BEFORE"
+      reference_action: "CAP-ACT-005"
+
+    diagnostic:
+      test_name: "Blood cultures x2"
+      test_code: "600-7"
+      sample_type: "blood"
+      number_of_samples: 2
+      collection_sites: ["peripheral", "peripheral"]
+      urgency: "STAT"
+      instructions: "Collect from 2 separate sites before antibiotic administration"
+
+  - action_id: "CAP-ACT-003"
+    type: "DIAGNOSTIC"
+    priority: "HIGH"
+    sequence_number: 3
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "Sputum culture and gram stain, respiratory viral PCR panel"
+      urgency: "STAT"
+      instructions: "Obtain if adequate sputum sample available (>25 PMNs, <10 epithelial cells per LPF)"
+
+  - action_id: "CAP-ACT-004"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "CBC, CMP, arterial blood gas (if hypoxemic)"
+      urgency: "STAT"
+      instructions: "Assess severity, organ function, oxygenation; calculate severity scores"
+
+  - action_id: "CAP-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 240  # 4 hours for non-severe
+      sequence: "AFTER"
+      reference_action: "CAP-ACT-002"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "STANDARD_CAP"
+          description: "Standard beta-lactam plus macrolide for hospitalized CAP"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "beta_lactam_allergy"
+                operator: "=="
+                threshold: false
+              - parameter: "aspiration_suspected"
+                operator: "=="
+                threshold: false
+              - parameter: "healthcare_associated_risk"
+                operator: "=="
+                threshold: false
+
+          primary_medication:
+            name: "Ceftriaxone + Azithromycin"
+            dose: "1-2 g ceftriaxone + 500 mg azithromycin"
+            dose_unit: "g and mg"
+            route: "IV"
+            frequency: "once daily (both)"
+            duration: "minimum 5 days, typically 7 days"
+            administration_instructions: "Ceftriaxone 1-2g IV once daily; Azithromycin 500mg IV or PO once daily; infuse ceftriaxone over 30 minutes"
+
+        - criteria_id: "BETA_LACTAM_ALLERGY"
+          description: "Respiratory fluoroquinolone for beta-lactam allergy"
+
+          condition:
+            parameter: "beta_lactam_allergy"
+            operator: "=="
+            threshold: true
+
+          primary_medication:
+            name: "Levofloxacin"
+            dose: "750"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "once daily"
+            duration: "minimum 5 days, typically 7 days"
+            administration_instructions: "750mg IV or PO once daily; IV infuse over 90 minutes; excellent oral bioavailability allows early PO switch"
+
+        - criteria_id: "ASPIRATION_PNEUMONIA"
+          description: "Anaerobic coverage for aspiration pneumonia"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "witnessed_aspiration"
+                operator: "=="
+                threshold: true
+              - parameter: "dysphagia"
+                operator: "=="
+                threshold: true
+              - parameter: "poor_dentition"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Ampicillin-Sulbactam"
+            dose: "3"
+            dose_unit: "g"
+            route: "IV"
+            frequency: "q6h"
+            indication: "Aspiration pneumonia with anaerobic coverage"
+            administration_instructions: "Add anaerobic coverage for aspiration risk"
+
+        - criteria_id: "HEALTHCARE_ASSOCIATED"
+          description: "Broader coverage for healthcare-associated pneumonia"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "recent_hospitalization_days"
+                operator: "<="
+                threshold: 90
+              - parameter: "nursing_home_resident"
+                operator: "=="
+                threshold: true
+              - parameter: "dialysis_patient"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Piperacillin-Tazobactam + Azithromycin"
+            dose: "4.5 g piperacillin-tazobactam + 500 mg azithromycin"
+            dose_unit: "g and mg"
+            route: "IV"
+            frequency: "q6h (piperacillin-tazobactam), once daily (azithromycin)"
+            indication: "Broader coverage for MRSA and Pseudomonas risk"
+            administration_instructions: "Anti-pseudomonal beta-lactam for healthcare-associated risk"
+
+        - criteria_id: "QTC_PROLONGATION"
+          description: "Doxycycline alternative for QTc prolongation"
+
+          condition:
+            parameter: "qtc_ms"
+            operator: ">"
+            threshold: 500
+            unit: "ms"
+
+          primary_medication:
+            name: "Ceftriaxone + Doxycycline"
+            dose: "1-2 g ceftriaxone + 100 mg doxycycline"
+            dose_unit: "g and mg"
+            route: "IV"
+            frequency: "once daily (ceftriaxone), BID (doxycycline)"
+            dose_adjustment_rationale: "Doxycycline alternative to macrolide without QTc risk"
+
+  - action_id: "CAP-ACT-006"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 6
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 10
+
+    medication:
+      name: "Supplemental oxygen therapy"
+      dose: "titrate to SpO2 >90%"
+      route: "Inhalation"
+      frequency: "continuous"
+      administration_instructions: "Start with nasal cannula 1-6 L/min; escalate to face mask, high-flow nasal cannula, or NIV as needed"
+
+  - action_id: "CAP-ACT-007"
+    type: "MEDICATION"
+    priority: "HIGH"
+    sequence_number: 7
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 120
+
+    medication:
+      name: "IV crystalloid hydration"
+      dose: "1-2 L bolus, then maintenance 75-125 mL/hr"
+      route: "IV"
+      frequency: "continuous"
+      administration_instructions: "Restore euvolemia; avoid overhydration; monitor lung exam and O2 requirement"
+
+  - action_id: "CAP-ACT-008"
+    type: "CONSULTATION"
+    priority: "HIGH"
+    sequence_number: 8
+
+    timing:
+      window: "URGENT"
+
+    consultation:
+      specialty: "PULMONOLOGY"
+      urgency: "URGENT"
+      reason: "Severe CAP requiring ICU-level care or complications"
+      specific_questions:
+        - "Need for mechanical ventilation or advanced respiratory support?"
+        - "Parapneumonic effusion requiring thoracentesis?"
+
+  - action_id: "CAP-ACT-009"
+    type: "PROCEDURE"
+    priority: "CRITICAL"
+    sequence_number: 9
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+
+    procedure:
+      procedure_name: "ICU transfer"
+      indication: "Severe CAP (septic shock, respiratory failure, CURB-65 ≥3)"
+      urgency: "EMERGENT"
+
+# ============================================================
+# TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "CAP-TIME-001"
+    bundle_name: "Antibiotic Administration Bundle"
+    description: "Antibiotics within 4 hours of hospital arrival (1 hour if severe)"
+    offset_minutes: 240  # 4 hours for non-severe
+    critical: true
+
+    required_actions:
+      - action_id: "CAP-ACT-005"
+        description: "Empiric antibiotics"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 180
+      critical_alert_at_minutes: 240
+      missed_deadline_message: "CAP antibiotic bundle compliance failure"
+
+# ============================================================
+# CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "CAP-CONTRA-001"
+    condition_description: "Beta-lactam allergy contraindicates ceftriaxone"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "cephalosporin_allergy"
+          operator: "=="
+          threshold: true
+        - parameter: "penicillin_allergy_severe"
+          operator: "=="
+          threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "CAP-ACT-005"
+
+    alternative_action:
+      action_id: "CAP-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "Levofloxacin monotherapy"
+        dose: "750"
+        dose_unit: "mg"
+        route: "IV"
+        frequency: "once daily"
+      rationale: "Respiratory fluoroquinolone covers typical and atypical pathogens without beta-lactam"
+
+# ============================================================
+# MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "CAP-MON-001"
+    parameter: "temperature"
+
+    target_range:
+      min: 36.0
+      max: 38.0
+      unit: "celsius"
+
+    frequency: "every 4-6 hours"
+    duration_hours: 72
+
+    alert_condition:
+      parameter: "temperature"
+      operator: ">"
+      threshold: 38.5
+
+  - monitoring_id: "CAP-MON-002"
+    parameter: "oxygen_saturation"
+
+    target_range:
+      min: 90
+      max: null
+      unit: "percent"
+
+    frequency: "continuous if on supplemental oxygen"
+    duration_hours: 96
+
+    alert_condition:
+      parameter: "spo2"
+      operator: "<"
+      threshold: 90
+
+  - monitoring_id: "CAP-MON-003"
+    parameter: "white_blood_cell_count"
+
+    target_range:
+      min: 4000
+      max: 12000
+      unit: "cells/uL"
+
+    frequency: "daily until normalizing"
+    duration_hours: null
+
+    alert_condition:
+      parameter: "wbc"
+      operator: ">"
+      threshold: 15000
+
+# ============================================================
+# SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "ELDERLY"
+    description: "Patients ≥65 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "CAP-ACT-005"
+        modification_type: "CAUTION"
+        rationale: "Elderly have higher risk of severe CAP and complications"
+
+        new_parameters:
+          monitoring: "More aggressive monitoring; lower threshold for ICU admission; assess for atypical presentations"
+
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "CAP-ACT-005"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Macrolides and beta-lactams safe in pregnancy; avoid fluoroquinolones"
+
+        new_parameters:
+          preferred_regimen: "Ceftriaxone + Azithromycin (both pregnancy category B)"
+          contraindications: "Avoid fluoroquinolones (pregnancy category C)"
+
+  - population_id: "IMMUNOCOMPROMISED"
+    description: "Immunocompromised patients (neutropenic, transplant, HIV)"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "absolute_neutrophil_count"
+          operator: "<"
+          threshold: 500
+        - parameter: "transplant_recipient"
+          operator: "=="
+          threshold: true
+        - parameter: "hiv_positive"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "CAP-ACT-005"
+        modification_type: "BROADER_COVERAGE"
+        rationale: "Higher risk of opportunistic infections and resistant organisms"
+
+        additional_medications:
+          - name: "Piperacillin-Tazobactam"
+            dose: "4.5"
+            dose_unit: "g"
+            route: "IV"
+            frequency: "q6h"
+            indication: "Broader antibacterial coverage for immunocompromised"
+
+          - name: "Trimethoprim-Sulfamethoxazole"
+            dose: "15 mg/kg/day (TMP component)"
+            dose_unit: "mg/kg"
+            route: "IV"
+            frequency: "divided q6-8h"
+            indication: "PCP prophylaxis/treatment if CD4 <200"
+
+# ============================================================
+# ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "CAP-ESC-001"
+    description: "ICU transfer for severe CAP or septic shock"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "septic_shock"
+          operator: "=="
+          threshold: true
+
+        - parameter: "mechanical_ventilation_required"
+          operator: "=="
+          threshold: true
+
+        - parameter: "curb65_score"
+          operator: ">="
+          threshold: 3
+
+    recommendation:
+      escalation_level: "ICU_TRANSFER"
+      urgency: "IMMEDIATE"
+      rationale: "Severe CAP requiring intensive monitoring and organ support"
+
+      required_interventions:
+        - "Vasopressor support if septic shock"
+        - "Mechanical ventilation if respiratory failure"
+        - "Continuous monitoring"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "ICU management and organ support"
+
+  - rule_id: "CAP-ESC-002"
+    description: "Infectious disease consultation for treatment failure"
+
+    escalation_trigger:
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "no_clinical_improvement"
+          operator: "=="
+          threshold: true
+
+        - parameter: "hours_on_antibiotics"
+          operator: ">="
+          threshold: 72
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Treatment failure suggests resistant organisms or complications"
+
+      specialist_consultation:
+        - specialty: "INFECTIOUS_DISEASE"
+          urgency: "URGENT"
+          specific_question: "Alternative antibiotic regimen and investigation for resistant organisms or complications"
+
+# ============================================================
+# DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "CAP-DE-ESC-001"
+    description: "Narrow antibiotic spectrum based on culture results"
+
+    conditions:
+      - parameter: "culture_results_available"
+        operator: "=="
+        threshold: true
+
+      - parameter: "time_since_antibiotics"
+        operator: ">="
+        threshold: 48
+        unit: "hours"
+
+    recommendation:
+      action: "Narrow antibiotic spectrum based on culture and susceptibility"
+      rationale: "Antimicrobial stewardship"
+      specific_changes:
+        - "Discontinue broad-spectrum agent"
+        - "Start targeted therapy per susceptibility"
+
+  - criteria_id: "CAP-DE-ESC-002"
+    description: "Transition to oral antibiotics when clinically stable"
+
+    conditions:
+      - parameter: "afebrile_hours"
+        operator: ">="
+        threshold: 48
+
+      - parameter: "respiratory_rate"
+        operator: "<"
+        threshold: 24
+
+      - parameter: "heart_rate"
+        operator: "<"
+        threshold: 100
+
+      - parameter: "systolic_bp"
+        operator: ">"
+        threshold: 90
+
+      - parameter: "spo2"
+        operator: ">"
+        threshold: 90
+
+    recommendation:
+      action: "Transition from IV to oral antibiotics"
+      rationale: "Clinical stability allows oral therapy and potential discharge"
+
+# ============================================================
+# OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "CAP-OUT-001"
+      metric: "time_to_clinical_stability"
+      target: "<96 hours"
+      benchmark_source: "IDSA/ATS 2019 Guidelines"
+
+    - outcome_id: "CAP-OUT-002"
+      metric: "antibiotic_administration_within_4_hours"
+      target: ">95%"
+      benchmark_source: "CMS Core Measures"
+
+  process_measures:
+    - measure_id: "CAP-PROC-001"
+      description: "Blood cultures before antibiotics"
+      target: ">90%"
+
+    - measure_id: "CAP-PROC-002"
+      description: "Appropriate empiric antibiotic selection"
+      target: ">95%"
+
+  balancing_measures:
+    - measure_id: "CAP-BAL-001"
+      description: "C. difficile infection rate"
+      target: "<3%"
+
+# ============================================================
+# METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "MEDIUM"
+  requires_icu_level_care: false
+  estimated_implementation_time_minutes: 240
+  review_cycle_months: 24
+
+  tags:
+    - "time-sensitive"
+    - "infectious-disease"
+    - "respiratory"
+    - "antibiotic-stewardship"
+
+  related_protocols:
+    - protocol_id: "SEPSIS-BUNDLE-001"
+      relationship: "COMPLEMENTS"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Enhanced to CDS-compliant structure"
+        - "Added medication selection algorithm for empiric antibiotics"
+        - "Added confidence scoring and special populations"
+        - "Added time constraints and escalation rules"
+
+# ============================================================
+# END OF PROTOCOL
+# ============================================================

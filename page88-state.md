@@ -1,0 +1,1884 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - img [ref=e5]
+        - generic [ref=e7]:
+          - heading "KB-0" [level=1] [ref=e8]
+          - paragraph [ref=e9]: Governance Platform
+        - button "Collapse sidebar" [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+      - navigation [ref=e14]:
+        - paragraph [ref=e15]: Governance
+        - link "Dashboard" [ref=e16] [cursor=pointer]:
+          - /url: /
+          - img [ref=e17]
+          - text: Dashboard
+        - link "Review Queue" [ref=e22] [cursor=pointer]:
+          - /url: /queue
+          - img [ref=e23]
+          - text: Review Queue
+        - link "Active Facts" [ref=e26] [cursor=pointer]:
+          - /url: /facts
+          - img [ref=e27]
+          - text: Active Facts
+        - link "Conflicts" [ref=e31] [cursor=pointer]:
+          - /url: /conflicts
+          - img [ref=e32]
+          - text: Conflicts
+        - link "Audit History" [ref=e34] [cursor=pointer]:
+          - /url: /audit
+          - img [ref=e35]
+          - text: Audit History
+        - link "Executor" [ref=e39] [cursor=pointer]:
+          - /url: /executor
+          - img [ref=e40]
+          - text: Executor
+        - generic [ref=e42]:
+          - paragraph [ref=e43]: Extraction
+          - link "SPL Review" [ref=e44] [cursor=pointer]:
+            - /url: /spl-review
+            - img [ref=e45]
+            - text: SPL Review
+          - link "Span Review" [ref=e47] [cursor=pointer]:
+            - /url: /pipeline1
+            - img [ref=e48]
+            - text: Span Review
+          - link "Compare View" [ref=e51] [cursor=pointer]:
+            - /url: /pipeline1/compare
+            - img [ref=e52]
+            - text: Compare View
+        - generic [ref=e54]:
+          - paragraph [ref=e55]: System
+          - link "Settings" [ref=e56] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e57]
+            - text: Settings
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - img "pharma@vaidshala.com" [ref=e208]
+          - generic [ref=e209]:
+            - paragraph [ref=e210]: pharma@vaidshala.com
+            - paragraph [ref=e211]: Administrator
+        - link "Sign Out" [ref=e212] [cursor=pointer]:
+          - /url: /api/auth/logout
+          - img [ref=e213]
+          - text: Sign Out
+    - generic [ref=e63]:
+      - banner [ref=e64]:
+        - generic [ref=e66]:
+          - img [ref=e67]
+          - textbox "Search facts, drugs, or reviewers..." [ref=e70]
+        - generic [ref=e71]:
+          - button [ref=e72] [cursor=pointer]:
+            - img [ref=e73]
+          - button [ref=e78] [cursor=pointer]:
+            - img [ref=e79]
+          - generic [ref=e82]:
+            - generic [ref=e83]:
+              - paragraph [ref=e84]: Pending Reviews
+              - paragraph [ref=e85]: "0"
+            - generic [ref=e86]:
+              - paragraph [ref=e87]: SLA Compliance
+              - paragraph [ref=e88]: 0%
+          - img "pharma@vaidshala.com" [ref=e217]
+      - main [ref=e89]:
+        - generic [ref=e256]:
+          - generic [ref=e258]:
+            - generic [ref=e259]:
+              - generic "KDIGO-2022-Clinical-Practice-Guideline-for-Diabetes-Management-in-CKD.pdf" [ref=e260]
+              - generic "df538e50-0170-4ef8-862d-5b0a7c48e4ff" [ref=e261]: df538e50-017
+            - generic [ref=e262]:
+              - generic [ref=e263]:
+                - generic [ref=e264]: Merged Spans
+                - generic [ref=e265]: "4978"
+              - generic [ref=e266]:
+                - generic [ref=e267]: Sections
+                - generic [ref=e268]: "161"
+              - generic [ref=e269]:
+                - generic [ref=e270]: Pages Reviewed
+                - generic [ref=e271]: 0 / 126
+              - generic [ref=e272]:
+                - generic [ref=e273]: Tasks
+                - generic [ref=e274]: 25 / 32
+          - generic [ref=e275]:
+            - link "Jobs" [ref=e276] [cursor=pointer]:
+              - /url: /pipeline1
+              - img [ref=e277]
+              - text: Jobs
+            - generic [ref=e279]:
+              - generic [ref=e280]:
+                - text: KDIGO-2022-Clinical-Practice-Guideline-for-Diabetes-Management-in-CKD.pdf ·
+                - generic [ref=e281]: df538e50-017...
+              - button "Progress" [ref=e283] [cursor=pointer]:
+                - img [ref=e284]
+                - text: Progress
+          - generic [ref=e286]:
+            - generic [ref=e288]:
+              - paragraph [ref=e289]: Review Phases
+              - button "Report Review Review CoverageGuard report" [ref=e406] [cursor=pointer]:
+                - img [ref=e407]
+                - generic [ref=e294]:
+                  - paragraph [ref=e295]: Report Review
+                  - paragraph [ref=e296]: Review CoverageGuard report
+              - generic [ref=e297]:
+                - generic [ref=e300]: Fact Review
+                - button "Tier 1 Mandatory Disagreement + spot-check tasks" [ref=e302] [cursor=pointer]:
+                  - img [ref=e304]
+                  - generic [ref=e306]:
+                    - paragraph [ref=e307]: Tier 1 Mandatory
+                    - paragraph [ref=e308]: Disagreement + spot-check tasks
+              - button "2B Page Browse Tier 2/3 page-level review" [ref=e409] [cursor=pointer]:
+                - generic [ref=e410]: 2B
+                - generic [ref=e315]:
+                  - paragraph [ref=e316]: Page Browse
+                  - paragraph [ref=e317]: Tier 2/3 page-level review
+              - generic [ref=e318]:
+                - generic [ref=e321]: Low-Confidence
+                - button "F-Only Corroboration Low-confidence LLM-only spans" [disabled] [ref=e323]:
+                  - img [ref=e325]
+                  - generic [ref=e328]:
+                    - paragraph [ref=e329]: F-Only Corroboration
+                    - paragraph [ref=e330]: Low-confidence LLM-only spans
+              - button "L1 Recovery Triage OCR recovery verification" [disabled] [ref=e332]:
+                - img [ref=e334]
+                - generic [ref=e337]:
+                  - paragraph [ref=e338]: L1 Recovery Triage
+                  - paragraph [ref=e339]: OCR recovery verification
+              - button "Re-Validation CoverageGuard delta check" [disabled] [ref=e341]:
+                - img [ref=e343]
+                - generic [ref=e346]:
+                  - paragraph [ref=e347]: Re-Validation
+                  - paragraph [ref=e348]: CoverageGuard delta check
+              - button "Sign-Off Certify & submit" [disabled] [ref=e350]:
+                - img [ref=e352]
+                - generic [ref=e355]:
+                  - paragraph [ref=e356]: Sign-Off
+                  - paragraph [ref=e357]: Certify & submit
+            - generic [ref=e411]:
+              - generic [ref=e412]:
+                - generic [ref=e413]:
+                  - generic [ref=e414]:
+                    - img [ref=e415]
+                    - generic [ref=e419]: Page Browse — Tier-Based Review
+                  - button "Bulk Accept Clean 23" [ref=e421] [cursor=pointer]:
+                    - img [ref=e422]
+                    - text: Bulk Accept Clean
+                    - generic [ref=e425]: "23"
+                - generic [ref=e426]:
+                  - generic [ref=e427]:
+                    - generic [ref=e428]:
+                      - img [ref=e429]
+                      - generic [ref=e431]: T1 Patient Safety
+                    - generic [ref=e434]:
+                      - text: 8/1736
+                      - generic [ref=e435]: 0%
+                    - generic [ref=e436]: ≥100%
+                  - generic [ref=e437]:
+                    - generic [ref=e438]:
+                      - img [ref=e439]
+                      - generic [ref=e441]: T2 Clinical Accuracy
+                    - generic [ref=e444]:
+                      - text: 18/3242
+                      - generic [ref=e445]: 1%
+                    - generic [ref=e446]: ≥20%
+                  - generic [ref=e447]:
+                    - generic [ref=e448]:
+                      - img [ref=e449]
+                      - generic [ref=e452]: T3 Informational
+                    - generic [ref=e454]: 0/0
+                    - img [ref=e455]
+                - generic [ref=e460]:
+                  - text: "Pages:"
+                  - generic [ref=e461]: 0/126
+              - generic [ref=e464]:
+                - generic [ref=e45489]:
+                  - generic [ref=e45490]:
+                    - generic [ref=e45491]:
+                      - generic [ref=e45492]: "Pages:"
+                      - button "All (126)" [ref=e45493] [cursor=pointer]
+                      - button "Undecided (126)" [ref=e45494] [cursor=pointer]
+                      - button "Has Risk (62)" [ref=e45495] [cursor=pointer]
+                      - button "Flagged (0)" [ref=e45496] [cursor=pointer]
+                    - generic [ref=e45497]:
+                      - generic [ref=e45498]: 0 accepted
+                      - generic [ref=e45499]: "|"
+                      - generic [ref=e45500]: 0 flagged
+                      - generic [ref=e45501]: "|"
+                      - generic [ref=e45502]: 0/126 decided
+                  - generic [ref=e45503]:
+                    - button "3 98s" [ref=e45504] [cursor=pointer]:
+                      - generic [ref=e45505]: "3"
+                      - generic [ref=e45506]: 98s
+                    - button "4 151s" [ref=e45507] [cursor=pointer]:
+                      - generic [ref=e45508]: "4"
+                      - generic [ref=e45509]: 151s
+                    - button "5 57s" [ref=e45510] [cursor=pointer]:
+                      - generic [ref=e45511]: "5"
+                      - generic [ref=e45512]: 57s
+                    - button "6 44s" [ref=e45513] [cursor=pointer]:
+                      - generic [ref=e45514]: "6"
+                      - generic [ref=e45515]: 44s
+                    - button "7 139s" [ref=e45516] [cursor=pointer]:
+                      - generic [ref=e45517]: "7"
+                      - generic [ref=e45518]: 139s
+                    - button "8 5s" [ref=e45519] [cursor=pointer]:
+                      - generic [ref=e45520]: "8"
+                      - generic [ref=e45521]: 5s
+                    - button "9 59s" [ref=e45522] [cursor=pointer]:
+                      - generic [ref=e45523]: "9"
+                      - generic [ref=e45524]: 59s
+                    - button "10 49s" [ref=e45525] [cursor=pointer]:
+                      - generic [ref=e45526]: "10"
+                      - generic [ref=e45527]: 49s
+                    - button "11 287s" [ref=e45528] [cursor=pointer]:
+                      - generic [ref=e45529]: "11"
+                      - generic [ref=e45530]: 287s
+                    - button "12 76s" [ref=e45531] [cursor=pointer]:
+                      - generic [ref=e45532]: "12"
+                      - generic [ref=e45533]: 76s
+                    - button "13 3s" [ref=e45534] [cursor=pointer]:
+                      - generic [ref=e45535]: "13"
+                      - generic [ref=e45536]: 3s
+                    - button "14 8s" [ref=e45537] [cursor=pointer]:
+                      - generic [ref=e45538]: "14"
+                      - generic [ref=e45539]: 8s
+                    - button "15 15s" [ref=e45540] [cursor=pointer]:
+                      - generic [ref=e45541]: "15"
+                      - generic [ref=e45542]: 15s
+                    - button "16 9s" [ref=e45543] [cursor=pointer]:
+                      - generic [ref=e45544]: "16"
+                      - generic [ref=e45545]: 9s
+                    - button "17 5s" [ref=e45546] [cursor=pointer]:
+                      - generic [ref=e45547]: "17"
+                      - generic [ref=e45548]: 5s
+                    - button "18 41s" [ref=e45549] [cursor=pointer]:
+                      - generic [ref=e45550]: "18"
+                      - generic [ref=e45551]: 41s
+                    - button "19 3s" [ref=e45552] [cursor=pointer]:
+                      - generic [ref=e45553]: "19"
+                      - generic [ref=e45554]: 3s
+                    - button "20 14s" [ref=e45555] [cursor=pointer]:
+                      - generic [ref=e45556]: "20"
+                      - generic [ref=e45557]: 14s
+                    - button "21 12s" [ref=e45558] [cursor=pointer]:
+                      - generic [ref=e45559]: "21"
+                      - generic [ref=e45560]: 12s
+                    - button "22 72s" [ref=e45561] [cursor=pointer]:
+                      - generic [ref=e45562]: "22"
+                      - generic [ref=e45563]: 72s
+                    - button "23 39s" [ref=e45564] [cursor=pointer]:
+                      - generic [ref=e45565]: "23"
+                      - generic [ref=e45566]: 39s
+                    - button "24 27s" [ref=e45567] [cursor=pointer]:
+                      - generic [ref=e45568]: "24"
+                      - generic [ref=e45569]: 27s
+                    - button "25 18s" [ref=e45570] [cursor=pointer]:
+                      - generic [ref=e45571]: "25"
+                      - generic [ref=e45572]: 18s
+                    - button "26 4s" [ref=e45573] [cursor=pointer]:
+                      - generic [ref=e45574]: "26"
+                      - generic [ref=e45575]: 4s
+                    - button "27 49s" [ref=e45576] [cursor=pointer]:
+                      - generic [ref=e45577]: "27"
+                      - generic [ref=e45578]: 49s
+                    - button "28 85s" [ref=e45579] [cursor=pointer]:
+                      - generic [ref=e45580]: "28"
+                      - generic [ref=e45581]: 85s
+                    - button "29 4s" [ref=e45582] [cursor=pointer]:
+                      - generic [ref=e45583]: "29"
+                      - generic [ref=e45584]: 4s
+                    - button "30 28s" [ref=e45585] [cursor=pointer]:
+                      - generic [ref=e45586]: "30"
+                      - generic [ref=e45587]: 28s
+                    - button "31 8s" [ref=e45588] [cursor=pointer]:
+                      - generic [ref=e45589]: "31"
+                      - generic [ref=e45590]: 8s
+                    - button "32 20s" [ref=e45591] [cursor=pointer]:
+                      - generic [ref=e45592]: "32"
+                      - generic [ref=e45593]: 20s
+                    - button "33 76s" [ref=e45594] [cursor=pointer]:
+                      - generic [ref=e45595]: "33"
+                      - generic [ref=e45596]: 76s
+                    - button "34 9s" [ref=e45597] [cursor=pointer]:
+                      - generic [ref=e45598]: "34"
+                      - generic [ref=e45599]: 9s
+                    - button "35 69s" [ref=e45600] [cursor=pointer]:
+                      - generic [ref=e45601]: "35"
+                      - generic [ref=e45602]: 69s
+                    - button "36 8s" [ref=e45603] [cursor=pointer]:
+                      - generic [ref=e45604]: "36"
+                      - generic [ref=e45605]: 8s
+                    - button "37 12s" [ref=e45606] [cursor=pointer]:
+                      - generic [ref=e45607]: "37"
+                      - generic [ref=e45608]: 12s
+                    - button "38 13s" [ref=e45609] [cursor=pointer]:
+                      - generic [ref=e45610]: "38"
+                      - generic [ref=e45611]: 13s
+                    - button "39 44s" [ref=e45612] [cursor=pointer]:
+                      - generic [ref=e45613]: "39"
+                      - generic [ref=e45614]: 44s
+                    - button "40 99s" [ref=e45615] [cursor=pointer]:
+                      - generic [ref=e45616]: "40"
+                      - generic [ref=e45617]: 99s
+                    - button "41 9s" [ref=e45618] [cursor=pointer]:
+                      - generic [ref=e45619]: "41"
+                      - generic [ref=e45620]: 9s
+                    - button "42 11s" [ref=e45621] [cursor=pointer]:
+                      - generic [ref=e45622]: "42"
+                      - generic [ref=e45623]: 11s
+                    - button "43 9s" [ref=e45624] [cursor=pointer]:
+                      - generic [ref=e45625]: "43"
+                      - generic [ref=e45626]: 9s
+                    - button "44 25s" [ref=e45627] [cursor=pointer]:
+                      - generic [ref=e45628]: "44"
+                      - generic [ref=e45629]: 25s
+                    - button "45 364s" [ref=e45630] [cursor=pointer]:
+                      - generic [ref=e45631]: "45"
+                      - generic [ref=e45632]: 364s
+                    - button "46 6s" [ref=e45633] [cursor=pointer]:
+                      - generic [ref=e45634]: "46"
+                      - generic [ref=e45635]: 6s
+                    - button "47 89s" [ref=e45636] [cursor=pointer]:
+                      - generic [ref=e45637]: "47"
+                      - generic [ref=e45638]: 89s
+                    - button "48 61s" [ref=e45639] [cursor=pointer]:
+                      - generic [ref=e45640]: "48"
+                      - generic [ref=e45641]: 61s
+                    - button "49 90s" [ref=e45642] [cursor=pointer]:
+                      - generic [ref=e45643]: "49"
+                      - generic [ref=e45644]: 90s
+                    - button "50 32s" [ref=e45645] [cursor=pointer]:
+                      - generic [ref=e45646]: "50"
+                      - generic [ref=e45647]: 32s
+                    - button "51 75s" [ref=e45648] [cursor=pointer]:
+                      - generic [ref=e45649]: "51"
+                      - generic [ref=e45650]: 75s
+                    - button "52 12s" [ref=e45651] [cursor=pointer]:
+                      - generic [ref=e45652]: "52"
+                      - generic [ref=e45653]: 12s
+                    - button "53 125s" [ref=e45654] [cursor=pointer]:
+                      - generic [ref=e45655]: "53"
+                      - generic [ref=e45656]: 125s
+                    - button "54 28s" [ref=e45657] [cursor=pointer]:
+                      - generic [ref=e45658]: "54"
+                      - generic [ref=e45659]: 28s
+                    - button "55 4s" [ref=e45660] [cursor=pointer]:
+                      - generic [ref=e45661]: "55"
+                      - generic [ref=e45662]: 4s
+                    - button "56 6s" [ref=e45663] [cursor=pointer]:
+                      - generic [ref=e45664]: "56"
+                      - generic [ref=e45665]: 6s
+                    - button "57 41s" [ref=e45666] [cursor=pointer]:
+                      - generic [ref=e45667]: "57"
+                      - generic [ref=e45668]: 41s
+                    - button "58 40s" [ref=e45669] [cursor=pointer]:
+                      - generic [ref=e45670]: "58"
+                      - generic [ref=e45671]: 40s
+                    - button "59 19s" [ref=e45672] [cursor=pointer]:
+                      - generic [ref=e45673]: "59"
+                      - generic [ref=e45674]: 19s
+                    - button "60 37s" [ref=e45675] [cursor=pointer]:
+                      - generic [ref=e45676]: "60"
+                      - generic [ref=e45677]: 37s
+                    - button "61 25s" [ref=e45678] [cursor=pointer]:
+                      - generic [ref=e45679]: "61"
+                      - generic [ref=e45680]: 25s
+                    - button "62 32s" [ref=e45681] [cursor=pointer]:
+                      - generic [ref=e45682]: "62"
+                      - generic [ref=e45683]: 32s
+                    - button "63 18s" [ref=e45684] [cursor=pointer]:
+                      - generic [ref=e45685]: "63"
+                      - generic [ref=e45686]: 18s
+                    - button "64 10s" [ref=e45687] [cursor=pointer]:
+                      - generic [ref=e45688]: "64"
+                      - generic [ref=e45689]: 10s
+                    - button "65 13s" [ref=e45690] [cursor=pointer]:
+                      - generic [ref=e45691]: "65"
+                      - generic [ref=e45692]: 13s
+                    - button "66 23s" [ref=e45693] [cursor=pointer]:
+                      - generic [ref=e45694]: "66"
+                      - generic [ref=e45695]: 23s
+                    - button "67 33s" [ref=e45696] [cursor=pointer]:
+                      - generic [ref=e45697]: "67"
+                      - generic [ref=e45698]: 33s
+                    - button "68 19s" [ref=e45699] [cursor=pointer]:
+                      - generic [ref=e45700]: "68"
+                      - generic [ref=e45701]: 19s
+                    - button "69 3s" [ref=e45702] [cursor=pointer]:
+                      - generic [ref=e45703]: "69"
+                      - generic [ref=e45704]: 3s
+                    - button "70 29s" [ref=e45705] [cursor=pointer]:
+                      - generic [ref=e45706]: "70"
+                      - generic [ref=e45707]: 29s
+                    - button "71 4s" [ref=e45708] [cursor=pointer]:
+                      - generic [ref=e45709]: "71"
+                      - generic [ref=e45710]: 4s
+                    - button "72 11s" [ref=e45711] [cursor=pointer]:
+                      - generic [ref=e45712]: "72"
+                      - generic [ref=e45713]: 11s
+                    - button "73 2s" [ref=e45714] [cursor=pointer]:
+                      - generic [ref=e45715]: "73"
+                      - generic [ref=e45716]: 2s
+                    - button "74 7s" [ref=e45717] [cursor=pointer]:
+                      - generic [ref=e45718]: "74"
+                      - generic [ref=e45719]: 7s
+                    - button "75 16s" [ref=e45720] [cursor=pointer]:
+                      - generic [ref=e45721]: "75"
+                      - generic [ref=e45722]: 16s
+                    - button "76 5s" [ref=e45723] [cursor=pointer]:
+                      - generic [ref=e45724]: "76"
+                      - generic [ref=e45725]: 5s
+                    - button "77 171s" [ref=e45726] [cursor=pointer]:
+                      - generic [ref=e45727]: "77"
+                      - generic [ref=e45728]: 171s
+                    - button "78 6s" [ref=e45729] [cursor=pointer]:
+                      - generic [ref=e45730]: "78"
+                      - generic [ref=e45731]: 6s
+                    - button "79 14s" [ref=e45732] [cursor=pointer]:
+                      - generic [ref=e45733]: "79"
+                      - generic [ref=e45734]: 14s
+                    - button "80 28s" [ref=e45735] [cursor=pointer]:
+                      - generic [ref=e45736]: "80"
+                      - generic [ref=e45737]: 28s
+                    - button "81 210s" [ref=e45738] [cursor=pointer]:
+                      - generic [ref=e45739]: "81"
+                      - generic [ref=e45740]: 210s
+                    - button "82 21s" [ref=e45741] [cursor=pointer]:
+                      - generic [ref=e45742]: "82"
+                      - generic [ref=e45743]: 21s
+                    - button "83 7s" [ref=e45744] [cursor=pointer]:
+                      - generic [ref=e45745]: "83"
+                      - generic [ref=e45746]: 7s
+                    - button "84 160s" [ref=e45747] [cursor=pointer]:
+                      - generic [ref=e45748]: "84"
+                      - generic [ref=e45749]: 160s
+                    - button "85 2s" [ref=e45750] [cursor=pointer]:
+                      - generic [ref=e45751]: "85"
+                      - generic [ref=e45752]: 2s
+                    - button "86 6s" [ref=e45753] [cursor=pointer]:
+                      - generic [ref=e45754]: "86"
+                      - generic [ref=e45755]: 6s
+                    - button "87 20s" [ref=e45756] [cursor=pointer]:
+                      - generic [ref=e45757]: "87"
+                      - generic [ref=e45758]: 20s
+                    - button "88 202s" [ref=e45759] [cursor=pointer]:
+                      - generic [ref=e45760]: "88"
+                      - generic [ref=e45761]: 202s
+                    - button "89 12s" [ref=e45762] [cursor=pointer]:
+                      - generic [ref=e45763]: "89"
+                      - generic [ref=e45764]: 12s
+                    - button "90 5s" [ref=e45765] [cursor=pointer]:
+                      - generic [ref=e45766]: "90"
+                      - generic [ref=e45767]: 5s
+                    - button "91 8s" [ref=e45768] [cursor=pointer]:
+                      - generic [ref=e45769]: "91"
+                      - generic [ref=e45770]: 8s
+                    - button "92 13s" [ref=e45771] [cursor=pointer]:
+                      - generic [ref=e45772]: "92"
+                      - generic [ref=e45773]: 13s
+                    - button "93 338s" [ref=e45774] [cursor=pointer]:
+                      - generic [ref=e45775]: "93"
+                      - generic [ref=e45776]: 338s
+                    - button "94 3s" [ref=e45777] [cursor=pointer]:
+                      - generic [ref=e45778]: "94"
+                      - generic [ref=e45779]: 3s
+                    - button "95 5s" [ref=e45780] [cursor=pointer]:
+                      - generic [ref=e45781]: "95"
+                      - generic [ref=e45782]: 5s
+                    - button "96 7s" [ref=e45783] [cursor=pointer]:
+                      - generic [ref=e45784]: "96"
+                      - generic [ref=e45785]: 7s
+                    - button "97 8s" [ref=e45786] [cursor=pointer]:
+                      - generic [ref=e45787]: "97"
+                      - generic [ref=e45788]: 8s
+                    - button "98 6s" [ref=e45789] [cursor=pointer]:
+                      - generic [ref=e45790]: "98"
+                      - generic [ref=e45791]: 6s
+                    - button "99 90s" [ref=e45792] [cursor=pointer]:
+                      - generic [ref=e45793]: "99"
+                      - generic [ref=e45794]: 90s
+                    - button "100 33s" [ref=e45795] [cursor=pointer]:
+                      - generic [ref=e45796]: "100"
+                      - generic [ref=e45797]: 33s
+                    - button "101 84s" [ref=e45798] [cursor=pointer]:
+                      - generic [ref=e45799]: "101"
+                      - generic [ref=e45800]: 84s
+                    - button "102 14s" [ref=e45801] [cursor=pointer]:
+                      - generic [ref=e45802]: "102"
+                      - generic [ref=e45803]: 14s
+                    - button "103 3s" [ref=e45804] [cursor=pointer]:
+                      - generic [ref=e45805]: "103"
+                      - generic [ref=e45806]: 3s
+                    - button "104 29s" [ref=e45807] [cursor=pointer]:
+                      - generic [ref=e45808]: "104"
+                      - generic [ref=e45809]: 29s
+                    - button "105 15s" [ref=e45810] [cursor=pointer]:
+                      - generic [ref=e45811]: "105"
+                      - generic [ref=e45812]: 15s
+                    - button "106 4s" [ref=e45813] [cursor=pointer]:
+                      - generic [ref=e45814]: "106"
+                      - generic [ref=e45815]: 4s
+                    - button "107 11s" [ref=e45816] [cursor=pointer]:
+                      - generic [ref=e45817]: "107"
+                      - generic [ref=e45818]: 11s
+                    - button "108 7s" [ref=e45819] [cursor=pointer]:
+                      - generic [ref=e45820]: "108"
+                      - generic [ref=e45821]: 7s
+                    - button "109 2s" [ref=e45822] [cursor=pointer]:
+                      - generic [ref=e45823]: "109"
+                      - generic [ref=e45824]: 2s
+                    - button "110 4s" [ref=e45825] [cursor=pointer]:
+                      - generic [ref=e45826]: "110"
+                      - generic [ref=e45827]: 4s
+                    - button "111 6s" [ref=e45828] [cursor=pointer]:
+                      - generic [ref=e45829]: "111"
+                      - generic [ref=e45830]: 6s
+                    - button "112 5s" [ref=e45831] [cursor=pointer]:
+                      - generic [ref=e45832]: "112"
+                      - generic [ref=e45833]: 5s
+                    - button "113 5s" [ref=e45834] [cursor=pointer]:
+                      - generic [ref=e45835]: "113"
+                      - generic [ref=e45836]: 5s
+                    - button "114 7s" [ref=e45837] [cursor=pointer]:
+                      - generic [ref=e45838]: "114"
+                      - generic [ref=e45839]: 7s
+                    - button "115 4s" [ref=e45840] [cursor=pointer]:
+                      - generic [ref=e45841]: "115"
+                      - generic [ref=e45842]: 4s
+                    - button "116 1s" [ref=e45843] [cursor=pointer]:
+                      - generic [ref=e45844]: "116"
+                      - generic [ref=e45845]: 1s
+                    - button "117 2s" [ref=e45846] [cursor=pointer]:
+                      - generic [ref=e45847]: "117"
+                      - generic [ref=e45848]: 2s
+                    - button "118 26s" [ref=e45849] [cursor=pointer]:
+                      - generic [ref=e45850]: "118"
+                      - generic [ref=e45851]: 26s
+                    - button "119 22s" [ref=e45852] [cursor=pointer]:
+                      - generic [ref=e45853]: "119"
+                      - generic [ref=e45854]: 22s
+                    - button "120 25s" [ref=e45855] [cursor=pointer]:
+                      - generic [ref=e45856]: "120"
+                      - generic [ref=e45857]: 25s
+                    - button "121 49s" [ref=e45858] [cursor=pointer]:
+                      - generic [ref=e45859]: "121"
+                      - generic [ref=e45860]: 49s
+                    - button "122 22s" [ref=e45861] [cursor=pointer]:
+                      - generic [ref=e45862]: "122"
+                      - generic [ref=e45863]: 22s
+                    - button "123 50s" [ref=e45864] [cursor=pointer]:
+                      - generic [ref=e45865]: "123"
+                      - generic [ref=e45866]: 50s
+                    - button "124 37s" [ref=e45867] [cursor=pointer]:
+                      - generic [ref=e45868]: "124"
+                      - generic [ref=e45869]: 37s
+                    - button "125 12s" [ref=e45870] [cursor=pointer]:
+                      - generic [ref=e45871]: "125"
+                      - generic [ref=e45872]: 12s
+                    - button "126 53s" [ref=e45873] [cursor=pointer]:
+                      - generic [ref=e45874]: "126"
+                      - generic [ref=e45875]: 53s
+                    - button "127 9s" [ref=e45876] [cursor=pointer]:
+                      - generic [ref=e45877]: "127"
+                      - generic [ref=e45878]: 9s
+                    - button "128 4s" [ref=e45879] [cursor=pointer]:
+                      - generic [ref=e45880]: "128"
+                      - generic [ref=e45881]: 4s
+                - generic [ref=e45882]:
+                  - generic [ref=e45883]:
+                    - generic [ref=e45884]:
+                      - generic [ref=e45885]:
+                        - button [ref=e45886] [cursor=pointer]:
+                          - img [ref=e45887]
+                        - generic [ref=e45889]:
+                          - generic [ref=e45890]: Page 88
+                          - generic [ref=e45891]: 202 extractions
+                          - text: disagreement
+                        - button [ref=e45892] [cursor=pointer]:
+                          - img [ref=e45893]
+                      - generic [ref=e45895]:
+                        - generic [ref=e45896]:
+                          - text: 0/202 reviewed
+                          - generic [ref=e45897]: (202 pending)
+                        - button "Add Fact" [ref=e45898] [cursor=pointer]:
+                          - img [ref=e45899]
+                          - text: Add Fact
+                    - generic [ref=e45948]:
+                      - generic [ref=e45949]: D Table Decomp
+                      - generic [ref=e45951]: B Drug Dictionary
+                      - generic [ref=e45953]: C Grammar / Regex
+                      - generic [ref=e45955]: E GLiNER NER
+                      - generic [ref=e45957]: F NuExtract LLM
+                    - generic [ref=e45959]:
+                      - button "All (202)" [ref=e45960] [cursor=pointer]
+                      - button "T1 Safety (147)" [ref=e45961] [cursor=pointer]
+                      - button "T2 Clinical (55)" [ref=e45962] [cursor=pointer]
+                      - button "T3 Info (0)" [ref=e45963] [cursor=pointer]
+                    - generic [ref=e45900]:
+                      - generic [ref=e45964]:
+                        - generic [ref=e45965]:
+                          - generic [ref=e45966]: "Tier 1: Patient Safety"
+                          - generic [ref=e45967]: (0/147 reviewed)
+                        - button "D 92% Use with CrCl > 30 ml/min PENDING T1" [ref=e45969] [cursor=pointer]:
+                          - generic [ref=e45971]: D
+                          - generic [ref=e45972]: 92%
+                          - generic: Use with CrCl > 30 ml/min
+                          - generic [ref=e45973]: PENDING
+                          - generic [ref=e45974]: T1
+                        - button "D 92% No dosage adjustment Use with eGFR > 15 ml/min per 1.73 m 2 PENDING T1" [ref=e45976] [cursor=pointer]:
+                          - generic [ref=e45978]: D
+                          - generic [ref=e45979]: 92%
+                          - generic: No dosage adjustment Use with eGFR > 15 ml/min per 1.73 m 2
+                          - generic [ref=e45980]: PENDING
+                          - generic [ref=e45981]: T1
+                        - button "D 92% Use with eGFR > 45 ml/min per 1.73 m 2 PENDING T1" [ref=e45983] [cursor=pointer]:
+                          - generic [ref=e45985]: D
+                          - generic [ref=e45986]: 92%
+                          - generic: Use with eGFR > 45 ml/min per 1.73 m 2
+                          - generic [ref=e45987]: PENDING
+                          - generic [ref=e45988]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e45990] [cursor=pointer]:
+                          - generic [ref=e45992]: B
+                          - generic [ref=e45993]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e45994]: PENDING
+                          - generic [ref=e45995]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e45997] [cursor=pointer]:
+                          - generic [ref=e45999]: B
+                          - generic [ref=e46000]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46001]: PENDING
+                          - generic [ref=e46002]: T1
+                        - button "C 95% eGFR <30 mL/min/1.73m² PENDING T1" [ref=e46004] [cursor=pointer]:
+                          - generic [ref=e46006]: C
+                          - generic [ref=e46007]: 95%
+                          - generic: eGFR <30 mL/min/1.73m²
+                          - generic [ref=e46008]: PENDING
+                          - generic [ref=e46009]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46011] [cursor=pointer]:
+                          - generic [ref=e46013]: B
+                          - generic [ref=e46014]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46015]: PENDING
+                          - generic [ref=e46016]: T1
+                        - button "C 95% eGFR <60 mL/min/1.73m² PENDING T1" [ref=e46018] [cursor=pointer]:
+                          - generic [ref=e46020]: C
+                          - generic [ref=e46021]: 95%
+                          - generic: eGFR <60 mL/min/1.73m²
+                          - generic [ref=e46022]: PENDING
+                          - generic [ref=e46023]: T1
+                        - button "C 95% eGFR <60 mL/min/1.73m² PENDING T1" [ref=e46025] [cursor=pointer]:
+                          - generic [ref=e46027]: C
+                          - generic [ref=e46028]: 95%
+                          - generic: eGFR <60 mL/min/1.73m²
+                          - generic [ref=e46029]: PENDING
+                          - generic [ref=e46030]: T1
+                        - button "C 95% eGFR ≥60 mL/min/1.73m² PENDING T1" [ref=e46032] [cursor=pointer]:
+                          - generic [ref=e46034]: C
+                          - generic [ref=e46035]: 95%
+                          - generic: eGFR ≥60 mL/min/1.73m²
+                          - generic [ref=e46036]: PENDING
+                          - generic [ref=e46037]: T1
+                        - button "B 100% ACEi PENDING T1" [ref=e46039] [cursor=pointer]:
+                          - generic [ref=e46041]: B
+                          - generic [ref=e46042]: 100%
+                          - generic: ACEi
+                          - generic [ref=e46043]: PENDING
+                          - generic [ref=e46044]: T1
+                        - button "B 100% ARB PENDING T1" [ref=e46046] [cursor=pointer]:
+                          - generic [ref=e46048]: B
+                          - generic [ref=e46049]: 100%
+                          - generic: ARB
+                          - generic [ref=e46050]: PENDING
+                          - generic [ref=e46051]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46053] [cursor=pointer]:
+                          - generic [ref=e46055]: B
+                          - generic [ref=e46056]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46057]: PENDING
+                          - generic [ref=e46058]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46060] [cursor=pointer]:
+                          - generic [ref=e46062]: B
+                          - generic [ref=e46063]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46064]: PENDING
+                          - generic [ref=e46065]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46067] [cursor=pointer]:
+                          - generic [ref=e46069]: B
+                          - generic [ref=e46070]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46071]: PENDING
+                          - generic [ref=e46072]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46074] [cursor=pointer]:
+                          - generic [ref=e46076]: B
+                          - generic [ref=e46077]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46078]: PENDING
+                          - generic [ref=e46079]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46081] [cursor=pointer]:
+                          - generic [ref=e46083]: B
+                          - generic [ref=e46084]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46085]: PENDING
+                          - generic [ref=e46086]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46088] [cursor=pointer]:
+                          - generic [ref=e46090]: B
+                          - generic [ref=e46091]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46092]: PENDING
+                          - generic [ref=e46093]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46095] [cursor=pointer]:
+                          - generic [ref=e46097]: B
+                          - generic [ref=e46098]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46099]: PENDING
+                          - generic [ref=e46100]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46102] [cursor=pointer]:
+                          - generic [ref=e46104]: B
+                          - generic [ref=e46105]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46106]: PENDING
+                          - generic [ref=e46107]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46109] [cursor=pointer]:
+                          - generic [ref=e46111]: B
+                          - generic [ref=e46112]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46113]: PENDING
+                          - generic [ref=e46114]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46116] [cursor=pointer]:
+                          - generic [ref=e46118]: B
+                          - generic [ref=e46119]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46120]: PENDING
+                          - generic [ref=e46121]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46123] [cursor=pointer]:
+                          - generic [ref=e46125]: B
+                          - generic [ref=e46126]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46127]: PENDING
+                          - generic [ref=e46128]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46130] [cursor=pointer]:
+                          - generic [ref=e46132]: B
+                          - generic [ref=e46133]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46134]: PENDING
+                          - generic [ref=e46135]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46137] [cursor=pointer]:
+                          - generic [ref=e46139]: B
+                          - generic [ref=e46140]: 100%
+                          - generic: insulin
+                          - generic [ref=e46141]: PENDING
+                          - generic [ref=e46142]: T1
+                        - button "B 100% ACEi PENDING T1" [ref=e46144] [cursor=pointer]:
+                          - generic [ref=e46146]: B
+                          - generic [ref=e46147]: 100%
+                          - generic: ACEi
+                          - generic [ref=e46148]: PENDING
+                          - generic [ref=e46149]: T1
+                        - button "B 100% ARB PENDING T1" [ref=e46151] [cursor=pointer]:
+                          - generic [ref=e46153]: B
+                          - generic [ref=e46154]: 100%
+                          - generic: ARB
+                          - generic [ref=e46155]: PENDING
+                          - generic [ref=e46156]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46158] [cursor=pointer]:
+                          - generic [ref=e46160]: B
+                          - generic [ref=e46161]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46162]: PENDING
+                          - generic [ref=e46163]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46165] [cursor=pointer]:
+                          - generic [ref=e46167]: B
+                          - generic [ref=e46168]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46169]: PENDING
+                          - generic [ref=e46170]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46172] [cursor=pointer]:
+                          - generic [ref=e46174]: B
+                          - generic [ref=e46175]: 100%
+                          - generic: insulin
+                          - generic [ref=e46176]: PENDING
+                          - generic [ref=e46177]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46179] [cursor=pointer]:
+                          - generic [ref=e46181]: B
+                          - generic [ref=e46182]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46183]: PENDING
+                          - generic [ref=e46184]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46186] [cursor=pointer]:
+                          - generic [ref=e46188]: B
+                          - generic [ref=e46189]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46190]: PENDING
+                          - generic [ref=e46191]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46193] [cursor=pointer]:
+                          - generic [ref=e46195]: B
+                          - generic [ref=e46196]: 100%
+                          - generic: insulin
+                          - generic [ref=e46197]: PENDING
+                          - generic [ref=e46198]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46200] [cursor=pointer]:
+                          - generic [ref=e46202]: B
+                          - generic [ref=e46203]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46204]: PENDING
+                          - generic [ref=e46205]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46207] [cursor=pointer]:
+                          - generic [ref=e46209]: B
+                          - generic [ref=e46210]: 100%
+                          - generic: insulin
+                          - generic [ref=e46211]: PENDING
+                          - generic [ref=e46212]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46214] [cursor=pointer]:
+                          - generic [ref=e46216]: B
+                          - generic [ref=e46217]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46218]: PENDING
+                          - generic [ref=e46219]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46221] [cursor=pointer]:
+                          - generic [ref=e46223]: B
+                          - generic [ref=e46224]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46225]: PENDING
+                          - generic [ref=e46226]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46228] [cursor=pointer]:
+                          - generic [ref=e46230]: B
+                          - generic [ref=e46231]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46232]: PENDING
+                          - generic [ref=e46233]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46235] [cursor=pointer]:
+                          - generic [ref=e46237]: B
+                          - generic [ref=e46238]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46239]: PENDING
+                          - generic [ref=e46240]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46242] [cursor=pointer]:
+                          - generic [ref=e46244]: B
+                          - generic [ref=e46245]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46246]: PENDING
+                          - generic [ref=e46247]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46249] [cursor=pointer]:
+                          - generic [ref=e46251]: B
+                          - generic [ref=e46252]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46253]: PENDING
+                          - generic [ref=e46254]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46256] [cursor=pointer]:
+                          - generic [ref=e46258]: B
+                          - generic [ref=e46259]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46260]: PENDING
+                          - generic [ref=e46261]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46263] [cursor=pointer]:
+                          - generic [ref=e46265]: B
+                          - generic [ref=e46266]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46267]: PENDING
+                          - generic [ref=e46268]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46270] [cursor=pointer]:
+                          - generic [ref=e46272]: B
+                          - generic [ref=e46273]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46274]: PENDING
+                          - generic [ref=e46275]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46277] [cursor=pointer]:
+                          - generic [ref=e46279]: B
+                          - generic [ref=e46280]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46281]: PENDING
+                          - generic [ref=e46282]: T1
+                        - button "B 100% ACEi PENDING T1" [ref=e46284] [cursor=pointer]:
+                          - generic [ref=e46286]: B
+                          - generic [ref=e46287]: 100%
+                          - generic: ACEi
+                          - generic [ref=e46288]: PENDING
+                          - generic [ref=e46289]: T1
+                        - button "B 100% ARB PENDING T1" [ref=e46291] [cursor=pointer]:
+                          - generic [ref=e46293]: B
+                          - generic [ref=e46294]: 100%
+                          - generic: ARB
+                          - generic [ref=e46295]: PENDING
+                          - generic [ref=e46296]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46298] [cursor=pointer]:
+                          - generic [ref=e46300]: B
+                          - generic [ref=e46301]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46302]: PENDING
+                          - generic [ref=e46303]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46305] [cursor=pointer]:
+                          - generic [ref=e46307]: B
+                          - generic [ref=e46308]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46309]: PENDING
+                          - generic [ref=e46310]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46312] [cursor=pointer]:
+                          - generic [ref=e46314]: B
+                          - generic [ref=e46315]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46316]: PENDING
+                          - generic [ref=e46317]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46319] [cursor=pointer]:
+                          - generic [ref=e46321]: B
+                          - generic [ref=e46322]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46323]: PENDING
+                          - generic [ref=e46324]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46326] [cursor=pointer]:
+                          - generic [ref=e46328]: B
+                          - generic [ref=e46329]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46330]: PENDING
+                          - generic [ref=e46331]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46333] [cursor=pointer]:
+                          - generic [ref=e46335]: B
+                          - generic [ref=e46336]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46337]: PENDING
+                          - generic [ref=e46338]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46340] [cursor=pointer]:
+                          - generic [ref=e46342]: B
+                          - generic [ref=e46343]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46344]: PENDING
+                          - generic [ref=e46345]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46347] [cursor=pointer]:
+                          - generic [ref=e46349]: B
+                          - generic [ref=e46350]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46351]: PENDING
+                          - generic [ref=e46352]: T1
+                        - button "C 95% eGFR ≥20 mL/min/1.73m² PENDING T1" [ref=e46354] [cursor=pointer]:
+                          - generic [ref=e46356]: C
+                          - generic [ref=e46357]: 95%
+                          - generic: eGFR ≥20 mL/min/1.73m²
+                          - generic [ref=e46358]: PENDING
+                          - generic [ref=e46359]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46361] [cursor=pointer]:
+                          - generic [ref=e46363]: B
+                          - generic [ref=e46364]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46365]: PENDING
+                          - generic [ref=e46366]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46368] [cursor=pointer]:
+                          - generic [ref=e46370]: B
+                          - generic [ref=e46371]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46372]: PENDING
+                          - generic [ref=e46373]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46375] [cursor=pointer]:
+                          - generic [ref=e46377]: B
+                          - generic [ref=e46378]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46379]: PENDING
+                          - generic [ref=e46380]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46382] [cursor=pointer]:
+                          - generic [ref=e46384]: B
+                          - generic [ref=e46385]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46386]: PENDING
+                          - generic [ref=e46387]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46389] [cursor=pointer]:
+                          - generic [ref=e46391]: B
+                          - generic [ref=e46392]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46393]: PENDING
+                          - generic [ref=e46394]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46396] [cursor=pointer]:
+                          - generic [ref=e46398]: B
+                          - generic [ref=e46399]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46400]: PENDING
+                          - generic [ref=e46401]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46403] [cursor=pointer]:
+                          - generic [ref=e46405]: B
+                          - generic [ref=e46406]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46407]: PENDING
+                          - generic [ref=e46408]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46410] [cursor=pointer]:
+                          - generic [ref=e46412]: B
+                          - generic [ref=e46413]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46414]: PENDING
+                          - generic [ref=e46415]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46417] [cursor=pointer]:
+                          - generic [ref=e46419]: B
+                          - generic [ref=e46420]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46421]: PENDING
+                          - generic [ref=e46422]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46424] [cursor=pointer]:
+                          - generic [ref=e46426]: B
+                          - generic [ref=e46427]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46428]: PENDING
+                          - generic [ref=e46429]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46431] [cursor=pointer]:
+                          - generic [ref=e46433]: B
+                          - generic [ref=e46434]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46435]: PENDING
+                          - generic [ref=e46436]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46438] [cursor=pointer]:
+                          - generic [ref=e46440]: B
+                          - generic [ref=e46441]: 100%
+                          - generic: insulin
+                          - generic [ref=e46442]: PENDING
+                          - generic [ref=e46443]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46445] [cursor=pointer]:
+                          - generic [ref=e46447]: B
+                          - generic [ref=e46448]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46449]: PENDING
+                          - generic [ref=e46450]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46452] [cursor=pointer]:
+                          - generic [ref=e46454]: B
+                          - generic [ref=e46455]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46456]: PENDING
+                          - generic [ref=e46457]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46459] [cursor=pointer]:
+                          - generic [ref=e46461]: B
+                          - generic [ref=e46462]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46463]: PENDING
+                          - generic [ref=e46464]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46466] [cursor=pointer]:
+                          - generic [ref=e46468]: B
+                          - generic [ref=e46469]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46470]: PENDING
+                          - generic [ref=e46471]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46473] [cursor=pointer]:
+                          - generic [ref=e46475]: B
+                          - generic [ref=e46476]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46477]: PENDING
+                          - generic [ref=e46478]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46480] [cursor=pointer]:
+                          - generic [ref=e46482]: B
+                          - generic [ref=e46483]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46484]: PENDING
+                          - generic [ref=e46485]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46487] [cursor=pointer]:
+                          - generic [ref=e46489]: B
+                          - generic [ref=e46490]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46491]: PENDING
+                          - generic [ref=e46492]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46494] [cursor=pointer]:
+                          - generic [ref=e46496]: B
+                          - generic [ref=e46497]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46498]: PENDING
+                          - generic [ref=e46499]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46501] [cursor=pointer]:
+                          - generic [ref=e46503]: B
+                          - generic [ref=e46504]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46505]: PENDING
+                          - generic [ref=e46506]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46508] [cursor=pointer]:
+                          - generic [ref=e46510]: B
+                          - generic [ref=e46511]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46512]: PENDING
+                          - generic [ref=e46513]: T1
+                        - button "B 100% Exenatide PENDING T1" [ref=e46515] [cursor=pointer]:
+                          - generic [ref=e46517]: B
+                          - generic [ref=e46518]: 100%
+                          - generic: Exenatide
+                          - generic [ref=e46519]: PENDING
+                          - generic [ref=e46520]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46522] [cursor=pointer]:
+                          - generic [ref=e46524]: B
+                          - generic [ref=e46525]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46526]: PENDING
+                          - generic [ref=e46527]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46529] [cursor=pointer]:
+                          - generic [ref=e46531]: B
+                          - generic [ref=e46532]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46533]: PENDING
+                          - generic [ref=e46534]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46536] [cursor=pointer]:
+                          - generic [ref=e46538]: B
+                          - generic [ref=e46539]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46540]: PENDING
+                          - generic [ref=e46541]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46543] [cursor=pointer]:
+                          - generic [ref=e46545]: B
+                          - generic [ref=e46546]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46547]: PENDING
+                          - generic [ref=e46548]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46550] [cursor=pointer]:
+                          - generic [ref=e46552]: B
+                          - generic [ref=e46553]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46554]: PENDING
+                          - generic [ref=e46555]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46557] [cursor=pointer]:
+                          - generic [ref=e46559]: B
+                          - generic [ref=e46560]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46561]: PENDING
+                          - generic [ref=e46562]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46564] [cursor=pointer]:
+                          - generic [ref=e46566]: B
+                          - generic [ref=e46567]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46568]: PENDING
+                          - generic [ref=e46569]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46571] [cursor=pointer]:
+                          - generic [ref=e46573]: B
+                          - generic [ref=e46574]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46575]: PENDING
+                          - generic [ref=e46576]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46578] [cursor=pointer]:
+                          - generic [ref=e46580]: B
+                          - generic [ref=e46581]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46582]: PENDING
+                          - generic [ref=e46583]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46585] [cursor=pointer]:
+                          - generic [ref=e46587]: B
+                          - generic [ref=e46588]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46589]: PENDING
+                          - generic [ref=e46590]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46592] [cursor=pointer]:
+                          - generic [ref=e46594]: B
+                          - generic [ref=e46595]: 100%
+                          - generic: insulin
+                          - generic [ref=e46596]: PENDING
+                          - generic [ref=e46597]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46599] [cursor=pointer]:
+                          - generic [ref=e46601]: B
+                          - generic [ref=e46602]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46603]: PENDING
+                          - generic [ref=e46604]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46606] [cursor=pointer]:
+                          - generic [ref=e46608]: B
+                          - generic [ref=e46609]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46610]: PENDING
+                          - generic [ref=e46611]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46613] [cursor=pointer]:
+                          - generic [ref=e46615]: B
+                          - generic [ref=e46616]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46617]: PENDING
+                          - generic [ref=e46618]: T1
+                        - button "B 100% sulfonylureas PENDING T1" [ref=e46620] [cursor=pointer]:
+                          - generic [ref=e46622]: B
+                          - generic [ref=e46623]: 100%
+                          - generic: sulfonylureas
+                          - generic [ref=e46624]: PENDING
+                          - generic [ref=e46625]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46627] [cursor=pointer]:
+                          - generic [ref=e46629]: B
+                          - generic [ref=e46630]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46631]: PENDING
+                          - generic [ref=e46632]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46634] [cursor=pointer]:
+                          - generic [ref=e46636]: B
+                          - generic [ref=e46637]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46638]: PENDING
+                          - generic [ref=e46639]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46641] [cursor=pointer]:
+                          - generic [ref=e46643]: B
+                          - generic [ref=e46644]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46645]: PENDING
+                          - generic [ref=e46646]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46648] [cursor=pointer]:
+                          - generic [ref=e46650]: B
+                          - generic [ref=e46651]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46652]: PENDING
+                          - generic [ref=e46653]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46655] [cursor=pointer]:
+                          - generic [ref=e46657]: B
+                          - generic [ref=e46658]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46659]: PENDING
+                          - generic [ref=e46660]: T1
+                        - button "B 100% SGLT2i PENDING T1" [ref=e46662] [cursor=pointer]:
+                          - generic [ref=e46664]: B
+                          - generic [ref=e46665]: 100%
+                          - generic: SGLT2i
+                          - generic [ref=e46666]: PENDING
+                          - generic [ref=e46667]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46669] [cursor=pointer]:
+                          - generic [ref=e46671]: B
+                          - generic [ref=e46672]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46673]: PENDING
+                          - generic [ref=e46674]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46676] [cursor=pointer]:
+                          - generic [ref=e46678]: B
+                          - generic [ref=e46679]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46680]: PENDING
+                          - generic [ref=e46681]: T1
+                        - button "B 100% exenatide PENDING T1" [ref=e46683] [cursor=pointer]:
+                          - generic [ref=e46685]: B
+                          - generic [ref=e46686]: 100%
+                          - generic: exenatide
+                          - generic [ref=e46687]: PENDING
+                          - generic [ref=e46688]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46690] [cursor=pointer]:
+                          - generic [ref=e46692]: B
+                          - generic [ref=e46693]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46694]: PENDING
+                          - generic [ref=e46695]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46697] [cursor=pointer]:
+                          - generic [ref=e46699]: B
+                          - generic [ref=e46700]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46701]: PENDING
+                          - generic [ref=e46702]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46704] [cursor=pointer]:
+                          - generic [ref=e46706]: B
+                          - generic [ref=e46707]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46708]: PENDING
+                          - generic [ref=e46709]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46711] [cursor=pointer]:
+                          - generic [ref=e46713]: B
+                          - generic [ref=e46714]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46715]: PENDING
+                          - generic [ref=e46716]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46718] [cursor=pointer]:
+                          - generic [ref=e46720]: B
+                          - generic [ref=e46721]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46722]: PENDING
+                          - generic [ref=e46723]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46725] [cursor=pointer]:
+                          - generic [ref=e46727]: B
+                          - generic [ref=e46728]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46729]: PENDING
+                          - generic [ref=e46730]: T1
+                        - button "C 98% Practice Point 4.2.2 PENDING T1" [ref=e46732] [cursor=pointer]:
+                          - generic [ref=e46734]: C
+                          - generic [ref=e46735]: 98%
+                          - generic: Practice Point 4.2.2
+                          - generic [ref=e46736]: PENDING
+                          - generic [ref=e46737]: T1
+                        - button "C 98% Practice Point 4.2.3 PENDING T1" [ref=e46739] [cursor=pointer]:
+                          - generic [ref=e46741]: C
+                          - generic [ref=e46742]: 98%
+                          - generic: Practice Point 4.2.3
+                          - generic [ref=e46743]: PENDING
+                          - generic [ref=e46744]: T1
+                        - button "B C F 100% DPP-4 inhibitors and GLP-1 RA should not be used together. PENDING T1" [ref=e46746] [cursor=pointer]:
+                          - generic [ref=e46747]:
+                            - generic [ref=e46748]: B
+                            - generic [ref=e46749]: C
+                            - generic [ref=e46750]: F
+                          - generic [ref=e46751]: 100%
+                          - generic: DPP-4 inhibitors and GLP-1 RA should not be used together.
+                          - generic [ref=e46752]: PENDING
+                          - img [ref=e46753]
+                          - generic [ref=e46755]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46757] [cursor=pointer]:
+                          - generic [ref=e46759]: B
+                          - generic [ref=e46760]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46761]: PENDING
+                          - generic [ref=e46762]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46764] [cursor=pointer]:
+                          - generic [ref=e46766]: B
+                          - generic [ref=e46767]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46768]: PENDING
+                          - generic [ref=e46769]: T1
+                        - button "C 98% Practice Point 4.2.4 PENDING T1" [ref=e46771] [cursor=pointer]:
+                          - generic [ref=e46773]: C
+                          - generic [ref=e46774]: 98%
+                          - generic: Practice Point 4.2.4
+                          - generic [ref=e46775]: PENDING
+                          - generic [ref=e46776]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46778] [cursor=pointer]:
+                          - generic [ref=e46780]: B
+                          - generic [ref=e46781]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46782]: PENDING
+                          - generic [ref=e46783]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46785] [cursor=pointer]:
+                          - generic [ref=e46787]: B
+                          - generic [ref=e46788]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46789]: PENDING
+                          - generic [ref=e46790]: T1
+                        - button "B 100% sulfonylureas PENDING T1" [ref=e46792] [cursor=pointer]:
+                          - generic [ref=e46794]: B
+                          - generic [ref=e46795]: 100%
+                          - generic: sulfonylureas
+                          - generic [ref=e46796]: PENDING
+                          - generic [ref=e46797]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46799] [cursor=pointer]:
+                          - generic [ref=e46801]: B
+                          - generic [ref=e46802]: 100%
+                          - generic: insulin
+                          - generic [ref=e46803]: PENDING
+                          - generic [ref=e46804]: T1
+                        - button "B 100% sulfonylurea PENDING T1" [ref=e46806] [cursor=pointer]:
+                          - generic [ref=e46808]: B
+                          - generic [ref=e46809]: 100%
+                          - generic: sulfonylurea
+                          - generic [ref=e46810]: PENDING
+                          - generic [ref=e46811]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46813] [cursor=pointer]:
+                          - generic [ref=e46815]: B
+                          - generic [ref=e46816]: 100%
+                          - generic: insulin
+                          - generic [ref=e46817]: PENDING
+                          - generic [ref=e46818]: T1
+                        - button "B F 98% GLP-1 RA are preferred over classes of glucose-lowering medications with less evidence supporting reduction of cardiovas... PENDING T1" [ref=e46820] [cursor=pointer]:
+                          - generic [ref=e46821]:
+                            - generic [ref=e46822]: B
+                            - generic [ref=e46823]: F
+                          - generic [ref=e46824]: 98%
+                          - generic: GLP-1 RA are preferred over classes of glucose-lowering medications with less evidence supporting reduction of cardiovas...
+                          - generic [ref=e46825]: PENDING
+                          - img [ref=e46826]
+                          - generic [ref=e46828]: T1
+                        - button "B 100% DPP-4 inhibitors PENDING T1" [ref=e46830] [cursor=pointer]:
+                          - generic [ref=e46832]: B
+                          - generic [ref=e46833]: 100%
+                          - generic: DPP-4 inhibitors
+                          - generic [ref=e46834]: PENDING
+                          - generic [ref=e46835]: T1
+                        - button "B 100% thiazolidinediones PENDING T1" [ref=e46837] [cursor=pointer]:
+                          - generic [ref=e46839]: B
+                          - generic [ref=e46840]: 100%
+                          - generic: thiazolidinediones
+                          - generic [ref=e46841]: PENDING
+                          - generic [ref=e46842]: T1
+                        - button "B 100% sulfonylureas PENDING T1" [ref=e46844] [cursor=pointer]:
+                          - generic [ref=e46846]: B
+                          - generic [ref=e46847]: 100%
+                          - generic: sulfonylureas
+                          - generic [ref=e46848]: PENDING
+                          - generic [ref=e46849]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46851] [cursor=pointer]:
+                          - generic [ref=e46853]: B
+                          - generic [ref=e46854]: 100%
+                          - generic: insulin
+                          - generic [ref=e46855]: PENDING
+                          - generic [ref=e46856]: T1
+                        - button "B 100% sulfonylureas PENDING T1" [ref=e46858] [cursor=pointer]:
+                          - generic [ref=e46860]: B
+                          - generic [ref=e46861]: 100%
+                          - generic: sulfonylureas
+                          - generic [ref=e46862]: PENDING
+                          - generic [ref=e46863]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46865] [cursor=pointer]:
+                          - generic [ref=e46867]: B
+                          - generic [ref=e46868]: 100%
+                          - generic: insulin
+                          - generic [ref=e46869]: PENDING
+                          - generic [ref=e46870]: T1
+                        - button "B 100% sulfonylurea PENDING T1" [ref=e46872] [cursor=pointer]:
+                          - generic [ref=e46874]: B
+                          - generic [ref=e46875]: 100%
+                          - generic: sulfonylurea
+                          - generic [ref=e46876]: PENDING
+                          - generic [ref=e46877]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46879] [cursor=pointer]:
+                          - generic [ref=e46881]: B
+                          - generic [ref=e46882]: 100%
+                          - generic: insulin
+                          - generic [ref=e46883]: PENDING
+                          - generic [ref=e46884]: T1
+                        - button "C 98% Practice Point 4.2.5 PENDING T1" [ref=e46886] [cursor=pointer]:
+                          - generic [ref=e46888]: C
+                          - generic [ref=e46889]: 98%
+                          - generic: Practice Point 4.2.5
+                          - generic [ref=e46890]: PENDING
+                          - generic [ref=e46891]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46893] [cursor=pointer]:
+                          - generic [ref=e46895]: B
+                          - generic [ref=e46896]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46897]: PENDING
+                          - generic [ref=e46898]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46900] [cursor=pointer]:
+                          - generic [ref=e46902]: B
+                          - generic [ref=e46903]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46904]: PENDING
+                          - generic [ref=e46905]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46907] [cursor=pointer]:
+                          - generic [ref=e46909]: B
+                          - generic [ref=e46910]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46911]: PENDING
+                          - generic [ref=e46912]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46914] [cursor=pointer]:
+                          - generic [ref=e46916]: B
+                          - generic [ref=e46917]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46918]: PENDING
+                          - generic [ref=e46919]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46921] [cursor=pointer]:
+                          - generic [ref=e46923]: B
+                          - generic [ref=e46924]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46925]: PENDING
+                          - generic [ref=e46926]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46928] [cursor=pointer]:
+                          - generic [ref=e46930]: B
+                          - generic [ref=e46931]: 100%
+                          - generic: insulin
+                          - generic [ref=e46932]: PENDING
+                          - generic [ref=e46933]: T1
+                        - button "B 100% insulin PENDING T1" [ref=e46935] [cursor=pointer]:
+                          - generic [ref=e46937]: B
+                          - generic [ref=e46938]: 100%
+                          - generic: insulin
+                          - generic [ref=e46939]: PENDING
+                          - generic [ref=e46940]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46942] [cursor=pointer]:
+                          - generic [ref=e46944]: B
+                          - generic [ref=e46945]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46946]: PENDING
+                          - generic [ref=e46947]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46949] [cursor=pointer]:
+                          - generic [ref=e46951]: B
+                          - generic [ref=e46952]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46953]: PENDING
+                          - generic [ref=e46954]: T1
+                        - button "B 100% GLP-1 RA PENDING T1" [ref=e46956] [cursor=pointer]:
+                          - generic [ref=e46958]: B
+                          - generic [ref=e46959]: 100%
+                          - generic: GLP-1 RA
+                          - generic [ref=e46960]: PENDING
+                          - generic [ref=e46961]: T1
+                        - button "B 100% dulaglutide PENDING T1" [ref=e46963] [cursor=pointer]:
+                          - generic [ref=e46965]: B
+                          - generic [ref=e46966]: 100%
+                          - generic: dulaglutide
+                          - generic [ref=e46967]: PENDING
+                          - generic [ref=e46968]: T1
+                        - button "B 100% Exenatide PENDING T1" [ref=e46970] [cursor=pointer]:
+                          - generic [ref=e46972]: B
+                          - generic [ref=e46973]: 100%
+                          - generic: Exenatide
+                          - generic [ref=e46974]: PENDING
+                          - generic [ref=e46975]: T1
+                        - button "B 100% Exenatide PENDING T1" [ref=e46977] [cursor=pointer]:
+                          - generic [ref=e46979]: B
+                          - generic [ref=e46980]: 100%
+                          - generic: Exenatide
+                          - generic [ref=e46981]: PENDING
+                          - generic [ref=e46982]: T1
+                        - button "B 100% liraglutide PENDING T1" [ref=e46984] [cursor=pointer]:
+                          - generic [ref=e46986]: B
+                          - generic [ref=e46987]: 100%
+                          - generic: liraglutide
+                          - generic [ref=e46988]: PENDING
+                          - generic [ref=e46989]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46991] [cursor=pointer]:
+                          - generic [ref=e46993]: B
+                          - generic [ref=e46994]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e46995]: PENDING
+                          - generic [ref=e46996]: T1
+                        - button "B 100% semaglutide PENDING T1" [ref=e46998] [cursor=pointer]:
+                          - generic [ref=e47000]: B
+                          - generic [ref=e47001]: 100%
+                          - generic: semaglutide
+                          - generic [ref=e47002]: PENDING
+                          - generic [ref=e47003]: T1
+                      - generic [ref=e47004]:
+                        - generic [ref=e47005]:
+                          - generic [ref=e47006]: "Tier 2: Clinical Accuracy"
+                          - generic [ref=e47007]: (0/55 reviewed)
+                        - button "C 85% eGFR PENDING T2" [ref=e47009] [cursor=pointer]:
+                          - generic [ref=e47011]: C
+                          - generic [ref=e47012]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47013]: PENDING
+                          - generic [ref=e47014]: T2
+                        - button "E 85% HbA1c PENDING T2" [ref=e47016] [cursor=pointer]:
+                          - generic [ref=e47018]: E
+                          - generic [ref=e47019]: 85%
+                          - generic: HbA1c
+                          - generic [ref=e47020]: PENDING
+                          - generic [ref=e47021]: T2
+                        - button "C 85% creatinine PENDING T2" [ref=e47023] [cursor=pointer]:
+                          - generic [ref=e47025]: C
+                          - generic [ref=e47026]: 85%
+                          - generic: creatinine
+                          - generic [ref=e47027]: PENDING
+                          - generic [ref=e47028]: T2
+                        - button "C 85% Weekly PENDING T2" [ref=e47030] [cursor=pointer]:
+                          - generic [ref=e47032]: C
+                          - generic [ref=e47033]: 85%
+                          - generic: Weekly
+                          - generic [ref=e47034]: PENDING
+                          - generic [ref=e47035]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47037] [cursor=pointer]:
+                          - generic [ref=e47039]: C
+                          - generic [ref=e47040]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47041]: PENDING
+                          - generic [ref=e47042]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47044] [cursor=pointer]:
+                          - generic [ref=e47046]: C
+                          - generic [ref=e47047]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47048]: PENDING
+                          - generic [ref=e47049]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47051] [cursor=pointer]:
+                          - generic [ref=e47053]: C
+                          - generic [ref=e47054]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47055]: PENDING
+                          - generic [ref=e47056]: T2
+                        - button "C 85% 0.75 mg PENDING T2" [ref=e47058] [cursor=pointer]:
+                          - generic [ref=e47060]: C
+                          - generic [ref=e47061]: 85%
+                          - generic: 0.75 mg
+                          - generic [ref=e47062]: PENDING
+                          - generic [ref=e47063]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47065] [cursor=pointer]:
+                          - generic [ref=e47067]: C
+                          - generic [ref=e47068]: 85%
+                          - generic: weekly
+                          - generic [ref=e47069]: PENDING
+                          - generic [ref=e47070]: T2
+                        - button "C 85% 1.5 mg PENDING T2" [ref=e47072] [cursor=pointer]:
+                          - generic [ref=e47074]: C
+                          - generic [ref=e47075]: 85%
+                          - generic: 1.5 mg
+                          - generic [ref=e47076]: PENDING
+                          - generic [ref=e47077]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47079] [cursor=pointer]:
+                          - generic [ref=e47081]: C
+                          - generic [ref=e47082]: 85%
+                          - generic: weekly
+                          - generic [ref=e47083]: PENDING
+                          - generic [ref=e47084]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47086] [cursor=pointer]:
+                          - generic [ref=e47088]: C
+                          - generic [ref=e47089]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47090]: PENDING
+                          - generic [ref=e47091]: T2
+                        - button "C 85% HbA1c PENDING T2" [ref=e47093] [cursor=pointer]:
+                          - generic [ref=e47095]: C
+                          - generic [ref=e47096]: 85%
+                          - generic: HbA1c
+                          - generic [ref=e47097]: PENDING
+                          - generic [ref=e47098]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47100] [cursor=pointer]:
+                          - generic [ref=e47102]: C
+                          - generic [ref=e47103]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47104]: PENDING
+                          - generic [ref=e47105]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47107] [cursor=pointer]:
+                          - generic [ref=e47109]: C
+                          - generic [ref=e47110]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47111]: PENDING
+                          - generic [ref=e47112]: T2
+                        - button "C 85% 33.9 mg PENDING T2" [ref=e47114] [cursor=pointer]:
+                          - generic [ref=e47116]: C
+                          - generic [ref=e47117]: 85%
+                          - generic: 33.9 mg
+                          - generic [ref=e47118]: PENDING
+                          - generic [ref=e47119]: T2
+                        - button "C 85% 339 mg PENDING T2" [ref=e47121] [cursor=pointer]:
+                          - generic [ref=e47123]: C
+                          - generic [ref=e47124]: 85%
+                          - generic: 339 mg
+                          - generic [ref=e47125]: PENDING
+                          - generic [ref=e47126]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47128] [cursor=pointer]:
+                          - generic [ref=e47130]: C
+                          - generic [ref=e47131]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47132]: PENDING
+                          - generic [ref=e47133]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47135] [cursor=pointer]:
+                          - generic [ref=e47137]: C
+                          - generic [ref=e47138]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47139]: PENDING
+                          - generic [ref=e47140]: T2
+                        - button "C 85% 1 mg PENDING T2" [ref=e47142] [cursor=pointer]:
+                          - generic [ref=e47144]: C
+                          - generic [ref=e47145]: 85%
+                          - generic: 1 mg
+                          - generic [ref=e47146]: PENDING
+                          - generic [ref=e47147]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47149] [cursor=pointer]:
+                          - generic [ref=e47151]: C
+                          - generic [ref=e47152]: 85%
+                          - generic: weekly
+                          - generic [ref=e47153]: PENDING
+                          - generic [ref=e47154]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47156] [cursor=pointer]:
+                          - generic [ref=e47158]: C
+                          - generic [ref=e47159]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47160]: PENDING
+                          - generic [ref=e47161]: T2
+                        - button "C 95% not recommended PENDING T2" [ref=e47163] [cursor=pointer]:
+                          - generic [ref=e47165]: C
+                          - generic [ref=e47166]: 95%
+                          - generic: not recommended
+                          - generic [ref=e47167]: PENDING
+                          - generic [ref=e47168]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47170] [cursor=pointer]:
+                          - generic [ref=e47172]: C
+                          - generic [ref=e47173]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47174]: PENDING
+                          - generic [ref=e47175]: T2
+                        - button "C 85% HbA1c PENDING T2" [ref=e47177] [cursor=pointer]:
+                          - generic [ref=e47179]: C
+                          - generic [ref=e47180]: 85%
+                          - generic: HbA1c
+                          - generic [ref=e47181]: PENDING
+                          - generic [ref=e47182]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47184] [cursor=pointer]:
+                          - generic [ref=e47186]: C
+                          - generic [ref=e47187]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47188]: PENDING
+                          - generic [ref=e47189]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47191] [cursor=pointer]:
+                          - generic [ref=e47193]: C
+                          - generic [ref=e47194]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47195]: PENDING
+                          - generic [ref=e47196]: T2
+                        - button "C 85% HbA1c PENDING T2" [ref=e47198] [cursor=pointer]:
+                          - generic [ref=e47200]: C
+                          - generic [ref=e47201]: 85%
+                          - generic: HbA1c
+                          - generic [ref=e47202]: PENDING
+                          - generic [ref=e47203]: T2
+                        - button "C 85% eGFR PENDING T2" [ref=e47205] [cursor=pointer]:
+                          - generic [ref=e47207]: C
+                          - generic [ref=e47208]: 85%
+                          - generic: eGFR
+                          - generic [ref=e47209]: PENDING
+                          - generic [ref=e47210]: T2
+                        - button "C 95% should not be used PENDING T2" [ref=e47212] [cursor=pointer]:
+                          - generic [ref=e47214]: C
+                          - generic [ref=e47215]: 95%
+                          - generic: should not be used
+                          - generic [ref=e47216]: PENDING
+                          - generic [ref=e47217]: T2
+                        - button "C 90% stop PENDING T2" [ref=e47219] [cursor=pointer]:
+                          - generic [ref=e47221]: C
+                          - generic [ref=e47222]: 90%
+                          - generic: stop
+                          - generic [ref=e47223]: PENDING
+                          - generic [ref=e47224]: T2
+                        - button "C 85% 1.5 mg PENDING T2" [ref=e47226] [cursor=pointer]:
+                          - generic [ref=e47228]: C
+                          - generic [ref=e47229]: 85%
+                          - generic: 1.5 mg
+                          - generic [ref=e47230]: PENDING
+                          - generic [ref=e47231]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47233] [cursor=pointer]:
+                          - generic [ref=e47235]: C
+                          - generic [ref=e47236]: 85%
+                          - generic: weekly
+                          - generic [ref=e47237]: PENDING
+                          - generic [ref=e47238]: T2
+                        - button "C 85% 0.75 mg PENDING T2" [ref=e47240] [cursor=pointer]:
+                          - generic [ref=e47242]: C
+                          - generic [ref=e47243]: 85%
+                          - generic: 0.75 mg
+                          - generic [ref=e47244]: PENDING
+                          - generic [ref=e47245]: T2
+                        - button "C 85% 1.5 mg PENDING T2" [ref=e47247] [cursor=pointer]:
+                          - generic [ref=e47249]: C
+                          - generic [ref=e47250]: 85%
+                          - generic: 1.5 mg
+                          - generic [ref=e47251]: PENDING
+                          - generic [ref=e47252]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47254] [cursor=pointer]:
+                          - generic [ref=e47256]: C
+                          - generic [ref=e47257]: 85%
+                          - generic: weekly
+                          - generic [ref=e47258]: PENDING
+                          - generic [ref=e47259]: T2
+                        - button "C 95% eGFR &gt;15 mL/min/1.73m² PENDING T2" [ref=e47261] [cursor=pointer]:
+                          - generic [ref=e47263]: C
+                          - generic [ref=e47264]: 95%
+                          - generic: eGFR &gt;15 mL/min/1.73m²
+                          - generic [ref=e47265]: PENDING
+                          - generic [ref=e47266]: T2
+                        - button "C 85% daily PENDING T2" [ref=e47268] [cursor=pointer]:
+                          - generic [ref=e47270]: C
+                          - generic [ref=e47271]: 85%
+                          - generic: daily
+                          - generic [ref=e47272]: PENDING
+                          - generic [ref=e47273]: T2
+                        - button "C 95% CrCl &gt;30 ml/min PENDING T2" [ref=e47275] [cursor=pointer]:
+                          - generic [ref=e47277]: C
+                          - generic [ref=e47278]: 95%
+                          - generic: CrCl &gt;30 ml/min
+                          - generic [ref=e47279]: PENDING
+                          - generic [ref=e47280]: T2
+                        - button "C 85% 2 mg PENDING T2" [ref=e47282] [cursor=pointer]:
+                          - generic [ref=e47284]: C
+                          - generic [ref=e47285]: 85%
+                          - generic: 2 mg
+                          - generic [ref=e47286]: PENDING
+                          - generic [ref=e47287]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47289] [cursor=pointer]:
+                          - generic [ref=e47291]: C
+                          - generic [ref=e47292]: 85%
+                          - generic: weekly
+                          - generic [ref=e47293]: PENDING
+                          - generic [ref=e47294]: T2
+                        - button "C 95% eGFR &gt;45 mL/min/1.73m² PENDING T2" [ref=e47296] [cursor=pointer]:
+                          - generic [ref=e47298]: C
+                          - generic [ref=e47299]: 95%
+                          - generic: eGFR &gt;45 mL/min/1.73m²
+                          - generic [ref=e47300]: PENDING
+                          - generic [ref=e47301]: T2
+                        - button "C 85% 1.2 mg PENDING T2" [ref=e47303] [cursor=pointer]:
+                          - generic [ref=e47305]: C
+                          - generic [ref=e47306]: 85%
+                          - generic: 1.2 mg
+                          - generic [ref=e47307]: PENDING
+                          - generic [ref=e47308]: T2
+                        - button "C 85% 1.8 mg PENDING T2" [ref=e47310] [cursor=pointer]:
+                          - generic [ref=e47312]: C
+                          - generic [ref=e47313]: 85%
+                          - generic: 1.8 mg
+                          - generic [ref=e47314]: PENDING
+                          - generic [ref=e47315]: T2
+                        - button "C 85% daily PENDING T2" [ref=e47317] [cursor=pointer]:
+                          - generic [ref=e47319]: C
+                          - generic [ref=e47320]: 85%
+                          - generic: daily
+                          - generic [ref=e47321]: PENDING
+                          - generic [ref=e47322]: T2
+                        - button "C 85% daily PENDING T2" [ref=e47324] [cursor=pointer]:
+                          - generic [ref=e47326]: C
+                          - generic [ref=e47327]: 85%
+                          - generic: daily
+                          - generic [ref=e47328]: PENDING
+                          - generic [ref=e47329]: T2
+                        - button "C 95% Not recommended PENDING T2" [ref=e47331] [cursor=pointer]:
+                          - generic [ref=e47333]: C
+                          - generic [ref=e47334]: 95%
+                          - generic: Not recommended
+                          - generic [ref=e47335]: PENDING
+                          - generic [ref=e47336]: T2
+                        - button "C 95% eGFR &lt;15 mL/min/1.73m² PENDING T2" [ref=e47338] [cursor=pointer]:
+                          - generic [ref=e47340]: C
+                          - generic [ref=e47341]: 95%
+                          - generic: eGFR &lt;15 mL/min/1.73m²
+                          - generic [ref=e47342]: PENDING
+                          - generic [ref=e47343]: T2
+                        - button "C 85% 0.5 mg PENDING T2" [ref=e47345] [cursor=pointer]:
+                          - generic [ref=e47347]: C
+                          - generic [ref=e47348]: 85%
+                          - generic: 0.5 mg
+                          - generic [ref=e47349]: PENDING
+                          - generic [ref=e47350]: T2
+                        - button "C 85% 1 mg PENDING T2" [ref=e47352] [cursor=pointer]:
+                          - generic [ref=e47354]: C
+                          - generic [ref=e47355]: 85%
+                          - generic: 1 mg
+                          - generic [ref=e47356]: PENDING
+                          - generic [ref=e47357]: T2
+                        - button "C 85% weekly PENDING T2" [ref=e47359] [cursor=pointer]:
+                          - generic [ref=e47361]: C
+                          - generic [ref=e47362]: 85%
+                          - generic: weekly
+                          - generic [ref=e47363]: PENDING
+                          - generic [ref=e47364]: T2
+                        - button "C 85% 3 mg PENDING T2" [ref=e47366] [cursor=pointer]:
+                          - generic [ref=e47368]: C
+                          - generic [ref=e47369]: 85%
+                          - generic: 3 mg
+                          - generic [ref=e47370]: PENDING
+                          - generic [ref=e47371]: T2
+                        - button "C 85% 7 mg PENDING T2" [ref=e47373] [cursor=pointer]:
+                          - generic [ref=e47375]: C
+                          - generic [ref=e47376]: 85%
+                          - generic: 7 mg
+                          - generic [ref=e47377]: PENDING
+                          - generic [ref=e47378]: T2
+                        - button "C 85% 14 mg PENDING T2" [ref=e47380] [cursor=pointer]:
+                          - generic [ref=e47382]: C
+                          - generic [ref=e47383]: 85%
+                          - generic: 14 mg
+                          - generic [ref=e47384]: PENDING
+                          - generic [ref=e47385]: T2
+                        - button "C 85% daily PENDING T2" [ref=e47387] [cursor=pointer]:
+                          - generic [ref=e47389]: C
+                          - generic [ref=e47390]: 85%
+                          - generic: daily
+                          - generic [ref=e47391]: PENDING
+                          - generic [ref=e47392]: T2
+                    - generic [ref=e45904]:
+                      - generic [ref=e45905]:
+                        - generic [ref=e45906]:
+                          - generic [ref=e45907]: Page 88
+                          - text: — 0/202 spans reviewed
+                          - generic [ref=e45908]: (202 pending)
+                        - generic [ref=e45909]:
+                          - button "Accept Page" [disabled] [ref=e45910]:
+                            - img [ref=e45911]
+                            - text: Accept Page
+                          - button "Flag Page" [ref=e45913] [cursor=pointer]:
+                            - img [ref=e45914]
+                            - text: Flag Page
+                          - button "Escalate" [ref=e45916] [cursor=pointer]:
+                            - img [ref=e45917]
+                            - text: Escalate
+                      - generic [ref=e45920]:
+                        - img [ref=e45921]
+                        - text: 147 Tier 1 (patient safety) spans must be reviewed before ACCEPT
+                  - generic [ref=e45923]:
+                    - generic [ref=e45924]:
+                      - generic [ref=e45925]: Source PDF — Page 88
+                      - generic [ref=e45926]: Showing full page
+                    - generic [ref=e45929]:
+                      - generic [ref=e45930]:
+                        - button [ref=e45931] [cursor=pointer]:
+                          - img [ref=e45932]
+                        - spinbutton [ref=e45934]: "88"
+                        - generic [ref=e45935]: / 128
+                        - button [ref=e45936] [cursor=pointer]:
+                          - img [ref=e45937]
+                        - button "Search in PDF (Ctrl+F)" [ref=e45940] [cursor=pointer]:
+                          - img [ref=e45941]
+                      - generic [ref=e45947]:
+                        - text: "currently unavailable, the priority is to use one of the other GLP-1 RA, which have proven cardiovascular and kidney bene fi t (i.e., liraglutide, semaglutide [injectable], and dula- glutide). Additionally, cardiovascular bene fi t has not been demonstrated for oral semaglutide, as the PIONEER 6 383 trial was powered for only non-inferiority, although a larger outcome cardiovascular trial for oral semaglutide is ongoing (SOUL, NCT03914326). Patients with T2D and CKD are a heterogeneous group of patients, and treatment of hyperglycemia is complex. Treat- ment algorithms must be tailored to individuals, taking into consideration patient priorities and preferences, treatment availability, and cost, as part of shared decision-making. Practice Point 4.2.2: To minimize gastrointestinal side ef- fects, start with a low dose of GLP-1 RA, and titrate up slowly (Figure 29). Practice Point 4.2.3: GLP-1 RA should not be used in com- bination with dipeptidyl peptidase-4 (DPP-4) inhibitors. DPP-4 inhibitors and GLP-1 RA should not be used together. Given that GLP-1 RA have been shown to have cardiovascular bene fi t, consideration may be given to stop- ping the gliptin medication (DPP-4) in order to facilitate treatment with a GLP-1 RA instead. Practice Point 4.2.4: The risk of hypoglycemia is generally low with GLP-1 RA when used alone, but risk is increased when GLP-1 RA is used concomitantly with other medi- cations such as sulfonylureas or insulin. The doses of sul- fonylurea and/or insulin may need to be reduced. GLP-1 RA are preferred over classes of glucose-lowering medications with less evidence supporting reduction of car- diovascular or kidney risks (e.g., DPP-4 inhibitors, thiazolidinediones, sulfonylureas, insulin, and acarbose). GLP-1 RA on their own do not cause hypoglycemia, but they may increase the risk of hypoglycemia caused by sulfonylureas or insulin when used concurrently. Therefore, it is reasonable to stop or reduce the dose of sulfonylurea or insulin when starting a GLP-1 RA if the combination may lead to an un- acceptable risk of hypoglycemia. Practice Point 4.2.5: GLP-1 RA may be preferentially used in patients with obesity, T2D, and CKD to promote intentional weight loss. Persons with T2D and CKD often are obese even at advanced stages of CKD. Obesity has numerous adverse health effects, including higher risks of CVD and CKD. These risks are mediated by “ indirect ” effects such as worsened risk factors (e.g., hyperglycemia, hypertension) as well as by “ direct ” effects of obesity (e.g., pro-in fl ammatory state, fat compression of organs). 400,401 As a class, GLP-1 RA have demonstrated weight- loss effects. Both semaglutide and liraglutide have been studied and approved for weight loss in nondiabetic obesity. 402 In addition, tirzepatide has also been studied for obesity in pa- tients without diabetes in the A Study of Tirzepatide (LY3298176) in Participants With Obesity or Overweight (SURMONT) trial. In the AWARD-7 trial of patients with T2D and CKD G3a – G4, dulaglutide treatment (1.5 mg weekly) produced a mean weight loss of nearly 4 kg over 1 year, while insulin users gained > 1 kg on average. 382 Thus, the weight differential between conventional insulin and dulaglutide treatment was about 5 kg after 1 year. This magnitude of weight loss is clinically meaningful from the perspectives of improving cardiovascular and CKD risk factors and for kidney and heart protection. Furthermore, weight loss may be required to qualify people with obesity and advanced stages of CKD for kidney transplant. GLP-1 RA promotes weight loss in these"
+                        - generic:
+                          - generic: t n e m t s u j d a D K C e s o D A R 1 - P L G Dulaglutide Exenatide Exenatide extended-release Liraglutide Lixisenatide Semaglutide (injection) Semaglutide (oral) 0.75 mg and 1.5 mg once weekly 10 μg twice daily 2 mg once weekly 1.2 mg and 1.8 mg once daily 10 μg and 20 μg once daily 0.5 mg and 1 mg once weekly 3 mg, 7 mg, or 14 mg daily No dosage adjustment Use with eGFR >15 ml/min per 1.73 m 2 Use with CrCl >30 ml/min Use with eGFR >45 ml/min per 1.73 m 2 No dosage adjustment Limited data for severe CKD No dosage adjustment Limited data for severe CKD Not recommended with eGFR <15 ml/min per 1.73 m 2 No dosage adjustment Limited data for severe CKD No dosage adjustment Limited data for severe CKD
+                        - text: Figure 29 | Dosing for available glucagon-like peptide-1 receptor agonists (GLP-1 RA) and dose modi fi cation for chronic kidney disease (CKD). CrCl, creatinine clearance; eGFR, estimated glomerular fi ltration rate. www.kidney-international.org c h a p t e r 4 Kidney International (2022) 102 (Suppl 5S), S1–S127 S87
+  - alert [ref=e207]

@@ -1,0 +1,116 @@
+# Enhanced ORB Rule: Heparin Anticoagulation with Knowledge Manifest
+# This demonstrates the new knowledge_manifest section for KB optimization
+# File: /orb/anticoagulation/heparin-rules-v2.0.yaml
+
+metadata:
+  version: "2.0"
+  last_updated: "2024-01-15"
+  description: "Heparin anticoagulation rules with Knowledge Manifest optimization"
+  author: "Clinical Decision Support Team"
+  validation_status: "approved"
+
+rules:
+  - id: "heparin-standard-selection-v1"
+    priority: 10
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Heparin" }
+        - { fact: "patient.weight_kg", operator: "gte", value: 40 }
+        - { fact: "patient.age_years", operator: "gte", value: 18 }
+    action:
+      generate_manifest:
+        intent: "heparin_dosing"
+        recipe_id: "heparin-infusion-adult-v2.0"
+        variant: "standard"
+        
+        # Existing data manifest for Context Gateway Service
+        data_manifest:
+          required:
+            - "demographics.weight.actual_kg"
+            - "labs.platelet_count[latest]"
+            - "labs.ptt[latest]"
+            - "labs.inr[latest]"
+            - "conditions.bleeding_risk"
+            - "medications.anticoagulants[active]"
+            - "procedures.recent_surgeries[30_days]"
+        
+        # NEW: Knowledge Manifest - Only required KBs (6/7 KBs)
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"           # Drug information and properties
+            - "kb_dosing_rules_v1"          # Dosing algorithms and calculations
+            - "kb_ddi_v1"                   # Drug-drug interactions
+            - "kb_formulary_stock_v1"       # Formulary status and availability
+            - "kb_patient_safe_checks_v1"   # Patient safety validations
+            - "kb_guideline_evidence_v1"    # Clinical guidelines and evidence
+            # NOTE: "kb_resistance_profiles_v1" intentionally omitted
+            # Heparin dosing doesn't require antimicrobial resistance data
+
+  - id: "heparin-obesity-adjusted-v1"
+    priority: 15
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Heparin" }
+        - { fact: "patient.bmi", operator: "gte", value: 30 }
+        - { fact: "patient.weight_kg", operator: "gte", value: 100 }
+    action:
+      generate_manifest:
+        intent: "heparin_dosing_obesity"
+        recipe_id: "heparin-infusion-adult-v2.0"
+        variant: "obesity_adjusted"
+        
+        data_manifest:
+          required:
+            - "demographics.weight.actual_kg"
+            - "demographics.weight.ideal_kg"
+            - "demographics.bmi"
+            - "labs.platelet_count[latest]"
+            - "labs.ptt[latest]"
+            - "conditions.bleeding_risk"
+        
+        # Same KB requirements as standard heparin
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"
+            - "kb_dosing_rules_v1"
+            - "kb_ddi_v1"
+            - "kb_formulary_stock_v1"
+            - "kb_patient_safe_checks_v1"
+            - "kb_guideline_evidence_v1"
+
+  - id: "heparin-renal-impairment-v1"
+    priority: 20
+    conditions:
+      all_of:
+        - { fact: "drug_name", operator: "equal", value: "Heparin" }
+        - { fact: "patient.egfr_ml_min", operator: "lt", value: 30 }
+    action:
+      generate_manifest:
+        intent: "heparin_dosing_renal"
+        recipe_id: "heparin-infusion-adult-v2.0"
+        variant: "renal_adjusted"
+        
+        data_manifest:
+          required:
+            - "demographics.weight.actual_kg"
+            - "labs.serum_creatinine[latest]"
+            - "labs.egfr[latest]"
+            - "labs.platelet_count[latest]"
+            - "labs.ptt[latest]"
+            - "conditions.chronic_kidney_disease"
+        
+        # Same KB requirements - heparin doesn't require dose adjustment for renal impairment
+        # but we still need safety checks
+        knowledge_manifest:
+          required_kbs:
+            - "kb_drug_master_v1"
+            - "kb_dosing_rules_v1"
+            - "kb_ddi_v1"
+            - "kb_formulary_stock_v1"
+            - "kb_patient_safe_checks_v1"
+            - "kb_guideline_evidence_v1"
+
+rule_evaluation:
+  evaluation_order: "priority_desc"
+  stop_on_first_match: true
+  evaluation_timeout_ms: 100

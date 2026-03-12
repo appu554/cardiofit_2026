@@ -1,0 +1,293 @@
+# Renal Phenotypes Library
+# Chronic kidney disease and nephrology-specific phenotyping
+
+metadata:
+  kb_name: "kb_clinical_context"
+  version: "2.0.0"
+  institution: "Clinical Synthesis Hub"
+  effective_date: "2025-09-01"
+  expires_date: "2026-09-01"
+  clinical_domains: ["renal", "nephrology"]
+
+phenotypes:
+  
+  # ========== CHRONIC KIDNEY DISEASE ==========
+  
+  - id: "PHE-CKD00001"
+    name: "CKD with Rapid Progression"
+    domain: "renal"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Chronic kidney disease with evidence of rapid progression"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        labs.egfr < 60 && 
+        labs.egfr_decline_rate > 5 &&
+        labs.persistent_proteinuria
+      data_requirements:
+        - field: "labs.egfr"
+          type: "float"
+          required: true
+          source: "context_gateway"
+          units: "mL/min/1.73m2"
+          time_window: "3m"
+          validation_rules:
+            min_value: 5
+            max_value: 150
+        - field: "labs.egfr_decline_rate"
+          type: "float"
+          required: false
+          source: "calculated"
+          units: "mL/min/1.73m2/year"
+          description: "Rate of eGFR decline over past 12 months"
+        - field: "labs.persistent_proteinuria"
+          type: "boolean"
+          required: false
+          source: "calculated"
+          description: "Proteinuria present on 2+ occasions 3+ months apart"
+        - field: "labs.uacr"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "mg/g"
+          time_window: "6m"
+    
+    priority: 700
+    
+    outputs:
+      risk_category: "very_high"
+      treatment_intensity: "aggressive"
+      monitoring_level: "intensive"
+      care_setting: "specialty"
+      clinical_urgency: "urgent"
+    
+    clinical_implications:
+      - implication: "Urgent nephrology referral required"
+        severity: "critical"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "referral"
+      - implication: "Avoid nephrotoxic medications"
+        severity: "warning"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "medication_change"
+      - implication: "Consider renal replacement therapy planning"
+        severity: "warning"
+        action_required: false
+        timeframe: "within_week"
+        action_type: "follow_up"
+    
+    evidence_links:
+      kb3_guidelines: ["KDIGO-CKD-2024", "NKF-CKD-PROG-2024"]
+      kb4_safety_rules: ["SAF-NEPHROTOX-001", "SAF-CKD-CONTRAST-001"]
+
+  - id: "PHE-CKD00002"
+    name: "CKD Stage 4-5 Pre-Dialysis"
+    domain: "renal"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Advanced chronic kidney disease requiring renal replacement therapy planning"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        labs.egfr < 30 &&
+        labs.egfr_stable_6m &&
+        !patient.on_dialysis
+      data_requirements:
+        - field: "labs.egfr"
+          type: "float"
+          required: true
+          source: "context_gateway"
+          units: "mL/min/1.73m2"
+          time_window: "1m"
+        - field: "labs.egfr_stable_6m"
+          type: "boolean"
+          required: false
+          source: "calculated"
+          description: "eGFR consistently <30 for 6+ months"
+        - field: "patient.on_dialysis"
+          type: "boolean"
+          required: false
+          source: "ehr"
+    
+    priority: 800
+    
+    outputs:
+      risk_category: "very_high"
+      treatment_intensity: "specialized"
+      monitoring_level: "intensive"
+      care_setting: "specialty"
+      clinical_urgency: "urgent"
+    
+    clinical_implications:
+      - implication: "Nephrology management required for RRT planning"
+        severity: "critical"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "referral"
+      - implication: "Vascular access planning for hemodialysis"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "referral"
+      - implication: "Pre-transplant evaluation if appropriate candidate"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "referral"
+    
+    evidence_links:
+      kb3_guidelines: ["KDIGO-RRT-2024", "ASN-DIALYSIS-INIT-2024"]
+      kb4_safety_rules: ["SAF-ESRD-001", "SAF-DIALYSIS-PREP-001"]
+
+  # ========== ACUTE KIDNEY INJURY ==========
+  
+  - id: "PHE-CKD00003"
+    name: "Acute Kidney Injury"
+    domain: "renal"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Acute kidney injury with significant creatinine rise"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        (labs.creatinine_current / labs.creatinine_baseline >= 1.5 ||
+         labs.creatinine_increase >= 0.3) &&
+        labs.timeline <= 48
+      data_requirements:
+        - field: "labs.creatinine_current"
+          type: "float"
+          required: true
+          source: "context_gateway"
+          units: "mg/dL"
+          time_window: "48h"
+        - field: "labs.creatinine_baseline"
+          type: "float"
+          required: false
+          source: "ehr"
+          units: "mg/dL"
+          time_window: "12m"
+          description: "Baseline creatinine within past year"
+        - field: "labs.creatinine_increase"
+          type: "float"
+          required: false
+          source: "calculated"
+          units: "mg/dL"
+          description: "Absolute increase from baseline"
+        - field: "labs.timeline"
+          type: "float"
+          required: false
+          source: "calculated"
+          units: "hours"
+          description: "Time since onset of AKI"
+    
+    priority: 900  # High priority for acute conditions
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "aggressive"
+      monitoring_level: "intensive"
+      care_setting: "emergency"
+      clinical_urgency: "urgent"
+    
+    clinical_implications:
+      - implication: "Immediate nephrotoxin review and discontinuation"
+        severity: "critical"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "medication_change"
+      - implication: "Volume status assessment and optimization"
+        severity: "warning"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "follow_up"
+      - implication: "Nephrology consultation if Stage 2-3 AKI"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "referral"
+    
+    evidence_links:
+      kb3_guidelines: ["KDIGO-AKI-2024", "ASN-AKI-MGMT-2024"]
+      kb4_safety_rules: ["SAF-AKI-001", "SAF-NEPHROTOX-002"]
+
+  # ========== MINERAL BONE DISORDER ==========
+  
+  - id: "PHE-CKD00004"
+    name: "CKD Mineral Bone Disorder"
+    domain: "renal"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "CKD with mineral and bone metabolism abnormalities"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        labs.egfr < 45 &&
+        (labs.phosphorus > 4.5 || labs.pth > 65 || labs.calcium < 8.5)
+      data_requirements:
+        - field: "labs.egfr"
+          type: "float"
+          required: true
+          source: "context_gateway"
+          units: "mL/min/1.73m2"
+          time_window: "3m"
+        - field: "labs.phosphorus"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "mg/dL"
+          time_window: "3m"
+          validation_rules:
+            min_value: 1.0
+            max_value: 10.0
+        - field: "labs.pth"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "pg/mL"
+          time_window: "6m"
+        - field: "labs.calcium"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "mg/dL"
+          time_window: "3m"
+    
+    priority: 400
+    
+    outputs:
+      risk_category: "moderate"
+      treatment_intensity: "standard"
+      monitoring_level: "enhanced"
+      care_setting: "specialty"
+    
+    clinical_implications:
+      - implication: "CKD-MBD management required"
+        severity: "warning"
+        action_required: true
+        timeframe: "routine"
+        action_type: "medication_change"
+      - implication: "Phosphate binder therapy consideration"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "medication_change"
+      - implication: "Vitamin D analog therapy evaluation"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "medication_change"
+    
+    evidence_links:
+      kb3_guidelines: ["KDIGO-MBD-2024", "NKF-MBD-2024"]
+      kb4_safety_rules: ["SAF-PHOSPHATE-001", "SAF-VITAMIN-D-001"]

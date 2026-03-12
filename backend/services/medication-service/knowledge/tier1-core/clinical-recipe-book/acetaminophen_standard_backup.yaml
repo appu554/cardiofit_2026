@@ -1,0 +1,243 @@
+recipe_id: "acetaminophen-standard-v2"
+version: "2.0.0"
+name: "Acetaminophen Standard Dosing"
+description: "Weight-based acetaminophen dosing with hepatotoxicity prevention"
+medication_code: "acetaminophen"
+indication: "pain_mild_to_moderate"
+
+# Algorithm
+algorithm:
+  type: "weight_based_dosing"
+  steps:
+    - step_id: "calculate_dose"
+      description: "Calculate weight-based dose"
+      action: "multiply"
+      parameters:
+        weight_kg: "patient_weight"
+        dose_per_kg: 15.0
+        max_single_dose: 1000
+        max_daily_dose: 4000
+      conditions: []
+  parameters:
+    adult_dose_mg_per_kg: 15.0
+    max_single_dose_mg: 1000
+    max_daily_dose_mg: 4000
+    frequency_hours: 6
+  validation:
+    - rule_id: "max_dose_check"
+      description: "Ensure dose does not exceed maximum"
+      field: "calculated_dose"
+      operator: "less_than_or_equal"
+      value: 1000
+      error_message: "Dose exceeds maximum single dose of 1000mg"
+    - age_min: 0
+      age_max: 2
+      dose_mg_per_kg: 15.0
+      max_single_dose_mg: 160
+      frequency_hours: 6
+      
+    - age_min: 3
+      age_max: 11
+      dose_mg_per_kg: 15.0
+      max_single_dose_mg: 480
+      frequency_hours: 6
+      
+    - age_min: 12
+      age_max: 17
+      dose_mg_per_kg: 12.0
+      max_single_dose_mg: 750
+      frequency_hours: 6
+      
+    - age_min: 18
+      age_max: 64
+      dose_mg_per_kg: 10.0
+      max_single_dose_mg: 1000
+      frequency_hours: 6
+      
+    - age_min: 65
+      age_max: 999
+      dose_mg_per_kg: 10.0
+      max_single_dose_mg: 750  # Reduced for elderly
+      frequency_hours: 8       # Extended interval
+
+# Required clinical context
+required_context:
+  patient_demographics:
+    - "age_years"
+    - "weight_kg"
+    - "gender"
+    
+  clinical_factors:
+    - "pain_severity"
+    - "fever_temperature"
+    - "liver_function_status"
+    - "alcohol_use_history"
+    - "concurrent_medications"
+    
+  laboratory_values:
+    - "liver_function_tests"  # If liver disease suspected
+    - "acetaminophen_level"   # If overdose suspected
+
+# Safety checks and dose adjustments
+safety_checks:
+  dose_limits:
+    max_single_dose_mg: 1000
+    max_daily_dose_mg: 4000
+    max_daily_dose_liver_disease_mg: 2000
+    max_daily_dose_elderly_mg: 3000
+    
+  contraindications:
+    absolute:
+      - "acetaminophen_allergy"
+      - "severe_liver_disease"
+      
+    relative:
+      - "chronic_alcohol_use"
+      - "malnutrition"
+      - "fasting_state"
+      - "concurrent_hepatotoxic_drugs"
+
+  risk_factors:
+    hepatotoxicity:
+      - "chronic_alcohol_use_>3_drinks_daily"
+      - "malnutrition_or_fasting"
+      - "concurrent_cyp2e1_inducers"
+      - "glutathione_depletion"
+      
+    overdose:
+      - "multiple_acetaminophen_products"
+      - "prescription_opioid_combinations"
+      - "otc_cold_flu_medications"
+
+# Dose adjustments for special populations
+special_populations:
+  liver_disease:
+    mild_to_moderate:
+      dose_reduction: "50%"
+      max_daily_dose_mg: 2000
+      monitoring: "liver_function_tests"
+      
+    severe:
+      recommendation: "avoid_use"
+      alternatives: ["ibuprofen", "topical_analgesics"]
+      
+  chronic_alcohol_use:
+    dose_reduction: "50%"
+    max_daily_dose_mg: 2000
+    counseling: "alcohol_cessation"
+    
+  elderly:
+    dose_reduction: "25%"
+    frequency_extension: "every_8_hours"
+    monitoring: "enhanced_safety_monitoring"
+    
+  pregnancy:
+    safety_category: "B"
+    dose_adjustment: "none_required"
+    monitoring: "standard"
+
+# Drug interactions
+interactions:
+  hepatotoxicity_risk:
+    - "isoniazid"
+    - "phenytoin"
+    - "carbamazepine"
+    - "rifampin"
+    action: "reduce_acetaminophen_dose_monitor_liver"
+    
+  warfarin_interaction:
+    mechanism: "enhanced_anticoagulation"
+    action: "monitor_inr_more_frequently"
+    dose_limit: "2000_mg_daily"
+
+# Monitoring requirements
+monitoring:
+  routine_use:
+    clinical_response:
+      pain_assessment: "every_4_to_6_hours"
+      fever_monitoring: "every_4_hours_if_febrile"
+      
+    safety_monitoring:
+      liver_function: "not_routinely_required"
+      
+  high_risk_patients:
+    liver_function_tests:
+      frequency: "baseline_then_weekly"
+      parameters: ["alt", "ast", "bilirubin"]
+      
+    clinical_monitoring:
+      signs_hepatotoxicity: ["nausea", "vomiting", "abdominal_pain", "jaundice"]
+      frequency: "daily_assessment"
+
+# Overdose management
+overdose:
+  acute_ingestion:
+    time_since_ingestion: "<4_hours"
+    action: "activated_charcoal_if_appropriate"
+    
+  acetaminophen_level:
+    timing: "4_hours_post_ingestion"
+    nomogram: "rumack_matthew_nomogram"
+    
+  antidote:
+    medication: "n_acetylcysteine"
+    indication: "toxic_level_or_high_risk"
+    timing: "within_8_hours_optimal"
+
+# Clinical decision support
+decision_support:
+  rationale: "Acetaminophen is first-line analgesic/antipyretic with excellent safety profile when used appropriately"
+  evidence_level: "HIGH"
+  guideline_source: "WHO Pain Guidelines, FDA Guidance"
+  
+  patient_education:
+    - "maximum_daily_dose_awareness"
+    - "check_other_medications_for_acetaminophen"
+    - "avoid_alcohol_with_regular_use"
+    - "signs_of_liver_toxicity"
+    
+  alternatives:
+    pain:
+      - "ibuprofen"
+      - "naproxen"
+      - "topical_analgesics"
+      
+    fever:
+      - "ibuprofen"
+      - "aspirin" # if >16 years old
+
+# Quality metrics
+quality_metrics:
+  appropriate_dosing: ">95%"
+  hepatotoxicity_rate: "<0.1%"
+  pain_relief_achievement: ">80%"
+  fever_reduction: ">90%"
+
+# Formulation considerations
+formulations:
+  oral_tablets:
+    strengths: [325, 500, 650]
+    onset: "30_to_60_minutes"
+    duration: "4_to_6_hours"
+    
+  oral_liquid:
+    concentrations: ["160mg/5ml", "80mg/0.8ml"]
+    use: "pediatric_or_swallowing_difficulty"
+    
+  intravenous:
+    concentration: "10mg/ml"
+    indication: "unable_to_take_oral"
+    dose_equivalent: "same_as_oral"
+
+# Approval and version control
+approval:
+  clinical_pharmacist: "recommended"
+  pain_management: "if_chronic_pain"
+  
+change_log:
+  - version: "2.0.0"
+    date: "2024-01-15"
+    changes: "Added special population dosing, enhanced safety checks"
+  - version: "1.0.0"
+    date: "2023-01-01"
+    changes: "Initial acetaminophen standard dosing recipe"

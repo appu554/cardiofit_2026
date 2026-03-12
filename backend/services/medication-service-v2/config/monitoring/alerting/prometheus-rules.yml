@@ -1,0 +1,361 @@
+groups:
+  - name: medication_service_critical
+    interval: 15s
+    rules:
+      # Critical Patient Safety Alerts
+      - alert: PatientSafetyViolation
+        expr: increase(medication_service_safety_violations_total[1m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: patient_safety
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "Critical patient safety violation detected"
+          description: "Safety violation detected: {{ $labels.violation_type }} with severity {{ $labels.severity }}. Immediate action required."
+          runbook_url: "https://wiki.hospital.com/runbooks/patient-safety"
+          action_required: "Stop medication process, review patient case, notify physician"
+
+      - alert: DosageCalculationAccuracyLow
+        expr: avg(medication_service_dosage_calculation_accuracy) < 0.95
+        for: 2m
+        labels:
+          severity: critical
+          category: patient_safety
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "Dosage calculation accuracy below critical threshold"
+          description: "Dosage calculation accuracy is {{ $value | humanizePercentage }} (threshold: 95%)"
+          runbook_url: "https://wiki.hospital.com/runbooks/dosage-accuracy"
+          action_required: "Review calculation engine, validate recent calculations"
+
+      # System Health Critical Alerts
+      - alert: ServiceDown
+        expr: up{job="medication-service-v2"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          category: system_health
+          service: medication-service-v2
+          impact: critical
+        annotations:
+          summary: "Medication Service V2 is down"
+          description: "The medication service has been down for more than 30 seconds"
+          runbook_url: "https://wiki.hospital.com/runbooks/service-down"
+
+      - alert: DatabaseConnectionFailure
+        expr: medication_service_database_connections_active < 1
+        for: 30s
+        labels:
+          severity: critical
+          category: system_health
+          service: medication-service-v2
+          impact: critical
+        annotations:
+          summary: "Database connection failure"
+          description: "No active database connections available"
+          runbook_url: "https://wiki.hospital.com/runbooks/database-failure"
+
+      - alert: HighErrorRate
+        expr: rate(medication_service_errors_total[5m]) / rate(medication_service_http_requests_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          category: system_health
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "https://wiki.hospital.com/runbooks/high-errors"
+
+  - name: medication_service_high
+    interval: 30s
+    rules:
+      # High Severity Performance Alerts
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(medication_service_http_request_duration_seconds_bucket[5m])) > 0.25
+        for: 3m
+        labels:
+          severity: high
+          category: performance
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "High API response time"
+          description: "95th percentile response time is {{ $value }}s (threshold: 250ms)"
+          runbook_url: "https://wiki.hospital.com/runbooks/performance"
+
+      - alert: ClinicalProcessingDelayed
+        expr: histogram_quantile(0.95, rate(medication_service_clinical_calculation_duration_seconds_bucket[5m])) > 0.15
+        for: 2m
+        labels:
+          severity: high
+          category: performance
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Clinical processing time elevated"
+          description: "Clinical calculation P95 time is {{ $value }}s (threshold: 150ms)"
+          runbook_url: "https://wiki.hospital.com/runbooks/clinical-performance"
+
+      - alert: ValidationFailuresIncreasing
+        expr: rate(medication_service_validation_failures_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: high
+          category: data_quality
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Validation failures increasing"
+          description: "Validation failure rate: {{ $value }} failures/sec"
+          runbook_url: "https://wiki.hospital.com/runbooks/validation-failures"
+
+      - alert: DataFreshnessLow
+        expr: avg(medication_service_clinical_data_freshness_score) < 0.8
+        for: 5m
+        labels:
+          severity: high
+          category: data_quality
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Clinical data freshness score low"
+          description: "Data freshness score is {{ $value | humanizePercentage }} (threshold: 80%)"
+          runbook_url: "https://wiki.hospital.com/runbooks/data-quality"
+
+  - name: medication_service_medium
+    interval: 1m
+    rules:
+      # Medium Severity Alerts
+      - alert: ModerateResponseTime
+        expr: histogram_quantile(0.95, rate(medication_service_http_request_duration_seconds_bucket[5m])) > 0.15
+        for: 5m
+        labels:
+          severity: medium
+          category: performance
+          service: medication-service-v2
+          impact: low
+        annotations:
+          summary: "Moderate response time increase"
+          description: "95th percentile response time is {{ $value }}s (threshold: 150ms)"
+
+      - alert: CacheHitRateLow
+        expr: avg(medication_service_cache_hit_ratio) < 0.8
+        for: 5m
+        labels:
+          severity: medium
+          category: performance
+          service: medication-service-v2
+          impact: low
+        annotations:
+          summary: "Cache hit ratio below optimal"
+          description: "Cache hit ratio is {{ $value | humanizePercentage }} (optimal: >80%)"
+
+      - alert: RequestRateUnusual
+        expr: rate(medication_service_http_requests_total[5m]) > 10 or rate(medication_service_http_requests_total[5m]) < 0.1
+        for: 5m
+        labels:
+          severity: medium
+          category: performance
+          service: medication-service-v2
+          impact: low
+        annotations:
+          summary: "Unusual request rate detected"
+          description: "Request rate is {{ $value }} req/sec (normal range: 0.1-10 req/sec)"
+
+  - name: medication_service_compliance
+    interval: 1m
+    rules:
+      # Compliance and Audit Alerts
+      - alert: ComplianceCheckFailures
+        expr: increase(medication_service_compliance_checks_total{status="failed"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: high
+          category: compliance
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "Compliance check failures detected"
+          description: "{{ $value }} compliance checks failed for regulation: {{ $labels.regulation }}"
+          runbook_url: "https://wiki.hospital.com/runbooks/compliance"
+
+      - alert: AuditTrailIntegrityIssue
+        expr: increase(medication_service_errors_total{error_type="audit_failure"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: compliance
+          service: medication-service-v2
+          impact: critical
+        annotations:
+          summary: "Audit trail integrity issue"
+          description: "Audit trail logging failure detected - immediate attention required"
+          runbook_url: "https://wiki.hospital.com/runbooks/audit-integrity"
+
+      - alert: UnauthorizedAccess
+        expr: increase(medication_service_errors_total{error_type="unauthorized"}[1m]) > 0
+        for: 0s
+        labels:
+          severity: high
+          category: security
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "Unauthorized access attempt detected"
+          description: "{{ $value }} unauthorized access attempts in the last minute"
+          runbook_url: "https://wiki.hospital.com/runbooks/security-incident"
+
+  - name: medication_service_business
+    interval: 30s
+    rules:
+      # Business Logic Alerts
+      - alert: ProposalProcessingStalled
+        expr: rate(medication_service_proposals_total[5m]) == 0 and rate(medication_service_http_requests_total[5m]) > 0
+        for: 3m
+        labels:
+          severity: medium
+          category: business_logic
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "No medication proposals being processed"
+          description: "Receiving requests but no proposals are being created"
+          runbook_url: "https://wiki.hospital.com/runbooks/proposal-processing"
+
+      - alert: RecipeResolutionSlowdown
+        expr: histogram_quantile(0.95, rate(medication_service_recipe_resolution_duration_seconds_bucket[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: medium
+          category: performance
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Recipe resolution performance degraded"
+          description: "Recipe resolution P95 time is {{ $value }}s (threshold: 100ms)"
+
+      - alert: SnapshotCreationFailures
+        expr: rate(medication_service_errors_total{component="context_gateway"}[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: high
+          category: business_logic
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Context gateway snapshot creation failures"
+          description: "Snapshot creation failing at {{ $value }} failures/sec"
+
+  - name: medication_service_dependencies
+    interval: 1m
+    rules:
+      # External Dependencies
+      - alert: ClinicalEngineUnresponsive
+        expr: up{job="clinical-engine"} == 0
+        for: 1m
+        labels:
+          severity: medium
+          category: dependency
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Clinical engine is unresponsive"
+          description: "Rust clinical engine has been down for more than 1 minute"
+          runbook_url: "https://wiki.hospital.com/runbooks/clinical-engine"
+
+      - alert: ApolloFederationIssues
+        expr: up{job="apollo-federation"} == 0
+        for: 2m
+        labels:
+          severity: medium
+          category: dependency
+          service: medication-service-v2
+          impact: medium
+        annotations:
+          summary: "Apollo Federation gateway issues"
+          description: "Apollo Federation has been unreachable for more than 2 minutes"
+
+      - alert: RedisConnectionIssues
+        expr: medication_service_redis_connections_active < 1
+        for: 1m
+        labels:
+          severity: low
+          category: dependency
+          service: medication-service-v2
+          impact: low
+        annotations:
+          summary: "Redis connection issues"
+          description: "No active Redis connections (caching degraded)"
+
+  - name: medication_service_sla
+    interval: 1m
+    rules:
+      # SLA Monitoring
+      - alert: SLAAvailabilityBreach
+        expr: avg_over_time(up{job="medication-service-v2"}[5m]) < 0.999
+        for: 1m
+        labels:
+          severity: high
+          category: sla
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "SLA availability breach"
+          description: "Service availability {{ $value | humanizePercentage }} below 99.9% SLA"
+
+      - alert: SLALatencyBreach
+        expr: histogram_quantile(0.95, rate(medication_service_http_request_duration_seconds_bucket[5m])) > 0.25
+        for: 5m
+        labels:
+          severity: high
+          category: sla
+          service: medication-service-v2
+          impact: high
+        annotations:
+          summary: "SLA latency breach"
+          description: "P95 latency {{ $value }}s exceeds 250ms SLA"
+
+# Alertmanager routing configuration would go in alertmanager.yml:
+# route:
+#   group_by: ['alertname', 'cluster', 'service']
+#   group_wait: 10s
+#   group_interval: 30s
+#   repeat_interval: 12h
+#   receiver: 'default'
+#   routes:
+#   - match:
+#       category: patient_safety
+#     receiver: 'patient-safety-team'
+#     group_wait: 0s
+#     group_interval: 5s
+#     repeat_interval: 1h
+#   - match:
+#       severity: critical
+#     receiver: 'critical-alerts'
+#     group_wait: 5s
+#     repeat_interval: 5m
+#   - match:
+#       category: compliance
+#     receiver: 'compliance-team'
+#     repeat_interval: 30m
+#
+# receivers:
+# - name: 'default'
+#   email_configs:
+#   - to: 'alerts@hospital.com'
+# - name: 'patient-safety-team'
+#   pagerduty_configs:
+#   - service_key: '<PAGERDUTY_SERVICE_KEY>'
+#   email_configs:
+#   - to: 'safety@hospital.com'
+# - name: 'critical-alerts'
+#   pagerduty_configs:
+#   - service_key: '<PAGERDUTY_CRITICAL_KEY>'
+# - name: 'compliance-team'
+#   email_configs:
+#   - to: 'compliance@hospital.com'

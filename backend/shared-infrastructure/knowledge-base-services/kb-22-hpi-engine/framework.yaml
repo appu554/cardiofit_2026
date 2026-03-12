@@ -1,0 +1,121 @@
+# KB-22 HPI Engine - Service Framework Configuration
+# Used by the shared infrastructure orchestration layer
+
+service:
+  name: kb-22-hpi-engine
+  display_name: "KB-22 History of Present Illness Engine"
+  version: "1.0.0"
+  port: 8132
+  protocol: http
+
+  description: >
+    Bayesian differential diagnosis engine for structured HPI collection.
+    Uses log-odds inference with per-stratum priors, entropy-based question
+    ordering, parallel safety evaluation, and calibration feedback loops.
+
+health:
+  endpoint: /health
+  readiness_endpoint: /readiness
+  interval: 30s
+  timeout: 5s
+
+dependencies:
+  databases:
+    - type: postgresql
+      port: 5437
+      database: kb_hpi_engine
+      user: kb22_user
+  caches:
+    - type: redis
+      port: 6386
+
+  upstream_services:
+    - name: kb-20-patient-profile
+      url: "${KB20_URL}"
+      required: true
+      purpose: "Stratum label and CKD substage for per-stratum priors"
+
+    - name: kb-21-behavioral-intelligence
+      url: "${KB21_URL}"
+      required: true
+      purpose: "Adherence score (F-03), reliability modifier (R-03), telemetry sink"
+
+    - name: kb-3-guidelines
+      url: "${KB3_URL}"
+      required: false
+      purpose: "Guideline-anchored prior adjustments (N-01)"
+
+    - name: kb-5-drug-interactions
+      url: "${KB5_URL}"
+      required: false
+      purpose: "Medication safety context on URGENT/IMMEDIATE flags (N-02)"
+
+  downstream_consumers:
+    - name: kb-23-decision-engine
+      url: "${KB23_URL}"
+      purpose: "HPI_COMPLETE event with ranked differentials"
+
+    - name: kb-19-protocol-orchestrator
+      url: "${KB19_URL}"
+      purpose: "Safety alerts and stratum drift events"
+
+api:
+  base_path: /api/v1
+  endpoints:
+    - method: POST
+      path: /sessions
+      description: "Create new HPI session"
+    - method: GET
+      path: /sessions/:id
+      description: "Get session state"
+    - method: POST
+      path: /sessions/:id/answers
+      description: "Submit answer to current question"
+    - method: POST
+      path: /sessions/:id/suspend
+      description: "Suspend active session"
+    - method: POST
+      path: /sessions/:id/resume
+      description: "Resume suspended session"
+    - method: POST
+      path: /sessions/:id/complete
+      description: "Force-complete session"
+    - method: GET
+      path: /sessions/:id/differential
+      description: "Get current differential ranking"
+    - method: GET
+      path: /sessions/:id/safety
+      description: "Get active safety flags"
+    - method: GET
+      path: /snapshots/:session_id
+      description: "Get final differential snapshot"
+    - method: GET
+      path: /nodes
+      description: "List loaded HPI nodes"
+    - method: GET
+      path: /nodes/:node_id
+      description: "Get node definition"
+    - method: POST
+      path: /calibration/feedback
+      description: "Submit clinician adjudication"
+    - method: GET
+      path: /calibration/status/:node_id
+      description: "Get calibration concordance metrics"
+    - method: POST
+      path: /calibration/import-golden
+      description: "Import golden dataset cases"
+
+metrics:
+  endpoint: /metrics
+  collectors:
+    - sessions_started_total
+    - questions_asked_total
+    - safety_flags_raised_total (by severity)
+    - differential_converged_total
+    - pata_nahi_rate
+    - calibration_concordance (top1, top3)
+    - answer_latency_ms (histogram)
+    - session_init_latency_ms (histogram)
+    - kb20_fetch_duration_ms (histogram)
+    - kb21_fetch_duration_ms (histogram)
+    - entropy_computation_ms (histogram)

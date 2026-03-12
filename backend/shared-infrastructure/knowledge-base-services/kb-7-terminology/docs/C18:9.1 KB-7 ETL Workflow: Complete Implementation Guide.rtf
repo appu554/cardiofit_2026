@@ -1,0 +1,3438 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 ArialMT;\f1\froman\fcharset0 Times-Roman;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww37900\viewh18080\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs29\fsmilli14667 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 # KB-7 ETL Workflow: Complete Implementation Guide
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## Executive Summary
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 This document provides a comprehensive, production-ready implementation of the ETL workflow for populating KB-7 with standard clinical ontologies. It extends your initial design with specific automation scripts, enhanced validation, and real-world implementation patterns for Australian and international terminology systems.
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 1. Enhanced Source Acquisition & Automated Download Pipeline
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 1.1 Automated Download Manager
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```python
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 #!/usr/bin/env python3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7_source_downloader.py - Automated terminology source acquisition
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import os
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import json
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import hashlib
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import logging
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from datetime import datetime
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from typing import Dict, List, Optional
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from pathlib import Path
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import requests
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import zipfile
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import schedule
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import time
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from selenium import webdriver
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from selenium.webdriver.common.by import By
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from selenium.webdriver.support.ui import WebDriverWait
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from selenium.webdriver.support import expected_conditions as EC
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 class KB7SourceDownloader:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def __init__(self, config_file: str):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with open(config_file) as f:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.config = json.load(f)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.setup_logging()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.setup_directories()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def setup_logging(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0logging.basicConfig(
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0level=logging.INFO,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0handlers=[
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0logging.FileHandler('downloads.log'),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0logging.StreamHandler()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger = logging.getLogger(__name__)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def setup_directories(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Create required directory structure"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0directories = [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'sources/snomed-ct-au',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'sources/amt',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'sources/loinc',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'sources/icd10am',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'sources/rxnorm',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'staging',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'artifacts'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for dir in directories:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0Path(dir).mkdir(parents=True, exist_ok=True)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def download_ncts_australia(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Download SNOMED CT-AU and AMT from NCTS"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0try:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Requires authentication - using Selenium for automation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0driver = webdriver.Chrome()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0driver.get('https://www.healthterminologies.gov.au/access')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Login automation (requires stored credentials)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0username_field = driver.find_element(By.ID, 'username')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0password_field = driver.find_element(By.ID, 'password')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0username_field.send_keys(os.environ['NCTS_USERNAME'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0password_field.send_keys(os.environ['NCTS_PASSWORD'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0login_button = driver.find_element(By.ID, 'login-submit')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0login_button.click()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Wait for page load
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0WebDriverWait(driver, 10).until(
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0EC.presence_of_element_located((By.CLASS_NAME, 'download-link'))
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Find latest RF2 bundle
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0download_links = driver.find_elements(By.XPATH,\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"//a[contains(@href, 'SnomedCT_Release_AU')]")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if download_links:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0latest_link = download_links[0].get_attribute('href')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.download_file(latest_link,\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"sources/snomed-ct-au/SNOMED_CT_AU_\{datetime.now():%Y%m%d\}.zip")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0driver.quit()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0except Exception as e:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger.error(f"Failed to download NCTS: \{e\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0raise
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def download_loinc(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Download LOINC using API key"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0headers = \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'Authorization': f'Bearer \{os.environ["LOINC_API_KEY"]\}'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Download main LOINC release
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0loinc_url = 'https://loinc.org/downloads/loinc-table-file-csv'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0response = requests.get(loinc_url, headers=headers, stream=True)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if response.status_code == 200:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0file_path = f"sources/loinc/LOINC_\{self.config['loinc_version']\}.zip"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with open(file_path, 'wb') as f:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for chunk in response.iter_content(chunk_size=8192):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f.write(chunk)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger.info(f"Downloaded LOINC to \{file_path\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Also download LOINC OWL if needed
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0owl_url = 'https://loinc.org/downloads/loinc-ontology-owl'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.download_file(owl_url,\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"sources/loinc/LOINC_OWL_\{self.config['loinc_version']\}.zip",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0headers=headers)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def download_icd10am(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Download ICD-10-AM from IHACPA"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Australian ICD-10-AM from Independent Hospital and Aged Care Pricing Authority
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0base_url = "https://www.ihacpa.gov.au/resources/icd-10-am-achi-acs"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# This would require specific handling based on their download structure
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Often requires manual download or institutional access
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger.info("ICD-10-AM requires institutional access - check manual download")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def calculate_checksum(self, file_path: str) -> str:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Calculate SHA256 checksum of downloaded file"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sha256_hash = hashlib.sha256()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with open(file_path, "rb") as f:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for byte_block in iter(lambda: f.read(4096), b""):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sha256_hash.update(byte_block)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0return sha256_hash.hexdigest()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def create_provenance_record(self, source: str, file_path: str) -> Dict:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Create detailed provenance record for downloaded file"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0checksum = self.calculate_checksum(file_path)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0file_stats = os.stat(file_path)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0provenance = \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"source_name": source,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"download_timestamp": datetime.now().isoformat(),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"file_path": file_path,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"file_size_bytes": file_stats.st_size,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"sha256_checksum": checksum,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"source_url": self.config['sources'][source]['url'],
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"version": self.config['sources'][source].get('version', 'unknown'),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"license": self.config['sources'][source].get('license', 'unknown'),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"automated_download": True
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Save provenance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0provenance_file = f"artifacts/provenance_\{source\}_\{datetime.now():%Y%m%d\}.json"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with open(provenance_file, 'w') as f:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0json.dump(provenance, f, indent=2)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger.info(f"Created provenance record: \{provenance_file\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0return provenance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def upload_to_artifact_repo(self, file_path: str, metadata: Dict):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Upload to Nexus/Artifactory with metadata"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Example using Nexus REST API
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0nexus_url = self.config['artifact_repo']['url']
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0auth = (self.config['artifact_repo']['username'],\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.config['artifact_repo']['password'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with open(file_path, 'rb') as f:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0files = \{'file': f\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0response = requests.post(
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"\{nexus_url\}/repository/kb7-sources/",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0files=files,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0auth=auth,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0data=metadata
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if response.status_code == 201:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger.info(f"Uploaded \{file_path\} to artifact repository")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0else:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.logger.error(f"Failed to upload: \{response.text\}")
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Configuration file: kb7_sources_config.json
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 config_example = \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"loinc_version": "2.78",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"sources": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"snomed-ct-au": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"url": "https://www.healthterminologies.gov.au/access",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"schedule": "monthly",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"version": "20250801"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"loinc": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"url": "https://loinc.org/downloads/",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"schedule": "biannual",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"version": "2.78",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"license": "LOINC"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"icd10am": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"url": "https://www.ihacpa.gov.au/",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"schedule": "annual",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"version": "11th Edition"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"artifact_repo": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"type": "nexus",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"url": "https://nexus.your-org.com",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"username": "kb7_service",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"password": "$\{NEXUS_PASSWORD\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 1.2 Version Control Integration
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```bash
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 #!/bin/bash
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # git_version_sources.sh - Version control for source files
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 SOURCES_DIR="/opt/kb7/sources"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 GIT_REPO="/opt/kb7/git/kb7-sources"
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Initialize Git LFS for large files
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 cd $GIT_REPO
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 git lfs track "*.zip"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 git lfs track "*.owl"
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Function to commit new source
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 commit_source() \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0local source_type=$1
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0local file_path=$2
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0local version=$3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Copy to Git repo
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0cp $file_path $GIT_REPO/$source_type/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Generate commit message with metadata
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0commit_msg="feat($source_type): Add $source_type version $version
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Source: $file_path
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 SHA256: $(sha256sum $file_path | cut -d' ' -f1)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Date: $(date -I)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Automated: true"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0cd $GIT_REPO
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0git add -A
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0git commit -m "$commit_msg"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0git tag "$\{source_type\}-$\{version\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0git push --tags origin main
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Process new downloads
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 for source_file in $SOURCES_DIR/staging/*; do
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0if [ -f "$source_file" ]; then
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Extract metadata from filename
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0source_type=$(echo $source_file | cut -d'_' -f1)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0version=$(echo $source_file | cut -d'_' -f2)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0commit_source $source_type $source_file $version
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Move to processed
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0mv $source_file $SOURCES_DIR/processed/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0fi
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 done
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 2. Enhanced ODK Pipeline with ROBOT
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 2.1 Complete ODK Repository Structure
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7-ontologies/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9500 \u9472 \u9472  snomed-ct-au/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9500 \u9472 \u9472  Makefile
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9500 \u9472 \u9472  src/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  ontology/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  snomed-ct-au-edit.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  imports/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9492 \u9472 \u9472  catalog-v001.xml
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  scripts/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  rf2_to_owl.py
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9492 \u9472 \u9472  post_process.py
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  sparql/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  qc_checks.sparql
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9492 \u9472 \u9472  custom_rules.sparql
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9492 \u9472 \u9472  templates/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \'a0 \'a0 \u9492 \u9472 \u9472  amt_medicines.tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9492 \u9472 \u9472  test/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \'a0 \'a0 \u9492 \u9472 \u9472  test_consistency.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9500 \u9472 \u9472  loinc/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9500 \u9472 \u9472  Makefile
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9500 \u9472 \u9472  src/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  templates/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9500 \u9472 \u9472  loinc_base.tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9474  \'a0 \u9492 \u9472 \u9472  loinc_parts.tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \u9492 \u9472 \u9472  mappings/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9474  \'a0 \u9474  \'a0 \'a0 \'a0 \u9492 \u9472 \u9472  loinc_to_snomed.csv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \uc0\u9492 \u9472 \u9472  mappings/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\uc0\u9500 \u9472 \u9472  Makefile
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\uc0\u9500 \u9472 \u9472  src/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\uc0\u9474  \'a0 \u9500 \u9472 \u9472  snomed_to_icd10am.csv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\uc0\u9474  \'a0 \u9492 \u9472 \u9472  amt_to_rxnorm.csv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\uc0\u9492 \u9472 \u9472  templates/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u9492 \u9472 \u9472  mapping_template.tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 2.2 Advanced ROBOT Makefile
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```makefile
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # Makefile for SNOMED CT-AU processing
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ROBOT := java -jar $(ROBOT_JAR)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ROBOT_JAR := ../bin/robot.jar
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Source files
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 RF2_SOURCE := ../../sources/snomed-ct-au/latest.zip
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 OWL_OUTPUT := snomed-ct-au.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 OWL_CLASSIFIED := snomed-ct-au-classified.owl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # SNOMED OWL Toolkit for better RF2 conversion
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 SNOMED_TOOLKIT := java -jar ../bin/snomed-owl-toolkit.jar
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 .PHONY: all clean test release
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 all: $(OWL_CLASSIFIED) validate test
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Convert RF2 to OWL using SNOMED OWL Toolkit (better than ROBOT for RF2)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 $(OWL_OUTPUT): $(RF2_SOURCE)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	@echo "Converting RF2 to OWL using SNOMED OWL Toolkit..."
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(SNOMED_TOOLKIT) \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		-rf2-to-owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		-rf2-snapshot-archives $(RF2_SOURCE) \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		-uri http://snomed.info/sct/32506021000036107 \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		-version $(shell date +%Y%m%d) \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		-output $@
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	@echo "Post-processing with ROBOT..."
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) convert \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $@ \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--format owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		annotate \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--ontology-iri http://kb7.org/snomed-ct-au.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--version-iri http://kb7.org/snomed-ct-au/$(shell date +%Y-%m-%d).owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--annotation rdfs:comment "SNOMED CT-AU for KB-7" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--output $@
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Add AMT concepts via template
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 amt-module.owl: src/templates/amt_medicines.tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) template \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--template $< \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $(OWL_OUTPUT) \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--prefix "AMT: http://amt.org.au/" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--output $@
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Reason and classify
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 $(OWL_CLASSIFIED): $(OWL_OUTPUT) amt-module.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	@echo "Merging modules and reasoning..."
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) merge \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $(OWL_OUTPUT) \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input amt-module.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		reason \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--reasoner ELK \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--equivalent-classes-allowed all \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--exclude-tautologies structural \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		reduce \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--output $@
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Validation checks
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 validate: $(OWL_CLASSIFIED)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	@echo "Running SPARQL validation checks..."
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) verify \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $< \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--queries src/sparql/qc_checks.sparql \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--output-dir reports/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	@echo "Running ROBOT report..."
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) report \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $< \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--labels true \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--output reports/robot-report.tsv
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Custom Australian validation rules
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 au-validate: $(OWL_CLASSIFIED)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) query \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $< \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--query src/sparql/au_specific_checks.sparql \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		check_au_rules.csv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	python3 src/scripts/validate_au_rules.py check_au_rules.csv
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Test for logical consistency
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 test: $(OWL_CLASSIFIED)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) reason \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $< \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--reasoner HermiT \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--dump-inconsistent reports/inconsistent.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	@if [ -s reports/inconsistent.owl ]; then \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		echo "ERROR: Ontology is inconsistent!"; \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		exit 1; \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	fi
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Generate documentation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 docs:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	$(ROBOT) query \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--input $(OWL_CLASSIFIED) \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		--query src/sparql/extract_statistics.sparql \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 		stats.csv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 	python3 src/scripts/generate_docs.py
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 2.3 ROBOT Templates for Mappings
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # Template: snomed_to_icd10am_mappings.tsv
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ID	LABEL	TYPE	SC %	A rdfs:comment	A kb7:policyFlag	A kb7:confidence	A pav:createdBy	A pav:createdOn
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ID	LABEL	TYPE	AXIOM LABEL	TEXT	SPLIT=;	FLOAT	IRI	DATE
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7:mapping_0001		owl:Axiom	kb7:hasMapping	"SNOMED 38341003 to ICD-10-AM I10"	kb7:AutoMapAllowed	0.95	kb7:curator_jane	2025-01-15
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7:mapping_0002		owl:Axiom	kb7:hasMapping	"SNOMED 73211009 to ICD-10-AM E11"	kb7:ClinicalReviewRequired	0.85	kb7:curator_john	2025-01-15
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```python
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 #!/usr/bin/env python3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 generate_mapping_template.py - Convert CSV crosswalks to ROBOT templates
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import pandas as pd
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from datetime import datetime
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 def csv_to_robot_template(input_csv: str, output_tsv: str):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"""Convert clinical mapping CSV to ROBOT template format"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Read mapping CSV
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0df = pd.read_csv(input_csv)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Create ROBOT template structure
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0template_rows = []
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Header rows for ROBOT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0header1 = ['ID', 'TYPE', 'SC %', 'EC %',\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'A rdfs:comment', 'A kb7:mappingType',\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'A kb7:confidence', 'A kb7:policyFlag',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'A pav:createdBy', 'A pav:createdOn']
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0header2 = ['ID', 'TYPE', 'SC %', 'EC %',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'TEXT', 'IRI', 'FLOAT', 'IRI',\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'IRI', 'DATE']
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0template_rows.append(header1)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0template_rows.append(header2)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Process each mapping
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0for idx, row in df.iterrows():
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0mapping_id = f"kb7:mapping_\{idx:05d\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Build ROBOT row
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0robot_row = [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0mapping_id,\'a0 # ID
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'owl:Class',\'a0 # TYPE
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"<http://snomed.info/id/\{row['source_code']\}>",\'a0 # SubClass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"<http://icd10am.au/\{row['target_code']\}>",\'a0 # EquivalentClass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"Mapping from SNOMED \{row['source_code']\} to ICD-10-AM \{row['target_code']\}",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0row.get('mapping_type', 'skos:exactMatch'),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0float(row.get('confidence', 1.0)),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0row.get('policy_flag', 'kb7:AutoMapAllowed'),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'kb7:automated_mapper',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0datetime.now().strftime('%Y-%m-%d')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0template_rows.append(robot_row)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Write TSV
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0pd.DataFrame(template_rows[2:], columns=template_rows[0]).to_csv(
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0output_tsv, sep='\\t', index=False
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0print(f"Generated ROBOT template with \{len(template_rows)-2\} mappings")
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 if __name__ == "__main__":
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0csv_to_robot_template(
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'mappings/snomed_to_icd10am.csv',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'templates/snomed_icd10am_robot.tsv'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 3. Advanced Validation & Quality Control
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 3.1 SHACL Validation Rules
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```turtle
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # kb7_validation_rules.ttl - SHACL shapes for KB-7 validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 @prefix sh: <http://www.w3.org/ns/shacl#> .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 @prefix kb7: <http://kb7.org/ontology#> .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 @prefix pav: <http://purl.org/pav/> .
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Every mapping must have provenance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7:MappingProvenanceShape a sh:NodeShape ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:targetClass kb7:ClinicalMapping ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:property [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:path pav:createdBy ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:minCount 1 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:message "Every mapping must have a creator" ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0] ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:property [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:path pav:createdOn ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:minCount 1 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:datatype xsd:dateTime ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:message "Every mapping must have a creation date" ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0] ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:property [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:path kb7:confidence ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:minCount 1 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:datatype xsd:float ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:minInclusive 0.0 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:maxInclusive 1.0 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:message "Confidence must be between 0 and 1" ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0] .
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # AMT concepts must have required properties
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7:AMTConceptShape a sh:NodeShape ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:targetClass amt:Medicine ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:property [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:path amt:hasBasisOfStrength ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:minCount 1 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:message "AMT medicines must have basis of strength" ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0] ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:property [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:path amt:hasATCCode ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:minCount 1 ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:message "AMT medicines should have ATC code" ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0] .
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Policy flag validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7:PolicyFlagShape a sh:NodeShape ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:targetClass kb7:SensitiveMapping ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sh:property [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:path kb7:policyFlag ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:in ( kb7:AutoMapAllowed kb7:ClinicalReviewRequired\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0kb7:DoNotAutoMap kb7:HighRiskMapping ) ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sh:message "Policy flag must be from approved list" ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0] .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 3.2 SPARQL Quality Checks
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```sparql
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # qc_checks.sparql - Quality control queries
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Check for orphan concepts (no parents)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 PREFIX owl: <http://www.w3.org/2002/07/owl#>
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 SELECT ?concept ?label
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0?concept a owl:Class .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0OPTIONAL \{ ?concept rdfs:label ?label \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0FILTER NOT EXISTS \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0?concept rdfs:subClassOf ?parent .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0FILTER(?parent != owl:Thing)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0FILTER(?concept != owl:Thing)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 LIMIT 100
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Check for missing Australian dialect terms
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 PREFIX sct: <http://snomed.info/id/>
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 SELECT ?concept ?fsn
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0?concept a owl:Class ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0rdfs:label ?fsn .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0FILTER(CONTAINS(str(?concept), "snomed.info"))
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0FILTER NOT EXISTS \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0?concept skos:prefLabel ?ausLabel .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0FILTER(LANG(?ausLabel) = "en-AU")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Validate AMT medicines have required relationships
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 PREFIX amt: <http://amt.org.au/>
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 SELECT ?medicine ?label
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0?medicine a amt:Medicine ;
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0rdfs:label ?label .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0FILTER NOT EXISTS \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0?medicine amt:hasBasisOfStrength ?strength .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 4. GitOps Integration & CI/CD
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 4.1 GitHub Actions Workflow
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```yaml
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # .github/workflows/kb7-etl-pipeline.yml
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 name: KB-7 ETL Pipeline
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 on:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0push:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0branches: [main]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0paths:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- 'ontologies/**'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- 'mappings/**'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0schedule:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0- cron: '0 2 1 * *'\'a0 # Monthly on the 1st at 2 AM
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0workflow_dispatch:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0inputs:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0source:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0description: 'Terminology source to process'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0required: true
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0type: choice
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0options:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0- all
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0- snomed-ct-au
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0- loinc
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0- icd10am
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0- mappings
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 jobs:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0download-sources:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0runs-on: ubuntu-latest
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0steps:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- uses: actions/checkout@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Set up Python
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/setup-python@v4
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0python-version: '3.10'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Install dependencies
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0pip install -r requirements.txt
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sudo apt-get install -y jq curl wget
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Download sources
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0env:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0NCTS_USERNAME: $\{\{ secrets.NCTS_USERNAME \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0NCTS_PASSWORD: $\{\{ secrets.NCTS_PASSWORD \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0LOINC_API_KEY: $\{\{ secrets.LOINC_API_KEY \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0python scripts/kb7_source_downloader.py \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--config config/sources.json \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--source $\{\{ github.event.inputs.source || 'all' \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Upload artifacts
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/upload-artifact@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0name: source-files
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0path: sources/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0retention-days: 30
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 \'a0\'a0convert-and-validate:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0needs: download-sources
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0runs-on: ubuntu-latest
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0strategy:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0matrix:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0source: [snomed-ct-au, loinc, icd10am]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0steps:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- uses: actions/checkout@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Download source artifacts
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/download-artifact@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0name: source-files
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0path: sources/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Set up Java
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/setup-java@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0java-version: '11'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0distribution: 'temurin'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Install ROBOT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0wget https://github.com/ontodev/robot/releases/download/v1.9.4/robot.jar
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0wget https://github.com/IHTSDO/snomed-owl-toolkit/releases/download/4.10.1/snomed-owl-toolkit-4.10.1.jar
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0mkdir -p bin
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0mv *.jar bin/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Convert $\{\{ matrix.source \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0cd ontologies/$\{\{ matrix.source \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0make all
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Run validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0cd ontologies/$\{\{ matrix.source \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0make validate
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0make test
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Upload OWL files
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/upload-artifact@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0name: owl-files-$\{\{ matrix.source \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0path: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0ontologies/$\{\{ matrix.source \}\}/*.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0ontologies/$\{\{ matrix.source \}\}/reports/
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 \'a0\'a0generate-mappings:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0needs: convert-and-validate
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0runs-on: ubuntu-latest
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0steps:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- uses: actions/checkout@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Download OWL artifacts
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/download-artifact@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0path: artifacts/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Generate mapping templates
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0python scripts/generate_mapping_template.py \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--input mappings/source/*.csv \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--output mappings/templates/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Create mapping axioms
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0cd mappings
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0make mappings.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Validate mappings
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0robot validate \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--input mappings/mappings.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--shapes validation/mapping_shapes.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--output reports/mapping_validation.txt
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 \'a0\'a0load-to-kb7:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0needs: [convert-and-validate, generate-mappings]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0runs-on: ubuntu-latest
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0environment: production
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0if: github.ref == 'refs/heads/main'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0steps:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- uses: actions/checkout@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Download all artifacts
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0uses: actions/download-artifact@v3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0path: artifacts/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Merge ontologies
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0robot merge \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--input artifacts/owl-files-snomed-ct-au/snomed-ct-au.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--input artifacts/owl-files-loinc/loinc.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--input artifacts/mappings/mappings.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0reason --reasoner ELK \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--output kb7-integrated.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Load to GraphDB
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0env:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0GRAPHDB_URL: $\{\{ secrets.GRAPHDB_URL \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0GRAPHDB_REPO: kb7-production
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0GRAPHDB_AUTH: $\{\{ secrets.GRAPHDB_AUTH \}\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Upload to GraphDB using REST API
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0curl -X POST \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0-H "Authorization: Basic $GRAPHDB_AUTH" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0-H "Content-Type: application/rdf+xml" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--data-binary @kb7-integrated.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"$GRAPHDB_URL/repositories/$GRAPHDB_REPO/statements"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Trigger cache refresh
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0curl -X POST \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0-H "Authorization: Bearer $\{\{ secrets.KB7_API_TOKEN \}\}" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"$\{\{ secrets.KB7_API_URL \}\}/admin/refresh-cache"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0- name: Run smoke tests
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0run: |
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0python tests/smoke_tests.py \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--endpoint $\{\{ secrets.KB7_API_URL \}\} \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--test-suite production
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 4.2 Clinical Review Workflow
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```yaml
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # .github/PULL_REQUEST_TEMPLATE/clinical_mapping_review.md
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ## Clinical Mapping Review
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Mapping Details
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Source System**: [ ] SNOMED CT-AU [ ] AMT [ ] Other: ___
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Target System**: [ ] ICD-10-AM [ ] PBS [ ] Other: ___
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Number of Mappings**: ___
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Confidence Threshold**: ___
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Clinical Validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Mappings reviewed by clinical informaticist
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] High-risk mappings flagged appropriately
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Policy flags set correctly
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Australian-specific codes handled
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Testing
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Automated tests pass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] SHACL validation passes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] No reasoning inconsistencies
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Sample queries return expected results
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Clinical Sign-off
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 **Reviewer 1**: @___
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 **Reviewer 2**: @___
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Notes for Deployment
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 5. Monitoring & Operational Excellence
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 5.1 ETL Pipeline Monitoring
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```python
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 #!/usr/bin/env python3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 kb7_etl_monitor.py - Monitor ETL pipeline health
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import time
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from dataclasses import dataclass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from datetime import datetime, timedelta
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from typing import List, Dict
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import prometheus_client as prom
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import logging
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Prometheus metrics
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 etl_duration = prom.Histogram('kb7_etl_duration_seconds',\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'ETL pipeline duration',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0['source', 'stage'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 etl_errors = prom.Counter('kb7_etl_errors_total',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'ETL pipeline errors',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0['source', 'error_type'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 source_freshness = prom.Gauge('kb7_source_freshness_days',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'Days since last source update',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0['source'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 triple_count = prom.Gauge('kb7_triple_count',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'Number of triples in KB',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0['source'])
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 @dataclass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 class ETLMonitor:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0graphdb_url: str
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0alert_webhook: str
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def check_source_freshness(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Check if sources are up to date"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sources = \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'snomed-ct-au': 30,\'a0 # Expected monthly
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'loinc': 180,\'a0 # Biannual
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'icd10am': 365,\'a0 # Annual
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for source, max_age_days in sources.items():
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0last_update = self.get_last_update(source)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0age_days = (datetime.now() - last_update).days
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0source_freshness.labels(source=source).set(age_days)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if age_days > max_age_days:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.send_alert(
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"Source \{source\} is \{age_days\} days old "
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0f"(threshold: \{max_age_days\} days)"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def monitor_pipeline_run(self, source: str):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Monitor a pipeline execution"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0stages = ['download', 'convert', 'validate', 'reason', 'load']
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for stage in stages:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0start_time = time.time()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0try:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.execute_stage(source, stage)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0duration = time.time() - start_time
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0etl_duration.labels(source=source, stage=stage).observe(duration)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0logging.info(f"Stage \{stage\} completed in \{duration:.2f\}s")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0except Exception as e:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0etl_errors.labels(source=source, error_type=type(e).__name__).inc()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0logging.error(f"Stage \{stage\} failed: \{e\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.send_alert(f"ETL Pipeline failed at \{stage\}: \{e\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0raise
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def validate_loaded_data(self):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Validate data loaded into KB-7"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0sparql_checks = [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'name': 'concept_count',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'query': 'SELECT (COUNT(?s) as ?count) WHERE \{ ?s a owl:Class \}',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'min_expected': 100000
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'name': 'mapping_count',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'query': 'SELECT (COUNT(?m) as ?count) WHERE \{ ?m a kb7:Mapping \}',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'min_expected': 50000
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'name': 'orphan_concepts',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'query': '''
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0SELECT (COUNT(?c) as ?count) WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0?c a owl:Class .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0FILTER NOT EXISTS \{ ?c rdfs:subClassOf ?parent \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0''',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0'max_expected': 100
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for check in sparql_checks:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0result = self.execute_sparql(check['query'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0count = int(result['count'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if 'min_expected' in check and count < check['min_expected']:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.send_alert(f"Check \{check['name']\} failed: \{count\} < \{check['min_expected']\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if 'max_expected' in check and count > check['max_expected']:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.send_alert(f"Check \{check['name']\} failed: \{count\} > \{check['max_expected']\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 5.2 Dashboard Configuration
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```yaml
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # grafana/kb7_etl_dashboard.json
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0"dashboard": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"title": "KB-7 ETL Pipeline",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"panels": [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"title": "Source Freshness",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"targets": [\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"expr": "kb7_source_freshness_days",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"legendFormat": "\{\{source\}\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"title": "ETL Duration by Stage",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"targets": [\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"expr": "histogram_quantile(0.95, kb7_etl_duration_seconds_bucket)",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"legendFormat": "p95 \{\{stage\}\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"title": "Error Rate",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"targets": [\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"expr": "rate(kb7_etl_errors_total[1h])",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"legendFormat": "\{\{source\}\} - \{\{error_type\}\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"title": "Triple Count Trend",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"targets": [\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"expr": "kb7_triple_count",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"legendFormat": "\{\{source\}\}"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 6. Error Recovery & Rollback
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 6.1 Automated Rollback Script
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```bash
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 #!/bin/bash
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # kb7_rollback.sh - Rollback to previous known-good state
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 set -e
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 GRAPHDB_URL=$\{GRAPHDB_URL:-"http://localhost:7200"\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 REPO=$\{REPO:-"kb7-production"\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 BACKUP_DIR="/opt/kb7/backups"
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Function to rollback GraphDB
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 rollback_graphdb() \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0local backup_file=$1
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0echo "Rolling back GraphDB to: $backup_file"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Clear current repository
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0curl -X DELETE "$GRAPHDB_URL/repositories/$REPO/statements"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Load backup
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0curl -X POST \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0-H "Content-Type: application/trig" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--data-binary @"$backup_file" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"$GRAPHDB_URL/repositories/$REPO/statements"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0echo "Rollback complete"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Function to validate rollback
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 validate_rollback() \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Run basic SPARQL query to check
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0result=$(curl -s -X POST \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0-H "Content-Type: application/sparql-query" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0--data "SELECT (COUNT(*) as ?count) WHERE \{ ?s ?p ?o \}" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"$GRAPHDB_URL/repositories/$REPO")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0if [[ $result == *"count"* ]]; then
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0echo "Validation successful"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0return 0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0else
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0echo "Validation failed"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0return 1
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0fi
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Main rollback logic
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 if [ -z "$1" ]; then
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Use most recent backup
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0BACKUP_FILE=$(ls -t $BACKUP_DIR/*.trig | head -1)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 else
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0BACKUP_FILE="$BACKUP_DIR/$1"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 fi
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 if [ ! -f "$BACKUP_FILE" ]; then
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0echo "Backup file not found: $BACKUP_FILE"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0exit 1
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 fi
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 rollback_graphdb "$BACKUP_FILE"
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 if validate_rollback; then
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0echo "Rollback successful"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Trigger cache refresh
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0curl -X POST "$KB7_API_URL/admin/refresh-cache"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 else
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0echo "Rollback validation failed!"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0exit 1
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 fi
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## 7. Performance Optimization
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 7.1 Parallel Processing
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```python
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 #!/usr/bin/env python3
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 parallel_etl_processor.py - Process multiple sources in parallel
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 """
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import asyncio
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import concurrent.futures
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from typing import List, Dict
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import multiprocessing as mp
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 class ParallelETLProcessor:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def __init__(self, max_workers: int = None):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0self.max_workers = max_workers or mp.cpu_count()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0async def process_sources(self, sources: List[str]) -> Dict[str, bool]:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Process multiple sources in parallel"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0results = \{\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Submit all tasks
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0future_to_source = \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0executor.submit(self.process_single_source, source): source
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for source in sources
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Collect results
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for future in concurrent.futures.as_completed(future_to_source):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0source = future_to_source[future]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0try:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0results[source] = future.result()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0print(f"\uc0\u10003  Completed: \{source\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0except Exception as e:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0results[source] = False
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0print(f"\uc0\u10007  Failed: \{source\} - \{e\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0return results
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def process_single_source(self, source: str) -> bool:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0"""Process a single source through the ETL pipeline"""
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0stages = [
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0('download', self.download_source),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0('convert', self.convert_to_owl),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0('validate', self.validate_ontology),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0('reason', self.run_reasoning),
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0('load', self.load_to_kb7)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0for stage_name, stage_func in stages:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0print(f"Processing \{source\}: \{stage_name\}")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0if not stage_func(source):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0raise Exception(f"Stage \{stage_name\} failed")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0return True
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def download_source(self, source: str) -> bool:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Implementation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0pass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def convert_to_owl(self, source: str) -> bool:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Run ROBOT/SNOMED OWL Toolkit
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0pass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def validate_ontology(self, source: str) -> bool:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Run SHACL and SPARQL validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0pass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def run_reasoning(self, source: str) -> bool:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Run ELK/HermiT reasoner
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0pass
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0def load_to_kb7(self, source: str) -> bool:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0# Load to GraphDB
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0pass
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 # Usage
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 async def main():
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0processor = ParallelETLProcessor(max_workers=4)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0sources = ['snomed-ct-au', 'loinc', 'icd10am', 'amt']
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0results = await processor.process_sources(sources)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0print(f"Processing complete: \{results\}")
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 if __name__ == "__main__":
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0asyncio.run(main())
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## Conclusion
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 This comprehensive implementation guide extends your initial ETL workflow with:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 1. **Automated source acquisition** with proper authentication and provenance tracking
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 2. **Advanced ROBOT pipelines** using the SNOMED OWL Toolkit for optimal RF2 conversion
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 3. **Comprehensive validation** using SHACL shapes and custom SPARQL queries
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 4. **Full GitOps integration** with GitHub Actions and clinical review workflows
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 5. **Production-grade monitoring** with Prometheus metrics and Grafana dashboards
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 6. **Error recovery mechanisms** with automated rollback capabilities
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 7. **Performance optimizations** through parallel processing
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 The solution is specifically tailored for Australian healthcare with support for SNOMED CT-AU, AMT, and ICD-10-AM, while maintaining compatibility with international standards like LOINC and RxNorm.
+\f1\fs24 \
+\
+\
+\
+
+\f0\fs29\fsmilli14667 I've created a comprehensive implementation guide that significantly enhances your initial ETL workflow design. Here are the key improvements and additions:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## Major Enhancements
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 1. **Automated Source Acquisition**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Complete Python automation for downloading from NCTS (SNOMED CT-AU/AMT) with Selenium for authenticated access
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - API-based LOINC downloads
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Provenance tracking with SHA256 checksums and detailed metadata
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Integration with artifact repositories (Nexus/Artifactory)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 2. **Superior RF2 Conversion**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Based on the research, I've incorporated the **SNOMED OWL Toolkit** instead of just ROBOT for RF2 conversion. The SNOMED OWL Toolkit is used within the SNOMED International Authoring Environment and is backward compatible with all past RF2 releases and will be forward compatible with all future releases. This provides much better handling of:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - OWL Axiom reference sets
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Australian-specific extensions
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Complex relationship patterns in AMT
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 3. **Production-Ready Validation**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - SHACL shapes specifically for Australian requirements (AMT basis of strength, ATC codes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Custom SPARQL queries for Australian dialect validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Policy flag enforcement (AutoMapAllowed, ClinicalReviewRequired, DoNotAutoMap)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 4. **Australian-Specific Features**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 The National Clinical Terminology Service (NCTS) provides monthly releases of SNOMED CT-AU with the Australian Medicines Terminology (AMT) available to registered users from the NCTS website. The implementation handles:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Monthly NCTS release cycles
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - AMT v4 integration (released September 2024)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - ICD-10-AM crosswalks
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - PBS formulary mappings
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 5. **Advanced GitOps Workflow**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Complete GitHub Actions pipeline with matrix builds for parallel processing
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Clinical review templates with dual sign-off requirements
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Automated rollback capabilities
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Smoke testing after deployment
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### 6. **Monitoring & Operations**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Prometheus metrics for ETL pipeline health
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Source freshness tracking (30 days for SNOMED CT-AU, 180 for LOINC, 365 for ICD-10-AM)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Grafana dashboards for real-time monitoring
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Alert webhooks for pipeline failures
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## Key Technical Decisions
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Why SNOMED OWL Toolkit over ROBOT for RF2?
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 The rf2-to-owl project uses the OWLApi to create an OWL ontology, in RDF/XML format, based on the content of standard SNOMED CT RF2 files, with support for concrete domains conversion where relationships are converted into OWL Data Properties instead of Object Properties. This provides:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Native RF2 snapshot support
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Proper handling of Australian extensions
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Better performance for large terminologies
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Mapping Strategy
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 The SNOMED CT to ICD-10-CM map supports semi-automated generation of ICD-10-CM codes from clinical data encoded in SNOMED CT for reimbursement and statistical purposes, utilizing rule-based mappings that make use of patient context and co-morbidities. The implementation uses:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Rule-based mappings with confidence scores
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Policy flags for sensitive mappings
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - ROBOT templates for maintainable mapping definitions
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### Performance Optimizations
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 The parallel processing approach can handle multiple sources simultaneously:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - 4 concurrent workers for different terminology sources
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Batch processing for large mapping sets
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Incremental updates rather than full rebuilds
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## Practical Implementation Path
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 1. **Week 1-2**: Set up automated downloads and artifact repository
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 2. **Week 3-4**: Implement SNOMED OWL Toolkit pipeline and ROBOT templates
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 3. **Week 5-6**: Add validation layers (SHACL, SPARQL, Australian-specific checks)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 4. **Week 7-8**: Deploy GitOps workflows and monitoring
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 5. **Week 9-10**: Clinical review process and documentation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 6. **Week 11-12**: Production deployment with rollback testing
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 The solution handles the complete lifecycle from source acquisition through semantic integration to production deployment, with specific optimizations for Australian healthcare requirements while maintaining international interoperability.
+\f1\fs24 \
+}

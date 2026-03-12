@@ -1,0 +1,2475 @@
+﻿# KB-1 Governance Enhancement: Dynamic Drug Registry Implementation Plan
+
+
+## Executive Summary
+
+
+Build a **Dynamic, Source-Driven, Multi-Jurisdiction Drug Registry** that ingests drug information directly from regulatory authorities (FDA, TGA, CDSCO) and generates governed YAML rules with full provenance.
+
+
+**Scope**: Full formulary coverage (~40,000+ drugs from FDA DailyMed alone)
+**Sources**: FDA DailyMed (US), TGA Product Information (AU), CDSCO Package Inserts (IN)
+**Update Mode**: Manual trigger (no automatic sync)
+
+
+**Risk Level**: 🔴 CRITICAL - KB-1 computes doses that get administered. Errors can kill.
+
+
+---
+
+
+## Architecture Overview
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                    KB-1 DYNAMIC DRUG REGISTRY ARCHITECTURE                          │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│   │                         INGESTION LAYER                                      │  │
+│   ├─────────────────────────────────────────────────────────────────────────────┤  │
+│   │                                                                             │  │
+│   │   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   │  │
+│   │   │ FDA         │   │ TGA         │   │ CDSCO       │   │ WHO         │   │  │
+│   │   │ DailyMed    │   │ Product     │   │ Package     │   │ Essential   │   │  │
+│   │   │ SPL (XML)   │   │ Info (PDF)  │   │ Inserts     │   │ Medicines   │   │  │
+│   │   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘   │  │
+│   │          │                 │                 │                 │          │  │
+│   │          ▼                 ▼                 ▼                 ▼          │  │
+│   │   ┌─────────────────────────────────────────────────────────────────────┐ │  │
+│   │   │                    INGESTION ENGINE                                  │ │  │
+│   │   │                                                                      │ │  │
+│   │   │   • SPL XML Parser (FDA)                                            │ │  │
+│   │   │   • PDF Extractor (TGA, CDSCO)                                      │ │  │
+│   │   │   • NLP Dosing Extractor                                            │ │  │
+│   │   │   • Schema Validator                                                │ │  │
+│   │   │   • KB-7 RxNorm Resolver                                            │ │  │
+│   │   │                                                                      │ │  │
+│   │   └─────────────────────────────────────────────────────────────────────┘ │  │
+│   │                                    │                                      │  │
+│   └────────────────────────────────────┼──────────────────────────────────────┘  │
+│                                        ▼                                          │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│   │                         STORAGE LAYER                                        │  │
+│   ├─────────────────────────────────────────────────────────────────────────────┤  │
+│   │                                                                             │  │
+│   │   PostgreSQL (Primary)              kb1-knowledge/ (Generated YAML)        │  │
+│   │   ┌─────────────────────────┐       ┌─────────────────────────┐            │  │
+│   │   │ drug_rules              │       │ us/                     │            │  │
+│   │   │ ├── rxnorm_code (PK)    │       │ ├── metformin.yaml      │            │  │
+│   │   │ ├── jurisdiction        │       │ ├── warfarin.yaml       │            │  │
+│   │   │ ├── rule_yaml (JSONB)   │       │ └── ... (40,000+)       │            │  │
+│   │   │ ├── governance          │       │ au/                     │            │  │
+│   │   │ ├── source_hash         │       │ ├── metformin.yaml      │            │  │
+│   │   │ └── ingested_at         │       │ └── ...                 │            │  │
+│   │   │                         │       │ in/                     │            │  │
+│   │   │ ingestion_logs          │       │ └── ...                 │            │  │
+│   │   │ ├── source_authority    │       │ global/                 │            │  │
+│   │   │ ├── ingestion_run_id    │       │ └── ...                 │            │  │
+│   │   │ └── status              │       └─────────────────────────┘            │  │
+│   │   └─────────────────────────┘                                              │  │
+│   │                                                                             │  │
+│   └─────────────────────────────────────────────────────────────────────────────┘  │
+│                                        │                                          │
+│                                        ▼                                          │
+│   ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│   │                         RUNTIME LAYER                                        │  │
+│   ├─────────────────────────────────────────────────────────────────────────────┤  │
+│   │                                                                             │  │
+│   │   Request → Jurisdiction Resolver → Rule Loader → Dosing Calculator        │  │
+│   │                                          ↓                                  │  │
+│   │                                    PostgreSQL                               │  │
+│   │                                    (with Redis cache)                       │  │
+│   │                                          ↓                                  │  │
+│   │   Response WITH Full Provenance:                                           │  │
+│   │   {                                                                        │  │
+│   │     "dose": 500,                                                           │  │
+│   │     "unit": "mg",                                                          │  │
+│   │     "source": {                                                            │  │
+│   │       "authority": "FDA",                                                  │  │
+│   │       "document": "DailyMed SPL",                                          │  │
+│   │       "setId": "4a0166c5-58d9-43e1-9e65-8a5bd9686f0f",                     │  │
+│   │       "section": "34068-7 (DOSAGE AND ADMINISTRATION)",                    │  │
+│   │       "jurisdiction": "US",                                                │  │
+│   │       "ingestedAt": "2025-01-10T14:30:00Z"                                 │  │
+│   │     }                                                                      │  │
+│   │   }                                                                        │  │
+│   │                                                                             │  │
+│   └─────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+---
+
+
+## Directory Structure
+
+
+```
+kb-1-drug-rules/
+├── cmd/
+│   ├── server/
+│   │   └── main.go                     # API server (existing, enhanced)
+│   └── ingest/
+│       └── main.go                     # NEW: Ingestion CLI tool
+├── internal/
+│   ├── api/
+│   │   └── server.go                   # MODIFY: Add provenance to responses
+│   ├── config/
+│   │   └── config.go                   # MODIFY: Add ingestion config
+│   ├── models/
+│   │   ├── models.go                   # EXISTING (keep backward compat)
+│   │   └── governed_models.go          # NEW: Governance data structures
+│   ├── rules/
+│   │   ├── drug_rules.go               # DEPRECATE: Remove hardcoded rules
+│   │   └── repository.go               # NEW: Database-backed repository
+│   ├── services/
+│   │   └── dosing_service.go           # MODIFY: Use governed rules only
+│   └── database/
+│       ├── postgres.go                 # NEW: PostgreSQL connection
+│       ├── migrations/                 # NEW: Database schema migrations
+│       │   └── 001_create_drug_rules.sql
+│       └── queries/                    # NEW: SQL queries
+│           └── drug_rules.sql
+├── pkg/
+│   ├── ingestion/
+│   │   ├── engine.go                   # NEW: Main ingestion orchestrator
+│   │   ├── fda/
+│   │   │   ├── client.go               # NEW: FDA DailyMed API client
+│   │   │   ├── parser.go               # NEW: SPL XML parser
+│   │   │   └── extractor.go            # NEW: Dosing section extractor
+│   │   ├── tga/
+│   │   │   ├── client.go               # NEW: TGA API/scraper
+│   │   │   ├── parser.go               # NEW: PDF parser
+│   │   │   └── extractor.go            # NEW: Dosing extractor
+│   │   ├── cdsco/
+│   │   │   ├── client.go               # NEW: CDSCO data source
+│   │   │   ├── parser.go               # NEW: PDF parser
+│   │   │   └── extractor.go            # NEW: Dosing extractor
+│   │   └── common/
+│   │       ├── normalizer.go           # NEW: Cross-jurisdiction normalization
+│   │       └── validator.go            # NEW: Schema validation
+│   ├── governance/
+│   │   ├── schema.go                   # NEW: Schema validation
+│   │   ├── resolver.go                 # NEW: Jurisdiction resolver
+│   │   └── provenance.go               # NEW: Provenance tracking
+│   ├── kb7/
+│   │   └── client.go                   # NEW: KB-7 terminology client
+│   └── cache/
+│       └── redis.go                    # NEW: Redis caching layer
+├── schemas/
+│   └── kb1-dosing-rule.schema.yaml     # EXISTING: Governance schema
+├── migrations/
+│   └── 001_initial_schema.sql          # NEW: Database migrations
+├── scripts/
+│   ├── ingest-fda.sh                   # NEW: FDA ingestion script
+│   ├── ingest-tga.sh                   # NEW: TGA ingestion script
+│   └── ingest-all.sh                   # NEW: Full ingestion script
+└── kb1-knowledge/                      # GENERATED: YAML exports (optional)
+    ├── us/
+    ├── au/
+    ├── in/
+    └── global/
+```
+
+
+---
+
+
+## Phase 1: Foundation & Database Layer (Weeks 1-2)
+
+
+### 1.1 Database Schema
+
+
+**File**: `migrations/001_initial_schema.sql`
+
+
+```sql
+-- KB-1 Drug Rules Database Schema
+-- Supports full formulary (~40,000+ drugs) with multi-jurisdiction governance
+
+
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- For fast text search
+
+
+-- Main drug rules table
+CREATE TABLE drug_rules (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    rxnorm_code VARCHAR(20) NOT NULL,
+    jurisdiction VARCHAR(10) NOT NULL,  -- US, AU, IN, GLOBAL
+
+
+    -- Drug identification
+    drug_name VARCHAR(500) NOT NULL,
+    generic_name VARCHAR(500),
+    drug_class VARCHAR(200),
+    atc_code VARCHAR(20),
+    snomed_code VARCHAR(50),
+
+
+    -- Full rule as JSONB (matches GovernedDrugRule struct)
+    rule_data JSONB NOT NULL,
+
+
+    -- Governance metadata (denormalized for fast queries)
+    authority VARCHAR(50) NOT NULL,      -- FDA, TGA, CDSCO, WHO
+    document_name VARCHAR(500),
+    document_section VARCHAR(200),
+    document_url TEXT,
+    evidence_level VARCHAR(20),
+    effective_date DATE,
+
+
+    -- Ingestion tracking
+    source_set_id VARCHAR(100),          -- FDA SetID or equivalent
+    source_hash VARCHAR(64) NOT NULL,    -- SHA-256 of source document
+    ingested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    ingestion_run_id UUID,
+
+
+    -- Approval tracking (YAML metadata based)
+    approved_by VARCHAR(200),
+    approved_at TIMESTAMP WITH TIME ZONE,
+    version VARCHAR(20) NOT NULL,
+
+
+    -- Safety flags (denormalized for fast filtering)
+    is_high_alert BOOLEAN DEFAULT FALSE,
+    is_narrow_ti BOOLEAN DEFAULT FALSE,
+    has_black_box BOOLEAN DEFAULT FALSE,
+    is_beers_list BOOLEAN DEFAULT FALSE,
+
+
+    -- Audit
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+
+
+    -- Composite unique constraint
+    CONSTRAINT uk_drug_rules_rxnorm_jurisdiction UNIQUE (rxnorm_code, jurisdiction)
+);
+
+
+-- Indexes for common queries
+CREATE INDEX idx_drug_rules_rxnorm ON drug_rules(rxnorm_code);
+CREATE INDEX idx_drug_rules_jurisdiction ON drug_rules(jurisdiction);
+CREATE INDEX idx_drug_rules_drug_name ON drug_rules USING gin(drug_name gin_trgm_ops);
+CREATE INDEX idx_drug_rules_authority ON drug_rules(authority);
+CREATE INDEX idx_drug_rules_high_alert ON drug_rules(is_high_alert) WHERE is_high_alert = TRUE;
+CREATE INDEX idx_drug_rules_rule_data ON drug_rules USING gin(rule_data);
+
+
+-- Ingestion run logs
+CREATE TABLE ingestion_runs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    authority VARCHAR(50) NOT NULL,
+    jurisdiction VARCHAR(10) NOT NULL,
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    completed_at TIMESTAMP WITH TIME ZONE,
+    status VARCHAR(20) DEFAULT 'RUNNING',  -- RUNNING, COMPLETED, FAILED
+
+
+    -- Statistics
+    total_drugs_processed INT DEFAULT 0,
+    drugs_added INT DEFAULT 0,
+    drugs_updated INT DEFAULT 0,
+    drugs_unchanged INT DEFAULT 0,
+    drugs_failed INT DEFAULT 0,
+
+
+    -- Error tracking
+    error_message TEXT,
+    error_details JSONB,
+
+
+    -- Audit
+    triggered_by VARCHAR(200),
+    trigger_type VARCHAR(50)  -- MANUAL, SCHEDULED
+);
+
+
+-- Ingestion item logs (per-drug tracking)
+CREATE TABLE ingestion_items (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    ingestion_run_id UUID REFERENCES ingestion_runs(id),
+    rxnorm_code VARCHAR(20),
+    drug_name VARCHAR(500),
+    status VARCHAR(20),  -- SUCCESS, FAILED, SKIPPED
+    action VARCHAR(20),  -- INSERT, UPDATE, UNCHANGED
+    error_message TEXT,
+    processing_time_ms INT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+
+CREATE INDEX idx_ingestion_items_run ON ingestion_items(ingestion_run_id);
+CREATE INDEX idx_ingestion_items_status ON ingestion_items(status);
+
+
+-- Change history for audit trail
+CREATE TABLE drug_rule_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    drug_rule_id UUID REFERENCES drug_rules(id),
+    rxnorm_code VARCHAR(20) NOT NULL,
+    jurisdiction VARCHAR(10) NOT NULL,
+    change_type VARCHAR(20) NOT NULL,  -- INSERT, UPDATE, DELETE
+    old_rule_data JSONB,
+    new_rule_data JSONB,
+    changed_fields TEXT[],
+    changed_by VARCHAR(200),
+    change_reason TEXT,
+    changed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+
+CREATE INDEX idx_drug_rule_history_drug ON drug_rule_history(drug_rule_id);
+CREATE INDEX idx_drug_rule_history_rxnorm ON drug_rule_history(rxnorm_code);
+
+
+-- View for quick lookups with governance
+CREATE VIEW v_governed_drug_rules AS
+SELECT
+    dr.rxnorm_code,
+    dr.jurisdiction,
+    dr.drug_name,
+    dr.generic_name,
+    dr.drug_class,
+    dr.rule_data,
+    dr.authority,
+    dr.document_name,
+    dr.document_url,
+    dr.version,
+    dr.approved_by,
+    dr.approved_at,
+    dr.is_high_alert,
+    dr.is_narrow_ti,
+    dr.has_black_box,
+    dr.ingested_at,
+    ir.status as ingestion_status
+FROM drug_rules dr
+LEFT JOIN ingestion_runs ir ON dr.ingestion_run_id = ir.id;
+
+
+-- Function to automatically update updated_at
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER tr_drug_rules_updated
+    BEFORE UPDATE ON drug_rules
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at();
+
+
+-- Function to log changes to history
+CREATE OR REPLACE FUNCTION log_drug_rule_change()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO drug_rule_history (drug_rule_id, rxnorm_code, jurisdiction, change_type, new_rule_data)
+        VALUES (NEW.id, NEW.rxnorm_code, NEW.jurisdiction, 'INSERT', NEW.rule_data);
+    ELSIF TG_OP = 'UPDATE' THEN
+        INSERT INTO drug_rule_history (drug_rule_id, rxnorm_code, jurisdiction, change_type, old_rule_data, new_rule_data)
+        VALUES (NEW.id, NEW.rxnorm_code, NEW.jurisdiction, 'UPDATE', OLD.rule_data, NEW.rule_data);
+    ELSIF TG_OP = 'DELETE' THEN
+        INSERT INTO drug_rule_history (drug_rule_id, rxnorm_code, jurisdiction, change_type, old_rule_data)
+        VALUES (OLD.id, OLD.rxnorm_code, OLD.jurisdiction, 'DELETE', OLD.rule_data);
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER tr_drug_rules_history
+    AFTER INSERT OR UPDATE OR DELETE ON drug_rules
+    FOR EACH ROW
+    EXECUTE FUNCTION log_drug_rule_change();
+```
+
+
+### 1.2 Database Repository
+
+
+**File**: `internal/rules/repository.go`
+
+
+```go
+package rules
+
+
+import (
+    "context"
+    "database/sql"
+    "encoding/json"
+    "fmt"
+    "time"
+
+
+    "github.com/lib/pq"
+    "github.com/sirupsen/logrus"
+
+
+    "kb-1-drug-rules/internal/models"
+)
+
+
+// Repository provides database-backed drug rule access
+type Repository struct {
+    db     *sql.DB
+    log    *logrus.Entry
+    cache  Cache  // Redis cache interface
+}
+
+
+// Cache interface for rule caching
+type Cache interface {
+    Get(ctx context.Context, key string) ([]byte, error)
+    Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+    Delete(ctx context.Context, key string) error
+}
+
+
+// NewRepository creates a new database-backed repository
+func NewRepository(db *sql.DB, cache Cache, log *logrus.Entry) *Repository {
+    return &Repository{
+        db:    db,
+        cache: cache,
+        log:   log.WithField("component", "rules-repository"),
+    }
+}
+
+
+// GetByRxNorm retrieves a governed rule by RxNorm code and jurisdiction
+func (r *Repository) GetByRxNorm(ctx context.Context, rxnormCode, jurisdiction string) (*models.GovernedDrugRule, error) {
+    // Try cache first
+    cacheKey := fmt.Sprintf("drug_rule:%s:%s", jurisdiction, rxnormCode)
+    if r.cache != nil {
+        if cached, err := r.cache.Get(ctx, cacheKey); err == nil && cached != nil {
+            var rule models.GovernedDrugRule
+            if err := json.Unmarshal(cached, &rule); err == nil {
+                return &rule, nil
+            }
+        }
+    }
+
+
+    // Query database with jurisdiction fallback: specific -> global
+    query := `
+        SELECT rule_data
+        FROM drug_rules
+        WHERE rxnorm_code = $1
+          AND jurisdiction IN ($2, 'GLOBAL')
+        ORDER BY CASE jurisdiction WHEN $2 THEN 0 ELSE 1 END
+        LIMIT 1
+    `
+
+
+    var ruleJSON []byte
+    err := r.db.QueryRowContext(ctx, query, rxnormCode, jurisdiction).Scan(&ruleJSON)
+    if err == sql.ErrNoRows {
+        return nil, nil
+    }
+    if err != nil {
+        return nil, fmt.Errorf("failed to query drug rule: %w", err)
+    }
+
+
+    var rule models.GovernedDrugRule
+    if err := json.Unmarshal(ruleJSON, &rule); err != nil {
+        return nil, fmt.Errorf("failed to unmarshal rule: %w", err)
+    }
+
+
+    // Cache the result
+    if r.cache != nil {
+        r.cache.Set(ctx, cacheKey, ruleJSON, 5*time.Minute)
+    }
+
+
+    return &rule, nil
+}
+
+
+// Search searches for drug rules by name, class, or other criteria
+func (r *Repository) Search(ctx context.Context, query string, jurisdiction string, filters SearchFilters) ([]*models.DrugRuleSummary, error) {
+    sqlQuery := `
+        SELECT
+            rxnorm_code,
+            drug_name,
+            generic_name,
+            drug_class,
+            jurisdiction,
+            is_high_alert,
+            is_narrow_ti,
+            has_black_box,
+            authority,
+            version
+        FROM drug_rules
+        WHERE jurisdiction IN ($1, 'GLOBAL')
+          AND (
+              drug_name ILIKE '%' || $2 || '%'
+              OR generic_name ILIKE '%' || $2 || '%'
+              OR drug_class ILIKE '%' || $2 || '%'
+          )
+    `
+
+
+    args := []interface{}{jurisdiction, query}
+    argNum := 3
+
+
+    if filters.HighAlertOnly {
+        sqlQuery += fmt.Sprintf(" AND is_high_alert = $%d", argNum)
+        args = append(args, true)
+        argNum++
+    }
+
+
+    if filters.Category != "" {
+        sqlQuery += fmt.Sprintf(" AND drug_class ILIKE '%%' || $%d || '%%'", argNum)
+        args = append(args, filters.Category)
+        argNum++
+    }
+
+
+    sqlQuery += " ORDER BY drug_name LIMIT 100"
+
+
+    rows, err := r.db.QueryContext(ctx, sqlQuery, args...)
+    if err != nil {
+        return nil, fmt.Errorf("failed to search drugs: %w", err)
+    }
+    defer rows.Close()
+
+
+    var results []*models.DrugRuleSummary
+    for rows.Next() {
+        var summary models.DrugRuleSummary
+        if err := rows.Scan(
+            &summary.RxNormCode,
+            &summary.DrugName,
+            &summary.GenericName,
+            &summary.DrugClass,
+            &summary.Jurisdiction,
+            &summary.IsHighAlert,
+            &summary.IsNarrowTI,
+            &summary.HasBlackBox,
+            &summary.Authority,
+            &summary.Version,
+        ); err != nil {
+            return nil, fmt.Errorf("failed to scan row: %w", err)
+        }
+        results = append(results, &summary)
+    }
+
+
+    return results, nil
+}
+
+
+// SearchFilters for drug search
+type SearchFilters struct {
+    HighAlertOnly bool
+    Category      string
+    Authority     string
+}
+
+
+// GetStats returns repository statistics
+func (r *Repository) GetStats(ctx context.Context) (*RepositoryStats, error) {
+    var stats RepositoryStats
+
+
+    query := `
+        SELECT
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE jurisdiction = 'US') as us_count,
+            COUNT(*) FILTER (WHERE jurisdiction = 'AU') as au_count,
+            COUNT(*) FILTER (WHERE jurisdiction = 'IN') as in_count,
+            COUNT(*) FILTER (WHERE is_high_alert = TRUE) as high_alert_count,
+            COUNT(*) FILTER (WHERE has_black_box = TRUE) as black_box_count,
+            MAX(ingested_at) as last_ingestion
+        FROM drug_rules
+    `
+
+
+    err := r.db.QueryRowContext(ctx, query).Scan(
+        &stats.TotalDrugs,
+        &stats.USCount,
+        &stats.AUCount,
+        &stats.INCount,
+        &stats.HighAlertCount,
+        &stats.BlackBoxCount,
+        &stats.LastIngestion,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to get stats: %w", err)
+    }
+
+
+    return &stats, nil
+}
+
+
+// RepositoryStats contains repository statistics
+type RepositoryStats struct {
+    TotalDrugs     int       `json:"total_drugs"`
+    USCount        int       `json:"us_count"`
+    AUCount        int       `json:"au_count"`
+    INCount        int       `json:"in_count"`
+    HighAlertCount int       `json:"high_alert_count"`
+    BlackBoxCount  int       `json:"black_box_count"`
+    LastIngestion  time.Time `json:"last_ingestion"`
+}
+
+
+// UpsertRule inserts or updates a drug rule
+func (r *Repository) UpsertRule(ctx context.Context, rule *models.GovernedDrugRule, runID string) error {
+    ruleJSON, err := json.Marshal(rule)
+    if err != nil {
+        return fmt.Errorf("failed to marshal rule: %w", err)
+    }
+
+
+    query := `
+        INSERT INTO drug_rules (
+            rxnorm_code, jurisdiction, drug_name, generic_name, drug_class,
+            atc_code, snomed_code, rule_data, authority, document_name,
+            document_section, document_url, evidence_level, source_hash,
+            ingestion_run_id, approved_by, approved_at, version,
+            is_high_alert, is_narrow_ti, has_black_box, is_beers_list
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+        )
+        ON CONFLICT (rxnorm_code, jurisdiction) DO UPDATE SET
+            drug_name = EXCLUDED.drug_name,
+            generic_name = EXCLUDED.generic_name,
+            drug_class = EXCLUDED.drug_class,
+            rule_data = EXCLUDED.rule_data,
+            authority = EXCLUDED.authority,
+            document_name = EXCLUDED.document_name,
+            document_url = EXCLUDED.document_url,
+            source_hash = EXCLUDED.source_hash,
+            ingestion_run_id = EXCLUDED.ingestion_run_id,
+            version = EXCLUDED.version,
+            is_high_alert = EXCLUDED.is_high_alert,
+            is_narrow_ti = EXCLUDED.is_narrow_ti,
+            has_black_box = EXCLUDED.has_black_box
+    `
+
+
+    _, err = r.db.ExecContext(ctx, query,
+        rule.Drug.RxNormCode,
+        rule.Governance.Jurisdiction,
+        rule.Drug.Name,
+        rule.Drug.GenericName,
+        rule.Drug.DrugClass,
+        rule.Drug.ATCCode,
+        rule.Drug.SNOMEDCode,
+        ruleJSON,
+        rule.Governance.Authority,
+        rule.Governance.Document,
+        rule.Governance.Section,
+        rule.Governance.URL,
+        rule.Governance.EvidenceLevel,
+        "", // source_hash - computed by ingestion
+        runID,
+        rule.Governance.ApprovedBy,
+        rule.Governance.ApprovedAt,
+        rule.Governance.Version,
+        rule.Safety.HighAlertDrug,
+        rule.Safety.NarrowTherapeuticIndex,
+        rule.Safety.BlackBoxWarning,
+        false, // beers_list - extracted from rule
+    )
+
+
+    if err != nil {
+        return fmt.Errorf("failed to upsert rule: %w", err)
+    }
+
+
+    // Invalidate cache
+    if r.cache != nil {
+        cacheKey := fmt.Sprintf("drug_rule:%s:%s", rule.Governance.Jurisdiction, rule.Drug.RxNormCode)
+        r.cache.Delete(ctx, cacheKey)
+    }
+
+
+    return nil
+}
+```
+
+
+### 1.3 Governed Models
+
+
+**File**: `internal/models/governed_models.go`
+
+
+```go
+package models
+
+
+import "time"
+
+
+// GovernedDrugRule represents a fully governed drug dosing rule
+// This is the authoritative structure for all drug rules in KB-1
+type GovernedDrugRule struct {
+    Drug       DrugIdentification `json:"drug" yaml:"drug"`
+    Dosing     DosingRules        `json:"dosing" yaml:"dosing"`
+    Safety     SafetyInfo         `json:"safety" yaml:"safety"`
+    Governance GovernanceMetadata `json:"governance" yaml:"governance"`
+}
+
+
+// DrugIdentification contains drug identification codes
+type DrugIdentification struct {
+    RxNormCode   string `json:"rxnorm_code" yaml:"rxnormCode"`
+    Name         string `json:"name" yaml:"name"`
+    GenericName  string `json:"generic_name" yaml:"genericName"`
+    DrugClass    string `json:"drug_class,omitempty" yaml:"drugClass,omitempty"`
+    ATCCode      string `json:"atc_code,omitempty" yaml:"atcCode,omitempty"`
+    SNOMEDCode   string `json:"snomed_code,omitempty" yaml:"snomedCode,omitempty"`
+    AMTCode      string `json:"amt_code,omitempty" yaml:"amtCode,omitempty"`
+}
+
+
+// DosingRules contains all dosing information
+type DosingRules struct {
+    PrimaryMethod string              `json:"primary_method" yaml:"primaryMethod"`
+    Adult         *AdultDosing        `json:"adult,omitempty" yaml:"adult,omitempty"`
+    WeightBased   *WeightBasedDosing  `json:"weight_based,omitempty" yaml:"weightBased,omitempty"`
+    BSABased      *BSABasedDosing     `json:"bsa_based,omitempty" yaml:"bsaBased,omitempty"`
+    Pediatric     *PediatricDosing    `json:"pediatric,omitempty" yaml:"pediatric,omitempty"`
+    Geriatric     *GeriatricDosing    `json:"geriatric,omitempty" yaml:"geriatric,omitempty"`
+    Renal         *RenalDosing        `json:"renal,omitempty" yaml:"renal,omitempty"`
+    Hepatic       *HepaticDosing      `json:"hepatic,omitempty" yaml:"hepatic,omitempty"`
+    Titration     *TitrationSchedule  `json:"titration,omitempty" yaml:"titration,omitempty"`
+}
+
+
+// AdultDosing contains standard adult dosing
+type AdultDosing struct {
+    Standard   []StandardDose `json:"standard,omitempty" yaml:"standard,omitempty"`
+    MaxDaily   float64        `json:"max_daily,omitempty" yaml:"maxDaily,omitempty"`
+    MaxSingle  float64        `json:"max_single,omitempty" yaml:"maxSingle,omitempty"`
+    MaxUnit    string         `json:"max_unit,omitempty" yaml:"maxUnit,omitempty"`
+}
+
+
+// StandardDose represents a single dosing recommendation
+type StandardDose struct {
+    Indication        string  `json:"indication" yaml:"indication"`
+    Route             string  `json:"route,omitempty" yaml:"route,omitempty"`
+    Dose              float64 `json:"dose,omitempty" yaml:"dose,omitempty"`
+    DoseMin           float64 `json:"dose_min,omitempty" yaml:"doseMin,omitempty"`
+    DoseMax           float64 `json:"dose_max,omitempty" yaml:"doseMax,omitempty"`
+    Unit              string  `json:"unit" yaml:"unit"`
+    Frequency         string  `json:"frequency" yaml:"frequency"`
+    IsStartingDose    bool    `json:"is_starting_dose,omitempty" yaml:"isStartingDose,omitempty"`
+    IsMaintenanceDose bool    `json:"is_maintenance_dose,omitempty" yaml:"isMaintenanceDose,omitempty"`
+    Notes             string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// WeightBasedDosing for mg/kg calculations
+type WeightBasedDosing struct {
+    DosePerKg         float64 `json:"dose_per_kg" yaml:"dosePerKg"`
+    Unit              string  `json:"unit" yaml:"unit"`
+    Frequency         string  `json:"frequency" yaml:"frequency"`
+    MinDose           float64 `json:"min_dose,omitempty" yaml:"minDose,omitempty"`
+    MaxDose           float64 `json:"max_dose,omitempty" yaml:"maxDose,omitempty"`
+    UseIdealWeight    bool    `json:"use_ideal_weight,omitempty" yaml:"useIdealWeight,omitempty"`
+    UseAdjustedWeight bool    `json:"use_adjusted_weight,omitempty" yaml:"useAdjustedWeight,omitempty"`
+    Notes             string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// BSABasedDosing for mg/m² calculations
+type BSABasedDosing struct {
+    DosePerM2       float64 `json:"dose_per_m2" yaml:"dosePerM2"`
+    Unit            string  `json:"unit" yaml:"unit"`
+    MaxAbsoluteDose float64 `json:"max_absolute_dose,omitempty" yaml:"maxAbsoluteDose,omitempty"`
+    CappedAtBSA     float64 `json:"capped_at_bsa,omitempty" yaml:"cappedAtBSA,omitempty"`
+    Notes           string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// PediatricDosing contains age-specific pediatric dosing
+type PediatricDosing struct {
+    AgeRanges       []PediatricAgeRange `json:"age_ranges,omitempty" yaml:"ageRanges,omitempty"`
+    UseWeight       bool                `json:"use_weight,omitempty" yaml:"useWeight,omitempty"`
+    MinAgeMonths    int                 `json:"min_age_months,omitempty" yaml:"minAge,omitempty"`
+    Contraindicated bool                `json:"contraindicated,omitempty" yaml:"contraindicated,omitempty"`
+    Notes           string              `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// PediatricAgeRange defines dosing for specific age groups
+type PediatricAgeRange struct {
+    AgeGroup     string  `json:"age_group" yaml:"ageGroup"`
+    MinAgeMonths int     `json:"min_age_months" yaml:"minAgeMonths"`
+    MaxAgeMonths int     `json:"max_age_months" yaml:"maxAgeMonths"`
+    DosePerKg    float64 `json:"dose_per_kg" yaml:"dosePerKg"`
+    Unit         string  `json:"unit" yaml:"unit"`
+    Frequency    string  `json:"frequency" yaml:"frequency"`
+    MaxDose      float64 `json:"max_dose,omitempty" yaml:"maxDose,omitempty"`
+}
+
+
+// GeriatricDosing contains elderly-specific adjustments
+type GeriatricDosing struct {
+    StartLow        bool    `json:"start_low,omitempty" yaml:"startLow,omitempty"`
+    DoseReduction   float64 `json:"dose_reduction,omitempty" yaml:"doseReduction,omitempty"`
+    AvoidInElderly  bool    `json:"avoid_in_elderly,omitempty" yaml:"avoidInElderly,omitempty"`
+    BeersListStatus string  `json:"beers_list_status,omitempty" yaml:"beersListStatus,omitempty"`
+    Notes           string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// RenalDosing contains renal adjustment tiers
+type RenalDosing struct {
+    AdjustmentBasis string                `json:"adjustment_basis" yaml:"adjustmentBasis"`
+    Adjustments     []RenalAdjustmentTier `json:"adjustments" yaml:"adjustments"`
+    Notes           string                `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// RenalAdjustmentTier defines a single renal adjustment tier
+type RenalAdjustmentTier struct {
+    MinGFR         float64 `json:"min_gfr" yaml:"minCrCl"`
+    MaxGFR         float64 `json:"max_gfr" yaml:"maxCrCl"`
+    DosePercent    float64 `json:"dose_percent,omitempty" yaml:"dosePercent,omitempty"`
+    Frequency      string  `json:"frequency,omitempty" yaml:"frequency,omitempty"`
+    Avoid          bool    `json:"avoid,omitempty" yaml:"avoid,omitempty"`
+    Dialyzable     bool    `json:"dialyzable,omitempty" yaml:"dialyzable,omitempty"`
+    SupplementDose float64 `json:"supplement_dose,omitempty" yaml:"supplementDose,omitempty"`
+    Notes          string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// HepaticDosing contains hepatic adjustment by Child-Pugh class
+type HepaticDosing struct {
+    ChildPughA *HepaticAdjustmentTier `json:"child_pugh_a,omitempty" yaml:"childPughA,omitempty"`
+    ChildPughB *HepaticAdjustmentTier `json:"child_pugh_b,omitempty" yaml:"childPughB,omitempty"`
+    ChildPughC *HepaticAdjustmentTier `json:"child_pugh_c,omitempty" yaml:"childPughC,omitempty"`
+    Notes      string                 `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// HepaticAdjustmentTier defines hepatic adjustment for a Child-Pugh class
+type HepaticAdjustmentTier struct {
+    DosePercent float64 `json:"dose_percent,omitempty" yaml:"dosePercent,omitempty"`
+    FixedDose   float64 `json:"fixed_dose,omitempty" yaml:"fixedDose,omitempty"`
+    Avoid       bool    `json:"avoid,omitempty" yaml:"avoid,omitempty"`
+    Notes       string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// TitrationSchedule for drugs requiring gradual dose adjustment
+type TitrationSchedule struct {
+    Steps   []TitrationStep `json:"steps" yaml:"steps"`
+    Target  string          `json:"target,omitempty" yaml:"target,omitempty"`
+    MaxDose float64         `json:"max_dose,omitempty" yaml:"maxDose,omitempty"`
+    Notes   string          `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// TitrationStep defines a single titration step
+type TitrationStep struct {
+    StepNumber   int     `json:"step_number" yaml:"stepNumber"`
+    Dose         float64 `json:"dose" yaml:"dose"`
+    Unit         string  `json:"unit" yaml:"unit"`
+    Frequency    string  `json:"frequency" yaml:"frequency"`
+    DurationDays int     `json:"duration_days,omitempty" yaml:"durationDays,omitempty"`
+    Criteria     string  `json:"criteria,omitempty" yaml:"criteria,omitempty"`
+    Notes        string  `json:"notes,omitempty" yaml:"notes,omitempty"`
+}
+
+
+// SafetyInfo contains drug safety information
+type SafetyInfo struct {
+    HighAlertDrug          bool     `json:"high_alert_drug,omitempty" yaml:"highAlertDrug,omitempty"`
+    NarrowTherapeuticIndex bool     `json:"narrow_therapeutic_index,omitempty" yaml:"narrowTherapeuticIndex,omitempty"`
+    BlackBoxWarning        bool     `json:"black_box_warning,omitempty" yaml:"blackBoxWarning,omitempty"`
+    BlackBoxText           string   `json:"black_box_text,omitempty" yaml:"blackBoxText,omitempty"`
+    Monitoring             []string `json:"monitoring,omitempty" yaml:"monitoring,omitempty"`
+    Contraindications      []string `json:"contraindications,omitempty" yaml:"contraindications,omitempty"`
+    MajorInteractions      []string `json:"major_interactions,omitempty" yaml:"majorInteractions,omitempty"`
+    ClinicalNotes          string   `json:"clinical_notes,omitempty" yaml:"clinicalNotes,omitempty"`
+}
+
+
+// GovernanceMetadata contains full provenance tracking
+type GovernanceMetadata struct {
+    Authority        string            `json:"authority" yaml:"authority"`
+    Document         string            `json:"document" yaml:"document"`
+    Section          string            `json:"section,omitempty" yaml:"section,omitempty"`
+    URL              string            `json:"url,omitempty" yaml:"url,omitempty"`
+    Jurisdiction     string            `json:"jurisdiction" yaml:"jurisdiction"`
+    EvidenceLevel    string            `json:"evidence_level,omitempty" yaml:"evidenceLevel,omitempty"`
+    EffectiveDate    string            `json:"effective_date,omitempty" yaml:"effectiveDate,omitempty"`
+    ExpirationDate   string            `json:"expiration_date,omitempty" yaml:"expirationDate,omitempty"`
+    Version          string            `json:"version" yaml:"version"`
+    ApprovedBy       string            `json:"approved_by" yaml:"approvedBy"`
+    ApprovedAt       time.Time         `json:"approved_at" yaml:"approvedAt"`
+    LastReviewedAt   *time.Time        `json:"last_reviewed_at,omitempty" yaml:"lastReviewedAt,omitempty"`
+    LastReviewedBy   string            `json:"last_reviewed_by,omitempty" yaml:"lastReviewedBy,omitempty"`
+    NextReviewDue    string            `json:"next_review_due,omitempty" yaml:"nextReviewDue,omitempty"`
+    ChangeLog        []ChangeLogEntry  `json:"change_log,omitempty" yaml:"changeLog,omitempty"`
+    SecondarySources []SecondarySource `json:"secondary_sources,omitempty" yaml:"secondarySources,omitempty"`
+    SourceSetID      string            `json:"source_set_id,omitempty" yaml:"sourceSetId,omitempty"`
+    SourceHash       string            `json:"source_hash,omitempty" yaml:"sourceHash,omitempty"`
+    IngestedAt       time.Time         `json:"ingested_at,omitempty" yaml:"ingestedAt,omitempty"`
+}
+
+
+// ChangeLogEntry tracks rule changes
+type ChangeLogEntry struct {
+    Date     string `json:"date" yaml:"date"`
+    Change   string `json:"change" yaml:"change"`
+    Reviewer string `json:"reviewer" yaml:"reviewer"`
+}
+
+
+// SecondarySource for when primary label lacks detail
+type SecondarySource struct {
+    Authority string `json:"authority" yaml:"authority"`
+    Document  string `json:"document" yaml:"document"`
+    Section   string `json:"section,omitempty" yaml:"section,omitempty"`
+    Reason    string `json:"reason,omitempty" yaml:"reason,omitempty"`
+}
+
+
+// DoseSourceAttribution for API responses
+type DoseSourceAttribution struct {
+    Authority    string `json:"authority"`
+    Document     string `json:"document"`
+    Section      string `json:"section,omitempty"`
+    URL          string `json:"url,omitempty"`
+    Jurisdiction string `json:"jurisdiction"`
+    Version      string `json:"version"`
+    ApprovedBy   string `json:"approved_by"`
+    ApprovedAt   string `json:"approved_at"`
+    SourceSetID  string `json:"source_set_id,omitempty"`
+    IngestedAt   string `json:"ingested_at,omitempty"`
+}
+
+
+// DrugRuleSummary for search results
+type DrugRuleSummary struct {
+    RxNormCode   string `json:"rxnorm_code"`
+    DrugName     string `json:"drug_name"`
+    GenericName  string `json:"generic_name"`
+    DrugClass    string `json:"drug_class"`
+    Jurisdiction string `json:"jurisdiction"`
+    IsHighAlert  bool   `json:"is_high_alert"`
+    IsNarrowTI   bool   `json:"is_narrow_ti"`
+    HasBlackBox  bool   `json:"has_black_box"`
+    Authority    string `json:"authority"`
+    Version      string `json:"version"`
+}
+```
+
+
+---
+
+
+## Phase 2: FDA Ingestion Pipeline (Weeks 3-4)
+
+
+### 2.1 FDA DailyMed Client
+
+
+**File**: `pkg/ingestion/fda/client.go`
+
+
+```go
+package fda
+
+
+import (
+    "context"
+    "encoding/json"
+    "encoding/xml"
+    "fmt"
+    "io"
+    "net/http"
+    "net/url"
+    "time"
+
+
+    "github.com/sirupsen/logrus"
+)
+
+
+// Client provides access to FDA DailyMed API
+type Client struct {
+    baseURL    string
+    httpClient *http.Client
+    log        *logrus.Entry
+}
+
+
+// DailyMedSearchResult represents search results
+type DailyMedSearchResult struct {
+    Data []struct {
+        SetID       string `json:"setid"`
+        Title       string `json:"title"`
+        PublishedDate string `json:"published_date"`
+        ProductNDC  string `json:"product_ndc"`
+    } `json:"data"`
+    Metadata struct {
+        TotalElements int `json:"total_elements"`
+        TotalPages    int `json:"total_pages"`
+        CurrentPage   int `json:"current_page"`
+    } `json:"metadata"`
+}
+
+
+// NewClient creates a new FDA DailyMed client
+func NewClient(log *logrus.Entry) *Client {
+    return &Client{
+        baseURL: "https://dailymed.nlm.nih.gov/dailymed/services/v2",
+        httpClient: &http.Client{
+            Timeout: 60 * time.Second,
+        },
+        log: log.WithField("component", "fda-client"),
+    }
+}
+
+
+// SearchDrugs searches for drugs by name
+func (c *Client) SearchDrugs(ctx context.Context, drugName string, page, pageSize int) (*DailyMedSearchResult, error) {
+    u := fmt.Sprintf("%s/spls.json?drug_name=%s&page=%d&pagesize=%d",
+        c.baseURL, url.QueryEscape(drugName), page, pageSize)
+
+
+    req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create request: %w", err)
+    }
+
+
+    resp, err := c.httpClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+    }
+
+
+    var result DailyMedSearchResult
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, fmt.Errorf("failed to decode response: %w", err)
+    }
+
+
+    return &result, nil
+}
+
+
+// GetAllDrugSetIDs retrieves all drug SetIDs (paginated)
+func (c *Client) GetAllDrugSetIDs(ctx context.Context, pageSize int) ([]string, error) {
+    var allSetIDs []string
+    page := 1
+
+
+    for {
+        u := fmt.Sprintf("%s/spls.json?page=%d&pagesize=%d", c.baseURL, page, pageSize)
+
+
+        req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+        if err != nil {
+            return nil, fmt.Errorf("failed to create request: %w", err)
+        }
+
+
+        resp, err := c.httpClient.Do(req)
+        if err != nil {
+            return nil, fmt.Errorf("request failed: %w", err)
+        }
+
+
+        var result DailyMedSearchResult
+        if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+            resp.Body.Close()
+            return nil, fmt.Errorf("failed to decode response: %w", err)
+        }
+        resp.Body.Close()
+
+
+        for _, drug := range result.Data {
+            allSetIDs = append(allSetIDs, drug.SetID)
+        }
+
+
+        c.log.WithFields(logrus.Fields{
+            "page":        page,
+            "total_pages": result.Metadata.TotalPages,
+            "collected":   len(allSetIDs),
+        }).Info("Fetching drug SetIDs")
+
+
+        if page >= result.Metadata.TotalPages {
+            break
+        }
+        page++
+
+
+        // Rate limiting
+        time.Sleep(100 * time.Millisecond)
+    }
+
+
+    return allSetIDs, nil
+}
+
+
+// FetchSPL retrieves the full SPL XML document for a drug
+func (c *Client) FetchSPL(ctx context.Context, setID string) ([]byte, error) {
+    u := fmt.Sprintf("%s/spls/%s.xml", c.baseURL, setID)
+
+
+    req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create request: %w", err)
+    }
+
+
+    resp, err := c.httpClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+
+    if resp.StatusCode == http.StatusNotFound {
+        return nil, nil
+    }
+
+
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+    }
+
+
+    return io.ReadAll(resp.Body)
+}
+
+
+// FetchNDCInfo fetches NDC-specific drug information
+func (c *Client) FetchNDCInfo(ctx context.Context, ndc string) (*NDCInfo, error) {
+    u := fmt.Sprintf("%s/ndcs/%s.json", c.baseURL, ndc)
+
+
+    req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create request: %w", err)
+    }
+
+
+    resp, err := c.httpClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("request failed: %w", err)
+    }
+    defer resp.Body.Close()
+
+
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+    }
+
+
+    var result NDCInfo
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, fmt.Errorf("failed to decode response: %w", err)
+    }
+
+
+    return &result, nil
+}
+
+
+// NDCInfo represents NDC drug information
+type NDCInfo struct {
+    NDC            string `json:"ndc"`
+    ProductNDC     string `json:"product_ndc"`
+    GenericName    string `json:"generic_name"`
+    BrandName      string `json:"brand_name"`
+    DosageForm     string `json:"dosage_form"`
+    Route          string `json:"route"`
+    Strength       string `json:"active_numerator_strength"`
+    StrengthUnit   string `json:"active_ingred_unit"`
+    PharmClasses   []string `json:"pharm_class"`
+    Manufacturer   string `json:"labeler_name"`
+}
+```
+
+
+### 2.2 SPL Parser
+
+
+**File**: `pkg/ingestion/fda/parser.go`
+
+
+```go
+package fda
+
+
+import (
+    "encoding/xml"
+    "fmt"
+    "regexp"
+    "strings"
+
+
+    "kb-1-drug-rules/internal/models"
+)
+
+
+// SPLDocument represents FDA Structured Product Labeling XML
+type SPLDocument struct {
+    XMLName     xml.Name     `xml:"document"`
+    ID          SPLID        `xml:"id"`
+    SetID       SPLID        `xml:"setId"`
+    VersionNum  string       `xml:"versionNumber>value,attr"`
+    EffectiveTime string     `xml:"effectiveTime>value,attr"`
+    Title       string       `xml:"title"`
+    Components  []SPLComponent `xml:"component>structuredBody>component"`
+}
+
+
+// SPLID represents an SPL identifier
+type SPLID struct {
+    Root      string `xml:"root,attr"`
+    Extension string `xml:"extension,attr"`
+}
+
+
+// SPLComponent represents a section component
+type SPLComponent struct {
+    Section SPLSection `xml:"section"`
+}
+
+
+// SPLSection represents a labeled section
+type SPLSection struct {
+    ID       SPLID        `xml:"id"`
+    Code     SPLCode      `xml:"code"`
+    Title    string       `xml:"title"`
+    Text     SPLText      `xml:"text"`
+    Subjects []SPLSubject `xml:"subject"`
+    Components []SPLComponent `xml:"component"`
+}
+
+
+// SPLCode represents section code
+type SPLCode struct {
+    Code           string `xml:"code,attr"`
+    CodeSystem     string `xml:"codeSystem,attr"`
+    DisplayName    string `xml:"displayName,attr"`
+}
+
+
+// SPLText represents section text content
+type SPLText struct {
+    Paragraphs []string `xml:"paragraph"`
+    Lists      []SPLList `xml:"list"`
+    Tables     []SPLTable `xml:"table"`
+}
+
+
+// SPLList represents a list in text
+type SPLList struct {
+    Items []string `xml:"item"`
+}
+
+
+// SPLTable represents a table
+type SPLTable struct {
+    Rows []SPLTableRow `xml:"tbody>tr"`
+}
+
+
+// SPLTableRow represents a table row
+type SPLTableRow struct {
+    Cells []string `xml:"td"`
+}
+
+
+// SPLSubject represents a drug subject
+type SPLSubject struct {
+    MedicinalProduct struct {
+        Name string `xml:"name"`
+        FormCode SPLCode `xml:"formCode"`
+        AsEntityWithGeneric struct {
+            GenericMedicine struct {
+                Name string `xml:"name"`
+            } `xml:"genericMedicine"`
+        } `xml:"asEntityWithGeneric"`
+        Ingredient []struct {
+            Quantity struct {
+                Numerator struct {
+                    Value string `xml:"value,attr"`
+                    Unit  string `xml:"unit,attr"`
+                } `xml:"numerator"`
+            } `xml:"quantity"`
+            IngredientSubstance struct {
+                ActiveMoietyName string `xml:"activeMoiety>activeMoiety>name"`
+                Name string `xml:"name"`
+            } `xml:"ingredientSubstance"`
+        } `xml:"ingredient"`
+    } `xml:"manufacturedProduct>manufacturedProduct"`
+}
+
+
+// Parser parses FDA SPL documents
+type Parser struct{}
+
+
+// NewParser creates a new SPL parser
+func NewParser() *Parser {
+    return &Parser{}
+}
+
+
+// Parse parses SPL XML into structured data
+func (p *Parser) Parse(xmlData []byte) (*SPLDocument, error) {
+    var doc SPLDocument
+    if err := xml.Unmarshal(xmlData, &doc); err != nil {
+        return nil, fmt.Errorf("failed to parse SPL XML: %w", err)
+    }
+    return &doc, nil
+}
+
+
+// ExtractDrugInfo extracts drug identification from SPL
+func (p *Parser) ExtractDrugInfo(doc *SPLDocument) (*models.DrugIdentification, error) {
+    info := &models.DrugIdentification{}
+
+
+    // Get drug name and generic name from subjects
+    for _, comp := range doc.Components {
+        for _, subject := range comp.Section.Subjects {
+            if subject.MedicinalProduct.Name != "" {
+                info.Name = subject.MedicinalProduct.Name
+            }
+            if subject.MedicinalProduct.AsEntityWithGeneric.GenericMedicine.Name != "" {
+                info.GenericName = subject.MedicinalProduct.AsEntityWithGeneric.GenericMedicine.Name
+            }
+        }
+    }
+
+
+    // Fallback to title if no name found
+    if info.Name == "" {
+        info.Name = p.extractDrugNameFromTitle(doc.Title)
+    }
+
+
+    return info, nil
+}
+
+
+// extractDrugNameFromTitle extracts drug name from SPL title
+func (p *Parser) extractDrugNameFromTitle(title string) string {
+    // Title format: "DRUGNAME- active ingredient tablet"
+    parts := strings.Split(title, "-")
+    if len(parts) > 0 {
+        return strings.TrimSpace(parts[0])
+    }
+    return title
+}
+
+
+// GetSection retrieves a specific section by code
+func (p *Parser) GetSection(doc *SPLDocument, sectionCode string) *SPLSection {
+    for _, comp := range doc.Components {
+        if comp.Section.Code.Code == sectionCode {
+            return &comp.Section
+        }
+        // Check nested components
+        for _, nested := range comp.Section.Components {
+            if nested.Section.Code.Code == sectionCode {
+                return &nested.Section
+            }
+        }
+    }
+    return nil
+}
+
+
+// GetSectionText extracts plain text from a section
+func (p *Parser) GetSectionText(section *SPLSection) string {
+    var text strings.Builder
+
+
+    for _, para := range section.Text.Paragraphs {
+        text.WriteString(para)
+        text.WriteString("\n")
+    }
+
+
+    for _, list := range section.Text.Lists {
+        for _, item := range list.Items {
+            text.WriteString("• ")
+            text.WriteString(item)
+            text.WriteString("\n")
+        }
+    }
+
+
+    return strings.TrimSpace(text.String())
+}
+
+
+// SPL Section Codes
+const (
+    SectionDosageAdmin      = "34068-7"  // DOSAGE AND ADMINISTRATION
+    SectionBlackBox         = "34084-4"  // BOXED WARNING
+    SectionContraindications = "34070-3" // CONTRAINDICATIONS
+    SectionWarnings         = "43685-7"  // WARNINGS AND PRECAUTIONS
+    SectionAdverseReactions = "34084-4"  // ADVERSE REACTIONS
+    SectionDrugInteractions = "34073-7"  // DRUG INTERACTIONS
+    SectionUseSpecificPop   = "43684-0"  // USE IN SPECIFIC POPULATIONS
+    SectionClinPharm        = "34090-1"  // CLINICAL PHARMACOLOGY
+    SectionOverdosage       = "34088-5"  // OVERDOSAGE
+)
+```
+
+
+### 2.3 Dosing Extractor
+
+
+**File**: `pkg/ingestion/fda/extractor.go`
+
+
+```go
+package fda
+
+
+import (
+    "regexp"
+    "strconv"
+    "strings"
+
+
+    "kb-1-drug-rules/internal/models"
+)
+
+
+// Extractor extracts dosing information from SPL sections
+type Extractor struct {
+    parser *Parser
+}
+
+
+// NewExtractor creates a new dosing extractor
+func NewExtractor() *Extractor {
+    return &Extractor{
+        parser: NewParser(),
+    }
+}
+
+
+// ExtractDosingRules extracts dosing rules from SPL document
+func (e *Extractor) ExtractDosingRules(doc *SPLDocument) (*models.DosingRules, error) {
+    rules := &models.DosingRules{
+        PrimaryMethod: "FIXED", // Default, may be updated
+    }
+
+
+    // Extract from Dosage and Administration section
+    dosageSection := e.parser.GetSection(doc, SectionDosageAdmin)
+    if dosageSection != nil {
+        text := e.parser.GetSectionText(dosageSection)
+        rules.Adult = e.extractAdultDosing(text)
+
+
+        // Check for weight-based dosing
+        if e.containsWeightBasedDosing(text) {
+            rules.PrimaryMethod = "WEIGHT_BASED"
+            rules.WeightBased = e.extractWeightBasedDosing(text)
+        }
+    }
+
+
+    // Extract renal dosing from Use in Specific Populations
+    specificPopSection := e.parser.GetSection(doc, SectionUseSpecificPop)
+    if specificPopSection != nil {
+        text := e.parser.GetSectionText(specificPopSection)
+        rules.Renal = e.extractRenalDosing(text)
+        rules.Hepatic = e.extractHepaticDosing(text)
+        rules.Geriatric = e.extractGeriatricDosing(text)
+        rules.Pediatric = e.extractPediatricDosing(text)
+    }
+
+
+    return rules, nil
+}
+
+
+// ExtractSafetyInfo extracts safety information from SPL
+func (e *Extractor) ExtractSafetyInfo(doc *SPLDocument) (*models.SafetyInfo, error) {
+    safety := &models.SafetyInfo{}
+
+
+    // Black Box Warning
+    blackBoxSection := e.parser.GetSection(doc, SectionBlackBox)
+    if blackBoxSection != nil {
+        safety.BlackBoxWarning = true
+        safety.BlackBoxText = e.parser.GetSectionText(blackBoxSection)
+    }
+
+
+    // Contraindications
+    contraSection := e.parser.GetSection(doc, SectionContraindications)
+    if contraSection != nil {
+        safety.Contraindications = e.extractBulletPoints(
+            e.parser.GetSectionText(contraSection),
+        )
+    }
+
+
+    // Drug Interactions
+    interactionsSection := e.parser.GetSection(doc, SectionDrugInteractions)
+    if interactionsSection != nil {
+        safety.MajorInteractions = e.extractBulletPoints(
+            e.parser.GetSectionText(interactionsSection),
+        )
+    }
+
+
+    return safety, nil
+}
+
+
+// extractAdultDosing extracts adult dosing from text
+func (e *Extractor) extractAdultDosing(text string) *models.AdultDosing {
+    dosing := &models.AdultDosing{}
+
+
+    // Extract standard doses using regex patterns
+    doses := e.extractDosePatterns(text)
+    for _, dose := range doses {
+        dosing.Standard = append(dosing.Standard, dose)
+    }
+
+
+    // Extract max daily dose
+    maxDailyPattern := regexp.MustCompile(`(?i)maximum\s+(?:daily\s+)?(?:dose|dosage)[:\s]+(\d+(?:\.\d+)?)\s*(mg|g|mcg|units?)`)
+    if match := maxDailyPattern.FindStringSubmatch(text); len(match) > 1 {
+        if val, err := strconv.ParseFloat(match[1], 64); err == nil {
+            dosing.MaxDaily = val
+            dosing.MaxUnit = strings.ToLower(match[2])
+        }
+    }
+
+
+    return dosing
+}
+
+
+// extractDosePatterns extracts dose patterns from text
+func (e *Extractor) extractDosePatterns(text string) []models.StandardDose {
+    var doses []models.StandardDose
+
+
+    // Pattern: "X mg once daily", "X-Y mg twice daily", etc.
+    patterns := []struct {
+        regex *regexp.Regexp
+        freq  string
+    }{
+        {regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(mg|g|mcg)\s+(?:once\s+)?daily`), "DAILY"},
+        {regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(mg|g|mcg)\s+twice\s+daily`), "BID"},
+        {regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(mg|g|mcg)\s+three\s+times\s+daily`), "TID"},
+        {regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(mg|g|mcg)\s+every\s+(\d+)\s+hours?`), "Q$3H"},
+        {regexp.MustCompile(`(\d+(?:\.\d+)?)\s*(mg|g|mcg)\s+(?:orally|by\s+mouth)`), "DAILY"},
+    }
+
+
+    for _, p := range patterns {
+        matches := p.regex.FindAllStringSubmatch(text, -1)
+        for _, match := range matches {
+            if len(match) >= 3 {
+                if val, err := strconv.ParseFloat(match[1], 64); err == nil {
+                    doses = append(doses, models.StandardDose{
+                        Dose:      val,
+                        Unit:      strings.ToLower(match[2]),
+                        Frequency: p.freq,
+                    })
+                }
+            }
+        }
+    }
+
+
+    return doses
+}
+
+
+// containsWeightBasedDosing checks if text contains weight-based dosing
+func (e *Extractor) containsWeightBasedDosing(text string) bool {
+    patterns := []string{
+        `mg/kg`,
+        `mg per kg`,
+        `milligrams? per kilogram`,
+        `based on (?:body )?weight`,
+    }
+
+
+    for _, pattern := range patterns {
+        if matched, _ := regexp.MatchString(`(?i)`+pattern, text); matched {
+            return true
+        }
+    }
+    return false
+}
+
+
+// extractWeightBasedDosing extracts weight-based dosing
+func (e *Extractor) extractWeightBasedDosing(text string) *models.WeightBasedDosing {
+    dosing := &models.WeightBasedDosing{}
+
+
+    // Pattern: "X mg/kg" or "X mg per kg"
+    pattern := regexp.MustCompile(`(\d+(?:\.\d+)?)\s*mg/kg`)
+    if match := pattern.FindStringSubmatch(text); len(match) > 1 {
+        if val, err := strconv.ParseFloat(match[1], 64); err == nil {
+            dosing.DosePerKg = val
+            dosing.Unit = "mg/kg"
+        }
+    }
+
+
+    // Extract max dose
+    maxPattern := regexp.MustCompile(`(?i)(?:maximum|max|not\s+to\s+exceed)[:\s]+(\d+(?:\.\d+)?)\s*(mg|g)`)
+    if match := maxPattern.FindStringSubmatch(text); len(match) > 1 {
+        if val, err := strconv.ParseFloat(match[1], 64); err == nil {
+            dosing.MaxDose = val
+        }
+    }
+
+
+    return dosing
+}
+
+
+// extractRenalDosing extracts renal adjustment information
+func (e *Extractor) extractRenalDosing(text string) *models.RenalDosing {
+    // Check if renal impairment is mentioned
+    if !strings.Contains(strings.ToLower(text), "renal") {
+        return nil
+    }
+
+
+    dosing := &models.RenalDosing{
+        AdjustmentBasis: "eGFR",
+    }
+
+
+    // Common GFR thresholds
+    gfrPatterns := []struct {
+        pattern string
+        minGFR  float64
+        maxGFR  float64
+    }{
+        {`(?i)GFR\s*(?:>|greater\s+than)\s*60`, 60, 999},
+        {`(?i)GFR\s*(?:30|45)\s*(?:to|-)\s*(?:60|59)`, 30, 60},
+        {`(?i)GFR\s*(?:15|30)\s*(?:to|-)\s*(?:30|29)`, 15, 30},
+        {`(?i)GFR\s*(?:<|less\s+than)\s*(?:15|30)`, 0, 15},
+    }
+
+
+    for _, p := range gfrPatterns {
+        if matched, _ := regexp.MatchString(p.pattern, text); matched {
+            dosing.Adjustments = append(dosing.Adjustments, models.RenalAdjustmentTier{
+                MinGFR: p.minGFR,
+                MaxGFR: p.maxGFR,
+            })
+        }
+    }
+
+
+    // Check for contraindication
+    if strings.Contains(strings.ToLower(text), "contraindicated") &&
+       strings.Contains(strings.ToLower(text), "renal") {
+        dosing.Adjustments = append(dosing.Adjustments, models.RenalAdjustmentTier{
+            MinGFR: 0,
+            MaxGFR: 30,
+            Avoid:  true,
+            Notes:  "Contraindicated in severe renal impairment",
+        })
+    }
+
+
+    if len(dosing.Adjustments) == 0 {
+        return nil
+    }
+
+
+    return dosing
+}
+
+
+// extractHepaticDosing extracts hepatic adjustment information
+func (e *Extractor) extractHepaticDosing(text string) *models.HepaticDosing {
+    if !strings.Contains(strings.ToLower(text), "hepatic") {
+        return nil
+    }
+
+
+    dosing := &models.HepaticDosing{}
+
+
+    // Check for Child-Pugh mentions
+    if strings.Contains(text, "Child-Pugh") || strings.Contains(text, "hepatic impairment") {
+        // Class A
+        if strings.Contains(strings.ToLower(text), "mild") {
+            dosing.ChildPughA = &models.HepaticAdjustmentTier{
+                Notes: "Use with caution in mild hepatic impairment",
+            }
+        }
+        // Class B
+        if strings.Contains(strings.ToLower(text), "moderate") {
+            dosing.ChildPughB = &models.HepaticAdjustmentTier{
+                DosePercent: 50,
+                Notes:       "Reduce dose in moderate hepatic impairment",
+            }
+        }
+        // Class C
+        if strings.Contains(strings.ToLower(text), "severe") {
+            dosing.ChildPughC = &models.HepaticAdjustmentTier{
+                Avoid: true,
+                Notes: "Avoid in severe hepatic impairment",
+            }
+        }
+    }
+
+
+    return dosing
+}
+
+
+// extractGeriatricDosing extracts geriatric dosing information
+func (e *Extractor) extractGeriatricDosing(text string) *models.GeriatricDosing {
+    if !strings.Contains(strings.ToLower(text), "geriatric") &&
+       !strings.Contains(strings.ToLower(text), "elderly") {
+        return nil
+    }
+
+
+    dosing := &models.GeriatricDosing{}
+
+
+    if strings.Contains(strings.ToLower(text), "start") &&
+       strings.Contains(strings.ToLower(text), "low") {
+        dosing.StartLow = true
+        dosing.Notes = "Start at lowest effective dose in elderly patients"
+    }
+
+
+    if strings.Contains(strings.ToLower(text), "caution") {
+        dosing.Notes = "Use with caution in elderly patients"
+    }
+
+
+    return dosing
+}
+
+
+// extractPediatricDosing extracts pediatric dosing information
+func (e *Extractor) extractPediatricDosing(text string) *models.PediatricDosing {
+    if !strings.Contains(strings.ToLower(text), "pediatric") &&
+       !strings.Contains(strings.ToLower(text), "children") {
+        return nil
+    }
+
+
+    dosing := &models.PediatricDosing{}
+
+
+    // Check if contraindicated
+    if strings.Contains(strings.ToLower(text), "not recommended") ||
+       strings.Contains(strings.ToLower(text), "contraindicated") {
+        dosing.Contraindicated = true
+        dosing.Notes = "Not recommended for pediatric use"
+    }
+
+
+    // Extract minimum age
+    agePattern := regexp.MustCompile(`(?i)(?:age|aged?)\s*(?:≥|>=|>|of)\s*(\d+)\s*(?:years?|yrs?)`)
+    if match := agePattern.FindStringSubmatch(text); len(match) > 1 {
+        if age, err := strconv.Atoi(match[1]); err == nil {
+            dosing.MinAgeMonths = age * 12
+        }
+    }
+
+
+    return dosing
+}
+
+
+// extractBulletPoints extracts bullet points from text
+func (e *Extractor) extractBulletPoints(text string) []string {
+    var points []string
+
+
+    lines := strings.Split(text, "\n")
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if strings.HasPrefix(line, "•") || strings.HasPrefix(line, "-") {
+            point := strings.TrimPrefix(strings.TrimPrefix(line, "•"), "-")
+            point = strings.TrimSpace(point)
+            if point != "" {
+                points = append(points, point)
+            }
+        }
+    }
+
+
+    return points
+}
+```
+
+
+### 2.4 Ingestion Engine
+
+
+**File**: `pkg/ingestion/engine.go`
+
+
+```go
+package ingestion
+
+
+import (
+    "context"
+    "crypto/sha256"
+    "encoding/hex"
+    "fmt"
+    "sync"
+    "time"
+
+
+    "github.com/google/uuid"
+    "github.com/sirupsen/logrus"
+
+
+    "kb-1-drug-rules/internal/models"
+    "kb-1-drug-rules/internal/rules"
+    "kb-1-drug-rules/pkg/ingestion/fda"
+    "kb-1-drug-rules/pkg/kb7"
+)
+
+
+// Engine orchestrates drug rule ingestion from regulatory sources
+type Engine struct {
+    fdaClient   *fda.Client
+    fdaParser   *fda.Parser
+    fdaExtractor *fda.Extractor
+    kb7Client   *kb7.Client
+    repository  *rules.Repository
+    log         *logrus.Entry
+
+
+    // Configuration
+    concurrency int
+    batchSize   int
+}
+
+
+// EngineConfig configuration for ingestion engine
+type EngineConfig struct {
+    KB7URL      string
+    Concurrency int
+    BatchSize   int
+}
+
+
+// NewEngine creates a new ingestion engine
+func NewEngine(repo *rules.Repository, cfg EngineConfig, log *logrus.Entry) *Engine {
+    return &Engine{
+        fdaClient:    fda.NewClient(log),
+        fdaParser:    fda.NewParser(),
+        fdaExtractor: fda.NewExtractor(),
+        kb7Client:    kb7.NewClient(cfg.KB7URL, log),
+        repository:   repo,
+        log:          log.WithField("component", "ingestion-engine"),
+        concurrency:  cfg.Concurrency,
+        batchSize:    cfg.BatchSize,
+    }
+}
+
+
+// IngestionRun represents a single ingestion run
+type IngestionRun struct {
+    ID          string
+    Authority   string
+    Jurisdiction string
+    StartedAt   time.Time
+    CompletedAt *time.Time
+    Status      string
+    Stats       IngestionStats
+    Errors      []string
+}
+
+
+// IngestionStats tracks ingestion statistics
+type IngestionStats struct {
+    TotalProcessed int
+    Added          int
+    Updated        int
+    Unchanged      int
+    Failed         int
+}
+
+
+// RunFDAIngestion runs full FDA DailyMed ingestion
+func (e *Engine) RunFDAIngestion(ctx context.Context, triggeredBy string) (*IngestionRun, error) {
+    run := &IngestionRun{
+        ID:           uuid.New().String(),
+        Authority:    "FDA",
+        Jurisdiction: "US",
+        StartedAt:    time.Now(),
+        Status:       "RUNNING",
+    }
+
+
+    e.log.WithField("run_id", run.ID).Info("Starting FDA ingestion")
+
+
+    // Get all drug SetIDs from DailyMed
+    setIDs, err := e.fdaClient.GetAllDrugSetIDs(ctx, 100)
+    if err != nil {
+        run.Status = "FAILED"
+        run.Errors = append(run.Errors, fmt.Sprintf("Failed to fetch SetIDs: %v", err))
+        return run, err
+    }
+
+
+    e.log.WithField("total_drugs", len(setIDs)).Info("Fetched drug SetIDs")
+
+
+    // Process in parallel with worker pool
+    var wg sync.WaitGroup
+    semaphore := make(chan struct{}, e.concurrency)
+    results := make(chan *DrugProcessResult, len(setIDs))
+
+
+    for _, setID := range setIDs {
+        wg.Add(1)
+        go func(sid string) {
+            defer wg.Done()
+            semaphore <- struct{}{}
+            defer func() { <-semaphore }()
+
+
+            result := e.processFDADrug(ctx, sid, run.ID)
+            results <- result
+        }(setID)
+    }
+
+
+    // Close results channel when all workers done
+    go func() {
+        wg.Wait()
+        close(results)
+    }()
+
+
+    // Collect results
+    for result := range results {
+        run.Stats.TotalProcessed++
+        switch result.Action {
+        case "INSERT":
+            run.Stats.Added++
+        case "UPDATE":
+            run.Stats.Updated++
+        case "UNCHANGED":
+            run.Stats.Unchanged++
+        case "FAILED":
+            run.Stats.Failed++
+            if result.Error != "" {
+                run.Errors = append(run.Errors, result.Error)
+            }
+        }
+    }
+
+
+    now := time.Now()
+    run.CompletedAt = &now
+    run.Status = "COMPLETED"
+
+
+    e.log.WithFields(logrus.Fields{
+        "run_id":    run.ID,
+        "added":     run.Stats.Added,
+        "updated":   run.Stats.Updated,
+        "unchanged": run.Stats.Unchanged,
+        "failed":    run.Stats.Failed,
+        "duration":  time.Since(run.StartedAt),
+    }).Info("FDA ingestion completed")
+
+
+    return run, nil
+}
+
+
+// DrugProcessResult result of processing a single drug
+type DrugProcessResult struct {
+    SetID  string
+    Action string // INSERT, UPDATE, UNCHANGED, FAILED
+    Error  string
+}
+
+
+// processFDADrug processes a single FDA drug
+func (e *Engine) processFDADrug(ctx context.Context, setID, runID string) *DrugProcessResult {
+    result := &DrugProcessResult{SetID: setID}
+
+
+    // Fetch SPL document
+    splXML, err := e.fdaClient.FetchSPL(ctx, setID)
+    if err != nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("Failed to fetch SPL %s: %v", setID, err)
+        return result
+    }
+    if splXML == nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("SPL not found: %s", setID)
+        return result
+    }
+
+
+    // Parse SPL
+    doc, err := e.fdaParser.Parse(splXML)
+    if err != nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("Failed to parse SPL %s: %v", setID, err)
+        return result
+    }
+
+
+    // Extract drug info
+    drugInfo, err := e.fdaParser.ExtractDrugInfo(doc)
+    if err != nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("Failed to extract drug info %s: %v", setID, err)
+        return result
+    }
+
+
+    // Resolve RxNorm code via KB-7
+    rxnormCode, err := e.kb7Client.ResolveNameToRxNorm(drugInfo.GenericName)
+    if err != nil || rxnormCode == "" {
+        // Try brand name
+        rxnormCode, err = e.kb7Client.ResolveNameToRxNorm(drugInfo.Name)
+        if err != nil || rxnormCode == "" {
+            result.Action = "FAILED"
+            result.Error = fmt.Sprintf("Failed to resolve RxNorm for %s: %v", drugInfo.Name, err)
+            return result
+        }
+    }
+    drugInfo.RxNormCode = rxnormCode
+
+
+    // Extract dosing rules
+    dosingRules, err := e.fdaExtractor.ExtractDosingRules(doc)
+    if err != nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("Failed to extract dosing %s: %v", setID, err)
+        return result
+    }
+
+
+    // Extract safety info
+    safetyInfo, err := e.fdaExtractor.ExtractSafetyInfo(doc)
+    if err != nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("Failed to extract safety %s: %v", setID, err)
+        return result
+    }
+
+
+    // Compute source hash
+    hash := sha256.Sum256(splXML)
+    sourceHash := hex.EncodeToString(hash[:])
+
+
+    // Build governed rule
+    rule := &models.GovernedDrugRule{
+        Drug:   *drugInfo,
+        Dosing: *dosingRules,
+        Safety: *safetyInfo,
+        Governance: models.GovernanceMetadata{
+            Authority:    "FDA",
+            Document:     "DailyMed SPL",
+            Section:      "34068-7",
+            URL:          fmt.Sprintf("https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=%s", setID),
+            Jurisdiction: "US",
+            EvidenceLevel: "LABEL",
+            Version:      time.Now().Format("2006.1"),
+            ApprovedBy:   "System Ingestion",
+            ApprovedAt:   time.Now(),
+            SourceSetID:  setID,
+            SourceHash:   sourceHash,
+            IngestedAt:   time.Now(),
+        },
+    }
+
+
+    // Upsert to database
+    if err := e.repository.UpsertRule(ctx, rule, runID); err != nil {
+        result.Action = "FAILED"
+        result.Error = fmt.Sprintf("Failed to save rule %s: %v", setID, err)
+        return result
+    }
+
+
+    result.Action = "INSERT" // Simplified - real implementation would check for updates
+    return result
+}
+```
+
+
+---
+
+
+## Phase 3: TGA Ingestion Pipeline (Weeks 5-6)
+
+
+### 3.1 TGA Client and Parser
+
+
+Similar structure to FDA but for Australian TGA Product Information PDFs:
+
+
+**File**: `pkg/ingestion/tga/client.go` - TGA data source access
+**File**: `pkg/ingestion/tga/parser.go` - PDF parsing with pdftotext or similar
+**File**: `pkg/ingestion/tga/extractor.go` - Dosing extraction from TGA format
+
+
+---
+
+
+## Phase 4: CDSCO Ingestion Pipeline (Weeks 7-8)
+
+
+### 4.1 CDSCO Client and Parser
+
+
+Similar structure for Indian CDSCO Package Inserts:
+
+
+**File**: `pkg/ingestion/cdsco/client.go`
+**File**: `pkg/ingestion/cdsco/parser.go`
+**File**: `pkg/ingestion/cdsco/extractor.go`
+
+
+---
+
+
+## Phase 5: Ingestion CLI & Integration (Weeks 9-10)
+
+
+### 5.1 Ingestion CLI
+
+
+**File**: `cmd/ingest/main.go`
+
+
+```go
+package main
+
+
+import (
+    "context"
+    "flag"
+    "fmt"
+    "os"
+
+
+    "github.com/sirupsen/logrus"
+
+
+    "kb-1-drug-rules/internal/config"
+    "kb-1-drug-rules/internal/database"
+    "kb-1-drug-rules/internal/rules"
+    "kb-1-drug-rules/pkg/ingestion"
+)
+
+
+func main() {
+    // CLI flags
+    source := flag.String("source", "fda", "Data source: fda, tga, cdsco, all")
+    concurrency := flag.Int("concurrency", 10, "Number of parallel workers")
+    dryRun := flag.Bool("dry-run", false, "Dry run without database writes")
+    flag.Parse()
+
+
+    // Initialize logger
+    log := logrus.New()
+    log.SetFormatter(&logrus.JSONFormatter{})
+
+
+    // Load config
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+
+    // Connect to database
+    db, err := database.Connect(cfg.Database)
+    if err != nil {
+        log.Fatalf("Failed to connect to database: %v", err)
+    }
+    defer db.Close()
+
+
+    // Initialize repository
+    repo := rules.NewRepository(db, nil, log.WithField("component", "repository"))
+
+
+    // Initialize ingestion engine
+    engine := ingestion.NewEngine(repo, ingestion.EngineConfig{
+        KB7URL:      cfg.KB7URL,
+        Concurrency: *concurrency,
+    }, log.WithField("component", "ingestion"))
+
+
+    ctx := context.Background()
+
+
+    fmt.Printf("Starting ingestion from %s (concurrency: %d, dry-run: %v)\n",
+        *source, *concurrency, *dryRun)
+
+
+    var run *ingestion.IngestionRun
+
+
+    switch *source {
+    case "fda":
+        run, err = engine.RunFDAIngestion(ctx, "CLI")
+    case "tga":
+        // run, err = engine.RunTGAIngestion(ctx, "CLI")
+        fmt.Println("TGA ingestion not yet implemented")
+        os.Exit(1)
+    case "cdsco":
+        // run, err = engine.RunCDSCOIngestion(ctx, "CLI")
+        fmt.Println("CDSCO ingestion not yet implemented")
+        os.Exit(1)
+    case "all":
+        run, err = engine.RunFDAIngestion(ctx, "CLI")
+        // Additional sources would be run here
+    default:
+        log.Fatalf("Unknown source: %s", *source)
+    }
+
+
+    if err != nil {
+        log.Fatalf("Ingestion failed: %v", err)
+    }
+
+
+    fmt.Printf("\n=== Ingestion Complete ===\n")
+    fmt.Printf("Run ID: %s\n", run.ID)
+    fmt.Printf("Duration: %v\n", run.CompletedAt.Sub(run.StartedAt))
+    fmt.Printf("Total Processed: %d\n", run.Stats.TotalProcessed)
+    fmt.Printf("Added: %d\n", run.Stats.Added)
+    fmt.Printf("Updated: %d\n", run.Stats.Updated)
+    fmt.Printf("Unchanged: %d\n", run.Stats.Unchanged)
+    fmt.Printf("Failed: %d\n", run.Stats.Failed)
+
+
+    if len(run.Errors) > 0 {
+        fmt.Printf("\nErrors (%d):\n", len(run.Errors))
+        for i, e := range run.Errors {
+            if i >= 10 {
+                fmt.Printf("... and %d more\n", len(run.Errors)-10)
+                break
+            }
+            fmt.Printf("  - %s\n", e)
+        }
+    }
+}
+```
+
+
+### 5.2 Scripts
+
+
+**File**: `scripts/ingest-fda.sh`
+
+
+```bash
+#!/bin/bash
+set -e
+
+
+echo "=== KB-1 FDA Ingestion ==="
+echo "Starting FDA DailyMed ingestion..."
+
+
+# Check KB-7 is running
+if ! curl -s http://localhost:8092/health > /dev/null; then
+    echo "ERROR: KB-7 is not running on port 8092"
+    exit 1
+fi
+
+
+# Run ingestion
+go run cmd/ingest/main.go -source fda -concurrency 20
+
+
+echo "Done!"
+```
+
+
+---
+
+
+## Verification Plan
+
+
+### Database Verification
+
+
+```sql
+-- Check drug count by jurisdiction
+SELECT jurisdiction, COUNT(*) as drug_count
+FROM drug_rules
+GROUP BY jurisdiction;
+
+
+-- Check ingestion run status
+SELECT id, authority, status, drugs_added, drugs_failed
+FROM ingestion_runs
+ORDER BY started_at DESC
+LIMIT 5;
+
+
+-- Verify governance metadata is complete
+SELECT COUNT(*) as missing_governance
+FROM drug_rules
+WHERE authority IS NULL OR approved_by IS NULL;
+```
+
+
+### API Integration Test
+
+
+```bash
+# Test dose calculation with provenance
+curl -X POST http://localhost:8081/v1/calculate \
+  -H "Content-Type: application/json" \
+  -H "X-Patient-Jurisdiction: US" \
+  -d '{
+    "rxnorm_code": "6809",
+    "patient": {
+      "age": 65,
+      "weight": 80,
+      "gender": "male",
+      "serum_creatinine": 1.2
+    }
+  }'
+
+
+# Expected response includes source attribution
+```
+
+
+### KB-7 Integration Test
+
+
+```bash
+# Verify KB-7 connectivity
+curl http://localhost:8092/health
+
+
+# Test RxNorm resolution
+curl http://localhost:8092/v1/concepts/rxnorm/6809
+```
+
+
+---
+
+
+## Success Criteria
+
+
+- [ ] PostgreSQL database schema deployed with all tables
+- [ ] FDA ingestion pipeline functional (~40,000+ drugs)
+- [ ] TGA ingestion pipeline functional
+- [ ] CDSCO ingestion pipeline functional
+- [ ] KB-7 integration for RxNorm resolution
+- [ ] All dose responses include source attribution
+- [ ] Ingestion CLI works with manual trigger
+- [ ] Change history tracked in drug_rule_history table
+- [ ] Redis caching functional for performance
+- [ ] Service health checks pass
+
+
+---
+
+
+## Dependencies to Add
+
+
+```go
+// go.mod additions
+require (
+    github.com/lib/pq v1.10.9              // PostgreSQL driver
+    github.com/go-redis/redis/v8 v8.11.5   // Redis client
+    github.com/fsnotify/fsnotify v1.7.0    // File watching (optional)
+    gopkg.in/yaml.v3 v3.0.1                // YAML parsing
+    github.com/google/uuid v1.6.0          // UUID generation
+    github.com/santhosh-tekuri/jsonschema/v5 v5.3.1 // Schema validation
+)
+```
+
+
+---
+
+
+## Environment Variables
+
+
+```bash
+# Database
+KB1_DATABASE_URL=postgresql://user:pass@localhost:5433/kb1
+
+
+# Redis Cache
+KB1_REDIS_URL=redis://localhost:6380
+
+
+# KB-7 Integration
+KB1_KB7_URL=http://localhost:8092
+
+
+# Ingestion Settings
+KB1_INGESTION_CONCURRENCY=20
+KB1_INGESTION_BATCH_SIZE=100
+```

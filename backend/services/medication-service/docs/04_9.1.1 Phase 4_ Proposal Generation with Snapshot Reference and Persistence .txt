@@ -1,0 +1,78 @@
+﻿Correct. The Phase 4 implementation completes the **Calculate** step of your workflow. Here's the critical payload structure that flows back to the Workflow Platform:
+
+
+## Payload for Workflow Platform
+
+
+```typescript
+// Returned from Medication Service to Workflow Platform
+interface CalculateStepResponse {
+  proposalSetId: string;
+  requestId: string;
+  
+  // CRITICAL: Snapshot reference for Safety Gateway validation
+  snapshotReference: {
+    snapshotId: string;
+    checksum: string;
+    createdAt: string;
+    expiresAt: string;
+    kbVersions: Record<string, string>;
+    signature: string;
+  };
+  
+  // Medication proposals (ranked)
+  proposals: MedicationProposal[];
+  
+  // For Safety Gateway evaluation
+  validationRequired: true;
+  validationEndpoint: "/safety-gateway/validate";
+  
+  // Status for workflow
+  status: "READY_FOR_VALIDATION";
+}
+```
+
+
+## Integration with Calculate > Validate > Commit Flow
+
+
+### 1. **Calculate (Complete)**
+The 4-phase GO/Rust implementation generates proposals with snapshot reference.
+
+
+### 2. **Validate (Next Step)**
+Workflow Platform forwards to Safety Gateway with:
+```typescript
+interface ValidationRequest {
+  proposalSetId: string;
+  snapshotId: string;  // Same snapshot used for calculation
+  proposals: MedicationProposal[];
+  patientContext: PatientContext;
+  requestValidation: {
+    caeEngine: true;
+    protocolEngine: true;
+  };
+}
+```
+
+
+### 3. **Commit (After Validation)**
+If Safety Gateway returns `SAFE`:
+```typescript
+interface CommitRequest {
+  proposalSetId: string;
+  validationToken: string;  // From Safety Gateway
+  selectedProposalId: string;  // Which proposal to commit
+  commitActions: {
+    persistToEHR: true;
+    publishToKafka: true;
+    notifyProvider: true;
+  };
+}
+```
+
+
+The snapshot reference ensures the Safety Gateway validates against the **exact same data** used for calculation, maintaining consistency and safety throughout the entire workflow.
+
+
+The implementation is ready for integration with your Workflow Platform's orchestration layer.

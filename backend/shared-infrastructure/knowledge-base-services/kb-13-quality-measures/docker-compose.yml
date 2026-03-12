@@ -1,0 +1,107 @@
+# KB-13 Quality Measures Engine - Docker Compose
+# Run: docker-compose up -d
+#
+# Ports:
+#   - 8113: KB-13 API server
+#   - 5450: PostgreSQL (isolated from other KB services)
+#   - 6393: Redis (isolated from other KB services)
+
+version: '3.8'
+
+services:
+  # PostgreSQL database for KB-13
+  kb13-postgres:
+    image: postgres:15-alpine
+    container_name: kb13-postgres
+    environment:
+      POSTGRES_DB: kb13_quality
+      POSTGRES_USER: kb13user
+      POSTGRES_PASSWORD: kb13password
+    ports:
+      - "5450:5432"
+    volumes:
+      - kb13_postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb13user -d kb13_quality"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb13-network
+
+  # Redis for caching
+  kb13-redis:
+    image: redis:7-alpine
+    container_name: kb13-redis
+    ports:
+      - "6393:6379"
+    volumes:
+      - kb13_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb13-network
+
+  # KB-13 Quality Measures Engine
+  kb13-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb13-quality-measures
+    ports:
+      - "8113:8113"
+    environment:
+      # Server config
+      KB13_PORT: "8113"
+      KB13_ENVIRONMENT: "development"
+      KB13_LOG_LEVEL: "info"
+      KB13_MEASURES_PATH: "/app/measures"
+      KB13_BENCHMARKS_PATH: "/app/benchmarks"
+
+      # Database config
+      KB13_DB_HOST: "kb13-postgres"
+      KB13_DB_PORT: "5432"
+      KB13_DB_NAME: "kb13_quality"
+      KB13_DB_USER: "kb13user"
+      KB13_DB_PASSWORD: "kb13password"
+      KB13_DB_SSLMODE: "disable"
+
+      # Redis config
+      KB13_REDIS_URL: "redis://kb13-redis:6379"
+      KB13_ENABLE_CACHING: "true"
+      KB13_CACHE_TTL: "15m"
+
+      # Integration URLs (adjust for your environment)
+      VAIDSHALA_URL: "http://host.docker.internal:8096"
+      KB7_URL: "http://host.docker.internal:8092"
+      KB18_URL: "http://host.docker.internal:8118"
+      KB19_URL: "http://host.docker.internal:8119"
+      PATIENT_SERVICE_URL: "http://host.docker.internal:8080"
+    depends_on:
+      kb13-postgres:
+        condition: service_healthy
+      kb13-redis:
+        condition: service_healthy
+    volumes:
+      - ./measures:/app/measures:ro
+      - ./benchmarks:/app/benchmarks:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8113/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - kb13-network
+
+volumes:
+  kb13_postgres_data:
+  kb13_redis_data:
+
+networks:
+  kb13-network:
+    driver: bridge

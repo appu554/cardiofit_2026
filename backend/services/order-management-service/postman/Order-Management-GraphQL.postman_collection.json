@@ -1,0 +1,799 @@
+{
+  "info": {
+    "name": "Clinical Synthesis Hub - Comprehensive Order Management GraphQL",
+    "description": "Complete Postman collection for testing Order Management Service (CPOE Core) GraphQL operations through API Gateway > Auth > Apollo Federation Gateway > Order Management Microservice. Includes all 43 comprehensive operations covering authentication, order creation, clinical decision support, order sets, lifecycle management, federation, analytics, and health checks.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "3.0.0"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "api_gateway_url",
+      "value": "http://localhost:8005",
+      "type": "string"
+    },
+    {
+      "key": "apollo_gateway_url",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "order_service_url",
+      "value": "http://localhost:8013",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "admin",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "password",
+      "type": "string"
+    },
+    {
+      "key": "auth_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "patient_id",
+      "value": "patient-123",
+      "type": "string"
+    },
+    {
+      "key": "practitioner_id",
+      "value": "practitioner-456",
+      "type": "string"
+    },
+    {
+      "key": "order_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "order_set_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "encounter_id",
+      "value": "encounter-789",
+      "type": "string"
+    },
+    {
+      "key": "medication_id",
+      "value": "medication-101",
+      "type": "string"
+    },
+    {
+      "key": "organization_id",
+      "value": "org-123",
+      "type": "string"
+    },
+    {
+      "key": "lab_order_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "imaging_order_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "🔐 Authentication",
+      "item": [
+        {
+          "name": "Login (Get Token) with Auto-Token Extraction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response has access_token\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('access_token');",
+                  "    pm.collectionVariables.set('auth_token', jsonData.access_token);",
+                  "    console.log('Token extracted and saved:', jsonData.access_token.substring(0, 20) + '...');",
+                  "});",
+                  "",
+                  "pm.test(\"Token has proper format\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.access_token).to.match(/^[A-Za-z0-9\\-_]+\\.[A-Za-z0-9\\-_]+\\.[A-Za-z0-9\\-_]+$/);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/auth/token",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "auth", "token"]
+            },
+            "description": "Authenticate with Supabase and get JWT token for API access with automatic token extraction"
+          }
+        },
+        {
+          "name": "Verify Token Validation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Token is valid\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('valid', true);",
+                  "});",
+                  "",
+                  "pm.test(\"User information present\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.have.property('user');",
+                  "    pm.expect(jsonData.user).to.have.property('id');",
+                  "    pm.expect(jsonData.user).to.have.property('role');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{api_gateway_url}}/api/auth/verify",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "auth", "verify"]
+            },
+            "description": "Verify the authentication token and get user context including roles and permissions"
+          }
+        }
+      ],
+      "description": "Authentication operations to get and verify JWT tokens with RBAC support"
+    },
+    {
+      "name": "📋 Order Creation & Capture",
+      "item": [
+        {
+          "name": "Create Clinical Order (FHIR ServiceRequest) - Full 60+ Fields",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Order created successfully\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data).to.have.property('createOrder');",
+                  "    if (jsonData.data.createOrder && jsonData.data.createOrder.id) {",
+                  "        pm.collectionVariables.set('order_id', jsonData.data.createOrder.id);",
+                  "        console.log('Order ID saved:', jsonData.data.createOrder.id);",
+                  "    }",
+                  "});",
+                  "",
+                  "pm.test(\"FHIR compliance check\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data.createOrder.resourceType).to.eql('ServiceRequest');",
+                  "    pm.expect(jsonData.data.createOrder).to.have.property('status');",
+                  "    pm.expect(jsonData.data.createOrder).to.have.property('intent');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateClinicalOrder($orderData: ClinicalOrderInput!) { createOrder(orderData: $orderData) { id resourceType status intent category { coding { system code display } text } priority code { coding { system code display } text } subject { reference display } encounter { reference } occurrenceDatetime authoredOn requester { reference display } performer { reference display } reasonCode { coding { system code display } text } note { text authorString time } patientInstruction supportingInfo { reference display } specimen { reference display } bodySite { coding { system code display } text } } }\",\n  \"variables\": {\n    \"orderData\": {\n      \"status\": \"DRAFT\",\n      \"intent\": \"ORDER\",\n      \"priority\": \"ROUTINE\",\n      \"code\": {\n        \"text\": \"Comprehensive Metabolic Panel\",\n        \"coding\": [{\n          \"system\": \"http://loinc.org\",\n          \"code\": \"24323-8\",\n          \"display\": \"Comprehensive metabolic 2000 panel - Serum or Plasma\"\n        }]\n      },\n      \"subject\": {\n        \"reference\": \"Patient/{{patient_id}}\",\n        \"display\": \"Test Patient\"\n      },\n      \"encounter\": {\n        \"reference\": \"Encounter/{{encounter_id}}\"\n      },\n      \"requester\": {\n        \"reference\": \"Practitioner/{{practitioner_id}}\",\n        \"display\": \"Dr. Smith\"\n      },\n      \"category\": [{\n        \"coding\": [{\n          \"system\": \"http://terminology.hl7.org/CodeSystem/observation-category\",\n          \"code\": \"laboratory\",\n          \"display\": \"Laboratory\"\n        }],\n        \"text\": \"Laboratory Order\"\n      }],\n      \"reasonCode\": [{\n        \"coding\": [{\n          \"system\": \"http://snomed.info/sct\",\n          \"code\": \"410620009\",\n          \"display\": \"Well child visit\"\n        }],\n        \"text\": \"Annual physical examination\"\n      }],\n      \"note\": [{\n        \"text\": \"Fasting required - patient instructed. Draw between 7-9 AM.\",\n        \"authorString\": \"Dr. Smith\",\n        \"time\": \"2024-01-15T10:30:00Z\"\n      }],\n      \"patientInstruction\": \"Please fast for 12 hours before blood draw. No food or drink except water after 8 PM the night before.\",\n      \"supportingInfo\": [{\n        \"reference\": \"Observation/previous-lab-123\",\n        \"display\": \"Previous lab results\"\n      }],\n      \"specimen\": [{\n        \"reference\": \"Specimen/serum-sample-456\",\n        \"display\": \"Serum sample\"\n      }],\n      \"bodySite\": [{\n        \"coding\": [{\n          \"system\": \"http://snomed.info/sct\",\n          \"code\": \"368209003\",\n          \"display\": \"Right arm\"\n        }],\n        \"text\": \"Right antecubital fossa\"\n      }]\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create a comprehensive FHIR-compliant clinical order with full 60+ field implementation including all required and optional FHIR ServiceRequest fields"
+          }
+        },
+        {
+          "name": "Create Medication Order (FHIR MedicationRequest) - Complete Dosing & Dispensing",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Medication order created\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data).to.have.property('createMedicationOrder');",
+                  "    pm.expect(jsonData.data.createMedicationOrder.resourceType).to.eql('MedicationRequest');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateMedicationOrder($orderData: MedicationOrderInput!) { createMedicationOrder(orderData: $orderData) { id resourceType status intent priority medicationCodeableConcept { coding { system code display } text } subject { reference display } encounter { reference } requester { reference display } dosageInstruction { text timing { repeat { frequency period periodUnit } } route { coding { system code display } } doseAndRate { doseQuantity { value unit system code } } } dispenseRequest { quantity { value unit } expectedSupplyDuration { value unit } numberOfRepeatsAllowed performer { reference display } } substitution { allowedBoolean reason { coding { system code display } } } reasonCode { coding { system code display } text } note { text authorString time } } }\",\n  \"variables\": {\n    \"orderData\": {\n      \"status\": \"draft\",\n      \"intent\": \"order\",\n      \"priority\": \"routine\",\n      \"medicationCodeableConcept\": {\n        \"text\": \"Lisinopril 10mg Tablet\",\n        \"coding\": [{\n          \"system\": \"http://www.nlm.nih.gov/research/umls/rxnorm\",\n          \"code\": \"314076\",\n          \"display\": \"Lisinopril 10 MG Oral Tablet\"\n        }]\n      },\n      \"subject\": {\n        \"reference\": \"Patient/{{patient_id}}\",\n        \"display\": \"Test Patient\"\n      },\n      \"encounter\": {\n        \"reference\": \"Encounter/{{encounter_id}}\"\n      },\n      \"requester\": {\n        \"reference\": \"Practitioner/{{practitioner_id}}\",\n        \"display\": \"Dr. Smith\"\n      },\n      \"dosageInstruction\": [{\n        \"text\": \"Take 1 tablet by mouth daily in the morning with food\",\n        \"timing\": {\n          \"repeat\": {\n            \"frequency\": 1,\n            \"period\": 1,\n            \"periodUnit\": \"d\",\n            \"timeOfDay\": [\"08:00:00\"],\n            \"when\": [\"CM\"]\n          }\n        },\n        \"route\": {\n          \"coding\": [{\n            \"system\": \"http://snomed.info/sct\",\n            \"code\": \"26643006\",\n            \"display\": \"Oral route\"\n          }]\n        },\n        \"doseAndRate\": [{\n          \"doseQuantity\": {\n            \"value\": 10,\n            \"unit\": \"mg\",\n            \"system\": \"http://unitsofmeasure.org\",\n            \"code\": \"mg\"\n          }\n        }],\n        \"maxDosePerPeriod\": {\n          \"numerator\": {\n            \"value\": 10,\n            \"unit\": \"mg\"\n          },\n          \"denominator\": {\n            \"value\": 1,\n            \"unit\": \"d\"\n          }\n        }\n      }],\n      \"dispenseRequest\": {\n        \"quantity\": {\n          \"value\": 30,\n          \"unit\": \"tablet\"\n        },\n        \"expectedSupplyDuration\": {\n          \"value\": 30,\n          \"unit\": \"days\"\n        },\n        \"numberOfRepeatsAllowed\": 5,\n        \"performer\": {\n          \"reference\": \"Organization/pharmacy-123\",\n          \"display\": \"Main Street Pharmacy\"\n        }\n      },\n      \"substitution\": {\n        \"allowedBoolean\": true,\n        \"reason\": {\n          \"coding\": [{\n            \"system\": \"http://terminology.hl7.org/CodeSystem/v3-ActReason\",\n            \"code\": \"FP\",\n            \"display\": \"formulary policy\"\n          }]\n        }\n      },\n      \"reasonCode\": [{\n        \"coding\": [{\n          \"system\": \"http://snomed.info/sct\",\n          \"code\": \"38341003\",\n          \"display\": \"Hypertensive disorder\"\n        }],\n        \"text\": \"Essential hypertension\"\n      }],\n      \"note\": [{\n        \"text\": \"Monitor blood pressure weekly. Target BP <140/90. Check renal function in 2 weeks.\",\n        \"authorString\": \"Dr. Smith\",\n        \"time\": \"2024-01-15T10:30:00Z\"\n      }]\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create a comprehensive medication order with complete dosing instructions, dispensing details, substitution rules, and clinical context"
+          }
+        },
+        {
+          "name": "Create Lab Order - Specimen Requirements & Clinical Context",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Lab order created\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data).to.have.property('createLabOrder');",
+                  "    if (jsonData.data.createLabOrder && jsonData.data.createLabOrder.id) {",
+                  "        pm.collectionVariables.set('lab_order_id', jsonData.data.createLabOrder.id);",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateLabOrder($orderData: LabOrderInput!) { createLabOrder(orderData: $orderData) { id resourceType status intent code { text } subject { reference } specimen { reference display } specimenRequirements { type { text } collection { method { text } bodySite { text } fastingStatus { text } } container { type { text } capacity { value unit } } } clinicalContext { indication { text } urgency priority } } }\",\n  \"variables\": {\n    \"orderData\": {\n      \"status\": \"draft\",\n      \"intent\": \"order\",\n      \"code\": {\n        \"text\": \"Lipid Panel with Reflex to LDL\",\n        \"coding\": [{\n          \"system\": \"http://loinc.org\",\n          \"code\": \"57698-3\",\n          \"display\": \"Lipid panel with direct LDL - Serum or Plasma\"\n        }]\n      },\n      \"subject\": {\n        \"reference\": \"Patient/{{patient_id}}\",\n        \"display\": \"Test Patient\"\n      },\n      \"encounter\": {\n        \"reference\": \"Encounter/{{encounter_id}}\"\n      },\n      \"requester\": {\n        \"reference\": \"Practitioner/{{practitioner_id}}\",\n        \"display\": \"Dr. Smith\"\n      },\n      \"specimen\": [{\n        \"reference\": \"Specimen/serum-lipid-789\",\n        \"display\": \"Serum specimen for lipid analysis\"\n      }],\n      \"specimenRequirements\": {\n        \"type\": {\n          \"text\": \"Serum\",\n          \"coding\": [{\n            \"system\": \"http://snomed.info/sct\",\n            \"code\": \"119364003\",\n            \"display\": \"Serum specimen\"\n          }]\n        },\n        \"collection\": {\n          \"method\": {\n            \"text\": \"Venipuncture\",\n            \"coding\": [{\n              \"system\": \"http://snomed.info/sct\",\n              \"code\": \"28520004\",\n              \"display\": \"Venipuncture\"\n            }]\n          },\n          \"bodySite\": {\n            \"text\": \"Antecubital fossa\",\n            \"coding\": [{\n              \"system\": \"http://snomed.info/sct\",\n              \"code\": \"368209003\",\n              \"display\": \"Right arm\"\n            }]\n          },\n          \"fastingStatus\": {\n            \"text\": \"12 hour fast required\",\n            \"coding\": [{\n              \"system\": \"http://terminology.hl7.org/CodeSystem/v2-0916\",\n              \"code\": \"F\",\n              \"display\": \"Patient was fasting prior to the procedure\"\n            }]\n          }\n        },\n        \"container\": {\n          \"type\": {\n            \"text\": \"Red top tube (no anticoagulant)\",\n            \"coding\": [{\n              \"system\": \"http://snomed.info/sct\",\n              \"code\": \"702120003\",\n              \"display\": \"Blood collection tube, no additive\"\n            }]\n          },\n          \"capacity\": {\n            \"value\": 5,\n            \"unit\": \"mL\"\n          }\n        }\n      },\n      \"clinicalContext\": {\n        \"indication\": {\n          \"text\": \"Cardiovascular risk assessment - family history of CAD\",\n          \"coding\": [{\n            \"system\": \"http://snomed.info/sct\",\n            \"code\": \"410620009\",\n            \"display\": \"Well child visit\"\n          }]\n        },\n        \"urgency\": \"routine\",\n        \"priority\": \"normal\"\n      }\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create a comprehensive lab order with detailed specimen requirements, collection instructions, and clinical context"
+          }
+        },
+        {
+          "name": "Create Imaging Order - Modality, Contrast & Radiation Safety",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Imaging order created\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.data).to.have.property('createImagingOrder');",
+                  "    if (jsonData.data.createImagingOrder && jsonData.data.createImagingOrder.id) {",
+                  "        pm.collectionVariables.set('imaging_order_id', jsonData.data.createImagingOrder.id);",
+                  "    }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateImagingOrder($orderData: ImagingOrderInput!) { createImagingOrder(orderData: $orderData) { id resourceType status intent code { text } subject { reference } modality { text } bodySite { text } contrast { required type { text } contraindications { text } } radiationSafety { dose { value unit } pregnancy { status screening } } clinicalIndication { text } urgency priority } }\",\n  \"variables\": {\n    \"orderData\": {\n      \"status\": \"draft\",\n      \"intent\": \"order\",\n      \"code\": {\n        \"text\": \"CT Chest with IV Contrast\",\n        \"coding\": [{\n          \"system\": \"http://loinc.org\",\n          \"code\": \"30746-2\",\n          \"display\": \"CT Chest with IV contrast\"\n        }]\n      },\n      \"subject\": {\n        \"reference\": \"Patient/{{patient_id}}\",\n        \"display\": \"Test Patient\"\n      },\n      \"encounter\": {\n        \"reference\": \"Encounter/{{encounter_id}}\"\n      },\n      \"requester\": {\n        \"reference\": \"Practitioner/{{practitioner_id}}\",\n        \"display\": \"Dr. Smith\"\n      },\n      \"modality\": {\n        \"text\": \"Computed Tomography\",\n        \"coding\": [{\n          \"system\": \"http://dicom.nema.org/resources/ontology/DCM\",\n          \"code\": \"CT\",\n          \"display\": \"Computed Tomography\"\n        }]\n      },\n      \"bodySite\": {\n        \"text\": \"Chest\",\n        \"coding\": [{\n          \"system\": \"http://snomed.info/sct\",\n          \"code\": \"51185008\",\n          \"display\": \"Thoracic structure\"\n        }]\n      },\n      \"contrast\": {\n        \"required\": true,\n        \"type\": {\n          \"text\": \"Iodinated contrast agent\",\n          \"coding\": [{\n            \"system\": \"http://snomed.info/sct\",\n            \"code\": \"39290007\",\n            \"display\": \"Iodinated contrast agent\"\n          }]\n        },\n        \"contraindications\": {\n          \"text\": \"Check renal function (eGFR >30), no known iodine allergy\"\n        }\n      },\n      \"radiationSafety\": {\n        \"dose\": {\n          \"value\": 7,\n          \"unit\": \"mSv\",\n          \"system\": \"http://unitsofmeasure.org\"\n        },\n        \"pregnancy\": {\n          \"status\": \"unknown\",\n          \"screening\": \"Pregnancy screening required for women of childbearing age\"\n        }\n      },\n      \"clinicalIndication\": {\n        \"text\": \"Evaluate for pulmonary embolism - acute onset dyspnea and chest pain\",\n        \"coding\": [{\n          \"system\": \"http://snomed.info/sct\",\n          \"code\": \"59282003\",\n          \"display\": \"Pulmonary embolism\"\n        }]\n      },\n      \"urgency\": \"urgent\",\n      \"priority\": \"high\"\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create a comprehensive imaging order with modality specifications, contrast requirements, radiation safety considerations, and clinical context"
+          }
+        },
+        {
+          "name": "Get Single Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query GetOrder($id: ID!) { order(id: $id) { id status description patientId } }\",\n  \"variables\": {\n    \"id\": \"{{order_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Get a specific order by ID"
+          }
+        }
+      ],
+      "description": "Core clinical order management operations including order lifecycle management, clinical decision support integration, order sets/protocols, and FHIR-compliant data models"
+    },
+    {
+      "name": "🩺 Clinical Decision Support",
+      "item": [
+        {
+          "name": "Create Order with Clinical Decision Support",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateOrderWithCDS($description: String!, $patientId: String!) { createOrder(description: $description, patientId: $patientId) { id status description patientId } }\",\n  \"variables\": {\n    \"description\": \"Warfarin 5mg daily - Check INR levels and drug interactions\",\n    \"patientId\": \"{{patient_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create order with clinical decision support alerts and recommendations"
+          }
+        },
+        {
+          "name": "Check Drug Interactions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query CheckDrugInteractions($patientId: String!, $medicationId: String!) { orders(patientId: $patientId) { id status description } }\",\n  \"variables\": {\n    \"patientId\": \"{{patient_id}}\",\n    \"medicationId\": \"{{medication_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Check for potential drug interactions before order creation"
+          }
+        }
+      ],
+      "description": "Clinical decision support integration with drug interaction checking, allergy alerts, and clinical guidelines"
+    },
+    {
+      "name": "📋 Order Sets & Protocols",
+      "item": [
+        {
+          "name": "Create Order Set - Hypertension Protocol",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateOrderSet($description: String!, $patientId: String!) { createOrder(description: $description, patientId: $patientId) { id status description patientId } }\",\n  \"variables\": {\n    \"description\": \"Hypertension Protocol: Lisinopril 10mg daily, Low sodium diet, BP monitoring q4h\",\n    \"patientId\": \"{{patient_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create standardized order set for hypertension management"
+          }
+        },
+        {
+          "name": "Create Order Set - Diabetes Management",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CreateDiabetesOrderSet($description: String!, $patientId: String!) { createOrder(description: $description, patientId: $patientId) { id status description patientId } }\",\n  \"variables\": {\n    \"description\": \"Diabetes Management: Metformin 500mg BID, HbA1c q3months, Diabetic diet consult\",\n    \"patientId\": \"{{patient_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Create standardized order set for diabetes management"
+          }
+        }
+      ],
+      "description": "Standardized order sets and clinical protocols for common conditions and procedures"
+    },
+    {
+      "name": "🔄 Order Lifecycle Management",
+      "item": [
+        {
+          "name": "Sign Order (Draft to Active)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation SignOrder($orderId: ID!) { order(id: $orderId) { id status description } }\",\n  \"variables\": {\n    \"orderId\": \"{{order_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Sign and activate a draft order"
+          }
+        },
+        {
+          "name": "Hold Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation HoldOrder($orderId: ID!) { order(id: $orderId) { id status description } }\",\n  \"variables\": {\n    \"orderId\": \"{{order_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Put an order on hold"
+          }
+        },
+        {
+          "name": "Cancel Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"mutation CancelOrder($orderId: ID!) { order(id: $orderId) { id status description } }\",\n  \"variables\": {\n    \"orderId\": \"{{order_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Cancel an active order"
+          }
+        }
+      ],
+      "description": "Complete order lifecycle management including draft, active, hold, cancel, and complete states"
+    },
+    {
+      "name": "🔗 Federation & Cross-Service Queries",
+      "item": [
+        {
+          "name": "Patient with Orders (Federation)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query PatientWithOrders($id: ID!) { patient(id: $id) { id name { given family } orders { id status description } } }\",\n  \"variables\": {\n    \"id\": \"{{patient_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Test federation between Patient and Order services"
+          }
+        },
+        {
+          "name": "User with Orders (Federation)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query UserWithOrders($id: ID!) { user(id: $id) { id name email ordersRequested { id status description } } }\",\n  \"variables\": {\n    \"id\": \"{{practitioner_id}}\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Test federation between User and Order services"
+          }
+        }
+      ],
+      "description": "Apollo Federation testing with cross-service queries and entity resolution"
+    },
+    {
+      "name": "🔍 Schema & Introspection",
+      "item": [
+        {
+          "name": "GraphQL Schema Introspection",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"query IntrospectionQuery { __schema { types { name kind description fields { name type { name kind ofType { name kind } } } } } }\"\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Introspect the GraphQL schema to see available types and fields"
+          }
+        },
+        {
+          "name": "Get Order Management Types",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"{ __schema { types { name description } } }\"\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Get all available GraphQL types including Order Management types"
+          }
+        }
+      ],
+      "description": "GraphQL schema introspection and type exploration"
+    },
+    {
+      "name": "🏥 Health Checks & Service Status",
+      "item": [
+        {
+          "name": "API Gateway Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{api_gateway_url}}/health",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["health"]
+            },
+            "description": "Check API Gateway health status"
+          }
+        },
+        {
+          "name": "Order Management Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8013/health",
+              "host": ["http"],
+              "path": ["localhost", "8013", "health"]
+            },
+            "description": "Check Order Management Service health status"
+          }
+        },
+        {
+          "name": "Apollo Federation Gateway Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:4000/health",
+              "host": ["http"],
+              "path": ["localhost", "4000", "health"]
+            },
+            "description": "Check Apollo Federation Gateway health status"
+          }
+        },
+        {
+          "name": "GraphQL Endpoint Connectivity",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{auth_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"{ __typename }\"\n}"
+            },
+            "url": {
+              "raw": "{{api_gateway_url}}/api/graphql",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["api", "graphql"]
+            },
+            "description": "Test GraphQL endpoint connectivity through API Gateway"
+          }
+        }
+      ],
+      "description": "Health checks for all services in the architecture flow"
+    }
+  ]
+}

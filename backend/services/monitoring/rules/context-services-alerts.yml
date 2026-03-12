@@ -1,0 +1,239 @@
+# Prometheus Alert Rules for Context Services
+groups:
+  # Context Gateway Service Alerts
+  - name: context_gateway_alerts
+    interval: 30s
+    rules:
+      - alert: ContextGatewayDown
+        expr: up{job="context-gateway-go"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: context-gateway
+        annotations:
+          summary: "Context Gateway service is down"
+          description: "Context Gateway Go service has been down for more than 1 minute"
+          runbook_url: "https://docs.clinical-hub.com/runbooks/context-gateway-down"
+
+      - alert: ContextGatewayHighLatency
+        expr: histogram_quantile(0.95, rate(context_gateway_request_duration_seconds_bucket[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+          service: context-gateway
+        annotations:
+          summary: "Context Gateway high latency"
+          description: "Context Gateway 95th percentile latency is {{ $value }}s (>1s threshold)"
+
+      - alert: ContextGatewayHighErrorRate
+        expr: rate(context_gateway_errors_total[5m]) / rate(context_gateway_requests_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+          service: context-gateway
+        annotations:
+          summary: "Context Gateway high error rate"
+          description: "Context Gateway error rate is {{ $value | humanizePercentage }} (>5% threshold)"
+
+      - alert: SnapshotCreationFailure
+        expr: rate(context_gateway_snapshot_creation_failures_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          service: context-gateway
+        annotations:
+          summary: "Snapshot creation failures detected"
+          description: "Snapshot creation failure rate: {{ $value }} per second"
+
+      - alert: RecipeValidationFailure
+        expr: rate(context_gateway_recipe_validation_failures_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          service: context-gateway
+        annotations:
+          summary: "Recipe validation failures"
+          description: "Recipe validation failure rate: {{ $value }} per second"
+
+  # Clinical Data Hub Alerts
+  - name: clinical_hub_alerts
+    interval: 15s
+    rules:
+      - alert: ClinicalHubDown
+        expr: up{job="clinical-data-hub-rust"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: clinical-hub
+        annotations:
+          summary: "Clinical Data Hub service is down"
+          description: "Clinical Data Hub Rust service has been down for more than 30 seconds"
+          runbook_url: "https://docs.clinical-hub.com/runbooks/clinical-hub-down"
+
+      - alert: CacheL1HighLatency
+        expr: histogram_quantile(0.95, rate(clinical_hub_cache_l1_duration_microseconds_bucket[2m])) > 1000
+        for: 1m
+        labels:
+          severity: warning
+          service: clinical-hub
+          cache_layer: l1
+        annotations:
+          summary: "L1 cache high latency"
+          description: "L1 cache 95th percentile latency: {{ $value }}μs (>1ms threshold)"
+
+      - alert: CacheL2HighLatency
+        expr: histogram_quantile(0.95, rate(clinical_hub_cache_l2_duration_milliseconds_bucket[5m])) > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: clinical-hub
+          cache_layer: l2
+        annotations:
+          summary: "L2 cache high latency"
+          description: "L2 cache 95th percentile latency: {{ $value }}ms (>5ms threshold)"
+
+      - alert: CacheHitRatioLow
+        expr: |
+          (
+            rate(clinical_hub_cache_hits_total[10m]) / 
+            (rate(clinical_hub_cache_hits_total[10m]) + rate(clinical_hub_cache_misses_total[10m]))
+          ) < 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: clinical-hub
+        annotations:
+          summary: "Low cache hit ratio"
+          description: "Cache hit ratio is {{ $value | humanizePercentage }} (<80% threshold)"
+
+      - alert: MemoryUsageHigh
+        expr: clinical_hub_memory_usage_bytes / clinical_hub_memory_limit_bytes > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          service: clinical-hub
+        annotations:
+          summary: "High memory usage in Clinical Hub"
+          description: "Memory usage: {{ $value | humanizePercentage }} (>90% threshold)"
+
+      - alert: DataAggregationSlow
+        expr: histogram_quantile(0.95, rate(clinical_hub_aggregation_duration_milliseconds_bucket[5m])) > 100
+        for: 3m
+        labels:
+          severity: warning
+          service: clinical-hub
+        annotations:
+          summary: "Data aggregation is slow"
+          description: "Data aggregation 95th percentile: {{ $value }}ms (>100ms threshold)"
+
+  # Infrastructure Alerts
+  - name: infrastructure_alerts
+    interval: 60s
+    rules:
+      - alert: RedisConnectionFailure
+        expr: up{job="redis-cluster"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: "Redis cluster connection failure"
+          description: "Cannot connect to Redis cluster"
+
+      - alert: MongoConnectionFailure
+        expr: up{job="mongo-context"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: mongodb
+        annotations:
+          summary: "MongoDB connection failure"
+          description: "Cannot connect to MongoDB context storage"
+
+      - alert: PostgresConnectionFailure
+        expr: up{job="postgres-hub"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: postgresql
+        annotations:
+          summary: "PostgreSQL connection failure"
+          description: "Cannot connect to PostgreSQL clinical hub storage"
+
+      - alert: KafkaConnectionFailure
+        expr: up{job="kafka-context"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: kafka
+        annotations:
+          summary: "Kafka connection failure"
+          description: "Cannot connect to Kafka stream processing"
+
+  # Load Balancer Alerts
+  - name: load_balancer_alerts
+    interval: 30s
+    rules:
+      - alert: NginxDown
+        expr: up{job="nginx-context-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: nginx
+        annotations:
+          summary: "Nginx load balancer is down"
+          description: "Nginx context gateway load balancer has been down for more than 1 minute"
+
+      - alert: HighConnectionCount
+        expr: nginx_connections_active > 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: nginx
+        annotations:
+          summary: "High connection count on load balancer"
+          description: "Active connections: {{ $value }} (>1000 threshold)"
+
+  # Business Logic Alerts
+  - name: business_logic_alerts
+    interval: 30s
+    rules:
+      - alert: HighSnapshotSize
+        expr: histogram_quantile(0.95, rate(context_gateway_snapshot_size_bytes_bucket[10m])) > 10485760  # 10MB
+        for: 5m
+        labels:
+          severity: warning
+          service: context-gateway
+        annotations:
+          summary: "Large snapshot sizes detected"
+          description: "95th percentile snapshot size: {{ $value | humanizeBytes }} (>10MB threshold)"
+
+      - alert: RecipeExecutionTimeout
+        expr: rate(context_gateway_recipe_timeouts_total[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+          service: context-gateway
+        annotations:
+          summary: "Recipe execution timeouts"
+          description: "Recipe timeout rate: {{ $value }} per second"
+
+      - alert: DataIntegrityFailure
+        expr: rate(clinical_hub_integrity_check_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: clinical-hub
+        annotations:
+          summary: "Data integrity check failures"
+          description: "Data integrity failures detected: {{ $value }} per second"
+
+      - alert: StreamProcessingLag
+        expr: clinical_hub_stream_processing_lag_seconds > 30
+        for: 2m
+        labels:
+          severity: warning
+          service: clinical-hub
+        annotations:
+          summary: "Stream processing lag detected"
+          description: "Stream processing lag: {{ $value }}s (>30s threshold)"

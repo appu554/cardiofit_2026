@@ -1,0 +1,927 @@
+# Clinical Feature Schema v1.0
+# Module 5: ML Inference & Real-Time Risk Scoring
+#
+# This schema defines all 70 clinical features extracted for ML model inference.
+# Each feature includes type, range, imputation strategy, and clinical significance.
+
+schema_version: "1.0.0"
+total_features: 70
+feature_categories: 8
+
+# ===== CATEGORY 1: DEMOGRAPHICS (5 features) =====
+demographics:
+  count: 5
+  features:
+    - name: demo_age_years
+      type: continuous
+      unit: years
+      range: [0, 120]
+      imputation: median
+      median_value: 65.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Patient age is a critical predictor for mortality, readmission, and complications.
+        Elderly patients (>65) have higher risk of adverse events and longer recovery times.
+
+    - name: demo_gender_male
+      type: binary
+      encoding: {male: 1.0, female: 0.0}
+      imputation: mode
+      mode_value: 0.0
+      normalization: none
+      clinical_significance: |
+        Gender influences risk profiles for cardiovascular events, sepsis outcomes, and medication dosing.
+
+    - name: demo_bmi
+      type: continuous
+      unit: kg/m²
+      range: [10, 60]
+      imputation: median
+      median_value: 27.0
+      normalization: standard_scaling
+      clinical_significance: |
+        BMI affects medication dosing, surgical risk, and metabolic complications.
+        Obese patients (BMI>30) have higher risk of DVT, wound complications.
+
+    - name: demo_icu_patient
+      type: binary
+      encoding: {icu: 1.0, non_icu: 0.0}
+      imputation: mode
+      mode_value: 0.0
+      normalization: none
+      clinical_significance: |
+        ICU status indicates higher acuity and resource intensity.
+        Strong predictor of mortality and prolonged hospitalization.
+
+    - name: demo_admission_emergency
+      type: binary
+      encoding: {emergency: 1.0, elective: 0.0}
+      imputation: mode
+      mode_value: 0.0
+      normalization: none
+      clinical_significance: |
+        Emergency admissions have 2-3x higher mortality than elective.
+        Indicates acute decompensation requiring urgent intervention.
+
+# ===== CATEGORY 2: VITALS (12 features) =====
+vitals:
+  count: 12
+  measurement_frequency: continuous_monitoring
+  features:
+    - name: vital_heart_rate
+      type: continuous
+      unit: beats/min
+      range: [20, 220]
+      normal_range: [60, 100]
+      imputation: median
+      median_value: 80.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Tachycardia (HR>100) indicates stress, infection, hypovolemia.
+        Bradycardia (HR<60) may indicate heart block, medication effect.
+
+    - name: vital_systolic_bp
+      type: continuous
+      unit: mmHg
+      range: [40, 250]
+      normal_range: [90, 140]
+      imputation: median
+      median_value: 120.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Hypotension (SBP<90) indicates shock, requiring urgent intervention.
+        Critical for tissue perfusion and organ function.
+
+    - name: vital_diastolic_bp
+      type: continuous
+      unit: mmHg
+      range: [20, 180]
+      normal_range: [60, 90]
+      imputation: median
+      median_value: 75.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Diastolic pressure reflects peripheral vascular resistance.
+        Wide pulse pressure (SBP-DBP>60) may indicate sepsis.
+
+    - name: vital_respiratory_rate
+      type: continuous
+      unit: breaths/min
+      range: [4, 60]
+      normal_range: [12, 20]
+      imputation: median
+      median_value: 16.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Tachypnea (RR>20) is early sign of sepsis, ARDS, metabolic acidosis.
+        Strong predictor of clinical deterioration.
+
+    - name: vital_temperature_c
+      type: continuous
+      unit: celsius
+      range: [32, 42]
+      normal_range: [36.5, 37.5]
+      imputation: median
+      median_value: 37.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Fever (>38°C) indicates infection, inflammation.
+        Hypothermia (<36°C) in sepsis indicates severe illness.
+
+    - name: vital_oxygen_saturation
+      type: continuous
+      unit: percentage
+      range: [50, 100]
+      normal_range: [95, 100]
+      imputation: median
+      median_value: 97.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Hypoxemia (SpO2<90%) requires immediate oxygen therapy.
+        Critical indicator of respiratory function and tissue oxygenation.
+
+    - name: vital_mean_arterial_pressure
+      type: derived
+      formula: (SBP + 2*DBP) / 3
+      unit: mmHg
+      range: [30, 200]
+      target: ">65"
+      imputation: formula
+      normalization: standard_scaling
+      clinical_significance: |
+        MAP is key indicator of organ perfusion pressure.
+        MAP<65 requires vasopressor support in septic shock.
+
+    - name: vital_pulse_pressure
+      type: derived
+      formula: SBP - DBP
+      unit: mmHg
+      range: [10, 150]
+      normal_range: [30, 50]
+      imputation: formula
+      normalization: standard_scaling
+      clinical_significance: |
+        Narrow pulse pressure (<25) indicates cardiogenic shock.
+        Wide pulse pressure (>60) may indicate sepsis, aortic regurgitation.
+
+    - name: vital_shock_index
+      type: derived
+      formula: HR / SBP
+      range: [0.2, 3.0]
+      normal: "<0.7"
+      critical: ">1.0"
+      imputation: formula
+      normalization: standard_scaling
+      clinical_significance: |
+        Shock index >1.0 predicts need for massive transfusion.
+        Early indicator of hypovolemic and septic shock.
+
+    - name: vital_hr_abnormal
+      type: binary
+      condition: HR < 60 OR HR > 100
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        Binary flag for tachycardia or bradycardia.
+        Simplified feature for models sensitive to thresholds.
+
+    - name: vital_bp_hypotensive
+      type: binary
+      condition: SBP < 90
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        Hypotension flag for immediate intervention requirement.
+        Strong predictor of shock and organ hypoperfusion.
+
+    - name: vital_fever
+      type: binary
+      condition: temp >= 38.0
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        Fever flag for infection screening.
+        Triggers sepsis workup when combined with other SIRS criteria.
+
+# ===== CATEGORY 3: LABS (15 features) =====
+labs:
+  count: 15
+  measurement_frequency: periodic
+  typical_interval_hours: 6-12
+  features:
+    - name: lab_lactate_mmol
+      type: continuous
+      unit: mmol/L
+      range: [0.1, 20]
+      normal: "<2.0"
+      elevated: ">=2.0"
+      severe: ">=4.0"
+      imputation: median
+      median_value: 1.5
+      normalization: log_transform
+      clinical_significance: |
+        Lactate is THE biomarker for tissue hypoperfusion and sepsis.
+        Lactate >2 triggers sepsis protocol. Lactate >4 indicates severe shock.
+        Serial lactate clearance predicts mortality.
+
+    - name: lab_creatinine_mg_dl
+      type: continuous
+      unit: mg/dL
+      range: [0.3, 15]
+      normal: "<1.2"
+      aki_stage1: ">=1.5"
+      aki_stage2: ">=2.0"
+      imputation: median
+      median_value: 1.0
+      normalization: log_transform
+      clinical_significance: |
+        Creatinine indicates kidney function. Rising creatinine defines AKI.
+        Predictor of mortality, dialysis requirement, prolonged stay.
+
+    - name: lab_bun_mg_dl
+      type: continuous
+      unit: mg/dL
+      range: [2, 150]
+      normal: [7, 20]
+      imputation: median
+      median_value: 18.0
+      normalization: log_transform
+      clinical_significance: |
+        BUN/Creatinine ratio helps differentiate prerenal vs intrinsic AKI.
+        Elevated BUN indicates dehydration, GI bleeding, catabolic state.
+
+    - name: lab_sodium_meq
+      type: continuous
+      unit: mEq/L
+      range: [110, 170]
+      normal_range: [135, 145]
+      imputation: median
+      median_value: 140.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Hyponatremia (<135) common in SIADH, heart failure, diuretics.
+        Hypernatremia (>145) indicates severe dehydration.
+
+    - name: lab_potassium_meq
+      type: continuous
+      unit: mEq/L
+      range: [1.5, 8.0]
+      normal_range: [3.5, 5.0]
+      critical_low: "<2.5"
+      critical_high: ">6.0"
+      imputation: median
+      median_value: 4.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Hypokalemia (<3.5) causes arrhythmias, especially with digoxin.
+        Hyperkalemia (>6.0) is life-threatening cardiac emergency.
+
+    - name: lab_chloride_meq
+      type: continuous
+      unit: mEq/L
+      range: [70, 130]
+      normal_range: [96, 106]
+      imputation: median
+      median_value: 102.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Chloride helps calculate anion gap for metabolic acidosis.
+        Hyperchloremic acidosis from normal saline resuscitation.
+
+    - name: lab_bicarbonate_meq
+      type: continuous
+      unit: mEq/L
+      range: [5, 45]
+      normal_range: [22, 28]
+      metabolic_acidosis: "<18"
+      imputation: median
+      median_value: 24.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Low bicarbonate (<18) indicates metabolic acidosis (lactic, DKA).
+        Predictor of sepsis severity and mortality.
+
+    - name: lab_wbc_k_ul
+      type: continuous
+      unit: K/µL
+      range: [0.5, 50]
+      normal_range: [4, 11]
+      leukocytosis: ">12"
+      leukopenia: "<4"
+      imputation: median
+      median_value: 8.0
+      normalization: log_transform
+      clinical_significance: |
+        Leukocytosis (>12) indicates infection, inflammation.
+        Leukopenia (<4) in sepsis is bad prognostic sign.
+
+    - name: lab_hemoglobin_g_dl
+      type: continuous
+      unit: g/dL
+      range: [3, 20]
+      normal_male: [13.5, 17.5]
+      normal_female: [12, 16]
+      anemia: "<10"
+      severe_anemia: "<7"
+      imputation: median
+      median_value: 13.0
+      normalization: standard_scaling
+      clinical_significance: |
+        Anemia (<10) requires transfusion evaluation.
+        Affects oxygen delivery and organ perfusion.
+
+    - name: lab_platelets_k_ul
+      type: continuous
+      unit: K/µL
+      range: [5, 1000]
+      normal_range: [150, 400]
+      thrombocytopenia: "<100"
+      critical: "<50"
+      imputation: median
+      median_value: 220.0
+      normalization: log_transform
+      clinical_significance: |
+        Thrombocytopenia (<100) indicates DIC, HIT, ITP, liver disease.
+        Bleeding risk increases dramatically below 50K.
+
+    - name: lab_ast_u_l
+      type: continuous
+      unit: U/L
+      range: [5, 5000]
+      normal: "<40"
+      elevated: ">=3x normal"
+      imputation: median
+      median_value: 30.0
+      normalization: log_transform
+      clinical_significance: |
+        Elevated AST indicates hepatocellular injury, shock liver.
+        AST:ALT ratio >2 suggests alcoholic hepatitis.
+
+    - name: lab_alt_u_l
+      type: continuous
+      unit: U/L
+      range: [5, 5000]
+      normal: "<40"
+      elevated: ">=3x normal"
+      imputation: median
+      median_value: 30.0
+      normalization: log_transform
+      clinical_significance: |
+        ALT more specific for liver injury than AST.
+        Markedly elevated (>1000) indicates acute hepatitis, drug toxicity.
+
+    - name: lab_bilirubin_mg_dl
+      type: continuous
+      unit: mg/dL
+      range: [0.1, 30]
+      normal: "<1.2"
+      jaundice: ">=3.0"
+      imputation: median
+      median_value: 0.8
+      normalization: log_transform
+      clinical_significance: |
+        Elevated bilirubin indicates liver dysfunction, hemolysis, biliary obstruction.
+        Component of SOFA score for organ dysfunction.
+
+    - name: lab_lactate_elevated
+      type: binary
+      condition: lactate > 2.0
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        Binary lactate elevation flag for sepsis screening.
+        Triggers bundle compliance and resuscitation protocols.
+
+    - name: lab_aki_present
+      type: binary
+      condition: creatinine > 1.5
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        AKI flag based on KDIGO criteria (1.5x baseline or >0.3 increase).
+        Strong predictor of mortality and ICU length of stay.
+
+# ===== CATEGORY 4: CLINICAL SCORES (5 features) =====
+clinical_scores:
+  count: 5
+  description: Validated clinical scoring systems
+  features:
+    - name: score_news2
+      type: ordinal
+      full_name: National Early Warning Score 2
+      range: [0, 20]
+      low_risk: [0, 4]
+      medium_risk: [5, 6]
+      high_risk: [7, 20]
+      imputation: calculated
+      normalization: standard_scaling
+      clinical_significance: |
+        NEWS2 predicts clinical deterioration and mortality.
+        Score ≥7 triggers rapid response team activation.
+        Components: RR, O2, temp, SBP, HR, consciousness.
+
+    - name: score_qsofa
+      type: ordinal
+      full_name: Quick Sequential Organ Failure Assessment
+      range: [0, 3]
+      sepsis_screen: ">=2"
+      components: [RR>=22, SBP<=100, altered_mental_status]
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        qSOFA is bedside sepsis screening tool.
+        Score ≥2 predicts ICU admission and mortality.
+        Faster than full SOFA but less sensitive.
+
+    - name: score_sofa
+      type: ordinal
+      full_name: Sequential Organ Failure Assessment
+      range: [0, 24]
+      normal: [0, 2]
+      organ_dysfunction: ">=2"
+      sepsis_definition: increase >=2
+      imputation: calculated
+      normalization: standard_scaling
+      clinical_significance: |
+        SOFA quantifies organ dysfunction (respiratory, coagulation, liver, cardiovascular, CNS, renal).
+        Sepsis-3 definition requires SOFA increase ≥2.
+        Daily SOFA predicts mortality.
+
+    - name: score_apache
+      type: ordinal
+      full_name: Acute Physiology and Chronic Health Evaluation
+      range: [0, 71]
+      mortality_prediction: |
+        0-4: <5%
+        5-9: 5-15%
+        10-14: 15-25%
+        15-19: 25-40%
+        >=20: >40%
+      imputation: calculated
+      normalization: standard_scaling
+      clinical_significance: |
+        APACHE II predicts ICU mortality based on age, chronic health, physiologic derangement.
+        Gold standard for ICU severity scoring.
+        Used for clinical trials and quality benchmarking.
+
+    - name: score_acuity_combined
+      type: continuous
+      range: [0, 10]
+      description: Proprietary combined acuity score from semantic analysis
+      imputation: semantic_event
+      normalization: standard_scaling
+      clinical_significance: |
+        Combined acuity integrates multiple scoring systems and clinical judgment.
+        Module 3 semantic enrichment generates this composite score.
+        Higher values indicate greater clinical instability.
+
+# ===== CATEGORY 5: TEMPORAL (10 features) =====
+temporal:
+  count: 10
+  description: Time-based features capturing clinical trajectory
+  features:
+    - name: temporal_hours_since_admission
+      type: continuous
+      unit: hours
+      range: [0, 8760]  # 1 year
+      imputation: calculated
+      normalization: log_transform
+      clinical_significance: |
+        Early hospitalization (<24h) has different risk profile than prolonged stay.
+        Mortality risk highest in first 48 hours.
+
+    - name: temporal_hours_since_last_vitals
+      type: continuous
+      unit: hours
+      range: [0, 168]  # 1 week
+      stale_threshold: 6
+      imputation: calculated
+      normalization: log_transform
+      clinical_significance: |
+        Data recency affects prediction reliability.
+        Vitals >6 hours old may not reflect current condition.
+
+    - name: temporal_hours_since_last_labs
+      type: continuous
+      unit: hours
+      range: [0, 168]
+      stale_threshold: 24
+      imputation: calculated
+      normalization: log_transform
+      clinical_significance: |
+        Lab value age impacts clinical decision-making.
+        Critical labs should be <12 hours old.
+
+    - name: temporal_length_of_stay_hours
+      type: continuous
+      unit: hours
+      range: [0, 8760]
+      prolonged_stay: ">168"  # 7 days
+      imputation: calculated
+      normalization: log_transform
+      clinical_significance: |
+        Prolonged LOS (>7 days) predicts readmission and mortality.
+        Marker of clinical complexity and complications.
+
+    - name: temporal_hr_trend_increasing
+      type: binary
+      calculation: HR_current > HR_6h_ago + threshold
+      imputation: trend_analysis
+      normalization: none
+      clinical_significance: |
+        Rising heart rate indicates clinical deterioration.
+        Early warning sign of sepsis, bleeding, pain.
+
+    - name: temporal_bp_trend_decreasing
+      type: binary
+      calculation: SBP_current < SBP_6h_ago - threshold
+      imputation: trend_analysis
+      normalization: none
+      clinical_significance: |
+        Declining blood pressure requires immediate assessment.
+        May indicate shock, bleeding, medication effect.
+
+    - name: temporal_lactate_trend_increasing
+      type: binary
+      calculation: lactate_current > lactate_previous
+      imputation: trend_analysis
+      normalization: none
+      clinical_significance: |
+        Rising lactate despite resuscitation is poor prognostic sign.
+        Lactate clearance (<10% decrease) predicts mortality.
+
+    - name: temporal_hour_of_day
+      type: cyclic
+      range: [0, 23]
+      encoding: sin/cos transformation
+      imputation: timestamp
+      normalization: cyclic
+      clinical_significance: |
+        Circadian variation affects physiology and staffing.
+        Night shift (19:00-07:00) has different resource availability.
+
+    - name: temporal_is_night_shift
+      type: binary
+      condition: hour >= 19 OR hour < 7
+      imputation: timestamp
+      normalization: none
+      clinical_significance: |
+        Night shift associated with delayed recognition of deterioration.
+        Lower staffing ratios and reduced ancillary services.
+
+    - name: temporal_is_weekend
+      type: binary
+      condition: day_of_week IN [Saturday, Sunday]
+      imputation: timestamp
+      normalization: none
+      clinical_significance: |
+        Weekend effect: higher mortality due to reduced staffing.
+        Delayed diagnostic and therapeutic interventions.
+
+# ===== CATEGORY 6: MEDICATIONS (8 features) =====
+medications:
+  count: 8
+  description: Medication exposure and polypharmacy
+  features:
+    - name: med_total_count
+      type: discrete
+      range: [0, 50]
+      polypharmacy_threshold: 5
+      imputation: medication_list
+      normalization: log_transform
+      clinical_significance: |
+        Polypharmacy (≥5 medications) increases adverse drug events.
+        Higher medication count predicts falls, delirium, drug interactions.
+
+    - name: med_high_risk_count
+      type: discrete
+      range: [0, 20]
+      high_risk_classes: [anticoagulants, insulin, opioids, sedatives]
+      imputation: medication_list
+      normalization: standard_scaling
+      clinical_significance: |
+        High-risk medications require close monitoring.
+        Each additional high-risk drug increases ADE risk 10-15%.
+
+    - name: med_vasopressor_active
+      type: binary
+      examples: [norepinephrine, vasopressin, epinephrine, dopamine]
+      imputation: medication_list
+      normalization: none
+      clinical_significance: |
+        Vasopressor use indicates shock state requiring ICU care.
+        Strong predictor of mortality and prolonged ICU stay.
+
+    - name: med_antibiotic_active
+      type: binary
+      broad_spectrum: true
+      imputation: medication_list
+      normalization: none
+      clinical_significance: |
+        Antibiotic administration within 1 hour improves sepsis survival.
+        Marker of suspected or confirmed infection.
+
+    - name: med_anticoagulation_active
+      type: binary
+      examples: [heparin, warfarin, DOACs, enoxaparin]
+      imputation: medication_list
+      normalization: none
+      clinical_significance: |
+        Anticoagulation increases bleeding risk with procedures.
+        Important for fall risk and procedural planning.
+
+    - name: med_sedation_active
+      type: binary
+      examples: [propofol, midazolam, dexmedetomidine]
+      imputation: medication_list
+      normalization: none
+      clinical_significance: |
+        Sedation indicates mechanical ventilation or agitation.
+        Associated with delirium and prolonged ICU stay.
+
+    - name: med_insulin_active
+      type: binary
+      includes: [regular, sliding_scale, continuous_infusion]
+      imputation: medication_list
+      normalization: none
+      clinical_significance: |
+        Insulin indicates diabetes or stress hyperglycemia.
+        Hypoglycemia risk requires glucose monitoring.
+
+    - name: med_polypharmacy
+      type: binary
+      condition: med_total_count >= 5
+      imputation: calculated
+      normalization: none
+      clinical_significance: |
+        Binary polypharmacy flag for models sensitive to thresholds.
+        Simplified representation of medication burden.
+
+# ===== CATEGORY 7: COMORBIDITIES (10 features) =====
+comorbidities:
+  count: 10
+  description: Pre-existing conditions from problem list
+  features:
+    - name: comorbid_diabetes
+      type: binary
+      icd10_codes: [E08-E13]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Diabetes affects wound healing, infection risk, medication dosing.
+        Predictor of readmission and complications.
+
+    - name: comorbid_hypertension
+      type: binary
+      icd10_codes: [I10-I16]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Chronic hypertension affects cardiovascular risk.
+        Influences target blood pressure goals.
+
+    - name: comorbid_ckd
+      type: binary
+      full_name: Chronic Kidney Disease
+      stages: [3, 4, 5]
+      icd10_codes: [N18]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        CKD affects drug dosing, AKI risk, dialysis requirement.
+        Strong predictor of mortality and prolonged hospitalization.
+
+    - name: comorbid_heart_failure
+      type: binary
+      icd10_codes: [I50]
+      classes: [NYHA 2-4]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Heart failure affects fluid management and medication selection.
+        High readmission rate and mortality risk.
+
+    - name: comorbid_copd
+      type: binary
+      full_name: Chronic Obstructive Pulmonary Disease
+      icd10_codes: [J44]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        COPD increases respiratory failure risk.
+        Affects oxygenation targets and ventilator management.
+
+    - name: comorbid_cancer
+      type: binary
+      active_only: true
+      excludes: non_melanoma_skin_cancer
+      icd10_codes: [C00-C97]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Active cancer affects prognosis and treatment goals.
+        Immunosuppression increases infection risk.
+
+    - name: comorbid_immunosuppressed
+      type: binary
+      causes: [HIV, chemotherapy, transplant, steroids]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Immunosuppression dramatically increases infection risk.
+        Atypical presentations of common infections.
+
+    - name: comorbid_liver_disease
+      type: binary
+      severity: [cirrhosis, hepatitis]
+      icd10_codes: [K70-K77]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Liver disease affects drug metabolism and coagulation.
+        Predictor of mortality and complications.
+
+    - name: comorbid_stroke_history
+      type: binary
+      icd10_codes: [I63, I64, Z86.73]
+      imputation: problem_list
+      normalization: none
+      clinical_significance: |
+        Prior stroke increases recurrent stroke risk.
+        Affects rehabilitation needs and functional outcomes.
+
+    - name: comorbid_charlson_index
+      type: ordinal
+      full_name: Charlson Comorbidity Index
+      range: [0, 30]
+      mortality_prediction: |
+        0: 98% 1-year survival
+        1-2: 96%
+        3-4: 77%
+        >=5: 21%
+      calculation: weighted_sum_of_comorbidities
+      imputation: calculated
+      normalization: standard_scaling
+      clinical_significance: |
+        Charlson Index predicts 1-year mortality based on comorbidity burden.
+        Gold standard for risk adjustment in clinical research.
+        Higher scores indicate greater baseline frailty.
+
+# ===== CATEGORY 8: CEP PATTERNS (5 features) =====
+cep_patterns:
+  count: 5
+  description: Complex Event Processing patterns from Module 4
+  source: clinical_patterns_kafka_topic
+  features:
+    - name: pattern_sepsis_detected
+      type: binary
+      pattern_type: multi_criteria_sepsis
+      components: [SIRS, infection_suspected, organ_dysfunction]
+      imputation: pattern_event
+      normalization: none
+      clinical_significance: |
+        CEP sepsis pattern integrates vitals, labs, and clinical context.
+        Earlier detection than manual screening (median 2-hour lead time).
+        Triggers automated sepsis bundle workflow.
+
+    - name: pattern_deterioration_detected
+      type: binary
+      pattern_type: clinical_deterioration
+      components: [vital_trends, lab_trends, consciousness_change]
+      imputation: pattern_event
+      normalization: none
+      clinical_significance: |
+        Deterioration pattern predicts ICU transfer within 6 hours.
+        Enables proactive intervention and escalation of care.
+        Reduces preventable cardiopulmonary arrests.
+
+    - name: pattern_aki_detected
+      type: binary
+      pattern_type: acute_kidney_injury
+      criteria: KDIGO_stages
+      imputation: pattern_event
+      normalization: none
+      clinical_significance: |
+        AKI pattern detects kidney injury using trend analysis.
+        Earlier than static creatinine thresholds alone.
+        Enables nephrotoxin avoidance and fluid optimization.
+
+    - name: pattern_confidence_score
+      type: continuous
+      range: [0, 1]
+      high_confidence: ">0.8"
+      description: CEP pattern matching confidence
+      imputation: pattern_event
+      normalization: none
+      clinical_significance: |
+        Confidence score reflects pattern match quality.
+        Higher confidence patterns have lower false positive rates.
+        Used for alert prioritization and workflow automation.
+
+    - name: pattern_clinical_significance
+      type: continuous
+      range: [0, 1]
+      description: Semantic enrichment clinical significance from Module 3
+      source: semantic_mesh_updates
+      imputation: semantic_event
+      normalization: none
+      clinical_significance: |
+        Clinical significance score integrates multiple clinical factors.
+        Generated by semantic enrichment layer using clinical knowledge base.
+        Reflects urgency and potential impact of intervention.
+
+# ===== FEATURE EXTRACTION PIPELINE =====
+extraction_pipeline:
+  stage_1_demographics:
+    source: patient_context_snapshot
+    extraction_time_ms: "<1ms"
+
+  stage_2_vitals:
+    source: patient_context_snapshot.latest_vitals
+    extraction_time_ms: "<2ms"
+    derived_metrics: [MAP, pulse_pressure, shock_index]
+
+  stage_3_labs:
+    source: patient_context_snapshot.latest_labs
+    extraction_time_ms: "<2ms"
+    staleness_check: true
+
+  stage_4_clinical_scores:
+    source: [patient_context_snapshot, semantic_event]
+    extraction_time_ms: "<1ms"
+    calculation: on_demand
+
+  stage_5_temporal:
+    source: timestamps
+    extraction_time_ms: "<1ms"
+    trend_analysis: 6h_window
+
+  stage_6_medications:
+    source: patient_context_snapshot.active_medications
+    extraction_time_ms: "<1ms"
+    classification: drug_class_mapping
+
+  stage_7_comorbidities:
+    source: patient_context_snapshot.comorbidities
+    extraction_time_ms: "<1ms"
+    charlson_calculation: weighted_sum
+
+  stage_8_cep_patterns:
+    source: [pattern_event, semantic_event]
+    extraction_time_ms: "<2ms"
+    fallback: zero_if_missing
+
+  total_extraction_time_target: "<10ms (p99)"
+
+# ===== VALIDATION & NORMALIZATION =====
+quality_control:
+  validation:
+    missing_value_imputation:
+      continuous_features: median
+      binary_features: mode
+      temporal_features: calculated
+
+    outlier_detection:
+      method: winsorization
+      percentiles: [1st, 99th]
+
+    range_validation:
+      enforce_clinical_bounds: true
+      clip_to_valid_range: true
+
+  normalization:
+    default_strategy: standard_scaling
+    exceptions:
+      - features: [vitals, labs]
+        strategy: standard_scaling
+      - features: [temporal_*_hours]
+        strategy: log_transform
+      - features: [lab_lactate, lab_creatinine, lab_ast, lab_alt]
+        strategy: log_transform
+      - features: binary
+        strategy: none
+      - features: [pattern_confidence, pattern_clinical_significance]
+        strategy: none
+
+# ===== MODEL READINESS CHECKLIST =====
+ml_model_requirements:
+  input_shape: [batch_size, 70]
+  input_dtype: float32
+  feature_order: preserve_extraction_order
+  missing_values: not_allowed  # Must impute before inference
+  normalization: required  # Models trained on normalized data
+
+  quality_thresholds:
+    minimum_feature_completeness: 0.7  # 70% of features must be non-missing
+    maximum_data_age_hours: 24
+    required_features:
+      critical: [vital_heart_rate, vital_systolic_bp, lab_lactate]
+      high_priority: [vital_respiratory_rate, vital_temperature_c, lab_creatinine, lab_wbc]
+
+# ===== VERSION HISTORY =====
+version_history:
+  v1.0.0:
+    date: "2025-11-01"
+    changes: "Initial schema with 70 clinical features across 8 categories"
+    validated: true
+    deployed: pending_model_training

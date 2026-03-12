@@ -1,0 +1,262 @@
+type: rules
+version: "1.0.0"
+description: Clinical inference and derivation rules for automated clinical reasoning
+
+rules:
+  # Sepsis Inference Rule
+  - id: INFERENCE-SEPSIS-SUSPECTED
+    name: Suspected Sepsis Inference
+    description: Infers suspected sepsis when SIRS criteria met with suspected infection
+    type: INFERENCE
+    category: CLINICAL
+    severity: HIGH
+    status: ACTIVE
+    priority: 10
+
+    conditions:
+      - field: vitals.temperature.value
+        operator: GT
+        value: 38.3
+        description: Fever >38.3C
+      - field: vitals.heart_rate.value
+        operator: GT
+        value: 90
+        description: Tachycardia HR >90
+      - field: labs.wbc.value
+        operator: GT
+        value: 12000
+        description: Leukocytosis WBC >12,000
+
+    condition_logic: "((1 AND 2) OR 3)"
+
+    actions:
+      - type: INFERENCE
+        message: "Suspected Sepsis - SIRS criteria met"
+        parameters:
+          inferred_condition: sepsis
+          confidence: "0.75"
+
+      - type: RECOMMEND
+        message: "Consider sepsis workup: lactate, blood cultures, source identification"
+        parameters:
+          protocol: SEPSIS_BUNDLE
+
+    evidence:
+      level: MODERATE
+      source: "Surviving Sepsis Campaign 2021"
+
+    tags:
+      - sepsis
+      - sirs
+      - inference
+      - critical-care
+
+  # AKI Stage Derivation
+  - id: DERIVATION-AKI-STAGE
+    name: AKI Stage Derivation
+    description: Calculate AKI stage based on creatinine change from baseline
+    type: DERIVATION
+    category: CLINICAL
+    severity: MODERATE
+    status: ACTIVE
+    priority: 20
+
+    conditions:
+      - field: labs.creatinine.value
+        operator: EXISTS
+      - field: labs.creatinine_baseline.value
+        operator: EXISTS
+
+    actions:
+      - type: DERIVATION
+        parameters:
+          calculation: |
+            ratio = current_creatinine / baseline_creatinine
+            if ratio >= 3.0: return "Stage 3"
+            if ratio >= 2.0: return "Stage 2"
+            if ratio >= 1.5: return "Stage 1"
+            return "No AKI"
+          output_field: aki_stage
+
+      - type: LOG
+        message: "AKI staging calculated for patient"
+        parameters:
+          level: INFO
+
+    evidence:
+      level: HIGH
+      source: "KDIGO Guidelines 2012"
+
+    tags:
+      - aki
+      - renal
+      - derivation
+      - nephrology
+
+  # Diabetes Detection
+  - id: INFERENCE-DIABETES-DETECTED
+    name: Diabetes Detection
+    description: Infers diabetes diagnosis based on HbA1c or glucose criteria
+    type: INFERENCE
+    category: CLINICAL
+    severity: MODERATE
+    status: ACTIVE
+    priority: 15
+
+    conditions:
+      - field: labs.hba1c.value
+        operator: GTE
+        value: 6.5
+        description: HbA1c >= 6.5%
+      - field: labs.glucose_fasting.value
+        operator: GTE
+        value: 126
+        description: Fasting glucose >= 126 mg/dL
+
+    condition_logic: OR
+
+    actions:
+      - type: INFERENCE
+        message: "Diabetes mellitus criteria met"
+        parameters:
+          inferred_condition: diabetes_mellitus
+          confidence: "0.90"
+
+      - type: RECOMMEND
+        message: "Confirm diagnosis with repeat testing, initiate diabetes management"
+
+    evidence:
+      level: HIGH
+      source: "ADA Standards of Care 2024"
+
+    tags:
+      - diabetes
+      - endocrine
+      - hba1c
+      - inference
+
+  # Heart Failure Exacerbation
+  - id: INFERENCE-HF-EXACERBATION
+    name: Heart Failure Exacerbation Detection
+    description: Infers heart failure exacerbation based on BNP and clinical signs
+    type: INFERENCE
+    category: CLINICAL
+    severity: HIGH
+    status: ACTIVE
+    priority: 12
+
+    conditions:
+      - field: labs.bnp.value
+        operator: GT
+        value: 400
+        description: BNP > 400 pg/mL
+      - field: vitals.oxygen_saturation.value
+        operator: LT
+        value: 92
+        description: SpO2 < 92%
+
+    condition_logic: AND
+
+    actions:
+      - type: INFERENCE
+        message: "Heart failure exacerbation suspected"
+        parameters:
+          inferred_condition: heart_failure_exacerbation
+          confidence: "0.80"
+
+      - type: ALERT
+        message: "Suspected HF exacerbation - BNP elevated with hypoxemia"
+        priority: URGENT
+
+      - type: RECOMMEND
+        message: "Consider diuretics, echocardiogram, and cardiology consult"
+
+    evidence:
+      level: HIGH
+      source: "ACC/AHA Heart Failure Guidelines 2022"
+
+    tags:
+      - heart-failure
+      - bnp
+      - cardiology
+      - inference
+
+  # CKD Stage Derivation
+  - id: DERIVATION-CKD-STAGE
+    name: CKD Stage Derivation
+    description: Calculate CKD stage based on eGFR
+    type: DERIVATION
+    category: CLINICAL
+    severity: LOW
+    status: ACTIVE
+    priority: 25
+
+    conditions:
+      - field: labs.egfr.value
+        operator: EXISTS
+
+    actions:
+      - type: DERIVATION
+        parameters:
+          calculation: |
+            egfr = labs.egfr.value
+            if egfr >= 90: return "Stage 1 (Normal)"
+            if egfr >= 60: return "Stage 2 (Mild)"
+            if egfr >= 45: return "Stage 3a (Mild-Moderate)"
+            if egfr >= 30: return "Stage 3b (Moderate-Severe)"
+            if egfr >= 15: return "Stage 4 (Severe)"
+            return "Stage 5 (Kidney Failure)"
+          output_field: ckd_stage
+
+    evidence:
+      level: HIGH
+      source: "KDIGO CKD Guidelines 2012"
+
+    tags:
+      - ckd
+      - renal
+      - nephrology
+      - derivation
+
+  # Elderly Fall Risk
+  - id: INFERENCE-FALL-RISK-ELDERLY
+    name: Fall Risk Assessment - Elderly
+    description: Infers high fall risk for elderly patients with risk factors
+    type: INFERENCE
+    category: CLINICAL
+    severity: MODERATE
+    status: ACTIVE
+    priority: 30
+
+    conditions:
+      - field: patient.age
+        operator: AGE_GT
+        value: 65
+      - field: medications
+        operator: CONTAINS
+        value: sedative
+      - field: conditions
+        operator: CONTAINS
+        value: gait_abnormality
+
+    condition_logic: "1 AND (2 OR 3)"
+
+    actions:
+      - type: INFERENCE
+        message: "High fall risk identified"
+        parameters:
+          inferred_condition: high_fall_risk
+          confidence: "0.85"
+
+      - type: RECOMMEND
+        message: "Implement fall precautions: bed alarm, non-slip socks, assist with ambulation"
+
+    evidence:
+      level: MODERATE
+      source: "AHRQ Fall Prevention Guidelines"
+
+    tags:
+      - fall-risk
+      - geriatrics
+      - safety
+      - inference

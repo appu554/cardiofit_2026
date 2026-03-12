@@ -1,0 +1,480 @@
+name: Universal Framework Compliance
+
+on:
+  pull_request:
+    paths:
+      - 'kb-*/framework.yaml'
+      - 'kb-*/schemas/**'
+      - 'kb-*/api/**'
+      - 'kb-*/contracts/**'
+      - 'tools/framework-validator.py'
+      - 'framework-template.yaml'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'kb-*/framework.yaml'
+      - 'tools/**'
+
+env:
+  FRAMEWORK_VERSION: "2.0.0"
+  MIN_COMPLIANCE_SCORE: 80.0
+  CRITICAL_SECTION_THRESHOLD: 70.0
+
+jobs:
+  detect-changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      changed-services: ${{ steps.changes.outputs.services }}
+      has-changes: ${{ steps.changes.outputs.has-changes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed KB services
+        id: changes
+        run: |
+          # Find all KB services with framework changes
+          CHANGED_SERVICES=$(git diff --name-only HEAD~1 HEAD | \
+            grep -E '^kb-[0-9]+.*/' | \
+            cut -d'/' -f1 | \
+            sort -u | \
+            jq -R -s -c 'split("\n")[:-1]')
+          
+          echo "services=${CHANGED_SERVICES}" >> $GITHUB_OUTPUT
+          
+          if [ "${CHANGED_SERVICES}" = "[]" ]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Changed services: ${CHANGED_SERVICES}"
+
+  framework-validation:
+    name: Validate Framework Compliance
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    strategy:
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.changed-services) }}
+      fail-fast: false
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyyaml jsonschema
+
+      - name: Validate framework.yaml exists
+        run: |
+          if [ ! -f "${{ matrix.service }}/framework.yaml" ]; then
+            echo "❌ Error: framework.yaml not found in ${{ matrix.service }}"
+            echo "Generate framework with: python tools/framework-generator.py"
+            exit 1
+          fi
+
+      - name: Run framework validation
+        id: validation
+        run: |
+          echo "🔍 Validating framework for ${{ matrix.service }}"
+          
+          # Run validation and capture output
+          python tools/framework-validator.py "${{ matrix.service }}" \
+            --json --output validation-report.json || VALIDATION_FAILED=true
+          
+          # Extract results
+          SCORE=$(jq -r '.score' validation-report.json)
+          IS_VALID=$(jq -r '.is_valid' validation-report.json)
+          ERRORS_COUNT=$(jq -r '.errors | length' validation-report.json)
+          WARNINGS_COUNT=$(jq -r '.warnings | length' validation-report.json)
+          
+          echo "score=${SCORE}" >> $GITHUB_OUTPUT
+          echo "is_valid=${IS_VALID}" >> $GITHUB_OUTPUT
+          echo "errors_count=${ERRORS_COUNT}" >> $GITHUB_OUTPUT
+          echo "warnings_count=${WARNINGS_COUNT}" >> $GITHUB_OUTPUT
+          
+          # Generate human-readable report
+          python tools/framework-validator.py "${{ matrix.service }}" \
+            --output framework-report.md
+          
+          # Display results
+          echo "📊 Compliance Score: ${SCORE}/100"
+          echo "✅ Valid: ${IS_VALID}"
+          echo "❌ Errors: ${ERRORS_COUNT}"
+          echo "⚠️ Warnings: ${WARNINGS_COUNT}"
+          
+          # Fail if validation failed
+          if [ "${VALIDATION_FAILED}" = "true" ]; then
+            echo "❌ Framework validation failed"
+            exit 1
+          fi
+
+      - name: Check compliance thresholds
+        run: |
+          SCORE="${{ steps.validation.outputs.score }}"
+          IS_VALID="${{ steps.validation.outputs.is_valid }}"
+          
+          echo "🎯 Checking compliance thresholds..."
+          echo "Required score: >= ${MIN_COMPLIANCE_SCORE}"
+          echo "Actual score: ${SCORE}"
+          
+          if (( $(echo "${SCORE} < ${MIN_COMPLIANCE_SCORE}" | bc -l) )); then
+            echo "❌ Compliance score ${SCORE} is below minimum ${MIN_COMPLIANCE_SCORE}"
+            exit 1
+          fi
+          
+          if [ "${IS_VALID}" != "true" ]; then
+            echo "❌ Framework validation failed - critical errors present"
+            exit 1
+          fi
+          
+          echo "✅ Compliance thresholds met"
+
+      - name: Validate supporting files
+        run: |
+          echo "📁 Checking supporting files for ${{ matrix.service }}"
+          
+          MISSING_FILES=""
+          
+          # Required directories
+          for dir in api schemas contracts monitoring; do
+            if [ ! -d "${{ matrix.service }}/${dir}" ]; then
+              MISSING_FILES="${MISSING_FILES}\n  - ${dir}/ directory"
+            fi
+          done
+          
+          # Required files
+          for file in api/openapi.yaml schemas/data-model.json; do
+            if [ ! -f "${{ matrix.service }}/${file}" ]; then
+              MISSING_FILES="${MISSING_FILES}\n  - ${file}"
+            fi
+          done
+          
+          if [ -n "${MISSING_FILES}" ]; then
+            echo "⚠️ Missing supporting files:${MISSING_FILES}"
+            echo "Generate with: python tools/framework-generator.py --overwrite"
+          else
+            echo "✅ All supporting files present"
+          fi
+
+      - name: Validate API specification
+        run: |
+          if [ -f "${{ matrix.service }}/api/openapi.yaml" ]; then
+            echo "🔍 Validating OpenAPI specification"
+            
+            # Install swagger-codegen for validation
+            npm install -g swagger-codegen-cli
+            
+            # Validate OpenAPI spec
+            swagger-codegen-cli validate -i "${{ matrix.service }}/api/openapi.yaml" || {
+              echo "❌ Invalid OpenAPI specification"
+              exit 1
+            }
+            
+            echo "✅ OpenAPI specification is valid"
+          else
+            echo "⚠️ OpenAPI specification not found"
+          fi
+
+      - name: Check schema compliance
+        run: |
+          if [ -f "${{ matrix.service }}/schemas/data-model.json" ]; then
+            echo "🔍 Validating JSON schema"
+            
+            # Basic JSON schema validation
+            python -c "
+import json
+import sys
+try:
+    with open('${{ matrix.service }}/schemas/data-model.json', 'r') as f:
+        schema = json.load(f)
+    print('✅ JSON schema is valid')
+except Exception as e:
+    print(f'❌ Invalid JSON schema: {e}')
+    sys.exit(1)
+            "
+          else
+            echo "⚠️ JSON schema not found"
+          fi
+
+      - name: Security compliance check
+        run: |
+          echo "🔐 Checking security compliance"
+          
+          # Extract security section from framework
+          SECURITY_SCORE=$(jq -r '.section_scores."10_security_privacy" // 0' validation-report.json)
+          
+          if (( $(echo "${SECURITY_SCORE} < ${CRITICAL_SECTION_THRESHOLD}" | bc -l) )); then
+            echo "❌ Security section score ${SECURITY_SCORE} is below critical threshold ${CRITICAL_SECTION_THRESHOLD}"
+            echo "Security is critical for clinical systems - please address security requirements"
+            exit 1
+          fi
+          
+          echo "✅ Security compliance check passed"
+
+      - name: Clinical validation check
+        run: |
+          echo "🏥 Checking clinical validation requirements"
+          
+          # Extract testing section score
+          TESTING_SCORE=$(jq -r '.section_scores."6_testing" // 0' validation-report.json)
+          
+          if (( $(echo "${TESTING_SCORE} < ${CRITICAL_SECTION_THRESHOLD}" | bc -l) )); then
+            echo "❌ Testing section score ${TESTING_SCORE} is below critical threshold ${CRITICAL_SECTION_THRESHOLD}"
+            echo "Clinical validation is mandatory for KB services"
+            exit 1
+          fi
+          
+          # Check if clinical validation is required
+          CLINICAL_REQUIRED=$(yq eval '.6_testing.clinical_validation.required' "${{ matrix.service }}/framework.yaml")
+          
+          if [ "${CLINICAL_REQUIRED}" != "true" ]; then
+            echo "❌ Clinical validation must be required for KB services"
+            exit 1
+          fi
+          
+          echo "✅ Clinical validation requirements met"
+
+      - name: Upload validation report
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: framework-validation-${{ matrix.service }}
+          path: |
+            framework-report.md
+            validation-report.json
+          retention-days: 30
+
+      - name: Comment PR with validation results
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request' && always()
+        with:
+          script: |
+            const fs = require('fs');
+            const service = '${{ matrix.service }}';
+            const score = '${{ steps.validation.outputs.score }}';
+            const isValid = '${{ steps.validation.outputs.is_valid }}';
+            const errorsCount = '${{ steps.validation.outputs.errors_count }}';
+            const warningsCount = '${{ steps.validation.outputs.warnings_count }}';
+            
+            let status = isValid === 'true' ? '✅ PASS' : '❌ FAIL';
+            let report = '';
+            
+            try {
+              report = fs.readFileSync('framework-report.md', 'utf8');
+            } catch (e) {
+              report = 'Report generation failed';
+            }
+            
+            const comment = `## Framework Validation: ${service}
+            
+            **Status**: ${status}  
+            **Compliance Score**: ${score}/100  
+            **Errors**: ${errorsCount}  
+            **Warnings**: ${warningsCount}  
+            
+            <details>
+            <summary>📊 Detailed Report</summary>
+            
+            \`\`\`
+            ${report}
+            \`\`\`
+            
+            </details>
+            
+            ---
+            *Generated by Universal Framework Validator v2.0*
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  framework-compliance-summary:
+    name: Framework Compliance Summary
+    runs-on: ubuntu-latest
+    needs: [detect-changes, framework-validation]
+    if: always() && needs.detect-changes.outputs.has-changes == 'true'
+    
+    steps:
+      - name: Download validation reports
+        uses: actions/download-artifact@v3
+        with:
+          path: validation-reports
+
+      - name: Generate compliance summary
+        run: |
+          echo "# 📊 Framework Compliance Summary" > compliance-summary.md
+          echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> compliance-summary.md
+          echo "" >> compliance-summary.md
+          
+          echo "## Services Validated" >> compliance-summary.md
+          echo "| Service | Status | Score | Errors | Warnings |" >> compliance-summary.md
+          echo "|---------|--------|-------|--------|----------|" >> compliance-summary.md
+          
+          # Process each service report
+          TOTAL_SERVICES=0
+          PASSING_SERVICES=0
+          
+          for report_dir in validation-reports/framework-validation-*/; do
+            if [ -d "$report_dir" ]; then
+              SERVICE=$(basename "$report_dir" | sed 's/framework-validation-//')
+              
+              if [ -f "$report_dir/validation-report.json" ]; then
+                SCORE=$(jq -r '.score' "$report_dir/validation-report.json")
+                IS_VALID=$(jq -r '.is_valid' "$report_dir/validation-report.json")
+                ERRORS_COUNT=$(jq -r '.errors | length' "$report_dir/validation-report.json")
+                WARNINGS_COUNT=$(jq -r '.warnings | length' "$report_dir/validation-report.json")
+                
+                STATUS_ICON="❌"
+                if [ "$IS_VALID" = "true" ]; then
+                  STATUS_ICON="✅"
+                  PASSING_SERVICES=$((PASSING_SERVICES + 1))
+                fi
+                
+                echo "| $SERVICE | $STATUS_ICON | $SCORE/100 | $ERRORS_COUNT | $WARNINGS_COUNT |" >> compliance-summary.md
+                TOTAL_SERVICES=$((TOTAL_SERVICES + 1))
+              fi
+            fi
+          done
+          
+          echo "" >> compliance-summary.md
+          echo "## Summary Statistics" >> compliance-summary.md
+          echo "- **Total Services**: $TOTAL_SERVICES" >> compliance-summary.md
+          echo "- **Passing Services**: $PASSING_SERVICES" >> compliance-summary.md
+          echo "- **Failing Services**: $((TOTAL_SERVICES - PASSING_SERVICES))" >> compliance-summary.md
+          
+          PASS_RATE=0
+          if [ $TOTAL_SERVICES -gt 0 ]; then
+            PASS_RATE=$(echo "scale=1; $PASSING_SERVICES * 100 / $TOTAL_SERVICES" | bc)
+          fi
+          echo "- **Pass Rate**: ${PASS_RATE}%" >> compliance-summary.md
+          
+          echo "" >> compliance-summary.md
+          echo "## Compliance Requirements" >> compliance-summary.md
+          echo "- Minimum compliance score: ${MIN_COMPLIANCE_SCORE}/100" >> compliance-summary.md
+          echo "- Critical sections threshold: ${CRITICAL_SECTION_THRESHOLD}/100" >> compliance-summary.md
+          echo "- Framework version: ${FRAMEWORK_VERSION}" >> compliance-summary.md
+          
+          cat compliance-summary.md
+
+      - name: Check overall compliance
+        run: |
+          # Count failing services
+          FAILING_SERVICES=0
+          for report_dir in validation-reports/framework-validation-*/; do
+            if [ -d "$report_dir" ] && [ -f "$report_dir/validation-report.json" ]; then
+              IS_VALID=$(jq -r '.is_valid' "$report_dir/validation-report.json")
+              if [ "$IS_VALID" != "true" ]; then
+                FAILING_SERVICES=$((FAILING_SERVICES + 1))
+              fi
+            fi
+          done
+          
+          if [ $FAILING_SERVICES -gt 0 ]; then
+            echo "❌ $FAILING_SERVICES service(s) failed framework compliance"
+            echo "Please address compliance issues before merging"
+            exit 1
+          fi
+          
+          echo "✅ All services passed framework compliance"
+
+      - name: Upload compliance summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: framework-compliance-summary
+          path: compliance-summary.md
+          retention-days: 90
+
+  framework-template-validation:
+    name: Validate Framework Template
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'framework-template') || 
+        github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyyaml jsonschema
+
+      - name: Validate framework template
+        run: |
+          echo "🔍 Validating framework template"
+          
+          # Check YAML syntax
+          python -c "
+import yaml
+import sys
+try:
+    with open('framework-template.yaml', 'r') as f:
+        template = yaml.safe_load(f)
+    print('✅ Framework template YAML is valid')
+except Exception as e:
+    print(f'❌ Invalid framework template YAML: {e}')
+    sys.exit(1)
+          "
+          
+          # Check required sections
+          REQUIRED_SECTIONS=("1_purpose_and_scope" "2_data_model" "3_api_contracts" 
+                            "4_integration_map" "5_performance" "6_testing" 
+                            "7_governance" "8_cicd" "9_monitoring" 
+                            "10_security_privacy" "11_failure_modes" 
+                            "12_data_lifecycle" "13_supply_chain")
+          
+          for section in "${REQUIRED_SECTIONS[@]}"; do
+            if ! yq eval "has(\"$section\")" framework-template.yaml | grep -q true; then
+              echo "❌ Missing required section: $section"
+              exit 1
+            fi
+          done
+          
+          echo "✅ All required sections present in template"
+
+      - name: Test framework generator
+        run: |
+          echo "🧪 Testing framework generator"
+          
+          # Test generator with different service types
+          python tools/framework-generator.py 1 drug_rules --output /tmp/test-kb
+          
+          if [ -f "/tmp/test-kb/kb-1-drug-rules/framework.yaml" ]; then
+            echo "✅ Framework generator works correctly"
+          else
+            echo "❌ Framework generator failed"
+            exit 1
+          fi
+
+      - name: Test framework validator against template
+        run: |
+          echo "🧪 Testing framework validator"
+          
+          # Generate a test framework and validate it
+          python tools/framework-generator.py 7 terminology --output /tmp/test-validation
+          
+          python tools/framework-validator.py /tmp/test-validation/kb-7-terminology
+          
+          echo "✅ Framework validator works correctly"

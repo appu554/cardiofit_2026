@@ -1,0 +1,163 @@
+# P09 HTN Epistaxis - HPI Node Definition
+# Bayesian differential for nosebleeds (epistaxis) in hypertensive patients.
+# Triggered by: patient self-report of recurrent nosebleeds OR clinician query.
+# Output: posterior probability of HTN-related epistaxis -> feeds KB-23 decision cards.
+
+node_id: P09_HTN_EPISTAXIS
+version: "1.0"
+description: "Epistaxis differential in hypertensive cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 8
+
+# Safety classification
+safety_criticality: LOW_MODERATE
+
+# Guideline prior source (N-01)
+guideline_prior_source: "BSH_HTN_EPISTAXIS_2019; NICE_NG136_2022"
+
+# Differentials with per-stratum priors (F-05)
+# HTN-related epistaxis: debated causality, but uncontrolled BP correlates with severity/recurrence.
+differentials:
+  - id: HTN_RELATED
+    label: "Hypertension-Related Epistaxis"
+    population_reference: "Herkner H, BMJ 2000; Kikidis D, Laryngoscope 2014"
+    priors:
+      DM_ONLY: 0.15
+      DM_HTN: 0.35
+      DM_HTN_CKD: 0.40
+    conditional_priors:
+      - condition: "bp_status == ABOVE_TARGET"
+        override: 0.45
+      - condition: "bp_status == AT_TARGET"
+        override: 0.10
+
+  - id: ANTICOAGULANT_EFFECT
+    label: "Anticoagulant/Antiplatelet Effect"
+    population_reference: "Denholm SW, J Laryngol Otol 1994; NICE CKS Epistaxis 2022"
+    priors:
+      DM_ONLY: 0.25
+      DM_HTN: 0.30
+      DM_HTN_CKD: 0.30
+
+  - id: LOCAL_CAUSE
+    label: "Local Cause (Dry Mucosa, Trauma, Climate)"
+    population_reference: "Pope LER, Emerg Med J 2005"
+    priors:
+      DM_ONLY: 0.40
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.20
+
+# Enrichment fields pulled from KB-20 patient profile
+enrichment_fields:
+  - bp_status
+  - on_anticoagulant
+  - on_antiplatelet
+  - inr_latest
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "How often do the nosebleeds occur?"
+    text_hi: "नाक से खून कितनी बार आता है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "FREQUENT_WEEKLY"
+        label_en: "Frequent (weekly or more)"
+        likelihood_ratios:
+          HTN_RELATED: 2.0
+          ANTICOAGULANT_EFFECT: 2.5
+          LOCAL_CAUSE: 0.8
+      - value: "OCCASIONAL_MONTHLY"
+        label_en: "Occasional (monthly)"
+        likelihood_ratios:
+          HTN_RELATED: 1.2
+          ANTICOAGULANT_EFFECT: 1.0
+          LOCAL_CAUSE: 1.5
+      - value: "RARE_ISOLATED"
+        label_en: "Rare / isolated episode"
+        likelihood_ratios:
+          HTN_RELATED: 0.5
+          ANTICOAGULANT_EFFECT: 0.6
+          LOCAL_CAUSE: 2.0
+
+  - question_id: Q02
+    text_en: "When the nosebleed occurs, does it last more than 20 minutes despite applying pressure?"
+    text_hi: "जब नाक से खून आता है, तो क्या दबाव लगाने के बावजूद यह 20 मिनट से अधिक रहता है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_PROLONGED"
+        label_en: "Yes, more than 20 minutes"
+        likelihood_ratios:
+          HTN_RELATED: 2.5
+          ANTICOAGULANT_EFFECT: 3.0
+          LOCAL_CAUSE: 0.3
+      - value: "NO_STOPS_QUICKLY"
+        label_en: "No, stops within 10-20 minutes"
+        likelihood_ratios:
+          HTN_RELATED: 0.6
+          ANTICOAGULANT_EFFECT: 0.5
+          LOCAL_CAUSE: 2.0
+
+  - question_id: Q03
+    text_en: "Are you taking any blood-thinning medication (warfarin, aspirin, clopidogrel, rivaroxaban, apixaban)?"
+    text_hi: "क्या आप कोई खून पतला करने वाली दवा ले रहे हैं (वारफ़रिन, एस्पिरिन, क्लोपिडोग्रेल, रिवारोक्साबान, एपिक्साबान)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_ANTICOAGULANT"
+        label_en: "Yes, on anticoagulant or antiplatelet"
+        likelihood_ratios:
+          HTN_RELATED: 0.8
+          ANTICOAGULANT_EFFECT: 5.0
+          LOCAL_CAUSE: 0.5
+      - value: "NO_BLOOD_THINNER"
+        label_en: "No blood-thinning medication"
+        likelihood_ratios:
+          HTN_RELATED: 1.3
+          ANTICOAGULANT_EFFECT: 0.1
+          LOCAL_CAUSE: 1.5
+
+  - question_id: Q04
+    text_en: "Was your blood pressure checked during or shortly after the nosebleed episode? If so, was it elevated?"
+    text_hi: "क्या नाक से खून आने के दौरान या तुरंत बाद आपका रक्तचाप जांचा गया? यदि हां, तो क्या यह बढ़ा हुआ था?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_ELEVATED"
+        label_en: "Yes, BP was elevated during episode"
+        likelihood_ratios:
+          HTN_RELATED: 3.5
+          ANTICOAGULANT_EFFECT: 0.8
+          LOCAL_CAUSE: 0.5
+      - value: "YES_NORMAL"
+        label_en: "Yes, BP was normal during episode"
+        likelihood_ratios:
+          HTN_RELATED: 0.3
+          ANTICOAGULANT_EFFECT: 1.2
+          LOCAL_CAUSE: 1.5
+      - value: "NOT_CHECKED"
+        label_en: "BP was not checked"
+        likelihood_ratios:
+          HTN_RELATED: 1.0
+          ANTICOAGULANT_EFFECT: 1.0
+          LOCAL_CAUSE: 1.0
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_EPISTAXIS_MANAGEMENT_CARD"
+    description: "Posterior > 0.70 for HTN-related epistaxis -> verify BP control, generate decision card for antihypertensive optimisation. If anticoagulant > 0.70, check INR/coagulation."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Obtain BP reading during next episode. Review anticoagulant dosing and INR if applicable."
+  - threshold: 0.30
+    action: "INVESTIGATE_ALTERNATIVES"
+    description: "Low HTN probability. Consider local ENT causes (dry mucosa, anterior septal vessels). Humidification and topical measures."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "HTN_RELATED posterior > 0.50 AND headache_present == YES"
+    trigger_node: "P05_HTN_HEADACHE"
+    rationale: "HTN epistaxis with headache may indicate hypertensive urgency requiring headache pathway assessment."

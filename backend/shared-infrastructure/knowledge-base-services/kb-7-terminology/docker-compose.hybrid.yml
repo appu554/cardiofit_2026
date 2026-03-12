@@ -1,0 +1,218 @@
+version: '3.8'
+
+services:
+  # PostgreSQL for fast terminology lookups (Phase 3.5.1)
+  postgres-terminology:
+    image: postgres:15-alpine
+    container_name: kb7-postgres-terminology
+    ports:
+      - "5433:5432"  # Using 5433 as specified in implementation plan
+    environment:
+      - POSTGRES_DB=kb7_terminology
+      - POSTGRES_USER=kb7_user
+      - POSTGRES_PASSWORD=kb7_secure_password
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=en_US.utf8
+    volumes:
+      - postgres_terminology_data:/var/lib/postgresql/data
+      - ./migrations/phase3.5:/docker-entrypoint-initdb.d:ro
+    networks:
+      - kb7-hybrid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb7_user -d kb7_terminology"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # GraphDB for semantic reasoning (optimized for Phase 3.5)
+  graphdb-reasoning:
+    image: ontotext/graphdb:10.7.3
+    container_name: kb7-graphdb-reasoning
+    ports:
+      - "7200:7200"  # GraphDB Workbench
+      - "7300:7300"  # GraphDB HTTP API
+    environment:
+      - GDB_HEAP_SIZE=2g  # Reduced from 4g since we're storing less data
+      - GDB_JAVA_OPTS=-Xms1g -Xmx2g -Dfile.encoding=UTF-8
+      - GRAPHDB_REPOSITORY=kb7-reasoning
+    volumes:
+      - graphdb_reasoning_data:/opt/graphdb/home
+      - ./scripts/graphdb-init:/docker-entrypoint-initdb.d:ro
+      - ./data/reasoning:/import/reasoning:ro
+    networks:
+      - kb7-hybrid
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/repositories"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Redis for high-performance caching (Phase 3.5)
+  redis-cache:
+    image: redis:7.2-alpine
+    container_name: kb7-redis-cache
+    ports:
+      - "6380:6379"  # Using 6380 as specified in implementation plan
+    volumes:
+      - redis_cache_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - kb7-hybrid
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "2"
+
+  # Hybrid Query Router Service (Phase 3.5.2)
+  query-router:
+    build:
+      context: ./query-router
+      dockerfile: Dockerfile
+    container_name: kb7-query-router
+    ports:
+      - "8087:8087"  # Query router API port
+      - "8088:8088"  # Metrics port
+    environment:
+      - POSTGRES_CONNECTION=postgres://kb7_user:kb7_secure_password@postgres-terminology:5432/kb7_terminology
+      - GRAPHDB_ENDPOINT=http://graphdb-reasoning:7200/rest
+      - REDIS_CONNECTION=redis://redis-cache:6379/0
+      - LOG_LEVEL=info
+      - METRICS_ENABLED=true
+      - CACHE_TTL=3600
+      - POOL_SIZE=20
+    depends_on:
+      postgres-terminology:
+        condition: service_healthy
+      graphdb-reasoning:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    networks:
+      - kb7-hybrid
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Data Migration Service (Phase 3.5.1 - runs once)
+  data-migrator:
+    build:
+      context: ./migration
+      dockerfile: Dockerfile
+    container_name: kb7-data-migrator
+    environment:
+      - SOURCE_GRAPHDB=http://graphdb-reasoning:7200
+      - TARGET_POSTGRES=postgres://kb7_user:kb7_secure_password@postgres-terminology:5432/kb7_terminology
+      - MIGRATION_MODE=hybrid  # Extract and optimize for hybrid architecture
+      - BATCH_SIZE=1000
+      - VALIDATE_INTEGRITY=true
+    depends_on:
+      postgres-terminology:
+        condition: service_healthy
+      graphdb-reasoning:
+        condition: service_healthy
+    volumes:
+      - ./migration/scripts:/scripts:ro
+      - ./migration/data:/data
+      - migration_logs:/logs
+    networks:
+      - kb7-hybrid
+    restart: "no"  # Run once
+    command: ["python", "/scripts/migrate_to_hybrid.py"]
+
+  # Prometheus for monitoring (Phase 3.5 SLA tracking)
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: kb7-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-hybrid.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    networks:
+      - kb7-hybrid
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "2"
+
+  # Grafana for visualization (Phase 3.5 performance monitoring)
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: kb7-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_INSTALL_PLUGINS=redis-datasource,vertamedia-clickhouse-datasource
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - kb7-hybrid
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "2"
+
+volumes:
+  postgres_terminology_data:
+    driver: local
+  graphdb_reasoning_data:
+    driver: local
+  redis_cache_data:
+    driver: local
+  migration_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  kb7-hybrid:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

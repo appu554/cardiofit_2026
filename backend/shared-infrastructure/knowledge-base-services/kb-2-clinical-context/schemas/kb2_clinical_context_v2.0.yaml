@@ -1,0 +1,425 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://clinical-kb.health/schemas/kb2-clinical-context/v2.0.0"
+title: "KB-2 Clinical Context Schema v2.0"
+description: "Enhanced schema for clinical phenotypes, risk models, and treatment preferences"
+type: "object"
+
+required: ["metadata", "phenotypes", "risk_models", "treatment_preferences", "monitoring_protocols"]
+
+properties:
+  metadata:
+    type: object
+    required: ["kb_name", "version", "institution", "effective_date", "expires_date"]
+    properties:
+      kb_name: 
+        const: "kb_clinical_context"
+        description: "Fixed identifier for KB-2"
+      version: 
+        type: string
+        pattern: "^\\d+\\.\\d+\\.\\d+$"
+        description: "Semantic version (e.g., 2.0.0)"
+      institution: 
+        type: string
+        description: "Institution or health system name"
+      effective_date: 
+        type: string
+        format: date-time
+        description: "When this KB version becomes active"
+      expires_date: 
+        type: string
+        format: date-time
+        description: "When this KB version expires"
+      clinical_domains:
+        type: array
+        description: "Clinical domains covered by this KB"
+        items:
+          type: string
+          enum: ["cardiovascular", "diabetes", "respiratory", "renal", "hepatic", 
+                 "oncology", "neurology", "psychiatry", "infectious", "rheumatology",
+                 "hematology", "endocrine", "gastroenterology", "geriatrics", "pediatrics",
+                 "obstetrics", "emergency", "surgery", "anesthesia", "radiology"]
+      maintainer:
+        type: object
+        properties:
+          clinical_lead: { type: string }
+          technical_lead: { type: string }
+          last_review_date: { type: string, format: date }
+          next_review_date: { type: string, format: date }
+      
+  phenotypes:
+    type: array
+    description: "Clinical phenotype definitions"
+    items:
+      type: object
+      required: ["id", "name", "domain", "version", "criteria", "priority"]
+      properties:
+        id: 
+          type: string
+          pattern: "^PHE-[A-Z0-9]{8}$"
+          description: "Unique phenotype identifier"
+        name: 
+          type: string
+          minLength: 1
+          description: "Human-readable phenotype name"
+        domain: 
+          type: string
+          description: "Primary clinical domain"
+        version: 
+          type: string
+          pattern: "^\\d+\\.\\d+\\.\\d+$"
+          description: "Phenotype version"
+        status:
+          type: string
+          enum: ["draft", "active", "deprecated"]
+          default: "active"
+          description: "Lifecycle status"
+        effective_date: 
+          type: string
+          format: date
+          description: "When phenotype becomes active"
+        deprecated_date: 
+          type: string
+          format: date
+          description: "When phenotype was deprecated"
+        
+        criteria:
+          type: object
+          required: ["logic_engine", "expression", "data_requirements"]
+          properties:
+            logic_engine: 
+              type: string
+              enum: ["cel", "rego", "python", "sql"]
+              description: "Logic evaluation engine"
+            expression: 
+              type: string
+              minLength: 1
+              description: "Logic expression in specified engine"
+            data_requirements:
+              type: array
+              description: "Required data fields for evaluation"
+              items:
+                type: object
+                required: ["field", "type", "required", "source"]
+                properties:
+                  field: 
+                    type: string
+                    description: "Data field name (dot notation)"
+                  type: 
+                    type: string
+                    enum: ["string", "integer", "float", "boolean", "array", "object", "date"]
+                    description: "Expected data type"
+                  required: 
+                    type: boolean
+                    description: "Whether field is required for evaluation"
+                  source: 
+                    type: string
+                    enum: ["context_gateway", "ehr", "patient_reported", "calculated"]
+                    description: "Data source system"
+                  validation_rules:
+                    type: object
+                    properties:
+                      min_value: { type: number }
+                      max_value: { type: number }
+                      allowed_values: { type: array }
+                      regex_pattern: { type: string }
+        
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: "Priority for conflict resolution (higher wins)"
+        
+        exclusivity:
+          type: object
+          properties:
+            exclusive_with: 
+              type: array
+              items: { type: string }
+              description: "Phenotype IDs that are mutually exclusive"
+            scope: 
+              type: string
+              enum: ["domain", "global"]
+              description: "Scope of exclusivity"
+        
+        outputs:
+          type: object
+          description: "Clinical outputs and classifications"
+          properties:
+            risk_category: 
+              type: string
+              enum: ["low", "moderate", "high", "very_high"]
+            treatment_intensity: 
+              type: string
+              enum: ["conservative", "standard", "aggressive"]
+            monitoring_level: 
+              type: string
+              enum: ["routine", "enhanced", "intensive"]
+            care_setting: 
+              type: string
+              enum: ["primary", "specialty", "multidisciplinary", "emergency"]
+            clinical_urgency:
+              type: string
+              enum: ["routine", "urgent", "emergent"]
+        
+        clinical_implications:
+          type: array
+          description: "Clinical implications and required actions"
+          items:
+            type: object
+            required: ["implication", "severity", "action_required"]
+            properties:
+              implication: 
+                type: string
+                description: "Clinical implication description"
+              severity: 
+                type: string
+                enum: ["info", "warning", "critical"]
+              action_required: 
+                type: boolean
+                description: "Whether immediate action is needed"
+              timeframe:
+                type: string
+                enum: ["immediate", "within_24h", "within_week", "routine"]
+                description: "Timeframe for action"
+        
+        evidence_links:
+          type: object
+          description: "Links to supporting evidence"
+          properties:
+            kb3_guidelines: 
+              type: array
+              items: { type: string }
+              description: "KB-3 guideline references"
+            kb4_safety_rules: 
+              type: array
+              items: { type: string }
+              description: "KB-4 safety rule references"
+            literature_refs: 
+              type: array
+              items: { type: string }
+              description: "Literature citations"
+            internal_policies:
+              type: array
+              items: { type: string }
+              description: "Institution-specific policy references"
+
+  risk_models:
+    type: array
+    description: "Risk stratification models"
+    items:
+      type: object
+      required: ["id", "name", "version", "inputs", "calculation", "outputs"]
+      properties:
+        id:
+          type: string
+          pattern: "^RISK-[A-Z0-9]{3,6}$"
+          description: "Unique risk model identifier"
+        name:
+          type: string
+          description: "Risk model name"
+        version:
+          type: string
+          pattern: "^\\d+\\.\\d+\\.\\d+$"
+        domain:
+          type: string
+          description: "Primary clinical domain"
+        effective_date:
+          type: string
+          format: date
+        
+        inputs:
+          type: array
+          description: "Required input parameters"
+          items:
+            type: object
+            required: ["parameter", "type", "required"]
+            properties:
+              parameter: { type: string }
+              type: { type: string }
+              required: { type: boolean }
+              units: { type: string }
+              range: 
+                type: object
+                properties:
+                  min: { type: number }
+                  max: { type: number }
+        
+        calculation:
+          type: object
+          required: ["type", "algorithm"]
+          properties:
+            type:
+              type: string
+              enum: ["weighted_score", "regression", "machine_learning", "lookup_table"]
+            algorithm:
+              type: string
+              description: "Calculation algorithm or formula"
+            weights:
+              type: object
+              description: "Parameter weights for weighted scoring"
+            coefficients:
+              type: object
+              description: "Regression coefficients"
+        
+        outputs:
+          type: object
+          required: ["risk_categories"]
+          properties:
+            risk_categories:
+              type: array
+              items:
+                type: object
+                required: ["range", "category", "color"]
+                properties:
+                  range: 
+                    type: array
+                    items: { type: number }
+                    minItems: 2
+                    maxItems: 2
+                  category: { type: string }
+                  color: { type: string }
+                  recommendations: 
+                    type: array
+                    items: { type: string }
+        
+        validation:
+          type: object
+          properties:
+            c_statistic: { type: number, minimum: 0, maximum: 1 }
+            calibration_chi2: { type: number }
+            last_validated: { type: string, format: date }
+            validation_cohort_size: { type: integer }
+
+  treatment_preferences:
+    type: array
+    description: "Treatment selection preferences"
+    items:
+      type: object
+      required: ["id", "condition", "version", "selection_rules"]
+      properties:
+        id:
+          type: string
+          pattern: "^PREF-[A-Z]{2,4}-[0-9]{3}$"
+          description: "Treatment preference identifier"
+        condition:
+          type: string
+          description: "Clinical condition"
+        version:
+          type: string
+          pattern: "^\\d+\\.\\d+\\.\\d+$"
+        effective_date:
+          type: string
+          format: date
+        
+        selection_rules:
+          type: array
+          description: "Rules for treatment selection"
+          items:
+            type: object
+            required: ["phenotype", "preferences"]
+            properties:
+              phenotype:
+                type: string
+                description: "Target phenotype ID"
+              patient_criteria:
+                type: string
+                description: "Additional patient criteria (CEL expression)"
+              preferences:
+                type: object
+                properties:
+                  first_line:
+                    type: array
+                    items:
+                      type: object
+                      required: ["class", "rationale"]
+                      properties:
+                        class: { type: string }
+                        specific_agent: { type: string }
+                        condition: { type: string }
+                        rationale: { type: string }
+                  alternatives:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        class: { type: string }
+                        specific_agent: { type: string }
+                        when: { type: string }
+                  avoid:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        class: { type: string }
+                        reason: { type: string }
+                        unless: { type: string }
+                  formulary_preferences:
+                    type: object
+                    description: "Institution-specific medication preferences"
+
+  monitoring_protocols:
+    type: array
+    description: "Clinical monitoring requirements"
+    items:
+      type: object
+      required: ["id", "phenotype", "protocol"]
+      properties:
+        id:
+          type: string
+          pattern: "^MON-[A-Z0-9]{6}$"
+        phenotype:
+          type: string
+          description: "Associated phenotype ID"
+        protocol:
+          type: object
+          required: ["frequency", "parameters"]
+          properties:
+            frequency:
+              type: string
+              enum: ["weekly", "monthly", "quarterly", "semi_annual", "annual"]
+            parameters:
+              type: array
+              items:
+                type: object
+                required: ["test", "target"]
+                properties:
+                  test: { type: string, description: "Lab or assessment" }
+                  target: { type: string, description: "Target value or range" }
+                  alert_threshold: { type: string }
+                  units: { type: string }
+
+  configuration:
+    type: object
+    description: "Service configuration parameters"
+    properties:
+      evaluation_settings:
+        type: object
+        properties:
+          max_batch_size: { type: integer, default: 1000 }
+          evaluation_timeout_ms: { type: integer, default: 5000 }
+          missing_data_strategy: 
+            type: string
+            enum: ["fail", "skip", "default"]
+            default: "skip"
+          conflict_resolution_strategy:
+            type: string
+            enum: ["priority", "most_specific", "clinical_review"]
+            default: "priority"
+      
+      caching:
+        type: object
+        properties:
+          l1_cache_ttl_minutes: { type: integer, default: 5 }
+          l2_cache_ttl_minutes: { type: integer, default: 60 }
+          cache_key_strategy: 
+            type: string
+            enum: ["patient_id", "content_hash", "hybrid"]
+            default: "hybrid"
+      
+      integration:
+        type: object
+        properties:
+          kb3_endpoint: { type: string, format: uri }
+          kb4_endpoint: { type: string, format: uri }
+          evidence_envelope_endpoint: { type: string, format: uri }
+          timeout_seconds: { type: integer, default: 30 }

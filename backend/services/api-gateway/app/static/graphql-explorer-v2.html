@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clinical Synthesis Hub - GraphQL Explorer</title>
+    <style>
+        body {
+            height: 100%;
+            margin: 0;
+            width: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #graphiql {
+            height: calc(100vh - 120px);
+            width: 100%;
+            position: relative;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+        .auth-section {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .auth-section input {
+            padding: 8px;
+            width: 300px;
+            border: none;
+            border-radius: 4px;
+        }
+        .auth-section button {
+            padding: 8px 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .auth-section button:hover {
+            background-color: #2980b9;
+        }
+        .toolbar {
+            background-color: #f5f5f5;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        .toolbar select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            min-width: 200px;
+        }
+        .toolbar button {
+            padding: 8px 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .toolbar button:hover {
+            background-color: #2980b9;
+        }
+        .query-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+            position: absolute;
+            background-color: white;
+            z-index: 1000;
+            width: 300px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .query-item {
+            padding: 8px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+        .query-item:hover {
+            background-color: #f5f5f5;
+        }
+        .query-item.mutation {
+            color: #e74c3c;
+        }
+        .query-item.query {
+            color: #3498db;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/graphiql@1.5.0/graphiql.min.css" />
+</head>
+<body>
+    <div class="header">
+        <h1>Clinical Synthesis Hub - GraphQL Explorer</h1>
+        <div class="auth-section">
+            <input type="text" id="token-input" placeholder="Enter JWT token" />
+            <button id="set-token-btn">Set Token</button>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div>
+            <label for="service-select">Microservice:</label>
+            <select id="service-select">
+                <option value="all">All Services</option>
+                <option value="patient">Patient Service</option>
+                <option value="observation">Observation Service</option>
+                <option value="condition">Condition Service</option>
+                <option value="medication">Medication Service</option>
+                <option value="encounter">Encounter Service</option>
+                <option value="timeline">Timeline Service</option>
+                <option value="lab">Lab Service</option>
+            </select>
+        </div>
+        <div>
+            <button id="show-queries-btn">Show Queries</button>
+            <div id="query-list" class="query-list"></div>
+        </div>
+    </div>
+
+    <div id="graphiql"></div>
+
+    <!-- Load React -->
+    <script src="https://unpkg.com/react@16/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@16/umd/react-dom.development.js"></script>
+
+    <!-- Load GraphiQL -->
+    <script src="https://unpkg.com/graphiql@1.5.0/graphiql.min.js"></script>
+
+    <!-- Debug script -->
+    <script>
+        console.log('Scripts loaded');
+        console.log('React available:', typeof React !== 'undefined');
+        console.log('ReactDOM available:', typeof ReactDOM !== 'undefined');
+        console.log('GraphiQL available:', typeof GraphiQL !== 'undefined');
+    </script>
+
+    <script>
+        // Store the token in a variable that can be updated
+        let authToken = '';
+        let graphiqlInstance = null;
+
+        // Define queries and mutations by microservice
+        const microserviceQueries = {
+            patient: {
+                queries: [
+                    { name: "Get Patient by ID", query: `query GetPatient($id: String!) {
+  patient(id: $id) {
+    id
+    resourceType
+    name {
+      family
+      given
+      use
+    }
+    gender
+    birthDate
+    active
+  }
+}`, variables: `{
+  "id": "patient-id-here"
+}` },
+                    { name: "Search Patients", query: `query SearchPatients($name: String) {
+  searchPatients(name: $name) {
+    id
+    resourceType
+    name {
+      family
+      given
+      use
+    }
+    gender
+    birthDate
+    active
+  }
+}`, variables: `{
+  "name": "Smith"
+}` }
+                ],
+                mutations: [
+                    { name: "Create Patient", query: `mutation CreatePatient($patientData: PatientInput!) {
+  createPatient(patientData: $patientData) {
+    id
+    resourceType
+    name {
+      family
+      given
+      use
+    }
+    gender
+    birthDate
+    active
+  }
+}`, variables: `{
+  "patientData": {
+    "name": [
+      {
+        "family": "Doe",
+        "given": ["John"],
+        "use": "official"
+      }
+    ],
+    "gender": "male",
+    "birthDate": "1970-01-01",
+    "active": true
+  }
+}` }
+                ]
+            },
+            medication: {
+                queries: [
+                    { name: "Get Patient Medications", query: `query GetPatientMedications($patientId: String!) {
+  patientMedications(patientId: $patientId) {
+    id
+    resourceType
+    status
+    intent
+    medicationCodeableConcept {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    subject {
+      reference
+      display
+    }
+    authoredOn
+    dosageInstruction {
+      text
+      timing
+      dose_quantity {
+        value
+        unit
+        system
+        code
+      }
+    }
+  }
+}`, variables: `{
+  "patientId": "patient-id-here"
+}` }
+                ],
+                mutations: [
+                    { name: "Create Medication Request", query: `mutation CreateMedicationRequest($medicationData: MedicationRequestInput!) {
+  createMedicationRequest(medicationData: $medicationData) {
+    id
+    resourceType
+    status
+    intent
+    medicationCodeableConcept {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    subject {
+      reference
+      display
+    }
+    authoredOn
+  }
+}`, variables: `{
+  "medicationData": {
+    "status": "active",
+    "intent": "order",
+    "medicationCodeableConcept": {
+      "coding": [
+        {
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+          "code": "1049502",
+          "display": "Acetaminophen 325 MG Oral Tablet"
+        }
+      ],
+      "text": "Acetaminophen 325 MG Oral Tablet"
+    },
+    "subject": {
+      "reference": "Patient/patient-id-here"
+    },
+    "authoredOn": "2023-01-01T12:00:00Z"
+  }
+}` }
+                ]
+            },
+            condition: {
+                queries: [
+                    { name: "Get Patient Conditions", query: `query GetPatientConditions($patientId: String!) {
+  patientConditions(patientId: $patientId) {
+    id
+    resourceType
+    clinicalStatus {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    code {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    subject {
+      reference
+      display
+    }
+    onsetDateTime
+  }
+}`, variables: `{
+  "patientId": "patient-id-here"
+}` }
+                ]
+            },
+            observation: {
+                queries: [
+                    { name: "Get Patient Observations", query: `query GetPatientObservations($patientId: String!, $code: String) {
+  patientObservations(patientId: $patientId, code: $code) {
+    id
+    resourceType
+    status
+    code {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    subject {
+      reference
+      display
+    }
+    effectiveDateTime
+    valueQuantity {
+      value
+      unit
+      system
+      code
+    }
+  }
+}`, variables: `{
+  "patientId": "patient-id-here",
+  "code": "8480-6"
+}` }
+                ]
+            },
+            encounter: {
+                queries: [
+                    { name: "Get Patient Encounters", query: `query GetPatientEncounters($patientId: String!) {
+  patientEncounters(patientId: $patientId) {
+    id
+    resourceType
+    status
+    class_
+    type {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    subject {
+      reference
+      display
+    }
+    period {
+      start
+      end
+    }
+  }
+}`, variables: `{
+  "patientId": "patient-id-here"
+}` }
+                ]
+            },
+            timeline: {
+                queries: [
+                    { name: "Get Patient Timeline", query: `query GetPatientTimeline($patientId: String!) {
+  patientTimeline(patientId: $patientId) {
+    patientId
+    events {
+      id
+      type
+      date
+      title
+      description
+      resourceId
+      resourceType
+    }
+  }
+}`, variables: `{
+  "patientId": "patient-id-here"
+}` }
+                ]
+            },
+            lab: {
+                queries: [
+                    { name: "Get Patient Diagnostic Reports", query: `query GetPatientDiagnosticReports($patientId: String!) {
+  patientDiagnosticReports(patientId: $patientId) {
+    id
+    resourceType
+    status
+    code {
+      coding {
+        system
+        code
+        display
+      }
+      text
+    }
+    subject {
+      reference
+      display
+    }
+    effectiveDateTime
+    issued
+    result {
+      reference
+      display
+    }
+  }
+}`, variables: `{
+  "patientId": "patient-id-here"
+}` }
+                ]
+            }
+        };
+
+        // Function to create a fetcher with the current token
+        const createFetcher = (token) => {
+            return (graphQLParams) => {
+                const graphqlEndpoint = window.location.origin + '/graphql';
+                console.log('Fetching from:', graphqlEndpoint);
+                console.log('With token:', token ? 'Bearer ' + token.substring(0, 10) + '...' : 'none');
+
+                return fetch(graphqlEndpoint, {
+                    method: 'post',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': token ? `Bearer ${token}` : ''
+                    },
+                    body: JSON.stringify(graphQLParams)
+                })
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    return response.json();
+                })
+                .then(result => {
+                    console.log('Response data:', result);
+                    return result;
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    return { errors: [{ message: error.message }] };
+                });
+            };
+        };
+
+        // Check for token in URL parameters
+        const getTokenFromUrl = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('token') || '';
+        };
+
+        // Set token from URL if available
+        const urlToken = getTokenFromUrl();
+        if (urlToken) {
+            authToken = urlToken;
+            document.getElementById('token-input').value = urlToken;
+            console.log('Token loaded from URL parameter');
+        } else {
+            // Check if the token input already has a value (set by the server)
+            const tokenInput = document.getElementById('token-input');
+            if (tokenInput.value) {
+                authToken = tokenInput.value;
+                console.log('Token loaded from input value');
+            }
+        }
+
+        // Set token button
+        document.getElementById('set-token-btn').addEventListener('click', () => {
+            // Get the token from the input field
+            const tokenInput = document.getElementById('token-input');
+            authToken = tokenInput.value;
+
+            // Update URL with token parameter
+            const url = new URL(window.location.href);
+            if (authToken) {
+                url.searchParams.set('token', authToken);
+            } else {
+                url.searchParams.delete('token');
+            }
+            window.history.replaceState({}, '', url.toString());
+
+            // Re-render GraphiQL with the new token
+            renderGraphiQL();
+
+            // Show a message to the user
+            alert('Token set! You can now make authenticated requests.');
+        });
+
+        // Function to render GraphiQL with the current token
+        const renderGraphiQL = () => {
+            const fetcher = createFetcher(authToken);
+
+            // Clear the container first
+            const container = document.getElementById('graphiql');
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+
+            // Create a new GraphiQL element
+            try {
+                console.log('Creating GraphiQL element...');
+                console.log('GraphiQL available:', typeof GraphiQL);
+
+                // Render GraphiQL with the new fetcher
+                graphiqlInstance = ReactDOM.render(
+                    React.createElement(GraphiQL, {
+                        fetcher: fetcher,
+                        defaultVariableEditorOpen: true
+                    }),
+                    container
+                );
+
+                console.log('GraphiQL rendered with token:', authToken ? authToken.substring(0, 10) + '...' : 'none');
+            } catch (error) {
+                console.error('Error rendering GraphiQL:', error);
+                container.innerHTML = `<div style="padding: 20px; color: red;">Error rendering GraphiQL: ${error.message}</div>`;
+            }
+        };
+
+        // Function to set a query in GraphiQL
+        const setQuery = (query, variables) => {
+            if (graphiqlInstance) {
+                try {
+                    // Different versions of GraphiQL have different ways to set the query
+                    if (graphiqlInstance.setState) {
+                        graphiqlInstance.setState({
+                            query: query,
+                            variables: variables
+                        });
+                    } else if (graphiqlInstance._graphiql && graphiqlInstance._graphiql.setState) {
+                        graphiqlInstance._graphiql.setState({
+                            query: query,
+                            variables: variables
+                        });
+                    } else {
+                        console.error('Unable to set query: GraphiQL instance does not have setState method');
+
+                        // Fallback: re-render GraphiQL with the query and variables
+                        const container = document.getElementById('graphiql');
+                        ReactDOM.render(
+                            React.createElement(GraphiQL, {
+                                fetcher: createFetcher(authToken),
+                                defaultVariableEditorOpen: true,
+                                query: query,
+                                variables: variables
+                            }),
+                            container
+                        );
+                    }
+                } catch (error) {
+                    console.error('Error setting query:', error);
+                }
+            }
+        };
+
+        // Show queries button
+        document.getElementById('show-queries-btn').addEventListener('click', () => {
+            const queryList = document.getElementById('query-list');
+            const serviceSelect = document.getElementById('service-select');
+            const selectedService = serviceSelect.value;
+
+            // Clear the query list
+            queryList.innerHTML = '';
+
+            // Add queries and mutations based on selected service
+            if (selectedService === 'all') {
+                // Add all queries and mutations
+                Object.keys(microserviceQueries).forEach(service => {
+                    // Add service header
+                    const serviceHeader = document.createElement('div');
+                    serviceHeader.textContent = service.charAt(0).toUpperCase() + service.slice(1) + ' Service';
+                    serviceHeader.style.fontWeight = 'bold';
+                    serviceHeader.style.padding = '8px 16px';
+                    serviceHeader.style.backgroundColor = '#f5f5f5';
+                    queryList.appendChild(serviceHeader);
+
+                    // Add queries
+                    if (microserviceQueries[service].queries) {
+                        microserviceQueries[service].queries.forEach(query => {
+                            const queryItem = document.createElement('div');
+                            queryItem.className = 'query-item query';
+                            queryItem.textContent = query.name;
+                            queryItem.addEventListener('click', () => {
+                                setQuery(query.query, query.variables);
+                                queryList.style.display = 'none';
+                            });
+                            queryList.appendChild(queryItem);
+                        });
+                    }
+
+                    // Add mutations
+                    if (microserviceQueries[service].mutations) {
+                        microserviceQueries[service].mutations.forEach(mutation => {
+                            const mutationItem = document.createElement('div');
+                            mutationItem.className = 'query-item mutation';
+                            mutationItem.textContent = mutation.name;
+                            mutationItem.addEventListener('click', () => {
+                                setQuery(mutation.query, mutation.variables);
+                                queryList.style.display = 'none';
+                            });
+                            queryList.appendChild(mutationItem);
+                        });
+                    }
+                });
+            } else if (microserviceQueries[selectedService]) {
+                // Add queries for selected service
+                if (microserviceQueries[selectedService].queries) {
+                    const queriesHeader = document.createElement('div');
+                    queriesHeader.textContent = 'Queries';
+                    queriesHeader.style.fontWeight = 'bold';
+                    queriesHeader.style.padding = '8px 16px';
+                    queriesHeader.style.backgroundColor = '#f5f5f5';
+                    queryList.appendChild(queriesHeader);
+
+                    microserviceQueries[selectedService].queries.forEach(query => {
+                        const queryItem = document.createElement('div');
+                        queryItem.className = 'query-item query';
+                        queryItem.textContent = query.name;
+                        queryItem.addEventListener('click', () => {
+                            setQuery(query.query, query.variables);
+                            queryList.style.display = 'none';
+                        });
+                        queryList.appendChild(queryItem);
+                    });
+                }
+
+                // Add mutations for selected service
+                if (microserviceQueries[selectedService].mutations) {
+                    const mutationsHeader = document.createElement('div');
+                    mutationsHeader.textContent = 'Mutations';
+                    mutationsHeader.style.fontWeight = 'bold';
+                    mutationsHeader.style.padding = '8px 16px';
+                    mutationsHeader.style.backgroundColor = '#f5f5f5';
+                    queryList.appendChild(mutationsHeader);
+
+                    microserviceQueries[selectedService].mutations.forEach(mutation => {
+                        const mutationItem = document.createElement('div');
+                        mutationItem.className = 'query-item mutation';
+                        mutationItem.textContent = mutation.name;
+                        mutationItem.addEventListener('click', () => {
+                            setQuery(mutation.query, mutation.variables);
+                            queryList.style.display = 'none';
+                        });
+                        queryList.appendChild(mutationItem);
+                    });
+                }
+            }
+
+            // Toggle display of query list
+            if (queryList.style.display === 'block') {
+                queryList.style.display = 'none';
+            } else {
+                queryList.style.display = 'block';
+            }
+        });
+
+        // Close query list when clicking outside
+        document.addEventListener('click', (event) => {
+            const queryList = document.getElementById('query-list');
+            const showQueriesBtn = document.getElementById('show-queries-btn');
+
+            if (event.target !== showQueriesBtn && !showQueriesBtn.contains(event.target) &&
+                event.target !== queryList && !queryList.contains(event.target)) {
+                queryList.style.display = 'none';
+            }
+        });
+
+        // Initial render
+        renderGraphiQL();
+    </script>
+</body>
+</html>

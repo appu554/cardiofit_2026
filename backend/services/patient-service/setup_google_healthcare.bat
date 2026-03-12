@@ -1,0 +1,25 @@
+@echo off
+echo Setting up environment for Google Cloud Healthcare API...
+
+REM Set environment variables
+set USE_GOOGLE_HEALTHCARE_API=true
+set GOOGLE_CLOUD_PROJECT_ID=cardiofit-905a8
+set GOOGLE_CLOUD_LOCATION=us-central1
+set GOOGLE_CLOUD_DATASET_ID=clinical-synthesis-hub
+set GOOGLE_CLOUD_FHIR_STORE_ID=fhir-store
+set GOOGLE_CLOUD_CREDENTIALS_PATH=credentials/google-credentials.json
+
+REM Set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+set GOOGLE_APPLICATION_CREDENTIALS=credentials/google-credentials.json
+
+echo Environment variables set:
+echo USE_GOOGLE_HEALTHCARE_API=%USE_GOOGLE_HEALTHCARE_API%
+echo GOOGLE_CLOUD_PROJECT_ID=%GOOGLE_CLOUD_PROJECT_ID%
+echo GOOGLE_CLOUD_LOCATION=%GOOGLE_CLOUD_LOCATION%
+echo GOOGLE_CLOUD_DATASET_ID=%GOOGLE_CLOUD_DATASET_ID%
+echo GOOGLE_CLOUD_FHIR_STORE_ID=%GOOGLE_CLOUD_FHIR_STORE_ID%
+echo GOOGLE_CLOUD_CREDENTIALS_PATH=%GOOGLE_CLOUD_CREDENTIALS_PATH%
+echo GOOGLE_APPLICATION_CREDENTIALS=%GOOGLE_APPLICATION_CREDENTIALS%
+
+echo Starting Patient Service with Google Cloud Healthcare API...
+python -m app.main

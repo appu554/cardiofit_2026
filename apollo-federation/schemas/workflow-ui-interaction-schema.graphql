@@ -1,0 +1,598 @@
+# Advanced UI Interaction Schema for Clinical Override Management
+# This schema extends the workflow orchestration with real-time UI capabilities
+
+extend type Mutation {
+  # === UI Notification Management ===
+  updateUINotification(
+    workflowId: ID!
+    notification: UINotificationInput!
+  ): UINotification! @requiresAuth
+
+  # === Clinical Override Workflow ===
+  requestClinicalOverride(
+    workflowId: ID!
+    validationId: String!
+    request: OverrideRequestInput!
+  ): OverrideSession! @requiresAuth
+
+  resolveClinicalOverride(
+    sessionId: ID!
+    decision: OverrideDecisionInput!
+  ): CommitResponse! @requiresAuth
+
+  # === Collaborative Decision Making ===
+  requestPeerReview(
+    overrideSessionId: ID!
+    peerIds: [ID!]!
+    urgency: ReviewUrgency!
+  ): PeerReviewSession! @requiresAuth
+
+  submitPeerReviewDecision(
+    reviewSessionId: ID!
+    decision: PeerDecisionInput!
+  ): PeerReviewResult! @requiresAuth
+
+  # === UI State Management ===
+  updateWorkflowUIState(
+    workflowId: ID!
+    state: UIStateInput!
+  ): WorkflowUIState! @requiresAuth
+
+  acknowledgeWarning(
+    workflowId: ID!
+    warningId: ID!
+    acknowledgement: AcknowledgementInput!
+  ): AcknowledgementResult! @requiresAuth
+}
+
+extend type Subscription {
+  # === Real-time UI Updates ===
+  workflowUIUpdates(workflowId: ID!): WorkflowUIUpdate! @requiresAuth
+
+  # Clinical override required notification
+  overrideRequired(workflowId: ID!): OverrideRequirement! @requiresAuth
+
+  # Peer review updates
+  peerReviewUpdates(sessionId: ID!): PeerReviewUpdate! @requiresAuth
+
+  # System-wide alerts for clinical staff
+  clinicalAlerts(
+    severity: [AlertSeverity!]
+    departments: [String!]
+  ): ClinicalAlert! @requiresAuth
+}
+
+extend type Query {
+  # === UI State Queries ===
+  workflowUIState(workflowId: ID!): WorkflowUIState @requiresAuth
+
+  pendingOverrides(
+    clinicianId: ID
+    department: String
+    urgency: ReviewUrgency
+  ): [OverrideSession!]! @requiresAuth
+
+  overrideHistory(
+    clinicianId: ID
+    patientId: ID
+    dateRange: DateRangeInput
+  ): OverrideHistoryConnection! @requiresAuth
+
+  # Learning loop insights
+  overridePatterns(
+    timeRange: TimeRangeInput!
+    groupBy: OverrideGrouping!
+  ): OverridePatternAnalysis! @requiresAuth
+}
+
+# === Input Types ===
+
+input UINotificationInput {
+  status: UINotificationStatus!
+  title: String!
+  message: String!
+  severity: NotificationSeverity!
+  payload: JSON
+  actions: [UIActionInput!]
+  expiresAt: DateTime
+  requiresAcknowledgement: Boolean = false
+}
+
+input UIActionInput {
+  id: String!
+  label: String!
+  type: UIActionType!
+  payload: JSON
+  isPrimary: Boolean = false
+  requiresConfirmation: Boolean = false
+}
+
+input OverrideRequestInput {
+  verdict: ValidationVerdict!
+  findings: [ValidationFindingInput!]!
+  proposalId: String!
+  clinicalJustification: String
+  urgency: ReviewUrgency!
+  requiresPeerReview: Boolean = false
+  allowedOverrideLevels: [OverrideLevel!]!
+}
+
+input ValidationFindingInput {
+  findingId: String!
+  severity: FindingSeverity!
+  description: String!
+  overridable: Boolean!
+  evidence: JSON
+}
+
+input OverrideDecisionInput {
+  decision: OverrideDecision!
+  overrideLevel: OverrideLevel!
+  reason: OverrideReasonInput!
+  clinicalJustification: String!
+  coSignature: CoSignatureInput
+  acknowledgements: [String!]!
+  alternativeAction: AlternativeActionInput
+}
+
+input OverrideReasonInput {
+  code: String!
+  category: OverrideCategory!
+  freeText: String
+  evidenceUrls: [String!]
+}
+
+input CoSignatureInput {
+  clinicianId: ID!
+  role: String!
+  signature: String!
+  timestamp: DateTime!
+}
+
+input AlternativeActionInput {
+  type: AlternativeActionType!
+  modifiedProposal: JSON
+  deferralPeriod: String
+  monitoringPlan: JSON
+}
+
+input PeerDecisionInput {
+  recommendation: PeerRecommendation!
+  clinicalRationale: String!
+  supportingEvidence: [String!]
+  concerns: [String!]
+}
+
+input UIStateInput {
+  currentPhase: WorkflowPhase!
+  uiMode: UIMode!
+  activeModals: [String!]
+  pendingActions: [String!]
+  userContext: JSON
+}
+
+input AcknowledgementInput {
+  acknowledged: Boolean!
+  clinicianId: ID!
+  timestamp: DateTime!
+  comments: String
+}
+
+# === Response Types ===
+
+type UINotification {
+  id: ID!
+  workflowId: ID!
+  status: UINotificationStatus!
+  title: String!
+  message: String!
+  severity: NotificationSeverity!
+  payload: JSON
+  actions: [UIAction!]
+  createdAt: DateTime!
+  expiresAt: DateTime
+  acknowledgedBy: [Acknowledgement!]
+}
+
+type UIAction {
+  id: String!
+  label: String!
+  type: UIActionType!
+  payload: JSON
+  isPrimary: Boolean!
+  requiresConfirmation: Boolean!
+  isEnabled: Boolean!
+}
+
+type OverrideSession {
+  id: ID!
+  workflowId: ID!
+  validationId: String!
+  status: OverrideSessionStatus!
+  verdict: ValidationVerdict!
+  findings: [ValidationFinding!]!
+  requiredLevel: OverrideLevel!
+  requestedBy: Clinician!
+  requestedAt: DateTime!
+  expiresAt: DateTime!
+  peerReviewSession: PeerReviewSession
+  decision: OverrideDecisionResult
+  auditTrail: [AuditEntry!]!
+}
+
+type PeerReviewSession {
+  id: ID!
+  overrideSessionId: ID!
+  status: PeerReviewStatus!
+  requestedBy: Clinician!
+  reviewers: [PeerReviewer!]!
+  urgency: ReviewUrgency!
+  consensus: PeerConsensus
+  startedAt: DateTime!
+  completedAt: DateTime
+  chatMessages: [ChatMessage!]
+}
+
+type PeerReviewer {
+  clinician: Clinician!
+  status: ReviewerStatus!
+  decision: PeerDecision
+  joinedAt: DateTime
+  decidedAt: DateTime
+}
+
+type PeerDecision {
+  recommendation: PeerRecommendation!
+  clinicalRationale: String!
+  supportingEvidence: [String!]!
+  concerns: [String!]
+}
+
+type PeerConsensus {
+  reached: Boolean!
+  recommendation: PeerRecommendation!
+  consensusLevel: ConsensusLevel!
+  dissents: [Dissent!]
+}
+
+type Dissent {
+  clinician: Clinician!
+  reason: String!
+  alternativeRecommendation: PeerRecommendation!
+}
+
+type WorkflowUIState {
+  workflowId: ID!
+  currentPhase: WorkflowPhase!
+  uiMode: UIMode!
+  activeModals: [ModalState!]!
+  pendingActions: [PendingAction!]!
+  notifications: [UINotification!]!
+  lastUpdated: DateTime!
+  userContext: JSON
+}
+
+type ModalState {
+  id: String!
+  type: ModalType!
+  title: String!
+  content: JSON!
+  actions: [UIAction!]!
+  priority: Int!
+  dismissible: Boolean!
+}
+
+type PendingAction {
+  id: String!
+  type: ActionType!
+  description: String!
+  requiredBy: DateTime
+  assignedTo: [Clinician!]
+  priority: ActionPriority!
+}
+
+type WorkflowUIUpdate {
+  workflowId: ID!
+  updateType: UIUpdateType!
+  phase: WorkflowPhase!
+  notification: UINotification
+  stateChange: StateChange
+  timestamp: DateTime!
+}
+
+type StateChange {
+  field: String!
+  oldValue: JSON
+  newValue: JSON
+  changedBy: String
+}
+
+type OverrideRequirement {
+  workflowId: ID!
+  validationId: String!
+  verdict: ValidationVerdict!
+  criticalFindings: [ValidationFinding!]!
+  overrideOptions: [OverrideOption!]!
+  timeoutAt: DateTime!
+  escalationPath: [EscalationLevel!]
+}
+
+type OverrideOption {
+  level: OverrideLevel!
+  available: Boolean!
+  requirements: [String!]!
+  authorizedRoles: [String!]!
+}
+
+type EscalationLevel {
+  level: Int!
+  role: String!
+  contactMethod: ContactMethod!
+  timeoutMinutes: Int!
+}
+
+type PeerReviewUpdate {
+  sessionId: ID!
+  updateType: PeerUpdateType!
+  reviewer: Clinician
+  message: ChatMessage
+  statusChange: PeerReviewStatus
+  timestamp: DateTime!
+}
+
+type ChatMessage {
+  id: ID!
+  sender: Clinician!
+  message: String!
+  attachments: [Attachment!]
+  timestamp: DateTime!
+  isSystemMessage: Boolean!
+}
+
+type Attachment {
+  id: ID!
+  type: AttachmentType!
+  url: String!
+  title: String!
+  metadata: JSON
+}
+
+type ClinicalAlert {
+  id: ID!
+  severity: AlertSeverity!
+  type: AlertType!
+  title: String!
+  message: String!
+  affectedWorkflows: [ID!]!
+  department: String
+  expiresAt: DateTime
+  actions: [AlertAction!]!
+}
+
+type AlertAction {
+  label: String!
+  url: String!
+  type: AlertActionType!
+}
+
+type Clinician {
+  id: ID!
+  name: String!
+  role: String!
+  department: String!
+  authorityLevel: AuthorityLevel!
+  available: Boolean!
+}
+
+type AuditEntry {
+  id: ID!
+  action: AuditAction!
+  actor: Clinician!
+  timestamp: DateTime!
+  details: JSON!
+  signature: String!
+}
+
+type OverrideHistoryConnection {
+  edges: [OverrideHistoryEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+  statistics: OverrideStatistics!
+}
+
+type OverrideHistoryEdge {
+  node: OverrideSession!
+  cursor: String!
+}
+
+type OverrideStatistics {
+  totalOverrides: Int!
+  byLevel: [OverrideLevelCount!]!
+  byReason: [OverrideReasonCount!]!
+  averageReviewTime: Float!
+}
+
+type OverrideLevelCount {
+  level: OverrideLevel!
+  count: Int!
+  percentage: Float!
+}
+
+type OverrideReasonCount {
+  category: OverrideCategory!
+  count: Int!
+  percentage: Float!
+}
+
+type OverridePatternAnalysis {
+  patterns: [OverridePattern!]!
+  recommendations: [SystemRecommendation!]!
+  falsePositiveRate: Float!
+  clinicianAdherence: Float!
+}
+
+type OverridePattern {
+  id: ID!
+  description: String!
+  frequency: Int!
+  medications: [String!]!
+  commonReasons: [String!]!
+  suggestedRuleAdjustment: String
+}
+
+type SystemRecommendation {
+  id: ID!
+  type: RecommendationType!
+  description: String!
+  impact: ImpactLevel!
+  implementation: String!
+}
+
+# === Enums ===
+
+enum UINotificationStatus {
+  PENDING
+  DISPLAYED
+  ACKNOWLEDGED
+  EXPIRED
+  DISMISSED
+}
+
+enum NotificationSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum UIActionType {
+  APPROVE
+  OVERRIDE
+  CANCEL
+  MODIFY
+  DEFER
+  REQUEST_REVIEW
+  VIEW_DETAILS
+}
+
+enum OverrideDecision {
+  OVERRIDE
+  MODIFY
+  CANCEL
+  DEFER
+  ESCALATE
+}
+
+enum OverrideLevel {
+  CLINICAL_JUDGMENT      # Level 1: Individual clinician
+  PEER_REVIEW           # Level 2: Peer co-signature
+  SUPERVISORY           # Level 3: Department head
+  EMERGENCY             # Emergency: Any provider, 24hr review
+}
+
+enum OverrideCategory {
+  CLINICAL_BENEFIT
+  PATIENT_SPECIFIC
+  FALSE_POSITIVE
+  RISK_ACCEPTED
+  ALTERNATIVE_MONITORING
+  EMERGENCY_TREATMENT
+  SYSTEM_LIMITATION
+}
+
+enum PeerRecommendation {
+  SUPPORT_OVERRIDE
+  REJECT_OVERRIDE
+  MODIFY_PROPOSAL
+  REQUEST_MORE_INFO
+  ESCALATE
+}
+
+enum OverrideSessionStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum PeerReviewStatus {
+  REQUESTED
+  IN_PROGRESS
+  CONSENSUS_REACHED
+  NO_CONSENSUS
+  COMPLETED
+  CANCELLED
+}
+
+enum ReviewUrgency {
+  ROUTINE     # 4 hours
+  URGENT      # 1 hour
+  STAT        # 15 minutes
+  EMERGENCY   # Immediate
+}
+
+enum UIMode {
+  STANDARD
+  OVERRIDE_REQUIRED
+  PEER_REVIEW
+  EMERGENCY
+  READ_ONLY
+}
+
+enum ModalType {
+  WARNING
+  OVERRIDE_REQUEST
+  PEER_REVIEW
+  CONFIRMATION
+  ERROR
+}
+
+enum UIUpdateType {
+  PHASE_CHANGE
+  NOTIFICATION
+  STATE_UPDATE
+  ACTION_REQUIRED
+  ACTION_COMPLETED
+}
+
+enum ConsensusLevel {
+  UNANIMOUS
+  MAJORITY
+  SPLIT
+  NO_CONSENSUS
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertType {
+  OVERRIDE_REQUIRED
+  SYSTEM_ISSUE
+  COMPLIANCE_WARNING
+  SAFETY_ALERT
+}
+
+enum AuthorityLevel {
+  RESIDENT
+  ATTENDING
+  SPECIALIST
+  DEPARTMENT_HEAD
+  CHIEF_MEDICAL_OFFICER
+}
+
+enum AuditAction {
+  OVERRIDE_REQUESTED
+  OVERRIDE_APPROVED
+  OVERRIDE_REJECTED
+  PEER_REVIEW_REQUESTED
+  PEER_REVIEW_COMPLETED
+  WARNING_ACKNOWLEDGED
+  PROPOSAL_MODIFIED
+  WORKFLOW_CANCELLED
+}

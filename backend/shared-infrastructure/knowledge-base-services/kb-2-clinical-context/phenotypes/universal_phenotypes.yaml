@@ -1,0 +1,388 @@
+# Universal Phenotypes Library
+# High-priority cross-domain phenotypes for complex clinical scenarios
+
+metadata:
+  kb_name: "kb_clinical_context"
+  version: "2.0.0"
+  institution: "Clinical Synthesis Hub"
+  effective_date: "2025-09-01"
+  expires_date: "2026-09-01"
+  clinical_domains: ["cross_domain", "geriatrics", "obstetrics", "emergency"]
+
+phenotypes:
+  
+  # ========== MULTI-MORBIDITY PHENOTYPES ==========
+  
+  - id: "PHE-MM000001"
+    name: "Complex Multi-Morbidity with Polypharmacy"
+    domain: "cross_domain"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Complex patients with multiple conditions and medication burden"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        size(patient.conditions) >= 3 &&
+        size(patient.medications) >= 7 &&
+        (patient.age >= 65 || patient.frailty_score >= 5)
+      data_requirements:
+        - field: "patient.conditions"
+          type: "array"
+          required: true
+          source: "context_gateway"
+          time_window: "1y"
+        - field: "patient.medications"
+          type: "array" 
+          required: true
+          source: "context_gateway"
+          time_window: "3m"
+        - field: "patient.age"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+        - field: "patient.frailty_score"
+          type: "integer"
+          required: false
+          source: "ehr"
+          validation_rules:
+            min_value: 1
+            max_value: 9
+    
+    priority: 950
+    
+    exclusivity:
+      exclusive_with: []
+      scope: "domain"
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "conservative"
+      monitoring_level: "intensive"
+      care_setting: "multidisciplinary"
+      clinical_urgency: "urgent"
+    
+    clinical_implications:
+      - implication: "High risk for drug interactions and adverse events"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "medication_change"
+      - implication: "Prioritize deprescribing opportunities"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "medication_change"
+      - implication: "Consider geriatric consultation for medication optimization"
+        severity: "info"
+        action_required: false
+        timeframe: "within_week"
+        action_type: "referral"
+    
+    evidence_links:
+      kb3_guidelines: ["MULTI-MORBIDITY-2024-001", "POLYPHARMACY-MGMT-2024"]
+      kb4_safety_rules: ["SAF-DRUG-INT-001", "SAF-ELDERLY-002"]
+      literature_refs:
+        - pmid: "34567890"
+          citation: "Multi-morbidity management in elderly patients"
+          evidence_level: "2a"
+    
+    metadata:
+      author: "Clinical Informatics Team"
+      clinical_reviewer: "Dr. Sarah Johnson, Geriatrician"
+      last_review_date: "2025-08-30"
+      next_review_date: "2025-11-30"
+      review_frequency: "quarterly"
+
+  # ========== GERIATRIC PHENOTYPES ==========
+  
+  - id: "PHE-GER00001"
+    name: "Frail Elderly with Fall Risk"
+    domain: "geriatrics"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Elderly patients with frailty syndrome and increased fall risk"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.age >= 75 &&
+        (patient.frailty_score >= 6 || 
+         patient.fall_history_12mo >= 2 || 
+         patient.gait_speed < 0.8)
+      data_requirements:
+        - field: "patient.age"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+        - field: "patient.frailty_score"
+          type: "integer"
+          required: false
+          source: "ehr"
+          validation_rules:
+            min_value: 1
+            max_value: 9
+        - field: "patient.fall_history_12mo"
+          type: "integer"
+          required: false
+          source: "patient_reported"
+          time_window: "12m"
+        - field: "patient.gait_speed"
+          type: "float"
+          required: false
+          source: "ehr"
+          units: "m/s"
+          validation_rules:
+            min_value: 0.1
+            max_value: 2.0
+    
+    priority: 800
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "conservative"
+      monitoring_level: "enhanced"
+      care_setting: "multidisciplinary"
+    
+    clinical_implications:
+      - implication: "Avoid medications that increase fall risk"
+        severity: "warning"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "medication_change"
+      - implication: "Relax glycemic and blood pressure targets"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "follow_up"
+      - implication: "Consider physical therapy and home safety evaluation"
+        severity: "info"
+        action_required: false
+        timeframe: "within_week"
+        action_type: "referral"
+    
+    evidence_links:
+      kb3_guidelines: ["GERIATRIC-FALL-PREV-2024", "FRAILTY-MGMT-2024"]
+      kb4_safety_rules: ["SAF-FALL-RISK-001", "SAF-ELDERLY-MED-002"]
+
+  # ========== PREGNANCY PHENOTYPES ==========
+  
+  - id: "PHE-OB000001"
+    name: "Pregnancy with Chronic Conditions"
+    domain: "obstetrics"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Pregnancy complicated by pre-existing chronic medical conditions"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.is_pregnant && 
+        (patient.has_diabetes || patient.has_hypertension || 
+         patient.has_thyroid_disease || patient.has_cardiac_disease)
+      data_requirements:
+        - field: "patient.is_pregnant"
+          type: "boolean"
+          required: true
+          source: "context_gateway"
+        - field: "patient.has_diabetes"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.has_hypertension"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.has_thyroid_disease"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.has_cardiac_disease"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.gestational_age"
+          type: "integer"
+          required: false
+          source: "ehr"
+          units: "weeks"
+          validation_rules:
+            min_value: 6
+            max_value: 42
+    
+    priority: 1000  # Highest priority - pregnancy takes precedence
+    
+    outputs:
+      risk_category: "very_high"
+      treatment_intensity: "specialized"
+      monitoring_level: "intensive"
+      care_setting: "specialty"
+      clinical_urgency: "urgent"
+    
+    clinical_implications:
+      - implication: "Requires maternal-fetal medicine consultation"
+        severity: "critical"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "referral"
+      - implication: "Review all medications for teratogenicity"
+        severity: "critical"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "medication_change"
+      - implication: "Intensive monitoring of maternal and fetal status"
+        severity: "warning"
+        action_required: true
+        timeframe: "routine"
+        action_type: "follow_up"
+    
+    evidence_links:
+      kb3_guidelines: ["PREGNANCY-HTN-2024", "PREGNANCY-DM-2024", "HIGH-RISK-PREG-2024"]
+      kb4_safety_rules: ["SAF-PREG-MED-001", "SAF-TERATOGEN-001"]
+
+  # ========== EMERGENCY PHENOTYPES ==========
+  
+  - id: "PHE-EM000001"
+    name: "Acute Cardiovascular Emergency"
+    domain: "emergency"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Patients presenting with acute cardiovascular emergencies"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        (patient.troponin > 0.04 && patient.chest_pain) ||
+        (patient.systolic_bp > 180 && patient.diastolic_bp > 120) ||
+        (patient.heart_rate > 150 && patient.hypotensive)
+      data_requirements:
+        - field: "patient.troponin"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "ng/mL"
+          time_window: "6h"
+        - field: "patient.chest_pain"
+          type: "boolean"
+          required: false
+          source: "patient_reported"
+        - field: "patient.systolic_bp"
+          type: "integer"
+          required: false
+          source: "context_gateway"
+          units: "mmHg"
+          time_window: "1h"
+        - field: "patient.diastolic_bp"
+          type: "integer"
+          required: false
+          source: "context_gateway"
+          units: "mmHg"
+          time_window: "1h"
+        - field: "patient.heart_rate"
+          type: "integer"
+          required: false
+          source: "context_gateway"
+          units: "bpm"
+        - field: "patient.hypotensive"
+          type: "boolean"
+          required: false
+          source: "calculated"
+    
+    priority: 999  # Near-highest priority for emergencies
+    
+    outputs:
+      risk_category: "extreme"
+      treatment_intensity: "aggressive"
+      monitoring_level: "critical"
+      care_setting: "emergency"
+      clinical_urgency: "stat"
+    
+    clinical_implications:
+      - implication: "Immediate cardiology consultation required"
+        severity: "emergency"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "referral"
+      - implication: "Consider cardiac catheterization lab activation"
+        severity: "critical"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "alert"
+      - implication: "Continuous cardiac monitoring required"
+        severity: "critical"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "follow_up"
+    
+    evidence_links:
+      kb3_guidelines: ["ACS-EMERGENCY-2024", "HTN-CRISIS-2024", "CARDIAC-ARREST-2024"]
+      kb4_safety_rules: ["SAF-EMERGENCY-001", "SAF-CARDIAC-CRIT-001"]
+
+  # ========== COMPLEX CARE COORDINATION ==========
+  
+  - id: "PHE-CC000001"
+    name: "Complex Care Coordination Required"
+    domain: "cross_domain"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Patients requiring complex care coordination across multiple specialists"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        size(patient.active_specialists) >= 3 ||
+        (size(patient.conditions) >= 4 && patient.recent_hospitalizations >= 2) ||
+        (patient.has_rare_disease && size(patient.medications) >= 5)
+      data_requirements:
+        - field: "patient.active_specialists"
+          type: "array"
+          required: false
+          source: "ehr"
+          time_window: "6m"
+        - field: "patient.conditions"
+          type: "array"
+          required: true
+          source: "context_gateway"
+        - field: "patient.recent_hospitalizations"
+          type: "integer"
+          required: false
+          source: "ehr"
+          time_window: "12m"
+        - field: "patient.has_rare_disease"
+          type: "boolean"
+          required: false
+          source: "ehr"
+        - field: "patient.medications"
+          type: "array"
+          required: true
+          source: "context_gateway"
+    
+    priority: 900
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "standard"
+      monitoring_level: "enhanced"
+      care_setting: "multidisciplinary"
+      clinical_urgency: "routine"
+    
+    clinical_implications:
+      - implication: "Care coordination team involvement recommended"
+        severity: "info"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "referral"
+      - implication: "Consider comprehensive care plan development"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "follow_up"
+    
+    evidence_links:
+      kb3_guidelines: ["CARE-COORD-2024", "MULTI-SPEC-MGMT-2024"]
+      kb4_safety_rules: ["SAF-COORD-001"]

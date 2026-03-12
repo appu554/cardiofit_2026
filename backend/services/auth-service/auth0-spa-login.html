@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 SPA Login</title>
+    <script src="https://cdn.auth0.com/js/auth0-spa-js/2.1.2/auth0-spa-js.production.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0063b1;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 4px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        .hidden {
+            display: none;
+        }
+        .api-test {
+            margin-top: 20px;
+        }
+        input[type="text"] {
+            padding: 8px;
+            width: 300px;
+            margin-right: 10px;
+        }
+        #error-message {
+            color: red;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Auth0 SPA Login</h1>
+            <p>Use this page to authenticate with Auth0 and test the auth service.</p>
+            <div>
+                <button id="login">Login</button>
+                <button id="logout" class="hidden">Logout</button>
+            </div>
+            <div id="error-message"></div>
+        </div>
+
+        <div id="user-info" class="card hidden">
+            <h2>User Information</h2>
+            <pre id="profile">Not logged in</pre>
+        </div>
+
+        <div id="token-info" class="card hidden">
+            <h2>Token Information</h2>
+            <button id="get-token">Get Access Token</button>
+            <pre id="token">No token</pre>
+        </div>
+
+        <div id="api-test" class="card hidden">
+            <h2>API Test</h2>
+            <div>
+                <input type="text" id="api-url" value="http://localhost:8000/api/auth/me">
+                <button id="call-api">Call API</button>
+            </div>
+            <pre id="api-response">No response</pre>
+        </div>
+    </div>
+
+    <script>
+        // Auth0 configuration
+        const auth0Domain = 'dev-hfw6wda5wtf8l13c.au.auth0.com';
+        const auth0ClientId = 'qysYE1GswykrgR7OmfrSw475cBPjVRxl';
+        const auth0Audience = 'https://clinical-synthesis-hub-api';
+
+        // Debug information
+        console.log('Auth0 Configuration:');
+        console.log('Domain:', auth0Domain);
+        console.log('Client ID:', auth0ClientId);
+        console.log('Audience:', auth0Audience);
+        console.log('Redirect URL:', window.location.href);
+
+        // DOM elements
+        const loginButton = document.getElementById('login');
+        const logoutButton = document.getElementById('logout');
+        const getTokenButton = document.getElementById('get-token');
+        const callApiButton = document.getElementById('call-api');
+        const userInfoSection = document.getElementById('user-info');
+        const tokenInfoSection = document.getElementById('token-info');
+        const apiTestSection = document.getElementById('api-test');
+        const profileElement = document.getElementById('profile');
+        const tokenElement = document.getElementById('token');
+        const apiResponseElement = document.getElementById('api-response');
+        const apiUrlInput = document.getElementById('api-url');
+        const errorMessageElement = document.getElementById('error-message');
+
+        // Store auth0 client and tokens
+        let auth0Client = null;
+        let accessToken = '';
+
+        // Initialize Auth0 client
+        async function initAuth0() {
+            try {
+                errorMessageElement.textContent = '';
+
+                auth0Client = await auth0.createAuth0Client({
+                    domain: auth0Domain,
+                    clientId: auth0ClientId,
+                    authorizationParams: {
+                        redirect_uri: window.location.href,
+                        audience: auth0Audience
+                    }
+                });
+
+                // Check for the code in the URL
+                if (window.location.search.includes('code=')) {
+                    // Handle the redirect and get tokens
+                    await auth0Client.handleRedirectCallback();
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                }
+
+                // Check if user is authenticated
+                const isAuthenticated = await auth0Client.isAuthenticated();
+                updateUI(isAuthenticated);
+
+                if (isAuthenticated) {
+                    const user = await auth0Client.getUser();
+                    profileElement.textContent = JSON.stringify(user, null, 2);
+                }
+            } catch (error) {
+                console.error('Auth0 initialization error:', error);
+                errorMessageElement.textContent = 'Error initializing Auth0: ' + error.message;
+            }
+        }
+
+        // Update UI based on authentication state
+        function updateUI(isAuthenticated) {
+            if (isAuthenticated) {
+                loginButton.classList.add('hidden');
+                logoutButton.classList.remove('hidden');
+                userInfoSection.classList.remove('hidden');
+                tokenInfoSection.classList.remove('hidden');
+                apiTestSection.classList.remove('hidden');
+            } else {
+                loginButton.classList.remove('hidden');
+                logoutButton.classList.add('hidden');
+                userInfoSection.classList.add('hidden');
+                tokenInfoSection.classList.add('hidden');
+                apiTestSection.classList.add('hidden');
+
+                profileElement.textContent = 'Not logged in';
+                tokenElement.textContent = 'No token';
+                apiResponseElement.textContent = 'No response';
+
+                accessToken = '';
+            }
+        }
+
+        // Login function
+        async function login() {
+            try {
+                errorMessageElement.textContent = '';
+                await auth0Client.loginWithRedirect();
+            } catch (error) {
+                console.error('Login error:', error);
+                errorMessageElement.textContent = 'Login error: ' + error.message;
+            }
+        }
+
+        // Logout function
+        async function logout() {
+            try {
+                errorMessageElement.textContent = '';
+                await auth0Client.logout({
+                    logoutParams: {
+                        returnTo: window.location.href
+                    }
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+                errorMessageElement.textContent = 'Logout error: ' + error.message;
+            }
+        }
+
+        // Get token function
+        async function getToken() {
+            try {
+                errorMessageElement.textContent = '';
+                accessToken = await auth0Client.getTokenSilently();
+                tokenElement.textContent = accessToken;
+            } catch (error) {
+                console.error('Error getting token:', error);
+                errorMessageElement.textContent = 'Error getting token: ' + error.message;
+            }
+        }
+
+        // Call API function
+        async function callApi() {
+            if (!accessToken) {
+                errorMessageElement.textContent = 'No token available. Please get a token first.';
+                return;
+            }
+
+            try {
+                errorMessageElement.textContent = '';
+                apiResponseElement.textContent = 'Loading...';
+
+                const apiUrl = apiUrlInput.value;
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+
+                const data = await response.json();
+                apiResponseElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API Error:', error);
+                apiResponseElement.textContent = 'Error: ' + error.message;
+                errorMessageElement.textContent = 'API error: ' + error.message;
+            }
+        }
+
+        // Event listeners
+        loginButton.addEventListener('click', login);
+        logoutButton.addEventListener('click', logout);
+        getTokenButton.addEventListener('click', getToken);
+        callApiButton.addEventListener('click', callApi);
+
+        // Initialize Auth0 on page load
+        window.addEventListener('load', initAuth0);
+    </script>
+</body>
+</html>

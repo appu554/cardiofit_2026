@@ -1,0 +1,953 @@
+// scoring_engine.go
+// Package scoring implements the multi-factor scoring and ranking algorithm for medication recommendations
+package scoring
+
+import (
+    "context"
+    "fmt"
+    "math"
+    "sort"
+    "sync"
+    "time"
+    
+    "github.com/montanaflynn/stats"
+    "go.uber.org/zap"
+    
+    "yourmodule/recommendation"
+    "yourmodule/integration"
+)
+
+// ==================== Configuration ====================
+
+// ScoringConfig defines weights and parameters for the scoring algorithm
+type ScoringConfig struct {
+    // Weight factors (must sum to 1.0)
+    Weights ScoringWeights `json:"weights"`
+    
+    // Scoring parameters
+    Parameters ScoringParameters `json:"parameters"`
+    
+    // Feature flags
+    Features ScoringFeatures `json:"features"`
+}
+
+// ScoringWeights defines the relative importance of each scoring dimension
+type ScoringWeights struct {
+    Safety                float64 `json:"safety"`                  // Safety profile weight
+    Efficacy              float64 `json:"efficacy"`                // Clinical efficacy weight
+    Tolerability          float64 `json:"tolerability"`            // Side effect profile weight
+    Convenience           float64 `json:"convenience"`             // Dosing convenience weight
+    Cost                  float64 `json:"cost"`                    // Cost-effectiveness weight
+    PatientPreference     float64 `json:"patient_preference"`     // Patient-specific factors weight
+    GuidelineAdherence    float64 `json:"guideline_adherence"`    // Clinical guideline alignment weight
+    DrugInteractionProfile float64 `json:"drug_interaction_profile"` // DDI complexity weight
+}
+
+// ScoringParameters defines thresholds and scaling factors
+type ScoringParameters struct {
+    // Cost parameters
+    MaxAcceptableCostPerMonth float64 `json:"max_acceptable_cost_per_month"`
+    CostSensitivity           float64 `json:"cost_sensitivity"` // 0-1, higher = more cost sensitive
+    
+    // Efficacy parameters
+    MinimumEfficacyThreshold  float64 `json:"minimum_efficacy_threshold"`
+    EfficacyDataQualityWeight float64 `json:"efficacy_data_quality_weight"`
+    
+    // Convenience parameters
+    IdealDosesPerDay          int     `json:"ideal_doses_per_day"`
+    PillBurdenPenaltyFactor   float64 `json:"pill_burden_penalty_factor"`
+    
+    // Patient preference parameters
+    PreferGeneric             bool    `json:"prefer_generic"`
+    PreferOralRoute           bool    `json:"prefer_oral_route"`
+    AvoidInjectables          bool    `json:"avoid_injectables"`
+    
+    // Guideline parameters
+    GuidelineSource           string  `json:"guideline_source"` // e.g., "AHA", "ADA", "KDIGO"
+    PreferFirstLine           bool    `json:"prefer_first_line"`
+}
+
+// ScoringFeatures defines which advanced features are enabled
+type ScoringFeatures struct {
+    UseMLPredictions          bool `json:"use_ml_predictions"`
+    UsePatientHistory         bool `json:"use_patient_history"`
+    UsePopulationOutcomes     bool `json:"use_population_outcomes"`
+    UseRealWorldEvidence      bool `json:"use_real_world_evidence"`
+    UsePredictiveAdherence    bool `json:"use_predictive_adherence"`
+    UsePharmacogenomics       bool `json:"use_pharmacogenomics"`
+}
+
+// DefaultScoringConfig returns a balanced default configuration
+func DefaultScoringConfig() *ScoringConfig {
+    return &ScoringConfig{
+        Weights: ScoringWeights{
+            Safety:                0.30,
+            Efficacy:              0.25,
+            Tolerability:          0.15,
+            Convenience:           0.10,
+            Cost:                  0.10,
+            PatientPreference:     0.05,
+            GuidelineAdherence:    0.03,
+            DrugInteractionProfile: 0.02,
+        },
+        Parameters: ScoringParameters{
+            MaxAcceptableCostPerMonth: 500.0,
+            CostSensitivity:           0.5,
+            MinimumEfficacyThreshold:  0.6,
+            EfficacyDataQualityWeight: 0.8,
+            IdealDosesPerDay:          1,
+            PillBurdenPenaltyFactor:   0.1,
+            PreferGeneric:             true,
+            PreferOralRoute:           true,
+            AvoidInjectables:          false,
+            GuidelineSource:           "AHA",
+            PreferFirstLine:           true,
+        },
+        Features: ScoringFeatures{
+            UseMLPredictions:       false,
+            UsePatientHistory:      true,
+            UsePopulationOutcomes:  true,
+            UseRealWorldEvidence:   false,
+            UsePredictiveAdherence: false,
+            UsePharmacogenomics:    true,
+        },
+    }
+}
+
+// ==================== Domain Models ====================
+
+// ScoredProposal represents a candidate with comprehensive scoring
+type ScoredProposal struct {
+    Candidate           integration.SafetyVerifiedProposal `json:"candidate"`
+    TotalScore          float64                            `json:"total_score"`
+    ComponentScores     ComponentScores                    `json:"component_scores"`
+    Rankings            Rankings                           `json:"rankings"`
+    Evidence            ScoringEvidence                    `json:"evidence"`
+    Recommendation      ClinicalRecommendation             `json:"recommendation"`
+    AlternativeOptions  []AlternativeOption                `json:"alternative_options"`
+}
+
+// ComponentScores breaks down the total score by dimension
+type ComponentScores struct {
+    Safety                float64 `json:"safety"`
+    Efficacy              float64 `json:"efficacy"`
+    Tolerability          float64 `json:"tolerability"`
+    Convenience           float64 `json:"convenience"`
+    Cost                  float64 `json:"cost"`
+    PatientPreference     float64 `json:"patient_preference"`
+    GuidelineAdherence    float64 `json:"guideline_adherence"`
+    DrugInteractionProfile float64 `json:"drug_interaction_profile"`
+}
+
+// Rankings shows relative position across dimensions
+type Rankings struct {
+    OverallRank          int `json:"overall_rank"`
+    SafetyRank           int `json:"safety_rank"`
+    EfficacyRank         int `json:"efficacy_rank"`
+    CostRank             int `json:"cost_rank"`
+    PatientPreferenceRank int `json:"patient_preference_rank"`
+}
+
+// ScoringEvidence provides transparency into scoring decisions
+type ScoringEvidence struct {
+    DataSources           []DataSource           `json:"data_sources"`
+    ClinicalTrials        []ClinicalTrialSummary `json:"clinical_trials"`
+    RealWorldEvidence     []RWEDataPoint         `json:"real_world_evidence"`
+    GuidelineReferences   []GuidelineReference   `json:"guideline_references"`
+    ConfidenceLevel       float64                `json:"confidence_level"`
+    DataCompleteness      float64                `json:"data_completeness"`
+}
+
+// DataSource represents where scoring data came from
+type DataSource struct {
+    Name        string    `json:"name"`
+    Type        string    `json:"type"` // "RCT", "Meta-analysis", "Observational", "Registry"
+    Quality     string    `json:"quality"` // "High", "Moderate", "Low"
+    LastUpdated time.Time `json:"last_updated"`
+}
+
+// ClinicalTrialSummary provides key trial data
+type ClinicalTrialSummary struct {
+    TrialID          string  `json:"trial_id"`
+    Name             string  `json:"name"`
+    SampleSize       int     `json:"sample_size"`
+    PrimaryOutcome   string  `json:"primary_outcome"`
+    EffectSize       float64 `json:"effect_size"`
+    PValue           float64 `json:"p_value"`
+    NumberNeededToTreat int  `json:"nnt"`
+}
+
+// RWEDataPoint represents real-world evidence
+type RWEDataPoint struct {
+    Source            string  `json:"source"`
+    PopulationSize    int     `json:"population_size"`
+    OutcomeMeasure    string  `json:"outcome_measure"`
+    ObservedBenefit   float64 `json:"observed_benefit"`
+    TimeToEffect      string  `json:"time_to_effect"`
+}
+
+// GuidelineReference links to clinical guidelines
+type GuidelineReference struct {
+    Organization     string `json:"organization"`
+    GuidelineName    string `json:"guideline_name"`
+    RecommendationClass string `json:"recommendation_class"` // "I", "IIa", "IIb", "III"
+    LevelOfEvidence  string `json:"level_of_evidence"` // "A", "B", "C"
+    Year             int    `json:"year"`
+}
+
+// ClinicalRecommendation provides actionable guidance
+type ClinicalRecommendation struct {
+    RecommendationText    string                 `json:"recommendation_text"`
+    Strength              string                 `json:"strength"` // "Strong", "Conditional", "Weak"
+    Rationale             string                 `json:"rationale"`
+    MonitoringRequired    []MonitoringParameter  `json:"monitoring_required"`
+    ExpectedTimeToEffect  string                 `json:"expected_time_to_effect"`
+    DurationOfTherapy     string                 `json:"duration_of_therapy"`
+    TitrationSchedule     *TitrationSchedule     `json:"titration_schedule,omitempty"`
+}
+
+// MonitoringParameter defines what to monitor
+type MonitoringParameter struct {
+    Parameter     string `json:"parameter"`
+    Frequency     string `json:"frequency"`
+    TargetRange   string `json:"target_range"`
+    ActionIfAbnormal string `json:"action_if_abnormal"`
+}
+
+// TitrationSchedule defines dose escalation
+type TitrationSchedule struct {
+    StartingDose      string   `json:"starting_dose"`
+    TargetDose        string   `json:"target_dose"`
+    IncrementSteps    []string `json:"increment_steps"`
+    IntervalDays      int      `json:"interval_days"`
+    MonitoringBetween bool     `json:"monitoring_between"`
+}
+
+// AlternativeOption represents other viable choices
+type AlternativeOption struct {
+    DrugID            string  `json:"drug_id"`
+    DrugName          string  `json:"drug_name"`
+    Score             float64 `json:"score"`
+    ProsComparedToPrimary []string `json:"pros_compared_to_primary"`
+    ConsComparedToPrimary []string `json:"cons_compared_to_primary"`
+    SwitchingNotes    string  `json:"switching_notes"`
+}
+
+// ==================== External Service Interfaces ====================
+
+// EfficacyDataService provides clinical efficacy data
+type EfficacyDataService interface {
+    GetEfficacyData(ctx context.Context, drugID string, indication string) (*EfficacyData, error)
+    GetComparativeEffectiveness(ctx context.Context, drugIDs []string, indication string) (map[string]float64, error)
+}
+
+// EfficacyData represents drug efficacy information
+type EfficacyData struct {
+    DrugID                string                  `json:"drug_id"`
+    Indication            string                  `json:"indication"`
+    EfficacyScore         float64                 `json:"efficacy_score"` // 0-1 normalized
+    ClinicalTrials        []ClinicalTrialSummary  `json:"clinical_trials"`
+    MetaAnalyses          []MetaAnalysis          `json:"meta_analyses"`
+    NumberNeededToTreat   *int                    `json:"nnt,omitempty"`
+    TimeToEffect          string                  `json:"time_to_effect"`
+    DurableResponse       bool                    `json:"durable_response"`
+}
+
+// MetaAnalysis represents aggregated trial data
+type MetaAnalysis struct {
+    Title           string  `json:"title"`
+    StudiesIncluded int     `json:"studies_included"`
+    TotalPatients   int     `json:"total_patients"`
+    PooledEffectSize float64 `json:"pooled_effect_size"`
+    Heterogeneity   string  `json:"heterogeneity"` // "Low", "Moderate", "High"
+    Publication     string  `json:"publication"`
+    Year            int     `json:"year"`
+}
+
+// CostDataService provides medication cost information
+type CostDataService interface {
+    GetMedicationCost(ctx context.Context, drugID string, formularyID string) (*CostData, error)
+    GetPatientCopay(ctx context.Context, drugID string, insuranceID string) (float64, error)
+}
+
+// CostData represents medication cost details
+type CostData struct {
+    DrugID              string  `json:"drug_id"`
+    AWPPerMonth         float64 `json:"awp_per_month"` // Average Wholesale Price
+    PatientCopayPerMonth float64 `json:"patient_copay_per_month"`
+    FormularyTier       int     `json:"formulary_tier"`
+    GenericAvailable    bool    `json:"generic_available"`
+    PatientAssistance   bool    `json:"patient_assistance_available"`
+    CostEffectivenessRatio float64 `json:"cost_effectiveness_ratio"` // $/QALY
+}
+
+// PatientHistoryService provides historical patient data
+type PatientHistoryService interface {
+    GetMedicationHistory(ctx context.Context, patientID string) ([]MedicationHistoryEntry, error)
+    GetAdherenceHistory(ctx context.Context, patientID string) (*AdherenceProfile, error)
+    GetOutcomeHistory(ctx context.Context, patientID string) ([]OutcomeEntry, error)
+}
+
+// MedicationHistoryEntry represents past medication use
+type MedicationHistoryEntry struct {
+    DrugID            string    `json:"drug_id"`
+    StartDate         time.Time `json:"start_date"`
+    EndDate           *time.Time `json:"end_date,omitempty"`
+    ReasonForStopping *string   `json:"reason_for_stopping,omitempty"`
+    Efficacy          *string   `json:"efficacy,omitempty"`
+    Tolerability      *string   `json:"tolerability,omitempty"`
+}
+
+// AdherenceProfile represents patient adherence patterns
+type AdherenceProfile struct {
+    OverallAdherence      float64            `json:"overall_adherence"` // 0-1
+    MedicationAdherence   map[string]float64 `json:"medication_adherence"`
+    PredictedAdherence    float64            `json:"predicted_adherence"`
+    AdherenceFactors      []string           `json:"adherence_factors"`
+}
+
+// OutcomeEntry represents clinical outcomes
+type OutcomeEntry struct {
+    Date          time.Time `json:"date"`
+    OutcomeType   string    `json:"outcome_type"`
+    Value         string    `json:"value"`
+    MedicationID  string    `json:"medication_id"`
+}
+
+// ==================== Main Scoring Engine ====================
+
+// ScoringEngine orchestrates the multi-factor scoring process
+type ScoringEngine struct {
+    config           *ScoringConfig
+    efficacyService  EfficacyDataService
+    costService      CostDataService
+    historyService   PatientHistoryService
+    logger           *zap.Logger
+    
+    // Caching
+    efficacyCache    map[string]*EfficacyData
+    cacheMu          sync.RWMutex
+}
+
+// NewScoringEngine creates a new scoring engine instance
+func NewScoringEngine(
+    config *ScoringConfig,
+    efficacyService EfficacyDataService,
+    costService CostDataService,
+    historyService PatientHistoryService,
+    logger *zap.Logger,
+) *ScoringEngine {
+    if config == nil {
+        config = DefaultScoringConfig()
+    }
+    if logger == nil {
+        logger = zap.NewNop()
+    }
+    
+    return &ScoringEngine{
+        config:          config,
+        efficacyService: efficacyService,
+        costService:     costService,
+        historyService:  historyService,
+        logger:          logger,
+        efficacyCache:   make(map[string]*EfficacyData),
+    }
+}
+
+// ScoreAndRankProposals scores and ranks all safety-verified proposals
+func (e *ScoringEngine) ScoreAndRankProposals(
+    ctx context.Context,
+    proposals []integration.SafetyVerifiedProposal,
+    patientContext recommendation.PatientContext,
+    indication string,
+) ([]ScoredProposal, error) {
+    if len(proposals) == 0 {
+        return []ScoredProposal{}, nil
+    }
+    
+    startTime := time.Now()
+    e.logger.Info("Starting scoring process",
+        zap.Int("proposal_count", len(proposals)),
+        zap.String("indication", indication),
+    )
+    
+    // Score each proposal concurrently
+    scoredProposals := make([]ScoredProposal, 0, len(proposals))
+    scoredChan := make(chan ScoredProposal, len(proposals))
+    errChan := make(chan error, len(proposals))
+    
+    var wg sync.WaitGroup
+    for _, proposal := range proposals {
+        wg.Add(1)
+        go func(p integration.SafetyVerifiedProposal) {
+            defer wg.Done()
+            
+            scored, err := e.scoreProposal(ctx, p, patientContext, indication)
+            if err != nil {
+                errChan <- err
+                return
+            }
+            scoredChan <- scored
+        }(proposal)
+    }
+    
+    wg.Wait()
+    close(scoredChan)
+    close(errChan)
+    
+    // Check for errors
+    if len(errChan) > 0 {
+        return nil, <-errChan
+    }
+    
+    // Collect scored proposals
+    for scored := range scoredChan {
+        scoredProposals = append(scoredProposals, scored)
+    }
+    
+    // Sort by total score (descending)
+    sort.Slice(scoredProposals, func(i, j int) bool {
+        return scoredProposals[i].TotalScore > scoredProposals[j].TotalScore
+    })
+    
+    // Assign rankings
+    e.assignRankings(scoredProposals)
+    
+    // Add alternative options for top recommendations
+    if len(scoredProposals) > 0 {
+        e.addAlternativeOptions(scoredProposals)
+    }
+    
+    e.logger.Info("Scoring completed",
+        zap.Duration("duration", time.Since(startTime)),
+        zap.Float64("top_score", scoredProposals[0].TotalScore),
+    )
+    
+    return scoredProposals, nil
+}
+
+// scoreProposal calculates comprehensive score for a single proposal
+func (e *ScoringEngine) scoreProposal(
+    ctx context.Context,
+    proposal integration.SafetyVerifiedProposal,
+    patientContext recommendation.PatientContext,
+    indication string,
+) (ScoredProposal, error) {
+    var scores ComponentScores
+    var evidence ScoringEvidence
+    
+    // 1. Safety Score (from JIT safety check)
+    scores.Safety = e.calculateSafetyScore(proposal)
+    
+    // 2. Efficacy Score
+    efficacyScore, efficacyEvidence := e.calculateEfficacyScore(ctx, proposal, indication)
+    scores.Efficacy = efficacyScore
+    evidence.ClinicalTrials = efficacyEvidence.ClinicalTrials
+    
+    // 3. Tolerability Score
+    scores.Tolerability = e.calculateTolerabilityScore(proposal, patientContext)
+    
+    // 4. Convenience Score
+    scores.Convenience = e.calculateConvenienceScore(proposal)
+    
+    // 5. Cost Score
+    costScore, costData := e.calculateCostScore(ctx, proposal, patientContext)
+    scores.Cost = costScore
+    
+    // 6. Patient Preference Score
+    scores.PatientPreference = e.calculatePatientPreferenceScore(proposal, patientContext)
+    
+    // 7. Guideline Adherence Score
+    scores.GuidelineAdherence, evidence.GuidelineReferences = e.calculateGuidelineScore(proposal, indication)
+    
+    // 8. Drug Interaction Profile Score
+    scores.DrugInteractionProfile = e.calculateDrugInteractionScore(proposal)
+    
+    // Calculate weighted total score
+    totalScore := e.calculateWeightedTotal(scores)
+    
+    // Build recommendation
+    recommendation := e.buildRecommendation(proposal, scores, indication)
+    
+    // Calculate confidence level
+    evidence.ConfidenceLevel = e.calculateConfidenceLevel(evidence)
+    evidence.DataCompleteness = e.calculateDataCompleteness(scores)
+    
+    return ScoredProposal{
+        Candidate:       proposal,
+        TotalScore:      totalScore,
+        ComponentScores: scores,
+        Evidence:        evidence,
+        Recommendation:  recommendation,
+    }, nil
+}
+
+// ==================== Individual Scoring Functions ====================
+
+func (e *ScoringEngine) calculateSafetyScore(proposal integration.SafetyVerifiedProposal) float64 {
+    // Start with JIT safety score
+    baseScore := proposal.SafetyScore
+    
+    // Apply penalties for warnings and required monitoring
+    warningPenalty := float64(len(proposal.Warnings)) * 0.05
+    monitoringPenalty := float64(len(proposal.Monitoring)) * 0.02
+    
+    // Apply bonus for clean safety profile
+    cleanBonus := 0.0
+    if len(proposal.Warnings) == 0 && len(proposal.CriticalActions) == 0 {
+        cleanBonus = 0.1
+    }
+    
+    finalScore := baseScore - warningPenalty - monitoringPenalty + cleanBonus
+    
+    // Ensure score stays within bounds
+    return math.Max(0.0, math.Min(1.0, finalScore))
+}
+
+func (e *ScoringEngine) calculateEfficacyScore(
+    ctx context.Context,
+    proposal integration.SafetyVerifiedProposal,
+    indication string,
+) (float64, *EfficacyData) {
+    // Check cache first
+    e.cacheMu.RLock()
+    cached, exists := e.efficacyCache[proposal.Candidate.Drug.ID]
+    e.cacheMu.RUnlock()
+    
+    if exists {
+        return cached.EfficacyScore, cached
+    }
+    
+    // Fetch efficacy data
+    efficacyData, err := e.efficacyService.GetEfficacyData(ctx, proposal.Candidate.Drug.ID, indication)
+    if err != nil {
+        e.logger.Warn("Failed to get efficacy data",
+            zap.Error(err),
+            zap.String("drug_id", proposal.Candidate.Drug.ID),
+        )
+        // Return neutral score if data unavailable
+        return 0.5, nil
+    }
+    
+    // Cache the result
+    e.cacheMu.Lock()
+    e.efficacyCache[proposal.Candidate.Drug.ID] = efficacyData
+    e.cacheMu.Unlock()
+    
+    // Apply data quality weighting
+    qualityAdjustedScore := efficacyData.EfficacyScore
+    if len(efficacyData.ClinicalTrials) < 3 {
+        qualityAdjustedScore *= e.config.Parameters.EfficacyDataQualityWeight
+    }
+    
+    return qualityAdjustedScore, efficacyData
+}
+
+func (e *ScoringEngine) calculateTolerabilityScore(
+    proposal integration.SafetyVerifiedProposal,
+    patientContext recommendation.PatientContext,
+) float64 {
+    baseScore := 0.8 // Start with good tolerability
+    
+    // Check patient history for previous intolerance
+    if e.config.Features.UsePatientHistory && e.historyService != nil {
+        history, err := e.historyService.GetMedicationHistory(context.Background(), patientContext.PatientID)
+        if err == nil {
+            for _, entry := range history {
+                if entry.DrugID == proposal.Candidate.Drug.ID {
+                    if entry.Tolerability != nil && *entry.Tolerability == "Poor" {
+                        return 0.2 // Significant penalty for previous intolerance
+                    }
+                }
+            }
+        }
+    }
+    
+    // Adjust for common side effects (would come from KB)
+    // Simplified logic here
+    if proposal.Candidate.Drug.BlackBoxWarning {
+        baseScore -= 0.2
+    }
+    
+    return math.Max(0.0, baseScore)
+}
+
+func (e *ScoringEngine) calculateConvenienceScore(proposal integration.SafetyVerifiedProposal) float64 {
+    score := 1.0
+    
+    // Penalize for multiple daily doses
+    // Assuming frequency info would be in the drug metadata
+    dosesPerDay := 1 // Default, would come from drug data
+    if dosesPerDay > e.config.Parameters.IdealDosesPerDay {
+        score -= float64(dosesPerDay-e.config.Parameters.IdealDosesPerDay) * e.config.Parameters.PillBurdenPenaltyFactor
+    }
+    
+    // Bonus for once-weekly or once-monthly formulations
+    // Would check drug formulation data
+    
+    return math.Max(0.0, math.Min(1.0, score))
+}
+
+func (e *ScoringEngine) calculateCostScore(
+    ctx context.Context,
+    proposal integration.SafetyVerifiedProposal,
+    patientContext recommendation.PatientContext,
+) (float64, *CostData) {
+    if e.costService == nil {
+        return 0.5, nil // Neutral score if cost data unavailable
+    }
+    
+    costData, err := e.costService.GetMedicationCost(
+        ctx,
+        proposal.Candidate.Drug.ID,
+        patientContext.FormularyKBId,
+    )
+    if err != nil {
+        e.logger.Warn("Failed to get cost data",
+            zap.Error(err),
+            zap.String("drug_id", proposal.Candidate.Drug.ID),
+        )
+        return 0.5, nil
+    }
+    
+    // Calculate cost score based on patient copay
+    copay := costData.PatientCopayPerMonth
+    maxCost := e.config.Parameters.MaxAcceptableCostPerMonth
+    
+    if copay >= maxCost {
+        return 0.0, costData
+    }
+    
+    // Linear scaling from max cost to 0
+    costScore := 1.0 - (copay / maxCost)
+    
+    // Apply cost sensitivity factor
+    costScore = costScore * (1.0 - e.config.Parameters.CostSensitivity) + 
+                e.config.Parameters.CostSensitivity * costScore
+    
+    // Bonus for generic availability
+    if costData.GenericAvailable && e.config.Parameters.PreferGeneric {
+        costScore = math.Min(1.0, costScore+0.1)
+    }
+    
+    return costScore, costData
+}
+
+func (e *ScoringEngine) calculatePatientPreferenceScore(
+    proposal integration.SafetyVerifiedProposal,
+    patientContext recommendation.PatientContext,
+) float64 {
+    score := 0.7 // Start with neutral-positive
+    
+    // Check route preference
+    // Would need to get route from drug metadata
+    isOral := true // Simplified
+    if e.config.Parameters.PreferOralRoute && isOral {
+        score += 0.1
+    }
+    
+    // Check for generic preference
+    // Would check if drug is generic
+    isGeneric := false // Simplified
+    if e.config.Parameters.PreferGeneric && isGeneric {
+        score += 0.1
+    }
+    
+    // Check patient history for preferences
+    if e.config.Features.UsePatientHistory && e.historyService != nil {
+        adherence, err := e.historyService.GetAdherenceHistory(context.Background(), patientContext.PatientID)
+        if err == nil && adherence.PredictedAdherence > 0.8 {
+            score += 0.1
+        }
+    }
+    
+    return math.Min(1.0, score)
+}
+
+func (e *ScoringEngine) calculateGuidelineScore(
+    proposal integration.SafetyVerifiedProposal,
+    indication string,
+) (float64, []GuidelineReference) {
+    // Would check against clinical guidelines database
+    // Simplified implementation
+    guidelines := []GuidelineReference{
+        {
+            Organization:        e.config.Parameters.GuidelineSource,
+            GuidelineName:       fmt.Sprintf("%s Treatment Guidelines", indication),
+            RecommendationClass: "I",
+            LevelOfEvidence:     "A",
+            Year:                2024,
+        },
+    }
+    
+    // Score based on recommendation class
+    score := 1.0
+    if len(guidelines) > 0 {
+        switch guidelines[0].RecommendationClass {
+        case "I":
+            score = 1.0
+        case "IIa":
+            score = 0.8
+        case "IIb":
+            score = 0.6
+        case "III":
+            score = 0.2
+        default:
+            score = 0.5
+        }
+    }
+    
+    return score, guidelines
+}
+
+func (e *ScoringEngine) calculateDrugInteractionScore(proposal integration.SafetyVerifiedProposal) float64 {
+    // Based on DDI warnings from safety check
+    score := 1.0
+    
+    // Penalize for each DDI warning
+    for _, warning := range proposal.Candidate.DDIWarnings {
+        switch warning.Severity {
+        case recommendation.DDISeverityMajor:
+            score -= 0.3
+        case recommendation.DDISeverityModerate:
+            score -= 0.15
+        case recommendation.DDISeverityMinor:
+            score -= 0.05
+        }
+    }
+    
+    return math.Max(0.0, score)
+}
+
+// ==================== Utility Functions ====================
+
+func (e *ScoringEngine) calculateWeightedTotal(scores ComponentScores) float64 {
+    weights := e.config.Weights
+    
+    total := scores.Safety * weights.Safety +
+             scores.Efficacy * weights.Efficacy +
+             scores.Tolerability * weights.Tolerability +
+             scores.Convenience * weights.Convenience +
+             scores.Cost * weights.Cost +
+             scores.PatientPreference * weights.PatientPreference +
+             scores.GuidelineAdherence * weights.GuidelineAdherence +
+             scores.DrugInteractionProfile * weights.DrugInteractionProfile
+    
+    return total
+}
+
+func (e *ScoringEngine) calculateConfidenceLevel(evidence ScoringEvidence) float64 {
+    confidence := 0.5 // Base confidence
+    
+    // Increase confidence based on evidence quality
+    if len(evidence.ClinicalTrials) > 0 {
+        confidence += 0.2
+    }
+    if len(evidence.GuidelineReferences) > 0 {
+        confidence += 0.15
+    }
+    if len(evidence.RealWorldEvidence) > 0 {
+        confidence += 0.15
+    }
+    
+    return math.Min(1.0, confidence)
+}
+
+func (e *ScoringEngine) calculateDataCompleteness(scores ComponentScores) float64 {
+    // Check how many dimensions have non-default scores
+    completeness := 0.0
+    count := 0.0
+    
+    if scores.Safety != 0.5 {
+        completeness += 1.0
+        count += 1.0
+    }
+    if scores.Efficacy != 0.5 {
+        completeness += 1.0
+        count += 1.0
+    }
+    if scores.Cost != 0.5 {
+        completeness += 1.0
+        count += 1.0
+    }
+    // Add other dimensions...
+    
+    if count > 0 {
+        return completeness / 8.0 // Total number of dimensions
+    }
+    return 0.0
+}
+
+func (e *ScoringEngine) assignRankings(proposals []ScoredProposal) {
+    // Overall ranking (already sorted)
+    for i := range proposals {
+        proposals[i].Rankings.OverallRank = i + 1
+    }
+    
+    // Safety ranking
+    sort.Slice(proposals, func(i, j int) bool {
+        return proposals[i].ComponentScores.Safety > proposals[j].ComponentScores.Safety
+    })
+    for i := range proposals {
+        proposals[i].Rankings.SafetyRank = i + 1
+    }
+    
+    // Efficacy ranking
+    sort.Slice(proposals, func(i, j int) bool {
+        return proposals[i].ComponentScores.Efficacy > proposals[j].ComponentScores.Efficacy
+    })
+    for i := range proposals {
+        proposals[i].Rankings.EfficacyRank = i + 1
+    }
+    
+    // Cost ranking
+    sort.Slice(proposals, func(i, j int) bool {
+        return proposals[i].ComponentScores.Cost > proposals[j].ComponentScores.Cost
+    })
+    for i := range proposals {
+        proposals[i].Rankings.CostRank = i + 1
+    }
+    
+    // Re-sort by total score for final output
+    sort.Slice(proposals, func(i, j int) bool {
+        return proposals[i].TotalScore > proposals[j].TotalScore
+    })
+}
+
+func (e *ScoringEngine) buildRecommendation(
+    proposal integration.SafetyVerifiedProposal,
+    scores ComponentScores,
+    indication string,
+) ClinicalRecommendation {
+    // Build recommendation text based on scores
+    strength := "Strong"
+    if scores.Safety < 0.7 || scores.Efficacy < 0.7 {
+        strength = "Conditional"
+    }
+    if scores.Safety < 0.5 || scores.Efficacy < 0.5 {
+        strength = "Weak"
+    }
+    
+    rec := ClinicalRecommendation{
+        RecommendationText: fmt.Sprintf(
+            "Recommend %s for %s based on favorable benefit-risk profile",
+            proposal.Candidate.Drug.Name,
+            indication,
+        ),
+        Strength: strength,
+        Rationale: e.buildRationale(scores),
+        ExpectedTimeToEffect: "2-4 weeks", // Would come from efficacy data
+        DurationOfTherapy: "Ongoing", // Would be condition-specific
+    }
+    
+    // Add monitoring requirements
+    if len(proposal.Monitoring) > 0 {
+        for _, param := range proposal.Monitoring {
+            rec.MonitoringRequired = append(rec.MonitoringRequired, MonitoringParameter{
+                Parameter: param,
+                Frequency: "Monthly initially, then quarterly",
+                TargetRange: "Within normal limits",
+                ActionIfAbnormal: "Reassess therapy",
+            })
+        }
+    }
+    
+    return rec
+}
+
+func (e *ScoringEngine) buildRationale(scores ComponentScores) string {
+    rationale := "Selection based on: "
+    reasons := []string{}
+    
+    if scores.Safety > 0.8 {
+        reasons = append(reasons, "excellent safety profile")
+    }
+    if scores.Efficacy > 0.8 {
+        reasons = append(reasons, "strong efficacy evidence")
+    }
+    if scores.Cost > 0.8 {
+        reasons = append(reasons, "favorable cost-effectiveness")
+    }
+    if scores.GuidelineAdherence > 0.8 {
+        reasons = append(reasons, "guideline-recommended first-line therapy")
+    }
+    
+    if len(reasons) > 0 {
+        rationale += strings.Join(reasons, ", ")
+    } else {
+        rationale += "balanced consideration of all factors"
+    }
+    
+    return rationale
+}
+
+func (e *ScoringEngine) addAlternativeOptions(proposals []ScoredProposal) {
+    if len(proposals) < 2 {
+        return
+    }
+    
+    // For the top recommendation, add the next 2-3 as alternatives
+    topProposal := &proposals[0]
+    
+    for i := 1; i < min(4, len(proposals)); i++ {
+        alt := proposals[i]
+        
+        alternative := AlternativeOption{
+            DrugID:   alt.Candidate.Drug.ID,
+            DrugName: alt.Candidate.Drug.Name,
+            Score:    alt.TotalScore,
+        }
+        
+        // Compare to primary choice
+        if alt.ComponentScores.Cost > topProposal.ComponentScores.Cost {
+            alternative.ProsComparedToPrimary = append(
+                alternative.ProsComparedToPrimary,
+                "Lower cost",
+            )
+        }
+        if alt.ComponentScores.Safety > topProposal.ComponentScores.Safety {
+            alternative.ProsComparedToPrimary = append(
+                alternative.ProsComparedToPrimary,
+                "Better safety profile",
+            )
+        }
+        
+        if alt.ComponentScores.Efficacy < topProposal.ComponentScores.Efficacy {
+            alternative.ConsComparedToPrimary = append(
+                alternative.ConsComparedToPrimary,
+                "Lower efficacy",
+            )
+        }
+        
+        topProposal.AlternativeOptions = append(topProposal.AlternativeOptions, alternative)
+    }
+}
+
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+func strings.Join(elems []string, sep string) string {
+    switch len(elems) {
+    case 0:
+        return ""
+    case 1:
+        return elems[0]
+    }
+    n := len(sep) * (len(elems) - 1)
+    for i := 0; i < len(elems); i++ {
+        n += len(elems[i])
+    }
+    
+    var b strings.Builder
+    b.Grow(n)
+    b.WriteString(elems[0])
+    for _, s := range elems[1:] {
+        b.WriteString(sep)
+        b.WriteString(s)
+    }
+    return b.String()
+}

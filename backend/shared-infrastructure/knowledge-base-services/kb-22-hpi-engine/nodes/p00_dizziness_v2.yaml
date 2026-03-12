@@ -1,0 +1,349 @@
+# P00 Dizziness V2 - HPI Node Definition (Pilot Node)
+# Prototype node for harvest-first, build-second methodology.
+# Source: Dizziness Evidence Harvest V2 (Feb 2026)
+# Differentials derived from Indian DM+HTN cohort prevalence.
+# G15: Other bucket enabled (0.15 prior). Named priors sum to 0.85.
+# G16: All questions include alt_prompt for pata-nahi rephrase cascade.
+
+node_id: P00_DIZZINESS
+version: "2.0.0"
+title_en: "Dizziness / Lightheadedness"
+title_hi: "Chakkar aana / sir mein halkapan"
+description: "Dizziness differential diagnosis for cardio-renal-metabolic patients (DM+HTN cohort)"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.20
+convergence_logic: BOTH
+max_questions: 15
+
+# Strata supported
+strata_supported:
+  - DM_ONLY
+  - DM_HTN
+  - DM_HTN_CKD
+
+# G15: Other bucket — open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.15
+
+# Guideline prior source (N-01)
+guideline_prior_source: "BMJ_DIZZINESS_2024; NICE_VERTIGO_NG127; McGee_CH19_DIZZINESS"
+
+# ============================================================================
+# 8 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.85 per stratum (0.15 reserved for G15 Other bucket).
+# Source: Dizziness Evidence Harvest V2, Indian DM+HTN prevalence data.
+# ============================================================================
+differentials:
+  - id: ORTHOSTATIC_HYPO
+    label: "Orthostatic Hypotension (drug-induced or autonomic)"
+    population_reference: "Ricci F, J Am Heart Assoc 2015; ESC HTN 2023; Shibao C, Hypertension 2013"
+    priors:
+      DM_ONLY: 0.18
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.28
+
+  - id: HYPOGLYCEMIA
+    label: "Hypoglycemia"
+    population_reference: "ADA Standards of Care 2025; Cryer PE, JCEM 2009; UKPDS Group, Lancet 1998"
+    priors:
+      DM_ONLY: 0.20
+      DM_HTN: 0.15
+      DM_HTN_CKD: 0.13
+
+  - id: DRUG_INDUCED
+    label: "Drug-Induced Dizziness (non-orthostatic)"
+    population_reference: "NICE NG136 2022; Pickering TG, Hypertension 2005; API-ICP 2024"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.13
+      DM_HTN_CKD: 0.12
+
+  - id: BPPV
+    label: "Benign Paroxysmal Positional Vertigo"
+    population_reference: "Bhattacharyya N, Otolaryngol Head Neck Surg 2017; von Brevern M, J Neurol 2007"
+    priors:
+      DM_ONLY: 0.12
+      DM_HTN: 0.10
+      DM_HTN_CKD: 0.08
+
+  - id: TIA
+    label: "Transient Ischaemic Attack (posterior circulation)"
+    population_reference: "Kattah JC, Stroke 2009 (HINTS); Kerber KA, Stroke 2006"
+    priors:
+      DM_ONLY: 0.04
+      DM_HTN: 0.05
+      DM_HTN_CKD: 0.06
+
+  - id: ARRHYTHMIA
+    label: "Cardiac Arrhythmia"
+    population_reference: "ESC AF Guidelines 2024; Brignole M, Eur Heart J 2018 (Syncope)"
+    priors:
+      DM_ONLY: 0.04
+      DM_HTN: 0.05
+      DM_HTN_CKD: 0.06
+
+  - id: ANEMIA
+    label: "Anemia (iron deficiency, CKD-related)"
+    population_reference: "KDIGO Anemia 2012; WHO Hb thresholds; AASK Study Group"
+    priors:
+      DM_ONLY: 0.07
+      DM_HTN: 0.06
+      DM_HTN_CKD: 0.08
+
+  - id: VOLUME_DEPLETION
+    label: "Volume Depletion (SGLT2i, diuretic, poor intake)"
+    population_reference: "KDIGO DM-CKD 2024; Zinman B, NEJM 2015 (EMPA-REG); CREDENCE Trial 2019"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.06
+      DM_HTN_CKD: 0.04
+
+# ============================================================================
+# 8 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# All questions include alt_prompt (G16 pata-nahi rephrase cascade).
+# LR sources: McGee Ch.19, Kattah (HINTS), AASK, ESC, ADA.
+# ============================================================================
+questions:
+  - id: DQ01
+    text_en: "Does the dizziness happen when you stand up from sitting or lying down?"
+    text_hi: "Kya chakkar aana baith kar ya let kar uthne par hota hai?"
+    alt_prompt_en: "When you get up, do you feel like everything goes dark or you might fall?"
+    alt_prompt_hi: "Jab aap uthte hain, kya lagta hai sab andhera ho gaya ya girne wale hain?"
+    cluster: POSTURAL
+    cluster_dampening: 0.85
+    mandatory: true
+    lr_source: "McGee Ch.19, Table 19-3; Ricci F, J Am Heart Assoc 2015"
+    lr_positive:
+      ORTHOSTATIC_HYPO: 3.80
+      VOLUME_DEPLETION: 2.20
+      DRUG_INDUCED: 1.60
+    lr_negative:
+      ORTHOSTATIC_HYPO: 0.35
+      VOLUME_DEPLETION: 0.60
+      BPPV: 1.30
+
+  - id: DQ02
+    text_en: "Does the dizziness come with a spinning or rotating sensation?"
+    text_hi: "Kya chakkar mein ghumne ya ghoomne ka ehsaas hota hai?"
+    alt_prompt_en: "Does it feel like the room is moving around you?"
+    alt_prompt_hi: "Kya lagta hai kamra aapke charo taraf ghoom raha hai?"
+    cluster: CHARACTER
+    cluster_dampening: 0.80
+    mandatory: true
+    lr_source: "von Brevern M, J Neurol 2007; Newman-Toker DE, Acad Emerg Med 2008"
+    lr_positive:
+      BPPV: 4.20
+      TIA: 1.50
+    lr_negative:
+      BPPV: 0.30
+      ORTHOSTATIC_HYPO: 1.20
+      HYPOGLYCEMIA: 1.10
+
+  - id: DQ03
+    text_en: "Does the dizziness happen before meals or when you have not eaten for a long time?"
+    text_hi: "Kya chakkar khaana khaane se pehle ya bahut der tak na khaane par aata hai?"
+    alt_prompt_en: "Does it happen when you are hungry or skip a meal?"
+    alt_prompt_hi: "Kya yeh tab hota hai jab aapko bhookh lagi ho ya khaana chhoot gaya ho?"
+    cluster: TIMING
+    mandatory: true
+    lr_source: "ADA Standards of Care 2025; Cryer PE, JCEM 2009"
+    lr_positive:
+      HYPOGLYCEMIA: 4.50
+      VOLUME_DEPLETION: 1.30
+    lr_negative:
+      HYPOGLYCEMIA: 0.35
+      ORTHOSTATIC_HYPO: 1.10
+
+  - id: DQ04
+    text_en: "Has there been a recent change in your blood pressure or diabetes medication?"
+    text_hi: "Kya haal mein aapki BP ya sugar ki dawai mein koi badlaav hua hai?"
+    alt_prompt_en: "Did your doctor recently change any of your medicines?"
+    alt_prompt_hi: "Kya doctor ne haal mein aapki koi dawai badli hai?"
+    cluster: MEDICATION
+    mandatory: true
+    lr_source: "NICE NG136 2022; Pickering TG, Hypertension 2005"
+    lr_positive:
+      DRUG_INDUCED: 3.80
+      ORTHOSTATIC_HYPO: 2.10
+      VOLUME_DEPLETION: 1.50
+    lr_negative:
+      DRUG_INDUCED: 0.40
+      ORTHOSTATIC_HYPO: 0.70
+
+  - id: DQ05
+    text_en: "Do you feel your heart racing or skipping beats during the dizziness?"
+    text_hi: "Kya chakkar ke samay dil ki dhadkan tez ya ruk-ruk kar chalti hai?"
+    alt_prompt_en: "Does your heart beat very fast or feel strange when dizzy?"
+    alt_prompt_hi: "Kya chakkar aane par dil bahut tez dhakdhak karta hai?"
+    cluster: CARDIAC
+    mandatory: false
+    lr_source: "ESC AF Guidelines 2024; Brignole M, Eur Heart J 2018"
+    lr_positive:
+      ARRHYTHMIA: 4.50
+      VOLUME_DEPLETION: 1.40
+    lr_negative:
+      ARRHYTHMIA: 0.38
+      ORTHOSTATIC_HYPO: 1.05
+
+  - id: DQ06
+    text_en: "Do you have any weakness on one side of the body, slurred speech, or double vision with the dizziness?"
+    text_hi: "Kya chakkar ke saath sharir ke ek taraf kamzori, zuban ladakhna, ya do-do dikhai deta hai?"
+    alt_prompt_en: "When dizzy, does your face, arm, or leg feel weak or numb on one side?"
+    alt_prompt_hi: "Chakkar aane par kya ek taraf ka chehra, haath, ya pair kamzor lagta hai?"
+    cluster: NEURO
+    mandatory: true
+    safety_role: "RF01_FOCAL_DEFICIT"
+    lr_source: "Kattah JC, Stroke 2009 (HINTS); Kerber KA, Stroke 2006"
+    lr_positive:
+      TIA: 8.50
+      ARRHYTHMIA: 1.30
+    lr_negative:
+      TIA: 0.20
+      BPPV: 1.10
+
+  - id: DQ07
+    text_en: "Are you feeling unusually tired or short of breath even without exertion?"
+    text_hi: "Kya aapko bina mehnat ke bhi bahut thakaan ya saans ki taklif hoti hai?"
+    alt_prompt_en: "Do you feel very weak or breathless even when resting?"
+    alt_prompt_hi: "Kya aaram karte hue bhi bahut kamzori ya saans phoolti hai?"
+    cluster: SYSTEMIC
+    mandatory: false
+    lr_source: "KDIGO Anemia 2012; WHO Hb thresholds"
+    lr_positive:
+      ANEMIA: 3.60
+      VOLUME_DEPLETION: 1.80
+    lr_negative:
+      ANEMIA: 0.45
+      HYPOGLYCEMIA: 1.05
+
+  - id: DQ08
+    text_en: "Have you noticed increased urination or reduced fluid intake recently?"
+    text_hi: "Kya haal mein peshab zyada aa raha hai ya paani kam pee rahe hain?"
+    alt_prompt_en: "Are you passing urine more often or drinking less water than usual?"
+    alt_prompt_hi: "Kya aap zyada baar bathroom ja rahe hain ya kam paani pee rahe hain?"
+    cluster: VOLUME
+    mandatory: false
+    lr_source: "KDIGO DM-CKD 2024; Zinman B, NEJM 2015"
+    lr_positive:
+      VOLUME_DEPLETION: 3.80
+      ORTHOSTATIC_HYPO: 1.40
+    lr_negative:
+      VOLUME_DEPLETION: 0.35
+      DRUG_INDUCED: 1.05
+
+# ============================================================================
+# 6 Safety Triggers (F-02 parallel evaluation)
+# Source: Dizziness Evidence Harvest V2, Section 3 Red Flags
+# ============================================================================
+safety_triggers:
+  - id: RF01
+    type: BOOLEAN
+    condition: "DQ06=YES"
+    severity: IMMEDIATE
+    recommended_action: "Focal neurological deficit with dizziness — possible posterior circulation stroke/TIA. Urgent referral for imaging (MRI-DWI). SNOMED: 29164008"
+
+  - id: RF02
+    type: BOOLEAN
+    condition: "DQ05=YES AND DQ01=YES"
+    severity: URGENT
+    recommended_action: "Palpitations with postural dizziness — possible arrhythmia with haemodynamic compromise. Arrange ECG and 24h Holter. SNOMED: 80313002"
+
+  - id: RF03
+    type: BOOLEAN
+    condition: "DQ03=YES AND HYPOGLYCEMIA_POSTERIOR>0.40"
+    severity: URGENT
+    recommended_action: "High probability hypoglycaemia — check capillary glucose STAT. If glucose <54 mg/dL (3.0 mmol/L), treat immediately. SNOMED: 302866003"
+
+  - id: RF04
+    type: BOOLEAN
+    condition: "DQ01=YES AND DQ04=YES"
+    severity: WARN
+    recommended_action: "Postural dizziness with recent medication change — review antihypertensive timing and doses. Consider lying-standing BP protocol."
+
+  - id: RF05
+    type: BOOLEAN
+    condition: "DQ07=YES AND DQ08=YES"
+    severity: WARN
+    recommended_action: "Fatigue and volume signs — check Hb (anemia screen) and renal function. In CKD patients, consider EPO status."
+
+  - id: RF06
+    type: BOOLEAN
+    condition: "DQ02=YES AND DQ06=YES"
+    severity: IMMEDIATE
+    recommended_action: "Vertigo with focal deficit — HINTS exam indicated. Possible cerebellar stroke. SNOMED: 230690007. Immediate neurology referral."
+
+# ============================================================================
+# 8 Context Modifiers (G14 log-odds CM composition)
+# Source: Dizziness Evidence Harvest V2, Section 4 Context Modifiers
+# Applied via CMApplicator using logit(0.50+delta) - logit(0.50) formula.
+# CM01-CM08 overlap with P01/P02 CMs — registered in shared CM registry.
+# ============================================================================
+context_modifiers:
+  - id: CM01
+    name: "ARB/ACEi active"
+    description: "Patient on ACE inhibitor or ARB — increases OH and drug-induced dizziness risk"
+    source: "ESC HTN 2023; NICE NG136"
+    adjustments:
+      ORTHOSTATIC_HYPO: 0.08
+      DRUG_INDUCED: 0.06
+
+  - id: CM02
+    name: "Beta-blocker active"
+    description: "Beta-blocker use — masks hypoglycemia symptoms, contributes to bradycardia-related dizziness"
+    source: "ADA Standards 2025; ESC AF 2024"
+    adjustments:
+      HYPOGLYCEMIA: 0.07
+      ARRHYTHMIA: 0.05
+      DRUG_INDUCED: 0.04
+
+  - id: CM03
+    name: "SGLT2i active"
+    description: "SGLT2 inhibitor use — volume depletion risk, especially in CKD"
+    source: "KDIGO DM-CKD 2024; EMPA-REG OUTCOME; CREDENCE"
+    adjustments:
+      VOLUME_DEPLETION: 0.10
+      ORTHOSTATIC_HYPO: 0.04
+
+  - id: CM04
+    name: "Insulin or sulfonylurea active"
+    description: "Insulin/SU — direct hypoglycemia risk"
+    source: "ADA Standards 2025; UKPDS; Cryer PE, JCEM 2009"
+    adjustments:
+      HYPOGLYCEMIA: 0.12
+
+  - id: CM05
+    name: "CCB active (amlodipine, nifedipine)"
+    description: "Calcium channel blocker — peripheral vasodilation, ankle edema, dizziness"
+    source: "NICE NG136; API-ICP 2024"
+    adjustments:
+      DRUG_INDUCED: 0.07
+      ORTHOSTATIC_HYPO: 0.05
+
+  - id: CM06
+    name: "Diuretic active (thiazide, furosemide)"
+    description: "Diuretic — volume depletion, electrolyte disturbance"
+    source: "ESC HTN 2023; KDIGO DM-CKD 2024"
+    adjustments:
+      VOLUME_DEPLETION: 0.09
+      ORTHOSTATIC_HYPO: 0.05
+
+  - id: CM07
+    name: "eGFR < 30 (CKD G4-G5)"
+    description: "Advanced CKD — anemia risk, volume sensitivity, autonomic neuropathy"
+    source: "KDIGO CKD 2024; AASK Study"
+    adjustments:
+      ANEMIA: 0.10
+      ORTHOSTATIC_HYPO: 0.06
+      VOLUME_DEPLETION: 0.05
+
+  - id: CM08
+    name: "Age > 65"
+    description: "Elderly — increased OH prevalence, polypharmacy, autonomic decline"
+    source: "Shibao C, Hypertension 2013; Ricci F, J Am Heart Assoc 2015"
+    adjustments:
+      ORTHOSTATIC_HYPO: 0.08
+      DRUG_INDUCED: 0.04
+      ARRHYTHMIA: 0.03

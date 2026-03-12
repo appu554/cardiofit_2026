@@ -1,0 +1,1074 @@
+import com.cardiofit.stream.models.CanonicalEvent;
+
+package com.cardiofit.flink.operators;
+
+import com.cardiofit.flink.models.*;
+import com.cardiofit.flink.utils.KafkaConfigLoader;
+import com.cardiofit.flink.utils.KafkaTopics;
+import com.cardiofit.flink.config.GoogleHealthcareConfig;
+import com.cardiofit.flink.sinks.GoogleFHIRStoreSink;
+import com.cardiofit.flink.sinks.ElasticsearchSink;
+import com.cardiofit.flink.sinks.Neo4jGraphSink;
+import com.cardiofit.flink.sinks.ClickHouseSink;
+import com.cardiofit.flink.sinks.RedisCacheSink;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.FilterFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+
+/**
+ * Module 6: Egress & Multi-Sink Routing
+ *
+ * Responsibilities:
+ * - Route processed events to appropriate downstream systems
+ * - Handle multi-sink delivery with different formats
+ * - Manage priority-based routing for critical events
+ * - Implement fail-safe routing and dead letter queues
+ * - Provide real-time and batch export capabilities
+ * - Transform events for different consumer systems
+ * - Monitor routing health and performance
+ */
+public class Module6_EgressRouting {
+    private static final Logger LOG = LoggerFactory.getLogger(Module6_EgressRouting.class);
+
+    // Output tags for different routing destinations
+    private static final OutputTag<RoutedEvent> CRITICAL_ALERTS_TAG =
+        new OutputTag<RoutedEvent>("critical-alerts"){};
+
+    private static final OutputTag<RoutedEvent> CLINICAL_WORKFLOW_TAG =
+        new OutputTag<RoutedEvent>("clinical-workflow"){};
+
+    private static final OutputTag<RoutedEvent> ANALYTICS_TAG =
+        new OutputTag<RoutedEvent>("analytics"){};
+
+    private static final OutputTag<RoutedEvent> EXTERNAL_SYSTEMS_TAG =
+        new OutputTag<RoutedEvent>("external-systems"){};
+
+    private static final OutputTag<RoutedEvent> AUDIT_TAG =
+        new OutputTag<RoutedEvent>("audit"){};
+
+    private static final OutputTag<RoutedEvent> FAILED_ROUTING_TAG =
+        new OutputTag<RoutedEvent>("failed-routing"){};
+
+    public static void main(String[] args) throws Exception {
+        LOG.info("Starting Module 6: Egress & Multi-Sink Routing");
+
+        // Set up execution environment
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Configure for egress processing
+        env.setParallelism(10);
+        env.enableCheckpointing(30000);
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+
+        // Create egress routing pipeline
+        createEgressRoutingPipeline(env);
+
+        // Execute the job
+        env.execute("Module 6: Egress & Multi-Sink Routing");
+    }
+
+    public static void createEgressRoutingPipeline(StreamExecutionEnvironment env) {
+        LOG.info("Creating egress routing pipeline");
+
+        // Input streams from all previous modules
+        DataStream<SemanticEvent> semanticEvents = createSemanticEventSource(env);
+        DataStream<PatternEvent> patternEvents = createPatternEventSource(env);
+        DataStream<MLPrediction> mlPredictions = createMLPredictionSource(env);
+        DataStream<PatientContext> contextSnapshots = createContextSnapshotSource(env);
+
+        // ===== Event Prioritization and Routing =====
+
+        // Priority routing for critical events
+        SingleOutputStreamOperator<RoutedEvent> routedSemanticEvents = semanticEvents
+            .process(new SemanticEventRouter())
+            .uid("Semantic Event Routing");
+
+        SingleOutputStreamOperator<RoutedEvent> routedPatternEvents = patternEvents
+            .process(new PatternEventRouter())
+            .uid("Pattern Event Routing");
+
+        SingleOutputStreamOperator<RoutedEvent> routedMLPredictions = mlPredictions
+            .process(new MLPredictionRouter())
+            .uid("ML Prediction Routing");
+
+        SingleOutputStreamOperator<RoutedEvent> routedContextSnapshots = contextSnapshots
+            .process(new ContextSnapshotRouter())
+            .uid("Context Snapshot Routing");
+
+        // ===== Unified Routing Stream =====
+
+        DataStream<RoutedEvent> allRoutedEvents = routedSemanticEvents
+            .union(routedPatternEvents)
+            .union(routedMLPredictions)
+            .union(routedContextSnapshots)
+            .uid("Unified Routed Events");
+
+        // ===== Multi-Format Transformation =====
+
+        // Transform events for different consumer formats
+        SingleOutputStreamOperator<RoutedEvent> transformedEvents = allRoutedEvents
+            .map(new EventTransformationFunction())
+            .uid("Event Transformation");
+
+        // ===== HYBRID KAFKA TOPIC ARCHITECTURE =====
+        // Transform to EnrichedClinicalEvent format for new architecture
+
+        DataStream<EnrichedClinicalEvent> enrichedEvents = transformedEvents
+            .map(new RoutedEventToEnrichedEventMapper())
+            .uid("Transform to Enriched Clinical Events");
+
+        // **CORE: Transactional Multi-Sink Router**
+        // This implements the recommended hybrid architecture with EXACTLY_ONCE semantics
+        enrichedEvents
+            .process(new TransactionalMultiSinkRouter())
+            .uid("Transactional Multi-Sink Router")
+            .uid("transactional-router");
+
+        LOG.info("🏗️ Hybrid Architecture Activated:");
+        LOG.info("  📊 Central Topic: {}", KafkaTopics.EHR_EVENTS_ENRICHED.getTopicName());
+        LOG.info("  🚨 Critical Alerts: {}", KafkaTopics.EHR_ALERTS_CRITICAL_ACTION.getTopicName());
+        LOG.info("  🏥 FHIR Upsert: {}", KafkaTopics.EHR_FHIR_UPSERT.getTopicName());
+        LOG.info("  📈 Analytics: {}", KafkaTopics.EHR_ANALYTICS_EVENTS.getTopicName());
+        LOG.info("  🕸️ Graph: {}", KafkaTopics.EHR_GRAPH_MUTATIONS.getTopicName());
+        LOG.info("  📋 Audit: {}", KafkaTopics.EHR_AUDIT_LOGS.getTopicName());
+
+        // ===== LEGACY ROUTING (for migration period) =====
+
+        // Route to primary clinical systems (legacy)
+        transformedEvents
+            .filter(event -> event.hasDestination("clinical_workflow"))
+            .sinkTo(createClinicalWorkflowSink())
+            .uid("Legacy Clinical Workflow Sink");
+
+        // Route critical alerts with high priority (legacy)
+        transformedEvents.getSideOutput(CRITICAL_ALERTS_TAG)
+            .sinkTo(createCriticalAlertsSink())
+            .uid("Legacy Critical Alerts Sink");
+
+        // Route to analytics systems (legacy)
+        transformedEvents.getSideOutput(ANALYTICS_TAG)
+            .sinkTo(createAnalyticsSink())
+            .uid("Legacy Analytics Sink");
+
+        // Route to external systems (legacy)
+        transformedEvents.getSideOutput(EXTERNAL_SYSTEMS_TAG)
+            .sinkTo(createExternalSystemsSink())
+            .uid("Legacy External Systems Sink");
+
+        // Route to audit and compliance systems
+        transformedEvents.getSideOutput(AUDIT_TAG)
+            .sinkTo(createAuditSink())
+            .uid("Audit Sink");
+
+        // Handle routing failures
+        transformedEvents.getSideOutput(FAILED_ROUTING_TAG)
+            .sinkTo(createFailedRoutingSink())
+            .uid("Failed Routing Sink");
+
+        // ===== Real-time Export Endpoints =====
+
+        // High-priority events for immediate notification
+        DataStream<RoutedEvent> highPriorityEvents = transformedEvents
+            .filter(event -> event.getPriority() == RoutedEvent.Priority.CRITICAL ||
+                           event.getPriority() == RoutedEvent.Priority.HIGH)
+            .uid("High Priority Events");
+
+        highPriorityEvents
+            .sinkTo(createRealtimeNotificationSink())
+            .uid("Real-time Notifications");
+
+        // ===== Batch Export for Analytics =====
+
+        // Batch events for analytics and reporting
+        DataStream<RoutedEvent> analyticsEvents = transformedEvents
+            .filter(event -> event.hasDestination("analytics") || event.hasDestination("reporting"))
+            .uid("Analytics Events");
+
+        analyticsEvents
+            .sinkTo(createBatchAnalyticsSink())
+            .uid("Batch Analytics Export");
+
+        LOG.info("Egress routing pipeline created successfully");
+    }
+
+    // ===== Input Sources =====
+
+    private static DataStream<SemanticEvent> createSemanticEventSource(StreamExecutionEnvironment env) {
+        KafkaSource<SemanticEvent> source = KafkaSource.<SemanticEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.SEMANTIC_MESH_UPDATES.getTopicName())
+            .setGroupId("egress-semantic")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new SemanticEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("egress-semantic"))
+            .build();
+
+        return env.fromSource(source, WatermarkStrategy.noWatermarks(), "Egress Semantic Events");
+    }
+
+    private static DataStream<PatternEvent> createPatternEventSource(StreamExecutionEnvironment env) {
+        KafkaSource<PatternEvent> source = KafkaSource.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.CLINICAL_PATTERNS.getTopicName())
+            .setGroupId("egress-patterns")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new PatternEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("egress-patterns"))
+            .build();
+
+        return env.fromSource(source, WatermarkStrategy.noWatermarks(), "Egress Pattern Events");
+    }
+
+    private static DataStream<MLPrediction> createMLPredictionSource(StreamExecutionEnvironment env) {
+        KafkaSource<MLPrediction> source = KafkaSource.<MLPrediction>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.INFERENCE_RESULTS.getTopicName())
+            .setGroupId("egress-ml")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new MLPredictionDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("egress-ml"))
+            .build();
+
+        return env.fromSource(source, WatermarkStrategy.noWatermarks(), "Egress ML Predictions");
+    }
+
+    private static DataStream<PatientContext> createContextSnapshotSource(StreamExecutionEnvironment env) {
+        KafkaSource<PatientContext> source = KafkaSource.<PatientContext>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.PATIENT_CONTEXT_SNAPSHOTS.getTopicName())
+            .setGroupId("egress-context")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new PatientContextDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("egress-context"))
+            .build();
+
+        return env.fromSource(source, WatermarkStrategy.noWatermarks(), "Egress Context Snapshots");
+    }
+
+    // ===== Routing Functions =====
+
+    /**
+     * Router for semantic events
+     */
+    public static class SemanticEventRouter extends ProcessFunction<SemanticEvent, RoutedEvent> {
+        @Override
+        public void processElement(SemanticEvent value, Context ctx, Collector<RoutedEvent> out) throws Exception {
+            RoutedEvent routed = new RoutedEvent();
+            routed.setId(UUID.randomUUID().toString());
+            routed.setSourceEventId(value.getId());
+            routed.setSourceEventType("SEMANTIC_EVENT");
+            routed.setPatientId(value.getPatientId());
+            routed.setRoutingTime(System.currentTimeMillis());
+            routed.setOriginalPayload(value);
+
+            // Determine routing destinations based on event characteristics
+            Set<String> destinations = new HashSet<>();
+
+            // All semantic events go to analytics
+            destinations.add("analytics");
+            destinations.add("audit");
+
+            // Critical events get priority routing
+            if (value.hasHighClinicalSignificance()) {
+                destinations.add("clinical_workflow");
+                destinations.add("fhir_store"); // Store significant clinical events in FHIR
+                routed.setPriority(RoutedEvent.Priority.HIGH);
+
+                if (value.hasClinicalAlerts()) {
+                    destinations.add("critical_alerts");
+                    routed.setPriority(RoutedEvent.Priority.CRITICAL);
+                    ctx.output(CRITICAL_ALERTS_TAG, routed);
+                }
+            } else {
+                destinations.add("fhir_store"); // Store all semantic events in FHIR
+                routed.setPriority(RoutedEvent.Priority.NORMAL);
+            }
+
+            // Drug interactions require external system notification
+            if (value.hasDrugInteractions()) {
+                destinations.add("external_systems");
+                destinations.add("pharmacy_systems");
+            }
+
+            // Guideline recommendations go to clinical workflow
+            if (value.hasGuidelineRecommendations()) {
+                destinations.add("clinical_workflow");
+                destinations.add("quality_systems");
+            }
+
+            routed.setDestinations(destinations);
+            routed.setTransformationRules(getTransformationRules(value, destinations));
+
+            // Route to appropriate side outputs
+            routeToSideOutputs(routed, ctx);
+
+            out.collect(routed);
+        }
+
+        private Set<String> getTransformationRules(SemanticEvent event, Set<String> destinations) {
+            Set<String> rules = new HashSet<>();
+
+            for (String destination : destinations) {
+                switch (destination) {
+                    case "clinical_workflow":
+                        rules.add("FHIR_R4_TRANSFORM");
+                        rules.add("CLINICAL_SUMMARY");
+                        break;
+                    case "fhir_store":
+                    case "google_healthcare":
+                        rules.add("FHIR_R4_TRANSFORM");
+                        rules.add("CLINICAL_SUMMARY");
+                        break;
+                    case "external_systems":
+                        rules.add("HL7_V2_TRANSFORM");
+                        rules.add("INTEROP_FORMAT");
+                        break;
+                    case "analytics":
+                        rules.add("ANALYTICS_FLATTEN");
+                        rules.add("TIMESTAMP_NORMALIZE");
+                        break;
+                    case "audit":
+                        rules.add("AUDIT_FORMAT");
+                        rules.add("PRIVACY_FILTER");
+                        break;
+                }
+            }
+
+            return rules;
+        }
+    }
+
+    /**
+     * Router for pattern events
+     */
+    public static class PatternEventRouter extends ProcessFunction<PatternEvent, RoutedEvent> {
+        @Override
+        public void processElement(PatternEvent value, Context ctx, Collector<RoutedEvent> out) throws Exception {
+            RoutedEvent routed = new RoutedEvent();
+            routed.setId(UUID.randomUUID().toString());
+            routed.setSourceEventId(value.getId());
+            routed.setSourceEventType("PATTERN_EVENT");
+            routed.setPatientId(value.getPatientId());
+            routed.setRoutingTime(System.currentTimeMillis());
+            routed.setOriginalPayload(value);
+
+            Set<String> destinations = new HashSet<>();
+            destinations.add("analytics");
+
+            // Route based on pattern type and severity
+            if (value.isDeteriorationPattern() && value.isHighSeverity()) {
+                destinations.add("critical_alerts");
+                destinations.add("clinical_workflow");
+                destinations.add("fhir_store"); // Store critical patterns in FHIR
+                routed.setPriority(RoutedEvent.Priority.CRITICAL);
+                ctx.output(CRITICAL_ALERTS_TAG, routed);
+            } else if (value.isHighSeverity()) {
+                destinations.add("clinical_workflow");
+                destinations.add("fhir_store"); // Store high-severity patterns in FHIR
+                routed.setPriority(RoutedEvent.Priority.HIGH);
+            } else {
+                destinations.add("fhir_store"); // Store all patterns in FHIR for analysis
+                routed.setPriority(RoutedEvent.Priority.NORMAL);
+            }
+
+            // Pathway compliance patterns go to quality systems
+            if (value.isPathwayCompliancePattern()) {
+                destinations.add("quality_systems");
+                destinations.add("workflow_systems");
+            }
+
+            // Medication adherence patterns go to pharmacy systems
+            if (value.isMedicationAdherencePattern()) {
+                destinations.add("pharmacy_systems");
+                destinations.add("care_coordination");
+            }
+
+            routed.setDestinations(destinations);
+            routed.setTransformationRules(getPatternTransformationRules(value, destinations));
+
+            routeToSideOutputs(routed, ctx);
+            out.collect(routed);
+        }
+
+        private Set<String> getPatternTransformationRules(PatternEvent event, Set<String> destinations) {
+            Set<String> rules = new HashSet<>();
+
+            rules.add("PATTERN_SUMMARY");
+            rules.add("TIMESTAMP_NORMALIZE");
+
+            if (destinations.contains("clinical_workflow")) {
+                rules.add("CLINICAL_PATTERN_FORMAT");
+                rules.add("RECOMMENDATION_EXTRACT");
+            }
+
+            if (destinations.contains("analytics")) {
+                rules.add("PATTERN_ANALYTICS_FORMAT");
+                rules.add("STATISTICAL_SUMMARY");
+            }
+
+            return rules;
+        }
+    }
+
+    /**
+     * Router for ML predictions
+     */
+    public static class MLPredictionRouter extends ProcessFunction<MLPrediction, RoutedEvent> {
+        @Override
+        public void processElement(MLPrediction value, Context ctx, Collector<RoutedEvent> out) throws Exception {
+            RoutedEvent routed = new RoutedEvent();
+            routed.setId(UUID.randomUUID().toString());
+            routed.setSourceEventId(value.getId());
+            routed.setSourceEventType("ML_PREDICTION");
+            routed.setPatientId(value.getPatientId());
+            routed.setRoutingTime(System.currentTimeMillis());
+            routed.setOriginalPayload(value);
+
+            Set<String> destinations = new HashSet<>();
+            destinations.add("analytics");
+
+            // Route based on prediction type and risk level
+            if (value.requiresImmediateAttention()) {
+                destinations.add("critical_alerts");
+                destinations.add("clinical_workflow");
+                destinations.add("fhir_store"); // Store critical predictions in FHIR
+                routed.setPriority(RoutedEvent.Priority.CRITICAL);
+                ctx.output(CRITICAL_ALERTS_TAG, routed);
+            } else if (value.isHighRisk()) {
+                destinations.add("clinical_workflow");
+                destinations.add("fhir_store"); // Store high-risk predictions in FHIR
+                routed.setPriority(RoutedEvent.Priority.HIGH);
+            } else {
+                destinations.add("fhir_store"); // Store all predictions in FHIR for tracking
+                routed.setPriority(RoutedEvent.Priority.NORMAL);
+            }
+
+            // Specific prediction types require specialized routing
+            switch (value.getModelType()) {
+                case "SEPSIS_PREDICTION":
+                    if (value.isHighRisk()) {
+                        destinations.add("infection_control");
+                        destinations.add("laboratory_systems");
+                    }
+                    break;
+                case "READMISSION_RISK":
+                    destinations.add("case_management");
+                    destinations.add("discharge_planning");
+                    break;
+                case "FALL_RISK":
+                    destinations.add("safety_systems");
+                    destinations.add("nursing_workflow");
+                    break;
+                case "MORTALITY_RISK":
+                    if (value.isHighRisk()) {
+                        destinations.add("palliative_care");
+                        destinations.add("ethics_committee");
+                    }
+                    break;
+            }
+
+            routed.setDestinations(destinations);
+            routed.setTransformationRules(getMLTransformationRules(value, destinations));
+
+            routeToSideOutputs(routed, ctx);
+            out.collect(routed);
+        }
+
+        private Set<String> getMLTransformationRules(MLPrediction prediction, Set<String> destinations) {
+            Set<String> rules = new HashSet<>();
+
+            rules.add("ML_PREDICTION_FORMAT");
+            rules.add("CONFIDENCE_SCORE_INCLUDE");
+
+            if (destinations.contains("clinical_workflow")) {
+                rules.add("CLINICAL_INTERPRETATION");
+                rules.add("RECOMMENDATION_FORMAT");
+            }
+
+            if (prediction.isEnsemblePrediction()) {
+                rules.add("ENSEMBLE_METADATA");
+            }
+
+            return rules;
+        }
+    }
+
+    /**
+     * Router for context snapshots
+     */
+    public static class ContextSnapshotRouter extends ProcessFunction<PatientContext, RoutedEvent> {
+        @Override
+        public void processElement(PatientContext value, Context ctx, Collector<RoutedEvent> out) throws Exception {
+            RoutedEvent routed = new RoutedEvent();
+            routed.setId(UUID.randomUUID().toString());
+            routed.setSourceEventId(value.getPatientId() + "_context_" + value.getSnapshotTime());
+            routed.setSourceEventType("CONTEXT_SNAPSHOT");
+            routed.setPatientId(value.getPatientId());
+            routed.setRoutingTime(System.currentTimeMillis());
+            routed.setOriginalPayload(value);
+
+            Set<String> destinations = new HashSet<>();
+            destinations.add("analytics");
+            destinations.add("data_warehouse");
+
+            // High acuity patients get clinical workflow routing
+            if (value.isHighAcuity()) {
+                destinations.add("clinical_workflow");
+                routed.setPriority(RoutedEvent.Priority.HIGH);
+            } else {
+                routed.setPriority(RoutedEvent.Priority.NORMAL);
+            }
+
+            // Admitted patients get care coordination routing
+            if (value.isCurrentlyAdmitted()) {
+                destinations.add("care_coordination");
+                destinations.add("bed_management");
+            }
+
+            routed.setDestinations(destinations);
+            routed.setTransformationRules(getContextTransformationRules(value, destinations));
+
+            routeToSideOutputs(routed, ctx);
+            out.collect(routed);
+        }
+
+        private Set<String> getContextTransformationRules(PatientContext context, Set<String> destinations) {
+            Set<String> rules = new HashSet<>();
+
+            rules.add("CONTEXT_SUMMARY");
+            rules.add("SNAPSHOT_METADATA");
+
+            if (destinations.contains("clinical_workflow")) {
+                rules.add("CLINICAL_CONTEXT_FORMAT");
+            }
+
+            if (destinations.contains("analytics")) {
+                rules.add("ANALYTICS_CONTEXT_FORMAT");
+                rules.add("TREND_CALCULATION");
+            }
+
+            return rules;
+        }
+    }
+
+    /**
+     * Route events to appropriate side outputs
+     */
+    private static void routeToSideOutputs(RoutedEvent routed, ProcessFunction.Context ctx) {
+        Set<String> destinations = routed.getDestinations();
+
+        if (destinations.contains("clinical_workflow")) {
+            ctx.output(CLINICAL_WORKFLOW_TAG, routed);
+        }
+
+        if (destinations.contains("analytics") || destinations.contains("data_warehouse")) {
+            ctx.output(ANALYTICS_TAG, routed);
+        }
+
+        if (destinations.contains("external_systems") || destinations.contains("interop")) {
+            ctx.output(EXTERNAL_SYSTEMS_TAG, routed);
+        }
+
+        if (destinations.contains("audit") || destinations.contains("compliance")) {
+            ctx.output(AUDIT_TAG, routed);
+        }
+    }
+
+    // ===== Event Transformation =====
+
+    /**
+     * Transform events based on destination requirements
+     */
+    public static class EventTransformationFunction implements MapFunction<RoutedEvent, RoutedEvent> {
+        @Override
+        public RoutedEvent map(RoutedEvent event) throws Exception {
+            // Apply transformation rules based on destinations
+            for (String rule : event.getTransformationRules()) {
+                applyTransformationRule(event, rule);
+            }
+
+            // Set transformation metadata
+            Map<String, Object> transformationMetadata = new HashMap<>();
+            transformationMetadata.put("applied_rules", event.getTransformationRules());
+            transformationMetadata.put("transformation_time", System.currentTimeMillis());
+            transformationMetadata.put("destinations", event.getDestinations());
+
+            event.setTransformationMetadata(transformationMetadata);
+
+            return event;
+        }
+
+        private void applyTransformationRule(RoutedEvent event, String rule) {
+            Map<String, Object> transformedPayload = new HashMap<>();
+
+            switch (rule) {
+                case "FHIR_R4_TRANSFORM":
+                    transformedPayload = transformToFHIR(event);
+                    break;
+                case "HL7_V2_TRANSFORM":
+                    transformedPayload = transformToHL7(event);
+                    break;
+                case "ANALYTICS_FLATTEN":
+                    transformedPayload = flattenForAnalytics(event);
+                    break;
+                case "CLINICAL_SUMMARY":
+                    transformedPayload = createClinicalSummary(event);
+                    break;
+                case "AUDIT_FORMAT":
+                    transformedPayload = formatForAudit(event);
+                    break;
+                case "PRIVACY_FILTER":
+                    transformedPayload = applyPrivacyFilter(event);
+                    break;
+                default:
+                    transformedPayload.put("original", event.getOriginalPayload());
+                    break;
+            }
+
+            event.getTransformedPayloads().put(rule, transformedPayload);
+        }
+
+        private Map<String, Object> transformToFHIR(RoutedEvent event) {
+            Map<String, Object> fhirPayload = new HashMap<>();
+            fhirPayload.put("resourceType", determineFHIRResourceType(event));
+            fhirPayload.put("id", event.getSourceEventId());
+            fhirPayload.put("meta", createFHIRMeta());
+            fhirPayload.put("subject", Map.of("reference", "Patient/" + ((CanonicalEvent)event).getPatientId()));
+            fhirPayload.put("effectiveDateTime", new Date(event.getRoutingTime()));
+            fhirPayload.put("valueCodeableConcept", extractClinicalConcepts(event));
+            return fhirPayload;
+        }
+
+        private Map<String, Object> transformToHL7(RoutedEvent event) {
+            Map<String, Object> hl7Payload = new HashMap<>();
+            hl7Payload.put("MSH", createHL7Header(event));
+            hl7Payload.put("PID", createHL7PatientInfo(event));
+            hl7Payload.put("OBX", createHL7Observation(event));
+            return hl7Payload;
+        }
+
+        private Map<String, Object> flattenForAnalytics(RoutedEvent event) {
+            Map<String, Object> flatPayload = new HashMap<>();
+            flatPayload.put("event_id", event.getSourceEventId());
+            flatPayload.put("patient_id", ((CanonicalEvent)event).getPatientId());
+            flatPayload.put("event_type", event.getSourceEventType());
+            flatPayload.put("routing_time", event.getRoutingTime());
+            flatPayload.put("priority", event.getPriority().name());
+            flatPayload.put("destination_count", event.getDestinations().size());
+
+            // Flatten nested data structures
+            if (event.getOriginalPayload() instanceof Map) {
+                flattenMap((Map<String, Object>) event.getOriginalPayload(), flatPayload, "");
+            }
+
+            return flatPayload;
+        }
+
+        private Map<String, Object> createClinicalSummary(RoutedEvent event) {
+            Map<String, Object> summary = new HashMap<>();
+            summary.put("patient_id", ((CanonicalEvent)event).getPatientId());
+            summary.put("event_type", event.getSourceEventType());
+            summary.put("priority", event.getPriority().name());
+            summary.put("timestamp", new Date(event.getRoutingTime()));
+            summary.put("clinical_significance", extractClinicalSignificance(event));
+            summary.put("recommended_actions", extractRecommendedActions(event));
+            return summary;
+        }
+
+        private Map<String, Object> formatForAudit(RoutedEvent event) {
+            Map<String, Object> auditPayload = new HashMap<>();
+            auditPayload.put("audit_id", UUID.randomUUID().toString());
+            auditPayload.put("event_id", event.getSourceEventId());
+            auditPayload.put("patient_id", ((CanonicalEvent)event).getPatientId());
+            auditPayload.put("event_type", event.getSourceEventType());
+            auditPayload.put("timestamp", event.getRoutingTime());
+            auditPayload.put("destinations", event.getDestinations());
+            auditPayload.put("transformation_rules", event.getTransformationRules());
+            auditPayload.put("data_classification", "CLINICAL");
+            return auditPayload;
+        }
+
+        private Map<String, Object> applyPrivacyFilter(RoutedEvent event) {
+            Map<String, Object> filteredPayload = new HashMap<>();
+
+            // Remove or mask sensitive data
+            filteredPayload.put("event_id", event.getSourceEventId());
+            filteredPayload.put("patient_id_hash", hashPatientId(((CanonicalEvent)event).getPatientId()));
+            filteredPayload.put("event_type", event.getSourceEventType());
+            filteredPayload.put("timestamp", event.getRoutingTime());
+            filteredPayload.put("clinical_indicators", extractNonSensitiveClinicalData(event));
+
+            return filteredPayload;
+        }
+
+        // Helper methods for transformations
+        private String determineFHIRResourceType(RoutedEvent event) {
+            switch (event.getSourceEventType()) {
+                case "SEMANTIC_EVENT":
+                    return "Observation";
+                case "PATTERN_EVENT":
+                    return "DiagnosticReport";
+                case "ML_PREDICTION":
+                    return "RiskAssessment";
+                case "CONTEXT_SNAPSHOT":
+                    return "Encounter";
+                default:
+                    return "Basic";
+            }
+        }
+
+        private Map<String, Object> createFHIRMeta() {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("versionId", "1");
+            meta.put("lastUpdated", new Date());
+            meta.put("source", "CardioFit-EHR-Intelligence");
+            return meta;
+        }
+
+        private Map<String, Object> createHL7Header(RoutedEvent event) {
+            Map<String, Object> msh = new HashMap<>();
+            msh.put("sending_application", "CardioFit-Flink");
+            msh.put("sending_facility", "CardioFit-Hospital");
+            msh.put("message_type", "ORU^R01^ORU_R01");
+            msh.put("timestamp", new Date(event.getRoutingTime()));
+            return msh;
+        }
+
+        private Map<String, Object> createHL7PatientInfo(RoutedEvent event) {
+            Map<String, Object> pid = new HashMap<>();
+            pid.put("patient_id", ((CanonicalEvent)event).getPatientId());
+            return pid;
+        }
+
+        private Map<String, Object> createHL7Observation(RoutedEvent event) {
+            Map<String, Object> obx = new HashMap<>();
+            obx.put("observation_identifier", event.getSourceEventType());
+            obx.put("observation_value", extractObservationValue(event));
+            obx.put("observation_datetime", new Date(event.getRoutingTime()));
+            return obx;
+        }
+
+        private void flattenMap(Map<String, Object> source, Map<String, Object> target, String prefix) {
+            for (Map.Entry<String, Object> entry : source.entrySet()) {
+                String key = prefix.isEmpty() ? entry.getKey() : prefix + "_" + entry.getKey();
+                Object value = entry.getValue();
+
+                if (value instanceof Map) {
+                    flattenMap((Map<String, Object>) value, target, key);
+                } else {
+                    target.put(key, value);
+                }
+            }
+        }
+
+        private Object extractClinicalConcepts(RoutedEvent event) {
+            // Extract clinical concepts based on event type
+            return Map.of("text", "Clinical event processed by EHR Intelligence Engine");
+        }
+
+        private Object extractClinicalSignificance(RoutedEvent event) {
+            // Extract clinical significance from original payload
+            return "Moderate"; // Simplified
+        }
+
+        private Object extractRecommendedActions(RoutedEvent event) {
+            // Extract recommended actions from original payload
+            return Arrays.asList("Monitor patient", "Review clinical data");
+        }
+
+        private String hashPatientId(String patientId) {
+            // Simple hash for privacy (in practice, use proper cryptographic hash)
+            return "HASH_" + patientId.hashCode();
+        }
+
+        private Object extractNonSensitiveClinicalData(RoutedEvent event) {
+            // Extract only non-sensitive clinical indicators
+            Map<String, Object> indicators = new HashMap<>();
+            indicators.put("event_category", event.getSourceEventType());
+            indicators.put("priority_level", event.getPriority().name());
+            return indicators;
+        }
+
+        private Object extractObservationValue(RoutedEvent event) {
+            // Extract observation value from event
+            return event.getSourceEventType() + "_OBSERVATION";
+        }
+    }
+
+    // ===== Sink Creation Methods =====
+
+    private static KafkaSink<RoutedEvent> createClinicalWorkflowSink() {
+        return createRoutedEventSink(KafkaTopics.WORKFLOW_EVENTS);
+    }
+
+    private static KafkaSink<RoutedEvent> createCriticalAlertsSink() {
+        return createRoutedEventSink(KafkaTopics.ALERT_MANAGEMENT);
+    }
+
+    private static KafkaSink<RoutedEvent> createAnalyticsSink() {
+        return createRoutedEventSink(KafkaTopics.PERFORMANCE_METRICS);
+    }
+
+    private static KafkaSink<RoutedEvent> createExternalSystemsSink() {
+        return createRoutedEventSink(KafkaTopics.HL7_OUTBOUND);
+    }
+
+    private static KafkaSink<RoutedEvent> createAuditSink() {
+        return createRoutedEventSink(KafkaTopics.AUDIT_EVENTS);
+    }
+
+    private static KafkaSink<RoutedEvent> createFailedRoutingSink() {
+        return createRoutedEventSink(KafkaTopics.DLQ_PROCESSING_ERRORS);
+    }
+
+    private static KafkaSink<RoutedEvent> createRealtimeNotificationSink() {
+        return createRoutedEventSink(KafkaTopics.NOTIFICATION_EVENTS);
+    }
+
+    private static KafkaSink<RoutedEvent> createBatchAnalyticsSink() {
+        return createRoutedEventSink(KafkaTopics.PRECOMPUTED_VIEWS);
+    }
+
+
+    private static GoogleFHIRStoreSink createGoogleFHIRStoreSink() {
+        // Use configuration compatible with patient-service settings
+        GoogleHealthcareConfig config = GoogleHealthcareConfig.createDevelopmentConfig();
+
+        LOG.info("Creating Google FHIR Store sink with configuration: {}", config.toString());
+
+        return new GoogleFHIRStoreSink(config);
+    }
+
+    private static KafkaSink<RoutedEvent> createRoutedEventSink(KafkaTopics topic) {
+        return KafkaSink.<RoutedEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(topic.getTopicName())
+                .setKeySerializationSchema(event -> ((CanonicalEvent)event).getPatientId().getBytes())
+                .setValueSerializationSchema(new RoutedEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static String getBootstrapServers() {
+        return KafkaConfigLoader.isRunningInDocker()
+            ? "kafka1:29092,kafka2:29093,kafka3:29094"
+            : "localhost:9092,localhost:9093,localhost:9094";
+    }
+
+    // ===== Serialization Classes =====
+
+    private static class SemanticEventDeserializer implements DeserializationSchema<SemanticEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public SemanticEvent deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, SemanticEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(SemanticEvent nextElement) { return false; }
+
+        @Override
+        public TypeInformation<SemanticEvent> getProducedType() {
+            return TypeInformation.of(SemanticEvent.class);
+        }
+    }
+
+    private static class PatternEventDeserializer implements DeserializationSchema<PatternEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public PatternEvent deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, PatternEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(PatternEvent nextElement) { return false; }
+
+        @Override
+        public TypeInformation<PatternEvent> getProducedType() {
+            return TypeInformation.of(PatternEvent.class);
+        }
+    }
+
+    private static class MLPredictionDeserializer implements DeserializationSchema<MLPrediction> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public MLPrediction deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, MLPrediction.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(MLPrediction nextElement) { return false; }
+
+        @Override
+        public TypeInformation<MLPrediction> getProducedType() {
+            return TypeInformation.of(MLPrediction.class);
+        }
+    }
+
+    private static class PatientContextDeserializer implements DeserializationSchema<PatientContext> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public PatientContext deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, PatientContext.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(PatientContext nextElement) { return false; }
+
+        @Override
+        public TypeInformation<PatientContext> getProducedType() {
+            return TypeInformation.of(PatientContext.class);
+        }
+    }
+
+    private static class RoutedEventSerializer implements SerializationSchema<RoutedEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(SerializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(RoutedEvent element) {
+            try {
+                return objectMapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize RoutedEvent", e);
+            }
+        }
+    }
+
+    /**
+     * Mapper to convert RoutedEvent to EnrichedClinicalEvent for hybrid architecture
+     */
+    private static class RoutedEventToEnrichedEventMapper implements MapFunction<RoutedEvent, EnrichedClinicalEvent> {
+    public static class DetectedPattern {
+        private String patternType;
+        private double confidence;
+        public DetectedPattern(String type, double conf) { this.patternType = type; this.confidence = conf; }
+        public String getPatternType() { return patternType; }
+        public double getConfidence() { return confidence; }
+    }
+
+        @Override
+        public EnrichedClinicalEvent map(RoutedEvent routedEvent) throws Exception {
+            EnrichedClinicalEvent enriched = new EnrichedClinicalEvent();
+
+            // Basic event information
+            enriched.setId(routedEvent.getSourceEventId());
+            enriched.setPatientId(routedEvent.getPatientId());
+            enriched.setTimestamp(routedEvent.getRoutingTime());
+            enriched.setSourceEventType(routedEvent.getSourceEventType());
+
+            // Extract clinical context from original payload
+            if (routedEvent.getOriginalPayload() instanceof SemanticEvent) {
+                SemanticEvent semantic = (SemanticEvent) routedEvent.getOriginalPayload();
+                enriched.setClinicalSignificance(semantic.getClinicalSignificance());
+                enriched.setDrugInteractions(semantic.getDrugInteractions());
+                enriched.setClinicalConcepts(semantic.getClinicalConcepts());
+                enriched.setPatientRelationshipChanges(semantic.hasPatientRelationships());
+                enriched.setClinicalConceptRelationships(semantic.hasClinicalConceptRelationships());
+            } else if (routedEvent.getOriginalPayload() instanceof PatternEvent) {
+                PatternEvent pattern = (PatternEvent) routedEvent.getOriginalPayload();
+                enriched.setClinicalSignificance(pattern.getConfidence());
+
+                // Convert pattern to detected patterns list
+                List<DetectedPattern> patterns = new ArrayList<>();
+                DetectedPattern detectedPattern = new DetectedPattern();
+                detectedPattern.setPatternType(pattern.getPatternType());
+                detectedPattern.setConfidence(pattern.getConfidence());
+                detectedPattern.setUrgency(pattern.getUrgency());
+                patterns.add(detectedPattern);
+                enriched.setDetectedPatterns(patterns);
+            } else if (routedEvent.getOriginalPayload() instanceof MLPrediction) {
+                MLPrediction prediction = (MLPrediction) routedEvent.getOriginalPayload();
+
+                // Convert ML prediction to predictions list
+                List<MLPrediction> predictions = new ArrayList<>();
+                predictions.add(prediction);
+                enriched.setMlPredictions(predictions);
+                enriched.setClinicalSignificance(prediction.getConfidence());
+            } else if (routedEvent.getOriginalPayload() instanceof PatientContext) {
+                PatientContext context = (PatientContext) routedEvent.getOriginalPayload();
+                enriched.setClinicalSignificance(0.5); // Default significance for context events
+                enriched.setPatientContext(context);
+            }
+
+            // Map routing destinations to clinical event fields
+            if (routedEvent.getDestinations() != null) {
+                enriched.setDestinations(new HashSet<>(routedEvent.getDestinations()));
+            }
+
+            // Set priority based on routing priority
+            if (routedEvent.getPriority() != null) {
+                switch (routedEvent.getPriority()) {
+                    case CRITICAL:
+                        enriched.setCriticalEvent(true);
+                        break;
+                    case HIGH:
+                        enriched.setHighClinicalSignificance(true);
+                        break;
+                    default:
+                        enriched.setCriticalEvent(false);
+                        enriched.setHighClinicalSignificance(false);
+                }
+            }
+
+            return enriched;
+        }
+    }
+}

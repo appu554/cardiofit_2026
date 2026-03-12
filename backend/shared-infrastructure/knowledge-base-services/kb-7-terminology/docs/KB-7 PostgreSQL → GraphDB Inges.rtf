@@ -1,0 +1,2137 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 ArialMT;\f1\froman\fcharset0 Times-Roman;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs29\fsmilli14667 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 # Workflow Implementation Design: KB-7 PostgreSQL \uc0\u8594  GraphDB Ingestion
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Let me provide a comprehensive workflow design that bridges the gap between your **Knowledge Factory pipeline** (the 3-tool system) and the **CDC-driven synchronization** we discussed earlier.
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## \uc0\u55356 \u57263  Critical Clarification: Two Distinct Data Flows
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Before we design the workflow, we need to understand that KB-7 has **two separate data flows** that must NOT be confused:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Flow 1: Knowledge Factory \uc0\u8594  GraphDB (Primary Ontology Load)**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Source**: External terminology providers (NCTS, LOINC.org, NIH RxNorm)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Processing**: SNOMED-OWL-Toolkit + ROBOT + Python converters
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Destination**: GraphDB (Layer 1 Authoritative Core)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Frequency**: Monthly releases (or on-demand)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Data Type**: Large RDF/OWL files (2.5M+ triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Purpose**: Load the **semantic knowledge** (medical concepts, hierarchies, mappings)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Flow 2: GraphDB \uc0\u8594  PostgreSQL Registry (Metadata Tracking)**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Source**: GraphDB (after Knowledge Factory load)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Processing**: Metadata extraction + version tagging
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Destination**: PostgreSQL `kb7_snapshots` table
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Frequency**: After each Knowledge Factory build
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Data Type**: Small metadata records (1 row per kernel version)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - **Purpose**: Enable CDC detection + audit trail
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Your Question**: "Ingesting data from KB-7 PostgreSQL to GraphDB"
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **My Analysis**: This appears to be asking about the **reverse direction** (PostgreSQL \uc0\u8594  GraphDB), which would be **architecturally incorrect** for your system. Here's why:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## \uc0\u10060  Why PostgreSQL \u8594  GraphDB is NOT Recommended
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Architectural Principle**: GraphDB is the Source of Truth for Ontologies
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Your PostgreSQL Registry serves three purposes:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 1. **Version Control**: Track which kernel versions exist
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 2. **Governance**: Record who approved releases and when
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 3. **CDC Trigger**: Signal to downstream systems that a new kernel is ready
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **PostgreSQL does NOT store**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - SNOMED concepts (520,000 nodes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - RxNorm drug hierarchies
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - LOINC lab codes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Ontology relationships (1.3M triples)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **GraphDB stores all of the above** because:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - It's optimized for RDF triples and semantic reasoning
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - It supports SPARQL queries for complex graph traversals
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - It handles OWL inference (subsumption, classification)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Attempting to load PostgreSQL \uc0\u8594  GraphDB would mean**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Storing 2.5M triples as PostgreSQL rows (performance nightmare)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Reimplementing semantic reasoning in SQL (impossible)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Losing OWL validation capabilities
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## \uc0\u9989  The Correct Flow: Knowledge Factory \u8594  GraphDB \u8594  PostgreSQL Registry
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Let me provide the **complete workflow** from source terminology to CDC-ready metadata.
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Phase 1: Knowledge Factory Build (External Sources \uc0\u8594  GraphDB)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 This is where your 3-tool pipeline operates.
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 1: Source Acquisition**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Trigger**: Monthly release detection or manual trigger
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Actions**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 1. **SNOMED-CT Acquisition**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Source: NCTS (National Clinical Terminology Service) - Australia
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Endpoint: https://www.healthterminologies.gov.au/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Authentication: API credentials from Australian Digital Health Agency
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- File: `SnomedCT_AU_Release_20240331.zip` (RF2 format)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Size: ~450MB compressed
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 2. **RxNorm Acquisition**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Source: NIH National Library of Medicine
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Endpoint: https://www.nlm.nih.gov/research/umls/rxnorm/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- File: `RxNorm_full_20240304.zip` (RRF format)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Size: ~800MB compressed
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 3. **LOINC Acquisition**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Source: LOINC.org (Regenstrief Institute)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Endpoint: https://loinc.org/downloads/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Authentication: Free account + terms acceptance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- File: `LOINC_2.77.zip` (CSV + XML)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Size: ~120MB compressed
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 4. **Verification**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Check SHA-256 checksums against official release notes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Validate digital signatures (if provided)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Store raw files in artifact repository (Nexus/Artifactory)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Output**: Three validated, versioned source archives
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 2: Transformation (3-Tool Pipeline)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Environment**: GitHub Actions runner or Jenkins executor with Docker
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Execution**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **2A: SNOMED-CT Processing**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: SNOMED-OWL-Toolkit
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Input: SnomedCT_AU_Release_20240331.zip
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Command:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0docker run --rm -v $(pwd):/data snomed/owl-toolkit:latest \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0-rf2-to-owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0-rf2-snapshot-archives /data/SnomedCT_AU_Release_20240331.zip \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0-output-file /data/snomed-au-20240331.owl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Processing:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Extract RF2 Snapshot files
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Read sct2_Concept_Snapshot_AU_20240331.txt (520,000 concepts)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Read sct2_Relationship_Snapshot_AU_20240331.txt (1.2M relationships)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Read sct2_Description_Snapshot_AU_20240331.txt (1.8M terms)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Map to OWL format with SNOMED namespace
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~8 minutes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: snomed-au-20240331.owl (1.8M triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **2B: RxNorm Processing**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: Custom Python script (rxnorm_converter.py)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Input: RxNorm_full_20240304.zip
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Execution:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0docker run --rm -v $(pwd):/data python:3.11-slim \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0python /data/rxnorm_converter.py \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /data/rrf/ \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--output /data/rxnorm-20240304.ttl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Processing:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Parse RXNCONSO.RRF (drug concepts: 180,000 entries)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Parse RXNREL.RRF (relationships: 450,000 entries)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Parse RXNSAT.RRF (attributes: 320,000 entries)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Map to RDF triples with RXNORM namespace
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~5 minutes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: rxnorm-20240304.ttl (500,000 triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **2C: LOINC Processing**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: Custom Python script (loinc_converter.py)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Input: LOINC_2.77.zip
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Processing:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Parse Loinc.csv (lab codes: 95,000 entries)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Parse LoincPartFile.csv (components: 28,000 entries)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Map to RDF with LOINC namespace
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~2 minutes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: loinc-2.77.ttl (200,000 triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **2D: ROBOT Merge**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: ROBOT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Command:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0docker run --rm -v $(pwd):/work obolibrary/robot:latest \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0merge \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /work/snomed-au-20240331.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /work/rxnorm-20240304.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /work/loinc-2.77.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /work/mappings/snomed-icd10-crosswalk.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--output /work/merged-ontology.owl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Processing:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Combine all ontologies into single graph
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Resolve namespace conflicts
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Unify base URIs
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~3 minutes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: merged-ontology.owl (2.5M triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **2E: ROBOT Reason**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: ROBOT + ELK Reasoner
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Command:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0docker run --rm -v $(pwd):/work obolibrary/robot:latest \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0reason \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /work/merged-ontology.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--reasoner ELK \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--create-new-ontology false \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--annotate-inferred-axioms true \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--output /work/reasoned-ontology.owl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Processing:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Classify ontology (compute subsumption hierarchy)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Materialize inferred axioms
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Example inference:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"Amoxicillin \uc0\u8594  is_a \u8594  Penicillin \u8594  is_a \u8594  Beta-lactam \u8594  is_a \u8594  Antibiotic"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0Pre-computed so GraphDB doesn't compute at query time
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~12 minutes (CPU-intensive)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: reasoned-ontology.owl (2.8M triples with inferred axioms)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **2F: ROBOT Verify (Quality Gates)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: ROBOT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Command:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0docker run --rm -v $(pwd):/work obolibrary/robot:latest \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0verify \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input /work/reasoned-ontology.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--queries /work/validation/*.sparql \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--output-dir /work/results/
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Validation Queries:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 1. check_missing_labels.sparql:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0"Find concepts without rdfs:label"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Expected: 0 results
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 2. check_dangling_references.sparql:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0"Find relationships pointing to non-existent concepts"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Expected: 0 results
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 3. check_snomed_coverage.sparql:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0"Count SNOMED concepts with Australian dialect terms"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Expected: >95% coverage
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 4. check_mapping_completeness.sparql:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0"Count SNOMED concepts with ICD-10-AM mappings"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Expected: >80,000 mappings
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 5. check_circular_hierarchies.sparql:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0"Find cycles in IS-A relationships"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Expected: 0 results
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Success Criteria:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- All queries return expected results
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Exit code: 0
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Failure Handling:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- If any query fails: Exit code 1
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- GitHub Actions marks build as FAILED
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Create GitHub Issue with validation report
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Alert clinical team via Slack/PagerDuty
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- DO NOT proceed to GraphDB load
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~5 minutes
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: validation-report.txt (pass/fail per query)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Total Pipeline Duration**: ~35 minutes (for full build)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 3: Load to GraphDB (Authoritative Core)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Trigger**: ROBOT verify passes (exit code 0)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Environment**: GraphDB server with preload utility
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Actions**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **3A: Prepare Import Configuration**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 File: graphdb-import-config.ttl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Configuration:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Repository: kb7-terminology
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Named Graph: http://cardiofit.ai/kernels/v2.3.0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Base IRI: http://cardiofit.ai/ontology/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Inference: Disabled (already reasoned by ROBOT)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Imports: Disabled (all ontologies merged)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **3B: Execute Import**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: GraphDB Import Utility (headless mode)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Command:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0./graphdb-importrdf \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--force \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--config graphdb-import-config.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0--input reasoned-ontology.owl
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Processing:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Parse OWL/RDF triples
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Validate RDF syntax
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Load into named graph
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Build internal indexes (subject, predicate, object)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Generate entity pool (unique URI registry)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~8 minutes (for 2.8M triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: GraphDB repository updated
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **3C: Validation Query**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Tool: curl (GraphDB SPARQL endpoint)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Query:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0SELECT (COUNT(*) as ?count) WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0GRAPH <http://cardiofit.ai/kernels/v2.3.0> \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0?s ?p ?o
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\}
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Expected Result: 2,800,000 triples (\'b15% tolerance)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Verification:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Query SNOMED concept count: Expected ~520,000
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Query RxNorm concept count: Expected ~180,000
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Query LOINC concept count: Expected ~95,000
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Query mapping count: Expected ~85,000
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Success: All counts within tolerance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Failure: Rollback import, alert team
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **3D: Create Named Graph Metadata**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 GraphDB stores additional metadata about the kernel:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Subject: <http://cardiofit.ai/kernels/v2.3.0>
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Predicates:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0dc:created \'a0 \'a0 \'a0 \'a0 "2024-04-01T10:00:00Z"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0dc:creator \'a0 \'a0 \'a0 \'a0 "knowledge-factory-pipeline"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0dc:description \'a0 \'a0 "Combined SNOMED-CT AU, RxNorm, LOINC kernel"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0owl:versionInfo\'a0 \'a0 "v2.3.0"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0cardiofit:buildDuration\'a0 \'a0 "PT35M"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0cardiofit:tripleCount\'a0 \'a0 \'a0 "2800000"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0cardiofit:checksum \'a0 \'a0 \'a0 \'a0 "sha256:7f8d9ab..."
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Phase 2: PostgreSQL Registry Update (GraphDB \uc0\u8594  PostgreSQL)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 This is where CDC integration begins.
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 4: Extract Metadata from GraphDB**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Trigger**: GraphDB import validation succeeds
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Actions**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **4A: SPARQL Query for Component Versions**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Query GraphDB to extract version information:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 SPARQL:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0SELECT ?component ?version WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0GRAPH <http://cardiofit.ai/kernels/v2.3.0> \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0?component owl:versionInfo ?version
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\}
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Results:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0snomed_ct_au\'a0 \'a0 \uc0\u8594  "20240331"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0rxnorm\'a0 \'a0 \'a0 \'a0 \'a0 \uc0\u8594  "20240304"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0loinc \'a0 \'a0 \'a0 \'a0 \'a0 \uc0\u8594  "2.77"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0icd10_am_map\'a0 \'a0 \uc0\u8594  "11th_edition_2024"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **4B: Count Statistics**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 SPARQL queries to generate statistics:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 1. Total Triples:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0SELECT (COUNT(*) as ?count) WHERE \{ ?s ?p ?o \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Result: 2,800,000
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 2. SNOMED Concepts:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0SELECT (COUNT(DISTINCT ?c) as ?count) WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0?c a snomed:Concept
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Result: 520,341
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 3. RxNorm Drugs:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0SELECT (COUNT(DISTINCT ?d) as ?count) WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0?d a rxnorm:Concept
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Result: 180,245
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 4. LOINC Codes:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0SELECT (COUNT(DISTINCT ?l) as ?count) WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0?l a loinc:Concept
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Result: 95,112
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 5. Mappings:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0SELECT (COUNT(*) as ?count) WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0?s skos:exactMatch ?o
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0Result: 85,220
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 5: Insert Metadata to PostgreSQL Registry**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Database**: PostgreSQL (Layer 1 Authoritative Core)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Table Schema**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Table: kb7_snapshots
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Columns:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0snapshot_id \'a0 \'a0 \'a0 VARCHAR(50) \'a0 PRIMARY KEY
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0version_tag \'a0 \'a0 \'a0 VARCHAR(20) \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0status\'a0 \'a0 \'a0 \'a0 \'a0 \'a0 VARCHAR(20) \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0graphdb_graph_uri TEXT\'a0 \'a0 \'a0 \'a0 \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0s3_location \'a0 \'a0 \'a0 TEXT\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0-- Component versions
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0snomed_version\'a0 \'a0 VARCHAR(20)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0amt_version \'a0 \'a0 \'a0 VARCHAR(20)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0rxnorm_version\'a0 \'a0 VARCHAR(20)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0loinc_version \'a0 \'a0 VARCHAR(20)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0icd10_map_version VARCHAR(20)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0-- Statistics
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0triple_count\'a0 \'a0 \'a0 BIGINT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0concept_count \'a0 \'a0 BIGINT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0mapping_count \'a0 \'a0 BIGINT
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0-- Provenance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0build_duration\'a0 \'a0 INTERVAL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0created_at\'a0 \'a0 \'a0 \'a0 TIMESTAMP \'a0 \'a0 NOT NULL DEFAULT NOW()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0activated_at\'a0 \'a0 \'a0 TIMESTAMP
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0approved_by \'a0 \'a0 \'a0 VARCHAR(100)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0checksum\'a0 \'a0 \'a0 \'a0 \'a0 VARCHAR(128)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0-- Metadata
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0build_job_id\'a0 \'a0 \'a0 VARCHAR(100)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0github_commit \'a0 \'a0 VARCHAR(40)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0validation_report TEXT
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Indexes:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- PRIMARY KEY on snapshot_id
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- INDEX on status (for CDC queries: WHERE status = 'RELEASED')
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- INDEX on created_at (for time-range queries)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Insert Operation**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Action: Knowledge Factory pipeline executes SQL INSERT
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 SQL:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0INSERT INTO kb7_snapshots (
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0snapshot_id,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0version_tag,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0status,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0graphdb_graph_uri,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0s3_location,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0snomed_version,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0amt_version,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0rxnorm_version,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0loinc_version,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0icd10_map_version,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0triple_count,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0concept_count,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0mapping_count,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0build_duration,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0approved_by,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0checksum,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0build_job_id,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0github_commit,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0validation_report
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0) VALUES (
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'snap_v2.3.0',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'v2.3.0',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'RELEASED',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'http://cardiofit.ai/kernels/v2.3.0',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0's3://cardiofit-kb/kernels/v2.3.0.tar.gz',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'20240331',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'20240331',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'20240304',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'2.77',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'11th_edition_2024',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a02800000,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0795698,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a085220,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'00:35:00',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'Dr. Jane Smith',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'sha256:7f8d9ab...',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'github-actions-12345',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'a3f9c21',
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0'All validation gates passed'
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0RETURNING snapshot_id, created_at;
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Result:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0snapshot_id: snap_v2.3.0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0created_at: 2024-04-01 10:00:00.123456+00
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Critical Timing**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - PostgreSQL WAL receives the INSERT within milliseconds
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Debezium detects the change within 50-100ms
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - CDC pipeline triggers (as detailed in previous response)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Phase 3: CDC Propagation (PostgreSQL \uc0\u8594  Downstream Systems)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 This phase was covered extensively in my previous response. Here's the summary:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 6: Debezium Capture**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **What Happens**: Debezium monitors PostgreSQL WAL
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Event Generated**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Topic: dbserver1.public.kb7_snapshots
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Message:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"before": null,
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"after": \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0"snapshot_id": "snap_v2.3.0",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0"version_tag": "v2.3.0",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0"status": "RELEASED",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0"snomed_version": "20240331",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0...
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\},
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"op": "c",
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0"ts_ms": 1711969200123
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Step 7: Parallel Consumer Processing**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **7A: Flink Broadcast State Update**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - All 6 Flink modules receive `kb_versions: v2.3.0`
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Clinical snapshots tagged with new version
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Duration: <2 seconds
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **7B: Neo4j Blue-Green Deployment**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - SPARQL extraction from GraphDB
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - RDF \uc0\u8594  Property Graph transformation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Staging deployment + validation
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Atomic pointer flip
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Duration: ~3 minutes
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **7C: Audit Logging**
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - PostgreSQL audit table updated
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Prometheus metrics exported
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Grafana dashboards refreshed
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Alternative Scenario: PostgreSQL as Primary Store (Not Recommended)**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 If you insist on storing ontology data in PostgreSQL first, here's why it's problematic:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Challenges**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 1. **Schema Complexity**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- RDF triples: Subject-Predicate-Object requires 3-column table
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- 2.8M triples = 2.8M rows (minimum)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Indexing: Need 6 indexes (SPO, SOP, PSO, POS, OSP, OPS) for query performance
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Storage: ~10GB just for indexes
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 2. **Semantic Reasoning**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- PostgreSQL cannot perform OWL inference
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- SPARQL queries not natively supported
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Graph traversal (find all descendants) requires recursive CTEs (slow)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 3. **Performance**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- GraphDB query: "Find all antihypertensive drugs" = 12ms
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- PostgreSQL equivalent (recursive CTE): 800ms+
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- 67x slower for typical semantic queries
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 4. **Maintenance**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- Updating ontology = UPDATE 2.8M rows (locks entire table)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0- GraphDB update = Replace named graph (atomic operation)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **If You Must Use PostgreSQL**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Option 1: PostgreSQL as Cache** (After GraphDB)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Table: kb7_triple_cache
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Columns:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0id \'a0 \'a0 \'a0 \'a0 BIGSERIAL PRIMARY KEY
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0subject\'a0 \'a0 TEXT\'a0 \'a0 \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0predicate\'a0 TEXT\'a0 \'a0 \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0object \'a0 \'a0 TEXT\'a0 \'a0 \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0graph_uri\'a0 TEXT\'a0 \'a0 \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0created_at TIMESTAMP DEFAULT NOW()
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Indexes:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0CREATE INDEX idx_spo ON kb7_triple_cache (subject, predicate, object);
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0CREATE INDEX idx_graph ON kb7_triple_cache (graph_uri);
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Population:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- After GraphDB load succeeds
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Run SPARQL CONSTRUCT query
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Stream results into PostgreSQL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Use COPY command for bulk insert (faster than INSERTs)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Duration: ~20 minutes to copy 2.8M triples
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Use Case:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Simple lookups: "What's the label for SNOMED code X?"
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- NOT for graph traversal or inference
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Option 2: PostgreSQL with JSON Storage**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Table: kb7_ontology_json
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Columns:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0snapshot_id VARCHAR(50) PRIMARY KEY
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0ontology\'a0 \'a0 JSONB \'a0 \'a0 \'a0 NOT NULL
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0created_at\'a0 TIMESTAMP \'a0 DEFAULT NOW()
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Storage:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Store entire ontology as one JSONB document
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Use GIN index for property lookups
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Size: ~1.2GB for 2.8M triples
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Pros:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Single row per kernel version
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- JSONB query operators for simple lookups
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Cons:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Cannot perform SPARQL queries
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- No semantic reasoning
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0- Graph traversal extremely slow
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Recommended Architecture: The Current Design**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 Your existing architecture is **optimal**:
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 External Sources (NCTS, NIH, LOINC)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u8595 
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Knowledge Factory (3-Tool Pipeline)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u8595 
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 GraphDB (Authoritative Semantic Core)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u8595 
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 PostgreSQL Registry (Metadata + CDC Trigger)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u8595 
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Debezium (Change Capture)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u8595 
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Kafka (Event Bus)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u8595 
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u9500 \u8594  Flink (Broadcast State)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u9500 \u8594  Neo4j (Runtime Graph)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0\uc0\u9492 \u8594  Redis (Fast Cache)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Why It Works**:
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - GraphDB handles ontologies (what it's designed for)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - PostgreSQL handles metadata + governance (what it's designed for)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Neo4j handles runtime queries (what it's designed for)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - Each tool optimized for its specific purpose
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Implementation Checklist**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Phase 1: Knowledge Factory Setup**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 - [ ] Deploy GitHub Actions runner with Docker support
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Install SNOMED-OWL-Toolkit Docker image
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Develop RxNorm converter Python script
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Develop LOINC converter Python script
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure ROBOT with ELK reasoner
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Create validation SPARQL queries (5 quality gates)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Set up artifact repository (Nexus/Artifactory)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Phase 2: GraphDB Configuration**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 - [ ] Provision GraphDB server (16GB RAM minimum)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Create `kb7-terminology` repository
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure named graph structure
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Set up GraphDB importrdf utility
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Create SPARQL validation endpoints
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure backup/snapshot policies
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Phase 3: PostgreSQL Registry**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 - [ ] Create `kb7_snapshots` table with schema
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure Write-Ahead Log (WAL) for Debezium
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Create replication slot: `debezium_kb_slot`
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Set up indexes for CDC queries
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure audit logging
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Phase 4: CDC Pipeline**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 - [ ] Deploy Debezium PostgreSQL connector
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure Kafka topic: `dbserver1.public.kb7_snapshots`
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Implement Flink broadcast state consumers
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Build Neo4j Updater Service
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Set up Consul for pointer management
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Configure Prometheus metrics
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Build Grafana dashboards
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ### **Phase 5: Testing & Validation**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 - [ ] End-to-end test: External source \uc0\u8594  GraphDB \u8594  Neo4j
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Validate CDC latency (<5 minutes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Test rollback procedures
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Perform load testing (10M+ triples)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 - [ ] Document runbooks
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ---
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ## **Summary: The Complete Data Flow**
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 1. Monthly Release Trigger
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  Download SNOMED + RxNorm + LOINC
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 2. Knowledge Factory Build (35 minutes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  Transform + Merge + Reason + Validate
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 3. GraphDB Load (8 minutes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  Import 2.8M triples into named graph
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 4. PostgreSQL Registry Update (5 seconds)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  INSERT metadata row into kb7_snapshots
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 5. Debezium Capture (100ms)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  Detect WAL change, publish to Kafka
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 6. Parallel CDC Propagation (3 minutes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9500 \u8594  Flink broadcast state (2 seconds)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9500 \u8594  Neo4j blue-green deploy (3 minutes)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  Audit logging (1 second)
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 7. Production Ready
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\uc0\u9492 \u8594  All layers synchronized on v2.3.0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ```
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Total Duration**: ~46 minutes from source download to production deployment
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 **Next Step**: Implement Workflow 2 (Snapshot Manager with AWS KMS signatures), knowing that Flink will provide the `kb_versions` metadata automatically through the CDC pipeline.
+\f1\fs24 \
+\
+\
+\
+\
+
+\f0\fs29\fsmilli14667 Knowledge Factory Implementation: The 3-Tool PipelineObjective: To automate the extraction, transformation, and validation of SNOMED-CT, RxNorm, and LOINC into a single, validated RDF Graph.The Pipeline Runner: GitHub Actions / JenkinsThe Output: kb7-kernel-v\{version\}.trig (A valid RDF dataset)Tool 1: SNOMED-OWL-Toolkit (The SNOMED Handler)Purpose: Convert SNOMED's proprietary "RF2" format (a complex set of tab-delimited files) into standard OWL ontology format.Source: IHTSDO/snomed-owl-toolkitDocker Image: snomed/owl-toolkit:latestThe Technical Workflow:Extract: The pipeline unzips the SNOMED release file (e.g., SnomedCT_InternationalRF2_PRODUCTION_20250301.zip).Execute: We run the toolkit in "RF2 to OWL" mode.# Implementation Command
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 java -jar snomed-owl-toolkit.jar \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0-rf2-to-owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0-rf2-snapshot-archives SnomedCT_InternationalRF2_PRODUCTION_20250301.zip \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0-output-file snomed-output.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 What it does under the hood:It reads the Snapshot directory of the RF2 archive (the "current state" of all concepts).It maps the SNOMED concept model (Concept ID 12345) to an IRI: http://snomed.info/id/12345.It translates RF2 relationships (SourceId, DestinationId, TypeId) into OWL Object Properties: Subject SubClassOf (Property some Object).Output: snomed-output.owl (A valid, massive OWL ontology file).Tool 2: RRF-to-RDF Converter (The RxNorm Handler)Purpose: RxNorm comes as .RRF files (Rich Release Format), which are essentially relational database dumps (pipe-delimited). There is no "standard" tool for this, so we use a custom, optimized Python/Pandas script.Key Files to Process:RXNCONSO.RRF: Concepts and Names (The Nodes).RXNREL.RRF: Relationships (The Edges).RXNSAT.RRF: Attributes (The Properties).The Technical Workflow (Python Script):# rxnorm_converter.py (Simplified Logic)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 import pandas as pd
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 from rdflib import Graph, URIRef, Literal, Namespace
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 def convert_rxnorm(rrf_path, output_file):
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0g = Graph()
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0RXNORM = Namespace("http://purl.bioontology.org/ontology/RXNORM/")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# 1. Load Concepts (RXNCONSO)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Columns: RXCUI (ID), STR (Name), TTY (Term Type)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0conso = pd.read_csv(f"\{rrf_path\}/RXNCONSO.RRF", sep='|', usecols=[0, 12, 14], names=['RXCUI', 'TTY', 'STR'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0for index, row in conso.iterrows():
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0concept_uri = RXNORM[row['RXCUI']]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0g.add((concept_uri, RDF.type, RXNORM.Concept))
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0g.add((concept_uri, RDFS.label, Literal(row['STR'])))
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0g.add((concept_uri, RXNORM.termType, Literal(row['TTY'])))
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# 2. Load Relationships (RXNREL)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# Columns: RXCUI1 (Source), RXCUI2 (Target), REL (Relationship Type)
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0rel = pd.read_csv(f"\{rrf_path\}/RXNREL.RRF", sep='|', usecols=[0, 4, 7], names=['RXCUI1', 'RXCUI2', 'REL'])
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0for index, row in rel.iterrows():
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0source = RXNORM[row['RXCUI1']]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0target = RXNORM[row['RXCUI2']]
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0predicate = RXNORM[f"has_\{row['REL']\}"] # e.g., has_isa, has_ingredient
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0\'a0\'a0\'a0\'a0g.add((source, predicate, target))
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0# 3. Serialize
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0g.serialize(destination=output_file, format='turtle')
+\f1\fs24 \
+\
+
+\f0\fs29\fsmilli14667 if __name__ == "__main__":
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0\'a0convert_rxnorm("./input/rrf", "rxnorm-output.ttl")
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Output: rxnorm-output.ttl (A valid Turtle RDF file representing the drug graph).Tool 3: ROBOT (The Ontology Master Tool)Purpose: ROBOT is the "Swiss Army Knife" of ontology engineering. It handles Merging, Reasoning, and Verification. It is the most important tool in the pipeline.Source: ontodev/robotDocker Image: obolibrary/robot:latestStep 3a: Merge (Unification)First, we combine our different ontologies into one graph.robot merge \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--input snomed-output.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--input rxnorm-output.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--input loinc-output.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--output merged-ontology.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Step 3b: Reason (Inference & Materialization)This is where the "Semantic Magic" happens. We run a Reasoner (like ELK) to compute the class hierarchy. This pre-calculates "Amoxicillin is an Antibiotic" so GraphDB doesn't have to do it during every query.robot reason \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--input merged-ontology.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--reasoner ELK \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--materialize-scopes "subClassOf" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--output reasoned-ontology.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Step 3c: Verify (The Validation Gate)This corresponds to the "Validate" step in your workflow. We use robot verify to run logical tests.Input: reasoned-ontology.owlInput: queries/validation.sparql (A directory of SPARQL queries that check for errors).Example Validation Query (check_missing_labels.sparql):# ERROR if a Class has no label
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 SELECT ?cls WHERE \{
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0?cls a owl:Class .
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0FILTER NOT EXISTS \{ ?cls rdfs:label ?label \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \}
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Execution Command:robot verify \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--input reasoned-ontology.owl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--queries queries/validation.sparql \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0--output-dir results/
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Result: If this command finds any results (errors), the CI/CD pipeline FAILS. The bad data never leaves the build server.Phase 2: The Load (Writing to Authoritative Core)Once robot verify passes, we have a pristine file: reasoned-ontology.owl.The Action: The CI/CD pipeline uses the GraphDB Preload Tool (or REST API) to push this file.# Using GraphDB's high-performance 'importrdf' utility
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 # This is much faster than standard REST API for bulk loads
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 ./graphdb-importrdf \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0--force \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0--config production-repo-config.ttl \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0--default-graph "graph://kernels/v2025-03" \\
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 \'a0\'a0\'a0reasoned-ontology.owl
+\f1\fs24 \
+
+\f0\fs29\fsmilli14667 Validation: Finally, we run a quick count check via curl to the GraphDB SPARQL endpoint to confirm the number of triples loaded matches our expectation.Summary of the "3 Tools"SNOMED-OWL-Toolkit: Translates SNOMED RF2 $\\rightarrow$ OWL.Custom Python Script: Translates RxNorm RRF $\\rightarrow$ RDF (Turtle).ROBOT: Merges, Reasons (Infers), and Validates the final graph.This is a robust, automated engineering pipeline that treats "Knowledge" as "Code," ensuring that only valid, compiled ontologies ever reach your production database.
+\f1\fs24 \
+}

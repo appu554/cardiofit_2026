@@ -1,0 +1,302 @@
+syntax = "proto3";
+
+package context_gateway;
+
+option go_package = "./proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Context Gateway Service - Implementation of Requirements from documentation
+service ContextGateway {
+  // Core snapshot management operations
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (ClinicalSnapshot);
+  rpc GetSnapshot(GetSnapshotRequest) returns (ClinicalSnapshot);
+  rpc ValidateSnapshot(ValidateSnapshotRequest) returns (ValidateSnapshotResponse);
+  rpc InvalidateSnapshot(InvalidateRequest) returns (InvalidateResponse);
+  
+  // Live fetch operations with governance
+  rpc FetchLiveFields(LiveFetchRequest) returns (LiveFetchResponse);
+  
+  // Recipe management operations
+  rpc LoadRecipe(LoadRecipeRequest) returns (WorkflowRecipe);
+  rpc ValidateRecipe(ValidateRecipeRequest) returns (RecipeValidationResponse);
+  
+  // Service health and metrics
+  rpc GetServiceHealth(HealthRequest) returns (HealthResponse);
+  rpc GetMetrics(MetricsRequest) returns (MetricsResponse);
+  
+  // Streaming operations for real-time updates
+  rpc StreamContextUpdates(StreamRequest) returns (stream ContextUpdate);
+}
+
+// Request Messages
+message CreateSnapshotRequest {
+  WorkflowRecipe recipe = 1;
+  string patient_id = 2;
+  string requesting_service = 3;
+  optional string provider_id = 4;
+  optional string encounter_id = 5;
+  bool force_refresh = 6;
+  int32 ttl_hours = 7;
+}
+
+message GetSnapshotRequest {
+  string snapshot_id = 1;
+  string requesting_service = 2;
+}
+
+message ValidateSnapshotRequest {
+  string snapshot_id = 1;
+  string requesting_service = 2;
+}
+
+message InvalidateRequest {
+  string snapshot_id = 1;
+  string reason = 2;
+  string requesting_service = 3;
+}
+
+message LiveFetchRequest {
+  string snapshot_id = 1;
+  repeated string missing_fields = 2;
+  string patient_id = 3;
+  string requesting_service = 4;
+}
+
+message LoadRecipeRequest {
+  string recipe_id = 1;
+  optional string version = 2;
+}
+
+message ValidateRecipeRequest {
+  WorkflowRecipe recipe = 1;
+}
+
+message HealthRequest {
+  bool include_dependencies = 1;
+}
+
+message MetricsRequest {
+  optional string time_range = 1;
+}
+
+message StreamRequest {
+  string patient_id = 1;
+  repeated string recipe_ids = 2;
+}
+
+// Core Data Models
+message ClinicalSnapshot {
+  string id = 1;
+  string patient_id = 2;
+  string recipe_id = 3;
+  string context_id = 4;
+  google.protobuf.Struct data = 5;
+  double completeness_score = 6;
+  string checksum = 7;
+  string signature = 8;
+  SignatureMethod signature_method = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  SnapshotStatus status = 12;
+  optional string provider_id = 13;
+  optional string encounter_id = 14;
+  google.protobuf.Struct assembly_metadata = 15;
+  google.protobuf.Struct evidence_envelope = 16;
+  int32 accessed_count = 17;
+  google.protobuf.Timestamp last_accessed_at = 18;
+  bool allow_live_fetch = 19;
+  repeated string allowed_live_fields = 20;
+}
+
+message WorkflowRecipe {
+  string recipe_id = 1;
+  string recipe_name = 2;
+  string version = 3;
+  string clinical_scenario = 4;
+  string workflow_category = 5;
+  string execution_pattern = 6;
+  repeated DataPoint required_fields = 7;
+  repeated ConditionalRule conditional_rules = 8;
+  QualityConstraints quality_constraints = 9;
+  SafetyRequirements safety_requirements = 10;
+  CacheStrategy cache_strategy = 11;
+  AssemblyRules assembly_rules = 12;
+  GovernanceMetadata governance_metadata = 13;
+  int32 sla_ms = 14;
+}
+
+message DataPoint {
+  string name = 1;
+  string source_type = 2;
+  repeated string fields = 3;
+  bool required = 4;
+  int32 max_age_hours = 5;
+  double quality_threshold = 6;
+  int32 timeout_ms = 7;
+  int32 retry_count = 8;
+  repeated string fallback_sources = 9;
+  int32 freshness_requirement = 10;
+}
+
+message ConditionalRule {
+  string condition = 1;
+  repeated DataPoint additional_data_points = 2;
+  string description = 3;
+}
+
+message QualityConstraints {
+  double minimum_completeness = 1;
+  int32 maximum_age_hours = 2;
+  repeated string required_fields = 3;
+  double accuracy_threshold = 4;
+}
+
+message SafetyRequirements {
+  double minimum_completeness_score = 1;
+  string absolute_required_enforcement = 2;
+  string preferred_data_handling = 3;
+  string critical_missing_data_action = 4;
+  string stale_data_action = 5;
+}
+
+message CacheStrategy {
+  int32 l1_ttl_seconds = 1;
+  int32 l2_ttl_seconds = 2;
+  int32 l3_ttl_seconds = 3;
+  repeated string invalidation_events = 4;
+  string cache_key_pattern = 5;
+}
+
+message AssemblyRules {
+  bool parallel_execution = 1;
+  int32 timeout_budget_ms = 2;
+  bool circuit_breaker_enabled = 3;
+  bool retry_failed_sources = 4;
+  bool validate_data_freshness = 5;
+  bool enforce_quality_constraints = 6;
+}
+
+message GovernanceMetadata {
+  string approved_by = 1;
+  google.protobuf.Timestamp approval_date = 2;
+  string version = 3;
+  google.protobuf.Timestamp effective_date = 4;
+  google.protobuf.Timestamp expiry_date = 5;
+  string clinical_board_approval_id = 6;
+  repeated string tags = 7;
+  repeated string change_log = 8;
+}
+
+// Response Messages
+message ValidateSnapshotResponse {
+  bool valid = 1;
+  bool checksum_valid = 2;
+  bool signature_valid = 3;
+  bool not_expired = 4;
+  repeated string errors = 5;
+  repeated string warnings = 6;
+  double validation_duration_ms = 7;
+}
+
+message InvalidateResponse {
+  bool success = 1;
+  string message = 2;
+  google.protobuf.Timestamp invalidated_at = 3;
+}
+
+message LiveFetchResponse {
+  google.protobuf.Struct fetched_data = 1;
+  double completeness = 2;
+  repeated string errors = 3;
+  AuditEntry audit_entry = 4;
+}
+
+message RecipeValidationResponse {
+  bool valid = 1;
+  repeated string errors = 2;
+  repeated string warnings = 3;
+  double validation_duration_ms = 4;
+}
+
+message HealthResponse {
+  ServiceStatus status = 1;
+  string version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  repeated DependencyHealth dependencies = 4;
+  CacheStats cache_stats = 5;
+}
+
+message MetricsResponse {
+  google.protobuf.Struct metrics = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message ContextUpdate {
+  string patient_id = 1;
+  string recipe_id = 2;
+  UpdateType update_type = 3;
+  google.protobuf.Struct data = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// Supporting Messages
+message AuditEntry {
+  string event = 1;
+  string snapshot_id = 2;
+  string patient_id = 3;
+  string requesting_service = 4;
+  repeated string fields_fetched = 5;
+  string reason = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message DependencyHealth {
+  string service_name = 1;
+  ServiceStatus status = 2;
+  string endpoint = 3;
+  int32 response_time_ms = 4;
+  google.protobuf.Timestamp last_check = 5;
+  optional string error = 6;
+}
+
+message CacheStats {
+  int64 total_entries = 1;
+  double hit_ratio = 2;
+  int64 l1_entries = 3;
+  int64 l2_entries = 4;
+  int64 l3_entries = 5;
+  google.protobuf.Timestamp last_updated = 6;
+}
+
+// Enums
+enum SnapshotStatus {
+  SNAPSHOT_STATUS_UNKNOWN = 0;
+  SNAPSHOT_STATUS_ACTIVE = 1;
+  SNAPSHOT_STATUS_EXPIRED = 2;
+  SNAPSHOT_STATUS_INVALIDATED = 3;
+}
+
+enum SignatureMethod {
+  SIGNATURE_METHOD_UNKNOWN = 0;
+  SIGNATURE_METHOD_MOCK = 1;
+  SIGNATURE_METHOD_RSA_2048 = 2;
+  SIGNATURE_METHOD_ECDSA_P256 = 3;
+}
+
+enum ServiceStatus {
+  SERVICE_STATUS_UNKNOWN = 0;
+  SERVICE_STATUS_HEALTHY = 1;
+  SERVICE_STATUS_DEGRADED = 2;
+  SERVICE_STATUS_UNHEALTHY = 3;
+}
+
+enum UpdateType {
+  UPDATE_TYPE_UNKNOWN = 0;
+  UPDATE_TYPE_SNAPSHOT_CREATED = 1;
+  UPDATE_TYPE_SNAPSHOT_UPDATED = 2;
+  UPDATE_TYPE_SNAPSHOT_INVALIDATED = 3;
+  UPDATE_TYPE_CACHE_INVALIDATED = 4;
+  UPDATE_TYPE_RECIPE_UPDATED = 5;
+}

@@ -1,0 +1,220 @@
+{
+  "index_patterns": ["clinical_terms*", "terminology_*", "medical_*"],
+  "priority": 1,
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": 3,
+        "number_of_replicas": 1,
+        "refresh_interval": "30s",
+        "max_result_window": 50000,
+        "mapping": {
+          "total_fields": {
+            "limit": 2000
+          }
+        },
+        "analysis": {
+          "char_filter": {
+            "medical_char_filter": {
+              "type": "mapping",
+              "mappings": [
+                "α => alpha",
+                "β => beta",
+                "γ => gamma",
+                "μ => micro",
+                "Ω => omega",
+                "& => and",
+                "w/ => with",
+                "w/o => without",
+                "± => plus-minus",
+                "≤ => less-equal",
+                "≥ => greater-equal",
+                "°C => celsius",
+                "°F => fahrenheit"
+              ]
+            },
+            "medical_html_strip": {
+              "type": "html_strip"
+            }
+          },
+          "tokenizer": {
+            "medical_tokenizer": {
+              "type": "pattern",
+              "pattern": "[\\W&&[^'-]]",
+              "lowercase": true
+            }
+          },
+          "filter": {
+            "medical_stemmer": {
+              "type": "stemmer",
+              "language": "english"
+            },
+            "medical_synonyms": {
+              "type": "synonym",
+              "synonyms": [
+                "heart attack,myocardial infarction,MI,cardiac arrest",
+                "high blood pressure,hypertension,HTN",
+                "diabetes,diabetes mellitus,DM",
+                "stroke,cerebrovascular accident,CVA",
+                "blood sugar,glucose,blood glucose",
+                "cholesterol,lipid,lipids",
+                "medication,medicine,drug,pharmaceutical",
+                "prescription,Rx,script",
+                "milligram,mg",
+                "gram,g,gm",
+                "kilogram,kg",
+                "milliliter,ml,mL",
+                "liter,l,L",
+                "tablet,tab,pill",
+                "capsule,cap",
+                "injection,inj,shot",
+                "twice daily,bid,b.i.d",
+                "three times daily,tid,t.i.d",
+                "four times daily,qid,q.i.d",
+                "once daily,daily,qd,q.d",
+                "as needed,prn,p.r.n",
+                "immediately,stat,STAT",
+                "before meals,ac,a.c",
+                "after meals,pc,p.c",
+                "at bedtime,hs,h.s"
+              ]
+            },
+            "medical_stop": {
+              "type": "stop",
+              "stopwords": [
+                "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"
+              ]
+            },
+            "medical_edge_ngram": {
+              "type": "edge_ngram",
+              "min_gram": 2,
+              "max_gram": 15,
+              "token_chars": ["letter", "digit"]
+            },
+            "medical_word_delimiter": {
+              "type": "word_delimiter",
+              "generate_word_parts": true,
+              "generate_number_parts": true,
+              "catenate_words": true,
+              "catenate_numbers": true,
+              "catenate_all": false,
+              "split_on_case_change": true,
+              "preserve_original": false
+            }
+          },
+          "analyzer": {
+            "medical_standard": {
+              "char_filter": ["medical_html_strip", "medical_char_filter"],
+              "tokenizer": "standard",
+              "filter": [
+                "lowercase",
+                "medical_word_delimiter",
+                "medical_synonyms",
+                "medical_stop",
+                "medical_stemmer"
+              ]
+            },
+            "medical_search": {
+              "char_filter": ["medical_html_strip", "medical_char_filter"],
+              "tokenizer": "standard",
+              "filter": [
+                "lowercase",
+                "medical_word_delimiter",
+                "medical_synonyms",
+                "medical_stop"
+              ]
+            },
+            "medical_autocomplete": {
+              "char_filter": ["medical_html_strip", "medical_char_filter"],
+              "tokenizer": "medical_tokenizer",
+              "filter": [
+                "lowercase",
+                "medical_word_delimiter",
+                "medical_edge_ngram"
+              ]
+            },
+            "medical_exact": {
+              "char_filter": ["medical_html_strip"],
+              "tokenizer": "keyword",
+              "filter": ["lowercase"]
+            },
+            "medical_phonetic": {
+              "tokenizer": "standard",
+              "filter": [
+                "lowercase",
+                "phonetic"
+              ]
+            }
+          },
+          "normalizer": {
+            "medical_normalizer": {
+              "char_filter": ["medical_char_filter"],
+              "filter": ["lowercase", "asciifolding"]
+            }
+          }
+        }
+      }
+    },
+    "mappings": {
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "match": "*_id",
+            "mapping": {
+              "type": "keyword"
+            }
+          }
+        },
+        {
+          "medical_text_fields": {
+            "match_mapping_type": "string",
+            "match": "*term*",
+            "mapping": {
+              "type": "text",
+              "analyzer": "medical_standard",
+              "search_analyzer": "medical_search",
+              "fields": {
+                "exact": {
+                  "type": "keyword",
+                  "normalizer": "medical_normalizer"
+                },
+                "autocomplete": {
+                  "type": "text",
+                  "analyzer": "medical_autocomplete"
+                }
+              }
+            }
+          }
+        },
+        {
+          "description_fields": {
+            "match_mapping_type": "string",
+            "match": "*description*",
+            "mapping": {
+              "type": "text",
+              "analyzer": "medical_standard"
+            }
+          }
+        },
+        {
+          "definition_fields": {
+            "match_mapping_type": "string",
+            "match": "*definition*",
+            "mapping": {
+              "type": "text",
+              "analyzer": "medical_standard"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "composed_of": [],
+  "version": 1,
+  "_meta": {
+    "description": "Template for clinical terminology indices with medical text analysis",
+    "created_by": "KB7 Terminology Service",
+    "version": "1.0.0"
+  }
+}

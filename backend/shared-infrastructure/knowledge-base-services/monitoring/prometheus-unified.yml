@@ -1,0 +1,281 @@
+# Unified Prometheus Configuration for All KB Services
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'kb-services'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "alert_rules.yml"
+  - "recording_rules.yml"
+
+# Scrape configurations for all KB services
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # KB-1 Drug Rules Service (Go with PostgreSQL)
+  - job_name: 'kb-drug-rules'
+    static_configs:
+      - targets: ['localhost:8081']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'drug_calculations'
+        - 'dosing_rules'
+        - 'toml_validations'
+
+  # KB-2 Clinical Context Service (Go with MongoDB)  
+  - job_name: 'kb-clinical-context'
+    static_configs:
+      - targets: ['localhost:8082']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'phenotype_matches'
+        - 'context_analysis'
+        - 'population_cohorts'
+
+  # KB-3 Guideline Evidence Service (Go with Neo4j)
+  - job_name: 'kb-guideline-evidence'
+    static_configs:
+      - targets: ['localhost:8084']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'guideline_searches'
+        - 'recommendation_lookups'
+        - 'graph_traversals'
+
+  # KB-4 Patient Safety Service (Go with TimescaleDB)
+  - job_name: 'kb-patient-safety'
+    static_configs:
+      - targets: ['localhost:8085']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'safety_checks'
+        - 'alert_generation'
+        - 'risk_assessments'
+
+  # KB-5 Drug Interactions Service (Go with PostgreSQL)
+  - job_name: 'kb-drug-interactions'
+    static_configs:
+      - targets: ['localhost:8086']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'interaction_checks'
+        - 'matrix_lookups'
+        - 'severity_analysis'
+
+  # KB-6 Formulary Service (Go with Elasticsearch)
+  - job_name: 'kb-formulary'
+    static_configs:
+      - targets: ['localhost:8087']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'formulary_searches'
+        - 'tier_analysis'
+        - 'alternative_lookups'
+
+  # KB-7 Terminology Service (Go with PostgreSQL)
+  - job_name: 'kb-terminology'
+    static_configs:
+      - targets: ['localhost:8088']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    params:
+      collect[]:
+        - 'terminology_lookups'
+        - 'code_validations'
+        - 'expansion_operations'
+
+  # Database Infrastructure Monitoring
+
+  # PostgreSQL instances (KB-1, KB-4, KB-5, KB-7)
+  - job_name: 'postgres-kb-primary'
+    static_configs:
+      - targets: ['localhost:5432']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      collect[]:
+        - 'pg_stat_database'
+        - 'pg_stat_user_tables'
+        - 'pg_stat_bgwriter'
+        - 'pg_locks'
+        - 'pg_stat_replication'
+
+  - job_name: 'postgres-kb-secondary'
+    static_configs:
+      - targets: ['localhost:5433']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+
+  # MongoDB for KB-2 Clinical Context
+  - job_name: 'mongodb-kb-clinical-context'
+    static_configs:
+      - targets: ['localhost:27017']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      collect[]:
+        - 'mongodb_connections'
+        - 'mongodb_operations'
+        - 'mongodb_memory'
+        - 'mongodb_locks'
+
+  # Neo4j for KB-3 Guidelines
+  - job_name: 'neo4j-kb-guidelines'
+    static_configs:
+      - targets: ['localhost:7474']
+    metrics_path: '/db/manage/server/jmx/domain/neo4j'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      collect[]:
+        - 'neo4j_database'
+        - 'neo4j_transactions'
+        - 'neo4j_page_cache'
+
+  # Elasticsearch for KB-6 Formulary
+  - job_name: 'elasticsearch-kb-formulary'
+    static_configs:
+      - targets: ['localhost:9200']
+    metrics_path: '/_prometheus/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      collect[]:
+        - 'elasticsearch_indices'
+        - 'elasticsearch_cluster'
+        - 'elasticsearch_nodes'
+
+  # TimescaleDB for KB-4 Patient Safety
+  - job_name: 'timescaledb-kb-safety'
+    static_configs:
+      - targets: ['localhost:5434']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+
+  # Redis Cache Infrastructure
+  - job_name: 'redis-kb-cache-l2'
+    static_configs:
+      - targets: ['localhost:6379']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  - job_name: 'redis-kb-cache-l3'
+    static_configs:
+      - targets: ['localhost:6380']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # System-level monitoring
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # Health checks for all KB services
+  - job_name: 'kb-services-health'
+    static_configs:
+      - targets: 
+          - 'localhost:8081'  # KB-1
+          - 'localhost:8082'  # KB-2
+          - 'localhost:8084'  # KB-3
+          - 'localhost:8085'  # KB-4
+          - 'localhost:8086'  # KB-5
+          - 'localhost:8087'  # KB-6
+          - 'localhost:8088'  # KB-7
+    metrics_path: '/api/v1/health'
+    scrape_interval: 30s
+    scrape_timeout: 5s
+    params:
+      format: ['prometheus']
+
+  # Business logic monitoring
+  - job_name: 'kb-business-metrics'
+    static_configs:
+      - targets:
+          - 'localhost:8081'  # Drug calculations
+          - 'localhost:8082'  # Clinical phenotyping 
+          - 'localhost:8084'  # Guideline recommendations
+          - 'localhost:8085'  # Safety alerts
+          - 'localhost:8086'  # Interaction analysis
+          - 'localhost:8087'  # Formulary searches
+          - 'localhost:8088'  # Terminology validation
+    metrics_path: '/api/v1/metrics/business'
+    scrape_interval: 60s
+    scrape_timeout: 15s
+
+  # Security and audit metrics
+  - job_name: 'kb-security-metrics'
+    static_configs:
+      - targets:
+          - 'localhost:8081'
+          - 'localhost:8082'
+          - 'localhost:8084'
+          - 'localhost:8085'
+          - 'localhost:8086'
+          - 'localhost:8087'
+          - 'localhost:8088'
+    metrics_path: '/api/v1/metrics/security'
+    scrape_interval: 60s
+    scrape_timeout: 15s
+    params:
+      collect[]:
+        - 'authentication_attempts'
+        - 'authorization_failures'
+        - 'rate_limit_hits'
+        - 'license_validations'
+
+# Remote write configuration for long-term storage
+remote_write:
+  - url: "http://prometheus-remote:9201/write"
+    queue_config:
+      max_samples_per_send: 10000
+      max_shards: 200
+      capacity: 20000
+      batch_send_deadline: 5s
+    metadata_config:
+      send: true
+      send_interval: 30s
+
+# Remote read configuration
+remote_read:
+  - url: "http://prometheus-remote:9201/read"
+    read_recent: true

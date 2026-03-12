@@ -1,0 +1,575 @@
+# ==============================================================================
+# KB-9 Care Gaps Service - GraphQL Schema
+# Apollo Federation Subgraph
+# ==============================================================================
+#
+# This schema defines the Care Gaps Service API for quality measure evaluation
+# and care gap detection. It implements:
+#   - Da Vinci DEQM $care-gaps operation
+#   - CMS eCQM measure evaluation
+#   - Patient and population-level gap detection
+#
+# Integration Points:
+#   - Phase 4 Proposal: Augment medication responses with care gap alerts
+#   - Conditions Advisor: Primary consumer for patient care gaps
+#   - Population Health: Batch measure evaluation and reporting
+#
+# CQL Pattern: QUERY-BASED
+#   - CQL queries FHIR Server directly for longitudinal patient data
+#   - Compatible with CMS eCQM library structure
+#   - Runs on HAPI FHIR Server (not Flink stream)
+#
+# ==============================================================================
+
+extend schema @link(url: "https://specs.apollo.dev/federation/v2.0", import: ["@key", "@shareable", "@external", "@requires"])
+
+# ==============================================================================
+# ENUMS
+# ==============================================================================
+
+"""Supported quality measures"""
+enum MeasureType {
+  """CMS122 - Diabetes: Hemoglobin A1c Poor Control (>9%)"""
+  CMS122_DIABETES_HBA1C
+  """CMS165 - Controlling High Blood Pressure"""
+  CMS165_BP_CONTROL
+  """CMS130 - Colorectal Cancer Screening"""
+  CMS130_COLORECTAL_SCREENING
+  """CMS125 - Breast Cancer Screening"""
+  CMS125_BREAST_CANCER_SCREENING
+  """CMS127 - Pneumococcal Vaccination Status"""
+  CMS127_PNEUMONIA_VACCINE
+  """CMS138 - Tobacco Use Screening and Cessation"""
+  CMS138_TOBACCO_SCREENING
+  """CMS139 - Falls Screening"""
+  CMS139_FALLS_SCREENING
+  """CMS147 - Preventive Care: Influenza Immunization"""
+  CMS147_FLU_VACCINE
+  """CMS154 - Appropriate Treatment for URI"""
+  CMS154_URI_TREATMENT
+  """CMS156 - High-Risk Medication Use in Older Adults"""
+  CMS156_HIGH_RISK_MEDS
+  """CMS69 - BMI Screening and Follow-Up"""
+  CMS69_BMI_SCREENING
+  """CMS2 - Depression Screening"""
+  CMS2_DEPRESSION_SCREENING
+  """Custom measure - India Diabetes Care"""
+  INDIA_DIABETES_CARE
+  """Custom measure - India Hypertension Care"""
+  INDIA_HYPERTENSION_CARE
+}
+
+"""Care gap status"""
+enum GapStatus {
+  """Gap is open - action required"""
+  OPEN
+  """Gap was recently closed"""
+  CLOSED
+  """Action is pending (e.g., lab ordered but not resulted)"""
+  PENDING
+  """Not applicable to this patient"""
+  NOT_APPLICABLE
+  """Excluded from measure (valid exclusion criteria met)"""
+  EXCLUDED
+}
+
+"""Gap priority for clinical workflow"""
+enum GapPriority {
+  """Immediate attention required (e.g., severely uncontrolled diabetes)"""
+  URGENT
+  """Should be addressed at current visit"""
+  HIGH
+  """Should be addressed soon"""
+  MEDIUM
+  """Routine - address when convenient"""
+  LOW
+}
+
+"""Measure population type (per CMS eCQM structure)"""
+enum PopulationType {
+  """Initial Population - patients potentially eligible"""
+  INITIAL_POPULATION
+  """Denominator - patients meeting inclusion criteria"""
+  DENOMINATOR
+  """Denominator Exclusion - valid exclusions"""
+  DENOMINATOR_EXCLUSION
+  """Denominator Exception - valid exceptions"""
+  DENOMINATOR_EXCEPTION
+  """Numerator - patients meeting quality criteria"""
+  NUMERATOR
+  """Numerator Exclusion - valid numerator exclusions"""
+  NUMERATOR_EXCLUSION
+}
+
+"""Data quality for gap assessment"""
+enum DataCompleteness {
+  """All required data present"""
+  COMPLETE
+  """Some data missing but gap can still be assessed"""
+  PARTIAL
+  """Critical data missing - gap assessment unreliable"""
+  INSUFFICIENT
+}
+
+# ==============================================================================
+# INPUT TYPES
+# ==============================================================================
+
+"""Request for patient care gaps"""
+input PatientCareGapsInput {
+  """Patient identifier"""
+  patientId: ID!
+  """Measures to evaluate (empty = all applicable)"""
+  measures: [MeasureType!]
+  """Measurement period start (default: start of current year)"""
+  periodStart: Date
+  """Measurement period end (default: today)"""
+  periodEnd: Date
+  """Include closed gaps in response"""
+  includeClosedGaps: Boolean = false
+  """Include detailed CQL evidence"""
+  includeEvidence: Boolean = true
+}
+
+"""Request for single measure evaluation"""
+input MeasureEvaluationInput {
+  """Patient identifier"""
+  patientId: ID!
+  """Measure to evaluate"""
+  measure: MeasureType!
+  """Measurement period start"""
+  periodStart: Date!
+  """Measurement period end"""
+  periodEnd: Date!
+}
+
+"""Request for population measure evaluation"""
+input PopulationMeasureInput {
+  """List of patient IDs to evaluate"""
+  patientIds: [ID!]!
+  """Measure to evaluate"""
+  measure: MeasureType!
+  """Measurement period start"""
+  periodStart: Date!
+  """Measurement period end"""
+  periodEnd: Date!
+  """Maximum patients to process (for pagination)"""
+  limit: Int = 1000
+}
+
+"""Request for care gap recommendations"""
+input GapRecommendationInput {
+  """Patient identifier"""
+  patientId: ID!
+  """Specific gap to get recommendations for"""
+  gapId: ID
+  """Context (e.g., current medications, allergies)"""
+  clinicalContext: ClinicalContextInput
+}
+
+"""Clinical context for personalized recommendations"""
+input ClinicalContextInput {
+  """Current medication RxNorm codes"""
+  currentMedications: [String!]
+  """Known allergies"""
+  allergies: [String!]
+  """Patient preferences"""
+  preferences: [String!]
+}
+
+# ==============================================================================
+# CARE GAP TYPES
+# ==============================================================================
+
+"""Complete care gap report for a patient"""
+type CareGapReport {
+  """Patient identifier"""
+  patientId: ID!
+  """Report generation timestamp"""
+  reportDate: DateTime!
+  """Measurement period"""
+  measurementPeriod: Period!
+  """Open care gaps requiring action"""
+  openGaps: [CareGap!]!
+  """Recently closed gaps (if requested)"""
+  closedGaps: [CareGap!]
+  """Gaps coming due soon"""
+  upcomingDue: [CareGap!]
+  """Summary statistics"""
+  summary: CareGapSummary!
+  """Data completeness assessment"""
+  dataCompleteness: DataCompleteness!
+  """Warnings about data quality"""
+  warnings: [String!]
+}
+
+"""Individual care gap"""
+type CareGap {
+  """Unique gap identifier"""
+  id: ID!
+  """Measure that generated this gap"""
+  measure: MeasureInfo!
+  """Gap status"""
+  status: GapStatus!
+  """Priority for clinical workflow"""
+  priority: GapPriority!
+  """Human-readable reason for gap"""
+  reason: String!
+  """Recommended action to close gap"""
+  recommendation: String!
+  """When gap was identified"""
+  identifiedDate: Date!
+  """When gap was closed (if closed)"""
+  closedDate: Date
+  """Due date for action (if applicable)"""
+  dueDate: Date
+  """Days until due (negative = overdue)"""
+  daysUntilDue: Int
+  """Evidence from CQL evaluation"""
+  evidence: CQLEvidence
+  """Related FHIR resources"""
+  relatedResources: [FHIRReference!]
+  """Potential interventions"""
+  interventions: [Intervention!]
+}
+
+"""Information about a quality measure"""
+type MeasureInfo {
+  """Measure type"""
+  type: MeasureType!
+  """CMS measure ID (e.g., CMS122v11)"""
+  cmsId: String!
+  """Human-readable name"""
+  name: String!
+  """Description"""
+  description: String!
+  """Clinical domain"""
+  domain: String!
+  """Measure steward"""
+  steward: String!
+  """eCQM version"""
+  version: String!
+  """CQL library name"""
+  cqlLibrary: String!
+}
+
+"""Evidence from CQL evaluation supporting the gap"""
+type CQLEvidence {
+  """CQL library used"""
+  libraryId: String!
+  """Library version"""
+  libraryVersion: String!
+  """Population membership"""
+  populations: [PopulationMembership!]!
+  """Key data elements evaluated"""
+  dataElements: [EvaluatedDataElement!]!
+  """Evaluation timestamp"""
+  evaluatedAt: DateTime!
+}
+
+"""Patient membership in measure populations"""
+type PopulationMembership {
+  """Population type"""
+  population: PopulationType!
+  """Whether patient is in this population"""
+  isMember: Boolean!
+  """Reason for membership/non-membership"""
+  reason: String
+}
+
+"""Data element evaluated by CQL"""
+type EvaluatedDataElement {
+  """Element name (e.g., "Most Recent HbA1c")"""
+  name: String!
+  """Value found (or null if missing)"""
+  value: String
+  """Value date"""
+  valueDate: Date
+  """Whether this element contributed to gap"""
+  contributedToGap: Boolean!
+  """FHIR resource reference"""
+  sourceResource: FHIRReference
+}
+
+"""Reference to a FHIR resource"""
+type FHIRReference {
+  """Resource type"""
+  resourceType: String!
+  """Resource ID"""
+  resourceId: String!
+  """Display text"""
+  display: String
+}
+
+"""Suggested intervention to close a gap"""
+type Intervention {
+  """Intervention type"""
+  type: InterventionType!
+  """Description"""
+  description: String!
+  """Order code (if applicable)"""
+  code: String
+  """Code system"""
+  codeSystem: String
+  """Priority"""
+  priority: GapPriority!
+}
+
+"""Types of interventions"""
+enum InterventionType {
+  LAB_ORDER
+  MEDICATION_ORDER
+  PROCEDURE_ORDER
+  REFERRAL
+  PATIENT_EDUCATION
+  SCREENING
+  VACCINATION
+  COUNSELING
+}
+
+"""Summary statistics for care gaps"""
+type CareGapSummary {
+  """Total open gaps"""
+  totalOpenGaps: Int!
+  """Urgent gaps requiring immediate attention"""
+  urgentGaps: Int!
+  """High priority gaps"""
+  highPriorityGaps: Int!
+  """Gaps by domain"""
+  gapsByDomain: [DomainGapCount!]!
+  """Overall care quality score (0-100)"""
+  qualityScore: Float
+}
+
+"""Gap count by clinical domain"""
+type DomainGapCount {
+  """Clinical domain"""
+  domain: String!
+  """Number of open gaps"""
+  count: Int!
+}
+
+"""Time period"""
+type Period {
+  """Start date"""
+  start: Date!
+  """End date"""
+  end: Date!
+}
+
+# ==============================================================================
+# MEASURE REPORT TYPES (FHIR MeasureReport compatible)
+# ==============================================================================
+
+"""FHIR MeasureReport for a single patient"""
+type MeasureReport {
+  """Report identifier"""
+  id: ID!
+  """Measure evaluated"""
+  measure: MeasureInfo!
+  """Patient identifier"""
+  patientId: ID!
+  """Measurement period"""
+  period: Period!
+  """Report status"""
+  status: MeasureReportStatus!
+  """Report type"""
+  type: MeasureReportType!
+  """Population results"""
+  populations: [PopulationResult!]!
+  """Evaluated resources"""
+  evaluatedResources: [FHIRReference!]
+  """Improvement notation"""
+  improvementNotation: String
+  """Report generation timestamp"""
+  generatedAt: DateTime!
+}
+
+"""Measure report status"""
+enum MeasureReportStatus {
+  COMPLETE
+  PENDING
+  ERROR
+}
+
+"""Measure report type"""
+enum MeasureReportType {
+  INDIVIDUAL
+  SUBJECT_LIST
+  SUMMARY
+  DATA_COLLECTION
+}
+
+"""Population result in measure report"""
+type PopulationResult {
+  """Population type"""
+  population: PopulationType!
+  """Count of patients in population"""
+  count: Int!
+  """Patient references (for subject-list type)"""
+  subjectResults: [ID!]
+}
+
+"""Population-level measure report"""
+type PopulationMeasureReport {
+  """Report identifier"""
+  id: ID!
+  """Measure evaluated"""
+  measure: MeasureInfo!
+  """Measurement period"""
+  period: Period!
+  """Total patients evaluated"""
+  totalPatients: Int!
+  """Population results"""
+  populations: [PopulationResult!]!
+  """Performance rate (numerator / denominator)"""
+  performanceRate: Float
+  """Patients with gaps"""
+  patientsWithGaps: [PatientGapSummary!]
+  """Report generation timestamp"""
+  generatedAt: DateTime!
+  """Processing time in milliseconds"""
+  processingTimeMs: Int!
+}
+
+"""Summary of gaps for a single patient in population report"""
+type PatientGapSummary {
+  """Patient identifier"""
+  patientId: ID!
+  """Gap status for this measure"""
+  status: GapStatus!
+  """Recommendation"""
+  recommendation: String
+}
+
+# ==============================================================================
+# QUERIES
+# ==============================================================================
+
+type Query {
+  """
+  Get care gaps for a patient.
+  Primary integration point for Conditions Advisor.
+  Implements Da Vinci DEQM $care-gaps operation.
+  """
+  getPatientCareGaps(input: PatientCareGapsInput!): CareGapReport!
+
+  """
+  Evaluate a single measure for a patient.
+  Returns FHIR MeasureReport.
+  """
+  evaluateMeasure(input: MeasureEvaluationInput!): MeasureReport!
+
+  """
+  Evaluate a measure across a population.
+  For population health reporting and quality improvement.
+  """
+  evaluatePopulation(input: PopulationMeasureInput!): PopulationMeasureReport!
+
+  """
+  Get recommendations for closing a specific gap.
+  Returns personalized interventions based on patient context.
+  """
+  getGapRecommendations(input: GapRecommendationInput!): [Intervention!]!
+
+  """
+  Get list of available measures.
+  """
+  availableMeasures: [MeasureInfo!]!
+
+  """
+  Get measure details by type.
+  """
+  getMeasureInfo(measure: MeasureType!): MeasureInfo
+
+  """
+  Health check for the care gaps service.
+  """
+  careGapsServiceHealth: ServiceHealth!
+}
+
+# ==============================================================================
+# MUTATIONS
+# ==============================================================================
+
+type Mutation {
+  """
+  Record that a gap has been addressed.
+  Updates gap status and triggers re-evaluation.
+  """
+  recordGapAddressed(
+    patientId: ID!
+    gapId: ID!
+    intervention: InterventionType!
+    notes: String
+  ): CareGap!
+
+  """
+  Dismiss a gap with reason.
+  For valid clinical exceptions.
+  """
+  dismissGap(
+    patientId: ID!
+    gapId: ID!
+    reason: String!
+  ): CareGap!
+
+  """
+  Snooze a gap until a future date.
+  """
+  snoozeGap(
+    patientId: ID!
+    gapId: ID!
+    snoozeUntil: Date!
+    reason: String
+  ): CareGap!
+}
+
+# ==============================================================================
+# SUBSCRIPTIONS
+# ==============================================================================
+
+type Subscription {
+  """
+  Subscribe to gap status changes for a patient.
+  Triggered when labs result, conditions documented, etc.
+  """
+  gapStatusChanged(patientId: ID!): CareGap!
+
+  """
+  Subscribe to new gaps identified for a patient.
+  """
+  newGapIdentified(patientId: ID!): CareGap!
+}
+
+# ==============================================================================
+# SHARED TYPES
+# ==============================================================================
+
+"""Service health status"""
+type ServiceHealth {
+  """Overall status"""
+  status: String!
+  """CQL engine status"""
+  cqlEngineStatus: String!
+  """FHIR server connectivity"""
+  fhirServerStatus: String!
+  """Measure library status"""
+  measureLibraryStatus: String!
+  """Service version"""
+  version: String!
+  """Uptime in seconds"""
+  uptimeSeconds: Int!
+  """Measures loaded"""
+  measuresLoaded: Int!
+}
+
+# ==============================================================================
+# SCALARS
+# ==============================================================================
+
+"""ISO 8601 date (YYYY-MM-DD)"""
+scalar Date
+
+"""ISO 8601 datetime"""
+scalar DateTime

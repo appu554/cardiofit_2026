@@ -1,0 +1,344 @@
+type: rules
+version: "1.0.0"
+description: Medication safety validation rules for drug dosing, interactions, and contraindications
+
+rules:
+  # Duplicate Therapy Detection
+  - id: VALIDATION-DUPLICATE-THERAPY
+    name: Duplicate Therapy Detection
+    description: Flags when patient has duplicate medications in same therapeutic class
+    type: VALIDATION
+    category: SAFETY
+    severity: MODERATE
+    status: ACTIVE
+    priority: 5
+
+    conditions:
+      - field: medications
+        operator: EXISTS
+      - field: custom_data.duplicate_therapy_detected
+        operator: EQ
+        value: true
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "Duplicate therapy detected: Multiple medications in same therapeutic class"
+        priority: HIGH
+
+      - type: RECOMMEND
+        message: "Review medication list for therapeutic duplication and consider discontinuation"
+
+    evidence:
+      level: HIGH
+      source: "ISMP Medication Safety Guidelines"
+
+    tags:
+      - duplicate-therapy
+      - medication-safety
+      - polypharmacy
+
+  # Maximum Daily Dose Exceeded
+  - id: VALIDATION-MAX-DOSE-EXCEEDED
+    name: Maximum Daily Dose Validation
+    description: Validates that medication doses do not exceed maximum recommended daily dose
+    type: VALIDATION
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: medications.dose_ratio
+        operator: GT
+        value: 1.0
+        description: Dose exceeds maximum recommended
+
+    actions:
+      - type: ALERT
+        message: "Maximum daily dose exceeded for {{.Context.Medications.name}}: {{.Context.Medications.current_dose}} exceeds max {{.Context.Medications.max_dose}}"
+        priority: HIGH
+
+      - type: ESCALATE
+        parameters:
+          level: PHARMACIST
+          urgency: ROUTINE
+        recipients:
+          - clinical_pharmacist
+        channel: WORKLIST
+
+    evidence:
+      level: HIGH
+      source: "FDA Drug Label Requirements"
+
+    tags:
+      - dose-validation
+      - max-dose
+      - medication-safety
+
+  # Contraindication Check - Renal Failure
+  - id: VALIDATION-CONTRAINDICATED-RENAL
+    name: Renal Contraindication Check
+    description: Flags medications contraindicated in severe renal impairment
+    type: VALIDATION
+    category: SAFETY
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: labs.egfr.value
+        operator: LT
+        value: 15
+        description: Stage 5 CKD / ESRD
+      - field: medications
+        operator: IN
+        value:
+          - metformin
+          - nitrofurantoin
+          - spironolactone
+          - amiloride
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "CONTRAINDICATED: {{.Context.Medications.name}} contraindicated with eGFR {{.Context.Labs.egfr.value}} mL/min"
+        priority: STAT
+
+      - type: ESCALATE
+        parameters:
+          level: PHYSICIAN
+          urgency: STAT
+        recipients:
+          - attending_physician
+          - clinical_pharmacist
+        channel: PAGER
+
+    evidence:
+      level: HIGH
+      source: "Lexicomp Drug Database"
+
+    tags:
+      - contraindication
+      - renal
+      - critical-safety
+
+  # Hepatic Impairment Warning
+  - id: VALIDATION-HEPATIC-CAUTION
+    name: Hepatic Impairment Medication Warning
+    description: Flags medications requiring dose adjustment in hepatic impairment
+    type: VALIDATION
+    category: SAFETY
+    severity: MODERATE
+    status: ACTIVE
+    priority: 8
+
+    conditions:
+      - field: labs.alt.value
+        operator: GT
+        value: 120
+        description: ALT > 3x ULN
+      - field: medications
+        operator: IN
+        value:
+          - acetaminophen
+          - statins
+          - methotrexate
+          - isoniazid
+          - valproic_acid
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "Hepatic caution: {{.Context.Medications.name}} may require dose adjustment with elevated LFTs"
+        priority: MODERATE
+
+      - type: RECOMMEND
+        message: "Consider hepatic dosing adjustment or alternative medication"
+
+    evidence:
+      level: MODERATE
+      source: "Clinical Pharmacology Guidelines"
+
+    tags:
+      - hepatic
+      - dose-adjustment
+      - liver-function
+
+  # Anticoagulant/Antiplatelet Combination
+  - id: VALIDATION-ANTICOAG-ANTIPLATELET
+    name: Anticoagulant-Antiplatelet Combination Warning
+    description: Alerts when patient is on both anticoagulant and antiplatelet therapy
+    type: VALIDATION
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 3
+
+    conditions:
+      - field: medications.classes
+        operator: CONTAINS
+        value: anticoagulant
+      - field: medications.classes
+        operator: CONTAINS
+        value: antiplatelet
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "High bleeding risk: Patient on concurrent anticoagulant and antiplatelet therapy"
+        priority: HIGH
+
+      - type: RECOMMEND
+        message: "Review indication for dual therapy, assess bleeding risk, ensure PPI coverage"
+
+      - type: NOTIFY
+        message: "Concurrent anticoagulant/antiplatelet therapy requires close monitoring"
+        recipients:
+          - attending_physician
+        channel: EHR_MESSAGE
+
+    evidence:
+      level: HIGH
+      source: "ACC/AHA Antithrombotic Guidelines"
+
+    tags:
+      - bleeding-risk
+      - anticoagulation
+      - antiplatelet
+      - drug-interaction
+
+  # QT Prolongation Risk
+  - id: VALIDATION-QT-PROLONGATION
+    name: QT Prolongation Risk Assessment
+    description: Flags medications with QT prolongation risk in at-risk patients
+    type: VALIDATION
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 4
+
+    conditions:
+      - field: medications
+        operator: IN
+        value:
+          - amiodarone
+          - sotalol
+          - haloperidol
+          - ondansetron
+          - methadone
+          - ciprofloxacin
+          - azithromycin
+      - field: labs.potassium.value
+        operator: LT
+        value: 3.5
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "QT prolongation risk: {{.Context.Medications.name}} with hypokalemia (K+ {{.Context.Labs.potassium.value}})"
+        priority: HIGH
+
+      - type: RECOMMEND
+        message: "Obtain ECG, correct electrolytes, consider alternative medication"
+
+    evidence:
+      level: HIGH
+      source: "CredibleMeds QT Drug List"
+
+    tags:
+      - qt-prolongation
+      - arrhythmia-risk
+      - electrolyte
+      - cardiac-safety
+
+  # Pediatric Dose Validation
+  - id: VALIDATION-PEDIATRIC-DOSE
+    name: Pediatric Weight-Based Dosing Validation
+    description: Validates weight-based dosing for pediatric patients
+    type: VALIDATION
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: patient.age
+        operator: AGE_LT
+        value: 18
+      - field: medications.dose_per_kg
+        operator: GT
+        value: medications.max_dose_per_kg
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "Pediatric dose exceeded: {{.Context.Medications.name}} dose exceeds maximum mg/kg"
+        priority: HIGH
+
+      - type: ESCALATE
+        parameters:
+          level: PHARMACIST
+          urgency: URGENT
+        recipients:
+          - pediatric_pharmacist
+        channel: WORKLIST
+
+    evidence:
+      level: HIGH
+      source: "Pediatric Dosing Handbook"
+
+    tags:
+      - pediatric
+      - weight-based-dosing
+      - dose-validation
+
+  # Narrow Therapeutic Index Monitoring
+  - id: VALIDATION-NTI-MONITORING
+    name: Narrow Therapeutic Index Drug Monitoring
+    description: Ensures appropriate monitoring for NTI medications
+    type: VALIDATION
+    category: SAFETY
+    severity: MODERATE
+    status: ACTIVE
+    priority: 6
+
+    conditions:
+      - field: medications
+        operator: IN
+        value:
+          - warfarin
+          - digoxin
+          - phenytoin
+          - lithium
+          - theophylline
+          - vancomycin
+          - aminoglycosides
+      - field: custom_data.drug_level_due
+        operator: EQ
+        value: true
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "Drug level monitoring due for {{.Context.Medications.name}}"
+        priority: MODERATE
+
+      - type: RECOMMEND
+        message: "Order therapeutic drug level and adjust dose as needed"
+
+    evidence:
+      level: HIGH
+      source: "ISMP High-Alert Medications"
+
+    tags:
+      - nti
+      - drug-monitoring
+      - therapeutic-drug-level

@@ -1,0 +1,805 @@
+# ============================================================
+# ACS/NSTEMI MANAGEMENT PROTOCOL - CDS-COMPLIANT ENHANCED VERSION
+# ============================================================
+# Clinical Guideline: ACC/AHA 2021 Chest Pain Guidelines
+# Evidence Level: STRONG (Class I, Level A for DAPT and early invasive strategy)
+# Last Updated: 2025-10-21
+# ============================================================
+
+protocol_id: "ACS-NSTEMI-001"
+name: "Non-ST Elevation Acute Coronary Syndrome (NSTEMI) Management"
+category: "CARDIOVASCULAR"
+specialty: "CARDIOLOGY"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# SECTION 2: TRIGGER CRITERIA
+# ============================================================
+trigger_criteria:
+  match_logic: "ANY_OF"
+
+  conditions:
+    # Condition 1: Elevated troponin with ischemic symptoms
+    - condition_id: "ACS-TRIG-001"
+      description: "Troponin elevation above 99th percentile with chest pain or anginal equivalent"
+      match_logic: "ALL_OF"
+      conditions:
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "troponin_i"
+              operator: ">"
+              threshold: 0.04
+              unit: "ng/mL"
+              source: "lab_results"
+            - parameter: "troponin_t"
+              operator: ">"
+              threshold: 14
+              unit: "ng/L"
+              source: "lab_results"
+
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "chest_pain"
+              operator: "=="
+              threshold: true
+              source: "clinical_assessment"
+            - parameter: "dyspnea"
+              operator: "=="
+              threshold: true
+              source: "clinical_assessment"
+            - parameter: "diaphoresis"
+              operator: "=="
+              threshold: true
+              source: "clinical_assessment"
+
+        - parameter: "st_elevation"
+          operator: "=="
+          threshold: false
+          source: "ecg"
+
+    # Condition 2: High-risk unstable angina (even without troponin elevation yet)
+    - condition_id: "ACS-TRIG-002"
+      description: "High-risk unstable angina with dynamic ECG changes"
+      match_logic: "ALL_OF"
+      conditions:
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "rest_angina_duration_minutes"
+              operator: ">"
+              threshold: 20
+            - parameter: "new_onset_severe_angina"
+              operator: "=="
+              threshold: true
+            - parameter: "crescendo_angina"
+              operator: "=="
+              threshold: true
+
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "st_depression_mm"
+              operator: ">="
+              threshold: 0.5
+              unit: "mm"
+              source: "ecg"
+            - parameter: "t_wave_inversion"
+              operator: "=="
+              threshold: true
+              source: "ecg"
+
+    # Condition 3: GRACE score indicating high risk
+    - condition_id: "ACS-TRIG-003"
+      description: "GRACE score >140 indicating high risk for adverse events"
+      condition:
+        parameter: "grace_score"
+        operator: ">"
+        threshold: 140
+        source: "clinical_assessment"
+
+# ============================================================
+# SECTION 3: CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.87  # Strong evidence for NSTEMI management
+
+  modifiers:
+    - modifier_id: "ACS-CONF-001"
+      description: "Very high troponin elevation (>5x ULN)"
+      condition:
+        parameter: "troponin_i"
+        operator: ">"
+        threshold: 0.20
+        unit: "ng/mL"
+      adjustment: 0.10
+
+    - modifier_id: "ACS-CONF-002"
+      description: "High GRACE score (>140) predicts adverse events"
+      condition:
+        parameter: "grace_score"
+        operator: ">"
+        threshold: 140
+      adjustment: 0.08
+
+    - modifier_id: "ACS-CONF-003"
+      description: "Dynamic ST changes on ECG"
+      condition:
+        parameter: "dynamic_st_changes"
+        operator: "=="
+        threshold: true
+      adjustment: 0.07
+
+    - modifier_id: "ACS-CONF-004"
+      description: "Rising troponin pattern confirms acute MI"
+      condition:
+        parameter: "troponin_rising_pattern"
+        operator: "=="
+        threshold: true
+      adjustment: 0.06
+
+    - modifier_id: "ACS-CONF-005"
+      description: "Hemodynamic instability increases urgency"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "systolic_bp"
+            operator: "<"
+            threshold: 90
+            unit: "mmHg"
+          - parameter: "cardiogenic_shock"
+            operator: "=="
+            threshold: true
+      adjustment: 0.09
+
+  activation_threshold: 0.70
+
+# ============================================================
+# SECTION 4: EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "ACC/AHA 2021 Guideline for the Evaluation and Diagnosis of Chest Pain"
+  guideline_version: "ACC/AHA 2021"
+  publication_date: "2021-11"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "ACC-AHA-CHEST-PAIN-2021"
+      authors: "Gulati M, Levy PD, Mukherjee D, et al."
+      title: "2021 AHA/ACC/ASE/CHEST/SAEM/SCCT/SCMR Guideline for the Evaluation and Diagnosis of Chest Pain"
+      journal: "Journal of the American College of Cardiology"
+      year: 2021
+      pmid: "33789754"
+      doi: "10.1016/j.jacc.2021.07.053"
+
+    - citation_id: "PLATO-TRIAL"
+      authors: "Wallentin L, Becker RC, Budaj A, et al."
+      title: "Ticagrelor versus Clopidogrel in Patients with Acute Coronary Syndromes"
+      journal: "New England Journal of Medicine"
+      year: 2009
+      pmid: "19717846"
+
+  last_review_date: "2024-06-01"
+  next_review_date: "2026-06-01"
+
+# ============================================================
+# SECTION 5: ACTIONS
+# ============================================================
+actions:
+  - action_id: "ACS-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 10
+
+    diagnostic:
+      test_name: "12-lead ECG"
+      urgency: "STAT"
+      instructions: "Obtain within 10 minutes. Distinguish STEMI from NSTEMI. Identify high-risk features (ST depression ≥1mm, diffuse ST depression with ST elevation in aVR suggesting left main/3-vessel disease)."
+
+  - action_id: "ACS-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "High-sensitivity cardiac troponin I or T (serial measurements)"
+      test_code: "LOINC-89579-7"
+      sample_type: "blood"
+      urgency: "STAT"
+      instructions: "Serial troponins at 0h, 3-6h, and 12-24h. Rising or falling pattern confirms acute MI. Peak level correlates with infarct size."
+
+      repeat_testing:
+        repeat_interval_hours: 3
+        repeat_condition:
+          parameter: "initial_troponin_elevated"
+          operator: "=="
+          threshold: true
+
+  - action_id: "ACS-ACT-003"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 3
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 5
+
+    medication:
+      name: "Aspirin"
+      dose: "324"
+      dose_unit: "mg"
+      route: "PO (chewable)"
+      frequency: "Loading dose, then 81 mg daily maintenance"
+      administration_instructions: "Chew and swallow immediately. Non-enteric coated for rapid absorption. Lifelong therapy after ACS."
+
+  - action_id: "ACS-ACT-004"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 10
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "P2Y12_NO_CONTRAINDICATIONS"
+          description: "Clopidogrel initial loading, may switch to ticagrelor post-angiography"
+
+          condition:
+            parameter: "active_bleeding"
+            operator: "=="
+            threshold: false
+
+          primary_medication:
+            name: "Clopidogrel"
+            dose: "600"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Loading dose, then 75 mg daily"
+            administration_instructions: "Load with clopidogrel pre-cath. Switch to ticagrelor 180mg if PCI performed (more potent per PLATO trial)."
+
+          alternative_medication:
+            name: "Ticagrelor (post-angiography)"
+            dose: "180 mg loading, then 90 mg BID"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "BID"
+            indication: "Preferred post-PCI per PLATO trial (16% reduction in CV death/MI/stroke vs clopidogrel)"
+
+        - criteria_id: "CYP3A_INHIBITOR_INTERACTION"
+          description: "Use clopidogrel if patient on strong CYP3A inhibitor"
+
+          condition:
+            parameter: "strong_cyp3a_inhibitor"
+            operator: "=="
+            threshold: true
+
+          primary_medication:
+            name: "Clopidogrel"
+            dose: "600 mg loading, then 75 mg daily"
+            dose_unit: "mg"
+            route: "PO"
+            frequency: "Daily"
+            dose_adjustment_rationale: "Ticagrelor contraindicated with strong CYP3A inhibitors (ketoconazole, clarithromycin)"
+
+  - action_id: "ACS-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "NO_HIT_HISTORY_ENOXAPARIN"
+          description: "Enoxaparin preferred over UFH per ESSENCE/TIMI 11B trials"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "heparin_induced_thrombocytopenia_history"
+                operator: "=="
+                threshold: false
+              - parameter: "egfr"
+                operator: ">"
+                threshold: 30
+                unit: "mL/min"
+
+          primary_medication:
+            name: "Enoxaparin"
+            dose: "1"
+            dose_unit: "mg/kg"
+            route: "SC"
+            frequency: "q12h"
+            duration: "Until PCI/discharge or up to 8 days"
+            administration_instructions: "Enoxaparin 1 mg/kg SC q12h. Superior to UFH per ESSENCE trial (16% reduction in death/MI). Discontinue 12-24h before elective PCI."
+
+          alternative_medication:
+            name: "Unfractionated Heparin"
+            dose: "60 units/kg bolus (max 4000 units), then 12 units/kg/hr (max 1000 units/hr)"
+            dose_unit: "units/kg"
+            route: "IV"
+            frequency: "Continuous infusion"
+            indication: "If PCI imminent or severe renal dysfunction (eGFR <30)"
+
+        - criteria_id: "RENAL_IMPAIRMENT_ANTICOAGULATION"
+          description: "Dose-adjust enoxaparin or use UFH in severe renal dysfunction"
+
+          condition:
+            parameter: "egfr"
+            operator: "<"
+            threshold: 30
+            unit: "mL/min"
+
+          primary_medication:
+            name: "Enoxaparin (renal-adjusted)"
+            dose: "1"
+            dose_unit: "mg/kg"
+            route: "SC"
+            frequency: "q24h"
+            dose_adjustment_rationale: "Reduce to once daily dosing if eGFR <30. Monitor anti-Xa levels (target 0.5-1.0 units/mL)."
+            administration_instructions: "Alternative: Use UFH with aPTT monitoring (not renally cleared)."
+
+        - criteria_id: "HIT_HISTORY_PRESENT"
+          description: "Use bivalirudin if HIT history"
+
+          condition:
+            parameter: "heparin_induced_thrombocytopenia_history"
+            operator: "=="
+            threshold: true
+
+          primary_medication:
+            name: "Bivalirudin"
+            dose: "0.1 mg/kg/hr infusion"
+            dose_unit: "mg/kg/hr"
+            route: "IV"
+            frequency: "Continuous infusion"
+            indication: "Direct thrombin inhibitor safe in HIT history"
+
+  - action_id: "ACS-ACT-006"
+    type: "MEDICATION"
+    priority: "HIGH"
+    sequence_number: 6
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 1440
+
+    medication:
+      name: "Atorvastatin"
+      dose: "80"
+      dose_unit: "mg"
+      route: "PO"
+      frequency: "Daily"
+      administration_instructions: "High-intensity statin. Goal LDL <70 mg/dL (ideally <55 mg/dL per ESC 2019 guidelines)."
+
+  - action_id: "ACS-ACT-007"
+    type: "MEDICATION"
+    priority: "MEDIUM"
+    sequence_number: 7
+
+    timing:
+      window: "ROUTINE"
+      max_delay_minutes: 1440
+
+    medication:
+      name: "Metoprolol"
+      dose: "25-50"
+      dose_unit: "mg"
+      route: "PO"
+      frequency: "BID or daily (extended release)"
+      administration_instructions: "Start within 24h if no contraindications (cardiogenic shock, decompensated HF, heart block). Titrate to resting HR 50-60 bpm."
+
+  - action_id: "ACS-ACT-008"
+    type: "MEDICATION"
+    priority: "MEDIUM"
+    sequence_number: 8
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "NITROGLYCERIN_FOR_CHEST_PAIN"
+          description: "Nitrates for ongoing chest pain or hypertension/pulmonary congestion"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "ongoing_chest_pain"
+                operator: "=="
+                threshold: true
+              - parameter: "systolic_bp"
+                operator: ">"
+                threshold: 160
+                unit: "mmHg"
+
+          primary_medication:
+            name: "Nitroglycerin"
+            dose: "0.4 mg SL q5min x3, then IV 10-200 mcg/min if persistent"
+            dose_unit: "mg (SL) or mcg/min (IV)"
+            route: "SL or IV"
+            frequency: "PRN (SL) or continuous infusion (IV)"
+            administration_instructions: "Avoid if SBP <90 mmHg or PDE-5 inhibitor use within 24-48 hours."
+
+          alternative_medication:
+            name: "Morphine"
+            dose: "2-4 mg IV"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "PRN for pain control"
+            indication: "If nitrates contraindicated or chest pain refractory"
+
+        - criteria_id: "PDE5_INHIBITOR_CONTRAINDICATION"
+          description: "Avoid nitrates if PDE-5 inhibitor use within 24-48h"
+
+          condition:
+            parameter: "pde5_inhibitor_recent_use"
+            operator: "=="
+            threshold: true
+
+          primary_medication:
+            name: "Morphine"
+            dose: "2-4 mg IV"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "PRN"
+            dose_adjustment_rationale: "Nitrates contraindicated with recent sildenafil/tadalafil use (severe hypotension risk)"
+
+  - action_id: "ACS-ACT-009"
+    type: "PROCEDURE"
+    priority: "HIGH"
+    sequence_number: 9
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 1440  # Within 24 hours for high-risk patients
+
+    procedure:
+      procedure_name: "Coronary angiography with PCI/CABG as indicated"
+      procedure_code: "CPT-93458"
+      indication: "NSTEMI-ACS risk stratification and revascularization"
+      urgency: "URGENT"
+      consent_required: true
+      location: "Cardiac catheterization laboratory"
+
+  - action_id: "ACS-ACT-010"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "HIGH"
+    sequence_number: 10
+
+    clinical_assessment:
+      assessment_type: "Continuous cardiac monitoring and serial assessments"
+      frequency: "Continuous telemetry for 24-48 hours minimum"
+      duration_hours: 48
+      specific_parameters:
+        - "Continuous ECG telemetry (detect arrhythmias and ischemic changes)"
+        - "Vital signs hourly until stable, then q4h"
+        - "Serial troponins (0, 3-6, 12-24 hours)"
+        - "Serial ECGs (daily and PRN if chest pain recurs)"
+
+# ============================================================
+# SECTION 6: TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "ACS-INVASIVE-STRATEGY-TIMING"
+    bundle_name: "Risk-Stratified Invasive Strategy"
+    description: "Timing of angiography based on risk stratification"
+    offset_minutes: 120  # Immediate for very high risk (<2 hours)
+    critical: true
+
+    required_actions:
+      - action_id: "ACS-ACT-001"
+        description: "ECG within 10 minutes"
+      - action_id: "ACS-ACT-002"
+        description: "Troponin measurement"
+      - action_id: "ACS-ACT-009"
+        description: "Angiography within 2-72 hours based on risk"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 60
+      critical_alert_at_minutes: 0
+      missed_deadline_message: "Very high risk NSTEMI requires immediate invasive strategy (<2 hours). High risk patients within 24 hours, moderate risk 25-72 hours."
+
+# ============================================================
+# SECTION 7: CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "ACS-CONTRA-001"
+    condition_description: "Severe beta-blocker contraindications"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "decompensated_heart_failure"
+          operator: "=="
+          threshold: true
+        - parameter: "cardiogenic_shock"
+          operator: "=="
+          threshold: true
+        - parameter: "advanced_av_block"
+          operator: "=="
+          threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "ACS-ACT-007"
+
+    alternative_action:
+      action_id: "ACS-ALT-001"
+      rationale: "Defer beta-blocker until hemodynamically stable and compensated"
+
+# ============================================================
+# SECTION 8: MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "ACS-MON-001"
+    parameter: "continuous_telemetry"
+
+    target_range:
+      min: null
+      max: null
+      unit: null
+
+    frequency: "continuous"
+    duration_hours: 48
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "ventricular_tachycardia"
+          operator: "=="
+          threshold: true
+        - parameter: "dynamic_st_elevation"
+          operator: "=="
+          threshold: true
+
+  - monitoring_id: "ACS-MON-002"
+    parameter: "troponin"
+
+    target_range:
+      min: null
+      max: null
+      unit: "ng/mL"
+
+    frequency: "0, 3-6, 12-24 hours"
+    duration_hours: 24
+
+    alert_condition:
+      parameter: "troponin_rising"
+      operator: "=="
+      threshold: true
+
+# ============================================================
+# SECTION 9: SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "ELDERLY"
+    description: "Patients ≥75 years old"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 75
+      unit: "years"
+
+    modifications:
+      - action_id: "ACS-ACT-004"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Increased bleeding risk in elderly with P2Y12 inhibitors"
+
+        new_parameters:
+          dose: "Consider reduced clopidogrel loading dose (300 mg vs 600 mg) if age >75 and low weight"
+          monitoring: "Enhanced bleeding surveillance"
+
+      - action_id: "ACS-ACT-005"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Renal function declines with age"
+
+        new_parameters:
+          monitoring: "Check creatinine clearance, adjust enoxaparin if eGFR <30 (use 1 mg/kg q24h or UFH)"
+
+  - population_id: "RENAL_FAILURE"
+    description: "Patients with severe renal impairment or dialysis"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "egfr"
+          operator: "<"
+          threshold: 30
+          unit: "mL/min"
+        - parameter: "dialysis_dependent"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "ACS-ACT-005"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Enoxaparin accumulates in renal failure"
+
+        new_parameters:
+          dose: "Reduce enoxaparin to 1 mg/kg q24h OR use UFH (not renally cleared)"
+          monitoring: "Monitor anti-Xa levels if using enoxaparin (target 0.5-1.0 units/mL)"
+
+  - population_id: "DIABETES"
+    description: "Diabetic patients (higher ischemic risk)"
+
+    inclusion_criteria:
+      parameter: "diabetes_mellitus"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "ACS-ACT-009"
+        modification_type: "CAUTION"
+        rationale: "Diabetes is moderate-risk feature favoring early invasive strategy"
+
+        new_parameters:
+          timing: "Consider early invasive strategy (within 24-72 hours) even if otherwise moderate risk"
+          monitoring: "Glycemic control important during hospitalization"
+
+# ============================================================
+# SECTION 10: ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "ACS-ESC-001"
+    description: "Immediate angiography for very high-risk features"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "hemodynamic_instability"
+          operator: "=="
+          threshold: true
+        - parameter: "cardiogenic_shock"
+          operator: "=="
+          threshold: true
+        - parameter: "life_threatening_arrhythmia"
+          operator: "=="
+          threshold: true
+        - parameter: "refractory_angina"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "IMMEDIATE_TRANSFER"
+      urgency: "STAT"
+      rationale: "Very high-risk NSTEMI requires immediate invasive strategy (<2 hours)"
+
+      required_interventions:
+        - "STAT cardiology consultation"
+        - "Immediate angiography (<2 hours)"
+        - "Consider mechanical circulatory support if cardiogenic shock"
+        - "ICU bed arranged"
+
+      specialist_consultation:
+        - specialty: "CARDIOLOGY"
+          urgency: "STAT"
+          specific_question: "Immediate angiography for very high-risk NSTEMI, consideration of mechanical support"
+
+  - rule_id: "ACS-ESC-002"
+    description: "Dynamic ST elevation during monitoring (transition to STEMI)"
+
+    escalation_trigger:
+      parameter: "dynamic_st_elevation"
+      operator: "=="
+      threshold: true
+
+    recommendation:
+      escalation_level: "IMMEDIATE_TRANSFER"
+      urgency: "STAT"
+      rationale: "New ST elevation indicates STEMI evolution - activate cath lab for emergent PCI"
+
+      specialist_consultation:
+        - specialty: "CARDIOLOGY"
+          urgency: "STAT"
+          specific_question: "Emergent PCI for STEMI evolution from NSTEMI"
+
+# ============================================================
+# SECTION 11: DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "ACS-DE-ESC-001"
+    description: "Transition from ICU to step-down unit"
+
+    conditions:
+      - parameter: "chest_pain_resolved"
+        operator: "=="
+        threshold: true
+
+      - parameter: "troponin_trending_down"
+        operator: "=="
+        threshold: true
+
+      - parameter: "hemodynamically_stable"
+        operator: "=="
+        threshold: true
+
+      - parameter: "no_recurrent_ischemia_24h"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Transfer to cardiac step-down unit for continued monitoring"
+      rationale: "Low-risk post-angiography NSTEMI patients can safely transition to step-down care"
+
+# ============================================================
+# SECTION 12: OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "ACS-OUT-001"
+      metric: "in_hospital_major_adverse_cardiac_events"
+      target: "<5%"
+      benchmark_source: "ACC/AHA 2021 Guidelines"
+
+    - outcome_id: "ACS-OUT-002"
+      metric: "time_to_angiography_based_on_risk"
+      target: "<2h (very high risk), <24h (high risk), <72h (moderate risk)"
+      benchmark_source: "TACTICS-TIMI 18 Trial"
+
+  process_measures:
+    - measure_id: "ACS-PROC-001"
+      description: "ECG within 10 minutes of arrival"
+      target: ">95% compliance"
+
+    - measure_id: "ACS-PROC-002"
+      description: "Aspirin + P2Y12 inhibitor within 30 minutes"
+      target: ">90% compliance"
+
+  balancing_measures:
+    - measure_id: "ACS-BAL-001"
+      description: "Major bleeding rate"
+      target: "<3%"
+
+# ============================================================
+# SECTION 13: METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: true
+  estimated_implementation_time_minutes: 120
+  review_cycle_months: 12
+
+  tags:
+    - "time-sensitive"
+    - "risk-stratified"
+    - "early-invasive-strategy"
+    - "dual-antiplatelet-therapy"
+
+  related_protocols:
+    - protocol_id: "STEMI-PROTOCOL-001"
+      relationship: "ALTERNATIVE_TO"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Migrated to enhanced CDS-compliant YAML structure"
+        - "Added trigger_criteria for elevated troponin, unstable angina, GRACE score"
+        - "Added confidence_scoring with troponin level and GRACE score modifiers"
+        - "Enhanced medication_selection for P2Y12 inhibitors and anticoagulation (enoxaparin vs UFH vs bivalirudin)"
+        - "Added risk-stratified invasive strategy time constraints"
+        - "Added special_populations (elderly, renal failure, diabetes)"
+        - "Added escalation_rules for very high-risk features and STEMI evolution"
+        - "Based on ACC/AHA 2021 Chest Pain Guidelines"

@@ -1,0 +1,525 @@
+package com.cardiofit.flink.knowledgebase.medications.safety;
+
+import com.cardiofit.flink.knowledgebase.medications.model.Medication;
+import com.cardiofit.flink.knowledgebase.medications.model.ContraindicationType;
+import com.cardiofit.flink.models.EnrichedPatientContext;
+import com.cardiofit.flink.models.PatientContext;
+import com.cardiofit.flink.models.PatientState;
+import lombok.Builder;
+import lombok.Data;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.*;
+
+/**
+ * Enhanced Contraindication Checker.
+ *
+ * Checks medication contraindications against patient conditions, including:
+ * - Absolute contraindications (never use)
+ * - Relative contraindications (use with extreme caution)
+ * - Disease state contraindications
+ * - Pregnancy/lactation contraindications
+ *
+ * @author CardioFit Module 3 Team
+ * @version 1.0
+ * @since 2025-10-24
+ */
+public class EnhancedContraindicationChecker {
+    private static final Logger logger = LoggerFactory.getLogger(EnhancedContraindicationChecker.class);
+
+    /**
+     * Check medication contraindications against patient context.
+     *
+     * @param medication The medication to check
+     * @param context Patient context with conditions and demographics
+     * @return ContraindicationResult with contraindications and warnings
+     */
+    public com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult checkContraindications(
+            Medication medication,
+            EnrichedPatientContext context) {
+
+        if (medication == null || context == null) {
+            throw new IllegalArgumentException("Medication and context cannot be null");
+        }
+
+        logger.debug("Checking contraindications for {} against patient conditions",
+            medication.getGenericName());
+
+        com.cardiofit.flink.models.PatientContextState patientContextState = context.getPatientState();
+
+        // Convert to PatientState for enhanced methods
+        com.cardiofit.flink.models.PatientState state;
+        if (patientContextState instanceof com.cardiofit.flink.models.PatientState) {
+            state = (com.cardiofit.flink.models.PatientState) patientContextState;
+        } else {
+            logger.error("PatientContextState is not a PatientState instance - cannot check contraindications");
+            return com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+                .medicationId(medication.getMedicationId())
+                .medicationName(medication.getGenericName())
+                .contraindicated(true)
+                .contraindications(java.util.Arrays.asList("Unable to assess - incomplete patient state"))
+                .build();
+        }
+
+        ContraindicationResult result = com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+            .medicationId(medication.getMedicationId())
+            .medicationName(medication.getGenericName())
+            .contraindicated(false)
+            .contraindications(new ArrayList<>())
+            .warnings(new ArrayList<>())
+            .requiresClinicalReview(false)
+            .build();
+
+        // Check absolute contraindications
+        checkAbsoluteContraindications(medication, state, result);
+
+        // Check relative contraindications
+        checkRelativeContraindications(medication, state, result);
+
+        // Check disease state contraindications
+        checkDiseaseStateContraindications(medication, state, result);
+
+        // Check pregnancy contraindications
+        checkPregnancyContraindications(medication, state, result);
+
+        // Check lactation contraindications
+        checkLactationContraindications(medication, state, result);
+
+        logger.info("Contraindication check complete for {}: contraindicated={}, warnings={}",
+            medication.getGenericName(),
+            result.isContraindicated(),
+            result.getWarnings().size());
+
+        return result;
+    }
+
+    /**
+     * Check absolute contraindications (NEVER USE).
+     */
+    private void checkAbsoluteContraindications(
+            Medication medication,
+            PatientState state,
+            ContraindicationResult result) {
+
+        if (medication.getContraindications() == null ||
+            medication.getContraindications().getAbsolute() == null) {
+            return;
+        }
+
+        List<String> absolute = medication.getContraindications().getAbsolute();
+
+        for (String contraindication : absolute) {
+            if (patientHasCondition(state, contraindication)) {
+                result.setContraindicated(true);
+                result.getContraindications().add(
+                    "ABSOLUTE: " + contraindication);
+                logger.error("ABSOLUTE CONTRAINDICATION: {} has {}",
+                    medication.getGenericName(), contraindication);
+            }
+        }
+    }
+
+    /**
+     * Check relative contraindications (USE WITH CAUTION).
+     */
+    private void checkRelativeContraindications(
+            Medication medication,
+            PatientState state,
+            ContraindicationResult result) {
+
+        if (medication.getContraindications() == null ||
+            medication.getContraindications().getRelative() == null) {
+            return;
+        }
+
+        List<String> relative = medication.getContraindications().getRelative();
+
+        for (String contraindication : relative) {
+            if (patientHasCondition(state, contraindication)) {
+                result.setRequiresClinicalReview(true);
+                result.getWarnings().add(
+                    "RELATIVE CONTRAINDICATION: " + contraindication + " - Use with extreme caution");
+                logger.warn("RELATIVE CONTRAINDICATION: {} has {}",
+                    medication.getGenericName(), contraindication);
+            }
+        }
+    }
+
+    /**
+     * Check disease state contraindications.
+     */
+    private void checkDiseaseStateContraindications(
+            Medication medication,
+            PatientState state,
+            ContraindicationResult result) {
+
+        if (medication.getContraindications() == null ||
+            medication.getContraindications().getDiseaseStates() == null) {
+            return;
+        }
+
+        List<String> diseaseStates = medication.getContraindications().getDiseaseStates();
+        List<String> patientDiagnoses = getActiveDiagnoses(state);
+
+        if (patientDiagnoses != null && !patientDiagnoses.isEmpty()) {
+            for (String disease : diseaseStates) {
+                for (String diagnosis : patientDiagnoses) {
+                    if (diagnosis.toLowerCase().contains(disease.toLowerCase())) {
+                        result.setRequiresClinicalReview(true);
+                        result.getWarnings().add(
+                            "DISEASE STATE: Contraindicated in " + disease);
+                        logger.warn("Disease state contraindication: {} in patient with {}",
+                            medication.getGenericName(), disease);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Check pregnancy contraindications.
+     */
+    private void checkPregnancyContraindications(
+            Medication medication,
+            PatientState state,
+            ContraindicationResult result) {
+
+        if (state.isPregnant() && medication.getPregnancyLactation() != null) {
+            String pregnancyRisk = medication.getPregnancyLactation().getPregnancyRisk();
+
+            if ("High".equalsIgnoreCase(pregnancyRisk)) {
+                result.setContraindicated(true);
+                result.getContraindications().add(
+                    "PREGNANCY: High risk - contraindicated in pregnancy");
+                logger.error("HIGH PREGNANCY RISK: {} contraindicated in pregnancy",
+                    medication.getGenericName());
+            } else if ("Moderate".equalsIgnoreCase(pregnancyRisk)) {
+                result.setRequiresClinicalReview(true);
+                result.getWarnings().add(
+                    "PREGNANCY: Moderate risk - use only if benefit outweighs risk");
+            }
+
+            // Add FDA category warning if present
+            String fdaCategory = medication.getPregnancyLactation().getFdaCategory();
+            if (fdaCategory != null && (fdaCategory.equals("D") || fdaCategory.equals("X"))) {
+                result.getWarnings().add(
+                    "FDA Pregnancy Category " + fdaCategory);
+            }
+        }
+    }
+
+    /**
+     * Check lactation contraindications.
+     */
+    private void checkLactationContraindications(
+            Medication medication,
+            PatientState state,
+            ContraindicationResult result) {
+
+        if (isBreastfeeding(state) && medication.getPregnancyLactation() != null) {
+            String lactationRisk = medication.getPregnancyLactation().getLactationRisk();
+
+            if ("Contraindicated".equalsIgnoreCase(lactationRisk)) {
+                result.setContraindicated(true);
+                result.getContraindications().add(
+                    "LACTATION: Contraindicated during breastfeeding");
+                logger.error("LACTATION CONTRAINDICATION: {} contraindicated while breastfeeding",
+                    medication.getGenericName());
+            } else if ("Use Caution".equalsIgnoreCase(lactationRisk)) {
+                result.setRequiresClinicalReview(true);
+                result.getWarnings().add(
+                    "LACTATION: Use with caution - monitor infant for adverse effects");
+            }
+        }
+    }
+
+    /**
+     * Check if patient has a specific condition.
+     * Simplified check - in production would use comprehensive condition matching.
+     */
+    private boolean patientHasCondition(com.cardiofit.flink.models.PatientState state, String condition) {
+        List<String> diagnoses = getActiveDiagnoses(state);
+        if (diagnoses == null || diagnoses.isEmpty()) return false;
+
+        String conditionLower = condition.toLowerCase();
+
+        return diagnoses.stream()
+            .anyMatch(diagnosis -> diagnosis.toLowerCase().contains(conditionLower));
+    }
+
+    // ================================================================
+    // HELPER METHODS FOR PATIENT STATE API COMPATIBILITY
+    // ================================================================
+
+    /**
+     * Get active diagnoses from PatientState.
+     * Extracts condition codes from chronicConditions.
+     */
+    private List<String> getActiveDiagnoses(com.cardiofit.flink.models.PatientState state) {
+        if (state == null || state.getChronicConditions() == null) {
+            return java.util.Collections.emptyList();
+        }
+
+        return state.getChronicConditions().stream()
+            .map(condition -> condition.getCode() != null ? condition.getCode() : condition.getDisplay())
+            .filter(java.util.Objects::nonNull)
+            .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Check if patient is breastfeeding.
+     * Note: This information is not yet available in PatientState - returns false for now.
+     */
+    private boolean isBreastfeeding(com.cardiofit.flink.models.PatientState state) {
+        // TODO: Add breastfeeding status to PatientState/RiskIndicators
+        // For now, return false as safe default
+        return false;
+    }
+
+    /**
+     * Check if medication is absolutely contraindicated.
+     */
+    public boolean isAbsoluteContraindication(
+            Medication medication,
+            EnrichedPatientContext context) {
+        ContraindicationResult result = checkContraindications(medication, context);
+        return result.isContraindicated();
+    }
+
+    /**
+     * Get relative contraindications only.
+     */
+    public List<String> getRelativeContraindications(
+            Medication medication,
+            EnrichedPatientContext context) {
+        ContraindicationResult result = checkContraindications(medication, context);
+        return result.getWarnings();
+    }
+
+    /**
+     * Get all warnings (relative contraindications + clinical considerations).
+     */
+    public List<String> getWarnings(
+            Medication medication,
+            EnrichedPatientContext context) {
+        ContraindicationResult result = checkContraindications(medication, context);
+        return result.getWarnings();
+    }
+
+    // ================================================================
+    // RESULT CLASS
+    // ================================================================
+
+    @Data
+    @Builder
+    public static class ContraindicationResult {
+        private String medicationId;
+        private String medicationName;
+        private boolean contraindicated;
+        private List<String> contraindications;
+        private List<String> warnings;
+        private boolean requiresClinicalReview;
+
+        // Additional fields for test compatibility
+        private ContraindicationType contraindicationType = ContraindicationType.NONE;
+        private String reason;
+        private boolean shouldReject = false;
+
+        /**
+         * Check if medication is safe to use (no contraindications, no warnings).
+         */
+        public boolean isSafeToUse() {
+            return !contraindicated &&
+                   (contraindications == null || contraindications.isEmpty()) &&
+                   (warnings == null || warnings.isEmpty());
+        }
+
+        /**
+         * Get summary of contraindication status.
+         */
+        public String getSummary() {
+            if (contraindicated) {
+                return "CONTRAINDICATED: " + String.join("; ", contraindications);
+            }
+            if (requiresClinicalReview) {
+                return "REQUIRES CLINICAL REVIEW: " + warnings.size() + " warnings";
+            }
+            return "No contraindications";
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // TEST COMPATIBILITY METHOD
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Check contraindications for a medication against patient context (test-compatible signature).
+     *
+     * @param medication The medication to check
+     * @param patient The patient context with allergies, conditions, etc.
+     * @return Contraindication check result
+     */
+    public com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult check(Medication medication, PatientContext patient) {
+        if (medication == null || patient == null) {
+            return com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+                .contraindicated(false)
+                .contraindicationType(ContraindicationType.NONE)
+                .build();
+        }
+
+        // Check allergies
+        if (patient.getAllergies() != null && !patient.getAllergies().isEmpty()) {
+            for (String allergy : patient.getAllergies()) {
+                if (hasAllergyCrossReactivity(medication, allergy)) {
+                    return com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+                        .contraindicated(true)
+                        .contraindicationType(ContraindicationType.ABSOLUTE)
+                        .medicationId(medication.getMedicationId())
+                        .medicationName(medication.getName())
+                        .reason("Patient has documented allergy to " + allergy)
+                        .patientFactor(allergy + " allergy")
+                        .shouldReject(true)
+                        .allowOverride(false)
+                        .severityScore(1)
+                        .build();
+                }
+            }
+        }
+
+        // Check renal contraindications
+        if (patient.getCreatinine() != null && patient.getAge() != null && patient.getWeight() != null) {
+            double crCl = calculateCrCl(patient);
+            if (hasRenalContraindication(medication, crCl)) {
+                return com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+                    .contraindicated(true)
+                    .contraindicationType(ContraindicationType.RELATIVE)
+                    .medicationId(medication.getMedicationId())
+                    .medicationName(medication.getName())
+                    .reason("Contraindicated in renal impairment (CrCl " + String.format("%.1f", crCl) + " mL/min)")
+                    .patientFactor("CrCl " + String.format("%.1f", crCl) + " mL/min")
+                    .shouldReject(false)
+                    .allowOverride(true)
+                    .severityScore(2)
+                    .build();
+            }
+        }
+
+        // Check age-related contraindications
+        if (patient.getAge() != null) {
+            if (hasAgeContraindication(medication, patient.getAge())) {
+                return com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+                    .contraindicated(true)
+                    .contraindicationType(ContraindicationType.AGE_RELATED)
+                    .medicationId(medication.getMedicationId())
+                    .medicationName(medication.getName())
+                    .reason("Age-related contraindication (patient age: " + patient.getAge() + " years)")
+                    .patientFactor("Age " + patient.getAge() + " years")
+                    .shouldReject(false)
+                    .allowOverride(true)
+                    .severityScore(2)
+                    .build();
+            }
+        }
+
+        // No contraindications found
+        return com.cardiofit.flink.knowledgebase.medications.safety.ContraindicationResult.builder()
+            .contraindicated(false)
+            .contraindicationType(ContraindicationType.NONE)
+            .medicationId(medication.getMedicationId())
+            .medicationName(medication.getName())
+            .reason("No contraindications identified")
+            .build();
+    }
+
+    /**
+     * Check if medication has cross-reactivity with patient allergy.
+     */
+    private boolean hasAllergyCrossReactivity(Medication medication, String allergy) {
+        if (medication == null || allergy == null) return false;
+
+        String medName = medication.getName().toLowerCase();
+        String allergyLower = allergy.toLowerCase();
+
+        // Direct match
+        if (medName.contains(allergyLower)) return true;
+
+        // Penicillin class cross-reactivity
+        if (allergyLower.contains("penicillin")) {
+            return medName.contains("penicillin") ||
+                   medName.contains("amoxicillin") ||
+                   medName.contains("ampicillin") ||
+                   medName.contains("piperacillin");
+        }
+
+        // Sulfa cross-reactivity
+        if (allergyLower.contains("sulfa") || allergyLower.contains("sulfon")) {
+            return medName.contains("sulfa") ||
+                   medName.contains("sulfon") ||
+                   medName.contains("trimethoprim");
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if medication is contraindicated in renal impairment.
+     */
+    private boolean hasRenalContraindication(Medication medication, double crCl) {
+        if (medication == null) return false;
+
+        String medName = medication.getName().toLowerCase();
+
+        // Metformin contraindicated if CrCl < 30
+        if (medName.contains("metformin") && crCl < 30) {
+            return true;
+        }
+
+        // NSAIDs use caution if CrCl < 30
+        if ((medName.contains("ibuprofen") || medName.contains("naproxen") ||
+             medName.contains("ketorolac")) && crCl < 30) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Check age-related contraindications.
+     */
+    private boolean hasAgeContraindication(Medication medication, int age) {
+        if (medication == null) return false;
+
+        String medName = medication.getName().toLowerCase();
+
+        // Aspirin in children < 18 (Reye's syndrome risk)
+        if (medName.contains("aspirin") && age < 18) {
+            return true;
+        }
+
+        // Benzodiazepines in elderly > 65 (falls risk)
+        if ((medName.contains("diazepam") || medName.contains("lorazepam") ||
+             medName.contains("alprazolam")) && age > 65) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Calculate CrCl using Cockcroft-Gault formula.
+     */
+    private double calculateCrCl(PatientContext patient) {
+        int age = patient.getAge();
+        double weight = patient.getWeight();
+        double creatinine = patient.getCreatinine();
+
+        double crCl = ((140.0 - age) * weight) / (72.0 * creatinine);
+
+        if ("F".equalsIgnoreCase(patient.getSex()) || "FEMALE".equalsIgnoreCase(patient.getSex())) {
+            crCl *= 0.85;
+        }
+
+        return crCl;
+    }
+}

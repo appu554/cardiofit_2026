@@ -1,0 +1,260 @@
+// KB-7 Terminology Service gRPC Contract
+// Protocol Buffers definition for terminology service integration
+
+syntax = "proto3";
+
+package kb7.terminology;
+
+option go_package = "github.com/clinical-platform/kb-services/kb7/terminology";
+
+// Terminology lookup and validation service
+service TerminologyService {
+  // Lookup single terminology code
+  rpc LookupCode(LookupRequest) returns (TerminologyEntry);
+  
+  // Batch lookup multiple codes
+  rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse);
+  
+  // Search terminologies by text
+  rpc SearchTerminologies(SearchRequest) returns (SearchResponse);
+  
+  // Validate code existence and status
+  rpc ValidateCode(ValidationRequest) returns (ValidationResponse);
+  
+  // Get hierarchical relationships
+  rpc GetHierarchy(HierarchyRequest) returns (HierarchyResponse);
+  
+  // Map codes between systems
+  rpc MapCode(MappingRequest) returns (MappingResponse);
+}
+
+// Code system enumeration
+enum CodeSystem {
+  CODE_SYSTEM_UNSPECIFIED = 0;
+  SNOMED_CT = 1;
+  ICD_10 = 2;
+  RXNORM = 3;
+  LOINC = 4;
+}
+
+// Entry status enumeration
+enum EntryStatus {
+  ENTRY_STATUS_UNSPECIFIED = 0;
+  ACTIVE = 1;
+  INACTIVE = 2;
+  DEPRECATED = 3;
+}
+
+// Basic terminology code structure
+message TerminologyCode {
+  string code = 1;
+  CodeSystem system = 2;
+}
+
+// Complete terminology entry
+message TerminologyEntry {
+  string code = 1;
+  CodeSystem system = 2;
+  string display = 3;
+  string definition = 4;
+  repeated string synonyms = 5;
+  map<string, string> properties = 6;
+  repeated Relationship relationships = 7;
+  EntryMetadata metadata = 8;
+}
+
+// Relationship between terminology entries
+message Relationship {
+  enum RelationType {
+    RELATION_TYPE_UNSPECIFIED = 0;
+    PARENT = 1;
+    CHILD = 2;
+    RELATED = 3;
+    MAPS_TO = 4;
+    SYNONYM = 5;
+  }
+  
+  RelationType type = 1;
+  string target_code = 2;
+  CodeSystem target_system = 3;
+  string target_display = 4;
+  float confidence = 5; // 0.0 to 1.0
+}
+
+// Entry metadata
+message EntryMetadata {
+  string version = 1;
+  string effective_date = 2; // ISO 8601 date
+  EntryStatus status = 3;
+  int64 last_updated = 4; // Unix timestamp
+  string source_uri = 5;
+}
+
+// Lookup request
+message LookupRequest {
+  string code = 1;
+  CodeSystem system = 2;
+  bool include_hierarchy = 3;
+  bool include_relationships = 4;
+}
+
+// Batch lookup request
+message BatchLookupRequest {
+  repeated LookupRequest requests = 1;
+}
+
+// Batch lookup response
+message BatchLookupResponse {
+  repeated BatchLookupResult results = 1;
+}
+
+message BatchLookupResult {
+  string code = 1;
+  CodeSystem system = 2;
+  bool found = 3;
+  TerminologyEntry entry = 4;
+  string error = 5;
+}
+
+// Search request
+message SearchRequest {
+  string query = 1;
+  repeated CodeSystem systems = 2;
+  int32 max_results = 3;
+  bool include_inactive = 4;
+  bool fuzzy_matching = 5;
+  map<string, string> filters = 6;
+}
+
+// Search response
+message SearchResponse {
+  int32 total_results = 1;
+  repeated SearchResult results = 2;
+  int64 query_time_ms = 3;
+}
+
+message SearchResult {
+  string code = 1;
+  CodeSystem system = 2;
+  string display = 3;
+  string definition = 4;
+  float score = 5; // Relevance score 0.0-1.0
+  repeated string highlights = 6;
+  EntryMetadata metadata = 7;
+}
+
+// Validation request
+message ValidationRequest {
+  repeated CodeToValidate codes = 1;
+}
+
+message CodeToValidate {
+  string code = 1;
+  CodeSystem system = 2;
+  string context = 3; // Optional clinical context
+}
+
+// Validation response
+message ValidationResponse {
+  repeated ValidationResult results = 1;
+}
+
+message ValidationResult {
+  string code = 1;
+  CodeSystem system = 2;
+  bool valid = 3;
+  EntryStatus status = 4;
+  repeated string messages = 5;
+  TerminologyEntry entry = 6; // If valid
+}
+
+// Hierarchy request
+message HierarchyRequest {
+  string code = 1;
+  CodeSystem system = 2;
+  int32 depth = 3; // Max depth to traverse
+  enum Direction {
+    DIRECTION_UNSPECIFIED = 0;
+    UP = 1;    // Parents
+    DOWN = 2;  // Children  
+    BOTH = 3;  // Both directions
+  }
+  Direction direction = 4;
+}
+
+// Hierarchy response
+message HierarchyResponse {
+  string code = 1;
+  CodeSystem system = 2;
+  string display = 3;
+  repeated HierarchyNode parents = 4;
+  repeated HierarchyNode children = 5;
+}
+
+message HierarchyNode {
+  string code = 1;
+  string display = 2;
+  int32 level = 3; // Distance from root
+  repeated HierarchyNode children = 4;
+}
+
+// Mapping request
+message MappingRequest {
+  string source_code = 1;
+  CodeSystem source_system = 2;
+  CodeSystem target_system = 3;
+  
+  enum MappingType {
+    MAPPING_TYPE_UNSPECIFIED = 0;
+    EXACT = 1;
+    NARROW = 2;
+    BROAD = 3;
+    RELATED = 4;
+  }
+  MappingType mapping_type = 4;
+}
+
+// Mapping response
+message MappingResponse {
+  string source_code = 1;
+  CodeSystem source_system = 2;
+  repeated Mapping mappings = 3;
+}
+
+message Mapping {
+  string target_code = 1;
+  CodeSystem target_system = 2;
+  string target_display = 3;
+  string mapping_type = 4;
+  float confidence = 5; // 0.0 to 1.0
+}
+
+// Health check request/response
+message HealthRequest {}
+
+message HealthResponse {
+  enum HealthStatus {
+    HEALTH_STATUS_UNSPECIFIED = 0;
+    HEALTHY = 1;
+    UNHEALTHY = 2;
+    DEGRADED = 3;
+  }
+  
+  HealthStatus status = 1;
+  string service = 2;
+  string version = 3;
+  int64 timestamp = 4; // Unix timestamp
+  map<string, HealthCheck> checks = 5;
+}
+
+message HealthCheck {
+  enum CheckStatus {
+    CHECK_STATUS_UNSPECIFIED = 0;
+    HEALTHY = 1;
+    UNHEALTHY = 2;
+  }
+  
+  CheckStatus status = 1;
+  int64 response_time_ms = 2;
+  string error = 3;
+}

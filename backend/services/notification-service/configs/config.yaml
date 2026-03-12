@@ -1,0 +1,80 @@
+server:
+  http_port: 8050
+  grpc_port: 9050
+  env: development
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  dbname: notification_service
+  sslmode: disable
+  max_connections: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+kafka:
+  brokers:
+    - localhost:9092
+  group_id: notification-service
+  topic: clinical-alerts
+  auto_offset_reset: earliest
+
+delivery:
+  email:
+    provider: sendgrid
+    sendgrid_api_key: ${SENDGRID_API_KEY}
+    from_email: alerts@cardiofit.health
+    from_name: CardioFit Clinical Alerts
+  sms:
+    provider: twilio
+    twilio_sid: ${TWILIO_ACCOUNT_SID}
+    twilio_token: ${TWILIO_AUTH_TOKEN}
+    twilio_from_number: ${TWILIO_FROM_NUMBER}
+  push:
+    provider: firebase
+    firebase_credentials: ${FIREBASE_CREDENTIALS_PATH}
+    firebase_project_id: ${FIREBASE_PROJECT_ID}
+
+routing:
+  default_channel: email
+  retry_attempts: 3
+  retry_delay: 30s
+  channel_priorities:
+    critical: sms
+    high: push
+    medium: email
+    low: email
+
+escalation:
+  enabled: true
+  max_escalation_level: 3
+  escalation_delay: 5m
+  critical_timeout_minutes: 5
+  high_timeout_minutes: 15
+  enable_voice_escalation: true
+  critical_channels:
+    - sms
+    - push
+
+fatigue:
+  enabled: true
+  window_duration: 1h              # Rate limiting window
+  max_notifications: 20            # Max alerts per user per hour
+  quiet_hours_start: "22:00"       # Quiet hours start (HH:MM format)
+  quiet_hours_end: "07:00"         # Quiet hours end (HH:MM format)
+  priority_threshold: high         # CRITICAL always bypasses suppression
+  duplicate_window_ms: 300000      # 5 minutes for duplicate detection
+  bundle_threshold: 3              # Bundle if 3+ similar alerts in window
+  bundle_window_ms: 900000         # 15 minutes for bundling window
+
+logging:
+  level: info
+  format: json

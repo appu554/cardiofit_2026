@@ -1,0 +1,126 @@
+# KB-12 Order Sets & Care Plans Service - Production Dockerfile
+# Multi-stage build for optimized, secure production image
+# NO MOCKS, NO FALLBACKS - Production Only
+
+# =============================================================================
+# Stage 1: Builder
+# =============================================================================
+FROM golang:1.23-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata \
+    make
+
+# Create non-root user for build
+RUN addgroup -g 1000 builder && \
+    adduser -u 1000 -G builder -D builder
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files first for dependency caching
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+# Copy source code
+COPY . .
+
+# Build arguments for version info
+ARG VERSION=1.0.0
+ARG BUILD_TIME
+ARG GIT_COMMIT
+
+# Build the application with optimizations
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s \
+        -X main.Version=${VERSION} \
+        -X main.BuildTime=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)} \
+        -X main.GitCommit=${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}" \
+    -trimpath \
+    -o /build/kb-12-server \
+    ./cmd/server
+
+# Verify the binary
+RUN /build/kb-12-server --version 2>/dev/null || true
+
+# =============================================================================
+# Stage 2: Production Image
+# =============================================================================
+FROM alpine:3.19 AS production
+
+# Labels for container metadata
+LABEL maintainer="CardioFit Platform Team"
+LABEL service="kb-12-ordersets-careplans"
+LABEL description="KB-12 Order Sets and Care Plans Service - Production"
+ARG VERSION=1.0.0
+LABEL version="${VERSION}"
+
+# Install minimal runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    tini && \
+    rm -rf /var/cache/apk/*
+
+# Create non-root user with specific UID/GID
+RUN addgroup -g 10012 kb12 && \
+    adduser -u 10012 -G kb12 -D -H -s /sbin/nologin kb12
+
+# Create application directory structure
+WORKDIR /app
+
+# Create required directories
+RUN mkdir -p /app/migrations /app/knowledge /app/logs && \
+    chown -R kb12:kb12 /app
+
+# Copy binary from builder
+COPY --from=builder --chown=kb12:kb12 /build/kb-12-server /app/kb-12-server
+
+# Copy migrations
+COPY --from=builder --chown=kb12:kb12 /build/migrations /app/migrations
+
+# Set permissions
+RUN chmod +x /app/kb-12-server
+
+# Environment variables for production
+ENV ENVIRONMENT=production \
+    GIN_MODE=release \
+    LOG_LEVEL=info \
+    LOG_FORMAT=json \
+    PORT=8092 \
+    # Database settings (REQUIRED - no defaults)
+    POSTGRES_MAX_OPEN_CONNS=25 \
+    POSTGRES_MAX_IDLE_CONNS=10 \
+    POSTGRES_CONN_MAX_LIFETIME=5m \
+    # Redis settings (REQUIRED - no defaults)
+    REDIS_MAX_RETRIES=3 \
+    REDIS_POOL_SIZE=10 \
+    # KB Services (REQUIRED - must be configured)
+    KB1_ENABLED=true \
+    KB3_ENABLED=true \
+    KB6_ENABLED=true \
+    KB7_ENABLED=true \
+    # Timeouts
+    SERVER_READ_TIMEOUT=30s \
+    SERVER_WRITE_TIMEOUT=30s \
+    SERVER_SHUTDOWN_TIMEOUT=15s
+
+# Switch to non-root user
+USER kb12
+
+# Expose port
+EXPOSE 8092
+
+# Health check - verify all dependencies
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8092/ready || exit 1
+
+# Use tini as init system for proper signal handling
+ENTRYPOINT ["/sbin/tini", "--"]
+
+# Run the application
+CMD ["/app/kb-12-server"]

@@ -1,0 +1,464 @@
+# KB-7 Knowledge Factory Workflow - Multi-Region Version 2.4
+# Follows same pattern as kb7-factory-workflow-production
+# Supports: US (RxNorm/SNOMED/LOINC), AU (SNOMED-AU+AMT), IN (SNOMED-IN/CDCI)
+# Updated: 2025-12-06 - Aligned with production workflow pattern
+
+main:
+  params: [input]
+  steps:
+    - init:
+        assign:
+          - project_id: "sincere-hybrid-477206-h2"
+          - timestamp: ${text.split(time.format(sys.now()), "T")[0]}
+          - trigger: ${default(map.get(input, "trigger"), "manual")}
+          - environment: "production"
+          - region: "us-central1"
+          - source_bucket: "sincere-hybrid-477206-h2-kb-sources-production"
+          - github_repo: ${default(map.get(input, "github_repo"), "onkarshahi-IND/knowledge-factory")}
+          # Get terminology region from input (us, au, in) - defaults to "us"
+          - terminology_region: ${default(map.get(input, "region"), "us")}
+          # Job resource names
+          - github_job: ${"projects/" + project_id + "/locations/" + region + "/jobs/kb7-github-dispatcher-job-production"}
+
+    - log_start:
+        call: sys.log
+        args:
+          text: '${"Starting KB-7 Knowledge Factory workflow for region: " + terminology_region}'
+          severity: INFO
+
+    - validate_region:
+        switch:
+          - condition: ${terminology_region == "us"}
+            next: init_us_jobs
+          - condition: ${terminology_region == "au"}
+            next: init_au_jobs
+          - condition: ${terminology_region == "in"}
+            next: init_in_jobs
+        next: invalid_region
+
+    # =========================================================================
+    # AU Region: SNOMED CT-AU + AMT (bundled in single RF2 package from NTS)
+    # Source: Australian National Terminology Service (healthterminologies.gov.au)
+    # IMPORTANT: AU job runs in australia-southeast1 to avoid NTS geo-blocking
+    # =========================================================================
+    - init_au_jobs:
+        assign:
+          - au_region: "australia-southeast1"
+          - snomed_au_job: ${"projects/" + project_id + "/locations/" + au_region + "/jobs/kb7-snomed-au-job-production"}
+          # AU-specific GitHub dispatcher (separate from US dispatcher)
+          - github_au_job: ${"projects/" + project_id + "/locations/" + au_region + "/jobs/kb7-github-dispatcher-au-job-production"}
+          - github_au_repo: "onkarshahi-IND/knowledge-factory-au"
+          - snomed_au_execution: null
+          - snomed_au_status: "pending"
+
+    - log_au_start:
+        call: sys.log
+        args:
+          text: "Starting SNOMED CT-AU + AMT download from Australian NTS"
+          severity: INFO
+
+    - execute_snomed_au_job:
+        try:
+          steps:
+            - run_snomed_au:
+                call: googleapis.run.v2.projects.locations.jobs.run
+                args:
+                  name: ${snomed_au_job}
+                result: snomed_au_execution
+
+            - log_snomed_au_execution_created:
+                call: sys.log
+                args:
+                  text: '${"SNOMED CT-AU execution created - " + snomed_au_execution.name}'
+                  severity: INFO
+
+            - wait_snomed_au:
+                call: wait_for_job_completion
+                args:
+                  execution_name: ${snomed_au_execution.name}
+                  job_name: "kb7-snomed-au-job-production"
+                result: snomed_au_final_status
+
+            - update_snomed_au_status:
+                assign:
+                  - snomed_au_status: ${snomed_au_final_status.status}
+
+        except:
+          as: e
+          steps:
+            - log_snomed_au_error:
+                call: sys.log
+                args:
+                  text: '${"SNOMED CT-AU job failed - " + json.encode_to_string(e)}'
+                  severity: ERROR
+            - assign_snomed_au_error:
+                assign:
+                  - snomed_au_status: "failed"
+
+    - log_snomed_au_complete:
+        call: sys.log
+        args:
+          text: "SNOMED CT-AU job completed"
+          severity: INFO
+
+    - check_au_status:
+        switch:
+          - condition: ${snomed_au_status == "failed"}
+            next: handle_au_failure
+        next: read_au_results
+
+    - read_au_results:
+        try:
+          steps:
+            - read_snomed_au_result:
+                call: http.get
+                args:
+                  url: ${"https://storage.googleapis.com/storage/v1/b/" + source_bucket + "/o/workflow-results%2Fsnomed-au-latest.json?alt=media"}
+                  auth:
+                    type: OAuth2
+                result: snomed_au_result_response
+
+            - extract_au_gcs_keys:
+                assign:
+                  - snomed_au_gcs_key: ${snomed_au_result_response.body.data.gcs_key}
+
+            - log_au_extracted_keys:
+                call: sys.log
+                args:
+                  text: '${"Extracted GCS key - SNOMED-AU=" + snomed_au_gcs_key}'
+                  severity: INFO
+
+        except:
+          as: e
+          steps:
+            - log_au_read_error:
+                call: sys.log
+                args:
+                  text: '${"Failed to read AU result file - " + e.message}'
+                  severity: ERROR
+            - assign_au_default_keys:
+                assign:
+                  - snomed_au_gcs_key: "unknown"
+
+    - execute_au_github_dispatcher:
+        try:
+          steps:
+            - log_au_github_start:
+                call: sys.log
+                args:
+                  text: '${"Dispatching to AU repository: " + github_au_repo}'
+                  severity: INFO
+
+            - run_au_github_job:
+                call: googleapis.run.v2.projects.locations.jobs.run
+                args:
+                  # Use AU-specific dispatcher job (runs in australia-southeast1)
+                  name: ${github_au_job}
+                  body:
+                    overrides:
+                      containerOverrides:
+                        - env:
+                            - name: "PROJECT_ID"
+                              value: ${project_id}
+                            - name: "ENVIRONMENT"
+                              value: ${environment}
+                            # AU uses separate repository: knowledge-factory-au
+                            - name: "GITHUB_REPO"
+                              value: ${github_au_repo}
+                            - name: "SECRET_NAME"
+                              value: "kb7-github-token-production"
+                            - name: "REGION"
+                              value: "au"
+                            # AU-specific key (SNOMED-AU includes AMT bundled)
+                            - name: "SNOMED_AU_KEY"
+                              value: ${snomed_au_gcs_key}
+                result: github_au_execution
+
+            - wait_au_github:
+                call: wait_for_job_completion
+                args:
+                  execution_name: ${github_au_execution.name}
+                  # AU-specific dispatcher job name
+                  job_name: "kb7-github-dispatcher-au-job-production"
+                result: github_au_final_status
+
+            - log_au_github_complete:
+                call: sys.log
+                args:
+                  text: '${"GitHub dispatcher for AU completed - triggered " + github_au_repo}'
+                  severity: INFO
+
+        except:
+          as: e
+          steps:
+            - log_au_github_error:
+                call: sys.log
+                args:
+                  text: '${"GitHub dispatcher for AU failed - " + json.encode_to_string(e)}'
+                  severity: WARNING
+
+    - return_au_success:
+        return:
+          status: "success"
+          region: "au"
+          trigger: ${trigger}
+          timestamp: ${timestamp}
+          terminologies:
+            - "SNOMED CT-AU (32506021000036107)"
+            - "AMT (900062011000036103) - bundled"
+          downloads:
+            snomed_au:
+              gcs_key: ${snomed_au_gcs_key}
+              status: ${snomed_au_status}
+          executions:
+            snomed_au:
+              status: ${snomed_au_status}
+              execution_name: ${snomed_au_execution.name}
+
+    - handle_au_failure:
+        steps:
+          - log_au_failure:
+              call: sys.log
+              args:
+                text: "SNOMED CT-AU job execution failed"
+                severity: ERROR
+
+          - return_au_failure:
+              return:
+                status: "failed"
+                region: "au"
+                trigger: ${trigger}
+                timestamp: ${timestamp}
+                executions:
+                  snomed_au:
+                    status: ${snomed_au_status}
+                error: "AU region SNOMED CT-AU download failed"
+
+    # =========================================================================
+    # US Region: Redirect to main workflow (kb7-factory-workflow-production)
+    # =========================================================================
+    - init_us_jobs:
+        return:
+          status: "redirect"
+          region: "us"
+          message: "For US region, use kb7-factory-workflow-production workflow"
+          trigger: ${trigger}
+          timestamp: ${timestamp}
+
+    # =========================================================================
+    # IN Region: SNOMED CT International + CDCI (placeholder)
+    # =========================================================================
+    - init_in_jobs:
+        return:
+          status: "not_implemented"
+          region: "in"
+          message: "India region not yet implemented - requires SNOMED International license and CDCI integration"
+          trigger: ${trigger}
+          timestamp: ${timestamp}
+
+    # =========================================================================
+    # Invalid Region Handler
+    # =========================================================================
+    - invalid_region:
+        steps:
+          - log_invalid:
+              call: sys.log
+              args:
+                text: '${"Invalid region specified: " + terminology_region + ". Valid regions: us, au, in"}'
+                severity: ERROR
+
+          - return_invalid:
+              return:
+                status: "failed"
+                error: '${"Invalid region: " + terminology_region}'
+                valid_regions: ["us", "au", "in"]
+
+# =============================================================================
+# Subworkflow: Wait for job completion (same pattern as production workflow)
+# =============================================================================
+wait_for_job_completion:
+  params: [execution_name, job_name]
+  steps:
+    - init_wait:
+        assign:
+          - max_attempts: 120
+          - attempt: 0
+          - sleep_seconds: 60
+          - final_status: null
+          - is_terminal: false
+
+    - initial_delay:
+        call: sys.sleep
+        args:
+          seconds: 10
+
+    - check_loop_condition:
+        switch:
+          - condition: ${attempt >= max_attempts}
+            next: timeout_error
+        next: log_poll_attempt
+
+    - log_poll_attempt:
+        call: sys.log
+        args:
+          text: '${"Polling job execution - attempt " + string(attempt + 1)}'
+          severity: INFO
+
+    - get_execution_status:
+        try:
+          call: googleapis.run.v2.projects.locations.jobs.executions.get
+          args:
+            name: ${execution_name}
+          result: exec_response
+        except:
+          as: e
+          steps:
+            - log_error:
+                call: sys.log
+                args:
+                  text: '${"API error - will retry in " + string(sleep_seconds) + "s - " + json.encode_to_string(e)}'
+                  severity: WARNING
+            - jump_to_retry:
+                next: increment_retry
+
+    - analyze_conditions:
+        steps:
+          - init_flags:
+              assign:
+                - is_succeeded: false
+                - is_failed: false
+                - is_cancelled: false
+                - completion_message: "Running"
+                - gcs_status_file: ""
+
+          - determine_gcs_file:
+              switch:
+                - condition: ${job_name == "kb7-snomed-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/snomed-latest.json"
+                - condition: ${job_name == "kb7-rxnorm-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/rxnorm-latest.json"
+                - condition: ${job_name == "kb7-loinc-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/loinc-latest.json"
+                - condition: ${job_name == "kb7-snomed-au-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/snomed-au-latest.json"
+                - condition: ${job_name == "kb7-github-dispatcher-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/github-dispatcher-latest.json"
+                # AU-specific GitHub dispatcher
+                - condition: ${job_name == "kb7-github-dispatcher-au-job-production"}
+                  assign:
+                    - gcs_status_file: "workflow-results/github-dispatcher-au-latest.json"
+
+          - read_gcs_status:
+              try:
+                steps:
+                  - get_status_file:
+                      call: googleapis.storage.v1.objects.get
+                      args:
+                        bucket: "sincere-hybrid-477206-h2-kb-sources-production"
+                        object: ${text.url_encode(gcs_status_file)}
+                        alt: "media"
+                      result: gcs_content
+
+                  - parse_json_status:
+                      assign:
+                        - status_data: ${gcs_content}
+                        - job_status: ${default(status_data.status, "unknown")}
+
+                  - log_gcs_status:
+                      call: sys.log
+                      args:
+                        text: '${"GCS Status for " + job_name + ": " + job_status + " (from " + gcs_status_file + ")"}'
+                        severity: INFO
+
+                  - check_gcs_status:
+                      switch:
+                        - condition: ${job_status == "success" OR job_status == "succeeded"}
+                          assign:
+                            - is_succeeded: true
+                            - completion_message: "Job completed successfully (from GCS)"
+
+                        - condition: ${job_status == "failed" OR job_status == "error"}
+                          assign:
+                            - is_failed: true
+                            - completion_message: "Job failed (from GCS)"
+
+                        - condition: ${job_status == "skipped"}
+                          assign:
+                            - is_succeeded: true
+                            - completion_message: "Job completed - file already exists (from GCS)"
+
+              except:
+                as: e
+                steps:
+                  - log_gcs_error:
+                      call: sys.log
+                      args:
+                        text: '${"GCS status file not found yet for " + job_name + " - will retry"}'
+                        severity: INFO
+
+          - log_status:
+              call: sys.log
+              args:
+                text: '${"Status: " + completion_message + " | succeeded=" + string(is_succeeded) + " failed=" + string(is_failed)}'
+                severity: INFO
+
+          - set_terminal_if_complete:
+              switch:
+                - condition: ${is_succeeded}
+                  assign:
+                    - final_status:
+                        status: "succeeded"
+                        execution: ${exec_response}
+                    - is_terminal: true
+
+                - condition: ${is_failed}
+                  assign:
+                    - final_status:
+                        status: "failed"
+                        execution: ${exec_response}
+                    - is_terminal: true
+
+                - condition: ${is_cancelled}
+                  assign:
+                    - final_status:
+                        status: "cancelled"
+                        execution: ${exec_response}
+                    - is_terminal: true
+
+          - log_terminal_status:
+              call: sys.log
+              args:
+                text: '${"is_terminal=" + string(is_terminal)}'
+                severity: INFO
+
+    - check_if_terminal:
+        switch:
+          - condition: ${is_terminal}
+            next: return_status
+        next: increment_retry
+
+    - increment_retry:
+        steps:
+          - sleep:
+              call: sys.sleep
+              args:
+                seconds: ${sleep_seconds}
+
+          - increment:
+              assign:
+                - attempt: ${attempt + 1}
+
+          - loop_back:
+              next: check_loop_condition
+
+    - timeout_error:
+        raise:
+          message: "Job execution timeout after 120 minutes"
+
+    - return_status:
+        return: ${final_status}

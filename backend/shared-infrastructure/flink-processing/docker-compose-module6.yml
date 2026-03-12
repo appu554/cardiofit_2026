@@ -1,0 +1,229 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # Infrastructure Services
+  # ==========================================
+
+  redis-analytics:
+    image: redis:7-alpine
+    container_name: cardiofit-redis-analytics
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-analytics-data:/data
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    networks:
+      - module6-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postgres-analytics:
+    image: postgres:15-alpine
+    container_name: cardiofit-postgres-analytics
+    environment:
+      POSTGRES_DB: cardiofit_analytics
+      POSTGRES_USER: cardiofit
+      POSTGRES_PASSWORD: cardiofit_analytics_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-analytics-data:/var/lib/postgresql/data
+      - ./sql/init-analytics-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - module6-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardiofit -d cardiofit_analytics"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: cardiofit-influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: adminpassword
+      DOCKER_INFLUXDB_INIT_ORG: cardiofit
+      DOCKER_INFLUXDB_INIT_BUCKET: clinical_metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: cardiofit-influx-token-123456
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - module6-network
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ==========================================
+  # Module 6 Application Services
+  # ==========================================
+
+  dashboard-api:
+    build:
+      context: ./module6-services/dashboard-api
+      dockerfile: Dockerfile
+    container_name: cardiofit-dashboard-api
+    ports:
+      - "4001:4001"
+    environment:
+      NODE_ENV: production
+      PORT: 4001
+      KAFKA_BROKERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      REDIS_HOST: redis-analytics
+      REDIS_PORT: 6379
+      POSTGRES_HOST: postgres-analytics
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cardiofit_analytics
+      POSTGRES_USER: cardiofit
+      POSTGRES_PASSWORD: cardiofit_analytics_pass
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: cardiofit-influx-token-123456
+      INFLUXDB_ORG: cardiofit
+      INFLUXDB_BUCKET: clinical_metrics
+    depends_on:
+      redis-analytics:
+        condition: service_healthy
+      postgres-analytics:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    networks:
+      - module6-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  notification-service:
+    build:
+      context: ./module6-services/notification-service
+      dockerfile: Dockerfile
+    container_name: cardiofit-notification-service
+    ports:
+      - "8090:8090"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      REDIS_HOST: redis-analytics
+      REDIS_PORT: 6379
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_FROM_NUMBER: ${TWILIO_FROM_NUMBER}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
+    depends_on:
+      redis-analytics:
+        condition: service_healthy
+    networks:
+      - module6-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  export-reporting-service:
+    build:
+      context: ./module6-services/export-reporting-service
+      dockerfile: Dockerfile
+    container_name: cardiofit-export-reporting-service
+    ports:
+      - "8050:8050"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-analytics:5432/cardiofit_analytics
+      SPRING_DATASOURCE_USERNAME: cardiofit
+      SPRING_DATASOURCE_PASSWORD: cardiofit_analytics_pass
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SENDGRID_FROM_EMAIL: ${SENDGRID_FROM_EMAIL}
+      REPORT_OUTPUT_DIR: /tmp/reports
+    depends_on:
+      postgres-analytics:
+        condition: service_healthy
+    networks:
+      - module6-network
+    volumes:
+      - export-reports:/tmp/reports
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dashboard-ui:
+    build:
+      context: ./module6-services/dashboard-ui
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_GRAPHQL_ENDPOINT: http://localhost:4001/graphql
+        REACT_APP_WS_ENDPOINT: ws://localhost:8082/dashboard/realtime
+    container_name: cardiofit-dashboard-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - dashboard-api
+    networks:
+      - module6-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # WebSocket Server for Real-time Updates
+  # ==========================================
+
+  websocket-server:
+    build:
+      context: ./module6-services/websocket-server
+      dockerfile: Dockerfile
+    container_name: cardiofit-websocket-server
+    ports:
+      - "8082:8082"
+    environment:
+      NODE_ENV: production
+      PORT: 8082
+      KAFKA_BROKERS: ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}
+      REDIS_HOST: redis-analytics
+      REDIS_PORT: 6379
+    depends_on:
+      redis-analytics:
+        condition: service_healthy
+    networks:
+      - module6-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  module6-network:
+    driver: bridge
+    name: cardiofit-module6-network
+
+volumes:
+  redis-analytics-data:
+    name: cardiofit-redis-analytics-data
+  postgres-analytics-data:
+    name: cardiofit-postgres-analytics-data
+  influxdb-data:
+    name: cardiofit-influxdb-data
+  export-reports:
+    name: cardiofit-export-reports

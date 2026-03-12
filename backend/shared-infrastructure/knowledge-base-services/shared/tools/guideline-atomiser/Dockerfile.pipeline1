@@ -1,0 +1,79 @@
+# Lean Pipeline 1 image — MonkeyOCR from GitHub + all deps
+# Models mounted from host HuggingFace cache (no 3GB+ download in image)
+#
+# Build:  docker build -f Dockerfile.pipeline1 -t v4-pipeline:4.4-monkeyocr ../..
+# ~5 min build (no model downloads)
+
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# System deps for PDF processing + Aho-Corasick C extension
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils tesseract-ocr tesseract-ocr-eng \
+    libgl1-mesa-glx libglib2.0-0 \
+    build-essential git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install MonkeyOCR from GitHub (has magic_pdf.model.custom_model)
+RUN pip install --no-cache-dir \
+    'git+https://github.com/Yuliang-Liu/MonkeyOCR.git' \
+    'transformers==4.51.0' \
+    'accelerate>=0.20.0' \
+    'doclayout_yolo>=0.0.2b1' \
+    'qwen_vl_utils>=0.0.10'
+
+# Install Docling with VLM support (Channel A Granite-Docling structural oracle)
+RUN pip install --no-cache-dir 'docling[vlm]>=2.0.0'
+
+# Install remaining pipeline deps (gliner, anthropic, etc.)
+RUN pip install --no-cache-dir \
+    'pymupdf>=1.24.0' \
+    'rapidfuzz>=3.0.0' \
+    'pyahocorasick>=2.0.0' \
+    'gliner>=0.2.0' \
+    'anthropic>=0.39.0' \
+    'pydantic>=2.0.0' \
+    'requests>=2.31.0' \
+    'httpx>=0.27.0' \
+    'psycopg2-binary>=2.9.0' \
+    'pyyaml>=6.0.0' \
+    'python-dateutil>=2.8.0' \
+    'huggingface-hub>=0.19.0'
+
+# ML classifier deps — needed at inference for ShadowTieringClassifier / TierAssignerClassifier.
+# Installed BEFORE the transformers force-pin so the pin still takes effect last.
+RUN pip install --no-cache-dir \
+    'scikit-learn>=1.4.0' \
+    'xgboost>=2.0.0' \
+    'joblib>=1.3.0' \
+    'pandas>=2.0.0' \
+    'pyarrow>=14.0.0'
+
+# CRITICAL: Force-pin transformers back to 4.51.0 as ABSOLUTE LAST pip install.
+# Three packages fight over transformers versions:
+#   - magic-pdf (MonkeyOCR): requires exactly 4.51.0
+#   - docling-ibm-models:    requires <5.0.0,>=4.42.0  (4.51.0 satisfies)
+#   - gliner:                requires <5.2.0,>=4.51.3   (upgrades to 5.1.0!)
+# transformers 5.x removed AutoModelForVision2Seq which Granite-Docling needs.
+# Force-installing 4.51.0 last ensures it sticks. GLiNER works fine with 4.51.0
+# despite its >=4.51.3 constraint (it's a minor patch difference, no API changes).
+RUN pip install --no-cache-dir --force-reinstall 'transformers==4.51.0'
+
+# Copy pipeline source
+COPY extraction /app/extraction/
+COPY cql /app/cql/
+COPY tools/guideline-atomiser /app/guideline-atomiser/
+
+ENV PYTHONPATH=/app:/app/guideline-atomiser
+
+RUN mkdir -p /data/pdfs /data/output /app/guideline-atomiser/data/l1_cache
+
+CMD ["python", "/app/guideline-atomiser/data/run_pipeline_targeted.py", "--pipeline", "1", "--source", "full-guide", "--l1", "monkeyocr"]
+
+LABEL version="4.4.0-monkeyocr" \
+      description="V4.4 Pipeline 1 — MonkeyOCR L1 + Multi-Channel (lean image, host-mounted models)"

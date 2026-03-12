@@ -1,0 +1,237 @@
+# GraphQL schema for Workflow Engine Service
+# Apollo Federation v2 compatible schema
+
+extend schema
+  @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key", "@tag", "@shareable"])
+
+# Core workflow orchestration types
+type WorkflowInstance @key(fields: "id") {
+  id: ID!
+  definitionId: String!
+  patientId: String!
+  status: WorkflowStatus!
+  startedAt: DateTime!
+  completedAt: DateTime
+  correlationId: String!
+  currentPhase: String!
+  progress: Float!
+  errorMessage: String
+  context: JSON
+}
+
+# Patient entity (external reference for federation)
+type Patient @key(fields: "id") @tag(name: "external") {
+  id: ID!
+  workflows: [WorkflowInstance!]!
+}
+
+# Medication workflow specific types
+type MedicationWorkflowResult {
+  workflowInstanceId: ID!
+  snapshotId: String!
+  proposalSetId: String!
+  validationId: String!
+  medicationOrderId: String
+  rankedProposals: [MedicationProposal!]!
+  validationResult: ValidationSummary!
+  commitResult: CommitSummary
+  executionMetrics: ExecutionMetrics!
+  status: WorkflowExecutionStatus!
+  message: String
+  errors: [String!]!
+}
+
+type MedicationProposal {
+  proposalId: String!
+  medication: JSON!
+  dosing: JSON!
+  clinicalRationale: String!
+  confidenceScore: Float!
+  riskScore: Float!
+  contraindications: [String!]!
+  warnings: [String!]!
+}
+
+type ValidationSummary {
+  verdict: ValidationVerdict!
+  overallRiskScore: Float!
+  findingsCount: Int!
+  criticalFindings: [ValidationFinding!]!
+  executedEngines: [String!]!
+  overrideTokens: [String!]
+}
+
+type ValidationFinding {
+  findingId: String!
+  severity: ValidationSeverity!
+  category: String!
+  description: String!
+  clinicalSignificance: String!
+  recommendation: String!
+  confidenceScore: Float!
+  source: String!
+  evidence: JSON
+  overridable: Boolean!
+}
+
+type CommitSummary {
+  medicationOrderId: String!
+  fhirResourceId: String!
+  persistenceStatus: String!
+  eventPublicationStatus: String!
+  auditTrailId: String!
+  committedAt: DateTime!
+}
+
+type ExecutionMetrics {
+  totalDurationMs: Int!
+  calculateDurationMs: Int!
+  validateDurationMs: Int!
+  commitDurationMs: Int
+  phaseBreakdown: JSON!
+}
+
+# System health and monitoring
+type SystemHealth {
+  status: HealthStatus!
+  service: String!
+  databaseConnected: Boolean!
+  externalServices: JSON!
+  checkedAt: DateTime!
+}
+
+# Input types for mutations
+input MedicationWorkflowInput {
+  patientId: ID!
+  correlationId: String
+  medicationRequest: JSON!
+  clinicalIntent: JSON!
+  providerContext: JSON!
+  executionMode: ExecutionMode = ADVANCED
+  validationLevel: ValidationLevel = COMPREHENSIVE
+  commitMode: CommitMode = CONDITIONAL
+}
+
+input WorkflowListFilters {
+  patientId: String
+  status: WorkflowStatus
+  definitionId: String
+  startedAfter: DateTime
+  startedBefore: DateTime
+  limit: Int = 50
+  offset: Int = 0
+}
+
+# Pagination and list responses
+type WorkflowConnection {
+  edges: [WorkflowEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type WorkflowEdge {
+  node: WorkflowInstance!
+  cursor: String!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+# Enums
+enum WorkflowStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+  CANCELLED
+  DELETED
+}
+
+enum WorkflowExecutionStatus {
+  COMPLETED
+  COMPLETED_NO_COMMIT
+  FAILED
+}
+
+enum ValidationVerdict {
+  SAFE
+  WARNING
+  UNSAFE
+  ERROR
+}
+
+enum ValidationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ExecutionMode {
+  BASIC
+  STANDARD
+  ADVANCED
+}
+
+enum ValidationLevel {
+  BASIC
+  COMPREHENSIVE
+  CRITICAL
+}
+
+enum CommitMode {
+  IMMEDIATE
+  CONDITIONAL
+  SAFE_ONLY
+  NEVER
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+}
+
+# Scalar types
+scalar DateTime
+scalar JSON
+
+# Root types
+type Query {
+  # Workflow queries
+  workflow(id: ID!): WorkflowInstance
+  workflows(filters: WorkflowListFilters): WorkflowConnection!
+  
+  # Patient workflow queries (federation)
+  patient(id: ID!): Patient
+  
+  # System queries
+  health: SystemHealth!
+  
+  # For Apollo Federation subgraph introspection
+  _service: _Service!
+}
+
+type Mutation {
+  # Workflow orchestration
+  executeMedicationWorkflow(input: MedicationWorkflowInput!): MedicationWorkflowResult!
+  
+  # Workflow management
+  cancelWorkflow(workflowId: ID!): WorkflowInstance!
+}
+
+# Subscription for real-time workflow updates
+type Subscription {
+  workflowUpdates(workflowId: ID!): WorkflowInstance!
+  workflowsByPatient(patientId: ID!): WorkflowInstance!
+}
+
+# Apollo Federation service type
+type _Service {
+  sdl: String!
+}

@@ -1,0 +1,197 @@
+groups:
+  - name: safety_gateway_critical
+    rules:
+      - alert: SafetyGatewayDown
+        expr: up{job="safety-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: safety-gateway
+        annotations:
+          summary: "Safety Gateway Platform is down"
+          description: "Safety Gateway Platform has been down for more than 1 minute"
+          runbook_url: "https://docs.company.com/runbooks/safety-gateway-down"
+
+      - alert: CAEServiceDown
+        expr: safety_gateway_cae_connection_status == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: cae
+        annotations:
+          summary: "CAE Service connection is down"
+          description: "Connection to CAE service has been down for more than 2 minutes"
+          runbook_url: "https://docs.company.com/runbooks/cae-service-down"
+
+      - alert: HighErrorRate
+        expr: rate(safety_gateway_requests_total{status_code!~"2.."}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: safety-gateway
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes"
+          runbook_url: "https://docs.company.com/runbooks/high-error-rate"
+
+      - alert: HighResponseTime
+        expr: histogram_quantile(0.95, rate(safety_gateway_request_duration_seconds_bucket[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          service: safety-gateway
+        annotations:
+          summary: "High response time detected"
+          description: "95th percentile response time is {{ $value }}s for the last 5 minutes"
+          runbook_url: "https://docs.company.com/runbooks/high-response-time"
+
+  - name: safety_gateway_engines
+    rules:
+      - alert: EngineUnhealthy
+        expr: safety_gateway_engine_health_status == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: safety-gateway
+          component: engine
+        annotations:
+          summary: "Safety engine is unhealthy"
+          description: "Engine {{ $labels.engine_name }} has been unhealthy for more than 3 minutes"
+          runbook_url: "https://docs.company.com/runbooks/engine-unhealthy"
+
+      - alert: EngineHighErrorRate
+        expr: rate(safety_gateway_engine_errors_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: safety-gateway
+          component: engine
+        annotations:
+          summary: "High engine error rate"
+          description: "Engine {{ $labels.engine_name }} error rate is {{ $value | humanizePercentage }}"
+          runbook_url: "https://docs.company.com/runbooks/engine-high-error-rate"
+
+      - alert: CAEHighLatency
+        expr: histogram_quantile(0.95, rate(safety_gateway_cae_request_duration_seconds_bucket[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: cae
+        annotations:
+          summary: "CAE service high latency"
+          description: "CAE 95th percentile latency is {{ $value }}s"
+          runbook_url: "https://docs.company.com/runbooks/cae-high-latency"
+
+  - name: safety_gateway_business
+    rules:
+      - alert: HighRiskDecisions
+        expr: rate(safety_gateway_decisions_total{status="unsafe"}[10m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          service: safety-gateway
+          type: business
+        annotations:
+          summary: "High rate of unsafe decisions"
+          description: "Unsafe decision rate is {{ $value | humanizePercentage }} over the last 10 minutes"
+          runbook_url: "https://docs.company.com/runbooks/high-risk-decisions"
+
+      - alert: ExcessiveOverrideTokenUsage
+        expr: rate(safety_gateway_override_tokens_used_total[1h]) > 0.005
+        for: 10m
+        labels:
+          severity: warning
+          service: safety-gateway
+          type: business
+        annotations:
+          summary: "Excessive override token usage"
+          description: "Override token usage rate is {{ $value | humanizePercentage }} over the last hour"
+          runbook_url: "https://docs.company.com/runbooks/excessive-override-usage"
+
+      - alert: LowCacheHitRate
+        expr: safety_gateway_cache_hit_rate < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: safety-gateway
+          component: cache
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate for {{ $labels.cache_level }}/{{ $labels.cache_type }} is {{ $value | humanizePercentage }}"
+          runbook_url: "https://docs.company.com/runbooks/low-cache-hit-rate"
+
+  - name: safety_gateway_capacity
+    rules:
+      - alert: HighRequestVolume
+        expr: rate(safety_gateway_requests_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: safety-gateway
+          type: capacity
+        annotations:
+          summary: "High request volume"
+          description: "Request rate is {{ $value }} requests/second"
+          runbook_url: "https://docs.company.com/runbooks/high-request-volume"
+
+      - alert: HighConcurrentRequests
+        expr: safety_gateway_requests_in_flight > 50
+        for: 5m
+        labels:
+          severity: warning
+          service: safety-gateway
+          type: capacity
+        annotations:
+          summary: "High concurrent requests"
+          description: "{{ $value }} requests are currently in flight"
+          runbook_url: "https://docs.company.com/runbooks/high-concurrent-requests"
+
+      - alert: CircuitBreakerOpen
+        expr: safety_gateway_circuit_breaker_status == 1
+        for: 1m
+        labels:
+          severity: warning
+          service: safety-gateway
+          component: circuit-breaker
+        annotations:
+          summary: "Circuit breaker is open"
+          description: "Circuit breaker for {{ $labels.service }}/{{ $labels.endpoint }} is open"
+          runbook_url: "https://docs.company.com/runbooks/circuit-breaker-open"
+
+  - name: safety_gateway_compliance
+    rules:
+      - alert: AuditLogFailure
+        expr: increase(safety_gateway_audit_log_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: safety-gateway
+          type: compliance
+        annotations:
+          summary: "Audit log failure detected"
+          description: "{{ $value }} audit log errors in the last 5 minutes"
+          runbook_url: "https://docs.company.com/runbooks/audit-log-failure"
+
+      - alert: ComplianceViolation
+        expr: increase(safety_gateway_compliance_violations_total[1h]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: safety-gateway
+          type: compliance
+        annotations:
+          summary: "Compliance violation detected"
+          description: "{{ $value }} compliance violations in the last hour"
+          runbook_url: "https://docs.company.com/runbooks/compliance-violation"
+
+      - alert: DataRetentionIssue
+        expr: safety_gateway_data_retention_days > 2555  # 7 years
+        for: 1h
+        labels:
+          severity: warning
+          service: safety-gateway
+          type: compliance
+        annotations:
+          summary: "Data retention period exceeded"
+          description: "Data retention period is {{ $value }} days"
+          runbook_url: "https://docs.company.com/runbooks/data-retention-issue"

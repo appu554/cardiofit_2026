@@ -1,0 +1,338 @@
+# Ingress Configuration for Medication Service V2
+# Healthcare-grade SSL termination and routing with security controls
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medication-service-v2-ingress
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: ingress
+    version: v1
+  annotations:
+    # Ingress class and controller
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ingress.class-by-name: "true"
+    
+    # SSL Configuration
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.2 TLSv1.3"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256,ECDHE-RSA-AES128-GCM-SHA256,ECDHE-ECDSA-AES256-GCM-SHA384,ECDHE-RSA-AES256-GCM-SHA384,ECDHE-ECDSA-CHACHA20-POLY1305,ECDHE-RSA-CHACHA20-POLY1305,DHE-RSA-AES128-GCM-SHA256,DHE-RSA-AES256-GCM-SHA384"
+    nginx.ingress.kubernetes.io/ssl-prefer-server-ciphers: "true"
+    
+    # Security Headers for HIPAA Compliance
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+      add_header X-Frame-Options "DENY" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; font-src 'self' https:; object-src 'none'; media-src 'self'; form-action 'self'; base-uri 'self';" always;
+      add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), fullscreen=(), payment=()" always;
+    
+    # Rate Limiting for Healthcare API
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "10"
+    
+    # Clinical API specific rate limiting
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location ~* ^/api/v1/(medications|prescriptions|calculations) {
+        limit_req zone=clinical burst=20 nodelay;
+        limit_conn clinical_conn 5;
+      }
+    
+    # Backend configuration
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/upstream-vhost: "$service_name.$namespace.svc.cluster.local"
+    
+    # Load balancing
+    nginx.ingress.kubernetes.io/load-balance: "round_robin"
+    nginx.ingress.kubernetes.io/upstream-keepalive-connections: "32"
+    nginx.ingress.kubernetes.io/upstream-keepalive-timeout: "60s"
+    
+    # Timeouts
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-next-upstream-timeout: "60"
+    
+    # Body size limits
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "128k"
+    
+    # IP Whitelisting for admin endpoints
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    
+    # Health check configuration
+    nginx.ingress.kubernetes.io/health-check-path: "/health/ready"
+    nginx.ingress.kubernetes.io/health-check-interval: "30s"
+    nginx.ingress.kubernetes.io/health-check-timeout: "10s"
+    
+    # Custom error pages
+    nginx.ingress.kubernetes.io/custom-http-errors: "404,503,500"
+    nginx.ingress.kubernetes.io/default-backend: "medication-service-error-pages"
+
+spec:
+  tls:
+  - hosts:
+    - api-medication.cardiofit.health
+    - medication-v2.cardiofit.health
+    secretName: medication-service-v2-tls
+  
+  rules:
+  - host: api-medication.cardiofit.health
+    http:
+      paths:
+      # Main API endpoints
+      - path: /api/v1
+        pathType: Prefix
+        backend:
+          service:
+            name: medication-service-v2
+            port:
+              number: 80
+      
+      # Health and status endpoints
+      - path: /health
+        pathType: Prefix
+        backend:
+          service:
+            name: medication-service-v2
+            port:
+              number: 80
+      
+      # Metrics endpoint (restricted access)
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: medication-service-v2
+            port:
+              number: 8005
+  
+  - host: medication-v2.cardiofit.health
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: medication-service-v2
+            port:
+              number: 80
+
+---
+# Internal Ingress for service-to-service communication
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medication-service-v2-internal
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: internal-ingress
+    version: v1
+  annotations:
+    kubernetes.io/ingress.class: "nginx-internal"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    
+    # Internal network only
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    
+    # Higher rate limits for internal services
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    
+    # Reduced security headers for internal communication
+    nginx.ingress.kubernetes.io/server-snippet: |
+      add_header X-Internal-Service "true" always;
+
+spec:
+  rules:
+  - host: medication-service-v2.internal
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: medication-service-v2
+            port:
+              number: 80
+      - path: /grpc
+        pathType: Prefix
+        backend:
+          service:
+            name: medication-service-v2-grpc
+            port:
+              number: 50005
+
+---
+# gRPC Ingress for internal service communication
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: medication-service-v2-grpc-ingress
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: grpc-ingress
+    version: v1
+  annotations:
+    kubernetes.io/ingress.class: "nginx-grpc"
+    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    
+    # gRPC specific configuration
+    nginx.ingress.kubernetes.io/grpc-backend: "true"
+    nginx.ingress.kubernetes.io/http2-push-off: "true"
+    
+    # Authentication for gRPC endpoints
+    nginx.ingress.kubernetes.io/auth-method: "GET"
+    nginx.ingress.kubernetes.io/auth-url: "http://auth-service.cardiofit-auth.svc.cluster.local/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://auth.cardiofit.health/signin"
+    nginx.ingress.kubernetes.io/auth-response-headers: "Authorization"
+
+spec:
+  tls:
+  - hosts:
+    - grpc-medication.cardiofit.health
+    secretName: medication-service-v2-grpc-tls
+  
+  rules:
+  - host: grpc-medication.cardiofit.health
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: medication-service-v2-grpc
+            port:
+              number: 50005
+
+---
+# Network Policy for Ingress Traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: medication-service-ingress-policy
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: medication-service-v2
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow traffic from NGINX Ingress Controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8005
+    - protocol: TCP
+      port: 50005
+  
+  # Allow traffic from internal ingress
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx-internal
+    ports:
+    - protocol: TCP
+      port: 8005
+    - protocol: TCP
+      port: 50005
+
+---
+# Rate Limiting ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-rate-limit-config
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: rate-limiting
+data:
+  nginx.conf: |
+    # Rate limiting zones for healthcare API
+    limit_req_zone $binary_remote_addr zone=general:10m rate=100r/m;
+    limit_req_zone $binary_remote_addr zone=clinical:10m rate=50r/m;
+    limit_conn_zone $binary_remote_addr zone=clinical_conn:10m;
+    
+    # Custom log format for healthcare compliance
+    log_format healthcare_access '$remote_addr - $remote_user [$time_local] '
+                                '"$request" $status $body_bytes_sent '
+                                '"$http_referer" "$http_user_agent" '
+                                '"$http_x_forwarded_for" "$http_authorization" '
+                                'rt=$request_time uct="$upstream_connect_time" '
+                                'uht="$upstream_header_time" urt="$upstream_response_time"';
+
+---
+# Error Pages ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: medication-service-error-pages
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: error-pages
+data:
+  "404.html": |
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>404 - Resource Not Found</title>
+        <style>body{font-family:Arial,sans-serif;text-align:center;padding:50px}</style>
+    </head>
+    <body>
+        <h1>404 - Resource Not Found</h1>
+        <p>The requested medication resource could not be found.</p>
+        <p>Please verify the URL and try again.</p>
+    </body>
+    </html>
+  
+  "503.html": |
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>503 - Service Temporarily Unavailable</title>
+        <style>body{font-family:Arial,sans-serif;text-align:center;padding:50px}</style>
+    </head>
+    <body>
+        <h1>503 - Service Temporarily Unavailable</h1>
+        <p>The medication service is temporarily unavailable for maintenance.</p>
+        <p>Please try again in a few minutes.</p>
+    </body>
+    </html>
+  
+  "500.html": |
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>500 - Internal Server Error</title>
+        <style>body{font-family:Arial,sans-serif;text-align:center;padding:50px}</style>
+    </head>
+    <body>
+        <h1>500 - Internal Server Error</h1>
+        <p>An internal error occurred in the medication service.</p>
+        <p>Our team has been notified and is working to resolve the issue.</p>
+    </body>
+    </html>

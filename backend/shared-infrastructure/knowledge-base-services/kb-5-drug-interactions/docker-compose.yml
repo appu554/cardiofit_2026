@@ -1,0 +1,147 @@
+# KB-5 Drug Interactions Service - Docker Compose
+# Starts PostgreSQL, Redis, and the KB-5 Go service
+# Usage: docker-compose up -d --build
+
+services:
+  # ============================================================================
+  # PostgreSQL Database
+  # Stores DDI rules, drug synonyms, clinical data
+  # ============================================================================
+  kb5-postgres:
+    image: postgres:15-alpine
+    container_name: kb5-postgres
+    environment:
+      POSTGRES_USER: kb5_user
+      POSTGRES_PASSWORD: kb5_password
+      POSTGRES_DB: kb_drug_interactions
+    ports:
+      - "5434:5432"  # Isolated port (5434 avoids conflicts with kb3-5433, kb4-5432, kb1-5481)
+    volumes:
+      - kb5_postgres_data:/var/lib/postgresql/data
+      # Auto-run migrations on first start (files must be .sql)
+      - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+      - ./migrations/002_enhanced_schema.sql:/docker-entrypoint-initdb.d/002_enhanced_schema.sql:ro
+      - ./migrations/003_phase3_clinical_safety.sql:/docker-entrypoint-initdb.d/003_phase3_clinical_safety.sql:ro
+      - ./migrations/004_seed_phase3_clinical_data.sql:/docker-entrypoint-initdb.d/004_seed_phase3_clinical_data.sql:ro
+      - ./migrations/005_governance_attribution.sql:/docker-entrypoint-initdb.d/005_governance_attribution.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb5_user -d kb_drug_interactions"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - kb5-network
+
+  # ============================================================================
+  # Redis Cache
+  # 3-tier caching: Main (DB 0) + Hot (DB 5) + Warm (DB 6)
+  # ============================================================================
+  kb5-redis:
+    image: redis:7-alpine
+    container_name: kb5-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6383:6379"  # Isolated port (6383 avoids conflicts with kb1-6382, kb3-6380, kb4-6381)
+    volumes:
+      - kb5_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb5-network
+
+  # ============================================================================
+  # KB-5 Drug Interactions Service
+  # Go service with 6 clinical safety engines
+  # ============================================================================
+  kb5-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb5-drug-interactions
+    ports:
+      - "8095:8085"  # HTTP REST API (8095 avoids conflicts with kb3-8085, kb4-8088, kb9-8089)
+      - "8096:8086"  # gRPC (8096 external avoids conflict with kb6-8086)
+    environment:
+      # Server Configuration
+      PORT: "8085"
+      GRPC_PORT: "8086"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "info"
+
+      # Database Configuration (KB-5 local)
+      DATABASE_URL: "postgres://kb5_user:kb5_password@kb5-postgres:5432/kb_drug_interactions?sslmode=disable"
+      DATABASE_MAX_CONNECTIONS: "25"
+      DATABASE_CONN_MAX_LIFETIME: "5m"
+
+      # Shared Database for OHDSI/Constitutional DDI (canonical_facts)
+      # Connect to kb-fact-store container on shared kb-network
+      SHARED_DATABASE_URL: "postgres://kb_admin:kb_secure_password_2024@kb-fact-store:5432/canonical_facts?sslmode=disable"
+
+      # Redis Configuration (3-tier caching)
+      REDIS_URL: "redis://kb5-redis:6379"
+      REDIS_HOT_CACHE_URL: "redis://kb5-redis:6379/5"
+      REDIS_WARM_CACHE_URL: "redis://kb5-redis:6379/6"
+
+      # Interaction Checking Features
+      ENABLE_SEVERITY_FILTERING: "true"
+      DEFAULT_SEVERITY_THRESHOLD: "moderate"
+      MAX_INTERACTIONS_PER_REQUEST: "20"
+      CACHE_INTERACTION_RESULTS: "true"
+      INTERACTION_CACHE_TTL: "1h"
+
+      # Drug Database Features
+      ENABLE_SYNONYM_RESOLUTION: "true"
+      SYNONYM_MATCH_THRESHOLD: "0.8"
+
+      # Clinical Decision Support
+      ENABLE_CDS_INTEGRATION: "true"
+      REQUIRE_OVERRIDE_REASON: "true"
+      LOG_ALL_INTERACTION_CHECKS: "true"
+
+      # Performance Tuning
+      BATCH_SIZE: "100"
+      QUERY_TIMEOUT: "10s"
+      CONCURRENT_CHECKS: "5"
+      ENABLE_MATRIX_CACHING: "true"
+
+      # External Services (optional - for integration with other KB services)
+      # KB7_TERMINOLOGY_URL: "http://kb7-terminology:8087"
+      # KB4_PATIENT_SAFETY_URL: "http://kb4-patient-safety:8084"
+    depends_on:
+      kb5-postgres:
+        condition: service_healthy
+      kb5-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - kb5-network
+      - kb-network  # Connect to shared infrastructure for OHDSI/Constitutional DDI
+
+# ============================================================================
+# Volumes - Persistent storage
+# ============================================================================
+volumes:
+  kb5_postgres_data:
+    driver: local
+  kb5_redis_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  kb5-network:
+    name: kb5-network
+    driver: bridge
+  kb-network:
+    external: true  # Shared infrastructure network (created by docker-compose.phase1.yml)

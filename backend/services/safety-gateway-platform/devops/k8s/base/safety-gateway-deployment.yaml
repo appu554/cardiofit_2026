@@ -1,0 +1,485 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safety-gateway
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v1
+    tier: critical
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: safety-gateway
+  template:
+    metadata:
+      labels:
+        app: safety-gateway
+        component: safety-platform
+        version: v1
+        tier: critical
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Security context for safety-critical service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Affinity rules for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values: ["safety-gateway"]
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/worker
+                operator: Exists
+      
+      # Initialize database schema and connections
+      initContainers:
+      - name: database-migration
+        image: migrate/migrate:latest
+        command: ["/migrate"]
+        args:
+          - "-path"
+          - "/migrations"
+          - "-database"
+          - "$(TIMESCALEDB_URL)"
+          - "up"
+        env:
+        - name: TIMESCALEDB_URL
+          valueFrom:
+            secretKeyRef:
+              name: safety-gateway-secrets
+              key: timescaledb-url
+        volumeMounts:
+        - name: migrations
+          mountPath: /migrations
+          readOnly: true
+      
+      - name: kafka-topic-check
+        image: confluentinc/cp-kafka:latest
+        command: ["/bin/bash"]
+        args:
+          - "-c"
+          - |
+            echo "Checking Kafka topics..."
+            kafka-topics --bootstrap-server $(KAFKA_BOOTSTRAP_SERVERS) --list | grep -E "(safety-events-raw|safety-alerts-critical)" || exit 1
+            echo "Kafka topics verified"
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: safety-gateway-config
+              key: kafka-bootstrap-servers
+      
+      containers:
+      - name: safety-gateway
+        image: safety-gateway-platform:latest
+        imagePullPolicy: IfNotPresent
+        
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+        
+        # Container ports
+        ports:
+        - name: http
+          containerPort: 8030
+          protocol: TCP
+        - name: grpc
+          containerPort: 8031
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 8032
+          protocol: TCP
+        
+        # Environment variables
+        env:
+        - name: ENVIRONMENT
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['environment']
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        
+        # Configuration from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: safety-gateway-config
+        - secretRef:
+            name: safety-gateway-secrets
+        
+        # Resource requirements - safety-critical service needs guaranteed resources
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        
+        # Health checks - critical for safety service
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 10
+          successThreshold: 1
+        
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        
+        # Volume mounts
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+        - name: logs-volume
+          mountPath: /var/log/safety-gateway
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: cache-volume
+          mountPath: /var/cache/safety-gateway
+        
+        # Lifecycle hooks
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 10"]  # Allow time for connections to drain
+      
+      # Sidecar container for log shipping
+      - name: log-shipper
+        image: fluent/fluent-bit:latest
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: logs-volume
+          mountPath: /var/log/safety-gateway
+          readOnly: true
+        - name: fluent-bit-config
+          mountPath: /fluent-bit/etc
+          readOnly: true
+        env:
+        - name: FLUENT_ELASTICSEARCH_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: logging-config
+              key: elasticsearch-host
+        - name: FLUENT_ELASTICSEARCH_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: logging-config
+              key: elasticsearch-port
+      
+      # Volumes
+      volumes:
+      - name: config-volume
+        configMap:
+          name: safety-gateway-config
+          items:
+          - key: config.yaml
+            path: config.yaml
+      - name: migrations
+        configMap:
+          name: safety-gateway-migrations
+      - name: logs-volume
+        emptyDir:
+          sizeLimit: "1Gi"
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: "100Mi"
+      - name: cache-volume
+        emptyDir:
+          sizeLimit: "500Mi"
+      - name: fluent-bit-config
+        configMap:
+          name: fluent-bit-config
+      
+      # DNS configuration for service discovery
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      
+      # Termination grace period for safe shutdown
+      terminationGracePeriodSeconds: 30
+      
+      # Image pull secrets if needed
+      # imagePullSecrets:
+      # - name: registry-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safety-gateway-service
+  labels:
+    app: safety-gateway
+    component: safety-platform
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8030
+    targetPort: http
+    protocol: TCP
+  - name: grpc
+    port: 8031
+    targetPort: grpc
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app: safety-gateway
+  sessionAffinity: None
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safety-gateway-headless
+  labels:
+    app: safety-gateway
+    component: safety-platform
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8030
+    targetPort: http
+    protocol: TCP
+  - name: grpc
+    port: 8031
+    targetPort: grpc
+    protocol: TCP
+  selector:
+    app: safety-gateway
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: safety-gateway-pdb
+  labels:
+    app: safety-gateway
+    component: safety-platform
+spec:
+  minAvailable: 2  # Always maintain at least 2 replicas for safety-critical service
+  selector:
+    matchLabels:
+      app: safety-gateway
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: safety-gateway-hpa
+  labels:
+    app: safety-gateway
+    component: safety-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: safety-gateway
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods
+    pods:
+      metric:
+        name: safety_gateway_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "100"  # Scale up when requests exceed 100 RPS per pod
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 minutes stabilization for safety
+      policies:
+      - type: Percent
+        value: 10  # Conservative scale-down for safety-critical service
+        periodSeconds: 60
+      selectPolicy: Min
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: safety-gateway-network-policy
+  labels:
+    app: safety-gateway
+    component: safety-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: safety-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from ingress controllers
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8030
+  # Allow traffic from other services in the same namespace
+  - from:
+    - podSelector:
+        matchLabels:
+          component: clinical-services
+    ports:
+    - protocol: TCP
+      port: 8030
+    - protocol: TCP
+      port: 8031
+  # Allow monitoring traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow TimescaleDB access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: timescaledb
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow Redis access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow Kafka access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  # Allow CAE service access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: clinical-reasoning-service
+    ports:
+    - protocol: TCP
+      port: 8027

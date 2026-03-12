@@ -1,0 +1,338 @@
+# Alert Rules for Unified KB Services Monitoring
+groups:
+  # Service Health Alerts
+  - name: kb_service_health
+    rules:
+      - alert: KBServiceDown
+        expr: up{job=~"kb-.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: availability
+        annotations:
+          summary: "KB Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been down for more than 1 minute"
+          runbook_url: "https://kb-docs/runbooks/service-down"
+
+      - alert: KBServiceHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job=~"kb-.*", status=~"5.."}[5m])) by (job) /
+            sum(rate(http_requests_total{job=~"kb-.*"}[5m])) by (job)
+          ) * 100 > 5
+        for: 2m
+        labels:
+          severity: warning
+          category: reliability
+        annotations:
+          summary: "High error rate in {{ $labels.job }}"
+          description: "{{ $labels.job }} error rate is {{ $value }}% over the last 5 minutes"
+
+      - alert: KBServiceHighLatency
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket{job=~"kb-.*"}[5m])) by (job, le)
+          ) * 1000 > 500
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "High response time in {{ $labels.job }}"
+          description: "{{ $labels.job }} 95th percentile latency is {{ $value }}ms"
+
+  # Database Performance Alerts
+  - name: kb_database_alerts
+    rules:
+      - alert: PostgreSQLConnectionPoolExhaustion
+        expr: |
+          (db_connections_active / db_connections_max) * 100 > 90
+        for: 2m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "PostgreSQL connection pool nearly exhausted"
+          description: "PostgreSQL connection pool is {{ $value }}% full"
+
+      - alert: MongoDBSlowQueries
+        expr: |
+          increase(mongodb_slow_queries_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "MongoDB experiencing slow queries"
+          description: "{{ $value }} slow queries detected in the last 5 minutes"
+
+      - alert: Neo4jMemoryUsageHigh
+        expr: |
+          (neo4j_memory_heap_used / neo4j_memory_heap_max) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "Neo4j heap memory usage is high"
+          description: "Neo4j heap memory usage is {{ $value }}%"
+
+      - alert: ElasticsearchClusterYellow
+        expr: |
+          elasticsearch_cluster_status != 0
+        for: 1m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "Elasticsearch cluster status is not green"
+          description: "Elasticsearch cluster health is degraded"
+
+  # Cache Performance Alerts  
+  - name: kb_cache_alerts
+    rules:
+      - alert: LowCacheHitRate
+        expr: |
+          cache_hit_rate{cache_level="L1"} < 0.85
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Low L1 cache hit rate in {{ $labels.service }}"
+          description: "L1 cache hit rate is {{ $value | humanizePercentage }}"
+
+      - alert: RedisConnectionFailure
+        expr: |
+          redis_connected_clients < 1
+        for: 1m
+        labels:
+          severity: critical
+          category: cache
+        annotations:
+          summary: "Redis connection failure"
+          description: "Redis instance has no connected clients"
+
+      - alert: CacheMemoryUsageHigh
+        expr: |
+          (redis_memory_used_bytes / redis_memory_max_bytes) * 100 > 90
+        for: 2m
+        labels:
+          severity: warning
+          category: cache
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Redis memory usage is {{ $value }}%"
+
+  # Business Logic Alerts
+  - name: kb_business_alerts
+    rules:
+      - alert: TerminologyValidationFailures
+        expr: |
+          increase(terminology_validation_failures_total[5m]) > 50
+        for: 2m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "High terminology validation failure rate"
+          description: "{{ $value }} terminology validation failures in the last 5 minutes"
+
+      - alert: DrugInteractionCheckFailures
+        expr: |
+          increase(drug_interaction_check_failures_total[5m]) > 10
+        for: 1m
+        labels:
+          severity: critical
+          category: safety
+        annotations:
+          summary: "Drug interaction check failures detected"
+          description: "{{ $value }} drug interaction check failures - potential safety risk"
+
+      - alert: SafetyAlertsSpike
+        expr: |
+          increase(safety_alerts_generated_total[5m]) > 100
+        for: 1m
+        labels:
+          severity: warning
+          category: safety
+        annotations:
+          summary: "Spike in safety alerts"
+          description: "{{ $value }} safety alerts generated in the last 5 minutes"
+
+      - alert: GuidelineRecommendationLag
+        expr: |
+          avg(guideline_recommendation_age_seconds) > 86400  # 24 hours
+        for: 5m
+        labels:
+          severity: warning
+          category: data_quality
+        annotations:
+          summary: "Guideline recommendations are outdated"
+          description: "Average guideline age is {{ $value | humanizeDuration }}"
+
+  # Security Alerts
+  - name: kb_security_alerts
+    rules:
+      - alert: HighAuthenticationFailureRate
+        expr: |
+          increase(authentication_failures_total[5m]) > 20
+        for: 1m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "High authentication failure rate"
+          description: "{{ $value }} authentication failures in the last 5 minutes"
+
+      - alert: RateLimitExceeded
+        expr: |
+          increase(rate_limit_exceeded_total[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Rate limit exceeded"
+          description: "{{ $value }} rate limit violations in the last 5 minutes"
+
+      - alert: UnauthorizedAccess
+        expr: |
+          increase(authorization_failures_total[1m]) > 10
+        for: 0m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "Unauthorized access attempts detected"
+          description: "{{ $value }} unauthorized access attempts in the last minute"
+
+      - alert: LicenseViolation
+        expr: |
+          increase(license_violations_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: compliance
+        annotations:
+          summary: "License violation detected"
+          description: "{{ $value }} license violations detected"
+
+  # Infrastructure Alerts
+  - name: kb_infrastructure_alerts
+    rules:
+      - alert: HighMemoryUsage
+        expr: |
+          (process_resident_memory_bytes{job=~"kb-.*"} / (1024*1024*1024)) > 2
+        for: 5m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "High memory usage in {{ $labels.job }}"
+          description: "Memory usage is {{ $value | humanize }}GB"
+
+      - alert: HighCPUUsage
+        expr: |
+          rate(process_cpu_seconds_total{job=~"kb-.*"}[5m]) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "High CPU usage in {{ $labels.job }}"
+          description: "CPU usage is {{ $value }}%"
+
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 20
+        for: 5m
+        labels:
+          severity: critical
+          category: resources
+        annotations:
+          summary: "Disk space is running low"
+          description: "Available disk space is {{ $value }}%"
+
+      - alert: FileDescriptorLimitApproaching
+        expr: |
+          (process_open_fds{job=~"kb-.*"} / process_max_fds{job=~"kb-.*"}) * 100 > 85
+        for: 2m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "File descriptor limit approaching in {{ $labels.job }}"
+          description: "File descriptor usage is {{ $value }}%"
+
+  # Data Quality Alerts
+  - name: kb_data_quality_alerts
+    rules:
+      - alert: StaleTerminologyData
+        expr: |
+          time() - terminology_last_update_timestamp > 604800  # 1 week
+        for: 1h
+        labels:
+          severity: warning
+          category: data_quality
+        annotations:
+          summary: "Terminology data is stale"
+          description: "Terminology data has not been updated for over a week"
+
+      - alert: InconsistentCrossServiceData
+        expr: |
+          abs(drug_count_kb1 - drug_count_kb7) / drug_count_kb1 > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          category: data_quality
+        annotations:
+          summary: "Inconsistent drug data between services"
+          description: "Drug counts differ by more than 10% between KB-1 and KB-7"
+
+      - alert: MissingCriticalReferences
+        expr: |
+          missing_reference_count > 0
+        for: 5m
+        labels:
+          severity: critical
+          category: data_integrity
+        annotations:
+          summary: "Missing critical data references"
+          description: "{{ $value }} critical references are missing"
+
+  # Compliance Alerts
+  - name: kb_compliance_alerts
+    rules:
+      - alert: AuditLogFailure
+        expr: |
+          increase(audit_log_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: compliance
+        annotations:
+          summary: "Audit log failure detected"
+          description: "{{ $value }} audit log failures in the last 5 minutes"
+
+      - alert: PHIAccessViolation
+        expr: |
+          increase(phi_access_violations_total[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          category: compliance
+        annotations:
+          summary: "PHI access violation detected"
+          description: "{{ $value }} PHI access violations detected"
+
+      - alert: ComplianceFrameworkViolation
+        expr: |
+          framework_compliance_score < 95
+        for: 5m
+        labels:
+          severity: warning
+          category: governance
+        annotations:
+          summary: "Universal Framework compliance below threshold"
+          description: "Framework compliance score is {{ $value }}%"

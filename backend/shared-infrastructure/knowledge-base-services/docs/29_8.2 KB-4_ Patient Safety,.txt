@@ -1,0 +1,623 @@
+﻿Awesome—building on your “KB-4 Patient Safety” implementation guide, here’s a hardened, production-grade design + implementation playbook with concrete schemas, APIs, examples, and rollout steps. I’ve kept your 13-section structure, then layered in the missing pieces (rule DSL, evidence envelopes, override state machine, mutation testing, shadow/canary, SBOM/SLSA, multi-region DR, seeded safety profiles). Where I’m referencing your current document, I note it inline.&#x20;
+
+
+# Final Proposal — KB-4: Patient Safety (Design & Implementation)
+
+
+## 0) Executive summary
+
+
+KB-4 is the **system’s veto switch**: evaluate each proposed therapy against curated safety knowledge and return **PASS / WARN / VETO** with a defensible evidence trail. This final design extends your guide with: (a) a compact **rule DSL**; (b) **EvidenceEnvelope** linking to KB-3 guideline sources; (c) **override workflow** (L1/L2/L3) as a state machine; (d) high-throughput, low-latency **gRPC** path + **GraphQL** explorer; (e) **timeseries safety signals** with tamper-evident hashing; (f) **shadow→canary** rollout; (g) mutation tests and retrospective replays; (h) minimal seed data.
+
+
+> This builds directly on your sections 1–13 (scope, schema, orchestrator interaction, gRPC contracts, privacy, performance, QA, governance, CI/CD, observability, failure modes, lifecycle, supply chain) and makes them implementation-ready.&#x20;
+
+
+---
+
+
+## 1) Purpose & scope (confirmation)
+
+
+* **Scope is unchanged**: absolute/relative contraindications, black-box warnings, baseline/ongoing monitoring, duplicate therapy checks, and patient-specific allergies/adverse reactions. **Out-of-scope** remains dosing math (KB-1), phenotype inference (KB-2), guideline narrative (KB-3), DDI (KB-5).&#x20;
+
+
+---
+
+
+## 2) Data model & schema (production ready)
+
+
+**Primary store:** PostgreSQL 15 + TimescaleDB for `safety_alerts` hypertable (append-only). (Matches your plan.)&#x20;
+
+
+### 2.1 Core relational schema (DDL)
+
+
+```sql
+-- Drugs & versions
+CREATE TABLE drug_safety_profiles (
+  profile_id        UUID PRIMARY KEY,
+  drug_code         TEXT NOT NULL,         -- RxNorm/SNOMED code
+  drug_name         TEXT NOT NULL,
+  version           TEXT NOT NULL,         -- semver e.g., "2025.8.3"
+  status            TEXT NOT NULL CHECK (status IN ('active','deprecated','draft')),
+  effective_from    TIMESTAMPTZ NOT NULL,
+  effective_to      TIMESTAMPTZ,
+  rule_bundle_json  JSONB NOT NULL,        -- compiled DSL (see §3)
+  monitoring_json   JSONB NOT NULL,        -- baseline/ongoing monitoring requirements
+  governance_tag    TEXT NOT NULL,         -- change ticket/id
+  created_by        TEXT NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (drug_code, version)
+);
+
+
+-- Patient-level facts (allergy/adverse reactions)
+CREATE TABLE patient_allergies (
+  allergy_id        UUID PRIMARY KEY,
+  patient_id        TEXT NOT NULL,
+  substance_code    TEXT NOT NULL,         -- RxNorm/SNOMED
+  substance_name    TEXT NOT NULL,
+  reaction_terms    TEXT[],                -- standardized terms
+  severity          TEXT CHECK (severity IN ('mild','moderate','severe','anaphylaxis')),
+  verification_status TEXT CHECK (verification_status IN ('confirmed','suspected')),
+  recorded_at       TIMESTAMPTZ NOT NULL,
+  recorded_by       TEXT NOT NULL
+);
+
+
+-- Multi-factor risk rules (e.g., risk scores driving WARN/VETO thresholds)
+CREATE TABLE risk_assessment_rules (
+  rule_id           UUID PRIMARY KEY,
+  name              TEXT NOT NULL,
+  version           TEXT NOT NULL,
+  dsl               JSONB NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('active','deprecated','draft')),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+-- Time-series safety events (Timescale hypertable)
+CREATE TABLE safety_alerts (
+  event_id          UUID NOT NULL,
+  ts                TIMESTAMPTZ NOT NULL,
+  patient_id        TEXT NOT NULL,
+  therapy_id        TEXT NOT NULL,         -- orchestration candidate id
+  drug_code         TEXT NOT NULL,
+  safety_status     TEXT NOT NULL CHECK (safety_status IN ('PASS','WARN','VETO')),
+  findings          JSONB NOT NULL,        -- array of SafetyFinding
+  evidence_envelope JSONB NOT NULL,        -- §4.3
+  override_state    TEXT NOT NULL,         -- 'none','L1','L2','L3'
+  decision_hash     TEXT NOT NULL,         -- tamper-evident SHA-256 of the payload
+  PRIMARY KEY (event_id, ts)
+);
+SELECT create_hypertable('safety_alerts','ts', if_not_exists => TRUE);  -- Timescale
+```
+
+
+**Indexes (examples):**
+
+
+```sql
+CREATE INDEX idx_profiles_code_active ON drug_safety_profiles (drug_code) WHERE status='active';
+CREATE INDEX idx_alerts_patient_ts   ON safety_alerts (patient_id, ts DESC);
+CREATE INDEX idx_alerts_drug_ts      ON safety_alerts (drug_code, ts DESC);
+```
+
+
+---
+
+
+## 3) Safety Rule DSL (authoring & execution)
+
+
+**Goals:** human-auditable, machine-deterministic, composable, versioned. Compiles to a normalized JSON form stored in `rule_bundle_json`.
+
+
+### 3.1 Authoring format (YAML)
+
+
+```yaml
+# acei.yaml (example for ACE inhibitors)
+meta:
+  drug_class: "ACEI"
+  applies_to: ["rxnorm:29046"]  # enalapril (example); supports class-wide binding
+  version: "2025.08.29"
+  owner: "Safety Committee"
+rules:
+  - id: "ABS_PREGNANCY_ACEI"
+    type: "absolute_contraindication"
+    predicate:
+      any_of:
+        - "patient.pregnant == true"
+        - "patient.plans_pregnancy == true"
+    action: "VETO"
+    justification: "ACE inhibitors teratogenic"
+    evidence_refs: ["ACC/AHA-2017-HTN", "ESC/ESH-2023-HTN"]
+
+
+  - id: "REL_HYPERKALEMIA"
+    type: "relative_contraindication"
+    predicate:
+      any_of:
+        - "labs.k.value >= 5.5"
+        - "labs.egfr.value < 30"
+    action: "WARN"
+    monitoring:
+      orders:
+        - "serum_potassium in 7_days"
+        - "creatinine in 7_days"
+    justification: "Risk of hyperkalemia/AKI"
+    evidence_refs: ["KDIGO-CKD-2024","ACC/AHA-2017-HTN"]
+
+
+  - id: "DUPLICATE_ACEI_ARB"
+    type: "duplicate_therapy"
+    predicate:
+      all_of:
+        - "active_meds.class contains 'ACEI'"
+        - "proposed_therapy.class == 'ARB'"
+    action: "VETO"
+    justification: "Avoid ACEI+ARB combo"
+    evidence_refs: ["ACC/AHA-2017-HTN","ESC/ESH-2023-HTN"]
+```
+
+
+### 3.2 Normalized compiled form (stored)
+
+
+At publish time we compile YAML to **normalized JSON** (predicate → AST), add constants, and freeze.
+
+
+```json
+{
+  "bundle_id": "ACEI-2025.08.29",
+  "targets": ["rxnorm:29046","class:ACEI"],
+  "rules": [
+    {
+      "rule_id": "ABS_PREGNANCY_ACEI",
+      "kind": "absolute",
+      "predicate_ast": {"op":"OR","args":[{"var":"patient.pregnant"},{"var":"patient.plans_pregnancy"}]},
+      "action": "VETO",
+      "justification": "ACE inhibitors teratogenic",
+      "evidence_refs": ["ACC/AHA-2017-HTN","ESC/ESH-2023-HTN"]
+    },
+    ...
+  ]
+}
+```
+
+
+**Evaluation model:** priority = absolute > duplicate > relative. Within same kind, **fail-fast** first match; otherwise aggregate WARNs. (Aligned with your PASS/WARN/VETO design.)&#x20;
+
+
+---
+
+
+## 4) API & query contracts (gRPC + GraphQL)
+
+
+You already specified **gRPC** for the hot path—kept, expanded.&#x20;
+
+
+### 4.1 Protobuf (final)
+
+
+```proto
+syntax = "proto3";
+package kb4;
+
+
+message PatientContext {
+  string patient_id = 1;
+  int32 age = 2;
+  string sex = 3; // "male","female","other"
+  map<string,string> diagnoses = 4; // icd10 -> status
+  map<string,double> labs = 5;      // e.g., "egfr": 28.3, "k": 5.7
+  repeated string allergies = 6;    // RxNorm/SNOMED
+  repeated string active_med_classes = 7; // e.g., "ACEI","ARB","MRA"
+  bool pregnant = 8;
+  bool plans_pregnancy = 9;
+}
+
+
+message ProposedTherapy {
+  string therapy_id = 1;
+  string drug_code = 2;      // RxNorm
+  string drug_class = 3;
+  string intended_indication = 4;
+}
+
+
+message SafetyFinding {
+  string rule_id = 1;
+  string severity = 2;       // "warning","contraindication","duplicate"
+  string justification = 3;
+  repeated string evidence_refs = 4;
+}
+
+
+enum SafetyStatus { PASS=0; WARN=1; VETO=2; }
+
+
+message TherapySafetyResult {
+  string therapy_id = 1;
+  string drug_code = 2;
+  SafetyStatus status = 3;
+  repeated SafetyFinding findings = 4;
+  EvidenceEnvelope evidence = 5;
+}
+
+
+message EvidenceEnvelope {
+  string profile_version = 1;
+  string compiled_bundle_id = 2;
+  string kb3_snapshot = 3;      // GUID to KB-3 snapshot used
+  string decision_hash = 4;
+  string evaluator_version = 5; // docker image digest
+  string conflict_resolution = 6; // if any applied from KB-3
+}
+
+
+message SafetyCheckRequest {
+  string transaction_id = 1;
+  PatientContext patient_context = 2;
+  repeated ProposedTherapy therapies = 3;
+}
+
+
+message SafetyCheckResponse {
+  string transaction_id = 1;
+  repeated TherapySafetyResult results = 2;
+}
+
+
+service SafetyService {
+  rpc CheckSafety(SafetyCheckRequest) returns (SafetyCheckResponse);
+}
+```
+
+
+### 4.2 GraphQL (read-only explorer)
+
+
+* For analytics/UX only (not on the hot path). Query **alerts**, **profiles**, **rules**, and **evidence envelopes**.
+
+
+```graphql
+type Query {
+  safetyAlerts(patientId: ID!, lastDays: Int = 30): [SafetyAlert!]!
+  profile(drugCode: String!, version: String): DrugSafetyProfile
+}
+
+
+type SafetyAlert {
+  eventId: ID!
+  ts: String!
+  therapyId: String!
+  drugCode: String!
+  safetyStatus: String!
+  findings: [SafetyFinding!]!
+  evidence: EvidenceEnvelope!
+}
+
+
+type DrugSafetyProfile {
+  drugCode: String!
+  drugName: String!
+  version: String!
+  rules: [Rule!]!
+}
+```
+
+
+---
+
+
+## 5) Security & privacy by design (hardened)
+
+
+* **mTLS** between GO Orchestrator ↔ KB-4; **private network** placement; **ABAC** on rule authoring endpoints. (Matches your guidance.)&#x20;
+* **Data minimization**: only pass fields referenced in active rule bundles. (You called this out; enforced via compile-time “used fields” manifest.)&#x20;
+* **Tamper evidence**: SHA-256 of (payload + findings + envelope) stored as `decision_hash`.
+* **Secrets** via Vault, short-lived tokens, rotating DB creds.
+
+
+---
+
+
+## 6) Performance & caching
+
+
+* **p95 < 50 ms** per CheckSafety request (your SLO), achieved by:
+
+
+  * Redis cache for `drug_safety_profiles` by `(drug_code, effective_version)` with **5-minute TTL** and **event-driven invalidation** on publish.&#x20;
+  * Predicate ASTs are JIT-compiled to in-process functions at startup.
+  * Parallel evaluation across therapies (thread pool N=CPU).
+* DB: composite indexes as shown; Timescale compression policy (90 days → compressed chunks).
+
+
+---
+
+
+## 7) Testing & quality (expanded)
+
+
+* **100% unit coverage** for rule evaluation + veto paths (as you require).&#x20;
+* **Mutation testing**: flip comparisons (>= → >), invert booleans to ensure tests catch faulty rules.
+* **Golden tests**: lock example inputs → expected PASS/WARN/VETO.
+* **Falsification suite**: adversarial scenarios to bypass checks (you noted this—keep).&#x20;
+* **Retrospective replays**: run all historic `safety_alerts` through new engine before promote (you noted this).&#x20;
+
+
+---
+
+
+## 8) Governance & maintenance (operationalized)
+
+
+* **Multi-party approval** (Clinical Safety Officer mandatory) for profile publish; immutable changelog. (Matches your doc.)&#x20;
+* **Override policy** (three levels) → **state machine**:
+
+
+```
+none → L1 (acknowledge WARN) → L2 (justify WARN) → L3 (request CONTRA override)
+  L3 requires break-glass token + dual authorization; auto-notify Safety Committee.
+```
+
+
+**All overrides** persist to `safety_alerts` with reason codes.
+
+
+---
+
+
+## 9) CI/CD & deployment (provable)
+
+
+* Pipeline gates: lint → build → unit + mutation → integration (gRPC) → replay → SAST/DAST → **clinical sign-off** → SBOM attach → sign → **shadow** → **canary** → full rollout. (You called for shadow/staged; we specify exact order.)&#x20;
+* **Shadow mode**: live traffic mirrored, decisions not enforced but logged for delta analysis.
+* **Canary**: 1–5% of safety checks enforced, auto-rollback on SLO breach.
+
+
+---
+
+
+## 10) Monitoring & observability (complete)
+
+
+* Tech SLOs (latency/error/cache hit)—as in your doc.&#x20;
+* **Clinical KPIs**: VETO/WARN rates by drug & rule; override rates; TTA (time-to-acknowledge); **near-misses**. (You listed; instrumented with Prometheus + Grafana.)&#x20;
+* **Audit trails**: link each alert to profile version, evaluator version, KB-3 snapshot.
+
+
+---
+
+
+## 11) Failure modes (fail-safe)
+
+
+* **Circuit breaker** in GO Orchestrator ⇒ **block** medication workflows if KB-4 unavailable; page on-call. (Your guidance, enforced.)&#x20;
+* Cache TTL short; stale reads avoided (as you noted).&#x20;
+* Read-only degraded mode for analytics (GraphQL) if primary DB degraded.
+
+
+---
+
+
+## 12) Data lifecycle
+
+
+* Retain `safety_alerts` ≥ 7 years; **never delete** old profiles—mark deprecated. (Your policy.)&#x20;
+* Nightly archive to WORM storage; quarterly integrity checks against `decision_hash`.
+
+
+---
+
+
+## 13) Supply chain security
+
+
+* **Image signing** (Sigstore/cosign), **SBOM** generated & scanned; **SLSA L3** build provenance. (You asked for artifact signing + dependency scanning.)&#x20;
+
+
+---
+
+
+## 14) Minimal seed safety profiles (to exercise flows)
+
+
+> These entries are illustrative to validate plumbing and are **not** a substitute for full committee-approved content.
+
+
+### 14.1 ACE inhibitor (e.g., enalapril)
+
+
+```json
+{
+  "profile_id": "7c6f9f7e-acei-2025",
+  "drug_code": "rxnorm:29046",
+  "drug_name": "Enalapril",
+  "version": "2025.08.29",
+  "status": "active",
+  "effective_from": "2025-08-29T00:00:00Z",
+  "rule_bundle_json": {
+    "bundle_id": "ACEI-2025.08.29",
+    "rules": [
+      {"rule_id":"ABS_PREGNANCY_ACEI","kind":"absolute",
+       "predicate_ast":{"op":"OR","args":[{"var":"patient.pregnant"},{"var":"patient.plans_pregnancy"}]},
+       "action":"VETO","justification":"ACE inhibitors teratogenic",
+       "evidence_refs":["ACC/AHA-2017-HTN","ESC/ESH-2023-HTN"]},
+      {"rule_id":"REL_HYPERKALEMIA","kind":"relative",
+       "predicate_ast":{"op":"OR","args":[{">=":[{"var":"labs.k"},5.5]},{ "<":[{"var":"labs.egfr"},30]}]},
+       "action":"WARN","justification":"Risk of hyperkalemia/AKI",
+       "monitoring":{"orders":["potassium@7d","creatinine@7d"]},
+       "evidence_refs":["KDIGO-CKD-2024","ACC/AHA-2017-HTN"]},
+      {"rule_id":"DUPLICATE_ACEI_ARB","kind":"duplicate",
+       "predicate_ast":{"op":"AND","args":[{"in":["ACEI",{"var":"active_med_classes"}]},{"==":[{"var":"proposed.drug_class"},"ARB"]}]},
+       "action":"VETO","justification":"Avoid ACEI+ARB combination",
+       "evidence_refs":["ACC/AHA-2017-HTN","ESC/ESH-2023-HTN"]}
+    ]
+  },
+  "monitoring_json": {
+    "baseline": ["creatinine","potassium"],
+    "followup": [{"test":"creatinine","when":"1-2 weeks"},{"test":"potassium","when":"1-2 weeks"}]
+  },
+  "governance_tag": "SAF-HTN-001",
+  "created_by": "safety_committee"
+}
+```
+
+
+### 14.2 ARB (e.g., losartan) — pregnancy veto + ACEI/ARB duplicate veto
+
+
+```yaml
+profile_id: "f4ca-ARB-2025"
+drug_code: "rxnorm:316764"
+drug_name: "Losartan"
+version: "2025.08.29"
+status: "active"
+effective_from: "2025-08-29T00:00:00Z"
+rule_bundle_json:
+  bundle_id: "ARB-2025.08.29"
+  rules:
+    - rule_id: "ABS_PREGNANCY_ARB"
+      kind: "absolute"
+      predicate_ast: { op: "OR", args: [ {var: "patient.pregnant"}, {var: "patient.plans_pregnancy"} ] }
+      action: "VETO"
+      justification: "ARBs teratogenic"
+      evidence_refs: ["ACC/AHA-2017-HTN","ESC/ESH-2023-HTN"]
+    - rule_id: "DUPLICATE_ARB_ACEI"
+      kind: "duplicate"
+      predicate_ast:
+        op: "AND"
+        args:
+          - { in: [ "ARB", {var: "active_med_classes"} ] }
+          - { "==": [ {var: "proposed.drug_class"}, "ACEI" ] }
+      action: "VETO"
+      justification: "Avoid ACEI+ARB combination"
+      evidence_refs: ["ACC/AHA-2017-HTN","ESC/ESH-2023-HTN"]
+monitoring_json:
+  baseline: ["creatinine","potassium"]
+  followup:
+    - { test: "creatinine", when: "1-2 weeks" }
+    - { test: "potassium", when: "1-2 weeks" }
+governance_tag: "SAF-HTN-002"
+created_by: "safety_committee"
+```
+
+
+### 14.3 MRA (spironolactone) — eGFR/K thresholds
+
+
+```json
+{
+  "profile_id": "mra-spironolactone-2025",
+  "drug_code": "rxnorm:36567",
+  "drug_name": "Spironolactone",
+  "version": "2025.08.29",
+  "status": "active",
+  "rule_bundle_json": {
+    "bundle_id": "MRA-2025.08.29",
+    "rules": [
+      {"rule_id":"ABS_HYPERK_MRA","kind":"absolute",
+       "predicate_ast":{">=":[{"var":"labs.k"},6.0]},
+       "action":"VETO","justification":"Severe hyperkalemia risk",
+       "evidence_refs":["KDIGO-CKD-2024"]},
+      {"rule_id":"REL_EGFR_LOW_MRA","kind":"relative",
+       "predicate_ast":{"<":[{"var":"labs.egfr"},30]},
+       "action":"WARN","justification":"Risk of hyperkalemia with CKD",
+       "monitoring":{"orders":["potassium@3-7d","creatinine@3-7d"]}
+      }
+    ]
+  },
+  "monitoring_json":{"baseline":["k","creatinine"],"followup":[{"test":"k","when":"3-7 days"}]},
+  "governance_tag":"SAF-HTN-003",
+  "created_by":"safety_committee"
+}
+```
+
+
+---
+
+
+## 15) End-to-end flow (hot path)
+
+
+1. GO Orchestrator generates therapies → calls `CheckSafety` (gRPC). (As in your “unique relationship” note.)&#x20;
+2. KB-4 fetches compiled bundle(s) from Redis/DB → evaluates predicates → returns PASS/WARN/VETO + findings + EvidenceEnvelope.
+3. Event emitted on `safety.signals` Kafka topic (you mandated this) and persisted in `safety_alerts`.&#x20;
+4. If **VETO**, orchestrator must drop candidate immediately (fail-fast).&#x20;
+
+
+---
+
+
+## 16) Migration & rollout checklist
+
+
+* [ ] Import minimal seed profiles (ACEI, ARB, MRA)
+* [ ] Enable **shadow mode** for 2 weeks; compare to clinician decisions
+* [ ] Run retrospective replay set
+* [ ] Pass mutation suite (≥ 95% mutation score)
+* [ ] Canary 5% with auto-rollback guards
+* [ ] Full rollout + governance sign-off snapshot
+
+
+---
+
+
+## 17) Example unit tests (fixture style)
+
+
+```yaml
+- name: "ACEI pregnancy veto"
+  patient:
+    pregnant: true
+    labs: { egfr: 90, k: 3.9 }
+    active_med_classes: []
+  therapy: { therapy_id: "t1", drug_code: "rxnorm:29046", drug_class: "ACEI" }
+  expect:
+    status: "VETO"
+    findings_contains: ["ABS_PREGNANCY_ACEI"]
+
+
+- name: "MRA warn egfr 25"
+  patient:
+    pregnant: false
+    labs: { egfr: 25, k: 4.6 }
+    active_med_classes: []
+  therapy: { therapy_id: "t2", drug_code: "rxnorm:36567", drug_class: "MRA" }
+  expect:
+    status: "WARN"
+    findings_contains: ["REL_EGFR_LOW_MRA"]
+```
+
+
+---
+
+
+## 18) What you already had (and we kept/enhanced)
+
+
+* PASS/WARN/VETO, Timescale alerts, orchestrator fail-safe, mTLS, p95<50ms, Redis TTL+invalidation, 100% coverage, falsification tests, retrospective replays, clinical approval workflow, 3-level overrides, shadow→staged rollout, monitoring KPIs, fail-safe circuit breaker, long-term retention, artifact signing & dependency scanning—all preserved and concretized.&#x20;
+
+
+---
+
+
+### Ready-to-build assets (recap)
+
+
+* **DDL** for all tables (above).
+* **Rule DSL** (authoring YAML + compiled JSON).
+* **Protobuf** for `SafetyService`.
+* **GraphQL** explorer schema.
+* **Seed safety profiles** (ACEI/ARB/MRA).
+* **Test fixtures** (YAML).
+
+
+If you want, I can drop these into repo-ready files (`/kb4/db/ddl.sql`, `/kb4/rules/seed/*.yaml`, `/kb4/api/kb4.proto`, `/kb4/graphql/schema.graphql`, `/kb4/tests/fixtures/*.yaml`) in the exact structure you’re using.

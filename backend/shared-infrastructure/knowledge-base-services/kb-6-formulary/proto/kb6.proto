@@ -1,0 +1,363 @@
+syntax = "proto3";
+package kb6.v1;
+
+option go_package = "kb-formulary/proto/kb6";
+
+import "google/protobuf/timestamp.proto";
+
+// KB-6 Formulary & Stock Service
+// Provides formulary coverage checking and stock availability for medication scoring
+service KB6Service {
+  // Get formulary status for a drug on a specific insurance plan
+  rpc GetFormularyStatus(FormularyRequest) returns (FormularyResponse);
+  
+  // Get stock availability for a drug at a specific location
+  rpc GetStock(StockRequest) returns (StockResponse);
+  
+  // Get cost analysis including alternatives
+  rpc GetCostAnalysis(CostAnalysisRequest) returns (CostAnalysisResponse);
+  
+  // Search formulary for alternatives
+  rpc SearchFormulary(FormularySearchRequest) returns (FormularySearchResponse);
+  
+  // Health check endpoint
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Request for formulary coverage checking
+message FormularyRequest {
+  string transaction_id = 1;
+  string drug_rxnorm = 2;      // RxNorm code for the drug
+  string payer_id = 3;         // Insurance payer identifier
+  string plan_id = 4;          // Specific insurance plan
+  int32 plan_year = 5;         // Plan year (optional, defaults to current)
+  int32 quantity = 6;          // Quantity for cost calculation (default: 30)
+  int32 days_supply = 7;       // Days supply (default: 30)
+  PatientContext patient = 8;  // Patient demographic context (optional)
+}
+
+// Patient context for formulary checking
+message PatientContext {
+  int32 age = 1;
+  string gender = 2;           // M, F, U
+  repeated string diagnosis_codes = 3;  // ICD-10 codes
+  repeated string allergies = 4;        // Drug allergy codes
+}
+
+// Response for formulary coverage
+message FormularyResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;  // Version of formulary data used
+  bool covered = 3;
+  string coverage_status = 4;  // preferred, non_preferred, not_covered
+  string tier = 5;             // tier1_generic, tier2_preferred_brand, etc.
+  
+  // Cost information
+  CostDetails cost = 6;
+  
+  // Authorization requirements
+  bool prior_authorization_required = 7;
+  bool step_therapy_required = 8;
+  QuantityLimits quantity_limits = 9;
+  
+  // Restrictions
+  repeated string restrictions = 10;
+  AgeRestrictions age_restrictions = 11;
+  string gender_restriction = 12;
+  
+  // Alternatives
+  repeated Alternative preferred_alternatives = 13;
+  
+  // Evidence envelope for audit trail
+  EvidenceEnvelope evidence = 14;
+  
+  // Status and metadata
+  ResponseStatus status = 15;
+  google.protobuf.Timestamp response_time = 16;
+}
+
+// Cost details for formulary coverage
+message CostDetails {
+  double copay_amount = 1;           // Fixed copay
+  int32 coinsurance_percent = 2;     // Percentage coinsurance
+  bool deductible_applies = 3;       // Whether deductible applies
+  double estimated_patient_cost = 4; // Calculated patient cost
+  double drug_cost = 5;              // Total drug cost
+}
+
+// Quantity limits and restrictions
+message QuantityLimits {
+  int32 max_quantity = 1;
+  int32 per_days = 2;
+  int32 max_fills_per_year = 3;
+  string limit_type = 4;  // quantity, duration, frequency
+}
+
+// Age-based restrictions
+message AgeRestrictions {
+  int32 min_age = 1;
+  int32 max_age = 2;
+}
+
+// Alternative drug recommendation
+message Alternative {
+  string drug_rxnorm = 1;
+  string drug_name = 2;
+  string alternative_type = 3;      // generic, therapeutic, biosimilar
+  string tier = 4;
+  double estimated_cost = 5;
+  double cost_savings = 6;
+  double cost_savings_percent = 7;
+  string switch_complexity = 8;    // simple, moderate, complex
+  double efficacy_rating = 9;      // 0.0 - 1.0
+  string safety_profile = 10;     // excellent, good, fair, poor
+}
+
+// Request for stock availability
+message StockRequest {
+  string transaction_id = 1;
+  string drug_rxnorm = 2;
+  string location_id = 3;          // Pharmacy, hospital, clinic ID
+  bool include_lots = 4;           // Include lot-level details
+  bool include_alternatives = 5;    // Include alternative stock
+  int32 required_quantity = 6;     // Quantity needed (for availability check)
+}
+
+// Response for stock availability  
+message StockResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;
+  string location_id = 3;
+  string drug_rxnorm = 4;
+  
+  // Stock levels
+  int32 quantity_on_hand = 5;
+  int32 quantity_allocated = 6;
+  int32 quantity_available = 7;    // on_hand - allocated
+  bool in_stock = 8;               // available > 0
+  bool sufficient_stock = 9;       // available >= required_quantity
+  
+  // Lot details (if requested)
+  repeated LotDetail lots = 10;
+  
+  // Reorder information
+  ReorderInfo reorder_info = 11;
+  
+  // Alternative stock (if requested and primary not available)
+  repeated AlternativeStock alternative_stock = 12;
+  
+  // Predictions and alerts
+  repeated StockAlert alerts = 13;
+  DemandPrediction demand_forecast = 14;
+  
+  // Evidence envelope
+  EvidenceEnvelope evidence = 15;
+  
+  // Status and metadata
+  ResponseStatus status = 16;
+  google.protobuf.Timestamp response_time = 17;
+}
+
+// Lot-level inventory details
+message LotDetail {
+  string lot_number = 1;
+  int32 quantity = 2;
+  google.protobuf.Timestamp expiration_date = 3;
+  string manufacturer = 4;
+  double unit_cost = 5;
+}
+
+// Reorder point and quantity information
+message ReorderInfo {
+  int32 reorder_point = 1;
+  int32 reorder_quantity = 2;
+  int32 max_stock_level = 3;
+  bool reorder_recommended = 4;
+  int32 days_until_stockout = 5;
+}
+
+// Alternative stock for out-of-stock scenarios
+message AlternativeStock {
+  string drug_rxnorm = 1;
+  string drug_name = 2;
+  string alternative_type = 3;
+  int32 quantity_available = 4;
+  string location_id = 5;
+  double distance_km = 6;          // Distance from requested location
+}
+
+// Stock alerts and notifications
+message StockAlert {
+  string alert_type = 1;           // low_stock, stockout, expired, recall
+  string severity = 2;             // critical, high, medium, low  
+  string message = 3;
+  string recommended_action = 4;
+  google.protobuf.Timestamp triggered_at = 5;
+}
+
+// Demand prediction information
+message DemandPrediction {
+  int32 predicted_demand_7d = 1;   // 7-day forecast
+  int32 predicted_demand_30d = 2;  // 30-day forecast
+  double confidence_score = 3;     // 0.0 - 1.0
+  double stockout_risk = 4;        // 0.0 - 1.0 probability
+}
+
+// Request for cost analysis
+message CostAnalysisRequest {
+  string transaction_id = 1;
+  repeated string drug_rxnorms = 2; // Multiple drugs for analysis
+  string payer_id = 3;
+  string plan_id = 4;
+  int32 quantity = 5;               // Quantity for each drug
+  bool include_alternatives = 6;    // Include alternative cost analysis
+  string optimization_goal = 7;     // cost, efficacy, safety
+}
+
+// Response for cost analysis
+message CostAnalysisResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;
+  double total_primary_cost = 3;
+  double total_alternative_cost = 4;
+  double total_savings = 5;
+  double savings_percent = 6;
+  
+  // Per-drug analysis
+  repeated DrugCostAnalysis drug_analysis = 7;
+  
+  // Optimization recommendations
+  repeated CostOptimization recommendations = 8;
+  
+  // Evidence and metadata
+  EvidenceEnvelope evidence = 9;
+  ResponseStatus status = 10;
+  google.protobuf.Timestamp response_time = 11;
+}
+
+// Cost analysis for individual drug
+message DrugCostAnalysis {
+  string drug_rxnorm = 1;
+  string drug_name = 2;
+  double primary_cost = 3;
+  Alternative best_alternative = 4;
+  repeated Alternative all_alternatives = 5;
+  double potential_savings = 6;
+}
+
+// Cost optimization recommendation
+message CostOptimization {
+  string recommendation_type = 1;   // generic_substitution, therapeutic_alternative
+  string description = 2;
+  double estimated_savings = 3;
+  string implementation_complexity = 4;  // simple, moderate, complex
+  repeated string required_actions = 5;
+  double clinical_impact_score = 6; // 0.0 - 1.0
+}
+
+// Request for formulary search
+message FormularySearchRequest {
+  string transaction_id = 1;
+  string query = 2;                // Drug name or therapeutic class
+  string payer_id = 3;            // Optional filter
+  string plan_id = 4;             // Optional filter
+  repeated string tiers = 5;       // Optional tier filters
+  repeated string drug_types = 6;  // brand, generic, biosimilar
+  int32 limit = 7;                // Max results (default: 50)
+  int32 offset = 8;               // Pagination offset
+  string sort_by = 9;             // name, cost, tier
+  string sort_order = 10;         // asc, desc
+}
+
+// Response for formulary search
+message FormularySearchResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;
+  repeated FormularyEntry results = 3;
+  int32 total_count = 4;
+  int32 search_time_ms = 5;
+  repeated string suggestions = 6;  // Search suggestions
+  
+  // Search metadata
+  SearchMetadata metadata = 7;
+  ResponseStatus status = 8;
+  google.protobuf.Timestamp response_time = 9;
+}
+
+// Individual formulary entry in search results
+message FormularyEntry {
+  string drug_rxnorm = 1;
+  string drug_name = 2;
+  string drug_type = 3;
+  string tier = 4;
+  string coverage_status = 5;
+  CostDetails cost = 6;
+  bool prior_authorization_required = 7;
+  bool step_therapy_required = 8;
+  double relevance_score = 9;      // Search relevance 0.0 - 1.0
+}
+
+// Search metadata and facets
+message SearchMetadata {
+  map<string, int32> tier_counts = 1;      // Count by tier
+  map<string, int32> drug_type_counts = 2; // Count by type
+  double avg_cost = 3;
+  int32 covered_count = 4;
+  int32 not_covered_count = 5;
+}
+
+// Evidence envelope for audit trail and reproducibility
+message EvidenceEnvelope {
+  string dataset_version = 1;       // Version of data used
+  google.protobuf.Timestamp dataset_timestamp = 2;
+  string source_system = 3;         // kb-6-formulary
+  map<string, string> provenance = 4; // Source metadata
+  string decision_hash = 5;          // Hash for reproducibility
+  repeated string data_sources = 6;  // PBM, inventory, etc.
+  string kb7_version = 7;           // KB-7 terminology version used
+}
+
+// Response status and error information
+message ResponseStatus {
+  StatusCode code = 1;
+  string message = 2;
+  repeated string warnings = 3;
+  string degradation_mode = 4;      // cache_only, conservative_defaults
+}
+
+enum StatusCode {
+  SUCCESS = 0;
+  PARTIAL_SUCCESS = 1;              // Some data missing but response valid
+  NOT_FOUND = 2;
+  INVALID_REQUEST = 3;
+  INTERNAL_ERROR = 4;
+  SERVICE_DEGRADED = 5;             // Running in degraded mode
+  EXTERNAL_SERVICE_ERROR = 6;       // Dependency failure
+}
+
+// Health check request
+message HealthCheckRequest {
+  string service = 1;               // Optional service name filter
+}
+
+// Health check response  
+message HealthCheckResponse {
+  HealthStatus overall_status = 1;
+  repeated ServiceHealth services = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string version = 4;
+}
+
+enum HealthStatus {
+  HEALTHY = 0;
+  DEGRADED = 1;
+  UNHEALTHY = 2;
+}
+
+// Individual service health
+message ServiceHealth {
+  string service_name = 1;          // postgresql, redis, elasticsearch
+  HealthStatus status = 2;
+  string message = 3;
+  map<string, string> metrics = 4;  // Additional health metrics
+}

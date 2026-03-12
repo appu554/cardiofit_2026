@@ -1,0 +1,401 @@
+# Risk Stratification Models
+# Comprehensive clinical risk assessment models
+
+metadata:
+  kb_name: "kb_clinical_context"
+  version: "2.0.0"
+  institution: "Clinical Synthesis Hub"
+  effective_date: "2025-09-01"
+  expires_date: "2026-09-01"
+  clinical_domains: ["cardiovascular", "diabetes", "renal", "bleeding"]
+
+risk_models:
+  
+  # ========== CARDIOVASCULAR RISK MODELS ==========
+  
+  - id: "RISK-CVD001"
+    name: "Integrated Cardiovascular Risk"
+    version: "1.0.0"
+    domain: "cardiovascular"
+    effective_date: "2025-09-01"
+    description: "Enhanced cardiovascular risk assessment integrating traditional and CKD risk factors"
+    
+    inputs:
+      - parameter: "age"
+        type: "integer"
+        required: true
+        units: "years"
+        range:
+          min: 18
+          max: 100
+      - parameter: "sex"
+        type: "enum"
+        required: true
+        enum_values: ["male", "female"]
+      - parameter: "race"
+        type: "enum"
+        required: true
+        enum_values: ["white", "black", "hispanic", "asian", "other"]
+      - parameter: "systolic_bp"
+        type: "integer"
+        required: true
+        units: "mmHg"
+        range:
+          min: 70
+          max: 250
+      - parameter: "total_cholesterol"
+        type: "float"
+        required: true
+        units: "mg/dL"
+        range:
+          min: 100
+          max: 500
+      - parameter: "hdl_cholesterol"
+        type: "float"
+        required: true
+        units: "mg/dL"
+        range:
+          min: 20
+          max: 120
+      - parameter: "diabetes"
+        type: "boolean"
+        required: true
+      - parameter: "current_smoker"
+        type: "boolean"
+        required: true
+      - parameter: "egfr"
+        type: "float"
+        required: false
+        units: "mL/min/1.73m2"
+        range:
+          min: 5
+          max: 150
+          default: 90
+      - parameter: "albumin_creatinine_ratio"
+        type: "float"
+        required: false
+        units: "mg/g"
+        range:
+          min: 0
+          max: 1000
+          default: 10
+    
+    calculation:
+      type: "weighted_score"
+      algorithm: "enhanced_pooled_cohort_with_ckd"
+      weights:
+        traditional_ascvd: 0.6
+        ckd_multiplier: 0.3
+        diabetes_multiplier: 0.1
+      modifiers:
+        - condition: "egfr < 60"
+          multiplier: 1.4
+          description: "CKD risk enhancement"
+        - condition: "albumin_creatinine_ratio >= 30"
+          multiplier: 1.2
+          description: "Albuminuria risk enhancement"
+        - condition: "diabetes && egfr < 60"
+          multiplier: 1.6
+          description: "Diabetic nephropathy high risk"
+    
+    outputs:
+      risk_categories:
+        - range: [0, 5]
+          category: "low"
+          color: "green"
+          recommendations:
+            - "Lifestyle modifications"
+            - "Risk factor counseling"
+            - "Reassess in 4-6 years"
+          monitoring_frequency: "annual"
+        - range: [5, 10]
+          category: "moderate"
+          color: "yellow"
+          recommendations:
+            - "Consider statin therapy"
+            - "Lifestyle modifications"
+            - "Reassess in 2-3 years"
+          monitoring_frequency: "annual"
+        - range: [10, 20]
+          category: "high"
+          color: "orange"
+          recommendations:
+            - "Statin therapy recommended"
+            - "Consider antihypertensive therapy"
+            - "Intensive lifestyle modifications"
+          monitoring_frequency: "semi_annual"
+        - range: [20, 100]
+          category: "very_high"
+          color: "red"
+          recommendations:
+            - "High-intensity statin therapy"
+            - "Blood pressure control <130/80"
+            - "Consider PCSK9 inhibitor"
+          monitoring_frequency: "quarterly"
+      units: "%"
+      time_horizon: "10y"
+      confidence_interval:
+        level: 0.95
+        lower: 0.85
+        upper: 1.15
+    
+    validation:
+      c_statistic: 0.78
+      calibration_chi2: 8.2
+      calibration_p_value: 0.314
+      last_validated: "2024-12-01"
+      validation_cohort_size: 15000
+      validation_population: "Multi-ethnic US population ages 40-79"
+      performance_metrics:
+        sensitivity: 0.75
+        specificity: 0.72
+        positive_predictive_value: 0.23
+        negative_predictive_value: 0.96
+
+  # ========== BLEEDING RISK MODELS ==========
+  
+  - id: "RISK-BLD001"
+    name: "HAS-BLED Bleeding Risk"
+    version: "1.0.0"
+    domain: "bleeding"
+    effective_date: "2025-09-01"
+    description: "Bleeding risk assessment for anticoagulated patients"
+    
+    inputs:
+      - parameter: "hypertension"
+        type: "boolean"
+        required: true
+        description: "Uncontrolled hypertension >160 mmHg systolic"
+      - parameter: "abnormal_liver_function"
+        type: "boolean"
+        required: true
+      - parameter: "abnormal_renal_function"
+        type: "boolean"
+        required: true
+        description: "Creatinine ≥2.3 mg/dL or dialysis"
+      - parameter: "stroke_history"
+        type: "boolean"
+        required: true
+      - parameter: "bleeding_history"
+        type: "boolean"
+        required: true
+      - parameter: "labile_inr"
+        type: "boolean"
+        required: true
+        description: "Time in therapeutic range <60%"
+      - parameter: "elderly"
+        type: "boolean"
+        required: true
+        description: "Age >65 years"
+      - parameter: "drug_interactions"
+        type: "boolean"
+        required: true
+        description: "Antiplatelet agents or NSAIDs"
+      - parameter: "alcohol_use"
+        type: "boolean"
+        required: true
+        description: "≥8 drinks per week"
+    
+    calculation:
+      type: "weighted_score"
+      algorithm: "hasbled_scoring"
+      weights:
+        hypertension: 1
+        abnormal_liver_function: 1
+        abnormal_renal_function: 1
+        stroke_history: 1
+        bleeding_history: 1
+        labile_inr: 1
+        elderly: 1
+        drug_interactions: 1
+        alcohol_use: 1
+    
+    outputs:
+      risk_categories:
+        - range: [0, 2]
+          category: "low"
+          color: "green"
+          recommendations:
+            - "Anticoagulation recommended if indicated"
+            - "Routine bleeding risk monitoring"
+          monitoring_frequency: "quarterly"
+        - range: [3, 3]
+          category: "moderate"
+          color: "yellow"
+          recommendations:
+            - "Anticoagulation with caution"
+            - "Address modifiable risk factors"
+            - "Enhanced monitoring"
+          monitoring_frequency: "monthly"
+        - range: [4, 9]
+          category: "high"
+          color: "red"
+          recommendations:
+            - "Consider alternatives to anticoagulation"
+            - "Intensive bleeding risk mitigation"
+            - "Specialist consultation"
+          monitoring_frequency: "monthly"
+      units: "points"
+      time_horizon: "1y"
+    
+    validation:
+      c_statistic: 0.65
+      last_validated: "2024-11-01"
+      validation_cohort_size: 8924
+      validation_population: "AF patients on oral anticoagulation"
+
+  # ========== DIABETES RISK MODELS ==========
+  
+  - id: "RISK-DM001"
+    name: "Diabetic Retinopathy Progression"
+    version: "1.0.0"
+    domain: "diabetes"
+    effective_date: "2025-09-01"
+    description: "Risk of diabetic retinopathy progression requiring intervention"
+    
+    inputs:
+      - parameter: "hba1c"
+        type: "float"
+        required: true
+        units: "%"
+        range:
+          min: 4.0
+          max: 15.0
+      - parameter: "diabetes_duration"
+        type: "integer"
+        required: true
+        units: "years"
+        range:
+          min: 0
+          max: 50
+      - parameter: "baseline_retinopathy"
+        type: "enum"
+        required: true
+        enum_values: ["none", "mild_npdr", "moderate_npdr", "severe_npdr", "pdr"]
+      - parameter: "blood_pressure_controlled"
+        type: "boolean"
+        required: true
+      - parameter: "pregnancy"
+        type: "boolean"
+        required: false
+        default: false
+    
+    calculation:
+      type: "regression"
+      algorithm: "logistic_regression_retinopathy"
+      coefficients:
+        hba1c: 0.23
+        diabetes_duration: 0.08
+        mild_npdr: 1.2
+        moderate_npdr: 2.1
+        severe_npdr: 3.4
+        uncontrolled_bp: 0.7
+        pregnancy: 0.9
+    
+    outputs:
+      risk_categories:
+        - range: [0, 10]
+          category: "low"
+          color: "green"
+          recommendations:
+            - "Annual dilated eye exam"
+            - "Optimize glycemic control"
+          monitoring_frequency: "annual"
+        - range: [10, 30]
+          category: "moderate"
+          color: "yellow"
+          recommendations:
+            - "6-month ophthalmology follow-up"
+            - "Intensive diabetes management"
+          monitoring_frequency: "semi_annual"
+        - range: [30, 100]
+          category: "high"
+          color: "red"
+          recommendations:
+            - "3-month ophthalmology follow-up"
+            - "Consider laser photocoagulation"
+            - "Urgent endocrine consultation"
+          monitoring_frequency: "quarterly"
+      units: "%"
+      time_horizon: "2y"
+    
+    validation:
+      c_statistic: 0.82
+      last_validated: "2024-10-15"
+      validation_cohort_size: 12000
+      validation_population: "Adults with diabetes in primary care"
+
+  # ========== COMPOSITE RISK MODELS ==========
+  
+  - id: "RISK-COMP001"
+    name: "Multi-Domain Clinical Risk"
+    version: "1.0.0"
+    domain: "composite"
+    effective_date: "2025-09-01"
+    description: "Composite risk assessment across cardiovascular, renal, and metabolic domains"
+    
+    inputs:
+      - parameter: "cardiovascular_risk"
+        type: "float"
+        required: true
+        units: "%"
+        description: "10-year cardiovascular risk"
+      - parameter: "renal_progression_risk"
+        type: "float"
+        required: false
+        units: "%"
+        description: "Risk of CKD progression"
+        default: 0
+      - parameter: "diabetes_complications_risk"
+        type: "float"
+        required: false
+        units: "%"
+        description: "Risk of diabetes complications"
+        default: 0
+      - parameter: "bleeding_risk"
+        type: "integer"
+        required: false
+        units: "points"
+        description: "HAS-BLED score"
+        default: 0
+    
+    calculation:
+      type: "weighted_score"
+      algorithm: "composite_risk_integration"
+      weights:
+        cardiovascular_risk: 0.4
+        renal_progression_risk: 0.3
+        diabetes_complications_risk: 0.2
+        bleeding_risk_penalty: 0.1
+    
+    outputs:
+      risk_categories:
+        - range: [0, 15]
+          category: "low_composite"
+          color: "green"
+          recommendations:
+            - "Standard preventive care"
+            - "Annual risk reassessment"
+          monitoring_frequency: "annual"
+        - range: [15, 35]
+          category: "moderate_composite"
+          color: "yellow"
+          recommendations:
+            - "Intensified risk factor management"
+            - "Semi-annual monitoring"
+          monitoring_frequency: "semi_annual"
+        - range: [35, 100]
+          category: "high_composite"
+          color: "red"
+          recommendations:
+            - "Multidisciplinary care team"
+            - "Quarterly comprehensive assessment"
+          monitoring_frequency: "quarterly"
+      units: "composite_score"
+      time_horizon: "5y"
+    
+    validation:
+      c_statistic: 0.73
+      last_validated: "2024-12-15"
+      validation_cohort_size: 25000
+      validation_population: "Multi-morbid patients in integrated health systems"

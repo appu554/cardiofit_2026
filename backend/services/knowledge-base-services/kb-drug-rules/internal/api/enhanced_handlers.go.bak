@@ -1,0 +1,524 @@
+package api
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"kb-drug-rules/internal/conversion"
+	"kb-drug-rules/internal/models"
+	"kb-drug-rules/internal/validation"
+
+	"github.com/gin-gonic/gin"
+)
+
+// Enhanced validation endpoint with comprehensive TOML validation
+func (s *Server) validateTOMLRules(c *gin.Context) {
+	var request models.TOMLValidationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("toml_validation_requests_total", map[string]string{
+		"format": request.Format,
+	})
+
+	// Validate TOML content
+	validator := validation.NewEnhancedTOMLValidator()
+	result := validator.ValidateComprehensive(request.Content)
+
+	// Convert to JSON if validation passes and format is TOML
+	var jsonContent string
+	if result.IsValid && request.Format == "toml" {
+		converter := conversion.NewFormatConverter()
+		var err error
+		jsonContent, err = converter.TOMLToJSON(request.Content)
+		if err != nil {
+			result.IsValid = false
+			result.Errors = append(result.Errors, fmt.Sprintf("Conversion error: %v", err))
+		}
+	}
+
+	response := models.TOMLValidationResponse{
+		ValidationResult: result,
+		ConvertedJSON:   jsonContent,
+		Timestamp:       time.Now(),
+	}
+
+	// Record validation metrics
+	if result.IsValid {
+		s.metrics.IncrementCounter("toml_validation_success_total", nil)
+	} else {
+		s.metrics.IncrementCounter("toml_validation_failure_total", nil)
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// New endpoint for format conversion
+func (s *Server) convertFormat(c *gin.Context) {
+	var request models.FormatConversionRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("format_conversion_requests_total", map[string]string{
+		"source_format": request.SourceFormat,
+		"target_format": request.TargetFormat,
+	})
+
+	converter := conversion.NewFormatConverter()
+	
+	// Validate source format
+	if !converter.IsFormatSupported(request.SourceFormat) {
+		s.respondWithError(c, http.StatusBadRequest, "Unsupported source format", map[string]string{
+			"supported_formats": "toml, json",
+		})
+		return
+	}
+
+	if !converter.IsFormatSupported(request.TargetFormat) {
+		s.respondWithError(c, http.StatusBadRequest, "Unsupported target format", map[string]string{
+			"supported_formats": "toml, json",
+		})
+		return
+	}
+
+	// Perform conversion
+	conversionResult := converter.ConvertWithResult(request.Content, request.SourceFormat, request.TargetFormat)
+	
+	if !conversionResult.Success {
+		s.metrics.IncrementCounter("format_conversion_failure_total", nil)
+		s.respondWithError(c, http.StatusBadRequest, "Conversion failed", map[string]string{
+			"error": conversionResult.Error,
+		})
+		return
+	}
+
+	s.metrics.IncrementCounter("format_conversion_success_total", nil)
+
+	response := models.FormatConversionResponse{
+		OriginalFormat:   request.SourceFormat,
+		TargetFormat:     request.TargetFormat,
+		ConvertedContent: conversionResult.ConvertedContent,
+		Timestamp:        time.Now(),
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// Enhanced hotload with TOML support, versioning, and distributed locking
+func (s *Server) hotloadTOMLRules(c *gin.Context) {
+	var request models.TOMLHotloadRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("toml_hotload_requests_total", map[string]string{
+		"drug_id": request.DrugID,
+	})
+
+	// Use distributed lock to prevent concurrent updates
+	ctx := c.Request.Context()
+	err := s.lockManager.WithDrugRuleLock(ctx, request.DrugID, 30*time.Second, func() error {
+		return s.performTOMLHotload(c, request)
+	})
+
+	if err != nil {
+		s.metrics.IncrementCounter("toml_hotload_lock_failure_total", nil)
+		s.respondWithError(c, http.StatusConflict, "Failed to acquire lock", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+}
+
+// performTOMLHotload performs the actual hotload operation
+func (s *Server) performTOMLHotload(c *gin.Context, request models.TOMLHotloadRequest) error {
+	// Validate TOML content first
+	validator := validation.NewEnhancedTOMLValidator()
+	validationResult := validator.ValidateComprehensive(request.TOMLContent)
+
+	if !validationResult.IsValid {
+		s.metrics.IncrementCounter("toml_hotload_validation_failure_total", nil)
+		s.respondWithError(c, http.StatusBadRequest, "TOML validation failed", map[string]interface{}{
+			"validation_result": validationResult,
+		})
+		return fmt.Errorf("validation failed")
+	}
+
+	// Convert to JSON
+	converter := conversion.NewFormatConverter()
+	jsonRaw, err := converter.TOMLToJSONRaw(request.TOMLContent)
+	if err != nil {
+		s.metrics.IncrementCounter("toml_hotload_conversion_failure_total", nil)
+		s.respondWithError(c, http.StatusInternalServerError, "Conversion failed", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Calculate content SHA
+	contentSHA := s.calculateSHA256(string(jsonRaw))
+
+	// Get user from context (set by auth middleware)
+	userID := c.GetString("user_id")
+	if userID == "" {
+		userID = "system"
+	}
+
+	// Create enhanced rule pack with versioning
+	rulePack := &models.DrugRulePack{
+		DrugID:           request.DrugID,
+		Version:          request.Version,
+		OriginalFormat:   "toml",
+		TOMLContent:      &request.TOMLContent,
+		JSONContent:      jsonRaw,
+		ContentSHA:       contentSHA,
+		SignedBy:         request.SignedBy,
+		SignatureValid:   true, // TODO: Implement actual signature validation
+		ClinicalReviewer: request.ClinicalReviewer,
+		Regions:          models.StringArray(request.Regions),
+		CreatedBy:        userID,
+		LastModifiedBy:   userID,
+		Tags:             models.StringArray(request.Tags),
+		DeploymentStatus: models.DeploymentStatusJSON{
+			Staging:      "deployed",
+			LastDeployed: time.Now(),
+		},
+	}
+
+	// Save to database with version management
+	if err := s.db.SaveRulePackWithVersioning(rulePack); err != nil {
+		s.metrics.IncrementCounter("toml_hotload_db_failure_total", nil)
+		s.respondWithError(c, http.StatusInternalServerError, "Database save failed", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Emit event for cache invalidation
+	s.eventBus.Emit(models.KnowledgeBaseEvent{
+		EventType:  "RulePackUpdated",
+		EntityID:   request.DrugID,
+		Version:    request.Version,
+		ContentSHA: contentSHA,
+		Regions:    request.Regions,
+		Timestamp:  time.Now(),
+	})
+
+	s.metrics.IncrementCounter("toml_hotload_success_total", nil)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":          "Rule pack deployed successfully",
+		"drug_id":          request.DrugID,
+		"version":          request.Version,
+		"content_sha":      contentSHA,
+		"validation_score": validationResult.Score,
+		"format":           "toml",
+	})
+}
+
+// New endpoint for batch loading multiple rules
+func (s *Server) batchLoadRules(c *gin.Context) {
+	var request models.BatchLoadRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("batch_load_requests_total", map[string]string{
+		"rule_count": strconv.Itoa(len(request.Rules)),
+	})
+
+	response := models.BatchLoadResponse{
+		TotalRules:      len(request.Rules),
+		SuccessfulRules: 0,
+		FailedRules:     0,
+		SuccessfulIDs:   []string{},
+		FailedIDs:       []string{},
+		Errors:          []string{},
+	}
+
+	validator := validation.NewEnhancedTOMLValidator()
+	converter := conversion.NewFormatConverter()
+
+	// Process each rule
+	for _, rule := range request.Rules {
+		// Validate TOML content
+		validationResult := validator.ValidateComprehensive(rule.TOMLContent)
+		if !validationResult.IsValid {
+			response.FailedRules++
+			response.FailedIDs = append(response.FailedIDs, rule.DrugID)
+			response.Errors = append(response.Errors, 
+				fmt.Sprintf("Validation failed for %s: %v", rule.DrugID, validationResult.Errors))
+			continue
+		}
+
+		// Convert to JSON
+		jsonRaw, err := converter.TOMLToJSONRaw(rule.TOMLContent)
+		if err != nil {
+			response.FailedRules++
+			response.FailedIDs = append(response.FailedIDs, rule.DrugID)
+			response.Errors = append(response.Errors, 
+				fmt.Sprintf("Conversion failed for %s: %v", rule.DrugID, err))
+			continue
+		}
+
+		// Create rule pack
+		rulePack := &models.DrugRulePack{
+			DrugID:           rule.DrugID,
+			Version:          rule.Version,
+			OriginalFormat:   "toml",
+			TOMLContent:      &rule.TOMLContent,
+			JSONContent:      jsonRaw,
+			ContentSHA:       s.calculateSHA256(string(jsonRaw)),
+			SignedBy:         rule.SignedBy,
+			SignatureValid:   true,
+			ClinicalReviewer: rule.ClinicalReviewer,
+			Regions:          models.StringArray(rule.Regions),
+			CreatedBy:        request.User,
+			LastModifiedBy:   request.User,
+			Tags:             models.StringArray(rule.Tags),
+			DeploymentStatus: models.DeploymentStatusJSON{
+				Staging:      "deployed",
+				LastDeployed: time.Now(),
+			},
+		}
+
+		// Save to database
+		if err := s.db.SaveRulePackWithVersioning(rulePack); err != nil {
+			response.FailedRules++
+			response.FailedIDs = append(response.FailedIDs, rule.DrugID)
+			response.Errors = append(response.Errors, 
+				fmt.Sprintf("Database save failed for %s: %v", rule.DrugID, err))
+			continue
+		}
+
+		response.SuccessfulRules++
+		response.SuccessfulIDs = append(response.SuccessfulIDs, rule.DrugID)
+	}
+
+	// Record batch metrics
+	s.metrics.IncrementCounter("batch_load_success_total", map[string]string{
+		"successful_count": strconv.Itoa(response.SuccessfulRules),
+	})
+	s.metrics.IncrementCounter("batch_load_failure_total", map[string]string{
+		"failed_count": strconv.Itoa(response.FailedRules),
+	})
+
+	statusCode := http.StatusOK
+	if response.FailedRules > 0 && response.SuccessfulRules == 0 {
+		statusCode = http.StatusBadRequest
+	} else if response.FailedRules > 0 {
+		statusCode = http.StatusPartialContent
+	}
+
+	c.JSON(statusCode, response)
+}
+
+// New endpoint for getting version history
+func (s *Server) getVersionHistory(c *gin.Context) {
+	drugID := c.Param("drug_id")
+	if drugID == "" {
+		s.respondWithError(c, http.StatusBadRequest, "drug_id is required", nil)
+		return
+	}
+
+	// Parse query parameters
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100 // Cap at 100
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("version_history_requests_total", map[string]string{
+		"drug_id": drugID,
+	})
+
+	// Get version history from database
+	versions, total, err := s.db.GetVersionHistory(drugID, limit)
+	if err != nil {
+		s.respondWithError(c, http.StatusInternalServerError, "Failed to retrieve version history", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	response := models.VersionHistoryResponse{
+		DrugID:   drugID,
+		Versions: versions,
+		Total:    total,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// New endpoint for rolling back to a previous version
+func (s *Server) rollbackVersion(c *gin.Context) {
+	var request models.RollbackRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		s.respondWithError(c, http.StatusBadRequest, "Invalid request", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Record metrics
+	s.metrics.IncrementCounter("rollback_requests_total", map[string]string{
+		"drug_id": request.DrugID,
+	})
+
+	// Get current version
+	currentRulePack, err := s.db.GetLatestRulePack(request.DrugID)
+	if err != nil {
+		s.respondWithError(c, http.StatusNotFound, "Current version not found", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Get target version
+	targetRulePack, err := s.db.GetRulePackByVersion(request.DrugID, request.TargetVersion)
+	if err != nil {
+		s.respondWithError(c, http.StatusNotFound, "Target version not found", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Create new version based on target version
+	userID := c.GetString("user_id")
+	if userID == "" {
+		userID = request.User
+	}
+
+	// Generate new version number (increment patch version)
+	newVersion, err := s.generateNextVersion(currentRulePack.Version)
+	if err != nil {
+		s.respondWithError(c, http.StatusInternalServerError, "Failed to generate new version", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Create rollback rule pack
+	rollbackRulePack := &models.DrugRulePack{
+		DrugID:           request.DrugID,
+		Version:          newVersion,
+		OriginalFormat:   targetRulePack.OriginalFormat,
+		TOMLContent:      targetRulePack.TOMLContent,
+		JSONContent:      targetRulePack.JSONContent,
+		ContentSHA:       targetRulePack.ContentSHA,
+		SignedBy:         targetRulePack.SignedBy,
+		SignatureValid:   targetRulePack.SignatureValid,
+		ClinicalReviewer: targetRulePack.ClinicalReviewer,
+		Regions:          targetRulePack.Regions,
+		CreatedBy:        userID,
+		LastModifiedBy:   userID,
+		Tags:             append(targetRulePack.Tags, "rollback"),
+		DeploymentStatus: models.DeploymentStatusJSON{
+			Staging:      "deployed",
+			LastDeployed: time.Now(),
+		},
+		PreviousVersion: &currentRulePack.Version,
+	}
+
+	// Save rollback version
+	if err := s.db.SaveRulePackWithVersioning(rollbackRulePack); err != nil {
+		s.metrics.IncrementCounter("rollback_failure_total", nil)
+		s.respondWithError(c, http.StatusInternalServerError, "Rollback failed", map[string]string{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Create rollback snapshot with reason
+	snapshot := &models.DrugRuleSnapshot{
+		DrugID:          request.DrugID,
+		Version:         currentRulePack.Version,
+		ContentSnapshot: currentRulePack.JSONContent,
+		TOMLSnapshot:    currentRulePack.TOMLContent,
+		CreatedBy:       userID,
+		Reason:          fmt.Sprintf("Rollback to version %s: %s", request.TargetVersion, request.Reason),
+	}
+
+	if err := s.db.CreateSnapshot(snapshot); err != nil {
+		// Log error but don't fail the rollback
+		s.logger.Errorf("Failed to create rollback snapshot: %v", err)
+	}
+
+	// Emit rollback event
+	s.eventBus.Emit(models.KnowledgeBaseEvent{
+		EventType:  "RulePackRolledBack",
+		EntityID:   request.DrugID,
+		Version:    newVersion,
+		ContentSHA: rollbackRulePack.ContentSHA,
+		Regions:    request.DrugID, // Convert StringArray to []string if needed
+		Timestamp:  time.Now(),
+		Metadata: map[string]interface{}{
+			"from_version": currentRulePack.Version,
+			"to_version":   request.TargetVersion,
+			"reason":       request.Reason,
+		},
+	})
+
+	s.metrics.IncrementCounter("rollback_success_total", nil)
+
+	response := models.RollbackResponse{
+		Success:      true,
+		DrugID:       request.DrugID,
+		FromVersion:  currentRulePack.Version,
+		ToVersion:    request.TargetVersion,
+		RollbackTime: time.Now(),
+		Message:      fmt.Sprintf("Successfully rolled back to version %s", request.TargetVersion),
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// Helper function to generate next version number
+func (s *Server) generateNextVersion(currentVersion string) (string, error) {
+	// Simple version increment logic (increment patch version)
+	// This could be made more sophisticated based on requirements
+	parts := strings.Split(currentVersion, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid version format: %s", currentVersion)
+	}
+
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return "", fmt.Errorf("invalid patch version: %s", parts[2])
+	}
+
+	return fmt.Sprintf("%s.%s.%d", parts[0], parts[1], patch+1), nil
+}
+
+// calculateSHA256 calculates SHA256 hash of content
+func (s *Server) calculateSHA256(content string) string {
+	hash := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(hash[:])
+}

@@ -1,0 +1,326 @@
+# Alertmanager Configuration for KB Services
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@kb-services.local'
+  smtp_auth_username: 'alerts@kb-services.local'
+  smtp_auth_password: 'alert_password'
+  smtp_require_tls: true
+
+# Notification templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route alerts based on labels
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'default-receiver'
+  
+  routes:
+    # Critical alerts - immediate notification
+    - matchers:
+        - severity = "critical"
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 5m
+      continue: false
+
+    # Security alerts - immediate notification to security team
+    - matchers:
+        - category = "security"
+      receiver: 'security-team'
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 30m
+      continue: false
+
+    # Compliance alerts - notify compliance team
+    - matchers:
+        - category = "compliance"
+      receiver: 'compliance-team'
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 2h
+      continue: false
+
+    # Safety alerts - notify clinical safety team
+    - matchers:
+        - category = "safety"
+      receiver: 'clinical-safety-team'
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 30m
+      continue: false
+
+    # Database alerts - notify database team
+    - matchers:
+        - category = "database"
+      receiver: 'database-team'
+      group_wait: 1m
+      group_interval: 5m
+      repeat_interval: 1h
+      continue: true
+
+    # Performance alerts - notify platform team
+    - matchers:
+        - category = "performance"
+      receiver: 'platform-team'
+      group_wait: 2m
+      group_interval: 10m
+      repeat_interval: 4h
+      continue: true
+
+    # Business logic alerts - notify development team
+    - matchers:
+        - category = "business"
+      receiver: 'development-team'
+      group_wait: 1m
+      group_interval: 5m
+      repeat_interval: 2h
+      continue: true
+
+    # Data quality alerts - notify data team
+    - matchers:
+        - category =~ "data_quality|data_integrity"
+      receiver: 'data-team'
+      group_wait: 5m
+      group_interval: 15m
+      repeat_interval: 6h
+      continue: true
+
+    # Resource alerts - notify infrastructure team
+    - matchers:
+        - category = "resources"
+      receiver: 'infrastructure-team'
+      group_wait: 2m
+      group_interval: 10m
+      repeat_interval: 4h
+      continue: true
+
+# Alert receivers/notification channels
+receivers:
+  # Default receiver for non-critical alerts
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'kb-alerts@company.com'
+        subject: '[KB-Services] {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Service: {{ .Labels.job }}
+          Severity: {{ .Labels.severity }}
+          Description: {{ .Annotations.description }}
+          
+          Labels:
+          {{ range .Labels.SortedPairs }}  {{ .Name }}: {{ .Value }}
+          {{ end }}
+          
+          Runbook: {{ .Annotations.runbook_url }}
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#kb-alerts'
+        title: 'KB Services Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Labels.job }}{{ end }}'
+        color: 'warning'
+
+  # Critical alerts - multiple channels + phone/SMS
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'oncall@company.com,kb-critical@company.com'
+        subject: '[CRITICAL] KB Services - {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          🚨 CRITICAL ALERT 🚨
+          
+          {{ range .Alerts }}
+          Service: {{ .Labels.job }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          
+          Time: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          Severity: {{ .Labels.severity }}
+          
+          Runbook: {{ .Annotations.runbook_url }}
+          Dashboard: https://grafana.kb-services.local/d/kb-unified
+          {{ end }}
+        headers:
+          Priority: 'high'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#kb-critical'
+        title: '🚨 CRITICAL: KB Services Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        color: 'danger'
+        actions:
+          - type: 'button'
+            text: 'View Dashboard'
+            url: 'https://grafana.kb-services.local/d/kb-unified'
+          - type: 'button'
+            text: 'Runbook'
+            url: '{{ range .Alerts }}{{ .Annotations.runbook_url }}{{ end }}'
+    webhook_configs:
+      - url: 'https://api.pagerduty.com/integration/YOUR_INTEGRATION_KEY/enqueue'
+        send_resolved: true
+
+  # Security team notifications
+  - name: 'security-team'
+    email_configs:
+      - to: 'security@company.com'
+        subject: '[SECURITY] KB Services - {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          🔒 SECURITY ALERT 🔒
+          
+          {{ range .Alerts }}
+          Service: {{ .Labels.job }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          
+          Time: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          Category: {{ .Labels.category }}
+          
+          This alert requires immediate security review.
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SECURITY/WEBHOOK'
+        channel: '#security-alerts'
+        title: '🔒 Security Alert: KB Services'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        color: 'danger'
+
+  # Clinical safety team
+  - name: 'clinical-safety-team'
+    email_configs:
+      - to: 'clinical-safety@company.com'
+        subject: '[CLINICAL SAFETY] KB Services - {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          ⚕️ CLINICAL SAFETY ALERT ⚕️
+          
+          {{ range .Alerts }}
+          Service: {{ .Labels.job }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          
+          Time: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          
+          This alert may impact patient safety. Immediate review required.
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/CLINICAL/WEBHOOK'
+        channel: '#clinical-safety'
+        title: '⚕️ Clinical Safety Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        color: 'danger'
+
+  # Compliance team
+  - name: 'compliance-team'
+    email_configs:
+      - to: 'compliance@company.com'
+        subject: '[COMPLIANCE] KB Services - {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          📋 COMPLIANCE ALERT 📋
+          
+          {{ range .Alerts }}
+          Service: {{ .Labels.job }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          
+          Time: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          
+          This alert indicates a potential compliance violation.
+          {{ end }}
+
+  # Database team
+  - name: 'database-team'
+    email_configs:
+      - to: 'dba@company.com'
+        subject: '[DATABASE] KB Services - {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          {{ range .Alerts }}
+          Database Alert: {{ .Annotations.summary }}
+          Service: {{ .Labels.job }}
+          Description: {{ .Annotations.description }}
+          Time: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/DBA/WEBHOOK'
+        channel: '#database-alerts'
+        title: 'Database Alert: KB Services'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+
+  # Platform team
+  - name: 'platform-team'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/PLATFORM/WEBHOOK'
+        channel: '#platform-alerts'
+        title: 'Platform Alert: KB Services'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Labels.job }}{{ end }}'
+        color: 'warning'
+
+  # Development team
+  - name: 'development-team'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/DEV/WEBHOOK'
+        channel: '#kb-development'
+        title: 'KB Development Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Labels.job }}{{ end }}'
+
+  # Data team
+  - name: 'data-team'
+    email_configs:
+      - to: 'data-team@company.com'
+        subject: '[DATA] KB Services - {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          {{ range .Alerts }}
+          Data Quality Alert: {{ .Annotations.summary }}
+          Service: {{ .Labels.job }}
+          Description: {{ .Annotations.description }}
+          Time: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+
+  # Infrastructure team  
+  - name: 'infrastructure-team'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/INFRA/WEBHOOK'
+        channel: '#infrastructure'
+        title: 'Infrastructure Alert: KB Services'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }} - {{ .Labels.job }}{{ end }}'
+
+# Inhibition rules to prevent alert spam
+inhibit_rules:
+  # Inhibit all other alerts when service is down
+  - source_matchers:
+      - alertname = "KBServiceDown"
+    target_matchers:
+      - job =~ "kb-.*"
+    equal: ['job']
+
+  # Inhibit latency alerts when error rate is high
+  - source_matchers:
+      - alertname = "KBServiceHighErrorRate"
+    target_matchers:
+      - alertname = "KBServiceHighLatency"
+    equal: ['job']
+
+  # Inhibit database connection alerts when database is down
+  - source_matchers:
+      - alertname =~ ".*DatabaseDown"
+    target_matchers:
+      - alertname =~ ".*ConnectionPool.*"
+    equal: ['service']
+
+  # Inhibit cache alerts when Redis is down
+  - source_matchers:
+      - alertname = "RedisConnectionFailure"
+    target_matchers:
+      - alertname =~ ".*Cache.*"
+    equal: ['instance']
+
+  # Inhibit memory alerts when there are file descriptor issues
+  - source_matchers:
+      - alertname = "FileDescriptorLimitApproaching"
+    target_matchers:
+      - alertname = "HighMemoryUsage"
+    equal: ['job']

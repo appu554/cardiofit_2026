@@ -1,0 +1,8 @@
+from fastapi import APIRouter
+from app.api.endpoints import lab, hl7, fhir
+
+api_router = APIRouter()
+
+api_router.include_router(lab.router, prefix="/lab", tags=["Lab"])
+api_router.include_router(hl7.router, prefix="/hl7", tags=["HL7"])
+api_router.include_router(fhir.router, prefix="/fhir/DiagnosticReport", tags=["FHIR"])

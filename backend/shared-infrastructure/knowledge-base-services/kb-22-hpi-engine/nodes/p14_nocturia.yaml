@@ -1,0 +1,237 @@
+# P14 Nocturia - HPI Node Definition
+# Bayesian differential for nocturia (frequent nighttime urination) in cardio-renal-metabolic patients
+# Binary question format (YES/NO/PATA_NAHI) with lr_positive / lr_negative
+# Priors sum to 0.90 (Other bucket reserves 0.10)
+
+node_id: P14_NOCTURIA
+version: "1.0.0"
+title_en: "Nocturia Differential Diagnosis"
+title_hi: "Raat ko Baar Baar Peshab Vibhedak Nidaan"
+description: "Bayesian differential for nocturia (>=2 voids/night) in DM+HTN cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Supported strata
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ICS_Nocturia_2019"
+
+# ===============================================================
+# Differentials with per-stratum priors (F-05)
+# Sum = 0.90; Other bucket = 0.10 -> total 1.00
+# ===============================================================
+differentials:
+  - id: HEART_FAILURE
+    label: "Heart Failure (Nocturnal Fluid Redistribution)"
+    population_reference: "ESC HF 2023; nocturnal polyuria in HF 40-60%"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: UNCONTROLLED_DM
+    label: "Uncontrolled Diabetes Mellitus (Osmotic Diuresis)"
+    population_reference: "ADA Standards 2024; ICMR India DM guidelines"
+    priors:
+      DM_HTN_base: 0.22
+
+  - id: CKD_CONCENTRATING_DEFECT
+    label: "CKD Concentrating Defect"
+    population_reference: "KDIGO CKD 2024; isosthenuria in CKD stage 3-5"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: PROSTATE_HYPERTROPHY
+    label: "Benign Prostatic Hypertrophy (BPH)"
+    population_reference: "AUA BPH Guidelines 2021; IPSS validation"
+    priors:
+      DM_HTN_base: 0.16
+
+  - id: MEDICATION_DIURETIC
+    label: "Medication-Related (Diuretic Timing, SGLT2i)"
+    population_reference: "SPL loop diuretics; SGLT2i glycosuria and polyuria"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: OTHER
+    label: "Other (Primary Polydipsia, Sleep Apnoea, Overactive Bladder)"
+    population_reference: "ICS Nocturia standardization 2019"
+    priors:
+      DM_HTN_base: 0.05
+
+# ===============================================================
+# G1: Safety floor clamping
+# Heart failure floor at 0.05 — nocturia may be early HF sign.
+# ===============================================================
+safety_floors:
+  HEART_FAILURE: 0.05
+  UNCONTROLLED_DM: 0.04
+
+# ===============================================================
+# Safety triggers
+# ===============================================================
+safety_triggers:
+  - id: RF01_HF_NOCTURNAL
+    type: BOOLEAN
+    condition: "HEART_FAILURE.posterior > 0.40 AND Q003=YES"
+    severity: IMMEDIATE
+    recommended_action: "Nocturia with orthopnoea — suspected heart failure decompensation. Order urgent BNP and chest X-ray. SNOMED: 84114007"
+
+  - id: RF02_DKA_POLYURIA
+    type: BOOLEAN
+    condition: "UNCONTROLLED_DM.posterior > 0.45 AND Q002=YES"
+    severity: URGENT
+    recommended_action: "Severe polyuria with polydipsia — check blood glucose, ketones, and HbA1c urgently. Rule out DKA."
+
+# ===============================================================
+# Questions — Binary (YES / NO / PATA_NAHI)
+# LR values for ALL differentials per question
+# ===============================================================
+questions:
+  - id: Q001
+    text_en: "Do you wake up more than twice at night to urinate?"
+    text_hi: "Kya aap raat mein do se zyada baar peshab ke liye uthte hain?"
+    mandatory: true
+    lr_source: "ICS Nocturia 2019; baseline severity"
+    lr_positive:
+      HEART_FAILURE: 2.20
+      UNCONTROLLED_DM: 2.00
+      CKD_CONCENTRATING_DEFECT: 2.50
+      PROSTATE_HYPERTROPHY: 1.80
+      MEDICATION_DIURETIC: 1.60
+      OTHER: 1.30
+    lr_negative:
+      HEART_FAILURE: 0.55
+      UNCONTROLLED_DM: 0.60
+      CKD_CONCENTRATING_DEFECT: 0.45
+      PROSTATE_HYPERTROPHY: 0.65
+      MEDICATION_DIURETIC: 0.70
+      OTHER: 0.80
+
+  - id: Q002
+    text_en: "Are you also very thirsty during the day and drinking more water than usual?"
+    text_hi: "Kya aapko din mein bhi bahut zyada pyaas lagti hai aur paani zyada peete hain?"
+    mandatory: true
+    lr_source: "ADA Standards 2024; osmotic diuresis symptoms"
+    lr_positive:
+      HEART_FAILURE: 0.60
+      UNCONTROLLED_DM: 4.80
+      CKD_CONCENTRATING_DEFECT: 1.80
+      PROSTATE_HYPERTROPHY: 0.40
+      MEDICATION_DIURETIC: 1.20
+      OTHER: 1.50
+    lr_negative:
+      HEART_FAILURE: 1.15
+      UNCONTROLLED_DM: 0.35
+      CKD_CONCENTRATING_DEFECT: 0.70
+      PROSTATE_HYPERTROPHY: 1.20
+      MEDICATION_DIURETIC: 0.90
+      OTHER: 0.80
+
+  - id: Q003
+    text_en: "Do you need extra pillows to sleep or wake up gasping for breath at night?"
+    text_hi: "Kya aapko sone ke liye zyada takiye chahiye ya raat ko saans phoolne se jaag jaate hain?"
+    mandatory: true
+    lr_source: "ESC HF 2023; orthopnoea/PND LR+ 2.2 for HF"
+    lr_positive:
+      HEART_FAILURE: 4.50
+      UNCONTROLLED_DM: 0.50
+      CKD_CONCENTRATING_DEFECT: 0.60
+      PROSTATE_HYPERTROPHY: 0.40
+      MEDICATION_DIURETIC: 0.50
+      OTHER: 0.70
+    lr_negative:
+      HEART_FAILURE: 0.40
+      UNCONTROLLED_DM: 1.15
+      CKD_CONCENTRATING_DEFECT: 1.10
+      PROSTATE_HYPERTROPHY: 1.15
+      MEDICATION_DIURETIC: 1.15
+      OTHER: 1.10
+
+  - id: Q004
+    text_en: "Do you also have swelling in your feet or ankles?"
+    text_hi: "Kya aapke pairon ya takhno mein sujan bhi hai?"
+    mandatory: false
+    lr_source: "ESC HF 2023; Framingham criteria"
+    lr_positive:
+      HEART_FAILURE: 3.20
+      UNCONTROLLED_DM: 0.60
+      CKD_CONCENTRATING_DEFECT: 1.50
+      PROSTATE_HYPERTROPHY: 0.40
+      MEDICATION_DIURETIC: 0.70
+      OTHER: 0.80
+    lr_negative:
+      HEART_FAILURE: 0.45
+      UNCONTROLLED_DM: 1.10
+      CKD_CONCENTRATING_DEFECT: 0.80
+      PROSTATE_HYPERTROPHY: 1.15
+      MEDICATION_DIURETIC: 1.10
+      OTHER: 1.05
+
+  - id: Q005
+    text_en: "Do you have difficulty starting to urinate or a weak urine stream?"
+    text_hi: "Kya peshab shuru karne mein dikkat hoti hai ya dhaar kamzor hai?"
+    mandatory: false
+    lr_source: "AUA BPH Guidelines 2021; IPSS obstructive symptoms"
+    lr_positive:
+      HEART_FAILURE: 0.40
+      UNCONTROLLED_DM: 0.60
+      CKD_CONCENTRATING_DEFECT: 0.70
+      PROSTATE_HYPERTROPHY: 5.50
+      MEDICATION_DIURETIC: 0.50
+      OTHER: 1.20
+    lr_negative:
+      HEART_FAILURE: 1.15
+      UNCONTROLLED_DM: 1.10
+      CKD_CONCENTRATING_DEFECT: 1.10
+      PROSTATE_HYPERTROPHY: 0.30
+      MEDICATION_DIURETIC: 1.15
+      OTHER: 0.90
+
+  - id: Q006
+    text_en: "Do you take a water tablet (diuretic) or SGLT2 inhibitor, and do you take it in the evening?"
+    text_hi: "Kya aap paani ki goli (diuretic) ya SGLT2 dawai lete hain, aur kya shaam ko lete hain?"
+    mandatory: false
+    lr_source: "SPL loop diuretics; clinical practice timing"
+    lr_positive:
+      HEART_FAILURE: 0.80
+      UNCONTROLLED_DM: 0.70
+      CKD_CONCENTRATING_DEFECT: 0.60
+      PROSTATE_HYPERTROPHY: 0.50
+      MEDICATION_DIURETIC: 6.00
+      OTHER: 0.80
+    lr_negative:
+      HEART_FAILURE: 1.05
+      UNCONTROLLED_DM: 1.10
+      CKD_CONCENTRATING_DEFECT: 1.10
+      PROSTATE_HYPERTROPHY: 1.15
+      MEDICATION_DIURETIC: 0.25
+      OTHER: 1.10
+
+  - id: Q007
+    text_en: "Is the amount of urine you pass at night large each time, or small amounts frequently?"
+    text_hi: "Kya raat ko ek baar mein zyada peshab aata hai, ya thoda thoda baar baar?"
+    mandatory: false
+    lr_source: "ICS Nocturia 2019; nocturnal polyuria index"
+    lr_positive:
+      HEART_FAILURE: 2.80
+      UNCONTROLLED_DM: 2.50
+      CKD_CONCENTRATING_DEFECT: 2.20
+      PROSTATE_HYPERTROPHY: 0.30
+      MEDICATION_DIURETIC: 2.00
+      OTHER: 1.00
+    lr_negative:
+      HEART_FAILURE: 0.50
+      UNCONTROLLED_DM: 0.55
+      CKD_CONCENTRATING_DEFECT: 0.55
+      PROSTATE_HYPERTROPHY: 2.80
+      MEDICATION_DIURETIC: 0.60
+      OTHER: 1.00

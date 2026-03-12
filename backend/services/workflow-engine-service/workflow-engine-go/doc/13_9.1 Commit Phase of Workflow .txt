@@ -1,0 +1,81 @@
+﻿Deep Dive: The Commit Phase & UI Interaction
+Objective: To provide a low-level implementation design for the Commit phase of the workflow. This design details how the Workflow Engine handles the verdict from the Safety Gateway, communicates with the UI, manages overrides, and triggers the final publication of the medication proposal.
+1. Architectural Context
+This entire process is orchestrated by the Workflow Engine. It is the central "conductor" that maintains the state of the clinical action, from the initial command to the final audit trail.
+Key Components Involved:
+* Workflow Engine: The state machine and orchestrator.
+* Safety Gateway: The service that provides the SAFE | UNSAFE | WARNING verdict.
+* Medication Service: The service that calculates the proposal and, crucially, commits it via the Transactional Outbox pattern.
+* Apollo Federation: The GraphQL gateway that serves as the single point of communication with the UI.
+* UI: The user interface where the clinician interacts with the system.
+2. The Step-by-Step Flow: From Validation to Final Action
+This sequence begins the moment the Workflow Engine receives the validation verdict from the Safety Gateway.
+sequenceDiagram
+   participant WE as Workflow Engine
+   participant SG as Safety Gateway
+   participant AF as Apollo Federation
+   participant UI as Clinician @ UI
+   participant MS as Medication Service
+   participant K as Kafka
+
+   SG-->>WE: 1. Returns Verdict (SAFE | UNSAFE | WARNING)
+
+   WE->>WE: 2. Handles Verdict (Branching Logic)
+
+   alt Verdict is SAFE
+       WE->>MS: 3a. Commit(proposal_id)
+       activate MS
+       MS-->>WE: 4a. {committed: true}
+       deactivate MS
+       WE->>AF: 5a. GraphQL Mutation: updateUINotification(status: 'SAVED', message: 'Proposal Saved & Committed')
+       AF-->>UI: 6a. (UI shows success message)
+
+   else Verdict is UNSAFE or WARNING
+       WE->>AF: 3b. GraphQL Mutation: updateUINotification(status: 'ACTION_REQUIRED', payload: {verdict, evidence, override_allowed})
+       AF-->>UI: 4b. (UI displays modal with details)
+       UI->>UI: 5b. Clinician reviews evidence & decides
+       UI->>AF: 6b. GraphQL Mutation: resolveAction(decision: 'OVERRIDE' | 'CANCEL', reason: '...')
+       AF->>WE: 7b. Forwards Clinician's Decision
+       WE->>WE: 8b. Handles Override/Cancel
+
+       alt Decision is OVERRIDE
+           WE->>MS: 9b. Commit(proposal_id, override_details)
+           activate MS
+           MS-->>WE: 10b. {committed: true}
+           deactivate MS
+           WE->>AF: 11b. GraphQL Mutation: updateUINotification(status: 'SAVED', message: 'Proposal Overridden & Committed')
+           AF-->>UI: 12b. (UI shows success message)
+           WE->>K: 13b. Publish OverrideEvent to 'clinical-overrides' topic (for Learning Loop)
+       else Decision is CANCEL
+           WE->>MS: 9c. Cancel(proposal_id)
+           WE->>AF: 10c. GraphQL Mutation: updateUINotification(status: 'CANCELLED')
+           AF-->>UI: 11c. (UI closes modal, cancels action)
+       end
+   end
+
+
+3. Detailed Implementation Logic
+Handling the Verdict in the Workflow Engine
+When the verdict arrives from the Safety Gateway, the Workflow Engine's state machine transitions.
+* If SAFE:
+   1. The Workflow Engine immediately calls the Commit endpoint on the Medication Service, passing the proposal_id.
+   2. The Medication Service executes the second part of its Transactional Outbox Pattern: it updates the proposal status to COMMITTED and the outbox event status to PUBLISHED in a single transaction.
+   3. Upon success, the Workflow Engine sends a GraphQL mutation through Apollo Federation to the UI, indicating that the proposal has been saved and the action is complete.
+* If UNSAFE or WARNING:
+   1. The Workflow Engine does not call Commit. Instead, it constructs a detailed payload.
+   2. This payload includes the verdict (UNSAFE), the evidence trail (the specific rules that failed), and a flag indicating if an override is permissible (e.g., warnings can be overridden, but absolute contraindications cannot).
+   3. It sends this payload in a GraphQL mutation through Apollo Federation to the UI.
+The UI Interaction: Display, Override, and Audit
+The UI is designed to handle this rich payload intelligently.
+1. Displaying the Warning: The UI receives the ACTION_REQUIRED notification and displays a modal window. This is not a simple alert(). It is a structured component that clearly shows:
+   * The Verdict: A clear "Warning" or "Unsafe" banner.
+   * The Evidence Trail: A human-readable list of the reasons for the verdict (e.g., "Moderate interaction between Lisinopril and Spironolactone: Increased risk of hyperkalemia").
+   * The Options: Buttons for "Override" (if allowed), "Modify" (to go back and change the proposal), or "Cancel".
+2. Handling the Override:
+   * If the clinician chooses to "Override," the UI requires them to select a reason from a dropdown or enter a free-text justification. This is mandatory for the audit trail.
+   * The UI sends a resolveAction mutation back to the Workflow Engine, containing the decision (OVERRIDE) and the reason.
+3. Committing the Override:
+   * The Workflow Engine receives the override command. It now calls the Commit endpoint on the Medication Service, but this time it includes the override details (overridden_by: clinician_id, override_reason: '...').
+   * The Medication Service saves these override details along with the proposal before marking it as COMMITTED.
+   * Crucially, the Workflow Engine also publishes a separate, specific event to a Kafka topic like clinical-overrides. This event contains the full context of the override and is consumed by our Override Learning Loop for analytics and future rule refinement.
+This design provides a complete, closed-loop system. It ensures that every decision is validated, every exception is handled with a clear human-in-the-loop workflow, and every action—especially an override—is captured as structured data for auditing, analytics, and continuous improvement.

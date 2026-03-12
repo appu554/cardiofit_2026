@@ -1,0 +1,132 @@
+# KB-22 HPI Engine - Prometheus Alerting Rules
+# Deploy to Prometheus alertmanager configuration.
+
+groups:
+  - name: kb22_hpi_engine
+    rules:
+      # -----------------------------------------------------------------------
+      # Safety Alerts — highest priority
+      # -----------------------------------------------------------------------
+      - alert: KB22_SafetyFlagSurge
+        expr: rate(kb22_safety_flags_raised_total{severity="IMMEDIATE"}[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "KB-22 IMMEDIATE safety flags firing at elevated rate"
+          description: "More than 0.5 IMMEDIATE safety flags/sec over 5m. Investigate patient safety escalation patterns."
+
+      - alert: KB22_SafetyFlagRateHigh
+        expr: sum(rate(kb22_safety_flags_raised_total[15m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "KB-22 safety flags firing at high rate across all severities"
+          description: "Combined safety flag rate exceeds 2/sec sustained for 5m."
+
+      # -----------------------------------------------------------------------
+      # Latency SLOs
+      # -----------------------------------------------------------------------
+      - alert: KB22_AnswerLatencyP95High
+        expr: histogram_quantile(0.95, rate(kb22_answer_latency_ms_bucket[5m])) > 50
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "KB-22 answer processing P95 latency exceeds 50ms"
+          description: "Answer P95 is {{ $value }}ms. Target is <50ms. Check Bayesian engine or DB performance."
+
+      - alert: KB22_AnswerLatencyP99Critical
+        expr: histogram_quantile(0.99, rate(kb22_answer_latency_ms_bucket[5m])) > 200
+        for: 3m
+        labels:
+          severity: critical
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "KB-22 answer processing P99 latency exceeds 200ms"
+          description: "Answer P99 is {{ $value }}ms. Patients may experience unacceptable delay."
+
+      - alert: KB22_SessionInitSlow
+        expr: histogram_quantile(0.95, rate(kb22_session_init_latency_ms_bucket[5m])) > 200
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "KB-22 session init P95 latency exceeds 200ms"
+          description: "Session init includes KB-20/21/23 fetches. P95 is {{ $value }}ms."
+
+      # -----------------------------------------------------------------------
+      # Upstream dependency health
+      # -----------------------------------------------------------------------
+      - alert: KB22_KB20FetchSlow
+        expr: histogram_quantile(0.95, rate(kb22_kb20_fetch_duration_ms_bucket[5m])) > 40
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-22-hpi-engine
+          dependency: kb-20
+        annotations:
+          summary: "KB-20 stratum fetch P95 exceeds 40ms SLO"
+          description: "KB-20 P95 latency is {{ $value }}ms. This is the required upstream — session creation will fail if KB-20 is down."
+
+      - alert: KB22_KB21FetchSlow
+        expr: histogram_quantile(0.95, rate(kb22_kb21_fetch_duration_ms_bucket[5m])) > 40
+        for: 10m
+        labels:
+          severity: info
+          service: kb-22-hpi-engine
+          dependency: kb-21
+        annotations:
+          summary: "KB-21 adherence/reliability fetch P95 exceeds 40ms"
+          description: "KB-21 gracefully degrades to defaults, but elevated latency wastes session init budget."
+
+      # -----------------------------------------------------------------------
+      # Clinical quality
+      # -----------------------------------------------------------------------
+      - alert: KB22_PatanahiRateHigh
+        expr: kb22_patanahi_rate > 0.50
+        for: 15m
+        labels:
+          severity: warning
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "Pata-nahi rate exceeds 50% for node {{ $labels.node_id }}"
+          description: "More than half of answers are 'pata nahi'. Review question clarity or patient engagement for {{ $labels.node_id }}."
+
+      - alert: KB22_CalibrationConcordanceLow
+        expr: kb22_calibration_concordance < 0.50
+        for: 1h
+        labels:
+          severity: warning
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "Top-1 concordance below 50% for {{ $labels.node_id }} / {{ $labels.stratum }}"
+          description: "Engine diagnostic accuracy has dropped. Review LR values and priors for recalibration."
+
+      - alert: KB22_ConvergenceRateLow
+        expr: rate(kb22_differential_converged_total[1h]) / rate(kb22_sessions_started_total[1h]) < 0.40
+        for: 30m
+        labels:
+          severity: info
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "KB-22 convergence rate below 40%"
+          description: "Less than 40% of sessions reach convergence. May indicate need for more discriminating questions."
+
+      # -----------------------------------------------------------------------
+      # Throughput
+      # -----------------------------------------------------------------------
+      - alert: KB22_NoSessionsStarted
+        expr: rate(kb22_sessions_started_total[30m]) == 0
+        for: 30m
+        labels:
+          severity: info
+          service: kb-22-hpi-engine
+        annotations:
+          summary: "No HPI sessions started in 30 minutes"
+          description: "KB-22 has not received any session creation requests. May indicate upstream routing issue."

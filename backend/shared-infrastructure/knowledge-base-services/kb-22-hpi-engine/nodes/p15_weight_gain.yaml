@@ -1,0 +1,244 @@
+# P15 Weight Gain - HPI Node Definition
+# Bayesian differential for rapid weight gain in cardio-renal-metabolic patients
+# Binary question format (YES/NO/PATA_NAHI) with lr_positive / lr_negative
+# Priors sum to 0.90 (Other bucket reserves 0.10)
+
+node_id: P15_WEIGHT_GAIN
+version: "1.0.0"
+title_en: "Rapid Weight Gain Differential Diagnosis"
+title_hi: "Tezi se Wajan Badhna Vibhedak Nidaan"
+description: "Bayesian differential for rapid weight gain (>2 kg/week) in DM+HTN cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Supported strata
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_HF_2023"
+
+# ===============================================================
+# Differentials with per-stratum priors (F-05)
+# Sum = 0.90; Other bucket = 0.10 -> total 1.00
+# ===============================================================
+differentials:
+  - id: FLUID_RETENTION_HF
+    label: "Fluid Retention - Heart Failure"
+    population_reference: "ESC HF 2023; daily weight monitoring in HF >2kg/3d = decompensation"
+    priors:
+      DM_HTN_base: 0.28
+
+  - id: CKD_FLUID_OVERLOAD
+    label: "CKD Fluid Overload"
+    population_reference: "KDIGO CKD 2024; fluid retention in CKD 3b-5"
+    priors:
+      DM_HTN_base: 0.18
+
+  - id: MEDICATION_INDUCED
+    label: "Medication-Induced Weight Gain (Insulin, TZD, Steroids, CCB)"
+    population_reference: "ADA 2024; insulin weight gain 2-4 kg; TZD 3-5 kg"
+    priors:
+      DM_HTN_base: 0.18
+
+  - id: HYPOTHYROID
+    label: "Hypothyroidism"
+    population_reference: "ATA Thyroid Guidelines 2017; typical 2-5 kg gain"
+    priors:
+      DM_HTN_base: 0.10
+
+  - id: DIETARY_EXCESS
+    label: "Dietary Excess / High Sodium Intake"
+    population_reference: "DASH diet trials; ICMR India dietary survey"
+    priors:
+      DM_HTN_base: 0.10
+
+  - id: OTHER
+    label: "Other (Cushing, Ascites, Lymphoedema)"
+    population_reference: "Clinical practice review"
+    priors:
+      DM_HTN_base: 0.06
+
+# ===============================================================
+# G1: Safety floor clamping
+# HF fluid retention NEVER drops below 0.05 — rapid weight gain
+# is a cardinal decompensation sign requiring urgent evaluation.
+# ===============================================================
+safety_floors:
+  FLUID_RETENTION_HF: 0.05
+  CKD_FLUID_OVERLOAD: 0.04
+
+# ===============================================================
+# Safety triggers
+# ===============================================================
+safety_triggers:
+  - id: RF01_HF_DECOMPENSATION
+    type: BOOLEAN
+    condition: "FLUID_RETENTION_HF.posterior > 0.40"
+    severity: IMMEDIATE
+    recommended_action: "Suspected acute HF decompensation with rapid weight gain. Order urgent BNP, chest X-ray, electrolytes. Consider diuretic adjustment. SNOMED: 84114007"
+
+  - id: RF02_RAPID_FLUID_GAIN
+    type: BOOLEAN
+    condition: "Q001=YES AND Q003=YES"
+    severity: IMMEDIATE
+    recommended_action: "Rapid weight gain (>2 kg in 3 days) with dyspnoea — urgent cardiology/nephrology review."
+
+  - id: RF03_CKD_OVERLOAD
+    type: BOOLEAN
+    condition: "CKD_FLUID_OVERLOAD.posterior > 0.40 AND Q006=YES"
+    severity: URGENT
+    recommended_action: "CKD fluid overload with reduced urine output. Urgent renal function, electrolytes, and nephrology consultation."
+
+# ===============================================================
+# Questions — Binary (YES / NO / PATA_NAHI)
+# LR values for ALL differentials per question
+# ===============================================================
+questions:
+  - id: Q001
+    text_en: "Have you gained more than 2 kg (about 4-5 pounds) in the past week?"
+    text_hi: "Kya pichle ek hafte mein aapka wajan 2 kg se zyada badha hai?"
+    mandatory: true
+    lr_source: "ESC HF 2023; >2 kg/3 days = decompensation threshold"
+    lr_positive:
+      FLUID_RETENTION_HF: 3.50
+      CKD_FLUID_OVERLOAD: 2.80
+      MEDICATION_INDUCED: 1.40
+      HYPOTHYROID: 0.80
+      DIETARY_EXCESS: 1.20
+      OTHER: 1.10
+    lr_negative:
+      FLUID_RETENTION_HF: 0.40
+      CKD_FLUID_OVERLOAD: 0.50
+      MEDICATION_INDUCED: 0.80
+      HYPOTHYROID: 1.10
+      DIETARY_EXCESS: 0.85
+      OTHER: 0.95
+
+  - id: Q002
+    text_en: "Do you notice swelling in your feet, ankles, or legs along with the weight gain?"
+    text_hi: "Kya wajan badhne ke saath pairon, takhno, ya tangon mein sujan bhi dikh rahi hai?"
+    mandatory: true
+    lr_source: "ESC HF 2023; Framingham criteria"
+    lr_positive:
+      FLUID_RETENTION_HF: 3.20
+      CKD_FLUID_OVERLOAD: 3.50
+      MEDICATION_INDUCED: 2.00
+      HYPOTHYROID: 1.20
+      DIETARY_EXCESS: 0.60
+      OTHER: 1.30
+    lr_negative:
+      FLUID_RETENTION_HF: 0.40
+      CKD_FLUID_OVERLOAD: 0.35
+      MEDICATION_INDUCED: 0.65
+      HYPOTHYROID: 0.90
+      DIETARY_EXCESS: 1.30
+      OTHER: 0.85
+
+  - id: Q003
+    text_en: "Are you also feeling breathless, especially when lying down or at night?"
+    text_hi: "Kya aapko saans ki taklif bhi ho rahi hai, khaaskar lete waqt ya raat ko?"
+    mandatory: true
+    lr_source: "ESC HF 2023; orthopnoea/PND in decompensated HF"
+    lr_positive:
+      FLUID_RETENTION_HF: 4.20
+      CKD_FLUID_OVERLOAD: 1.80
+      MEDICATION_INDUCED: 0.50
+      HYPOTHYROID: 0.60
+      DIETARY_EXCESS: 0.40
+      OTHER: 0.70
+    lr_negative:
+      FLUID_RETENTION_HF: 0.35
+      CKD_FLUID_OVERLOAD: 0.70
+      MEDICATION_INDUCED: 1.15
+      HYPOTHYROID: 1.10
+      DIETARY_EXCESS: 1.20
+      OTHER: 1.10
+
+  - id: Q004
+    text_en: "Has a new medication been started recently — such as insulin, a sugar tablet (pioglitazone), steroid, or BP medicine?"
+    text_hi: "Kya haal mein koi nayi dawai shuru hui hai — jaise insulin, sugar ki goli (pioglitazone), steroid, ya BP ki dawai?"
+    mandatory: true
+    lr_source: "ADA 2024; insulin/TZD weight gain; CCB edema"
+    lr_positive:
+      FLUID_RETENTION_HF: 0.60
+      CKD_FLUID_OVERLOAD: 0.70
+      MEDICATION_INDUCED: 5.50
+      HYPOTHYROID: 0.50
+      DIETARY_EXCESS: 0.40
+      OTHER: 1.00
+    lr_negative:
+      FLUID_RETENTION_HF: 1.10
+      CKD_FLUID_OVERLOAD: 1.10
+      MEDICATION_INDUCED: 0.30
+      HYPOTHYROID: 1.15
+      DIETARY_EXCESS: 1.20
+      OTHER: 1.00
+
+  - id: Q005
+    text_en: "Have you been eating more salty foods, eating out more, or eating larger portions recently?"
+    text_hi: "Kya haal mein namkeen khaana zyada khaya hai, baahar khaana zyada hua hai, ya bade portion khaye hain?"
+    mandatory: false
+    lr_source: "DASH trial; ICMR dietary sodium survey India"
+    lr_positive:
+      FLUID_RETENTION_HF: 0.80
+      CKD_FLUID_OVERLOAD: 1.20
+      MEDICATION_INDUCED: 0.60
+      HYPOTHYROID: 0.70
+      DIETARY_EXCESS: 5.00
+      OTHER: 1.00
+    lr_negative:
+      FLUID_RETENTION_HF: 1.05
+      CKD_FLUID_OVERLOAD: 0.90
+      MEDICATION_INDUCED: 1.10
+      HYPOTHYROID: 1.10
+      DIETARY_EXCESS: 0.30
+      OTHER: 1.00
+
+  - id: Q006
+    text_en: "Have you noticed that you are passing less urine than usual?"
+    text_hi: "Kya aapne mehsoos kiya hai ki peshab kam aa raha hai?"
+    mandatory: false
+    lr_source: "KDIGO CKD 2024; oliguria in fluid overload"
+    lr_positive:
+      FLUID_RETENTION_HF: 2.50
+      CKD_FLUID_OVERLOAD: 4.00
+      MEDICATION_INDUCED: 0.60
+      HYPOTHYROID: 0.70
+      DIETARY_EXCESS: 0.50
+      OTHER: 1.20
+    lr_negative:
+      FLUID_RETENTION_HF: 0.65
+      CKD_FLUID_OVERLOAD: 0.40
+      MEDICATION_INDUCED: 1.10
+      HYPOTHYROID: 1.10
+      DIETARY_EXCESS: 1.15
+      OTHER: 0.90
+
+  - id: Q007
+    text_en: "Do you feel more tired, cold, or sluggish than usual along with the weight gain?"
+    text_hi: "Kya wajan badhne ke saath aap zyada thake hue, thand lagti hai, ya susti mehsoos karte hain?"
+    mandatory: false
+    lr_source: "ATA Thyroid Guidelines 2017; hypothyroid symptom cluster"
+    lr_positive:
+      FLUID_RETENTION_HF: 1.20
+      CKD_FLUID_OVERLOAD: 0.90
+      MEDICATION_INDUCED: 0.80
+      HYPOTHYROID: 4.50
+      DIETARY_EXCESS: 0.50
+      OTHER: 1.30
+    lr_negative:
+      FLUID_RETENTION_HF: 0.90
+      CKD_FLUID_OVERLOAD: 1.05
+      MEDICATION_INDUCED: 1.05
+      HYPOTHYROID: 0.35
+      DIETARY_EXCESS: 1.15
+      OTHER: 0.85

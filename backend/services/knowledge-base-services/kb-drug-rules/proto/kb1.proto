@@ -1,0 +1,174 @@
+// KB-1 Drug Dosing Rules gRPC Service
+// Protocol Buffer definition for high-performance communication with Rust Dose Calculation Engine
+// Specification compliance: KB-1 Drug Dosing Rules Documentation
+// SLO Requirement: p95 latency < 60ms
+
+syntax = "proto3";
+package kb1;
+option go_package = "kb-drug-rules/proto";
+
+// PatientContext contains patient-specific parameters for dose calculation
+message PatientContext {
+  double weight_kg = 1;              // Patient weight in kilograms
+  double egfr = 2;                   // Estimated glomerular filtration rate (mL/min/1.73m²)
+  double alt = 3;                    // Alanine aminotransferase (U/L)
+  double ast = 4;                    // Aspartate aminotransferase (U/L)
+  int32 age_years = 5;               // Patient age in years
+  string sex = 6;                    // "M", "F", or "O"
+  bool pregnant = 7;                 // Pregnancy status
+  double creatinine_clearance = 8;   // Creatinine clearance (mL/min)
+  string dialysis_type = 9;          // "none", "hemodialysis", "peritoneal", "crrt"
+  
+  // Additional numeric parameters that may be referenced in rules
+  // Only fields listed in 'used_fields' per compiled bundle are transmitted
+  map<string, double> extra_numeric = 10;
+  map<string, string> extra_categorical = 11;
+}
+
+// DosingRuleRequest represents a request for dosing rules
+message DosingRuleRequest {
+  string transaction_id = 1;         // Unique transaction identifier for tracing
+  string drug_code = 2;              // Canonical drug code, e.g. "rxnorm:8610"
+  PatientContext patient_context = 3; // Patient-specific context for rule application
+  string version_pin = 4;            // Optional: specific semantic_version to retrieve
+  bool include_compiled_bundle = 5;  // Whether to include full compiled JSON bundle
+  string region = 6;                 // Regional variation (US, EU, CA, AU)
+}
+
+// DosingRuleResponse contains the complete dosing ruleset
+message DosingRuleResponse {
+  string transaction_id = 1;         // Echo of request transaction_id
+  string drug_code = 2;              // Echo of requested drug_code
+  string semantic_version = 3;       // Version of the returned rules
+  bytes compiled_json = 4;           // Full compiled rule bundle (if requested)
+  repeated DoseAdjustment adjustments = 5;  // Applicable dose adjustments
+  TitrationSchedule schedule = 6;    // Titration protocol (if applicable)
+  PopulationDosing population = 7;   // Population-specific dosing (if applicable)
+  string checksum = 8;               // SHA256 checksum of compiled_json
+  repeated string warnings = 9;      // Clinical warnings for this patient context
+  string provenance_json = 10;       // Provenance information as JSON string
+  RuleMetadata metadata = 11;        // Rule metadata for audit and display
+}
+
+// DoseAdjustment represents a specific dose adjustment rule
+message DoseAdjustment {
+  string adj_id = 1;                 // Unique adjustment identifier
+  string adjust_type = 2;            // "renal", "hepatic", "age", "weight", "drug_interaction"
+  string description = 3;            // Human-readable description
+  string formula_json = 4;           // Formula AST as JSON string
+  string condition_json = 5;         // Condition predicate AST as JSON string
+  double multiplier = 6;             // Dose multiplier (if applicable)
+  double additive_mg = 7;            // Additive dose adjustment in mg
+  double max_dose_mg = 8;            // Maximum dose limit in mg
+  double min_dose_mg = 9;            // Minimum dose limit in mg
+  bool contraindicated = 10;         // Whether this condition contraindicates the drug
+}
+
+// TitrationSchedule represents a multi-step titration protocol
+message TitrationSchedule {
+  bytes schedule_json = 1;           // Complete titration schedule as JSON
+  repeated TitrationStep steps = 2;  // Individual titration steps
+  string monitoring_requirements = 3; // Monitoring requirements during titration
+}
+
+// TitrationStep represents a single step in titration
+message TitrationStep {
+  int32 step_number = 1;             // Step sequence number
+  int32 after_days = 2;              // Days to wait before this step
+  string action_type = 3;            // "increase_by", "multiply", "assess", "hold"
+  double action_value = 4;           // Numeric value for the action
+  int32 max_step = 5;                // Maximum step number (if applicable)
+  string monitoring_required = 6;    // Specific monitoring for this step
+}
+
+// PopulationDosing represents population-specific dosing rules
+message PopulationDosing {
+  bytes population_json = 1;         // Complete population rules as JSON
+  repeated PopulationRule rules = 2; // Individual population rules
+}
+
+// PopulationRule represents a rule for a specific population
+message PopulationRule {
+  string pop_id = 1;                 // Unique population rule identifier
+  string population_type = 2;        // "pediatric", "geriatric", "pregnancy", "breastfeeding"
+  int32 age_min = 3;                 // Minimum age (years)
+  int32 age_max = 4;                 // Maximum age (years)
+  double weight_min = 5;             // Minimum weight (kg)
+  double weight_max = 6;             // Maximum weight (kg)
+  string formula_json = 7;           // Population-specific formula AST
+  string safety_limits_json = 8;     // Safety constraints as JSON
+}
+
+// RuleMetadata contains metadata about the dosing rule
+message RuleMetadata {
+  string source_file = 1;            // Original TOML filename
+  string created_by = 2;             // Rule author
+  string created_at = 3;             // Creation timestamp (RFC3339)
+  repeated string authors = 4;       // List of rule authors
+  repeated string kb3_refs = 5;      // References to KB-3 evidence
+  repeated string kb4_refs = 6;      // References to KB-4 safety data
+  string clinical_reviewer = 7;      // Clinical reviewer name
+  string clinical_review_date = 8;   // Clinical review date (RFC3339)
+  repeated string regions = 9;       // Supported regions
+}
+
+// ErrorDetails provides structured error information
+message ErrorDetails {
+  string error_code = 1;             // Machine-readable error code
+  string error_message = 2;          // Human-readable error message
+  string error_detail = 3;           // Additional error context
+  map<string, string> metadata = 4; // Additional error metadata
+}
+
+// DosingService provides drug dosing rule retrieval and validation
+service DosingService {
+  // GetDosingRuleset retrieves the complete dosing ruleset for a drug and patient context
+  // SLO: p95 latency < 60ms
+  rpc GetDosingRuleset(DosingRuleRequest) returns (DosingRuleResponse);
+  
+  // ValidatePatientContext validates patient context parameters
+  rpc ValidatePatientContext(PatientContext) returns (ValidationResponse);
+  
+  // GetRuleMetadata retrieves metadata about available rules
+  rpc GetRuleMetadata(RuleMetadataRequest) returns (RuleMetadataResponse);
+  
+  // CheckRuleAvailability checks if rules are available for a drug code
+  rpc CheckRuleAvailability(AvailabilityRequest) returns (AvailabilityResponse);
+}
+
+// ValidationResponse represents validation result
+message ValidationResponse {
+  bool valid = 1;                    // Whether the patient context is valid
+  repeated string errors = 2;        // Validation errors
+  repeated string warnings = 3;      // Validation warnings
+  repeated string required_fields = 4; // Fields required for this drug
+}
+
+// RuleMetadataRequest requests metadata about rules
+message RuleMetadataRequest {
+  string drug_code = 1;              // Drug code to get metadata for
+  string version = 2;                // Optional: specific version
+}
+
+// RuleMetadataResponse contains rule metadata
+message RuleMetadataResponse {
+  string drug_code = 1;
+  repeated string available_versions = 2;
+  string latest_version = 3;
+  RuleMetadata metadata = 4;
+  repeated string supported_regions = 5;
+}
+
+// AvailabilityRequest checks rule availability
+message AvailabilityRequest {
+  string drug_code = 1;              // Drug code to check
+  string region = 2;                 // Optional: specific region
+}
+
+// AvailabilityResponse indicates rule availability
+message AvailabilityResponse {
+  bool available = 1;                // Whether rules are available
+  string latest_version = 2;         // Latest available version
+  repeated string supported_regions = 3; // Supported regions
+  string message = 4;                // Additional information
+}

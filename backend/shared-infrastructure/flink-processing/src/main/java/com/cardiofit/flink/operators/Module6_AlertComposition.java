@@ -1,0 +1,937 @@
+package com.cardiofit.flink.operators;
+
+import com.cardiofit.flink.models.*;
+import com.cardiofit.flink.utils.KafkaConfigLoader;
+import com.cardiofit.flink.utils.KafkaTopics;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.StateTtlConfig;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.connector.base.DeliveryGuarantee;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.util.Collector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+
+/**
+ * Module 6: Alert Composition & Routing
+ *
+ * <p><b>Purpose:</b> Combine alerts from Module 2 (threshold-based) and Module 4 (CEP patterns),
+ * deduplicate based on 30-minute suppression windows, and route to clinical systems.
+ *
+ * <p><b>Architecture:</b>
+ * <pre>
+ * Input Stream 1: SimpleAlert (from Module 2 threshold checks)
+ * Input Stream 2: PatternEvent (from Module 4 CEP patterns)
+ *      ↓
+ * CoProcessFunction (AlertComposer)
+ *   - Keyed by patient_id for both streams
+ *   - MapState<String, AlertHistory> for deduplication
+ *   - 30-minute suppression window (per architecture spec)
+ *   - Severity escalation bypass (safety-critical)
+ *      ↓
+ * Output Stream: ComposedAlert (deduplicated, multi-source alerts)
+ *      ↓
+ * Kafka Sinks:
+ *   - composed-alerts.v1 (all alerts)
+ *   - urgent-alerts.v1 (CRITICAL + HIGH severity)
+ * </pre>
+ *
+ * <p><b>Clinical Safety Requirements:</b>
+ * <ul>
+ *   <li>30-minute suppression window to prevent alert fatigue</li>
+ *   <li>Severity escalation ALWAYS bypasses suppression (patient safety)</li>
+ *   <li>No missed critical alerts due to deduplication</li>
+ *   <li>Full audit trail with suppression count tracking</li>
+ *   <li>Multi-source alert attribution for evidence-based care</li>
+ * </ul>
+ *
+ * <p><b>Deduplication Logic:</b>
+ * <pre>
+ * For each incoming alert:
+ *   1. Generate alert key: "{alertType}:{patientId}"
+ *   2. Check AlertHistory state for this key
+ *   3. If history exists:
+ *      a. Check if within 30-min suppression window
+ *      b. If suppressed AND no severity escalation → suppress (increment count)
+ *      c. If suppressed BUT severity escalated → fire alert (bypass suppression)
+ *   4. If not suppressed → fire alert and update history
+ *   5. Track suppression count in ComposedAlert for audit
+ * </pre>
+ *
+ * <p><b>State Management:</b>
+ * <ul>
+ *   <li>State: MapState&lt;String, AlertHistory&gt; (keyed by patient)</li>
+ *   <li>TTL: 7 days (auto-cleanup old history)</li>
+ *   <li>Checkpointing: Every 30 seconds for fault tolerance</li>
+ *   <li>State backend: RocksDB for scalability</li>
+ * </ul>
+ *
+ * <p><b>Performance Characteristics:</b>
+ * <ul>
+ *   <li>Parallelism: 4 (alert composition can be parallelized by patient)</li>
+ *   <li>State size: ~1KB per patient (AlertHistory)</li>
+ *   <li>Throughput: ~10K alerts/second (typical clinical load)</li>
+ *   <li>Latency: &lt;100ms (p99) for alert composition</li>
+ * </ul>
+ *
+ * @see SimpleAlert Input from Module 2 (threshold-based alerts)
+ * @see PatternEvent Input from Module 4 (CEP pattern alerts)
+ * @see ComposedAlert Output (deduplicated multi-source alerts)
+ * @see AlertHistory State model for deduplication tracking
+ */
+public class Module6_AlertComposition {
+    private static final Logger LOG = LoggerFactory.getLogger(Module6_AlertComposition.class);
+
+    public static void main(String[] args) throws Exception {
+        LOG.info("Starting Module 6: Alert Composition & Routing");
+
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Configure for alert processing
+        env.setParallelism(4); // Alert composition can be parallelized
+        env.enableCheckpointing(30000); // 30-second checkpoints
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+
+        createAlertCompositionPipeline(env);
+
+        env.execute("Module 6: Alert Composition & Routing");
+    }
+
+    /**
+     * Create the alert composition pipeline
+     *
+     * <p>FIXED: Reads PatternEvents from all Module 4 sources (pattern-events.v1 and alert-management.v1)
+     * and Module 2 (clinical-patterns.v1), processes them through a KeyedProcessFunction for
+     * deduplication, and routes composed alerts to appropriate Kafka topics based on severity.
+     *
+     * @param env Flink execution environment
+     */
+    public static void createAlertCompositionPipeline(StreamExecutionEnvironment env) {
+        LOG.info("Creating alert composition pipeline - reading PatternEvents from all sources");
+
+        // Input Stream 1: PatternEvent from Module 4 - General patterns (pattern-events.v1)
+        DataStream<PatternEvent> patternEventsGeneral = createPatternEventSourceFromTopic(env, "pattern-events.v1");
+
+        // Input Stream 2: PatternEvent from Module 4 - Deterioration patterns (alert-management.v1)
+        DataStream<PatternEvent> patternEventsDeterior = createPatternEventSourceFromTopic(env, "alert-management.v1");
+
+        // Input Stream 3: PatternEvent from Module 2 - Clinical patterns (clinical-patterns.v1)
+        DataStream<PatternEvent> patternEventsClinical = createPatternEventSource(env);
+
+        // Union all three PatternEvent streams
+        DataStream<PatternEvent> allPatternEvents = patternEventsGeneral
+            .union(patternEventsDeterior)
+            .union(patternEventsClinical);
+
+        LOG.info("Combined PatternEvent streams from 3 sources: pattern-events.v1, alert-management.v1, clinical-patterns.v1");
+
+        // Process all PatternEvents through deduplication and composition
+        DataStream<ComposedAlert> composedAlerts = allPatternEvents
+            .keyBy(pattern -> pattern.getPatientId() != null ? pattern.getPatientId() : "UNKNOWN")
+            .process(new PatternEventProcessor())
+            .uid("alert-composition-operator")
+            .name("Alert Composition & Deduplication (PatternEvents Only)");
+
+        // Route composed alerts to all-alerts sink
+        composedAlerts
+            .sinkTo(createComposedAlertSink())
+            .uid("composed-alerts-sink")
+            .name("Composed Alerts Sink (All Severities)");
+
+        // Route high-priority alerts to urgent notification system
+        composedAlerts
+            .filter(alert -> alert.getSeverity() == AlertSeverity.CRITICAL ||
+                           alert.getSeverity() == AlertSeverity.HIGH)
+            .sinkTo(createUrgentAlertSink())
+            .uid("urgent-alerts-sink")
+            .name("Urgent Alerts Sink (CRITICAL + HIGH)");
+
+        LOG.info("Alert composition pipeline created successfully");
+    }
+
+    /**
+     * AlertComposer: CoProcessFunction that combines threshold and CEP alerts
+     *
+     * <p><b>Responsibilities:</b>
+     * <ul>
+     *   <li>Process SimpleAlert from Module 2 (processElement1)</li>
+     *   <li>Process PatternEvent from Module 4 (processElement2)</li>
+     *   <li>Maintain AlertHistory state for deduplication</li>
+     *   <li>Implement 30-minute suppression window</li>
+     *   <li>Bypass suppression for severity escalation</li>
+     *   <li>Generate ComposedAlert with multi-source attribution</li>
+     * </ul>
+     *
+     * <p><b>State Schema:</b>
+     * <pre>
+     * MapState Key: "{alertType}:{patientId}" (e.g., "VITAL_THRESHOLD_BREACH:P12345")
+     * MapState Value: AlertHistory {
+     *   alertType: String
+     *   patientId: String
+     *   lastFiredTime: long (milliseconds)
+     *   lastSeverity: AlertSeverity
+     *   suppressedCount: int
+     * }
+     * </pre>
+     *
+     * <p><b>Deduplication Algorithm:</b>
+     * <pre>
+     * 1. Generate alertKey from alert type and patient ID
+     * 2. Retrieve AlertHistory from state
+     * 3. If history exists and within suppression window:
+     *    a. Check for severity escalation
+     *    b. If escalated → bypass suppression (safety)
+     *    c. If not escalated → suppress and increment count
+     * 4. If not suppressed → create ComposedAlert
+     * 5. Update AlertHistory state with new firing time
+     * </pre>
+     */
+    public static class AlertComposer
+            extends CoProcessFunction<SimpleAlert, PatternEvent, ComposedAlert> {
+
+        private static final Logger LOG = LoggerFactory.getLogger(AlertComposer.class);
+
+        /**
+         * 30-minute suppression window (per architecture spec)
+         * Prevents alert fatigue by suppressing duplicate alerts within this window
+         */
+        private static final long SUPPRESSION_WINDOW_MS = 30 * 60 * 1000L; // 1,800,000 ms
+
+        /**
+         * Deduplication state: Maps alert key to firing history
+         * Key format: "{alertType}:{patientId}"
+         * Value: AlertHistory (last firing time, severity, suppression count)
+         */
+        private transient MapState<String, AlertHistory> alertHistoryState;
+
+        /**
+         * Initialize state descriptors with TTL configuration
+         *
+         * <p>State TTL (Time-To-Live) ensures old alert history is automatically
+         * cleaned up after 7 days to prevent unbounded state growth.
+         *
+         * @param parameters Flink configuration parameters
+         * @throws Exception if state initialization fails
+         */
+        @Override
+        public void open(OpenContext openContext) throws Exception {
+            // Create state descriptor for alert history
+            MapStateDescriptor<String, AlertHistory> historyDescriptor =
+                new MapStateDescriptor<>("alert-history", String.class, AlertHistory.class);
+
+            // Configure TTL to auto-clean old history (7 days)
+            StateTtlConfig ttlConfig = StateTtlConfig
+                .newBuilder(Duration.ofDays(7))
+                .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                .build();
+            historyDescriptor.enableTimeToLive(ttlConfig);
+
+            // Register state with runtime context
+            alertHistoryState = getRuntimeContext().getMapState(historyDescriptor);
+
+            LOG.info("AlertComposer initialized with 30-minute suppression window and 7-day TTL");
+        }
+
+        /**
+         * Process SimpleAlert from Module 2 (threshold-based detection)
+         *
+         * <p>Handles threshold-based alerts like:
+         * <ul>
+         *   <li>Heart rate > 140 bpm</li>
+         *   <li>Systolic BP < 90 mmHg</li>
+         *   <li>SpO2 < 92%</li>
+         *   <li>MEWS score >= 5</li>
+         *   <li>Lab critical values</li>
+         * </ul>
+         *
+         * <p><b>Deduplication Strategy:</b>
+         * <ol>
+         *   <li>Check if same alert type fired for this patient within 30 minutes</li>
+         *   <li>If yes AND severity hasn't escalated → suppress (increment count)</li>
+         *   <li>If yes BUT severity escalated → fire anyway (patient safety)</li>
+         *   <li>If no → fire alert and update history</li>
+         * </ol>
+         *
+         * @param simpleAlert Threshold-based alert from Module 2
+         * @param ctx Process context (for state access and side outputs)
+         * @param out Collector for emitting ComposedAlert
+         * @throws Exception if processing fails
+         */
+        @Override
+        public void processElement1(SimpleAlert simpleAlert, Context ctx, Collector<ComposedAlert> out)
+                throws Exception {
+
+            // Null-safe alert type handling
+            String alertType = (simpleAlert.getAlertType() != null)
+                ? simpleAlert.getAlertType().toString()
+                : "UNKNOWN";
+            String patientId = (simpleAlert.getPatientId() != null)
+                ? simpleAlert.getPatientId()
+                : "UNKNOWN";
+            AlertSeverity severity = (simpleAlert.getSeverity() != null)
+                ? simpleAlert.getSeverity()
+                : AlertSeverity.LOW;
+
+            String alertKey = generateAlertKey(alertType, patientId);
+
+            AlertHistory history = alertHistoryState.get(alertKey);
+
+            // Check if alert should be suppressed
+            if (history != null && history.shouldSuppress(System.currentTimeMillis(), SUPPRESSION_WINDOW_MS)) {
+                // Check if severity escalated (bypass suppression for safety)
+                if (history.hasEscalatedSeverity(severity)) {
+                    LOG.info("⚠️ Severity escalated for patient {}: {} -> {}, bypassing suppression",
+                        patientId, history.getLastSeverity(), severity);
+                } else {
+                    // Suppress duplicate alert
+                    history.incrementSuppressedCount();
+                    alertHistoryState.put(alertKey, history);
+
+                    LOG.debug("🔇 Suppressed duplicate alert for patient {}: type={}, suppressedCount={}",
+                        patientId, alertType,
+                        history.getSuppressedCount());
+                    return; // Don't emit
+                }
+            }
+
+            // Create composed alert from simple alert
+            ComposedAlert composed = ComposedAlert.builder()
+                .alertId(UUID.randomUUID().toString())
+                .patientId(patientId)
+                .severity(severity)
+                .confidence(1.0) // Threshold alerts have 100% confidence
+                .addSource("MODULE_2_THRESHOLD")
+                .addEvidence("simple_alert", simpleAlert)
+                .addEvidence("alert_type", alertType)
+                .addEvidence("message", simpleAlert.getMessage())
+                .addEvidence("context", simpleAlert.getContext())
+                .recommendedActions(determineRecommendedActions(simpleAlert))
+                .suppressionCount(history != null ? history.getSuppressedCount() : 0)
+                .lastUpdated(System.currentTimeMillis())
+                .compositionStrategy(CompositionStrategy.THRESHOLD_ONLY)
+                .build();
+
+            // Update history
+            AlertHistory newHistory = new AlertHistory();
+            newHistory.setAlertType(alertType);
+            newHistory.setPatientId(patientId);
+            newHistory.setLastFiredTime(System.currentTimeMillis());
+            newHistory.setLastSeverity(severity);
+            newHistory.setSuppressedCount(0); // Reset after firing
+            alertHistoryState.put(alertKey, newHistory);
+
+            out.collect(composed);
+            LOG.info("🚨 Composed alert from threshold: patient={}, severity={}, type={}",
+                patientId, severity, alertType);
+        }
+
+        /**
+         * Process PatternEvent from Module 4 (CEP-based detection)
+         *
+         * <p>Handles complex pattern-based alerts like:
+         * <ul>
+         *   <li>Sepsis pattern (SIRS + qSOFA criteria)</li>
+         *   <li>Clinical deterioration (NEWS2 escalation)</li>
+         *   <li>Medication adherence issues</li>
+         *   <li>Cardiac event sequences</li>
+         *   <li>Respiratory distress patterns</li>
+         * </ul>
+         *
+         * <p><b>Deduplication Strategy:</b>
+         * Same as threshold alerts - 30-minute window with severity escalation bypass
+         *
+         * @param patternEvent CEP pattern alert from Module 4
+         * @param ctx Process context (for state access and side outputs)
+         * @param out Collector for emitting ComposedAlert
+         * @throws Exception if processing fails
+         */
+        @Override
+        public void processElement2(PatternEvent patternEvent, Context ctx, Collector<ComposedAlert> out)
+                throws Exception {
+
+            // Null-safe pattern type and patient ID handling
+            String patternType = (patternEvent.getPatternType() != null)
+                ? patternEvent.getPatternType()
+                : "UNKNOWN";
+            String patientId = (patternEvent.getPatientId() != null)
+                ? patternEvent.getPatientId()
+                : "UNKNOWN";
+
+            String alertKey = generateAlertKey(patternType, patientId);
+
+            AlertHistory history = alertHistoryState.get(alertKey);
+
+            // Map pattern severity to AlertSeverity
+            AlertSeverity severity = mapPatternSeverityToAlertSeverity(patternEvent.getSeverity());
+
+            if (history != null && history.shouldSuppress(System.currentTimeMillis(), SUPPRESSION_WINDOW_MS)) {
+                if (history.hasEscalatedSeverity(severity)) {
+                    LOG.info("⚠️ Pattern severity escalated for patient {}: {} -> {}, bypassing suppression",
+                        patientId, history.getLastSeverity(), severity);
+                } else {
+                    history.incrementSuppressedCount();
+                    alertHistoryState.put(alertKey, history);
+
+                    LOG.debug("🔇 Suppressed duplicate pattern alert for patient {}: pattern={}, suppressedCount={}",
+                        patientId, patternType,
+                        history.getSuppressedCount());
+                    return;
+                }
+            }
+
+            // Create composed alert from pattern event
+            ComposedAlert composed = ComposedAlert.builder()
+                .alertId(UUID.randomUUID().toString())
+                .patientId(patientId)
+                .severity(severity)
+                .confidence(patternEvent.getConfidence())
+                .addSource("MODULE_4_CEP_" + patternType)
+                .addEvidence("pattern_event", patternEvent)
+                .addEvidence("pattern_type", patternType)
+                .addEvidence("pattern_details", patternEvent.getPatternDetails())
+                .addEvidence("involved_events", patternEvent.getInvolvedEvents())
+                .recommendedActions(patternEvent.getRecommendedActions() != null ?
+                                  patternEvent.getRecommendedActions() : new ArrayList<>())
+                .suppressionCount(history != null ? history.getSuppressedCount() : 0)
+                .lastUpdated(System.currentTimeMillis())
+                .compositionStrategy(CompositionStrategy.CEP_ONLY)
+                .build();
+
+            // Update history
+            AlertHistory newHistory = new AlertHistory();
+            newHistory.setAlertType(patternType);
+            newHistory.setPatientId(patientId);
+            newHistory.setLastFiredTime(System.currentTimeMillis());
+            newHistory.setLastSeverity(severity);
+            newHistory.setSuppressedCount(0);
+            alertHistoryState.put(alertKey, newHistory);
+
+            out.collect(composed);
+            LOG.info("🚨 Composed alert from CEP pattern: patient={}, severity={}, pattern={}",
+                patientId, severity, patternType);
+        }
+
+        /**
+         * Generate unique alert key for deduplication state
+         *
+         * <p>Format: "{alertType}:{patientId}"
+         * Example: "VITAL_THRESHOLD_BREACH:P12345"
+         *
+         * @param alertType Type of alert (e.g., "VITAL_THRESHOLD_BREACH", "SEPSIS_PATTERN")
+         * @param patientId Patient identifier
+         * @return Composite key for state lookup
+         */
+        private String generateAlertKey(String alertType, String patientId) {
+            return alertType + ":" + patientId;
+        }
+
+        /**
+         * Map PatternEvent severity string to AlertSeverity enum
+         *
+         * <p>Mapping rules:
+         * <ul>
+         *   <li>CRITICAL → AlertSeverity.CRITICAL</li>
+         *   <li>HIGH → AlertSeverity.HIGH</li>
+         *   <li>MODERATE, MEDIUM → AlertSeverity.WARNING</li>
+         *   <li>LOW → AlertSeverity.INFO</li>
+         *   <li>Unknown → AlertSeverity.WARNING (safe default)</li>
+         * </ul>
+         *
+         * @param patternSeverity Severity string from PatternEvent
+         * @return Mapped AlertSeverity enum value
+         */
+        private AlertSeverity mapPatternSeverityToAlertSeverity(String patternSeverity) {
+            if (patternSeverity == null) return AlertSeverity.WARNING;
+
+            switch (patternSeverity.toUpperCase()) {
+                case "CRITICAL": return AlertSeverity.CRITICAL;
+                case "HIGH": return AlertSeverity.HIGH;
+                case "MODERATE":
+                case "MEDIUM": return AlertSeverity.WARNING;
+                case "LOW": return AlertSeverity.INFO;
+                default: return AlertSeverity.WARNING;
+            }
+        }
+
+        /**
+         * Determine recommended clinical actions based on alert type and severity
+         *
+         * <p>Action selection logic:
+         * <ul>
+         *   <li>CRITICAL: Immediate assessment, notify physician, increase monitoring</li>
+         *   <li>HIGH: Clinical assessment, review care plan</li>
+         *   <li>WARNING: Continued monitoring, document in EMR</li>
+         *   <li>INFO: Routine monitoring</li>
+         * </ul>
+         *
+         * <p>Type-specific actions:
+         * <ul>
+         *   <li>LAB_CRITICAL_VALUE: Verify result, repeat test if indicated</li>
+         *   <li>MEDICATION_MISSED: Verify patient status, reschedule</li>
+         *   <li>VITAL_THRESHOLD_BREACH: Reassess vital signs, clinical review</li>
+         * </ul>
+         *
+         * @param alert SimpleAlert to determine actions for
+         * @return List of recommended clinical action codes
+         */
+        private List<String> determineRecommendedActions(SimpleAlert alert) {
+            List<String> actions = new ArrayList<>();
+
+            // Severity-based actions
+            if (alert.getSeverity() == AlertSeverity.CRITICAL) {
+                actions.add("IMMEDIATE_CLINICAL_ASSESSMENT");
+                actions.add("NOTIFY_PHYSICIAN");
+                actions.add("INCREASE_MONITORING_FREQUENCY");
+            } else if (alert.getSeverity() == AlertSeverity.HIGH) {
+                actions.add("CLINICAL_ASSESSMENT_REQUIRED");
+                actions.add("REVIEW_CARE_PLAN");
+            } else if (alert.getSeverity() == AlertSeverity.WARNING) {
+                actions.add("CONTINUED_MONITORING");
+                actions.add("DOCUMENT_IN_EMR");
+            }
+
+            // Type-specific actions
+            if (alert.getAlertType() == AlertType.LAB_CRITICAL_VALUE) {
+                actions.add("VERIFY_LAB_RESULT");
+                actions.add("REPEAT_TEST_IF_INDICATED");
+            } else if (alert.getAlertType() == AlertType.MEDICATION_MISSED) {
+                actions.add("VERIFY_PATIENT_STATUS");
+                actions.add("RESCHEDULE_MEDICATION");
+            } else if (alert.getAlertType() == AlertType.VITAL_THRESHOLD_BREACH) {
+                actions.add("REASSESS_VITAL_SIGNS");
+                actions.add("CLINICAL_REVIEW_REQUIRED");
+            }
+
+            return actions;
+        }
+    }
+
+    /**
+     * PatternEventProcessor - Process PatternEvents from all sources (Module 2 & Module 4)
+     *
+     * <p>ADDED: Replaces the broken SimpleAlert + PatternEvent CoProcessFunction
+     * Now processes ONLY PatternEvents from 3 sources:
+     * - pattern-events.v1 (Module 4 general patterns)
+     * - alert-management.v1 (Module 4 deterioration patterns)
+     * - clinical-patterns.v1 (Module 2 clinical patterns)
+     *
+     * <p>Implements same deduplication logic:
+     * - 30-minute suppression window per patient/pattern
+     * - Severity escalation bypasses suppression
+     * - State tracking with AlertHistory
+     *
+     * @see AlertHistory State model for deduplication tracking
+     */
+    public static class PatternEventProcessor extends KeyedProcessFunction<String, PatternEvent, ComposedAlert> {
+
+        private static final long serialVersionUID = 1L;
+        private static final Logger LOG = LoggerFactory.getLogger(PatternEventProcessor.class);
+        private static final long SUPPRESSION_WINDOW_MS = 30 * 60 * 1000L; // 30 minutes
+
+        /**
+         * State: Alert history for deduplication
+         * Key: "patternType:patientId"
+         * Value: AlertHistory (last firing time, severity, suppression count)
+         */
+        private transient MapState<String, AlertHistory> alertHistoryState;
+
+        @Override
+        public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
+            super.open(openContext);
+
+            MapStateDescriptor<String, AlertHistory> historyDescriptor =
+                new MapStateDescriptor<>("pattern-alert-history", String.class, AlertHistory.class);
+            alertHistoryState = getRuntimeContext().getMapState(historyDescriptor);
+
+            LOG.info("✅ PatternEventProcessor initialized - 30-minute suppression window active");
+        }
+
+        /**
+         * Process incoming PatternEvent from Module 2 or Module 4
+         *
+         * <p>Deduplication Logic:
+         * 1. Generate alert key: "patternType:patientId"
+         * 2. Retrieve AlertHistory from state
+         * 3. Check if within 30-minute suppression window
+         * 4. If severity escalated, bypass suppression
+         * 5. Create ComposedAlert and emit
+         * 6. Update AlertHistory state
+         *
+         * @param patternEvent CEP pattern alert from Module 2/4
+         * @param ctx Process context (for state access)
+         * @param out Collector for emitting ComposedAlert
+         * @throws Exception if processing fails
+         */
+        @Override
+        public void processElement(PatternEvent patternEvent, Context ctx, Collector<ComposedAlert> out)
+                throws Exception {
+
+            // Null-safe pattern type and patient ID handling
+            String patternType = (patternEvent.getPatternType() != null)
+                ? patternEvent.getPatternType()
+                : "UNKNOWN";
+            String patientId = (patternEvent.getPatientId() != null)
+                ? patternEvent.getPatientId()
+                : "UNKNOWN";
+
+            String alertKey = generateAlertKey(patternType, patientId);
+
+            AlertHistory history = alertHistoryState.get(alertKey);
+
+            // Map pattern severity to AlertSeverity
+            AlertSeverity severity = mapPatternSeverityToAlertSeverity(patternEvent.getSeverity());
+
+            // Deduplication check with severity escalation bypass
+            if (history != null && history.shouldSuppress(System.currentTimeMillis(), SUPPRESSION_WINDOW_MS)) {
+                if (history.hasEscalatedSeverity(severity)) {
+                    LOG.info("⚠️ Pattern severity escalated for patient {}: {} -> {}, bypassing suppression",
+                        patientId, history.getLastSeverity(), severity);
+                } else {
+                    history.incrementSuppressedCount();
+                    alertHistoryState.put(alertKey, history);
+
+                    LOG.debug("🔇 Suppressed duplicate pattern alert for patient {}: pattern={}, suppressedCount={}",
+                        patientId, patternType,
+                        history.getSuppressedCount());
+                    return;
+                }
+            }
+
+            // Create composed alert from pattern event
+            ComposedAlert composed = ComposedAlert.builder()
+                .alertId(UUID.randomUUID().toString())
+                .patientId(patientId)
+                .severity(severity)
+                .confidence(patternEvent.getConfidence())
+                .addSource("MODULE_4_CEP_" + patternType)
+                .addEvidence("pattern_event", patternEvent)
+                .addEvidence("pattern_type", patternType)
+                .addEvidence("pattern_details", patternEvent.getPatternDetails())
+                .addEvidence("involved_events", patternEvent.getInvolvedEvents())
+                .recommendedActions(patternEvent.getRecommendedActions() != null ?
+                                  patternEvent.getRecommendedActions() : new ArrayList<>())
+                .suppressionCount(history != null ? history.getSuppressedCount() : 0)
+                .lastUpdated(System.currentTimeMillis())
+                .compositionStrategy(CompositionStrategy.CEP_ONLY)
+                .build();
+
+            // Update history
+            AlertHistory newHistory = new AlertHistory();
+            newHistory.setAlertType(patternType);
+            newHistory.setPatientId(patientId);
+            newHistory.setLastFiredTime(System.currentTimeMillis());
+            newHistory.setLastSeverity(severity);
+            newHistory.setSuppressedCount(0);
+            alertHistoryState.put(alertKey, newHistory);
+
+            out.collect(composed);
+            LOG.info("🚨 Composed alert from CEP pattern: patient={}, severity={}, pattern={}",
+                patientId, severity, patternType);
+        }
+
+        /**
+         * Generate unique alert key for deduplication state
+         *
+         * <p>Format: "{patternType}:{patientId}"
+         * Example: "SEPSIS_PATTERN:P12345"
+         *
+         * @param patternType Type of pattern (e.g., "SEPSIS_PATTERN", "DETERIORATION")
+         * @param patientId Patient identifier
+         * @return Composite key for state lookup
+         */
+        private String generateAlertKey(String patternType, String patientId) {
+            return patternType + ":" + patientId;
+        }
+
+        /**
+         * Map PatternEvent severity string to AlertSeverity enum
+         *
+         * <p>Mapping rules:
+         * <ul>
+         *   <li>CRITICAL → AlertSeverity.CRITICAL</li>
+         *   <li>HIGH → AlertSeverity.HIGH</li>
+         *   <li>MODERATE, MEDIUM → AlertSeverity.WARNING</li>
+         *   <li>LOW → AlertSeverity.INFO</li>
+         *   <li>Unknown → AlertSeverity.WARNING (safe default)</li>
+         * </ul>
+         *
+         * @param patternSeverity Severity string from PatternEvent
+         * @return Mapped AlertSeverity enum value
+         */
+        private AlertSeverity mapPatternSeverityToAlertSeverity(String patternSeverity) {
+            if (patternSeverity == null) return AlertSeverity.WARNING;
+
+            switch (patternSeverity.toUpperCase()) {
+                case "CRITICAL": return AlertSeverity.CRITICAL;
+                case "HIGH": return AlertSeverity.HIGH;
+                case "MODERATE":
+                case "MEDIUM": return AlertSeverity.WARNING;
+                case "LOW": return AlertSeverity.INFO;
+                default: return AlertSeverity.WARNING;
+            }
+        }
+    }
+
+    // ===== Kafka Source Creation Methods =====
+
+    /**
+     * Create Kafka source for SimpleAlert from Module 2
+     *
+     * <p>Consumes from: alert-management.v1 topic
+     * <p>Consumer group: alert-composition
+     * <p>Starting offset: latest (don't reprocess old alerts)
+     *
+     * @param env Flink execution environment
+     * @return DataStream of SimpleAlert events
+     */
+    private static DataStream<SimpleAlert> createSimpleAlertSource(StreamExecutionEnvironment env) {
+        // Using alert-management.v1 which is the actual topic containing alerts
+        String topicName = "alert-management.v1";
+
+        KafkaSource<SimpleAlert> source = KafkaSource.<SimpleAlert>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(topicName)
+            .setGroupId("alert-composition")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new SimpleAlertDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("alert-composition"))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy.<SimpleAlert>forBoundedOutOfOrderness(Duration.ofMinutes(1))
+                .withTimestampAssigner((alert, timestamp) -> alert.getTimestamp()),
+            "Simple Alerts Source (Module 2)");
+    }
+
+    /**
+     * Create Kafka source for PatternEvent from Module 4
+     *
+     * <p>Consumes from: clinical-patterns.v1 topic
+     * <p>Consumer group: alert-composition
+     * <p>Starting offset: latest (don't reprocess old patterns)
+     *
+     * @param env Flink execution environment
+     * @return DataStream of PatternEvent events
+     */
+    private static DataStream<PatternEvent> createPatternEventSource(StreamExecutionEnvironment env) {
+        KafkaSource<PatternEvent> source = KafkaSource.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.CLINICAL_PATTERNS.getTopicName())
+            .setGroupId("alert-composition")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new PatternEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("alert-composition"))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy.<PatternEvent>forBoundedOutOfOrderness(Duration.ofMinutes(1))
+                .withTimestampAssigner((event, timestamp) -> event.getDetectionTime()),
+            "Pattern Events Source (Module 2 - clinical-patterns.v1)");
+    }
+
+    /**
+     * Create Kafka source for PatternEvent from a specific topic
+     *
+     * <p>ADDED: Generic method to read PatternEvents from any topic
+     * Used to read from both Module 4 outputs: pattern-events.v1 and alert-management.v1
+     *
+     * @param env Flink execution environment
+     * @param topicName Name of the Kafka topic to read from
+     * @return DataStream of PatternEvent events
+     */
+    private static DataStream<PatternEvent> createPatternEventSourceFromTopic(StreamExecutionEnvironment env, String topicName) {
+        KafkaSource<PatternEvent> source = KafkaSource.<PatternEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(topicName)
+            .setGroupId("alert-composition")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new PatternEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("alert-composition"))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy.<PatternEvent>forBoundedOutOfOrderness(Duration.ofMinutes(1))
+                .withTimestampAssigner((event, timestamp) -> event.getDetectionTime()),
+            "Pattern Events Source (Module 4 - " + topicName + ")");
+    }
+
+    // ===== Kafka Sink Creation Methods =====
+
+    /**
+     * Create Kafka sink for all composed alerts
+     *
+     * <p>Produces to: composed-alerts.v1 topic (not yet in KafkaTopics enum)
+     * <p>All severity levels (INFO, WARNING, HIGH, CRITICAL)
+     *
+     * @return KafkaSink for ComposedAlert
+     */
+    private static KafkaSink<ComposedAlert> createComposedAlertSink() {
+        // Note: This topic needs to be added to KafkaTopics enum
+        String topicName = "composed-alerts.v1";
+
+        // Create producer config WITHOUT key/value serializers (Flink handles serialization)
+        java.util.Properties producerConfig = KafkaConfigLoader.getAutoProducerConfig();
+        producerConfig.remove("key.serializer");
+        producerConfig.remove("value.serializer");
+
+        return KafkaSink.<ComposedAlert>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(topicName)
+                .setKeySerializationSchema((SerializationSchema<ComposedAlert>) alert ->
+                    alert.getPatientId().getBytes())
+                .setValueSerializationSchema(new ComposedAlertSerializer())
+                .build())
+            .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+            .setTransactionalIdPrefix("module6-alert-composed-all")
+            .setKafkaProducerConfig(producerConfig)
+            .build();
+    }
+
+    /**
+     * Create Kafka sink for urgent/critical alerts
+     *
+     * <p>Produces to: urgent-alerts.v1 topic (not yet in KafkaTopics enum)
+     * <p>Only HIGH and CRITICAL severity alerts
+     * <p>Consumed by urgent notification systems, paging services, etc.
+     *
+     * @return KafkaSink for urgent ComposedAlert
+     */
+    private static KafkaSink<ComposedAlert> createUrgentAlertSink() {
+        // Note: This topic needs to be added to KafkaTopics enum
+        String topicName = "urgent-alerts.v1";
+
+        // Create producer config WITHOUT key/value serializers (Flink handles serialization)
+        java.util.Properties producerConfig = KafkaConfigLoader.getAutoProducerConfig();
+        producerConfig.remove("key.serializer");
+        producerConfig.remove("value.serializer");
+
+        return KafkaSink.<ComposedAlert>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(topicName)
+                .setKeySerializationSchema((SerializationSchema<ComposedAlert>) alert ->
+                    alert.getPatientId().getBytes())
+                .setValueSerializationSchema(new ComposedAlertSerializer())
+                .build())
+            .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+            .setTransactionalIdPrefix("module6-alert-urgent")
+            .setKafkaProducerConfig(producerConfig)
+            .build();
+    }
+
+    /**
+     * Get Kafka bootstrap servers based on environment
+     *
+     * @return Bootstrap servers string (Docker internal or localhost)
+     */
+    private static String getBootstrapServers() {
+        return KafkaConfigLoader.isRunningInDocker()
+            ? "kafka:9092"
+            : "localhost:9092";
+    }
+
+    // ===== Kafka Serialization/Deserialization Classes =====
+
+    /**
+     * Deserializer for SimpleAlert from Kafka
+     *
+     * <p>Uses Jackson ObjectMapper with JavaTimeModule for timestamp handling
+     */
+    private static class SimpleAlertDeserializer implements DeserializationSchema<SimpleAlert> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        }
+
+        @Override
+        public SimpleAlert deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, SimpleAlert.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(SimpleAlert nextElement) { return false; }
+
+        @Override
+        public TypeInformation<SimpleAlert> getProducedType() {
+            return TypeInformation.of(SimpleAlert.class);
+        }
+    }
+
+    /**
+     * Deserializer for PatternEvent from Kafka
+     *
+     * <p>Uses Jackson ObjectMapper with JavaTimeModule for timestamp handling
+     */
+    private static class PatternEventDeserializer implements DeserializationSchema<PatternEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        }
+
+        @Override
+        public PatternEvent deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, PatternEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(PatternEvent nextElement) { return false; }
+
+        @Override
+        public TypeInformation<PatternEvent> getProducedType() {
+            return TypeInformation.of(PatternEvent.class);
+        }
+    }
+
+    /**
+     * Serializer for ComposedAlert to Kafka
+     *
+     * <p>Uses Jackson ObjectMapper with JavaTimeModule for timestamp handling
+     */
+    private static class ComposedAlertSerializer implements SerializationSchema<ComposedAlert> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(SerializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(ComposedAlert element) {
+            try {
+                return objectMapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize ComposedAlert", e);
+            }
+        }
+    }
+}

@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'KB-7 Knowledge Factory - S3 Storage Infrastructure'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+      - development
+    Description: Environment name for resource naming
+
+  SourceBucketName:
+    Type: String
+    Default: cardiofit-kb-sources
+    Description: Bucket for raw terminology downloads (SNOMED RF2, RxNorm RRF, LOINC CSV)
+
+  ArtifactBucketName:
+    Type: String
+    Default: cardiofit-kb-artifacts
+    Description: Bucket for transformed kernels (Turtle files)
+
+Resources:
+  # S3 Bucket for Raw Source Files (SNOMED, RxNorm, LOINC)
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${SourceBucketName}-${EnvironmentName}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldSources
+            Status: Enabled
+            ExpirationInDays: 180  # Keep 6 months of source files
+            NoncurrentVersionExpirationInDays: 30
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: STANDARD_IA  # Infrequent Access after 30 days
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: CardioFit-KB7
+        - Key: Purpose
+          Value: Terminology-Sources
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # S3 Bucket for Transformed Kernel Artifacts
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ArtifactBucketName}-${EnvironmentName}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: KeepLatest12Versions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 365  # Keep 1 year of versions
+          - Id: TransitionOldVersionsToGlacier
+            Status: Enabled
+            NoncurrentVersionTransitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER  # Archive old versions
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: CardioFit-KB7
+        - Key: Purpose
+          Value: Terminology-Kernels
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Bucket Policy for Lambda Access (Sources)
+  SourceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SourceBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaUpload
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt SourceBucket.Arn
+              - !Sub '${SourceBucket.Arn}/*'
+
+  # Bucket Policy for Artifacts (Read by GitHub Actions)
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowArtifactUpload
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+
+  # CloudWatch Log Group for S3 Access Logging
+  S3AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/s3/kb7-knowledge-factory
+      RetentionInDays: 30
+
+Outputs:
+  SourceBucketName:
+    Description: Name of the source files bucket
+    Value: !Ref SourceBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-SourceBucket'
+
+  SourceBucketArn:
+    Description: ARN of the source files bucket
+    Value: !GetAtt SourceBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-SourceBucketArn'
+
+  ArtifactBucketName:
+    Description: Name of the artifact bucket
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactBucket'
+
+  ArtifactBucketArn:
+    Description: ARN of the artifact bucket
+    Value: !GetAtt ArtifactBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactBucketArn'
+
+  S3AccessLogGroupName:
+    Description: CloudWatch Log Group for S3 access logs
+    Value: !Ref S3AccessLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-S3LogGroup'

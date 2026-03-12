@@ -1,0 +1,322 @@
+# KB-7 Terminology Service - Test Configuration
+# Comprehensive testing configuration for all test environments
+
+# Global Test Settings
+test_settings:
+  timeout: 30s
+  retry_attempts: 3
+  parallel_jobs: 4
+  log_level: "error"
+  trace_enabled: false
+
+# Database Test Configuration
+database:
+  # Docker test database (for CI/CD and integration tests)
+  test:
+    host: "localhost"
+    port: 5434
+    database: "clinical_governance_test"
+    username: "kb_test_user"
+    password: "kb_test_password"
+    ssl_mode: "disable"
+    connection_pool:
+      max_open: 10
+      max_idle: 5
+      max_lifetime: "1h"
+    timeout:
+      connect: "10s"
+      query: "30s"
+      idle: "5m"
+
+  # Local development database (optional)
+  local:
+    host: "localhost"
+    port: 5432
+    database: "clinical_governance_dev"
+    username: "dev_user"
+    password: "dev_password"
+    ssl_mode: "disable"
+
+# Redis Test Configuration
+redis:
+  test:
+    host: "localhost"
+    port: 6381
+    database: 8
+    password: ""
+    timeout:
+      connect: "5s"
+      read: "3s"
+      write: "3s"
+    pool:
+      max_active: 10
+      max_idle: 3
+      idle_timeout: "240s"
+
+# Service Configuration for API Tests
+service:
+  test:
+    host: "localhost"
+    port: 8085
+    base_path: "/api/v1"
+    health_endpoint: "/health"
+    timeout: "30s"
+    
+# Test Data Configuration
+test_data:
+  # Minimal test data for fast tests
+  minimal:
+    terminology_systems: 4  # Test, SNOMED, RxNorm, LOINC
+    concepts_per_system: 3
+    concept_mappings: 1
+    value_sets: 1
+    load_timeout: "30s"
+    
+  # Performance test data for benchmarks
+  performance:
+    terminology_systems: 4
+    concepts_per_system: 1000
+    concept_mappings: 100
+    value_sets: 10
+    load_timeout: "5m"
+    
+  # Full test data for comprehensive testing
+  comprehensive:
+    terminology_systems: 6
+    concepts_per_system: 10000
+    concept_mappings: 1000
+    value_sets: 50
+    load_timeout: "15m"
+
+# Test Categories Configuration
+test_categories:
+  unit:
+    enabled: true
+    timeout: "10s"
+    parallel: true
+    coverage: true
+    tags: ["unit"]
+    
+  integration:
+    enabled: true
+    timeout: "60s"
+    parallel: false  # Sequential for database tests
+    coverage: true
+    tags: ["integration"]
+    requires_docker: true
+    
+  api:
+    enabled: true
+    timeout: "120s"
+    parallel: false
+    coverage: true
+    tags: ["api", "integration"]
+    requires_service: true
+    
+  performance:
+    enabled: true
+    timeout: "300s"
+    parallel: false
+    coverage: false
+    tags: ["performance", "benchmark"]
+    requires_large_dataset: true
+    
+  smoke:
+    enabled: true
+    timeout: "30s"
+    parallel: true
+    coverage: false
+    tags: ["smoke"]
+
+# Environment-specific Overrides
+environments:
+  # CI/CD Environment (GitHub Actions)
+  ci:
+    test_settings:
+      timeout: 60s
+      retry_attempts: 2
+      parallel_jobs: 2
+    database:
+      test:
+        host: "localhost"
+        port: 5434
+    service:
+      test:
+        timeout: "60s"
+    test_data:
+      default: "minimal"
+    test_categories:
+      performance:
+        enabled: false  # Skip performance tests in CI by default
+        
+  # Local Development
+  local:
+    test_settings:
+      timeout: 45s
+      parallel_jobs: 6
+      log_level: "info"
+      trace_enabled: true
+    test_data:
+      default: "minimal"
+    test_categories:
+      performance:
+        enabled: true
+        timeout: "600s"
+        
+  # Staging Environment
+  staging:
+    test_settings:
+      timeout: 120s
+      retry_attempts: 5
+    test_data:
+      default: "comprehensive"
+    test_categories:
+      performance:
+        enabled: true
+        timeout: "900s"
+
+# Test Assertions and Expectations
+assertions:
+  # Performance expectations
+  performance:
+    database:
+      bulk_insert_rate: "1000 concepts/second"  # Minimum expected rate
+      query_response_time: "100ms"             # Maximum expected time
+      concurrent_connections: 50               # Minimum supported connections
+    api:
+      response_time: "200ms"                   # Maximum expected response
+      throughput: "100 requests/second"        # Minimum expected throughput
+      error_rate: "0.1%"                      # Maximum acceptable error rate
+    cache:
+      hit_rate: "80%"                         # Minimum cache hit rate
+      lookup_time: "10ms"                     # Maximum cache lookup time
+      
+  # Quality expectations  
+  quality:
+    test_coverage: "80%"                      # Minimum test coverage
+    code_coverage: "85%"                      # Minimum code coverage
+    cyclomatic_complexity: 10                 # Maximum complexity per function
+    technical_debt_ratio: "5%"                # Maximum technical debt
+    
+  # Reliability expectations
+  reliability:
+    uptime: "99.9%"                          # Minimum uptime requirement
+    mttr: "15m"                              # Maximum mean time to recovery
+    error_budget: "0.1%"                     # Maximum error budget consumption
+
+# Test Fixtures and Data Sets
+fixtures:
+  # Standard test terminology systems
+  terminology_systems:
+    - id: "test-system-001"
+      name: "Test Terminology System"
+      uri: "http://test.terminology.org/test"
+      version: "1.0.0"
+      status: "active"
+      
+    - id: "snomed-system"
+      name: "SNOMED CT"
+      uri: "http://snomed.info/sct"
+      version: "20250701"
+      status: "active"
+      
+    - id: "rxnorm-system"
+      name: "RxNorm"
+      uri: "http://www.nlm.nih.gov/research/umls/rxnorm"
+      version: "2025-07"
+      status: "active"
+
+# Docker Configuration for Tests
+docker:
+  compose_file: "docker-compose.test.yml"
+  services:
+    postgres:
+      image: "postgres:15-alpine"
+      ready_check: "pg_isready"
+      timeout: "60s"
+      
+    redis:
+      image: "redis:7-alpine"
+      ready_check: "redis-cli ping"
+      timeout: "30s"
+      
+  cleanup:
+    volumes: true
+    networks: true
+    containers: true
+
+# Monitoring and Reporting
+monitoring:
+  # Test metrics to collect
+  metrics:
+    - test_duration
+    - test_pass_rate
+    - coverage_percentage
+    - performance_metrics
+    - resource_usage
+    
+  # Reports to generate
+  reports:
+    - junit_xml
+    - coverage_html
+    - performance_json
+    - benchmark_results
+    
+  # Export destinations
+  exports:
+    - file_system
+    - github_actions
+    - codecov
+
+# Security Test Configuration
+security:
+  # Vulnerability scanning
+  vulnerability_scan:
+    enabled: true
+    tools: ["gosec", "nancy"]
+    severity_threshold: "medium"
+    
+  # Secret detection
+  secret_detection:
+    enabled: true
+    patterns:
+      - password
+      - api_key
+      - token
+      - credential
+      
+  # Dependency scanning
+  dependency_scan:
+    enabled: true
+    check_licenses: true
+    check_vulnerabilities: true
+
+# Cleanup Configuration
+cleanup:
+  # Automatic cleanup settings
+  auto_cleanup:
+    enabled: true
+    after_each_test: true
+    after_suite: true
+    on_failure: false  # Keep data for debugging
+    
+  # Cleanup operations
+  operations:
+    - truncate_tables
+    - reset_sequences  
+    - clear_cache
+    - remove_temp_files
+    
+# Debug and Troubleshooting
+debug:
+  # Debug modes
+  verbose_logging: false
+  sql_query_logging: false
+  http_request_logging: false
+  performance_profiling: false
+  
+  # Failure handling
+  stop_on_first_failure: false
+  capture_screenshots: false  # For API tests
+  save_logs_on_failure: true
+  generate_debug_reports: true

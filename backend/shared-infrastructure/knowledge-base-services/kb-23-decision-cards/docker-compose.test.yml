@@ -1,0 +1,38 @@
+# KB-23 Decision Cards — Test Infrastructure
+# Ephemeral PostgreSQL + Redis for integration tests (tmpfs = no persistence).
+#
+# Usage:
+#   docker-compose -f docker-compose.test.yml up -d
+#   go test -tags=integration -v -count=1 ./tests/integration/...
+#   docker-compose -f docker-compose.test.yml down
+
+services:
+  kb23-test-postgres:
+    image: postgres:15-alpine
+    container_name: kb23-test-postgres
+    environment:
+      POSTGRES_USER: kb23_test
+      POSTGRES_PASSWORD: kb23_test_pass
+      POSTGRES_DB: kb23_test
+    ports:
+      - "5439:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb23_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  kb23-test-redis:
+    image: redis:7-alpine
+    container_name: kb23-test-redis
+    ports:
+      - "6388:6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 Universal Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0063b1;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 4px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        .hidden {
+            display: none;
+        }
+        .api-test {
+            margin-top: 20px;
+        }
+        input[type="text"] {
+            padding: 8px;
+            width: 300px;
+            margin-right: 10px;
+        }
+        #error-message {
+            color: red;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Auth0 Universal Login</h1>
+            <p>Use this page to authenticate with Auth0 and test the auth service.</p>
+            <div>
+                <button id="login">Login with Auth0</button>
+                <button id="logout" style="display: none;">Logout</button>
+                <button id="client-token">Get Client Token</button>
+            </div>
+            <div id="user-info" style="margin-top: 10px; font-weight: bold;"></div>
+            <div id="error-message"></div>
+        </div>
+
+        <div id="token-info" class="card">
+            <h2>Token Information</h2>
+            <pre id="token">No token</pre>
+        </div>
+
+        <div id="api-test" class="card">
+            <h2>API Test</h2>
+            <div>
+                <input type="text" id="api-url" value="http://localhost:8000/api/auth/me">
+                <button id="call-api">Call API</button>
+            </div>
+            <pre id="api-response">No response</pre>
+        </div>
+    </div>
+
+    <script>
+        // Auth0 configuration
+        const auth0Domain = 'dev-hfw6wda5wtf8l13c.au.auth0.com';
+        const auth0ClientId = 'qysYE1GswykrgR7OmfrSw475cBPjVRxl';
+        const auth0Audience = 'https://clinical-synthesis-hub-api';
+
+        // DOM elements
+        const loginButton = document.getElementById('login');
+        const logoutButton = document.getElementById('logout');
+        const clientTokenButton = document.getElementById('client-token');
+        const callApiButton = document.getElementById('call-api');
+        const tokenElement = document.getElementById('token');
+        const apiResponseElement = document.getElementById('api-response');
+        const apiUrlInput = document.getElementById('api-url');
+        const errorMessageElement = document.getElementById('error-message');
+        const userInfoElement = document.getElementById('user-info');
+
+        // Store token
+        let token = '';
+
+        // Generate a random nonce
+        function generateNonce() {
+            const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            for (let i = 0; i < 32; i++) {
+                result += charset.charAt(Math.floor(Math.random() * charset.length));
+            }
+            return result;
+        }
+
+        // Login function - redirects to Auth0 Universal Login
+        function login() {
+            const redirectUri = encodeURIComponent(window.location.origin + '/api/auth/callback');
+            const responseType = 'token id_token';
+            const scope = 'openid profile email';
+            const nonce = generateNonce();
+
+            // Store nonce in localStorage to verify later
+            localStorage.setItem('auth_nonce', nonce);
+
+            const authUrl = `https://${auth0Domain}/authorize?` +
+                `client_id=${auth0ClientId}` +
+                `&redirect_uri=${redirectUri}` +
+                `&response_type=${responseType}` +
+                `&audience=${encodeURIComponent(auth0Audience)}` +
+                `&scope=${encodeURIComponent(scope)}` +
+                `&nonce=${nonce}`;
+
+            window.location.href = authUrl;
+        }
+
+        // Get client token function
+        async function getClientToken() {
+            try {
+                errorMessageElement.textContent = '';
+                tokenElement.textContent = 'Loading...';
+
+                const response = await fetch('http://localhost:8000/api/auth/client-token', {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+
+                const data = await response.json();
+                token = data.access_token;
+                tokenElement.textContent = token;
+
+                // Get user info with the token
+                await getUserInfo();
+            } catch (error) {
+                console.error('Error getting client token:', error);
+                errorMessageElement.textContent = 'Error getting client token: ' + error.message;
+                tokenElement.textContent = 'Error getting token';
+            }
+        }
+
+        // Call API function
+        async function callApi() {
+            if (!token) {
+                errorMessageElement.textContent = 'No token available. Please get a token first.';
+                return;
+            }
+
+            try {
+                errorMessageElement.textContent = '';
+                apiResponseElement.textContent = 'Loading...';
+
+                const apiUrl = apiUrlInput.value;
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+
+                const data = await response.json();
+                apiResponseElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API Error:', error);
+                apiResponseElement.textContent = 'Error: ' + error.message;
+                errorMessageElement.textContent = 'API error: ' + error.message;
+            }
+        }
+
+        // Parse hash from URL (for handling Auth0 redirect)
+        function parseHash() {
+            const hash = window.location.hash.substr(1);
+            const result = {};
+
+            if (hash.length === 0) {
+                return result;
+            }
+
+            hash.split('&').forEach(function(item) {
+                const parts = item.split('=');
+                result[parts[0]] = decodeURIComponent(parts[1]);
+            });
+
+            return result;
+        }
+
+        // Check for token in URL hash on page load
+        window.addEventListener('load', async function() {
+            const hashParams = parseHash();
+
+            if (hashParams.access_token) {
+                token = hashParams.access_token;
+                tokenElement.textContent = token;
+
+                // Clear hash from URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+                // Get user info with the token
+                await getUserInfo();
+            }
+        });
+
+        // Logout function
+        function logout() {
+            // Clear token and user info
+            token = '';
+            tokenElement.textContent = 'No token';
+            userInfoElement.textContent = '';
+            apiResponseElement.textContent = 'No response';
+
+            // Update UI
+            loginButton.style.display = 'inline-block';
+            logoutButton.style.display = 'none';
+
+            // Redirect to Auth0 logout
+            const returnTo = encodeURIComponent(window.location.origin + '/auth0-universal-login.html');
+            window.location.href = `https://${auth0Domain}/v2/logout?client_id=${auth0ClientId}&returnTo=${returnTo}`;
+        }
+
+        // Function to get user info from the API
+        async function getUserInfo() {
+            if (!token) {
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:8000/api/auth/me', {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Display user name if available
+                if (data.full_name && data.full_name.trim() !== '') {
+                    userInfoElement.textContent = `Welcome, ${data.full_name}`;
+                } else if (data.email && data.email.trim() !== '') {
+                    userInfoElement.textContent = `Welcome, ${data.email}`;
+                } else if (data.id) {
+                    // Extract user ID from Auth0 ID (format: 'auth0|user_id')
+                    const userId = data.id.includes('|') ? data.id.split('|')[1] : data.id;
+
+                    // Create a more user-friendly display name from the user ID
+                    // For example, if the ID is "67efe1de027d004aba5aa7fe", display "User 67ef"
+                    const shortId = userId.substring(0, 4);
+                    userInfoElement.textContent = `Welcome, User ${shortId}`;
+
+                    // Also update the user profile in Auth0 (this is a client-side suggestion)
+                    userInfoElement.innerHTML = `Welcome, User ${shortId} <a href="https://manage.auth0.com/#/users/${encodeURIComponent(data.id)}" target="_blank">(Update Profile)</a>`;
+                } else {
+                    userInfoElement.textContent = 'Welcome, Authenticated User';
+                }
+
+                // Show logout button
+                loginButton.style.display = 'none';
+                logoutButton.style.display = 'inline-block';
+            } catch (error) {
+                console.error('Error getting user info:', error);
+                // This might be a client token, not a user token
+                userInfoElement.textContent = 'Using client credentials (no user)';
+            }
+        }
+
+        // Event listeners
+        loginButton.addEventListener('click', login);
+        logoutButton.addEventListener('click', logout);
+        clientTokenButton.addEventListener('click', getClientToken);
+        callApiButton.addEventListener('click', callApi);
+    </script>
+</body>
+</html>

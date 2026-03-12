@@ -1,0 +1,324 @@
+﻿Great — let’s now design **Modules 2 through 6** of your Flink EHR Intelligence Engine. I’ll keep the format consistent: module purpose, state shapes, example Kafka topic names, parallelism recommendations, and TaskManager sizing.
+
+
+---
+
+
+# 🔹 Module 2: Context Assembly & Enrichment
+
+
+**Purpose:**
+Maintain **per-patient state vectors** and assemble enriched events for downstream pattern engines.
+
+
+---
+
+
+### State Shapes (Keyed by `patientId`)
+
+
+* `current_state_vector` (MapState\<String, Object>)
+
+
+  ```json
+  {
+    "medications_active": ["metformin", "lisinopril"],
+    "conditions_active": ["E11.9", "I10"],
+    "recent_procedures": ["CABG"],
+    "latest_vitals": {"HR": 84, "BP": "120/80", "SpO2": 96},
+    "current_location": "Ward-3B"
+  }
+  ```
+* `historical_aggregates` (ValueState<Pojo>)
+
+
+  ```json
+  {
+    "admissions_last_year": 3,
+    "ed_visits_last_90d": 2,
+    "allergy_history": ["penicillin"]
+  }
+  ```
+* `clinical_scores` (MapState\<String, Double>)
+  Example: `{"Charlson": 5.0, "MEWS": 2.0, "ReadmissionRisk": 0.21}`
+
+
+---
+
+
+### Streams & Topics
+
+
+* **Input:** `ehr-events-clean` (from Module 1)
+* **Output:** `ehr-events-enriched`
+
+
+---
+
+
+### Parallelism & TaskManager Sizing
+
+
+* **Parallelism:** `numPatients / 1000` (baseline: 32 for \~32k patients live)
+* **State Backend:** RocksDB
+* **TaskManager:** 4 CPU cores, 16 GB RAM each
+  (memory heavy since patient journey state can grow)
+
+
+---
+
+
+# 🔹 Module 3: Semantic Mesh Integration
+
+
+**Purpose:**
+Maintain **global broadcast state** for clinical knowledge (drug interactions, protocols, pathways).
+
+
+---
+
+
+### State Shapes (Broadcast State)
+
+
+* `drug_interactions` (MapState\<String, Set<String>>)
+  e.g., `"warfarin" -> ["aspirin", "amiodarone"]`
+* `contraindication_rules` (MapState\<String, String>)
+  `"metformin" -> "contraindicated in renal impairment"`
+* `clinical_protocols` (MapState\<String, JsonNode>)
+  Protocol JSON blobs keyed by ID
+* `alert_thresholds` (ValueState\<Map\<String, Double>>)
+  `"HR" -> 120, "BP" -> 90`
+
+
+---
+
+
+### Streams & Topics
+
+
+* **Input:** `semantic-mesh-updates`
+* **Broadcast Output:** joined into `ehr-events-enriched`
+
+
+---
+
+
+### Parallelism & TaskManager Sizing
+
+
+* **Parallelism:** Equal to Module 2 (to co-locate enrichment + mesh join)
+* **TaskManager:** 2 cores, 8 GB RAM (knowledge base fits in memory, replicated via broadcast)
+
+
+---
+
+
+# 🔹 Module 4: Clinical Pattern Engines
+
+
+Split into **4a (Pathway Adherence)** and **4b (Lab Trend Analysis)**.
+
+
+---
+
+
+## 4a. Pathway Adherence
+
+
+**Purpose:**
+Check adherence to clinical pathways using enriched events + broadcast mesh.
+
+
+**State Shapes (Keyed by `patientId`):**
+
+
+* `protocol_progress` (MapState\<String, JsonNode>)
+  `"sepsis_protocol" -> { "step1": true, "step2": false }`
+* `alerts_generated` (ListState<String>) for deduplication
+
+
+**Streams & Topics:**
+
+
+* Input: `ehr-events-enriched`
+* Output: `ehr-pathway-alerts`
+
+
+**Parallelism:** Same as Module 2 (32 baseline)
+**TaskManager:** 4 cores, 12 GB RAM
+
+
+---
+
+
+## 4b. Lab Trend Analysis
+
+
+**Purpose:**
+Use Flink **windowing** for vital/lab trends.
+
+
+**Window Types:**
+
+
+* Sliding (1h, slide 5m)
+* Tumbling (24h)
+* Session (gap 4h)
+
+
+**State Shapes (per key window):**
+
+
+* `aggregates`:
+
+
+  ```json
+  {
+    "mean_glucose": 112.4,
+    "variance_hr": 8.1,
+    "trend_bp": "decreasing"
+  }
+  ```
+
+
+**Streams & Topics:**
+
+
+* Input: `ehr-events-enriched`
+* Output: `ehr-lab-trends`
+
+
+**Parallelism:** Higher to absorb volume → 64
+**TaskManager:** 8 cores, 16 GB RAM (windowing is CPU + state intensive)
+
+
+---
+
+
+# 🔹 Module 5: Egress & Multi-Sink Routing
+
+
+**Purpose:**
+Route alerts/insights into multiple downstream sinks with SLA-based prioritization.
+
+
+---
+
+
+### Streams & Topics
+
+
+* Input:
+
+
+  * `ehr-pathway-alerts`
+  * `ehr-lab-trends`
+* Output Kafka Topics:
+
+
+  * `ehr-alerts-critical` (clinician pager <1m)
+  * `ehr-alerts-urgent` (nurse station <15m)
+  * `ehr-alerts-routine` (EHR inbox <1h)
+  * `ehr-alerts-informational` (analytics warehouse)
+
+
+**Other Sinks:**
+
+
+* FHIR Store (REST Sink)
+* Neo4j (JDBC Sink or custom async I/O)
+* ClickHouse (Batch Sink)
+* Clinical comms (WebSocket)
+
+
+---
+
+
+### State Shapes
+
+
+* Minimal; mostly routing, may keep:
+
+
+  * `alert_counters` (ValueState<Long>) per category
+  * `last_delivery_ts` (ValueState<Long>) for SLA enforcement
+
+
+---
+
+
+### Parallelism & TaskManager
+
+
+* Parallelism: 16 (routing fan-out is cheap)
+* TaskManager: 2 cores, 4 GB RAM
+
+
+---
+
+
+# 🔹 Module 6: Monitoring, Ops & Governance
+
+
+**Purpose:**
+Operational observability, audit trails, compliance (HIPAA/ISO).
+
+
+---
+
+
+### State Shapes
+
+
+* `metrics_state` (MapState\<String, Double>) → error rates, latency
+* `audit_log_state` (ListState<JsonNode>) → last 1k audit events per operator
+
+
+---
+
+
+### Streams & Topics
+
+
+* Input: Side outputs from all modules
+* Output:
+
+
+  * `ehr-monitoring-metrics`
+  * `ehr-audit-logs`
+
+
+---
+
+
+### Parallelism & TaskManager
+
+
+* Parallelism: 8 (lower volume, aggregated metrics)
+* TaskManager: 2 cores, 8 GB RAM
+
+
+---
+
+
+# ✅ Summary Table
+
+
+| Module                 | Kafka Topics (in/out)                        | State Shape           | Parallelism | TM Size   |
+| ---------------------- | -------------------------------------------- | --------------------- | ----------- | --------- |
+| 2. Context Assembly    | `ehr-events-clean` → `ehr-events-enriched`   | Patient state vectors | 32          | 4C / 16GB |
+| 3. Semantic Mesh       | `semantic-mesh-updates`                      | Broadcast KB          | 32          | 2C / 8GB  |
+| 4a. Pathway Adherence  | `ehr-events-enriched` → `ehr-pathway-alerts` | Protocol progress     | 32          | 4C / 12GB |
+| 4b. Lab Trend Analysis | `ehr-events-enriched` → `ehr-lab-trends`     | Lab/vital aggregates  | 64          | 8C / 16GB |
+| 5. Egress Routing      | alerts → sinks                               | Minimal routing       | 16          | 2C / 4GB  |
+| 6. Monitoring & Ops    | side outputs → `ehr-monitoring-metrics`      | Metrics, audit trails | 8           | 2C / 8GB  |
+
+
+---
+
+
+👉 This design balances **patient-centric keyed state**, **global broadcast clinical knowledge**, and **windowed analytics**. It also keeps ops visibility (Module 6) as a first-class citizen.
+
+
+Would you like me to **extend this into deployment-level diagrams** (showing Kafka topics, Flink operators, TaskManagers, sinks), or do you prefer a **step-by-step implementation playbook** (how to stand up each module in dev/prod)?

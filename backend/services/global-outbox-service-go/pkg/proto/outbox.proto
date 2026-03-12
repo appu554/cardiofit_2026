@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package outbox;
+
+option go_package = "global-outbox-service-go/pkg/proto";
+
+// OutboxService provides event publishing functionality
+service OutboxService {
+    // PublishEvent publishes an event to the outbox
+    rpc PublishEvent(PublishEventRequest) returns (PublishEventResponse);
+    
+    // HealthCheck returns service health status
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+    
+    // GetOutboxStats returns queue statistics
+    rpc GetOutboxStats(GetOutboxStatsRequest) returns (GetOutboxStatsResponse);
+}
+
+// PublishEventRequest represents an event to be published
+message PublishEventRequest {
+    string service_name = 1;           // Name of the publishing service
+    string event_type = 2;             // Type of the event
+    string event_data = 3;             // JSON serialized event data
+    string topic = 4;                  // Kafka topic to publish to
+    string correlation_id = 5;         // Optional correlation ID
+    int32 priority = 6;                // Event priority (1-10, 10 = highest)
+    map<string, string> metadata = 7;  // Additional metadata
+    string medical_context = 8;        // Medical context for circuit breaker
+}
+
+// PublishEventResponse confirms event publication
+message PublishEventResponse {
+    bool success = 1;
+    string message = 2;
+    string event_id = 3;              // UUID of the created event
+    int64 created_at = 4;             // Unix timestamp
+}
+
+// HealthCheckRequest for service health
+message HealthCheckRequest {
+    string service = 1;
+}
+
+// HealthCheckResponse with health status
+message HealthCheckResponse {
+    string status = 1;                // "SERVING", "NOT_SERVING", "UNKNOWN"
+    string message = 2;
+    map<string, string> details = 3;
+}
+
+// GetOutboxStatsRequest for statistics
+message GetOutboxStatsRequest {
+    string service_name = 1;          // Optional filter by service
+}
+
+// GetOutboxStatsResponse with queue statistics
+message GetOutboxStatsResponse {
+    map<string, int64> queue_depths = 1;         // Queue depth per service
+    int64 total_processed_24h = 2;               // Events processed in 24h
+    int64 dead_letter_count = 3;                 // Dead letter queue count
+    map<string, double> success_rates = 4;       // Success rate per service
+    CircuitBreakerStatus circuit_breaker = 5;    // Circuit breaker status
+}
+
+// CircuitBreakerStatus represents medical circuit breaker state
+message CircuitBreakerStatus {
+    bool enabled = 1;
+    string state = 2;                            // "CLOSED", "OPEN", "HALF_OPEN"
+    double current_load = 3;                     // Current load percentage (0.0-1.0)
+    int64 total_requests = 4;
+    int64 failed_requests = 5;
+    int64 critical_events_processed = 6;
+    int64 non_critical_events_dropped = 7;
+    int64 next_retry_at = 8;                     // Unix timestamp for next retry
+}
+
+// Event represents an outbox event in the database
+message Event {
+    string id = 1;
+    string service_name = 2;
+    string event_type = 3;
+    string event_data = 4;
+    string topic = 5;
+    string correlation_id = 6;
+    int32 priority = 7;
+    map<string, string> metadata = 8;
+    string medical_context = 9;
+    int64 created_at = 10;
+    int64 published_at = 11;
+    int32 retry_count = 12;
+    string status = 13;                          // "pending", "published", "failed", "dead_letter"
+    string error_message = 14;
+    int64 next_retry_at = 15;
+}

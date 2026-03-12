@@ -1,0 +1,442 @@
+version: '3.8'
+
+# Global Data Stores for CardioFit Platform
+# Provides Neo4j, ClickHouse, Ontotext GraphDB, Elasticsearch, and Redis
+# These stores are shared across all microservices and processing pipelines
+
+services:
+  # ============================================
+  # Neo4j - Graph Database for Clinical Knowledge
+  # ============================================
+  neo4j:
+    image: neo4j:5.15-community
+    container_name: cardiofit-neo4j
+    hostname: neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"  # HTTP interface
+      - "7687:7687"  # Bolt protocol
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+      - ./neo4j/conf:/var/lib/neo4j/conf
+      - ./neo4j/init:/var/lib/neo4j/init
+    environment:
+      # Authentication
+      NEO4J_AUTH: neo4j/CardioFit2024!
+      NEO4J_dbms_default__database: cardiofit
+
+      # Memory configuration
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 2G
+      NEO4J_server_memory_pagecache__size: 1G
+
+      # Network configuration
+      NEO4J_server_default__listen__address: 0.0.0.0
+      NEO4J_server_bolt_advertised__address: localhost:7687
+      NEO4J_server_http_advertised__address: localhost:7474
+
+      # Performance tuning
+      NEO4J_dbms_query__cache__size: 100
+      NEO4J_dbms_query__timeout: 120s
+      NEO4J_dbms_transaction__timeout: 120s
+
+      # APOC procedures
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*,algo.*
+      NEO4J_apoc_export_file_enabled: true
+      NEO4J_apoc_import_file_enabled: true
+
+      # Monitoring
+      NEO4J_metrics_enabled: true
+      NEO4J_metrics_prometheus_enabled: true
+      NEO4J_metrics_prometheus_endpoint: 0.0.0.0:2004
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "CardioFit2024!", "MATCH () RETURN count(*) as count"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ============================================
+  # ClickHouse - OLAP for Time-Series Analytics
+  # ============================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.12-alpine
+    container_name: cardiofit-clickhouse
+    hostname: clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"  # Native protocol
+      - "9004:9004"  # MySQL protocol
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      - ./clickhouse/config:/etc/clickhouse-server/config.d
+      - ./clickhouse/users:/etc/clickhouse-server/users.d
+      - ./clickhouse/init:/docker-entrypoint-initdb.d
+    environment:
+      CLICKHOUSE_DB: cardiofit_analytics
+      CLICKHOUSE_USER: cardiofit_user
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD: ClickHouse2024!
+
+      # Performance settings
+      CLICKHOUSE_MAX_MEMORY_USAGE: 4000000000
+      CLICKHOUSE_MAX_MEMORY_USAGE_FOR_USER: 3000000000
+      CLICKHOUSE_MAX_CONCURRENT_QUERIES: 100
+      CLICKHOUSE_MAX_CONNECTIONS: 1000
+
+      # Compression
+      CLICKHOUSE_COMPRESSION_METHOD: lz4
+    networks:
+      - cardiofit-network
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ============================================
+  # Ontotext GraphDB - Semantic Knowledge Base
+  # ============================================
+  graphdb:
+    image: ontotext/graphdb:10.5.0
+    container_name: cardiofit-graphdb
+    hostname: graphdb
+    restart: unless-stopped
+    ports:
+      - "7200:7200"  # HTTP/REST API
+    volumes:
+      - graphdb_data:/opt/graphdb/home
+      - graphdb_work:/opt/graphdb/work
+      - graphdb_logs:/opt/graphdb/logs
+      - ./graphdb/config:/opt/graphdb/config
+      - ./graphdb/import:/opt/graphdb/import
+    environment:
+      GDB_HEAP_SIZE: 2g
+      GDB_MIN_MEM: 1g
+      GDB_MAX_MEM: 4g
+
+      # Repository settings
+      GRAPHDB_HOME: /opt/graphdb/home
+      GRAPHDB_WORKBENCH_ENABLED: true
+
+      # Security
+      GRAPHDB_AUTH_TOKEN: CardioFitGraphDB2024!
+      GRAPHDB_ADMIN_PASSWORD: admin2024
+
+      # Performance
+      GRAPHDB_QUERY_TIMEOUT: 120
+      GRAPHDB_QUERY_LIMIT: 10000
+      GRAPHDB_CACHE_SIZE: 1000000
+
+      # Monitoring
+      GRAPHDB_ENABLE_METRICS: true
+      GRAPHDB_METRICS_JMX_ENABLED: true
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/monitor/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ============================================
+  # Elasticsearch - Search and Analytics
+  # ============================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: cardiofit-elasticsearch
+    hostname: elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"  # REST API
+      - "9300:9300"  # Transport protocol
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - elasticsearch_logs:/usr/share/elasticsearch/logs
+      - ./elasticsearch/config:/usr/share/elasticsearch/config/custom
+      - ./elasticsearch/synonyms:/usr/share/elasticsearch/config/synonyms
+    environment:
+      # Cluster settings
+      cluster.name: cardiofit-cluster
+      node.name: cardiofit-es-node1
+      discovery.type: single-node
+
+      # Security
+      xpack.security.enabled: true
+      xpack.security.enrollment.enabled: true
+      ELASTIC_PASSWORD: ElasticCardioFit2024!
+
+      # Memory
+      ES_JAVA_OPTS: "-Xms2g -Xmx2g"
+
+      # Performance
+      indices.memory.index_buffer_size: 30%
+      indices.queries.cache.size: 15%
+      indices.fielddata.cache.size: 20%
+
+      # HTTP settings
+      http.cors.enabled: true
+      http.cors.allow-origin: "*"
+      http.max_content_length: 100mb
+
+      # Monitoring
+      xpack.monitoring.enabled: true
+      xpack.monitoring.collection.enabled: true
+
+      # Machine Learning
+      xpack.ml.enabled: true
+      xpack.ml.max_machine_memory_percent: 30
+    networks:
+      - cardiofit-network
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -k https://elastic:ElasticCardioFit2024!@localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ============================================
+  # Kibana - Elasticsearch Visualization
+  # ============================================
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: cardiofit-kibana
+    hostname: kibana
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    volumes:
+      - ./kibana/config:/usr/share/kibana/config/custom
+      - ./kibana/dashboards:/usr/share/kibana/dashboards
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ElasticCardioFit2024!
+      SERVER_NAME: cardiofit-kibana
+      SERVER_HOST: "0.0.0.0"
+
+      # Security
+      XPACK_SECURITY_ENABLED: true
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: "CardioFit2024EncryptionKey32chr"
+
+      # Monitoring
+      MONITORING_ENABLED: true
+      MONITORING_UI_CONTAINER_ELASTICSEARCH_ENABLED: true
+    depends_on:
+      - elasticsearch
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  # ============================================
+  # Redis - In-Memory Cache and Message Broker
+  # ============================================
+  redis-master:
+    image: redis:7.2-alpine
+    container_name: cardiofit-redis-master
+    hostname: redis-master
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis/config/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    environment:
+      REDIS_PASSWORD: RedisCardioFit2024!
+      REDIS_REPLICATION_MODE: master
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Redis Replica for Read Scaling
+  redis-replica:
+    image: redis:7.2-alpine
+    container_name: cardiofit-redis-replica
+    hostname: redis-replica
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_replica_data:/data
+      - ./redis/config/redis-replica.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf --replicaof redis-master 6379
+    environment:
+      REDIS_PASSWORD: RedisCardioFit2024!
+      REDIS_MASTER_PASSWORD: RedisCardioFit2024!
+      REDIS_REPLICATION_MODE: replica
+    depends_on:
+      - redis-master
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ============================================
+  # Redis Insight - Redis Management UI
+  # ============================================
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    container_name: cardiofit-redis-insight
+    hostname: redis-insight
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    volumes:
+      - redis_insight_data:/db
+    networks:
+      - cardiofit-network
+    depends_on:
+      - redis-master
+      - redis-replica
+
+  # ============================================
+  # Monitoring - Prometheus for Metrics Collection
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cardiofit-prometheus
+    hostname: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alerts:/etc/prometheus/alerts
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Grafana - Monitoring Dashboards
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cardiofit-grafana
+    hostname: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: GrafanaCardioFit2024!
+      GF_INSTALL_PLUGINS: redis-datasource,hamedkarbasi93-nodegraphapi-datasource,fifemon-graphql-datasource
+      GF_SERVER_ROOT_URL: http://localhost:3000
+      GF_ANALYTICS_REPORTING_ENABLED: false
+    depends_on:
+      - prometheus
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+# ============================================
+# Networks
+# ============================================
+networks:
+  cardiofit-network:
+    name: cardiofit-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# ============================================
+# Volumes for Persistent Data
+# ============================================
+volumes:
+  # Neo4j volumes
+  neo4j_data:
+    name: cardiofit_neo4j_data
+  neo4j_logs:
+    name: cardiofit_neo4j_logs
+  neo4j_import:
+    name: cardiofit_neo4j_import
+  neo4j_plugins:
+    name: cardiofit_neo4j_plugins
+
+  # ClickHouse volumes
+  clickhouse_data:
+    name: cardiofit_clickhouse_data
+  clickhouse_logs:
+    name: cardiofit_clickhouse_logs
+
+  # GraphDB volumes
+  graphdb_data:
+    name: cardiofit_graphdb_data
+  graphdb_work:
+    name: cardiofit_graphdb_work
+  graphdb_logs:
+    name: cardiofit_graphdb_logs
+
+  # Elasticsearch volumes
+  elasticsearch_data:
+    name: cardiofit_elasticsearch_data
+  elasticsearch_logs:
+    name: cardiofit_elasticsearch_logs
+
+  # Redis volumes
+  redis_data:
+    name: cardiofit_redis_data
+  redis_replica_data:
+    name: cardiofit_redis_replica_data
+  redis_insight_data:
+    name: cardiofit_redis_insight_data
+
+  # Monitoring volumes
+  prometheus_data:
+    name: cardiofit_prometheus_data
+  grafana_data:
+    name: cardiofit_grafana_data

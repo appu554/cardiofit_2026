@@ -1,0 +1,141 @@
+# KB-23 Decision Cards Engine - Docker Compose
+# Starts PostgreSQL (5438), Redis (6387), and the KB-23 Go service (8134)
+# Usage: docker-compose up -d --build
+
+services:
+  # ============================================================================
+  # PostgreSQL Database
+  # Stores decision card templates, rendered cards, clinical context snapshots,
+  # safety alert records, and audit trails for card generation
+  # ============================================================================
+  kb23-postgres:
+    image: postgres:15-alpine
+    container_name: kb23-postgres
+    environment:
+      POSTGRES_USER: kb23_user
+      POSTGRES_PASSWORD: kb23_password
+      POSTGRES_DB: kb23_decision_cards
+    ports:
+      - "5438:5432"
+    volumes:
+      - kb23_postgres_data:/var/lib/postgresql/data
+      - ./migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb23_user -d kb23_decision_cards"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - kb23-network
+
+  # ============================================================================
+  # Redis Cache
+  # Template cache (DB 0), rendered cards (DB 1), session state (DB 2)
+  # ============================================================================
+  kb23-redis:
+    image: redis:7-alpine
+    container_name: kb23-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6387:6379"
+    volumes:
+      - kb23_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb23-network
+
+  # ============================================================================
+  # KB-23 Decision Cards Engine Service
+  # Generates context-aware clinical decision cards from protocol orchestrator
+  # output, patient profiles, behavioral intelligence, and HPI engine data.
+  # Applies Bayesian posterior thresholds and safety alert publishing.
+  # ============================================================================
+  kb23-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb23-decision-cards
+    ports:
+      - "8134:8134"
+    environment:
+      # Server
+      PORT: "8134"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "info"
+
+      # Database (local PostgreSQL)
+      DATABASE_URL: "postgres://kb23_user:kb23_password@kb23-postgres:5432/kb23_decision_cards?sslmode=disable"
+      DB_MAX_CONNECTIONS: "25"
+      DB_CONN_MAX_LIFETIME: "5m"
+
+      # Redis
+      REDIS_URL: "redis://kb23-redis:6379"
+
+      # Templates directory (baked into image)
+      TEMPLATES_DIR: "/app/templates"
+      TEMPLATES_HOT_RELOAD: "false"
+
+      # KB dependency URLs (connect via shared kb-network)
+      KB19_URL: "http://kb19-protocol-orchestrator:8103"
+      KB20_URL: "http://kb20-patient-profile:8131"
+      KB21_URL: "http://kb21-behavioral-intelligence:8133"
+      KB22_URL: "http://kb22-hpi-engine:8132"
+
+      # Timeouts
+      KB19_TIMEOUT_MS: "500"
+      KB20_TIMEOUT_MS: "200"
+      KB21_TIMEOUT_MS: "200"
+
+      # Clinical thresholds
+      DEFAULT_FIRM_POSTERIOR: "0.75"
+      DEFAULT_FIRM_MEDICATION_CHANGE: "0.82"
+      HYPOGLYCAEMIA_SEVERE_THRESHOLD: "3.0"
+      HYPOGLYCAEMIA_MODERATE_THRESHOLD: "3.9"
+
+      # Safety
+      SAFETY_ALERT_PUBLISH_TIMEOUT: "2s"
+
+      # Observability
+      METRICS_ENABLED: "true"
+
+    depends_on:
+      kb23-postgres:
+        condition: service_healthy
+      kb23-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8134/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    volumes:
+      - ./templates:/app/templates:ro
+    networks:
+      - kb23-network
+      - kb-network
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  kb23_postgres_data:
+    driver: local
+  kb23_redis_data:
+    driver: local
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  kb23-network:
+    name: kb23-network
+    driver: bridge
+  kb-network:
+    external: true

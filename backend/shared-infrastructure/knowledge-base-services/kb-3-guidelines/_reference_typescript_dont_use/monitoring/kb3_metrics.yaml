@@ -1,0 +1,353 @@
+# KB-3 Guideline Evidence Monitoring Configuration
+# Comprehensive monitoring for clinical quality and operational performance
+
+metrics:
+  clinical_quality:
+    - name: "guideline_currency"
+      description: "Percentage of guidelines updated within 2 years"
+      target: ">80%"
+      alert_threshold: "<70%"
+      collection_interval: "1h"
+      query: |
+        SELECT 
+          COUNT(*) FILTER (WHERE age(effective_date) < '2 years'::interval) * 100.0 
+          / COUNT(*) as currency_rate
+        FROM guideline_evidence.guidelines 
+        WHERE status = 'active'
+      metric_type: "gauge"
+      unit: "percentage"
+    
+    - name: "evidence_quality_score"
+      description: "Average evidence quality across recommendations"
+      target: ">75"
+      alert_threshold: "<65"
+      collection_interval: "1h"
+      query: |
+        SELECT AVG(
+          CASE evidence_grade
+            WHEN 'A' THEN 90
+            WHEN 'B' THEN 75
+            WHEN 'C' THEN 60
+            WHEN 'D' THEN 45
+            ELSE 30
+          END
+        ) as avg_quality_score
+        FROM guideline_evidence.recommendations r
+        JOIN guideline_evidence.guidelines g ON r.guideline_id = g.guideline_id
+        WHERE g.status = 'active'
+      metric_type: "gauge"
+      unit: "score"
+    
+    - name: "conflict_resolution_rate"
+      description: "Percentage of conflicts successfully resolved automatically"
+      target: ">95%"
+      alert_threshold: "<90%"
+      collection_interval: "5m"
+      query: |
+        SELECT 
+          COUNT(*) FILTER (WHERE winning_guideline IS NOT NULL) * 100.0
+          / COUNT(*) as resolution_rate
+        FROM guideline_evidence.conflict_resolutions
+        WHERE timestamp >= NOW() - INTERVAL '24 hours'
+      metric_type: "gauge"
+      unit: "percentage"
+    
+    - name: "safety_override_accuracy"
+      description: "Percentage of safety overrides that prevented adverse events"
+      target: ">98%"
+      alert_threshold: "<95%"
+      collection_interval: "1h"
+      query: |
+        SELECT 
+          COUNT(*) FILTER (WHERE action_taken->'prevented_adverse_event' = 'true') * 100.0
+          / COUNT(*) as accuracy_rate
+        FROM guideline_evidence.safety_override_audit
+        WHERE applied_at >= NOW() - INTERVAL '7 days'
+      metric_type: "gauge"
+      unit: "percentage"
+
+  operational:
+    - name: "query_latency_p95"
+      description: "95th percentile latency for guideline queries"
+      target: "<50ms"
+      alert_threshold: ">100ms"
+      collection_interval: "30s"
+      metric_type: "histogram"
+      unit: "milliseconds"
+      buckets: [5, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000]
+    
+    - name: "cache_hit_rate"
+      description: "Overall cache hit ratio across all layers"
+      target: ">90%"
+      alert_threshold: "<75%"
+      collection_interval: "30s"
+      metric_type: "gauge"
+      unit: "percentage"
+      labels: ["layer", "cache_type"]
+    
+    - name: "guideline_update_lag"
+      description: "Time from publication to system update"
+      target: "<7 days"
+      alert_threshold: ">14 days"
+      collection_interval: "1h"
+      query: |
+        SELECT 
+          AVG(EXTRACT(days FROM (created_at - effective_date))) as avg_lag_days
+        FROM guideline_evidence.guidelines
+        WHERE created_at >= NOW() - INTERVAL '30 days'
+      metric_type: "gauge"
+      unit: "days"
+    
+    - name: "cross_kb_link_validity"
+      description: "Percentage of valid cross-KB references"
+      target: ">98%"
+      alert_threshold: "<95%"
+      collection_interval: "5m"
+      query: |
+        SELECT 
+          COUNT(*) FILTER (WHERE validation_status = 'valid') * 100.0
+          / COUNT(*) as validity_rate
+        FROM guideline_evidence.kb_linkages
+        WHERE last_validated >= NOW() - INTERVAL '24 hours'
+      metric_type: "gauge"
+      unit: "percentage"
+    
+    - name: "database_connection_pool_usage"
+      description: "PostgreSQL connection pool utilization"
+      target: "<80%"
+      alert_threshold: ">90%"
+      collection_interval: "30s"
+      metric_type: "gauge"
+      unit: "percentage"
+    
+    - name: "neo4j_memory_usage"
+      description: "Neo4j heap memory usage"
+      target: "<80%"
+      alert_threshold: ">90%"
+      collection_interval: "30s"
+      metric_type: "gauge"
+      unit: "percentage"
+
+  business:
+    - name: "guidelines_per_condition"
+      description: "Number of active guidelines per medical condition"
+      collection_interval: "1h"
+      query: |
+        SELECT 
+          condition_primary,
+          COUNT(*) as guideline_count
+        FROM guideline_evidence.guidelines
+        WHERE status = 'active'
+        GROUP BY condition_primary
+        ORDER BY guideline_count DESC
+      metric_type: "gauge"
+      unit: "count"
+      
+    - name: "regional_coverage"
+      description: "Guideline coverage by region"
+      collection_interval: "1h"
+      query: |
+        SELECT 
+          region,
+          COUNT(DISTINCT condition_primary) as conditions_covered
+        FROM guideline_evidence.guidelines
+        WHERE status = 'active'
+        GROUP BY region
+      metric_type: "gauge"
+      unit: "count"
+      
+    - name: "conflict_types_distribution"
+      description: "Distribution of conflict types encountered"
+      collection_interval: "1h"
+      query: |
+        SELECT 
+          resolution_rule,
+          COUNT(*) as count
+        FROM guideline_evidence.conflict_resolutions
+        WHERE timestamp >= NOW() - INTERVAL '24 hours'
+        GROUP BY resolution_rule
+      metric_type: "counter"
+      unit: "count"
+
+alerting:
+  critical:
+    - name: "safety_override_storm"
+      condition: "rate(safety_override_frequency[5m]) > 100"
+      severity: "critical"
+      description: "Unusually high rate of safety overrides may indicate system issue"
+      notification_channels: ["oncall_team", "clinical_leads", "pager"]
+      escalation_time: "2m"
+      
+    - name: "conflict_resolution_failure"
+      condition: "conflict_resolution_rate < 85"
+      severity: "critical"
+      description: "High rate of unresolved conflicts affecting clinical decisions"
+      notification_channels: ["oncall_team", "clinical_leads"]
+      escalation_time: "5m"
+      
+    - name: "cross_kb_validation_failure"
+      condition: "cross_kb_link_validity < 90"
+      severity: "critical"
+      description: "High rate of broken cross-KB references affecting data integrity"
+      notification_channels: ["oncall_team", "data_team"]
+      escalation_time: "10m"
+
+  warning:
+    - name: "query_latency_degradation"
+      condition: "query_latency_p95 > 75"
+      severity: "warning"
+      description: "Query performance degrading beyond acceptable levels"
+      notification_channels: ["dev_team", "platform_team"]
+      escalation_time: "15m"
+      
+    - name: "cache_performance_degradation"
+      condition: "cache_hit_rate < 80"
+      severity: "warning"
+      description: "Cache effectiveness declining"
+      notification_channels: ["dev_team"]
+      escalation_time: "20m"
+      
+    - name: "guideline_staleness"
+      condition: "guideline_currency < 75"
+      severity: "warning"
+      description: "Guidelines becoming outdated"
+      notification_channels: ["clinical_leads", "content_team"]
+      escalation_time: "1h"
+
+  info:
+    - name: "high_conflict_activity"
+      condition: "rate(conflict_types_distribution[1h]) > 50"
+      severity: "info"
+      description: "Higher than normal conflict resolution activity"
+      notification_channels: ["dev_team"]
+
+dashboards:
+  clinical_overview:
+    title: "KB-3 Clinical Quality Dashboard"
+    refresh_interval: "30s"
+    panels:
+      - title: "Guideline Currency"
+        metric: "guideline_currency"
+        visualization: "stat"
+        thresholds: [70, 80, 90]
+        
+      - title: "Evidence Quality Distribution"
+        metric: "evidence_quality_score"
+        visualization: "gauge"
+        min: 0
+        max: 100
+        
+      - title: "Conflict Resolution Trends"
+        metric: "conflict_resolution_rate"
+        visualization: "time_series"
+        time_range: "24h"
+        
+      - title: "Safety Override Activity"
+        metric: "safety_override_frequency"
+        visualization: "time_series"
+        time_range: "6h"
+
+  operational_overview:
+    title: "KB-3 Operational Performance"
+    refresh_interval: "15s"
+    panels:
+      - title: "Query Latency"
+        metric: "query_latency_p95"
+        visualization: "time_series"
+        time_range: "1h"
+        
+      - title: "Cache Performance"
+        metric: "cache_hit_rate"
+        visualization: "time_series"
+        time_range: "1h"
+        
+      - title: "Database Pool Usage"
+        metric: "database_connection_pool_usage"
+        visualization: "gauge"
+        thresholds: [60, 80, 90]
+        
+      - title: "System Resource Usage"
+        metrics: ["neo4j_memory_usage", "database_connection_pool_usage"]
+        visualization: "multi_stat"
+
+# Log aggregation and analysis
+logging:
+  structured_logging: true
+  log_level: "info"
+  retention_policy:
+    application_logs: "30 days"
+    audit_logs: "10 years"
+    performance_logs: "90 days"
+    
+  log_aggregation:
+    platform: "elk_stack"
+    indexes:
+      - "kb3-application-logs"
+      - "kb3-audit-logs" 
+      - "kb3-performance-logs"
+    
+  analysis_queries:
+    - name: "conflict_resolution_patterns"
+      description: "Analyze patterns in conflict resolution decisions"
+      schedule: "daily"
+      query: |
+        SELECT 
+          resolution_rule,
+          DATE_TRUNC('day', timestamp) as date,
+          COUNT(*) as daily_count
+        FROM guideline_evidence.conflict_resolutions
+        WHERE timestamp >= NOW() - INTERVAL '30 days'
+        GROUP BY resolution_rule, DATE_TRUNC('day', timestamp)
+        ORDER BY date DESC, daily_count DESC
+    
+    - name: "safety_override_trends"
+      description: "Track safety override usage patterns"
+      schedule: "weekly"
+      query: |
+        SELECT 
+          override_id,
+          DATE_TRUNC('week', applied_at) as week,
+          COUNT(*) as weekly_applications
+        FROM guideline_evidence.safety_override_audit
+        WHERE applied_at >= NOW() - INTERVAL '12 weeks'
+        GROUP BY override_id, DATE_TRUNC('week', applied_at)
+        ORDER BY week DESC, weekly_applications DESC
+
+# Health checks and maintenance
+health_checks:
+  endpoints:
+    - path: "/health/basic"
+      interval: "30s"
+      timeout: "5s"
+      expected_response_time: "<100ms"
+      
+    - path: "/health/database"
+      interval: "1m"
+      timeout: "10s"
+      checks: ["postgresql_connection", "neo4j_connection"]
+      
+    - path: "/health/cache"
+      interval: "1m"
+      timeout: "5s"
+      checks: ["memory_cache", "redis_cache"]
+      
+    - path: "/health/cross_kb"
+      interval: "5m"
+      timeout: "30s"
+      checks: ["kb1_connectivity", "kb2_connectivity", "kb4_connectivity"]
+
+  maintenance:
+    daily_tasks:
+      - "vacuum_analyze_tables"
+      - "cleanup_expired_cache"
+      - "validate_recent_kb_links"
+      
+    weekly_tasks:
+      - "full_cross_kb_validation"
+      - "conflict_resolution_analysis"
+      - "performance_optimization_review"
+      
+    monthly_tasks:
+      - "guideline_currency_assessment"
+      - "evidence_quality_review"
+      - "capacity_planning_analysis"

@@ -1,0 +1,248 @@
+recipe_id: "warfarin-context-v1"
+version: "1.0.0"
+last_updated: "2024-01-15"
+medication_code: "warfarin"
+description: "Context data requirements for warfarin initiation and management"
+
+# Base context requirements for all warfarin recipes
+base_requirements:
+  - field: "age_years"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "weight_kg"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "race_ethnicity"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "gender"
+    source: "patient_service"
+    endpoint: "/api/patients/{patient_id}/demographics"
+    required: true
+
+  - field: "baseline_inr"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/coagulation"
+    required: true
+    max_age_hours: 24
+
+  - field: "baseline_pt"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/coagulation"
+    required: true
+    max_age_hours: 24
+
+  - field: "platelet_count"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/cbc"
+    required: true
+    max_age_hours: 48
+
+  - field: "liver_function_tests"
+    source: "lab_service"
+    endpoint: "/api/labs/{patient_id}/liver"
+    required: true
+    max_age_hours: 72
+    includes: ["alt", "ast", "bilirubin", "albumin"]
+
+  - field: "indication"
+    source: "clinical_service"
+    endpoint: "/api/clinical/{patient_id}/anticoagulation"
+    required: true
+    values: ["atrial_fibrillation", "dvt", "pe", "mechanical_valve"]
+
+  - field: "target_inr"
+    source: "clinical_service"
+    endpoint: "/api/clinical/{patient_id}/anticoagulation"
+    required: true
+
+  - field: "bleeding_risk_factors"
+    source: "clinical_service"
+    endpoint: "/api/clinical/{patient_id}/bleeding_risk"
+    required: true
+
+  - field: "concurrent_medications"
+    source: "medication_service"
+    endpoint: "/api/medications/{patient_id}/current"
+    required: true
+
+# Recipe-specific requirements
+recipe_specific_requirements:
+  "warfarin-initiation-v2":
+    additional_requirements:
+      - field: "cyp2c9_genotype"
+        source: "genetics_service"
+        endpoint: "/api/genetics/{patient_id}/pharmacogenomics"
+        required: false
+        values: ["*1/*1", "*1/*2", "*1/*3", "*2/*2", "*2/*3", "*3/*3"]
+        
+      - field: "vkorc1_genotype"
+        source: "genetics_service"
+        endpoint: "/api/genetics/{patient_id}/pharmacogenomics"
+        required: false
+        values: ["GG", "GA", "AA"]
+        
+      - field: "vitamin_k_intake"
+        source: "nutrition_service"
+        endpoint: "/api/nutrition/{patient_id}/vitamin_k"
+        required: false
+        
+      - field: "smoking_status"
+        source: "social_history_service"
+        endpoint: "/api/social/{patient_id}/smoking"
+        required: true
+        
+  "warfarin-clinical-v1":
+    additional_requirements:
+      - field: "previous_warfarin_response"
+        source: "medication_service"
+        endpoint: "/api/medications/{patient_id}/warfarin_history"
+        required: false
+        
+      - field: "comorbidities"
+        source: "clinical_service"
+        endpoint: "/api/clinical/{patient_id}/conditions"
+        required: true
+        focus: ["heart_failure", "liver_disease", "thyroid_disease"]
+
+# Genetic testing availability check
+genetic_testing:
+  availability_check:
+    source: "genetics_service"
+    endpoint: "/api/genetics/{patient_id}/availability"
+    timeout_ms: 1000
+    
+  turnaround_time:
+    cyp2c9: "24_hours"
+    vkorc1: "24_hours"
+    
+  cost_consideration:
+    include_in_decision: true
+    source: "formulary_service"
+    endpoint: "/api/formulary/genetic_testing_cost"
+
+# Drug interaction screening
+interaction_screening:
+  high_priority_drugs:
+    - "amiodarone"
+    - "metronidazole"
+    - "trimethoprim_sulfamethoxazole"
+    - "fluconazole"
+    - "rifampin"
+    - "carbamazepine"
+    - "phenytoin"
+    
+  interaction_database:
+    source: "interaction_service"
+    endpoint: "/api/interactions/warfarin"
+    include_severity: ["major", "moderate"]
+
+# Bleeding risk assessment
+bleeding_risk_assessment:
+  risk_factors:
+    major:
+      - "history_gi_bleeding"
+      - "intracranial_hemorrhage"
+      - "major_surgery_recent"
+      
+    moderate:
+      - "age_over_75"
+      - "hypertension_uncontrolled"
+      - "diabetes"
+      - "prior_stroke"
+      - "falls_risk"
+      
+  risk_scores:
+    - name: "has_bled"
+      source: "clinical_service"
+      endpoint: "/api/clinical/{patient_id}/bleeding_scores"
+      
+    - name: "chads2_vasc"
+      source: "clinical_service"
+      endpoint: "/api/clinical/{patient_id}/stroke_scores"
+
+# Data source configuration
+data_sources:
+  genetics_service:
+    base_url: "http://genetics-service:8018"
+    timeout_ms: 5000
+    retry_attempts: 1
+    
+  nutrition_service:
+    base_url: "http://nutrition-service:8019"
+    timeout_ms: 2000
+    retry_attempts: 2
+    
+  social_history_service:
+    base_url: "http://social-service:8020"
+    timeout_ms: 1500
+    retry_attempts: 2
+    
+  interaction_service:
+    base_url: "http://interaction-service:8021"
+    timeout_ms: 3000
+    retry_attempts: 3
+
+# Data validation rules
+validation_rules:
+  baseline_inr:
+    min_value: 0.8
+    max_value: 1.3
+    normal_range: [0.9, 1.1]
+    
+  platelet_count:
+    min_value: 50000
+    max_value: 1000000
+    units: "per_microliter"
+    
+  age_years:
+    min_value: 18
+    max_value: 120
+    
+  weight_kg:
+    min_value: 30
+    max_value: 200
+
+# Caching configuration
+caching:
+  genetic_data:
+    ttl_hours: 24
+    cache_key: "genetics_{patient_id}"
+    
+  bleeding_risk:
+    ttl_hours: 12
+    cache_key: "bleeding_risk_{patient_id}"
+    
+  drug_interactions:
+    ttl_hours: 6
+    cache_key: "interactions_{patient_id}_warfarin"
+
+# Performance optimization
+optimization:
+  parallel_requests: true
+  max_concurrent_requests: 8
+  
+  conditional_requests:
+    genetic_testing:
+      condition: "genetic_testing_available"
+      timeout_ms: 5000
+      
+  priority_order:
+    - "patient_demographics"
+    - "laboratory_values"
+    - "clinical_factors"
+    - "bleeding_risk_assessment"
+    - "genetic_testing"
+
+# Quality metrics
+quality_metrics:
+  genetic_data_availability: ">60%"
+  interaction_screening_completeness: ">95%"
+  bleeding_risk_assessment_completeness: ">90%"
+  response_time_target: "<800ms"

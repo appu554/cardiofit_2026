@@ -1,0 +1,230 @@
+package com.cardiofit.flink.knowledgebase.medications;
+
+import com.cardiofit.flink.knowledgebase.medications.calculator.DoseCalculator;
+import com.cardiofit.flink.knowledgebase.medications.loader.MedicationDatabaseLoader;
+import com.cardiofit.flink.knowledgebase.medications.model.*;
+import com.cardiofit.flink.knowledgebase.medications.safety.*;
+import com.cardiofit.flink.knowledgebase.medications.substitution.TherapeuticSubstitutionEngine;
+import com.cardiofit.flink.knowledgebase.medications.test.MedicationTestData;
+import com.cardiofit.flink.knowledgebase.medications.test.PatientContextFactory;
+import com.cardiofit.flink.models.PatientContext;
+import org.junit.jupiter.api.*;
+
+import java.util.Arrays;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * End-to-end integration tests for the Medication Database system.
+ *
+ * Tests complete workflows involving multiple components working together.
+ * Coverage Target: Workflow validation
+ * Test Count: 5 integration tests
+ */
+@DisplayName("Medication Database Integration Test Suite")
+@Tag("integration")
+class MedicationDatabaseIntegrationTest {
+
+    private MedicationDatabaseLoader loader;
+    private DoseCalculator calculator;
+    private DrugInteractionChecker interactionChecker;
+    private AllergyChecker allergyChecker;
+    private EnhancedContraindicationChecker contraindicationChecker;
+    private TherapeuticSubstitutionEngine substitutionEngine;
+
+    @BeforeEach
+    void setUp() {
+        loader = MedicationDatabaseLoader.getInstance();
+        calculator = new DoseCalculator();
+        interactionChecker = new DrugInteractionChecker();
+        allergyChecker = new AllergyChecker();
+        contraindicationChecker = new EnhancedContraindicationChecker();
+        substitutionEngine = new TherapeuticSubstitutionEngine();
+    }
+
+    @Test
+    @DisplayName("End-to-end: Medication ordering workflow")
+    void testEndToEndMedicationOrdering() {
+        // Arrange
+        PatientContext patient = PatientContextFactory.createStandardAdult();
+        patient.setActiveMedications(Arrays.asList("Warfarin"));
+
+        // Act
+        // Step 1: Lookup medication
+        Medication cipro = MedicationTestData.createCiprofloxacin();
+        assertThat(cipro).isNotNull();
+
+        // Step 2: Calculate dose
+        CalculatedDose dose = calculator.calculateDose(cipro, patient, "test-indication");
+        assertThat(dose.getCalculatedDose()).isEqualTo("400mg");
+
+        // Step 3: Check interactions
+        List<Interaction> interactions = interactionChecker.checkInteractions(cipro, patient);
+        assertThat(interactions).hasSizeGreaterThanOrEqualTo(1);
+        assertThat(interactions.get(0).getSeverity()).isEqualTo(InteractionSeverity.MAJOR);
+
+        // Step 4: Check allergies
+        AllergyCheckResult allergyResult = allergyChecker.check(cipro, patient);
+        assertThat(allergyResult.hasAllergy()).isFalse();
+
+        // Step 5: Generate recommendation
+        MedicationRecommendation recommendation = new MedicationRecommendation();
+        recommendation.setMedication(cipro);
+        recommendation.setDose(dose);
+        recommendation.setInteractions(interactions);
+        recommendation.setAllergyCheck(allergyResult);
+
+        // Assert final recommendation
+        assertThat(recommendation.requiresClinicalReview()).isTrue();
+        assertThat(recommendation.getWarnings()).containsAnyOf("INR monitoring required", "Monitor INR");
+    }
+
+    @Test
+    @DisplayName("Renal patient workflow: Automatic dose adjustment")
+    void testRenalPatientWorkflow() {
+        // Arrange
+        PatientContext patient = PatientContextFactory.createPatientWithCrCl(25.0); // Severe renal impairment
+
+        // Act
+        Medication levofloxacin = MedicationTestData.createLevofloxacin();
+        CalculatedDose dose = calculator.calculateDose(levofloxacin, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getCalculatedDose()).isEqualTo("500mg"); // Reduced from 750mg
+        assertThat(dose.getCalculatedFrequency()).isEqualTo("q48h"); // Extended from q24h
+        assertThat(dose.getWarnings()).containsAnyOf("severe renal impairment", "renal");
+    }
+
+    @Test
+    @DisplayName("Allergy workflow: Patient with penicillin allergy gets alternatives")
+    void testAllergyCheckWorkflow() {
+        // Arrange
+        PatientContext patient = PatientContextFactory.createPatientWithAllergies(
+            Arrays.asList("penicillin")
+        );
+
+        // Act
+        Medication pipTazo = MedicationTestData.createPiperacillinTazobactam();
+        AllergyCheckResult allergyResult = allergyChecker.check(pipTazo, patient);
+        List<SubstitutionOption> alternatives = substitutionEngine.findSubstitutes(pipTazo, patient);
+
+        // Assert
+        assertThat(allergyResult.hasAllergy()).isTrue();
+        assertThat(allergyResult.getShouldReject()).isTrue();
+        assertThat(alternatives).isNotEmpty();
+        assertThat(alternatives.get(0).getMedication().getDrugClass())
+            .isNotEqualTo("Beta-lactam");
+    }
+
+    @Test
+    @DisplayName("Formulary compliance workflow: Non-formulary → Substitute recommended")
+    void testFormularyComplianceWorkflow() {
+        // Arrange
+        Medication cefepime = MedicationTestData.createNonFormularyMedication("Cefepime");
+        cefepime.setDrugClass("Cephalosporin");
+
+        // Act
+        List<SubstitutionOption> substitutes = substitutionEngine.findSubstitutes(cefepime);
+
+        // Assert
+        assertThat(substitutes).isNotEmpty();
+        SubstitutionOption formularySubstitute = substitutes.stream()
+            .filter(s -> s.getMedication().isFormulary())
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(formularySubstitute.getMedication().getName()).isEqualTo("Ceftriaxone");
+        assertThat(formularySubstitute.getReason()).contains("formulary preferred");
+    }
+
+    @Test
+    @DisplayName("Critical care workflow: STEMI patient → Aspirin + Heparin interaction check")
+    void testCriticalCareWorkflow() {
+        // Arrange
+        PatientContext stemiPatient = PatientContextFactory.createSTEMIPatient();
+
+        // Act
+        // Step 1: Order aspirin
+        Medication aspirin = MedicationTestData.createAspirin();
+        CalculatedDose aspirinDose = calculator.calculateDose(aspirin, stemiPatient, "test-indication");
+        assertThat(aspirinDose.getCalculatedDose()).containsAnyOf("324mg", "325mg", "81mg");
+
+        // Step 2: Order heparin
+        Medication heparin = MedicationTestData.createHeparin();
+        CalculatedDose heparinDose = calculator.calculateDose(heparin, stemiPatient, "test-indication");
+        assertThat(heparinDose.getCalculatedDose()).contains("60 units/kg"); // Bolus
+
+        // Step 3: Check interaction
+        stemiPatient.setActiveMedications(Arrays.asList("Aspirin"));
+        List<Interaction> interactions = interactionChecker.checkInteractions(heparin, stemiPatient);
+
+        // Assert
+        assertThat(interactions).hasSizeGreaterThanOrEqualTo(1);
+        Interaction bleedingInteraction = interactions.stream()
+            .filter(i -> i.getDescription().toLowerCase().contains("bleeding"))
+            .findFirst()
+            .orElseThrow();
+        assertThat(bleedingInteraction.getSeverity()).isIn(
+            InteractionSeverity.MODERATE,
+            InteractionSeverity.MAJOR
+        );
+        assertThat(bleedingInteraction.getManagement()).contains("Monitor for bleeding");
+
+        // Step 4: Generate final recommendation
+        MedicationRecommendation recommendation = new MedicationRecommendation();
+        recommendation.proceedWithMonitoring(interactions);
+        assertThat(recommendation.canProceed()).isTrue();
+    }
+
+    @Nested
+    @DisplayName("Complex Clinical Scenarios")
+    class ComplexScenarios {
+
+        @Test
+        @DisplayName("Should handle septic patient with renal impairment and allergy")
+        void testComplexSepsisPatient() {
+            // Arrange
+            PatientContext patient = PatientContextFactory.createSepsisPatient();
+            patient.setAllergies(Arrays.asList("penicillin"));
+            patient.setCreatinine(2.0); // Mild AKI
+
+            // Act
+            Medication pipTazo = MedicationTestData.createPiperacillinTazobactam();
+
+            AllergyCheckResult allergyResult = allergyChecker.check(pipTazo, patient);
+            CalculatedDose dose = calculator.calculateDose(pipTazo, patient, "test-indication");
+            List<SubstitutionOption> alternatives = substitutionEngine.findSubstitutes(pipTazo, patient);
+
+            // Assert
+            assertThat(allergyResult.hasAllergy()).isTrue();
+            assertThat(dose.getWarnings()).isNotEmpty();
+            assertThat(alternatives).isNotEmpty();
+            assertThat(alternatives.get(0).getMedication().getDrugClass())
+                .isNotEqualTo("Beta-lactam");
+        }
+
+        @Test
+        @DisplayName("Should manage geriatric polypharmacy patient")
+        void testGeriatricPolypharmacy() {
+            // Arrange
+            PatientContext patient = PatientContextFactory.createGeriatricPatient(60.0, 1.5, 85, "F");
+            patient.setActiveMedications(Arrays.asList(
+                "Warfarin", "Metoprolol", "Lisinopril", "Furosemide", "Digoxin"
+            ));
+
+            // Act
+            Medication cipro = MedicationTestData.createCiprofloxacin();
+
+            CalculatedDose dose = calculator.calculateDose(cipro, patient, "test-indication");
+            List<Interaction> interactions = interactionChecker.checkInteractions(cipro, patient);
+
+            // Assert
+            assertThat(dose.getDoseReduction()).isLessThan(1.0); // Geriatric reduction
+            assertThat(interactions).hasSizeGreaterThanOrEqualTo(1);
+            assertThat(interactions).anyMatch(i ->
+                i.getSeverity() == InteractionSeverity.MAJOR
+            );
+        }
+    }
+}

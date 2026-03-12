@@ -1,0 +1,96 @@
+# KB-1 Drug Rules Service - Docker Compose Configuration
+# Provides drug dosing calculations and renal adjustments
+
+services:
+  # KB-1 Drug Rules API
+  kb-drug-rules:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-drug-rules
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: 8081
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+      # Database Configuration (PostgreSQL)
+      DB_HOST: kb1-postgres
+      DB_PORT: 5432
+      DB_USER: kb1_user
+      DB_PASSWORD: kb1_password
+      DB_NAME: kb1_drug_rules
+      DB_SSLMODE: disable
+      # Redis Configuration
+      REDIS_HOST: kb1-redis
+      REDIS_PORT: 6379
+      REDIS_ENABLED: "true"
+      # KB-7 Terminology Service (host.docker.internal for Mac/Windows)
+      KB7_URL: http://host.docker.internal:8092
+      KB7_ENABLED: "true"
+      # Metrics
+      METRICS_ENABLED: "true"
+    depends_on:
+      kb1-redis:
+        condition: service_healthy
+      kb1-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - kb1-network
+    restart: unless-stopped
+
+  # PostgreSQL for KB-1
+  kb1-postgres:
+    image: postgres:15-alpine
+    container_name: kb1-postgres
+    ports:
+      - "5481:5432"
+    environment:
+      POSTGRES_USER: kb1_user
+      POSTGRES_PASSWORD: kb1_password
+      POSTGRES_DB: kb1_drug_rules
+    volumes:
+      - kb1-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb1_user -d kb1_drug_rules"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb1-network
+    restart: unless-stopped
+
+  # Redis Cache for KB-1
+  kb1-redis:
+    image: redis:7-alpine
+    container_name: kb1-redis
+    ports:
+      - "6382:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - kb1-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb1-network
+    restart: unless-stopped
+
+volumes:
+  kb1-postgres-data:
+    name: kb1-postgres-data
+  kb1-redis-data:
+    name: kb1-redis-data
+
+networks:
+  kb1-network:
+    name: kb1-network
+    driver: bridge

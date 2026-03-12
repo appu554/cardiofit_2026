@@ -1,0 +1,222 @@
+# P_RENAL_ARTERY_STENOSIS - HPI Node Definition
+# Bayesian differential for renovascular hypertension screening in patients
+# with confirmed resistant hypertension.
+# Triggered by: RESISTANT_HTN_DETECTED event from KB-20.
+# Output: posterior probability of renal artery stenosis → feeds KB-23 imaging referral.
+
+node_id: P_RENAL_ARTERY_STENOSIS
+version: "1.0.0"
+description: "Renal artery stenosis differential in resistant hypertension patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ACC_AHA_RAS_2014"
+
+# Trigger event — this node activates on resistant HTN detection
+trigger_event: "RESISTANT_HTN_DETECTED"
+
+# Differentials with per-stratum priors (F-05)
+# RAS prevalence in resistant HTN: 2-24% depending on population.
+# Atherosclerotic RAS dominates in older DM+HTN+CKD patients.
+# FMD is rarer but important in younger patients.
+differentials:
+  - id: ATHEROSCLEROTIC_RAS
+    label: "Atherosclerotic Renal Artery Stenosis"
+    population_reference: "Safian RD, NEJM 2001; Textor SC, Circulation 2011"
+    priors:
+      DM_ONLY: 0.08
+      DM_HTN: 0.12
+      DM_HTN_CKD: 0.18
+
+  - id: FIBROMUSCULAR_DYSPLASIA
+    label: "Fibromuscular Dysplasia"
+    population_reference: "Olin JW, Circulation 2012; Gornik HL, JACC 2019"
+    priors:
+      DM_ONLY: 0.03
+      DM_HTN: 0.04
+      DM_HTN_CKD: 0.02
+
+  - id: OTHER_RENOVASCULAR
+    label: "Other Renovascular Cause (aortic coarctation, vasculitis, thrombosis)"
+    population_reference: "ESC Guidelines on Aortic Diseases 2023"
+    priors:
+      DM_ONLY: 0.02
+      DM_HTN: 0.02
+      DM_HTN_CKD: 0.03
+
+  - id: OTHER
+    label: "No Renovascular Cause (essential resistant HTN)"
+    population_reference: "AHA Resistant HTN Statement 2018"
+    priors:
+      DM_ONLY: 0.87
+      DM_HTN: 0.82
+      DM_HTN_CKD: 0.77
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Has the patient had any episode of flash pulmonary oedema (sudden severe breathlessness with pulmonary congestion)?"
+    text_hi: "क्या रोगी को फ्लैश पल्मोनरी एडिमा (अचानक गंभीर सांस फूलना और फेफड़ों में जमाव) का कोई प्रकरण हुआ है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, flash pulmonary oedema documented"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 8.0
+          FIBROMUSCULAR_DYSPLASIA: 2.0
+          OTHER_RENOVASCULAR: 1.5
+          OTHER: 0.2
+      - value: "NO"
+        label_en: "No flash pulmonary oedema"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 0.7
+          FIBROMUSCULAR_DYSPLASIA: 0.9
+          OTHER_RENOVASCULAR: 0.9
+          OTHER: 1.1
+
+  - question_id: Q02
+    text_en: "Does the patient have sudden severe BP instability (labile hypertension with large fluctuations)?"
+    text_hi: "क्या रोगी को अचानक गंभीर रक्तचाप अस्थिरता (बड़े उतार-चढ़ाव के साथ अस्थिर उच्च रक्तचाप) है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, labile HTN with large BP swings"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 3.5
+          FIBROMUSCULAR_DYSPLASIA: 2.8
+          OTHER_RENOVASCULAR: 2.0
+          OTHER: 0.4
+      - value: "NO"
+        label_en: "No unusual BP instability"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 0.7
+          FIBROMUSCULAR_DYSPLASIA: 0.7
+          OTHER_RENOVASCULAR: 0.8
+          OTHER: 1.2
+
+  - question_id: Q03
+    text_en: "Has an abdominal bruit been heard on clinical examination?"
+    text_hi: "क्या नैदानिक परीक्षण में पेट में ब्रूट (असामान्य ध्वनि) सुनाई दी है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, abdominal bruit present"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 5.0
+          FIBROMUSCULAR_DYSPLASIA: 6.0
+          OTHER_RENOVASCULAR: 2.5
+          OTHER: 0.2
+      - value: "NO"
+        label_en: "No abdominal bruit"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 0.6
+          FIBROMUSCULAR_DYSPLASIA: 0.5
+          OTHER_RENOVASCULAR: 0.8
+          OTHER: 1.2
+      - value: "NOT_EXAMINED"
+        label_en: "Not examined"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 1.0
+          FIBROMUSCULAR_DYSPLASIA: 1.0
+          OTHER_RENOVASCULAR: 1.0
+          OTHER: 1.0
+
+  - question_id: Q04
+    text_en: "Has the patient had unexplained renal function decline after starting or increasing ACEi/ARB?"
+    text_hi: "क्या ACEi/ARB शुरू करने या बढ़ाने के बाद रोगी की गुर्दे की कार्यक्षमता में अस्पष्ट गिरावट हुई है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_SIGNIFICANT"
+        label_en: "Yes, creatinine rise >30% after ACEi/ARB"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 6.5
+          FIBROMUSCULAR_DYSPLASIA: 3.0
+          OTHER_RENOVASCULAR: 2.0
+          OTHER: 0.3
+      - value: "YES_MILD"
+        label_en: "Mild creatinine rise 10-30% (may be expected RAAS effect)"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 1.8
+          FIBROMUSCULAR_DYSPLASIA: 1.2
+          OTHER_RENOVASCULAR: 1.0
+          OTHER: 0.8
+      - value: "NO"
+        label_en: "No renal function decline on ACEi/ARB"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 0.4
+          FIBROMUSCULAR_DYSPLASIA: 0.7
+          OTHER_RENOVASCULAR: 0.8
+          OTHER: 1.3
+
+  - question_id: Q05
+    text_en: "Is there asymmetric kidney size on any prior imaging (>1.5 cm difference)?"
+    text_hi: "क्या किसी पूर्व इमेजिंग में गुर्दों के आकार में असमानता (>1.5 cm अंतर) है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, asymmetric kidney size documented"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 7.0
+          FIBROMUSCULAR_DYSPLASIA: 4.0
+          OTHER_RENOVASCULAR: 3.0
+          OTHER: 0.2
+      - value: "NO"
+        label_en: "No asymmetry"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 0.5
+          FIBROMUSCULAR_DYSPLASIA: 0.6
+          OTHER_RENOVASCULAR: 0.7
+          OTHER: 1.2
+      - value: "NO_IMAGING"
+        label_en: "No renal imaging performed"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 1.0
+          FIBROMUSCULAR_DYSPLASIA: 1.0
+          OTHER_RENOVASCULAR: 1.0
+          OTHER: 1.0
+
+  - question_id: Q06
+    text_en: "Does the patient have peripheral vascular disease (claudication, absent pulses, prior peripheral intervention)?"
+    text_hi: "क्या रोगी को परिधीय संवहनी रोग है (अकड़न, नाड़ी न मिलना, पूर्व परिधीय हस्तक्षेप)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, peripheral vascular disease present"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 4.5
+          FIBROMUSCULAR_DYSPLASIA: 0.8
+          OTHER_RENOVASCULAR: 1.5
+          OTHER: 0.4
+      - value: "NO"
+        label_en: "No peripheral vascular disease"
+        likelihood_ratios:
+          ATHEROSCLEROTIC_RAS: 0.5
+          FIBROMUSCULAR_DYSPLASIA: 1.1
+          OTHER_RENOVASCULAR: 0.9
+          OTHER: 1.2
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.50
+    action: "IMAGING_REFERRAL"
+    description: "Posterior > 0.50 for renovascular cause → Order renal duplex ultrasonography or MR angiography. Refer to vascular/interventional radiology if stenosis confirmed."
+  - threshold: 0.35
+    action: "RENIN_SAMPLING"
+    description: "Moderate probability. Order peripheral renin sampling. Consider CT angiography if duplex is inconclusive."
+  - threshold: 0.15
+    action: "CONTINUE_MONITORING"
+    description: "Low renovascular probability. Continue standard resistant HTN workup. Re-evaluate if renal function deteriorates on RAAS blockade."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "ATHEROSCLEROTIC_RAS posterior > 0.40"
+    trigger_node: "P01_CHEST_PAIN"
+    rationale: "Atherosclerotic RAS with moderate posterior may indicate diffuse atherosclerosis; screen for coronary artery disease."
+  - condition: "FIBROMUSCULAR_DYSPLASIA posterior > 0.30"
+    trigger_node: "P_HYPERALDOSTERONISM"
+    rationale: "FMD can coexist with secondary hyperaldosteronism from renal hypoperfusion."

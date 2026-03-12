@@ -1,0 +1,232 @@
+# Clinical Context Recipe: Clinical Deterioration Response (Digital Reflex Arc)
+# Implements sub-100ms autonomous execution pattern for clinical deterioration
+# Approved by Clinical Governance Board for emergency response workflows
+
+recipe_id: "clinical_deterioration_response_v1"
+recipe_name: "Clinical Deterioration Response Context"
+version: "1.0"
+clinical_scenario: "clinical_deterioration"
+workflow_category: "event_triggered"
+execution_pattern: "digital_reflex_arc"
+
+# Performance requirements - Digital Reflex Arc
+sla_ms: 30  # Very fast for autonomous response
+cache_duration_seconds: 30  # Fresh data for deterioration
+real_data_only: true
+mock_data_detection: true
+autonomous_execution: true
+
+# Required data points for clinical deterioration response
+required_data_points:
+  - name: "current_medications"
+    source_type: "medication_service"
+    fields: ["medication_name", "dosage", "route", "last_dose_time", "critical_interactions"]
+    required: true
+    max_age_hours: 0.5  # 30 minutes max for deterioration
+    quality_threshold: 0.95
+    timeout_ms: 6000
+    retry_count: 1  # Fast response, limited retries
+    fallback_sources: ["fhir_store"]
+
+  - name: "active_orders"
+    source_type: "encounter_service"
+    fields: ["order_type", "order_status", "priority", "ordered_time", "due_time"]
+    required: true
+    max_age_hours: 1
+    quality_threshold: 0.90
+    timeout_ms: 5000
+    retry_count: 1
+    fallback_sources: ["fhir_store"]
+
+  - name: "care_team_members"
+    source_type: "context_service_internal"
+    fields: ["provider_id", "role", "contact_info", "on_call_status", "response_time"]
+    required: true
+    max_age_hours: 4
+    quality_threshold: 0.95
+    timeout_ms: 4000
+    retry_count: 1
+    fallback_sources: []
+
+  - name: "patient_preferences"
+    source_type: "patient_service"
+    fields: ["code_status", "advance_directives", "emergency_contacts", "allergies"]
+    required: true
+    max_age_hours: 24
+    quality_threshold: 0.85
+    timeout_ms: 6000
+    retry_count: 1
+    fallback_sources: ["fhir_store"]
+
+  - name: "vital_signs"
+    source_type: "observation_service"
+    fields: ["heart_rate", "blood_pressure", "respiratory_rate", "oxygen_saturation", "temperature"]
+    required: true
+    max_age_hours: 0.25  # 15 minutes max for vitals
+    quality_threshold: 0.95
+    timeout_ms: 5000
+    retry_count: 1
+    fallback_sources: ["device_data_service"]
+
+  - name: "lab_results"
+    source_type: "lab_service"
+    fields: ["critical_values", "trending_values", "collection_time", "result_status"]
+    required: false  # May not be available in emergency
+    max_age_hours: 6
+    quality_threshold: 0.80
+    timeout_ms: 8000
+    retry_count: 1
+    fallback_sources: ["fhir_store"]
+
+# Conditional rules for deterioration scenarios
+conditional_rules:
+  - condition: "vital_signs.heart_rate > 120 or vital_signs.heart_rate < 50"
+    description: "Cardiac deterioration requires ECG and cardiac history"
+    additional_data_points:
+      - name: "cardiac_history"
+        source_type: "condition_service"
+        fields: ["cardiac_conditions", "previous_events", "risk_factors"]
+        required: true
+        max_age_hours: 72
+        quality_threshold: 0.85
+        timeout_ms: 5000
+        retry_count: 1
+
+  - condition: "vital_signs.oxygen_saturation < 90"
+    description: "Respiratory deterioration requires pulmonary context"
+    additional_data_points:
+      - name: "respiratory_context"
+        source_type: "condition_service"
+        fields: ["pulmonary_conditions", "oxygen_requirements", "ventilator_settings"]
+        required: true
+        max_age_hours: 24
+        quality_threshold: 0.90
+        timeout_ms: 5000
+        retry_count: 1
+
+  - condition: "patient.code_status == 'DNR' or patient.code_status == 'DNI'"
+    description: "Code status requires ethics and family notification context"
+    additional_data_points:
+      - name: "ethics_context"
+        source_type: "context_service_internal"
+        fields: ["ethics_consult", "family_notification", "palliative_care"]
+        required: true
+        max_age_hours: 12
+        quality_threshold: 0.95
+        timeout_ms: 3000
+        retry_count: 1
+
+# Quality constraints - Relaxed for emergency response
+quality_constraints:
+  minimum_completeness: 0.70  # Lower threshold for emergency
+  maximum_age_hours: 1
+  required_fields: ["current_medications", "vital_signs", "care_team_members"]
+  accuracy_threshold: 0.85
+
+# Safety requirements - Emergency focused
+safety_requirements:
+  minimum_completeness_score: 0.70  # Emergency threshold
+  absolute_required_enforcement: "LENIENT"  # Allow partial data in emergency
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "FLAG_FOR_REVIEW"  # Don't fail in emergency
+  stale_data_action: "ACCEPT"  # Accept stale data in emergency
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Cache strategy - Very short TTL for fresh data
+cache_strategy:
+  l1_ttl_seconds: 30   # 30 seconds only
+  l2_ttl_seconds: 60   # 1 minute
+  l3_ttl_seconds: 120  # 2 minutes
+  cache_key_pattern: "context:deterioration:{patient_id}:{event_id}"
+  invalidation_events:
+    - "clinical-data-changes.patient.vitals.updated"
+    - "clinical-data-changes.patient.medication.administered"
+    - "clinical-data-changes.patient.orders.updated"
+    - "clinical-data-changes.patient.status.changed"
+
+# Assembly rules - Optimized for speed
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 25  # 25ms of the 30ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: false  # No retries for speed
+  validate_data_freshness: true
+  enforce_quality_constraints: false  # Skip for speed in emergency
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2024-01-20T14:00:00Z"
+  version: "1.0"
+  effective_date: "2024-01-20T00:00:00Z"
+  expiry_date: "2025-01-20T00:00:00Z"
+  clinical_board_approval_id: "CGB-CLIN-DETER-20240120"
+  tags: ["approved", "production", "emergency", "deterioration", "digital_reflex_arc"]
+  change_log:
+    - "v1.0: Initial approved version for clinical deterioration response"
+
+# Data source endpoints
+data_sources:
+  - service: "medication_service"
+    endpoint: "http://localhost:8009"
+    timeout_ms: 6000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "encounter_service"
+    endpoint: "http://localhost:8020"
+    timeout_ms: 5000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "observation_service"
+    endpoint: "http://localhost:8007"
+    timeout_ms: 5000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "patient_service"
+    endpoint: "http://localhost:8003"
+    timeout_ms: 6000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "lab_service"
+    endpoint: "http://localhost:8000"
+    timeout_ms: 8000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "fhir_store"
+    endpoint: "projects/cardiofit-905a8/locations/asia-south1/datasets/clinical-synthesis-hub/fhirStores/fhir-store"
+    timeout_ms: 8000
+    protocol: "google_healthcare_api"
+
+  - service: "cae_service"
+    endpoint: "localhost:8027"
+    timeout_ms: 8000
+    protocol: "grpc"
+
+# Emergency response configuration
+emergency_response:
+  auto_escalation: true
+  notification_required: true
+  rapid_response_team: true
+  critical_care_consultation: true
+  family_notification: true
+
+# Real-time monitoring
+real_time_requirements:
+  real_time_validation: true
+  autonomous_safety_checks: true
+  human_intervention_threshold: "critical_only"
+  continuous_monitoring: true
+  alert_propagation: true
+
+# Audit and compliance - Emergency focused
+audit_requirements:
+  log_all_data_access: true
+  track_response_time: true
+  record_decision_points: true
+  capture_escalation_events: true
+  maintain_emergency_timeline: true

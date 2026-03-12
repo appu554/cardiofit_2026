@@ -1,0 +1,42 @@
+# Dockerfile for Custom RDF Converters
+# Purpose: Convert LOINC CSV to RDF/Turtle (AMT uses RF2, handled by snomed-toolkit)
+# Base: Python 3.11
+# Region: Australia
+
+FROM python:3.11-slim-bookworm
+
+LABEL maintainer="kb7-team@cardiofit.ai"
+LABEL description="Custom RDF converters for LOINC - AU Edition"
+LABEL version="1.0.0"
+LABEL region="au"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    unzip \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    rdflib==7.0.0 \
+    pandas==2.1.4 \
+    click==8.1.7 \
+    requests==2.31.0
+
+# Copy transformation scripts
+# Note: AU uses AMT (RF2 format) instead of RxNorm (RRF format)
+# AMT is handled by snomed-toolkit, so only LOINC converter is needed here
+COPY scripts/transform-loinc.py /app/scripts/
+RUN chmod +x /app/scripts/*.py
+
+# Create workspace directories
+RUN mkdir -p /input /output /workspace
+
+WORKDIR /workspace
+
+# Verify installations
+RUN python -c "import rdflib; import pandas; print('Dependencies installed successfully')"
+
+ENTRYPOINT ["/bin/bash"]
+CMD ["-c", "echo 'RDF Converters ready. Use /app/scripts/transform-loinc.py'"]

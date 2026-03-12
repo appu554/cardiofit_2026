@@ -1,0 +1,816 @@
+{
+	"info": {
+		"_postman_id": "scheduling-federation-flow",
+		"name": "SchedulingService - Federation Flow Testing",
+		"description": "Complete flow testing: API Gateway → Auth → Apollo Federation Gateway → SchedulingService → Google Healthcare API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "api_gateway_url",
+			"value": "http://localhost:8005",
+			"type": "string"
+		},
+		{
+			"key": "auth_service_url",
+			"value": "http://localhost:8001",
+			"type": "string"
+		},
+		{
+			"key": "apollo_gateway_url",
+			"value": "http://localhost:4000",
+			"type": "string"
+		},
+		{
+			"key": "scheduling_service_url",
+			"value": "http://localhost:8014",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "patient_id",
+			"value": "patient-test-123",
+			"type": "string"
+		},
+		{
+			"key": "practitioner_id",
+			"value": "practitioner-test-456",
+			"type": "string"
+		},
+		{
+			"key": "appointment_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "schedule_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "slot_id",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Authentication Flow",
+			"item": [
+				{
+					"name": "Login Doctor (Get Auth Token)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.access_token) {",
+									"        pm.collectionVariables.set('auth_token', response.access_token);",
+									"        console.log('✅ Auth token set successfully');",
+									"        console.log('Token:', response.access_token.substring(0, 20) + '...');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Authentication failed');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"doctor@example.com\",\n  \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{auth_service_url}}/auth/login",
+							"host": ["{{auth_service_url}}"],
+							"path": ["auth", "login"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Verify Token via API Gateway",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{api_gateway_url}}/auth/verify",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["auth", "verify"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. Service Health Checks",
+			"item": [
+				{
+					"name": "API Gateway Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{api_gateway_url}}/health",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["health"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Apollo Federation Gateway Health",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"{ __schema { queryType { name } } }\"\n}"
+						},
+						"url": {
+							"raw": "{{apollo_gateway_url}}/graphql",
+							"host": ["{{apollo_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "SchedulingService Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{scheduling_service_url}}/health",
+							"host": ["{{scheduling_service_url}}"],
+							"path": ["health"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "SchedulingService Federation Schema",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"{ _service { sdl } }\"\n}"
+						},
+						"url": {
+							"raw": "{{scheduling_service_url}}/api/federation",
+							"host": ["{{scheduling_service_url}}"],
+							"path": ["api", "federation"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Complete Flow - Appointment Management",
+			"item": [
+				{
+					"name": "Create Appointment (via API Gateway)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createAppointment && response.data.createAppointment.id) {",
+									"        pm.collectionVariables.set('appointment_id', response.data.createAppointment.id);",
+									"        console.log('✅ Appointment created with ID:', response.data.createAppointment.id);",
+									"    }",
+									"} else {",
+									"    console.log('❌ Failed to create appointment');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateAppointment($appointment: AppointmentInput!) { createAppointment(appointment: $appointment) { id status description start end minutesDuration comment participant { status actor { reference display } required } } }\",\n  \"variables\": {\n    \"appointment\": {\n      \"status\": \"PROPOSED\",\n      \"description\": \"Regular checkup appointment via API Gateway\",\n      \"start\": \"2024-12-20T10:00:00Z\",\n      \"end\": \"2024-12-20T10:30:00Z\",\n      \"minutesDuration\": 30,\n      \"comment\": \"Testing complete flow: API Gateway → Auth → Apollo → SchedulingService → Google Healthcare\",\n      \"patientInstruction\": \"Please arrive 15 minutes early\",\n      \"participant\": [\n        {\n          \"status\": \"ACCEPTED\",\n          \"required\": \"REQUIRED\",\n          \"actor\": {\n            \"reference\": \"Patient/{{patient_id}}\",\n            \"display\": \"Test Patient\"\n          }\n        },\n        {\n          \"status\": \"ACCEPTED\",\n          \"required\": \"REQUIRED\",\n          \"actor\": {\n            \"reference\": \"Practitioner/{{practitioner_id}}\",\n            \"display\": \"Dr. Test Practitioner\"\n          }\n        }\n      ]\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Appointment (via API Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetAppointment($id: ID!) { appointment(id: $id) { id resourceType status description start end minutesDuration comment patientInstruction participant { status actor { reference display } required } } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Appointments by Patient (via API Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchAppointments($patientId: String) { appointments(patientId: $patientId) { id status description start end participant { actor { reference display } } } }\",\n  \"variables\": {\n    \"patientId\": \"{{patient_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Appointment Status (via API Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation UpdateAppointment($id: ID!, $appointment: AppointmentInput!) { updateAppointment(id: $id, appointment: $appointment) { id status description comment } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\",\n    \"appointment\": {\n      \"status\": \"BOOKED\",\n      \"description\": \"Updated appointment - confirmed booking\",\n      \"comment\": \"Patient confirmed attendance via API Gateway flow\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "4. Complete Flow - Schedule Management",
+			"item": [
+				{
+					"name": "Create Schedule (via API Gateway)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createSchedule && response.data.createSchedule.id) {",
+									"        pm.collectionVariables.set('schedule_id', response.data.createSchedule.id);",
+									"        console.log('✅ Schedule created with ID:', response.data.createSchedule.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateSchedule($schedule: ScheduleInput!) { createSchedule(schedule: $schedule) { id resourceType active actor { reference display } comment } }\",\n  \"variables\": {\n    \"schedule\": {\n      \"active\": true,\n      \"actor\": [\n        {\n          \"reference\": \"Practitioner/{{practitioner_id}}\",\n          \"display\": \"Dr. Test Practitioner\"\n        }\n      ],\n      \"comment\": \"Test schedule created via complete API Gateway flow\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Schedule (via API Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetSchedule($id: ID!) { schedule(id: $id) { id resourceType active actor { reference display } comment } }\",\n  \"variables\": {\n    \"id\": \"{{schedule_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Schedule by Practitioner ID (via API Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetSchedulesByPractitioner($actorId: String, $active: Boolean) { schedules(actorId: $actorId, active: $active) { id resourceType active actor { reference display } planningHorizon { start end } comment serviceCategory { text coding { system code display } } serviceType { text coding { system code display } } specialty { text coding { system code display } } identifier { use system value } } }\",\n  \"variables\": {\n    \"actorId\": \"{{practitioner_id}}\",\n    \"active\": true\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "5. Complete Flow - Slot Management",
+			"item": [
+				{
+					"name": "Create Slot (via API Gateway)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createSlot && response.data.createSlot.id) {",
+									"        pm.collectionVariables.set('slot_id', response.data.createSlot.id);",
+									"        console.log('✅ Slot created with ID:', response.data.createSlot.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateSlot($slot: SlotInput!) { createSlot(slot: $slot) { id resourceType status start end schedule { reference display } overbooked comment } }\",\n  \"variables\": {\n    \"slot\": {\n      \"status\": \"FREE\",\n      \"start\": \"2024-12-20T14:00:00Z\",\n      \"end\": \"2024-12-20T14:30:00Z\",\n      \"schedule\": {\n        \"reference\": \"Schedule/{{schedule_id}}\",\n        \"display\": \"Dr. Test Practitioner Schedule\"\n      },\n      \"overbooked\": false,\n      \"comment\": \"Available slot created via API Gateway flow\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Available Slots (via API Gateway)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchSlots($status: SlotStatus) { slots(status: $status) { id status start end schedule { reference display } overbooked } }\",\n  \"variables\": {\n    \"status\": \"FREE\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. Federation Cross-Service Queries",
+			"item": [
+				{
+					"name": "Patient with Appointments (Federation)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query PatientAppointments($id: ID!) { patient(id: $id) { id name { family given } appointments { id status description start end participant { actor { reference display } } } } }\",\n  \"variables\": {\n    \"id\": \"{{patient_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "User with Schedules and Appointments (Federation)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query UserSchedulingData($id: ID!) { user(id: $id) { id firstName lastName appointments { id status description start end } schedules { id active actor { reference display } comment } } }\",\n  \"variables\": {\n    \"id\": \"{{practitioner_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Complex Federation Query (Patient + User + Appointments)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query ComplexFederationQuery($patientId: ID!, $practitionerId: ID!) { patient(id: $patientId) { id name { family given } appointments { id status start end } } user(id: $practitionerId) { id firstName lastName schedules { id active } appointments { id status start end } } appointments { id status start end participant { actor { reference display } } } }\",\n  \"variables\": {\n    \"patientId\": \"{{patient_id}}\",\n    \"practitionerId\": \"{{practitioner_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "7. Google Healthcare API Validation",
+			"item": [
+				{
+					"name": "Verify Appointment in Google Healthcare API",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.appointment) {",
+									"        console.log('✅ Appointment found in Google Healthcare API');",
+									"        console.log('FHIR Resource Type:', response.data.appointment.resourceType);",
+									"        console.log('Status:', response.data.appointment.status);",
+									"    } else {",
+									"        console.log('❌ Appointment not found in Google Healthcare API');",
+									"    }",
+									"} else {",
+									"    console.log('❌ Failed to query Google Healthcare API');",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query VerifyAppointmentInGoogleHealthcare($id: ID!) { appointment(id: $id) { id resourceType status description start end participant { status actor { reference display } required } } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "FHIR Compliance Check",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query FHIRComplianceCheck($id: ID!) { appointment(id: $id) { id resourceType identifier { use system value } status serviceCategory { text coding { system code display } } serviceType { text coding { system code display } } appointmentType { text coding { system code display } } reasonCode { text coding { system code display } } priority description start end minutesDuration comment patientInstruction participant { type { text coding { system code display } } actor { reference display type } required status } } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "8. Error Handling & Edge Cases",
+			"item": [
+				{
+					"name": "Test Authentication Failure",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer invalid-token"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query TestAuth { appointments { id status } }\"\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Test Non-existent Appointment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetNonExistentAppointment($id: ID!) { appointment(id: $id) { id status } }\",\n  \"variables\": {\n    \"id\": \"non-existent-appointment-id\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Test Invalid Appointment Data",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateInvalidAppointment($appointment: AppointmentInput!) { createAppointment(appointment: $appointment) { id status } }\",\n  \"variables\": {\n    \"appointment\": {\n      \"status\": \"INVALID_STATUS\",\n      \"start\": \"invalid-date-format\",\n      \"end\": \"invalid-date-format\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "9. Performance & Load Testing",
+			"item": [
+				{
+					"name": "Bulk Appointment Query",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query BulkQuery { appointments { id status start end participant { actor { reference } } } schedules { id active actor { reference } } slots { id status start end } }\"\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Complex Federation Performance Test",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query ComplexPerformanceTest { appointments { id status start end participant { actor { reference display } } } patients { id name { family given } appointments { id status } } users { id firstName lastName appointments { id status } schedules { id active } } }\"\n}"
+						},
+						"url": {
+							"raw": "{{api_gateway_url}}/graphql",
+							"host": ["{{api_gateway_url}}"],
+							"path": ["graphql"]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

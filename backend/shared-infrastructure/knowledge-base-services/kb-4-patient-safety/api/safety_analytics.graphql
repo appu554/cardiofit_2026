@@ -1,0 +1,953 @@
+# KB-4 Patient Safety Analytics GraphQL Schema
+# Read-only analytics interface for dashboards and reporting
+
+scalar DateTime
+scalar JSON
+scalar UUID
+
+type Query {
+  # Real-time safety monitoring
+  safetyDashboard(timeframe: TimeframeInput!): SafetyDashboard!
+  
+  # Alert analytics
+  safetyAlerts(
+    filters: SafetyAlertFilters
+    pagination: PaginationInput
+    sorting: SortingInput
+  ): SafetyAlertsConnection!
+  
+  # Drug-specific analytics
+  drugSafetyProfile(drugCode: String!): DrugSafetyProfile
+  drugSafetyTrends(
+    drugCodes: [String!]!
+    timeframe: TimeframeInput!
+  ): [DrugTrendData!]!
+  
+  # Statistical signal detection
+  safetySignals(
+    filters: SignalFilters
+    algorithm: SignalDetectionAlgorithm
+  ): [SafetySignal!]!
+  
+  # Override analytics
+  overrideAnalytics(timeframe: TimeframeInput!): OverrideAnalytics!
+  overrideAuditTrail(overrideId: UUID!): OverrideAuditTrail!
+  
+  # Performance metrics
+  serviceMetrics(
+    metrics: [MetricType!]!
+    timeframe: TimeframeInput!
+    aggregation: MetricAggregation!
+  ): [ServiceMetric!]!
+  
+  # Clinical insights
+  clinicalInsights(
+    patientId: String
+    drugCode: String
+    timeframe: TimeframeInput!
+  ): ClinicalInsights!
+}
+
+type Subscription {
+  # Real-time safety alerts
+  safetyAlertStream(filters: SafetyAlertFilters): SafetyAlert!
+  
+  # Statistical signal detection updates
+  signalDetectionUpdates(drugCodes: [String!]): SafetySignal!
+  
+  # Override workflow notifications
+  overrideUpdates(userId: String!): OverrideUpdate!
+  
+  # Service health monitoring
+  serviceHealthUpdates: ServiceHealthUpdate!
+}
+
+# Core types
+type SafetyDashboard {
+  overview: SafetyOverview!
+  recentAlerts: [SafetyAlert!]!
+  criticalSignals: [SafetySignal!]!
+  performanceMetrics: DashboardMetrics!
+  systemHealth: SystemHealth!
+  lastUpdated: DateTime!
+}
+
+type SafetyOverview {
+  totalAlertsToday: Int!
+  vetoRate24h: Float!
+  overrideRate24h: Float!
+  avgResponseTimeMs: Float!
+  criticalAlertsActive: Int!
+  topRiskDrugs: [DrugRiskSummary!]!
+}
+
+type DrugRiskSummary {
+  drugCode: String!
+  drugName: String!
+  alertCount24h: Int!
+  vetoCount24h: Int!
+  riskScore: Float!
+  trendDirection: TrendDirection!
+}
+
+enum TrendDirection {
+  INCREASING
+  DECREASING
+  STABLE
+  VOLATILE
+}
+
+type SafetyAlert {
+  eventId: UUID!
+  timestamp: DateTime!
+  patientId: String!
+  therapyId: String!
+  drugCode: String!
+  drugClass: String!
+  
+  # Core verdict
+  safetyStatus: SafetyStatus!
+  findings: [SafetyFinding!]!
+  
+  # Evidence and audit
+  evidenceEnvelope: EvidenceEnvelope!
+  decisionHash: String!
+  
+  # Clinical context
+  patientSnapshot: JSON!
+  concurrentMeds: [String!]!
+  
+  # Override state
+  overrideState: OverrideLevel!
+  overrideInfo: OverrideInfo
+  
+  # Performance
+  evaluationTimeMs: Int!
+  cacheHit: Boolean!
+  
+  # Metadata
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum SafetyStatus {
+  PASS
+  WARN
+  VETO
+}
+
+type SafetyFinding {
+  findingId: UUID!
+  severity: FindingSeverity!
+  category: String!
+  ruleName: String!
+  description: String!
+  clinicalRationale: String!
+  evidenceIds: [String!]!
+  guidelineRefs: [String!]!
+  recommendation: String!
+  alternativeTherapies: [String!]!
+  confidenceScore: Float!
+  detectedAt: DateTime!
+}
+
+enum FindingSeverity {
+  INFO
+  LOW
+  MODERATE
+  HIGH
+  CRITICAL
+}
+
+type EvidenceEnvelope {
+  envelopeId: UUID!
+  envelopeHash: String!
+  evidenceItems: [EvidenceItem!]!
+  knowledgeSources: [String!]!
+  appliedRules: [String!]!
+  createdAt: DateTime!
+  createdBy: String!
+  integritySignature: String!
+}
+
+type EvidenceItem {
+  evidenceId: UUID!
+  sourceType: String!
+  sourceReference: String!
+  evidenceText: String!
+  strengthRating: Float!
+  metadata: JSON!
+}
+
+# Override management
+type OverrideInfo {
+  overrideId: UUID!
+  level: OverrideLevel!
+  status: OverrideStatus!
+  justification: String!
+  authorizedBy: String!
+  expiresAt: DateTime!
+  approvalChain: [String!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum OverrideLevel {
+  NONE
+  L1
+  L2
+  L3
+}
+
+enum OverrideStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+  REVOKED
+}
+
+# Drug safety analytics
+type DrugSafetyProfile {
+  drugCode: String!
+  drugName: String!
+  drugClass: String!
+  
+  # Safety statistics
+  safetyStatistics: DrugSafetyStatistics!
+  
+  # Recent performance
+  recentActivity: DrugRecentActivity!
+  
+  # Rule compliance
+  ruleCompliance: RuleComplianceProfile!
+  
+  # Signal analysis
+  detectedSignals: [SafetySignal!]!
+  
+  # Override patterns
+  overridePatterns: OverridePatterns!
+  
+  lastUpdated: DateTime!
+}
+
+type DrugSafetyStatistics {
+  totalEvaluations: Int!
+  passRate: Float!
+  warnRate: Float!
+  vetoRate: Float!
+  avgEvaluationTimeMs: Float!
+  cacheHitRate: Float!
+  
+  # Time-based trends
+  trends30d: SafetyTrend!
+  trends7d: SafetyTrend!
+  trends24h: SafetyTrend!
+}
+
+type SafetyTrend {
+  totalAlerts: Int!
+  passCount: Int!
+  warnCount: Int!
+  vetoCount: Int!
+  percentChange: Float!
+  trendDirection: TrendDirection!
+}
+
+type DrugRecentActivity {
+  recentAlerts: [SafetyAlert!]!
+  recentOverrides: [OverrideInfo!]!
+  recentSignals: [SafetySignal!]!
+  activitySummary: ActivitySummary!
+}
+
+type ActivitySummary {
+  alertsLast24h: Int!
+  overridesLast24h: Int!
+  signalsLast7d: Int!
+  peakActivityHour: String!
+}
+
+type RuleComplianceProfile {
+  totalRules: Int!
+  activeRules: Int!
+  rulesByCategory: [RuleCategoryCount!]!
+  recentRuleUpdates: [RuleUpdate!]!
+  complianceScore: Float!
+}
+
+type RuleCategoryCount {
+  category: String!
+  count: Int!
+  lastUpdated: DateTime!
+}
+
+type RuleUpdate {
+  updateId: UUID!
+  ruleName: String!
+  updateType: String!
+  updatedBy: String!
+  updatedAt: DateTime!
+  description: String!
+}
+
+type OverridePatterns {
+  totalOverrides: Int!
+  overridesByLevel: [OverrideLevelCount!]!
+  commonJustifications: [JustificationPattern!]!
+  overrideSuccessRate: Float!
+  avgApprovalTimeMinutes: Float!
+}
+
+type OverrideLevelCount {
+  level: OverrideLevel!
+  count: Int!
+  successRate: Float!
+}
+
+type JustificationPattern {
+  pattern: String!
+  frequency: Int!
+  successRate: Float!
+  avgApprovalTime: Float!
+}
+
+# Statistical signal detection
+type SafetySignal {
+  signalId: UUID!
+  drugCode: String!
+  signalType: String!
+  signalStrength: Float!
+  pValue: Float!
+  confidenceIntervalLower: Float!
+  confidenceIntervalUpper: Float!
+  
+  # Clinical context
+  clinicalDescription: String!
+  affectedPopulations: [String!]!
+  severityAssessment: String!
+  
+  # Temporal
+  firstDetected: DateTime!
+  lastUpdated: DateTime!
+  occurrenceCount: Int!
+  
+  # Metadata
+  detectionMethod: SignalDetectionAlgorithm!
+  detectionParameters: JSON!
+  
+  # Related data
+  relatedAlerts: [SafetyAlert!]!
+  statisticalContext: StatisticalContext!
+}
+
+enum SignalDetectionAlgorithm {
+  SPC
+  CUSUM
+  EWMA
+  ML_ANOMALY
+}
+
+type StatisticalContext {
+  baselineRate: Float!
+  currentRate: Float!
+  expectedRange: StatisticalRange!
+  controlLimits: ControlLimits!
+  historicalComparison: HistoricalComparison!
+}
+
+type StatisticalRange {
+  lower: Float!
+  upper: Float!
+  confidence: Float!
+}
+
+type ControlLimits {
+  upperControlLimit: Float!
+  lowerControlLimit: Float!
+  upperWarningLimit: Float!
+  lowerWarningLimit: Float!
+}
+
+type HistoricalComparison {
+  sameMonth1YearAgo: Float!
+  sameQuarter1YearAgo: Float!
+  rollingAverage30d: Float!
+  percentileRank: Float!
+}
+
+# Override analytics
+type OverrideAnalytics {
+  summary: OverrideSummary!
+  patterns: OverridePatternAnalysis!
+  performance: OverridePerformance!
+  compliance: OverrideCompliance!
+  trends: [OverrideTrend!]!
+}
+
+type OverrideSummary {
+  totalOverrides: Int!
+  pendingOverrides: Int!
+  approvedOverrides: Int!
+  deniedOverrides: Int!
+  expiredOverrides: Int!
+  revokedOverrides: Int!
+}
+
+type OverridePatternAnalysis {
+  topJustifications: [JustificationAnalysis!]!
+  drugDistribution: [DrugOverrideCount!]!
+  userPatterns: [UserOverridePattern!]!
+  timePatterns: [TimePattern!]!
+}
+
+type JustificationAnalysis {
+  justificationText: String!
+  frequency: Int!
+  approvalRate: Float!
+  avgProcessingTime: Float!
+  associatedRisks: [String!]!
+}
+
+type DrugOverrideCount {
+  drugCode: String!
+  drugName: String!
+  overrideCount: Int!
+  approvalRate: Float!
+  riskLevel: String!
+}
+
+type UserOverridePattern {
+  userId: String!
+  userName: String!
+  overrideCount: Int!
+  approvalRate: Float!
+  specializations: [String!]!
+}
+
+type TimePattern {
+  timeSlot: String!
+  overrideCount: Int!
+  avgProcessingTime: Float!
+  peakDay: String!
+}
+
+type OverridePerformance {
+  avgApprovalTimeMinutes: Float!
+  avgL1ApprovalTime: Float!
+  avgL2ApprovalTime: Float!
+  avgL3ApprovalTime: Float!
+  slaCompliance: Float!
+  bottlenecks: [PerformanceBottleneck!]!
+}
+
+type PerformanceBottleneck {
+  stage: String!
+  avgDelayMinutes: Float!
+  frequency: Int!
+  improvement: String!
+}
+
+type OverrideCompliance {
+  totalCompliantOverrides: Int!
+  complianceRate: Float!
+  violations: [ComplianceViolation!]!
+  auditScore: Float!
+  riskAssessment: RiskAssessment!
+}
+
+type ComplianceViolation {
+  violationType: String!
+  description: String!
+  frequency: Int!
+  severity: FindingSeverity!
+  remediation: String!
+}
+
+type RiskAssessment {
+  overallRiskScore: Float!
+  riskFactors: [RiskFactor!]!
+  mitigationRecommendations: [String!]!
+}
+
+type RiskFactor {
+  factor: String!
+  impact: Float!
+  frequency: Int!
+  mitigation: String!
+}
+
+type OverrideTrend {
+  date: DateTime!
+  totalOverrides: Int!
+  approvedCount: Int!
+  deniedCount: Int!
+  avgProcessingTime: Float!
+  complianceScore: Float!
+}
+
+type OverrideAuditTrail {
+  overrideId: UUID!
+  events: [AuditEvent!]!
+  timeline: AuditTimeline!
+  participants: [AuditParticipant!]!
+  complianceChecks: [ComplianceCheck!]!
+}
+
+type AuditEvent {
+  eventId: UUID!
+  eventType: String!
+  eventDescription: String!
+  userId: String!
+  userName: String!
+  timestamp: DateTime!
+  eventData: JSON!
+  ipAddress: String!
+  userAgent: String!
+}
+
+type AuditTimeline {
+  totalDurationMinutes: Float!
+  stages: [AuditStage!]!
+  criticalPath: [String!]!
+}
+
+type AuditStage {
+  stageName: String!
+  startTime: DateTime!
+  endTime: DateTime!
+  durationMinutes: Float!
+  participants: [String!]!
+  outcome: String!
+}
+
+type AuditParticipant {
+  userId: String!
+  userName: String!
+  role: String!
+  authorizationLevel: OverrideLevel!
+  participationTime: DateTime!
+  actions: [String!]!
+}
+
+type ComplianceCheck {
+  checkId: UUID!
+  checkType: String!
+  passed: Boolean!
+  description: String!
+  evidence: [String!]!
+  timestamp: DateTime!
+}
+
+# Service metrics
+type ServiceMetric {
+  metricName: String!
+  dataPoints: [MetricDataPoint!]!
+  summary: MetricSummary!
+  thresholds: MetricThresholds!
+}
+
+type MetricDataPoint {
+  timestamp: DateTime!
+  value: Float!
+  labels: JSON!
+}
+
+type MetricSummary {
+  average: Float!
+  minimum: Float!
+  maximum: Float!
+  percentile95: Float!
+  standardDeviation: Float!
+  trend: TrendDirection!
+}
+
+type MetricThresholds {
+  warningThreshold: Float!
+  criticalThreshold: Float!
+  targetValue: Float!
+  acceptableRange: StatisticalRange!
+}
+
+type StatisticalRange {
+  lower: Float!
+  upper: Float!
+  confidence: Float!
+}
+
+# Clinical insights
+type ClinicalInsights {
+  insightId: UUID!
+  patientInsights: PatientInsights
+  drugInsights: DrugInsights
+  populationInsights: PopulationInsights!
+  temporalInsights: TemporalInsights!
+  generatedAt: DateTime!
+}
+
+type PatientInsights {
+  patientId: String!
+  riskProfile: PatientRiskProfile!
+  safetyHistory: PatientSafetyHistory!
+  recommendations: [ClinicalRecommendation!]!
+}
+
+type PatientRiskProfile {
+  overallRiskScore: Float!
+  riskFactors: [PatientRiskFactor!]!
+  protectiveFactors: [ProtectiveFactor!]!
+  riskTrend: TrendDirection!
+}
+
+type PatientRiskFactor {
+  factor: String!
+  weight: Float!
+  evidence: String!
+  impact: FindingSeverity!
+}
+
+type ProtectiveFactor {
+  factor: String!
+  weight: Float!
+  evidence: String!
+}
+
+type PatientSafetyHistory {
+  totalEvaluations: Int!
+  recentAlerts: [SafetyAlert!]!
+  overrideHistory: [OverrideInfo!]!
+  adverseEvents: [AdverseEvent!]!
+}
+
+type AdverseEvent {
+  eventId: UUID!
+  eventType: String!
+  severity: FindingSeverity!
+  description: String!
+  reportedAt: DateTime!
+  resolved: Boolean!
+  resolution: String
+}
+
+type DrugInsights {
+  drugCode: String!
+  safetyProfile: DrugSafetyProfile!
+  populationEffects: PopulationEffects!
+  interactionRisks: [InteractionRisk!]!
+}
+
+type PopulationEffects {
+  totalPatients: Int!
+  effectivePatients: Int!
+  adverseEventRate: Float!
+  riskByDemographic: [DemographicRisk!]!
+}
+
+type DemographicRisk {
+  demographic: String!
+  category: String!
+  riskScore: Float!
+  patientCount: Int!
+  evidenceStrength: Float!
+}
+
+type InteractionRisk {
+  drugCombination: [String!]!
+  interactionType: String!
+  severity: FindingSeverity!
+  mechanism: String!
+  frequency: Float!
+  clinicalRecommendation: String!
+}
+
+type PopulationInsights {
+  totalPopulation: Int!
+  riskDistribution: RiskDistribution!
+  demographicBreakdown: [DemographicBreakdown!]!
+  comorbidityPatterns: [ComorbidityPattern!]!
+}
+
+type RiskDistribution {
+  lowRisk: Int!
+  moderateRisk: Int!
+  highRisk: Int!
+  criticalRisk: Int!
+  riskThresholds: [Float!]!
+}
+
+type DemographicBreakdown {
+  category: String!
+  subgroup: String!
+  count: Int!
+  percentage: Float!
+  avgRiskScore: Float!
+}
+
+type ComorbidityPattern {
+  conditions: [String!]!
+  frequency: Int!
+  associatedRisk: Float!
+  recommendations: [String!]!
+}
+
+type TemporalInsights {
+  timePatterns: [TimePattern!]!
+  seasonalTrends: [SeasonalTrend!]!
+  emergingPatterns: [EmergingPattern!]!
+}
+
+type TimePattern {
+  timeSlot: String!
+  alertFrequency: Float!
+  severity: FindingSeverity!
+  description: String!
+}
+
+type SeasonalTrend {
+  season: String!
+  trendType: String!
+  magnitude: Float!
+  significance: Float!
+  description: String!
+}
+
+type EmergingPattern {
+  patternId: UUID!
+  patternType: String!
+  description: String!
+  confidence: Float!
+  firstDetected: DateTime!
+  affectedDrugs: [String!]!
+  recommendedAction: String!
+}
+
+type ClinicalRecommendation {
+  recommendationId: UUID!
+  recommendationType: String!
+  priority: FindingSeverity!
+  description: String!
+  rationale: String!
+  evidenceLevel: String!
+  implementationSteps: [String!]!
+  expectedOutcome: String!
+}
+
+# System health
+type SystemHealth {
+  overallStatus: ServiceHealth!
+  components: [ComponentHealth!]!
+  dependencies: [DependencyHealth!]!
+  performance: SystemPerformance!
+  lastChecked: DateTime!
+}
+
+enum ServiceHealth {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  CRITICAL
+}
+
+type ComponentHealth {
+  componentName: String!
+  status: ServiceHealth!
+  statusMessage: String!
+  metrics: [HealthMetric!]!
+  lastCheck: DateTime!
+}
+
+type HealthMetric {
+  metricName: String!
+  value: Float!
+  unit: String!
+  thresholdWarning: Float!
+  thresholdCritical: Float!
+  status: ServiceHealth!
+}
+
+type DependencyHealth {
+  dependencyName: String!
+  dependencyType: String!
+  status: ServiceHealth!
+  responseTime: Float!
+  lastChecked: DateTime!
+  errorRate: Float!
+}
+
+type SystemPerformance {
+  avgResponseTime: Float!
+  throughputPerSecond: Float!
+  errorRate: Float!
+  cacheHitRate: Float!
+  resourceUtilization: ResourceUtilization!
+}
+
+type ResourceUtilization {
+  cpuPercent: Float!
+  memoryPercent: Float!
+  diskPercent: Float!
+  networkMbps: Float!
+}
+
+# Connections and pagination
+type SafetyAlertsConnection {
+  edges: [SafetyAlertEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+  facets: AlertFacets!
+}
+
+type SafetyAlertEdge {
+  node: SafetyAlert!
+  cursor: String!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+type AlertFacets {
+  statusCounts: [StatusCount!]!
+  drugClassCounts: [DrugClassCount!]!
+  severityCounts: [SeverityCount!]!
+  timeDistribution: [TimeDistribution!]!
+}
+
+type StatusCount {
+  status: SafetyStatus!
+  count: Int!
+}
+
+type DrugClassCount {
+  drugClass: String!
+  count: Int!
+}
+
+type SeverityCount {
+  severity: FindingSeverity!
+  count: Int!
+}
+
+type TimeDistribution {
+  hour: Int!
+  count: Int!
+}
+
+# Subscription types
+type OverrideUpdate {
+  updateType: String!
+  overrideId: UUID!
+  override: OverrideInfo!
+  timestamp: DateTime!
+  affectedUserId: String!
+}
+
+type ServiceHealthUpdate {
+  component: String!
+  previousStatus: ServiceHealth!
+  currentStatus: ServiceHealth!
+  timestamp: DateTime!
+  details: String!
+}
+
+# Input types
+input TimeframeInput {
+  start: DateTime!
+  end: DateTime!
+  timezone: String
+}
+
+input SafetyAlertFilters {
+  patientIds: [String!]
+  drugCodes: [String!]
+  drugClasses: [String!]
+  safetyStatuses: [SafetyStatus!]
+  severities: [FindingSeverity!]
+  timeRange: TimeframeInput
+  overrideStates: [OverrideLevel!]
+  hasOverride: Boolean
+  evaluationTimeRange: IntRange
+}
+
+input IntRange {
+  min: Int
+  max: Int
+}
+
+input SignalFilters {
+  drugCodes: [String!]
+  signalTypes: [String!]
+  algorithmTypes: [SignalDetectionAlgorithm!]
+  minSignalStrength: Float
+  maxPValue: Float
+  timeRange: TimeframeInput
+  affectedPopulations: [String!]
+}
+
+input PaginationInput {
+  first: Int
+  after: String
+  last: Int
+  before: String
+}
+
+input SortingInput {
+  field: String!
+  direction: SortDirection!
+}
+
+enum SortDirection {
+  ASC
+  DESC
+}
+
+enum MetricType {
+  RESPONSE_TIME
+  THROUGHPUT
+  ERROR_RATE
+  CACHE_HIT_RATE
+  ALERT_RATE
+  OVERRIDE_RATE
+  SIGNAL_DETECTION_RATE
+  CPU_UTILIZATION
+  MEMORY_UTILIZATION
+  DISK_UTILIZATION
+}
+
+enum MetricAggregation {
+  RAW
+  AVERAGE
+  SUM
+  MIN
+  MAX
+  PERCENTILE_95
+}
+
+# Dashboard metrics
+type DashboardMetrics {
+  responseTime: MetricSummary!
+  throughput: MetricSummary!
+  errorRate: MetricSummary!
+  cachePerformance: CachePerformance!
+  alertMetrics: AlertMetrics!
+}
+
+type CachePerformance {
+  l1HitRate: Float!
+  l2HitRate: Float!
+  l3HitRate: Float!
+  overallHitRate: Float!
+  avgLookupTime: Float!
+  evictionRate: Float!
+}
+
+type AlertMetrics {
+  alertsPerHour: Float!
+  vetoRatePercent: Float!
+  overrideRatePercent: Float!
+  avgProcessingTime: Float!
+  criticalAlertCount: Int!
+}

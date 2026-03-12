@@ -1,0 +1,200 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"go.uber.org/zap"
+
+	"kb-patient-profile/internal/api"
+	"kb-patient-profile/internal/cache"
+	"kb-patient-profile/internal/config"
+	"kb-patient-profile/internal/database"
+	"kb-patient-profile/internal/fhir"
+	"kb-patient-profile/internal/metrics"
+	"kb-patient-profile/internal/models"
+	"kb-patient-profile/internal/services"
+)
+
+func main() {
+	// Initialize structured logging
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
+	logger.Info("Starting KB-20 Patient Profile & Contextual State Engine...")
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Fatal("Failed to load configuration", zap.Error(err))
+	}
+
+	// Initialize database (auto-migrates all KB-20 models)
+	logger.Info("Connecting to database...")
+	db, err := database.NewConnection(cfg, logger)
+	if err != nil {
+		logger.Fatal("Failed to connect to database", zap.Error(err))
+	}
+	defer db.Close()
+	logger.Info("Database connected and migrations completed")
+
+	// Initialize cache
+	logger.Info("Connecting to Redis cache...")
+	cacheClient, err := cache.NewClient(cfg)
+	if err != nil {
+		logger.Fatal("Failed to connect to cache", zap.Error(err))
+	}
+	defer cacheClient.Close()
+
+	// Initialize metrics collector
+	metricsCollector := metrics.NewCollector()
+
+	// Initialize event bus with transactional outbox (G-03 remediation)
+	eventBus := services.NewEventBus(db.DB, logger, metricsCollector)
+	eventBus.StartPoller(context.Background())
+	defer eventBus.Stop()
+
+	// Initialize services
+	logger.Info("Initializing KB-20 services...")
+
+	patientService := services.NewPatientService(db, cacheClient, logger)
+	labService := services.NewLabService(db, cacheClient, logger, metricsCollector, eventBus)
+	medicationService := services.NewMedicationService(db, cacheClient, logger, eventBus)
+	adrService := services.NewADRService(db, logger)
+	pipelineService := services.NewPipelineService(db, logger, adrService)
+	cmRegistry := services.NewCMRegistry(db, logger)
+	stratumEngine := services.NewStratumEngine(db, cacheClient, logger, metricsCollector, cmRegistry, eventBus)
+
+	// Initialize HTTP server with all services
+	logger.Info("Initializing HTTP server...")
+	httpServer := api.NewServer(
+		cfg,
+		db,
+		cacheClient,
+		metricsCollector,
+		patientService,
+		labService,
+		medicationService,
+		stratumEngine,
+		cmRegistry,
+		adrService,
+		pipelineService,
+	)
+
+	// Start HTTP server
+	go func() {
+		port := cfg.Server.Port
+		if port == "" {
+			port = "8131"
+		}
+		logger.Info("Starting HTTP server", zap.String("port", port))
+		if err := httpServer.Router.Run(":" + port); err != nil {
+			logger.Fatal("Failed to start HTTP server", zap.Error(err))
+		}
+	}()
+
+	// FHIR Store integration (conditional)
+	if cfg.FHIR.Enabled {
+		logger.Info("FHIR sync enabled — initializing Google Healthcare FHIR client...")
+		fhirClient, err := fhir.NewFHIRClient(cfg.FHIR, logger)
+		if err != nil {
+			logger.Error("Failed to initialize FHIR client — service continues without FHIR sync",
+				zap.Error(err))
+		} else {
+			kb7Client := fhir.NewKB7Client(cfg.KB7, logger)
+
+			// Start FHIR→KB-20 sync worker
+			syncWorker := fhir.NewSyncWorker(fhirClient, kb7Client, db.DB, logger)
+			syncWorker.Start(context.Background())
+			defer syncWorker.Stop()
+			logger.Info("FHIR sync worker started")
+
+			// Start KB-20→FHIR write-back publisher
+			if cfg.FHIR.WriteBack {
+				publisher := fhir.NewPublisher(fhirClient, db.DB, logger)
+				eventBus.Subscribe(models.EventMedicationThresholdCrossed, publisher.HandleThresholdCrossed)
+				eventBus.Subscribe(models.EventStratumChange, publisher.HandleStratumChange)
+				logger.Info("FHIR write-back publisher registered for MEDICATION_THRESHOLD_CROSSED and STRATUM_CHANGE events")
+			}
+		}
+	} else {
+		logger.Info("FHIR sync disabled (set FHIR_SYNC_ENABLED=true to enable)")
+	}
+
+	// Health checks
+	logger.Info("Performing health checks...")
+	if err := db.HealthCheck(); err != nil {
+		logger.Warn("Database health check failed", zap.Error(err))
+	} else {
+		logger.Info("Database health check passed")
+	}
+	if err := cacheClient.HealthCheck(); err != nil {
+		logger.Warn("Cache health check failed", zap.Error(err))
+	} else {
+		logger.Info("Cache health check passed")
+	}
+
+	logger.Info("KB-20 Patient Profile & Contextual State Engine started successfully")
+
+	httpPort := cfg.Server.Port
+	if httpPort == "" {
+		httpPort = "8131"
+	}
+
+	fmt.Printf(`
+========================================
+KB-20 Patient Profile & Contextual State Engine
+========================================
+Service: kb-20-patient-profile
+HTTP Port: %s
+Version: 1.0.0
+Environment: %s
+========================================
+
+REST Endpoints:
+- Health:            GET  /health
+- Metrics:           GET  /metrics
+- Create Patient:    POST /api/v1/patient
+- Get Profile:       GET  /api/v1/patient/:id/profile
+- Add Lab:           POST /api/v1/patient/:id/labs
+- Get Labs:          GET  /api/v1/patient/:id/labs
+- eGFR Trajectory:   GET  /api/v1/patient/:id/labs/egfr
+- Add Medication:    POST /api/v1/patient/:id/medications
+- Update Medication: PUT  /api/v1/patient/:id/medications/:med_id
+- Get Medications:   GET  /api/v1/patient/:id/medications
+- Get Stratum:       GET  /api/v1/patient/:id/stratum/:node_id
+- CM Registry:       GET  /api/v1/modifiers/registry/:node_id
+- ADR Profiles:      GET  /api/v1/adr/profiles/:drug_class
+- Batch Modifiers:   POST /api/v1/pipeline/modifiers
+- Batch ADR:         POST /api/v1/pipeline/adr-profiles
+
+RED Findings Incorporated:
+  F-01: FDC decomposition (fdc_components field)
+  F-03: MEDICATION_THRESHOLD_CROSSED events + ckd_substage
+  F-05: Lab plausibility validation (ACCEPTED/FLAGGED/REJECTED)
+========================================
+`, httpPort, cfg.Environment)
+
+	// Wait for shutdown signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("Shutting down KB-20 Patient Profile service...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	select {
+	case <-shutdownCtx.Done():
+		logger.Warn("Shutdown timeout exceeded")
+	case <-time.After(2 * time.Second):
+		logger.Info("HTTP server shutdown completed")
+	}
+
+	logger.Info("KB-20 service stopped successfully")
+}

@@ -1,0 +1,227 @@
+# KB-7 Knowledge Factory Workflow for Cloud Run Services
+# Orchestrates parallel terminology downloads and GitHub workflow dispatch
+
+main:
+  params: [input]
+  steps:
+    - init:
+        assign:
+          - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT")}
+          - timestamp: ${text.split(time.format(sys.now()), "T")[0]}
+          - trigger: ${default(map.get(input, "trigger"), "manual")}
+          - environment: "production"
+          # Cloud Run service URLs
+          - snomed_url: "https://kb7-snomed-downloader-production-513961303605.us-central1.run.app"
+          - rxnorm_url: "https://kb7-rxnorm-downloader-production-513961303605.us-central1.run.app"
+          - loinc_url: "https://kb7-loinc-downloader-production-513961303605.us-central1.run.app"
+          - github_url: "https://kb7-github-dispatcher-production-513961303605.us-central1.run.app"
+
+    - log_start:
+        call: sys.log
+        args:
+          text: "Starting KB-7 Knowledge Factory workflow"
+          severity: INFO
+
+    - init_results:
+        assign:
+          - snomed_result:
+              body:
+                status: "pending"
+          - rxnorm_result:
+              body:
+                status: "pending"
+          - loinc_result:
+              body:
+                status: "pending"
+
+    # Phase 1: Parallel Downloads
+    - parallel_downloads:
+        parallel:
+          shared: [snomed_result, rxnorm_result, loinc_result]
+          branches:
+            # SNOMED CT Download Branch
+            - snomed_branch:
+                steps:
+                  - log_snomed_start:
+                      call: sys.log
+                      args:
+                        text: "Starting SNOMED CT download"
+                        severity: INFO
+
+                  - call_snomed_downloader:
+                      try:
+                        call: http.post
+                        args:
+                          url: ${snomed_url}
+                          auth:
+                            type: OIDC
+                          body:
+                            timestamp: ${timestamp}
+                            trigger: ${trigger}
+                          timeout: 3600
+                        result: snomed_result
+
+                      except:
+                        as: e
+                        steps:
+                          - log_snomed_error:
+                              call: sys.log
+                              args:
+                                text: "SNOMED download failed"
+                                severity: ERROR
+                          - assign_snomed_error:
+                              assign:
+                                - snomed_result:
+                                    body:
+                                      status: "failed"
+
+                  - log_snomed_complete:
+                      call: sys.log
+                      args:
+                        text: "SNOMED download complete"
+                        severity: INFO
+
+            # RxNorm Download Branch
+            - rxnorm_branch:
+                steps:
+                  - log_rxnorm_start:
+                      call: sys.log
+                      args:
+                        text: "Starting RxNorm download"
+                        severity: INFO
+
+                  - call_rxnorm_downloader:
+                      try:
+                        call: http.post
+                        args:
+                          url: ${rxnorm_url}
+                          auth:
+                            type: OIDC
+                          body:
+                            timestamp: ${timestamp}
+                            trigger: ${trigger}
+                          timeout: 3600
+                        result: rxnorm_result
+
+                      except:
+                        as: e
+                        steps:
+                          - log_rxnorm_error:
+                              call: sys.log
+                              args:
+                                text: "RxNorm download failed"
+                                severity: ERROR
+                          - assign_rxnorm_error:
+                              assign:
+                                - rxnorm_result:
+                                    body:
+                                      status: "failed"
+
+                  - log_rxnorm_complete:
+                      call: sys.log
+                      args:
+                        text: "RxNorm download complete"
+                        severity: INFO
+
+            # LOINC Download Branch
+            - loinc_branch:
+                steps:
+                  - log_loinc_start:
+                      call: sys.log
+                      args:
+                        text: "Starting LOINC download"
+                        severity: INFO
+
+                  - call_loinc_downloader:
+                      try:
+                        call: http.post
+                        args:
+                          url: ${loinc_url}
+                          auth:
+                            type: OIDC
+                          body:
+                            timestamp: ${timestamp}
+                            trigger: ${trigger}
+                          timeout: 1800
+                        result: loinc_result
+
+                      except:
+                        as: e
+                        steps:
+                          - log_loinc_error:
+                              call: sys.log
+                              args:
+                                text: "LOINC download failed"
+                                severity: ERROR
+                          - assign_loinc_error:
+                              assign:
+                                - loinc_result:
+                                    body:
+                                      status: "failed"
+
+                  - log_loinc_complete:
+                      call: sys.log
+                      args:
+                        text: "LOINC download complete"
+                        severity: INFO
+
+    # Phase 2: Check Download Results
+    - check_download_status:
+        switch:
+          - condition: ${snomed_result.body.status == "failed" OR rxnorm_result.body.status == "failed" OR loinc_result.body.status == "failed"}
+            next: handle_download_failure
+
+    # Phase 3: Dispatch GitHub Workflow
+    - dispatch_github:
+        try:
+          call: http.post
+          args:
+            url: ${github_url}
+            auth:
+              type: OIDC
+            body:
+              snomed_key: ${default(map.get(snomed_result.body, "gcs_key"), "")}
+              rxnorm_key: ${default(map.get(rxnorm_result.body, "gcs_key"), "")}
+              loinc_key: ${default(map.get(loinc_result.body, "gcs_key"), "")}
+              snomed_version: ${default(map.get(snomed_result.body, "version"), "")}
+              rxnorm_version: ${default(map.get(rxnorm_result.body, "version"), "")}
+              loinc_version: ${default(map.get(loinc_result.body, "version"), "")}
+            timeout: 300
+          result: dispatch_result
+        except:
+          as: e
+          steps:
+            - log_dispatch_error:
+                call: sys.log
+                args:
+                  text: "GitHub dispatch failed"
+                  severity: ERROR
+
+    - log_dispatch_complete:
+        call: sys.log
+        args:
+          text: "GitHub workflow dispatched"
+          severity: INFO
+
+    # Phase 4: Return Success
+    - return_success:
+        return:
+          status: "success"
+          trigger: ${trigger}
+          timestamp: ${timestamp}
+
+    # Error Handling
+    - handle_download_failure:
+        steps:
+          - log_failure:
+              call: sys.log
+              args:
+                text: "One or more downloads failed. Aborting workflow."
+                severity: ERROR
+
+          - return_failure:
+              return:
+                status: "failed"
+                trigger: ${trigger}
+                timestamp: ${timestamp}
+                error: "Download failures detected"

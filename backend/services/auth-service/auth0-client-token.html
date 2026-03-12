@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 Client Token</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #0063b1;
+        }
+        pre {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 4px;
+            overflow: auto;
+            max-height: 300px;
+        }
+        .hidden {
+            display: none;
+        }
+        .api-test {
+            margin-top: 20px;
+        }
+        input[type="text"] {
+            padding: 8px;
+            width: 300px;
+            margin-right: 10px;
+        }
+        #error-message {
+            color: red;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Auth0 Client Token</h1>
+            <p>Use this page to get a client token and test the auth service.</p>
+            <div>
+                <button id="client-token">Get Client Token</button>
+            </div>
+            <div id="error-message"></div>
+        </div>
+
+        <div id="token-info" class="card">
+            <h2>Token Information</h2>
+            <pre id="token">No token</pre>
+        </div>
+
+        <div id="api-test" class="card">
+            <h2>API Test</h2>
+            <div>
+                <input type="text" id="api-url" value="http://localhost:8000/api/auth/me">
+                <button id="call-api">Call API</button>
+            </div>
+            <pre id="api-response">No response</pre>
+        </div>
+        
+        <div id="verify-token" class="card">
+            <h2>Verify Token</h2>
+            <button id="verify">Verify Token</button>
+            <pre id="verify-response">No response</pre>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const clientTokenButton = document.getElementById('client-token');
+        const callApiButton = document.getElementById('call-api');
+        const verifyButton = document.getElementById('verify');
+        const tokenElement = document.getElementById('token');
+        const apiResponseElement = document.getElementById('api-response');
+        const verifyResponseElement = document.getElementById('verify-response');
+        const apiUrlInput = document.getElementById('api-url');
+        const errorMessageElement = document.getElementById('error-message');
+
+        // Store token
+        let token = '';
+        
+        // Get client token function
+        async function getClientToken() {
+            try {
+                errorMessageElement.textContent = '';
+                tokenElement.textContent = 'Loading...';
+                
+                const response = await fetch('http://localhost:8000/api/auth/client-token', {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                token = data.access_token;
+                tokenElement.textContent = token;
+            } catch (error) {
+                console.error('Error getting client token:', error);
+                errorMessageElement.textContent = 'Error getting client token: ' + error.message;
+                tokenElement.textContent = 'Error getting token';
+            }
+        }
+        
+        // Call API function
+        async function callApi() {
+            if (!token) {
+                errorMessageElement.textContent = 'No token available. Please get a token first.';
+                return;
+            }
+            
+            try {
+                errorMessageElement.textContent = '';
+                apiResponseElement.textContent = 'Loading...';
+                
+                const apiUrl = apiUrlInput.value;
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                apiResponseElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API Error:', error);
+                apiResponseElement.textContent = 'Error: ' + error.message;
+                errorMessageElement.textContent = 'API error: ' + error.message;
+            }
+        }
+        
+        // Verify token function
+        async function verifyToken() {
+            if (!token) {
+                errorMessageElement.textContent = 'No token available. Please get a token first.';
+                return;
+            }
+            
+            try {
+                errorMessageElement.textContent = '';
+                verifyResponseElement.textContent = 'Loading...';
+                
+                const response = await fetch('http://localhost:8000/api/auth/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                verifyResponseElement.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('Verify Error:', error);
+                verifyResponseElement.textContent = 'Error: ' + error.message;
+                errorMessageElement.textContent = 'Verify error: ' + error.message;
+            }
+        }
+        
+        // Event listeners
+        clientTokenButton.addEventListener('click', getClientToken);
+        callApiButton.addEventListener('click', callApi);
+        verifyButton.addEventListener('click', verifyToken);
+    </script>
+</body>
+</html>

@@ -1,0 +1,861 @@
+# ============================================================
+# DKA MANAGEMENT PROTOCOL - ENHANCED CDS-COMPLIANT VERSION
+# ============================================================
+
+protocol_id: "DKA-MANAGEMENT-001"
+name: "Diabetic Ketoacidosis Management Protocol"
+category: "ENDOCRINE"
+specialty: "CRITICAL_CARE"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# TRIGGER CRITERIA (Enhanced with AND/OR logic)
+# ============================================================
+trigger_criteria:
+  match_logic: "ALL_OF"  # All conditions required for DKA diagnosis
+
+  conditions:
+    - condition_id: "DKA-TRIG-001"
+      description: "Hyperglycemia criterion"
+      parameter: "glucose"
+      operator: ">="
+      threshold: 250
+      unit: "mg/dL"
+      source: "lab_results"
+
+    - condition_id: "DKA-TRIG-002"
+      description: "Acidosis criterion (ANY acidosis indicator)"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "arterial_ph"
+          operator: "<"
+          threshold: 7.3
+          source: "lab_results"
+
+        - parameter: "venous_ph"
+          operator: "<"
+          threshold: 7.25
+          source: "lab_results"
+
+        - parameter: "serum_bicarbonate"
+          operator: "<"
+          threshold: 18
+          unit: "mEq/L"
+          source: "lab_results"
+
+    - condition_id: "DKA-TRIG-003"
+      description: "Ketosis criterion (ANY ketone indicator)"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "beta_hydroxybutyrate"
+          operator: ">="
+          threshold: 3.0
+          unit: "mmol/L"
+          source: "lab_results"
+
+        - parameter: "serum_ketones"
+          operator: "=="
+          threshold: "positive"
+          source: "lab_results"
+
+        - parameter: "urine_ketones"
+          operator: "=="
+          threshold: "positive"
+          source: "lab_results"
+
+    - condition_id: "DKA-TRIG-004"
+      description: "Anion gap elevation"
+      parameter: "anion_gap"
+      operator: ">"
+      threshold: 12
+      source: "lab_results"
+
+# ============================================================
+# CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.85
+
+  modifiers:
+    - modifier_id: "DKA-CONF-001"
+      description: "Severe DKA increases confidence"
+      condition:
+        parameter: "arterial_ph"
+        operator: "<"
+        threshold: 7.0
+      adjustment: 0.10
+
+    - modifier_id: "DKA-CONF-002"
+      description: "Altered mental status increases confidence"
+      condition:
+        parameter: "altered_mental_status"
+        operator: "=="
+        threshold: true
+      adjustment: 0.08
+
+    - modifier_id: "DKA-CONF-003"
+      description: "Euglycemic DKA reduces confidence slightly"
+      condition:
+        parameter: "glucose"
+        operator: "<"
+        threshold: 250
+      adjustment: -0.10
+
+    - modifier_id: "DKA-CONF-004"
+      description: "Hemodynamic instability increases urgency"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "systolic_bp"
+            operator: "<"
+            threshold: 90
+            unit: "mmHg"
+          - parameter: "altered_mental_status"
+            operator: "=="
+            threshold: true
+      adjustment: 0.12
+
+  activation_threshold: 0.70
+
+# ============================================================
+# EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "American Diabetes Association 2023 Standards of Care"
+  guideline_version: "ADA 2023"
+  publication_date: "2023-01"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "DKA-CITE-001"
+      authors: "American Diabetes Association"
+      title: "Standards of Care in Diabetes - Diabetic Ketoacidosis"
+      journal: "Diabetes Care"
+      year: 2023
+      doi: "10.2337/dc23-S016"
+
+  last_review_date: "2023-01-01"
+  next_review_date: "2026-01-01"
+
+# ============================================================
+# ACTIONS
+# ============================================================
+actions:
+  # ==========================================================
+  # DIAGNOSTIC ACTIONS
+  # ==========================================================
+  - action_id: "DKA-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "Comprehensive metabolic panel, ABG/VBG, beta-hydroxybutyrate, ketones"
+      test_code: "LOINC-24323-8"
+      sample_type: "blood, urine"
+      urgency: "STAT"
+      instructions: "Confirm DKA diagnosis (hyperglycemia, acidosis, ketosis, anion gap); assess severity"
+
+      repeat_testing:
+        repeat_interval_hours: 2
+        repeat_condition:
+          parameter: "anion_gap"
+          operator: ">="
+          threshold: 12
+
+  - action_id: "DKA-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "CBC with differential, phosphate, magnesium, urinalysis, ECG"
+      urgency: "STAT"
+      instructions: "Identify precipitating factors (infection), electrolyte abnormalities, cardiac monitoring"
+
+  # ==========================================================
+  # FLUID RESUSCITATION
+  # ==========================================================
+  - action_id: "DKA-ACT-003"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 3
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 15
+      sequence: "BEFORE"
+      reference_action: "DKA-ACT-004"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "STANDARD_FLUID"
+          description: "Standard IV fluid resuscitation for DKA"
+
+          condition:
+            parameter: "decompensated_heart_failure"
+            operator: "=="
+            threshold: false
+
+          primary_medication:
+            name: "0.9% Normal Saline"
+            generic_name: "Isotonic Crystalloid"
+            dose: "15-20 mL/kg"
+            dose_unit: "mL/kg"
+            route: "IV"
+            frequency: "1-1.5 L bolus over first hour"
+            duration: "Until adequate rehydration (24-48 hours)"
+            administration_instructions: "Initial: 1-1.5 L NS over 1 hour; Subsequent: 250-500 mL/hr based on corrected sodium and hydration status"
+
+        - criteria_id: "HEART_FAILURE_CAUTION"
+          description: "Reduced fluid volumes for heart failure patients"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "ejection_fraction"
+                operator: "<"
+                threshold: 30
+              - parameter: "decompensated_heart_failure"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "0.9% Normal Saline"
+            dose: "250-500 mL"
+            dose_unit: "mL"
+            route: "IV"
+            frequency: "Smaller boluses with frequent reassessment"
+            indication: "Heart failure - reduce fluid volume"
+            administration_instructions: "Use smaller boluses; frequent reassessment; consider CVP monitoring; may require ICU"
+
+  # ==========================================================
+  # INSULIN THERAPY
+  # ==========================================================
+  - action_id: "DKA-ACT-004"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 120
+      sequence: "AFTER"
+      reference_action: "DKA-ACT-003"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "NORMAL_POTASSIUM"
+          description: "Standard insulin infusion for normal potassium"
+
+          condition:
+            parameter: "potassium"
+            operator: ">="
+            threshold: 3.3
+            unit: "mEq/L"
+
+          primary_medication:
+            name: "Regular Insulin"
+            generic_name: "Human Insulin"
+            dose: "0.1"
+            dose_unit: "units/kg/hour"
+            route: "IV continuous infusion"
+            frequency: "Continuous"
+            duration: "Until DKA resolution (anion gap <12, pH >7.3, bicarbonate >18)"
+            administration_instructions: "Mix 100 units regular insulin in 100 mL NS (1 unit/mL); start at 0.1 units/kg/hr; adjust to decrease glucose by 50-75 mg/dL/hr"
+
+        - criteria_id: "HYPOKALEMIA_ABSOLUTE"
+          description: "HOLD insulin for hypokalemia"
+
+          condition:
+            parameter: "potassium"
+            operator: "<"
+            threshold: 3.3
+            unit: "mEq/L"
+
+          primary_medication:
+            name: "HOLD INSULIN"
+            indication: "Hypokalemia - ABSOLUTE contraindication"
+            administration_instructions: "HOLD insulin until K+ >3.3 mEq/L; give potassium replacement aggressively (20-40 mEq/hr with cardiac monitoring); insulin will worsen hypokalemia and cause life-threatening arrhythmias"
+
+  # ==========================================================
+  # POTASSIUM REPLACEMENT
+  # ==========================================================
+  - action_id: "DKA-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+      sequence: "CONCURRENT"
+      reference_action: "DKA-ACT-004"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "SEVERE_HYPOKALEMIA"
+          description: "Aggressive replacement for severe hypokalemia"
+
+          condition:
+            parameter: "potassium"
+            operator: "<"
+            threshold: 3.3
+            unit: "mEq/L"
+
+          primary_medication:
+            name: "Potassium Chloride"
+            dose: "20-40"
+            dose_unit: "mEq/hour"
+            route: "IV"
+            frequency: "Continuous"
+            indication: "Severe hypokalemia - aggressive replacement needed"
+            administration_instructions: "20-40 mEq/hr with continuous cardiac monitoring; HOLD insulin until K+ >3.3"
+
+        - criteria_id: "MODERATE_HYPOKALEMIA"
+          description: "Standard replacement for moderate hypokalemia"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "potassium"
+                operator: ">="
+                threshold: 3.3
+                unit: "mEq/L"
+              - parameter: "potassium"
+                operator: "<"
+                threshold: 5.3
+                unit: "mEq/L"
+
+          primary_medication:
+            name: "Potassium Chloride"
+            dose: "20-30"
+            dose_unit: "mEq per liter IV fluid"
+            route: "IV"
+            frequency: "Continuous in IV fluids"
+            administration_instructions: "Add 20-30 mEq KCl per liter of IV fluid; maintain K+ 4-5 mEq/L"
+
+        - criteria_id: "HYPERKALEMIA"
+          description: "HOLD potassium for hyperkalemia"
+
+          condition:
+            parameter: "potassium"
+            operator: ">"
+            threshold: 5.3
+            unit: "mEq/L"
+
+          primary_medication:
+            name: "HOLD POTASSIUM"
+            indication: "Hyperkalemia"
+            administration_instructions: "HOLD potassium supplementation; monitor K+ hourly; insulin will lower K+; recheck before starting insulin"
+
+  # ==========================================================
+  # DEXTROSE ADDITION
+  # ==========================================================
+  - action_id: "DKA-ACT-006"
+    type: "MEDICATION"
+    priority: "HIGH"
+    sequence_number: 6
+
+    timing:
+      window: "URGENT"
+      sequence: "AFTER"
+      reference_action: "DKA-ACT-004"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "GLUCOSE_TARGET_RANGE"
+          description: "Add dextrose when glucose falls to target range"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "glucose"
+                operator: "<="
+                threshold: 250
+                unit: "mg/dL"
+              - parameter: "anion_gap"
+                operator: ">="
+                threshold: 12
+
+          primary_medication:
+            name: "Dextrose 5% in 0.45% Saline"
+            generic_name: "D5 1/2 NS"
+            dose: "150-250"
+            dose_unit: "mL/hour"
+            route: "IV"
+            frequency: "Continuous infusion"
+            duration: "Until DKA resolution"
+            administration_instructions: "Switch to D5 1/2 NS when glucose reaches 200-250 mg/dL; continue insulin to clear ketones; maintain glucose 150-200 mg/dL"
+
+  # ==========================================================
+  # BICARBONATE (SEVERE ACIDOSIS ONLY)
+  # ==========================================================
+  - action_id: "DKA-ACT-007"
+    type: "MEDICATION"
+    priority: "MEDIUM"
+    sequence_number: 7
+
+    timing:
+      window: "URGENT"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "SEVERE_ACIDOSIS"
+          description: "Bicarbonate only for pH <6.9"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "arterial_ph"
+                operator: "<"
+                threshold: 6.9
+              - parameter: "potassium"
+                operator: ">="
+                threshold: 3.3
+                unit: "mEq/L"
+
+          primary_medication:
+            name: "Sodium Bicarbonate"
+            dose: "100"
+            dose_unit: "mEq"
+            route: "IV"
+            frequency: "Every 2 hours until pH >7.0"
+            administration_instructions: "100 mEq sodium bicarbonate in 400 mL sterile water with 20 mEq KCl, infuse over 2 hours; repeat if pH <7.0"
+            indication: "Severe metabolic acidosis (pH <6.9)"
+
+  # ==========================================================
+  # PHOSPHATE REPLACEMENT (IF SEVERE)
+  # ==========================================================
+  - action_id: "DKA-ACT-008"
+    type: "MEDICATION"
+    priority: "LOW"
+    sequence_number: 8
+
+    timing:
+      window: "ROUTINE"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "SEVERE_HYPOPHOSPHATEMIA"
+          description: "Phosphate replacement for severe deficiency"
+
+          condition:
+            parameter: "phosphate"
+            operator: "<"
+            threshold: 1.0
+            unit: "mg/dL"
+
+          primary_medication:
+            name: "Potassium Phosphate"
+            dose: "20-30"
+            dose_unit: "mmol"
+            route: "IV"
+            frequency: "Continuous in IV fluids"
+            administration_instructions: "Substitute potassium phosphate for KCl in fluids (1 mmol phosphate = 1.5 mEq K+); max rate 4.5 mmol/hr"
+
+# ============================================================
+# TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "DKA-TIME-001"
+    bundle_name: "Hour-1 Initial Resuscitation"
+    description: "Critical interventions within 1 hour of DKA recognition"
+    offset_minutes: 60
+    critical: true
+
+    required_actions:
+      - action_id: "DKA-ACT-001"
+        description: "Diagnostic labs obtained"
+      - action_id: "DKA-ACT-003"
+        description: "IV fluid resuscitation started"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 30
+      critical_alert_at_minutes: 0
+      missed_deadline_message: "Hour-1 DKA resuscitation bundle not completed"
+
+  - constraint_id: "DKA-TIME-002"
+    bundle_name: "Hour-2 Insulin Initiation"
+    description: "Insulin infusion started after fluid resuscitation"
+    offset_minutes: 120
+    critical: true
+
+    required_actions:
+      - action_id: "DKA-ACT-004"
+        description: "Insulin infusion started (if K+ >3.3)"
+      - action_id: "DKA-ACT-005"
+        description: "Potassium replacement initiated"
+
+# ============================================================
+# CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "DKA-CONTRA-001"
+    condition_description: "Hypokalemia (K+ <3.3 mEq/L)"
+
+    trigger_condition:
+      parameter: "potassium"
+      operator: "<"
+      threshold: 3.3
+      unit: "mEq/L"
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "DKA-ACT-004"
+
+    alternative_action:
+      action_id: "DKA-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "Aggressive Potassium Replacement FIRST"
+        dose: "20-40 mEq/hr"
+        route: "IV"
+        titration: "Monitor K+ every 2 hours until >3.3, then start insulin"
+      rationale: "ABSOLUTE contraindication - insulin will worsen hypokalemia and cause cardiac arrest"
+
+  - contraindication_id: "DKA-CONTRA-002"
+    condition_description: "Decompensated heart failure or pulmonary edema"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "ejection_fraction"
+          operator: "<"
+          threshold: 30
+        - parameter: "pulmonary_edema"
+          operator: "=="
+          threshold: true
+
+    severity: "MODERATE"
+    affected_actions:
+      - "DKA-ACT-003"
+
+    alternative_action:
+      action_id: "DKA-ALT-002"
+      type: "MEDICATION"
+      medication:
+        name: "Reduced Fluid Volumes"
+        dose: "250-500 mL"
+        route: "IV"
+        frequency: "Smaller boluses with frequent reassessment"
+      rationale: "Caution with fluids in heart failure - use smaller volumes and close monitoring"
+
+# ============================================================
+# MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "DKA-MON-001"
+    parameter: "glucose"
+
+    target_range:
+      min: 150
+      max: 200
+      unit: "mg/dL"
+
+    frequency: "hourly"
+    duration_hours: 24
+
+    alert_condition:
+      parameter: "glucose"
+      operator: "<"
+      threshold: 70
+
+    escalation_action:
+      description: "Give D50 IV push, increase dextrose concentration"
+      reference_action: "DKA-ESC-HYPOGLYCEMIA"
+
+  - monitoring_id: "DKA-MON-002"
+    parameter: "potassium"
+
+    target_range:
+      min: 4.0
+      max: 5.0
+      unit: "mEq/L"
+
+    frequency: "q2-4h"
+    duration_hours: 24
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "potassium"
+          operator: "<"
+          threshold: 3.3
+        - parameter: "potassium"
+          operator: ">"
+          threshold: 5.5
+
+  - monitoring_id: "DKA-MON-003"
+    parameter: "anion_gap"
+
+    target_range:
+      min: null
+      max: 12
+      unit: null
+
+    frequency: "q2-4h"
+    duration_hours: 24
+
+# ============================================================
+# SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "ELDERLY"
+    description: "Patients ≥65 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "DKA-ACT-003"
+        modification_type: "CAUTION"
+        rationale: "Increased risk of fluid overload and heart failure"
+
+        new_parameters:
+          dose: "10-15 mL/kg initial bolus (reduced from 15-20)"
+          monitoring: "Reassess volume status after 500 mL; frequent lung exam"
+
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "DKA-ACT-004"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Pregnancy has lower glucose and bicarbonate thresholds for DKA"
+
+        new_parameters:
+          glucose_threshold: "200 mg/dL (lower threshold in pregnancy)"
+          monitoring: "Fetal monitoring; obstetrics consultation"
+
+  - population_id: "RENAL_IMPAIRMENT"
+    description: "Chronic kidney disease (CrCl <50 mL/min)"
+
+    inclusion_criteria:
+      parameter: "creatinine_clearance"
+      operator: "<"
+      threshold: 50
+      unit: "mL/min"
+
+    modifications:
+      - action_id: "DKA-ACT-005"
+        modification_type: "CAUTION"
+        rationale: "Reduced potassium excretion increases hyperkalemia risk"
+
+        new_parameters:
+          monitoring: "Monitor K+ every 2 hours; reduce KCl dose if CrCl <30; nephrology consultation if anuric"
+
+  - population_id: "PEDIATRIC"
+    description: "Patients <18 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: "<"
+      threshold: 18
+      unit: "years"
+
+    modifications:
+      - action_id: "DKA-ACT-003"
+        modification_type: "CAUTION"
+        rationale: "Higher risk of cerebral edema in pediatric DKA"
+
+        new_parameters:
+          monitoring: "Hourly neurological checks; slower fluid resuscitation (10 mL/kg/hr); avoid aggressive hyperventilation; mannitol 0.5-1 g/kg ready if cerebral edema suspected"
+
+# ============================================================
+# ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "DKA-ESC-001"
+    description: "ICU transfer for severe DKA or complications"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "arterial_ph"
+          operator: "<"
+          threshold: 7.0
+
+        - parameter: "altered_mental_status"
+          operator: "=="
+          threshold: true
+
+        - parameter: "hemodynamic_instability"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "ICU_TRANSFER"
+      urgency: "IMMEDIATE"
+      rationale: "Severe DKA requires ICU-level monitoring and support"
+
+      required_interventions:
+        - "Central venous access"
+        - "Arterial line for frequent ABG monitoring"
+        - "Continuous telemetry"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "ICU admission and advanced monitoring"
+
+  - rule_id: "DKA-ESC-002"
+    description: "Endocrinology consultation for complex cases"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "no_improvement_after_hours"
+          operator: ">="
+          threshold: 6
+
+        - parameter: "recurrent_dka"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Complex DKA or recurrent cases need endocrinology input"
+
+      specialist_consultation:
+        - specialty: "ENDOCRINOLOGY"
+          urgency: "URGENT"
+          specific_question: "DKA management optimization and diabetes education"
+
+# ============================================================
+# DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "DKA-DE-ESC-001"
+    description: "Transition from IV to subcutaneous insulin"
+
+    conditions:
+      - parameter: "anion_gap"
+        operator: "<"
+        threshold: 12
+
+      - parameter: "ph"
+        operator: ">"
+        threshold: 7.3
+
+      - parameter: "bicarbonate"
+        operator: ">"
+        threshold: 18
+        unit: "mEq/L"
+
+      - parameter: "patient_tolerating_po"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Give first SC insulin 1-2 hours BEFORE stopping IV insulin; calculate total daily dose 0.5-0.8 units/kg/day"
+      rationale: "DKA resolved; prevent rebound ketoacidosis"
+      specific_changes:
+        - "50% basal (long-acting glargine or detemir)"
+        - "50% prandial (rapid-acting before meals)"
+        - "Continue hourly glucose monitoring for 4-6 hours after stopping IV insulin"
+
+# ============================================================
+# OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "DKA-OUT-001"
+      metric: "anion_gap_closure"
+      target: "<12 within 12-24 hours"
+      benchmark_source: "ADA 2023"
+
+    - outcome_id: "DKA-OUT-002"
+      metric: "pH_normalization"
+      target: ">7.3 within 12-24 hours"
+      benchmark_source: "ADA 2023"
+
+  process_measures:
+    - measure_id: "DKA-PROC-001"
+      description: "Time to insulin initiation"
+      target: "<2 hours from diagnosis"
+
+    - measure_id: "DKA-PROC-002"
+      description: "Potassium monitoring compliance"
+      target: "Every 2-4 hours during acute phase"
+
+  balancing_measures:
+    - measure_id: "DKA-BAL-001"
+      description: "Hypoglycemia rate"
+      target: "<10%"
+      specific_events:
+        - "Glucose <70 mg/dL during treatment"
+
+    - measure_id: "DKA-BAL-002"
+      description: "Cerebral edema rate"
+      target: "<1% (primarily pediatric)"
+
+# ============================================================
+# METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: true
+  estimated_implementation_time_minutes: 60
+  review_cycle_months: 12
+
+  tags:
+    - "time-sensitive"
+    - "endocrine-emergency"
+    - "electrolyte-management"
+    - "icu-level-care"
+
+  related_protocols:
+    - protocol_id: "HHS-MANAGEMENT-001"
+      relationship: "ALTERNATIVE_TO"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Enhanced to CDS-compliant format"
+        - "Added confidence scoring"
+        - "Added medication_selection algorithms"
+        - "Added special populations (elderly, pregnancy, renal, pediatric)"
+        - "Added escalation rules and time constraints"
+
+# ============================================================
+# END OF DKA MANAGEMENT PROTOCOL
+# ============================================================

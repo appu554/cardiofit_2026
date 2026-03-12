@@ -1,0 +1,295 @@
+# KB-12 Order Sets & Care Plans Service - Production Docker Compose
+# NO MOCKS, NO FALLBACKS - All services are REQUIRED
+#
+# Usage:
+#   docker-compose -f docker-compose.production.yml up -d
+#   docker-compose -f docker-compose.production.yml logs -f kb-12-service
+#
+# Prerequisites:
+#   - KB-7 Terminology service must be running
+#   - KB-1, KB-3, KB-6 services should be accessible (or use internal network)
+
+services:
+  # ==========================================================================
+  # KB-12 Order Sets & Care Plans Service
+  # ==========================================================================
+  kb-12-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+      args:
+        VERSION: "1.0.0"
+        BUILD_TIME: "${BUILD_TIME:-}"
+        GIT_COMMIT: "${GIT_COMMIT:-}"
+    image: kb-12-ordersets-careplans:production
+    container_name: kb-12-ordersets
+    hostname: kb-12-ordersets
+    ports:
+      - "8094:8092"
+    environment:
+      # Server Configuration
+      PORT: 8092
+      ENVIRONMENT: production
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+
+      # PostgreSQL Database (REQUIRED)
+      DATABASE_URL: postgres://kb12_user:${KB12_DB_PASSWORD:-kb12_secure_password}@kb-12-postgres:5432/kb12_ordersets?sslmode=disable
+      POSTGRES_HOST: kb-12-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: kb12_user
+      POSTGRES_PASSWORD: ${KB12_DB_PASSWORD:-kb12_secure_password}
+      POSTGRES_DB: kb12_ordersets
+      POSTGRES_SSLMODE: disable
+      POSTGRES_MAX_OPEN_CONNS: 25
+      POSTGRES_MAX_IDLE_CONNS: 10
+      POSTGRES_CONN_MAX_LIFETIME: 5m
+
+      # Redis Cache (REQUIRED)
+      REDIS_URL: redis://kb-12-redis:6379/0
+      REDIS_HOST: kb-12-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      REDIS_MAX_RETRIES: 3
+      REDIS_POOL_SIZE: 10
+      REDIS_DEFAULT_TTL: 1h
+      REDIS_ORDERSET_TTL: 24h
+      REDIS_CAREPLAN_TTL: 12h
+      REDIS_TEMPLATE_TTL: 6h
+
+      # KB-1 Drug Rules Service (REQUIRED)
+      KB1_DOSING_URL: ${KB1_URL:-http://kb-drug-rules:8081}
+      KB1_TIMEOUT: 10s
+      KB1_MAX_RETRIES: 3
+      KB1_ENABLED: "true"
+
+      # KB-3 Guidelines/Temporal Service (REQUIRED)
+      KB3_TEMPORAL_URL: ${KB3_URL:-http://kb-3-guidelines:8087}
+      KB3_TIMEOUT: 15s
+      KB3_MAX_RETRIES: 3
+      KB3_ENABLED: "true"
+
+      # KB-6 Formulary Service (REQUIRED)
+      KB6_FORMULARY_URL: ${KB6_URL:-http://kb-6-formulary:8091}
+      KB6_TIMEOUT: 10s
+      KB6_MAX_RETRIES: 3
+      KB6_ENABLED: "true"
+
+      # KB-7 Terminology Service (REQUIRED)
+      KB7_TERMINOLOGY_URL: ${KB7_URL:-http://kb-7-terminology:8092}
+      KB7_TIMEOUT: 10s
+      KB7_MAX_RETRIES: 3
+      KB7_ENABLED: "true"
+
+      # Server Timeouts
+      SERVER_READ_TIMEOUT: 30s
+      SERVER_WRITE_TIMEOUT: 30s
+      SERVER_SHUTDOWN_TIMEOUT: 15s
+
+      # Health Check Configuration
+      HEALTH_CHECK_INTERVAL: 30s
+      HEALTH_CHECK_TIMEOUT: 5s
+      HEALTH_CHECK_FAILURE_THRESHOLD: 3
+
+    depends_on:
+      kb-12-postgres:
+        condition: service_healthy
+      kb-12-redis:
+        condition: service_healthy
+    networks:
+      - kb-12-internal
+      - kb-services-network
+    volumes:
+      - kb12-logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8092/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ==========================================================================
+  # PostgreSQL Database for KB-12
+  # ==========================================================================
+  kb-12-postgres:
+    image: postgres:16-alpine
+    container_name: kb-12-postgres
+    hostname: kb-12-postgres
+    ports:
+      - "5448:5432"
+    environment:
+      POSTGRES_USER: kb12_user
+      POSTGRES_PASSWORD: ${KB12_DB_PASSWORD:-kb12_secure_password}
+      POSTGRES_DB: kb12_ordersets
+      PGDATA: /var/lib/postgresql/data/pgdata
+      # Performance tuning for production
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    volumes:
+      - kb12-postgres-data:/var/lib/postgresql/data
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./migrations/seed_templates.sql:/docker-entrypoint-initdb.d/02-seed-templates.sql:ro
+    networks:
+      - kb-12-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb12_user -d kb12_ordersets"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=100"
+      - "-c"
+      - "shared_buffers=128MB"
+      - "-c"
+      - "effective_cache_size=384MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=4MB"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      - "-c"
+      - "log_statement=mod"
+      - "-c"
+      - "log_duration=on"
+      - "-c"
+      - "log_min_duration_statement=1000"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ==========================================================================
+  # Redis Cache for KB-12
+  # ==========================================================================
+  kb-12-redis:
+    image: redis:7-alpine
+    container_name: kb-12-redis
+    hostname: kb-12-redis
+    ports:
+      - "6406:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - "256mb"
+      - --maxmemory-policy
+      - "allkeys-lru"
+      - --save
+      - "900 1"
+      - --save
+      - "300 10"
+      - --save
+      - "60 10000"
+      - --tcp-keepalive
+      - "300"
+      - --timeout
+      - "0"
+    volumes:
+      - kb12-redis-data:/data
+    networks:
+      - kb-12-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ==========================================================================
+  # Database Admin UI (Optional - for development/debugging)
+  # ==========================================================================
+  kb-12-adminer:
+    image: adminer:4-standalone
+    container_name: kb-12-adminer
+    ports:
+      - "8093:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: kb-12-postgres
+      ADMINER_DESIGN: nette
+    depends_on:
+      - kb-12-postgres
+    networks:
+      - kb-12-internal
+    restart: unless-stopped
+    profiles:
+      - debug
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
+# ==========================================================================
+# Networks
+# ==========================================================================
+networks:
+  kb-12-internal:
+    driver: bridge
+    name: kb-12-internal-network
+    internal: false
+  kb-services-network:
+    driver: bridge
+    name: kb-services-network
+
+# ==========================================================================
+# Volumes
+# ==========================================================================
+volumes:
+  kb12-postgres-data:
+    driver: local
+    name: kb12-postgres-data
+  kb12-redis-data:
+    driver: local
+    name: kb12-redis-data
+  kb12-logs:
+    driver: local
+    name: kb12-logs

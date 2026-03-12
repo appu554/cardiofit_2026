@@ -1,0 +1,1295 @@
+openapi: 3.0.0
+info:
+  title: KB-1 Drug Dosing Rules API
+  description: |
+    Clinical drug dosing calculations and safety validation service.
+
+    Provides evidence-based dose calculations using established clinical formulas:
+    - BSA: Mosteller formula
+    - IBW: Devine formula
+    - CrCl: Cockcroft-Gault equation
+    - eGFR: CKD-EPI 2021 race-free equation
+
+    Supports 24 built-in drug rules across 5 categories:
+    - Diabetes (Metformin, Empagliflozin, Liraglutide, Insulin Glargine)
+    - Cardiovascular (Lisinopril, Losartan, Metoprolol, Carvedilol, Atorvastatin, Furosemide, Spironolactone)
+    - Anticoagulants (Warfarin, Apixaban, Enoxaparin, Heparin)
+    - Antibiotics (Amoxicillin, Vancomycin, Gentamicin, Ciprofloxacin)
+    - Pain (Acetaminophen, Ibuprofen, Morphine, Oxycodone)
+  version: 1.0.0
+  contact:
+    name: CardioFit Clinical Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:8081
+    description: Development server
+  - url: https://api.cardiofit.health/kb1
+    description: Production server
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Health
+    description: Service health and readiness endpoints
+  - name: Dose Calculation
+    description: Drug dose calculation endpoints
+  - name: Patient Parameters
+    description: Patient parameter calculation endpoints
+  - name: Dose Validation
+    description: Dose safety validation endpoints
+  - name: Dosing Rules
+    description: Drug rule query endpoints
+
+paths:
+  # ============================================================================
+  # HEALTH ENDPOINTS
+  # ============================================================================
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns service health status
+      operationId: healthCheck
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness check
+      description: Returns service readiness status
+      operationId: readinessCheck
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # ============================================================================
+  # DOSE CALCULATION ENDPOINTS
+  # ============================================================================
+  /v1/calculate:
+    post:
+      tags:
+        - Dose Calculation
+      summary: Calculate recommended dose
+      description: |
+        Calculates the recommended dose for a drug based on patient parameters.
+        Applies renal, hepatic, and age-based adjustments automatically.
+        Returns safety alerts for high-alert medications, narrow therapeutic index drugs,
+        black box warnings, and Beers Criteria for elderly patients.
+      operationId: calculateDose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DoseCalculationRequest'
+            examples:
+              lisinopril:
+                summary: Calculate Lisinopril dose
+                value:
+                  rxnorm_code: "8610"
+                  patient:
+                    age: 65
+                    gender: "M"
+                    weight_kg: 75.0
+                    height_cm: 175.0
+                    serum_creatinine: 1.2
+              vancomycin:
+                summary: Calculate Vancomycin dose (weight-based)
+                value:
+                  rxnorm_code: "11124"
+                  patient:
+                    age: 45
+                    gender: "M"
+                    weight_kg: 80.0
+                    height_cm: 175.0
+                    serum_creatinine: 1.0
+      responses:
+        '200':
+          description: Dose calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoseCalculationResult'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/calculate/weight-based:
+    post:
+      tags:
+        - Dose Calculation
+      summary: Calculate weight-based dose
+      description: |
+        Calculates dose using weight-based dosing (mg/kg).
+        Commonly used for antibiotics, anticoagulants, and pediatric medications.
+      operationId: calculateWeightBasedDose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WeightBasedRequest'
+            example:
+              rxnorm_code: "11124"
+              patient:
+                age: 45
+                gender: "M"
+                weight_kg: 80.0
+                height_cm: 175.0
+                serum_creatinine: 1.0
+              dose_per_kg: 15.0
+      responses:
+        '200':
+          description: Weight-based dose calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoseCalculationResult'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/calculate/bsa-based:
+    post:
+      tags:
+        - Dose Calculation
+      summary: Calculate BSA-based dose
+      description: |
+        Calculates dose using body surface area (mg/m²).
+        Uses Mosteller formula for BSA calculation.
+        Commonly used for chemotherapy and certain specialty medications.
+      operationId: calculateBSABasedDose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BSABasedRequest'
+            example:
+              patient:
+                age: 50
+                gender: "F"
+                weight_kg: 65.0
+                height_cm: 165.0
+              dose_per_m2: 100.0
+      responses:
+        '200':
+          description: BSA-based dose calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BSADoseResult'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/calculate/pediatric:
+    post:
+      tags:
+        - Dose Calculation
+      summary: Calculate pediatric dose
+      description: |
+        Calculates appropriate dose for pediatric patients.
+        Considers age, weight, and specific pediatric dosing rules.
+        Returns age category (neonate, infant, child, adolescent).
+      operationId: calculatePediatricDose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PediatricRequest'
+            example:
+              rxnorm_code: "723"
+              patient:
+                age: 8
+                gender: "M"
+                weight_kg: 25.0
+                height_cm: 125.0
+      responses:
+        '200':
+          description: Pediatric dose calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PediatricDoseResult'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/calculate/renal:
+    post:
+      tags:
+        - Dose Calculation
+      summary: Calculate renal-adjusted dose
+      description: |
+        Calculates dose with renal function adjustment.
+        Uses CrCl (Cockcroft-Gault) or eGFR (CKD-EPI 2021) for adjustment.
+        Returns CKD stage and specific adjustment recommendations.
+      operationId: calculateRenalAdjustedDose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenalAdjustedRequest'
+            example:
+              rxnorm_code: "6809"
+              patient:
+                age: 70
+                gender: "F"
+                weight_kg: 60.0
+                height_cm: 160.0
+                serum_creatinine: 1.8
+                egfr: 35.0
+      responses:
+        '200':
+          description: Renal-adjusted dose calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RenalDoseResult'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # PATIENT PARAMETER ENDPOINTS
+  # ============================================================================
+  /v1/patient/bsa:
+    post:
+      tags:
+        - Patient Parameters
+      summary: Calculate Body Surface Area
+      description: |
+        Calculates Body Surface Area using the Mosteller formula:
+        BSA (m²) = √[(Height(cm) × Weight(kg)) / 3600]
+      operationId: calculateBSA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BSARequest'
+            example:
+              height_cm: 175.0
+              weight_kg: 75.0
+      responses:
+        '200':
+          description: BSA calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BSAResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/patient/ibw:
+    post:
+      tags:
+        - Patient Parameters
+      summary: Calculate Ideal Body Weight
+      description: |
+        Calculates Ideal Body Weight using the Devine formula:
+        - Male: IBW = 50 + 2.3 × (height_inches - 60)
+        - Female: IBW = 45.5 + 2.3 × (height_inches - 60)
+      operationId: calculateIBW
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IBWRequest'
+            example:
+              height_cm: 175.0
+              gender: "M"
+      responses:
+        '200':
+          description: IBW calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IBWResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/patient/crcl:
+    post:
+      tags:
+        - Patient Parameters
+      summary: Calculate Creatinine Clearance
+      description: |
+        Calculates Creatinine Clearance using the Cockcroft-Gault equation:
+        CrCl = [(140 - Age) × Weight] / [72 × SCr]
+        For females, multiply result by 0.85
+      operationId: calculateCrCl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CrClRequest'
+            example:
+              age: 65
+              weight_kg: 70.0
+              serum_creatinine: 1.2
+              gender: "M"
+      responses:
+        '200':
+          description: CrCl calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrClResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/patient/egfr:
+    post:
+      tags:
+        - Patient Parameters
+      summary: Calculate eGFR
+      description: |
+        Calculates estimated Glomerular Filtration Rate using the CKD-EPI 2021
+        race-free equation. Returns eGFR value and CKD stage classification.
+      operationId: calculateEGFR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EGFRRequest'
+            example:
+              age: 65
+              serum_creatinine: 1.2
+              gender: "M"
+      responses:
+        '200':
+          description: eGFR calculation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EGFRResponse'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # DOSE VALIDATION ENDPOINTS
+  # ============================================================================
+  /v1/validate/dose:
+    post:
+      tags:
+        - Dose Validation
+      summary: Validate proposed dose
+      description: |
+        Validates a proposed dose against drug rules and patient parameters.
+        Returns validation result with any safety concerns or warnings.
+      operationId: validateDose
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DoseValidationRequest'
+            example:
+              rxnorm_code: "11289"
+              proposed_dose: 7.5
+              unit: "mg"
+              patient:
+                age: 75
+                gender: "M"
+                weight_kg: 70.0
+                height_cm: 170.0
+      responses:
+        '200':
+          description: Dose validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoseValidationResult'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/validate/max-dose:
+    get:
+      tags:
+        - Dose Validation
+      summary: Get maximum dose for drug
+      description: Returns the maximum single dose and maximum daily dose for a drug
+      operationId: getMaxDose
+      parameters:
+        - name: rxnorm_code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: RxNorm code of the drug
+          example: "6809"
+      responses:
+        '200':
+          description: Maximum dose information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaxDoseResponse'
+        '404':
+          description: Drug not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # DOSING RULES ENDPOINTS
+  # ============================================================================
+  /v1/rules:
+    get:
+      tags:
+        - Dosing Rules
+      summary: List all dosing rules
+      description: Returns a list of all available drug dosing rules
+      operationId: listRules
+      responses:
+        '200':
+          description: List of dosing rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RulesListResponse'
+
+  /v1/rules/{rxnorm}:
+    get:
+      tags:
+        - Dosing Rules
+      summary: Get dosing rule by RxNorm code
+      description: Returns the complete dosing rule for a specific drug
+      operationId: getRule
+      parameters:
+        - name: rxnorm
+          in: path
+          required: true
+          schema:
+            type: string
+          description: RxNorm code of the drug
+          example: "8610"
+      responses:
+        '200':
+          description: Drug dosing rule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrugRule'
+        '404':
+          description: Drug not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/rules/search:
+    get:
+      tags:
+        - Dosing Rules
+      summary: Search dosing rules
+      description: Search for drugs by name or category
+      operationId: searchRules
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Search query (drug name)
+          example: "metformin"
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - diabetes
+              - cardiovascular
+              - anticoagulant
+              - antibiotic
+              - pain
+          description: Drug category filter
+        - name: high_alert
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Filter for high-alert medications only
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RulesSearchResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    # ============================================================================
+    # COMMON SCHEMAS
+    # ============================================================================
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "healthy"
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          example: "1.0.0"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+        request_id:
+          type: string
+
+    PatientParameters:
+      type: object
+      required:
+        - age
+        - gender
+        - weight_kg
+        - height_cm
+      properties:
+        age:
+          type: integer
+          minimum: 0
+          maximum: 150
+          description: Patient age in years
+        gender:
+          type: string
+          enum: ["M", "F", "male", "female"]
+          description: Patient gender
+        weight_kg:
+          type: number
+          format: double
+          minimum: 0.1
+          description: Patient weight in kilograms
+        height_cm:
+          type: number
+          format: double
+          minimum: 10
+          description: Patient height in centimeters
+        serum_creatinine:
+          type: number
+          format: double
+          minimum: 0.1
+          description: Serum creatinine in mg/dL
+        egfr:
+          type: number
+          format: double
+          description: Pre-calculated eGFR if available
+        child_pugh_score:
+          type: integer
+          minimum: 5
+          maximum: 15
+          description: Child-Pugh score for hepatic adjustment
+
+    # ============================================================================
+    # DOSE CALCULATION SCHEMAS
+    # ============================================================================
+    DoseCalculationRequest:
+      type: object
+      required:
+        - rxnorm_code
+        - patient
+      properties:
+        rxnorm_code:
+          type: string
+          description: RxNorm code identifying the drug
+        patient:
+          $ref: '#/components/schemas/PatientParameters'
+        indication:
+          type: string
+          description: Clinical indication for dosing
+
+    DoseCalculationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        drug_name:
+          type: string
+        rxnorm_code:
+          type: string
+        recommended_dose:
+          type: number
+          format: double
+        unit:
+          type: string
+        frequency:
+          type: string
+        route:
+          type: string
+        dosing_method:
+          type: string
+          enum: ["FIXED", "WEIGHT_BASED", "BSA_BASED", "AGE_BASED", "RENAL_ADJUSTED", "HEPATIC_ADJUSTED", "TITRATION"]
+        dose_range:
+          $ref: '#/components/schemas/DoseRange'
+        renal_adjustment:
+          $ref: '#/components/schemas/AdjustmentInfo'
+        hepatic_adjustment:
+          $ref: '#/components/schemas/AdjustmentInfo'
+        age_adjustment:
+          $ref: '#/components/schemas/AdjustmentInfo'
+        calculated_parameters:
+          $ref: '#/components/schemas/CalculatedParameters'
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyAlert'
+        monitoring:
+          type: array
+          items:
+            type: string
+        error:
+          type: string
+        error_code:
+          type: string
+
+    DoseRange:
+      type: object
+      properties:
+        min:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+        unit:
+          type: string
+
+    AdjustmentInfo:
+      type: object
+      properties:
+        applied:
+          type: boolean
+        reason:
+          type: string
+        factor:
+          type: number
+          format: double
+        original_dose:
+          type: number
+          format: double
+        adjusted_dose:
+          type: number
+          format: double
+
+    CalculatedParameters:
+      type: object
+      properties:
+        bsa:
+          type: number
+          format: double
+          description: Body Surface Area (m²)
+        ibw:
+          type: number
+          format: double
+          description: Ideal Body Weight (kg)
+        adj_bw:
+          type: number
+          format: double
+          description: Adjusted Body Weight (kg)
+        bmi:
+          type: number
+          format: double
+          description: Body Mass Index
+        crcl:
+          type: number
+          format: double
+          description: Creatinine Clearance (mL/min)
+        egfr:
+          type: number
+          format: double
+          description: eGFR (mL/min/1.73m²)
+        ckd_stage:
+          type: string
+          description: CKD stage (G1-G5)
+        is_pediatric:
+          type: boolean
+        is_geriatric:
+          type: boolean
+        is_obese:
+          type: boolean
+
+    SafetyAlert:
+      type: object
+      properties:
+        alert_type:
+          type: string
+          enum: ["high_alert", "narrow_ti", "black_box", "beers", "renal_warning", "hepatic_warning", "age_warning"]
+        severity:
+          type: string
+          enum: ["critical", "high", "moderate", "low"]
+        message:
+          type: string
+        recommendation:
+          type: string
+
+    WeightBasedRequest:
+      type: object
+      required:
+        - patient
+      properties:
+        rxnorm_code:
+          type: string
+        patient:
+          $ref: '#/components/schemas/PatientParameters'
+        dose_per_kg:
+          type: number
+          format: double
+          description: Dose in mg per kg body weight
+
+    BSABasedRequest:
+      type: object
+      required:
+        - patient
+        - dose_per_m2
+      properties:
+        patient:
+          $ref: '#/components/schemas/PatientParameters'
+        dose_per_m2:
+          type: number
+          format: double
+          description: Dose in mg per m² body surface area
+
+    BSADoseResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        bsa:
+          type: number
+          format: double
+        dose_per_m2:
+          type: number
+          format: double
+        calculated_dose:
+          type: number
+          format: double
+        unit:
+          type: string
+        formula_used:
+          type: string
+
+    PediatricRequest:
+      type: object
+      required:
+        - rxnorm_code
+        - patient
+      properties:
+        rxnorm_code:
+          type: string
+        patient:
+          $ref: '#/components/schemas/PatientParameters'
+
+    PediatricDoseResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        age_category:
+          type: string
+          enum: ["neonate", "infant", "child", "adolescent"]
+        drug_name:
+          type: string
+        recommended_dose:
+          type: number
+          format: double
+        unit:
+          type: string
+        dose_per_kg:
+          type: number
+          format: double
+        max_dose:
+          type: number
+          format: double
+        warnings:
+          type: array
+          items:
+            type: string
+
+    RenalAdjustedRequest:
+      type: object
+      required:
+        - rxnorm_code
+        - patient
+      properties:
+        rxnorm_code:
+          type: string
+        patient:
+          $ref: '#/components/schemas/PatientParameters'
+
+    RenalDoseResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        drug_name:
+          type: string
+        original_dose:
+          type: number
+          format: double
+        adjusted_dose:
+          type: number
+          format: double
+        unit:
+          type: string
+        egfr:
+          type: number
+          format: double
+        crcl:
+          type: number
+          format: double
+        ckd_stage:
+          type: string
+        adjustment_factor:
+          type: number
+          format: double
+        recommendation:
+          type: string
+        contraindicated:
+          type: boolean
+        contraindication_reason:
+          type: string
+
+    # ============================================================================
+    # PATIENT PARAMETER SCHEMAS
+    # ============================================================================
+    BSARequest:
+      type: object
+      required:
+        - height_cm
+        - weight_kg
+      properties:
+        height_cm:
+          type: number
+          format: double
+        weight_kg:
+          type: number
+          format: double
+
+    BSAResponse:
+      type: object
+      properties:
+        bsa:
+          type: number
+          format: double
+          description: Body Surface Area in m²
+        formula:
+          type: string
+          example: "Mosteller"
+        height_cm:
+          type: number
+          format: double
+        weight_kg:
+          type: number
+          format: double
+
+    IBWRequest:
+      type: object
+      required:
+        - height_cm
+        - gender
+      properties:
+        height_cm:
+          type: number
+          format: double
+        gender:
+          type: string
+          enum: ["M", "F"]
+
+    IBWResponse:
+      type: object
+      properties:
+        ibw_kg:
+          type: number
+          format: double
+          description: Ideal Body Weight in kg
+        formula:
+          type: string
+          example: "Devine"
+        height_cm:
+          type: number
+          format: double
+        gender:
+          type: string
+
+    CrClRequest:
+      type: object
+      required:
+        - age
+        - weight_kg
+        - serum_creatinine
+        - gender
+      properties:
+        age:
+          type: integer
+        weight_kg:
+          type: number
+          format: double
+        serum_creatinine:
+          type: number
+          format: double
+          description: Serum creatinine in mg/dL
+        gender:
+          type: string
+          enum: ["M", "F"]
+
+    CrClResponse:
+      type: object
+      properties:
+        crcl:
+          type: number
+          format: double
+          description: Creatinine Clearance in mL/min
+        formula:
+          type: string
+          example: "Cockcroft-Gault"
+        ckd_stage:
+          type: string
+        interpretation:
+          type: string
+
+    EGFRRequest:
+      type: object
+      required:
+        - age
+        - serum_creatinine
+        - gender
+      properties:
+        age:
+          type: integer
+        serum_creatinine:
+          type: number
+          format: double
+          description: Serum creatinine in mg/dL
+        gender:
+          type: string
+          enum: ["M", "F"]
+
+    EGFRResponse:
+      type: object
+      properties:
+        egfr:
+          type: number
+          format: double
+          description: eGFR in mL/min/1.73m²
+        formula:
+          type: string
+          example: "CKD-EPI 2021"
+        ckd_stage:
+          type: string
+          description: CKD stage (G1, G2, G3a, G3b, G4, G5)
+        ckd_description:
+          type: string
+        interpretation:
+          type: string
+
+    # ============================================================================
+    # DOSE VALIDATION SCHEMAS
+    # ============================================================================
+    DoseValidationRequest:
+      type: object
+      required:
+        - rxnorm_code
+        - proposed_dose
+        - patient
+      properties:
+        rxnorm_code:
+          type: string
+        proposed_dose:
+          type: number
+          format: double
+        unit:
+          type: string
+          default: "mg"
+        patient:
+          $ref: '#/components/schemas/PatientParameters'
+
+    DoseValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        drug_name:
+          type: string
+        proposed_dose:
+          type: number
+          format: double
+        recommended_dose:
+          type: number
+          format: double
+        max_single_dose:
+          type: number
+          format: double
+        max_daily_dose:
+          type: number
+          format: double
+        validation_status:
+          type: string
+          enum: ["safe", "caution", "warning", "contraindicated"]
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyAlert'
+        reasons:
+          type: array
+          items:
+            type: string
+
+    MaxDoseResponse:
+      type: object
+      properties:
+        rxnorm_code:
+          type: string
+        drug_name:
+          type: string
+        max_single_dose:
+          type: number
+          format: double
+        max_daily_dose:
+          type: number
+          format: double
+        unit:
+          type: string
+        notes:
+          type: string
+
+    # ============================================================================
+    # DOSING RULES SCHEMAS
+    # ============================================================================
+    DrugRule:
+      type: object
+      properties:
+        rxnorm_code:
+          type: string
+        drug_name:
+          type: string
+        drug_class:
+          type: string
+        category:
+          type: string
+        dosing_method:
+          type: string
+        default_dose:
+          type: number
+          format: double
+        min_dose:
+          type: number
+          format: double
+        max_dose:
+          type: number
+          format: double
+        max_daily_dose:
+          type: number
+          format: double
+        dose_unit:
+          type: string
+        frequency:
+          type: string
+        route:
+          type: string
+        dose_per_kg:
+          type: number
+          format: double
+        is_high_alert:
+          type: boolean
+        is_narrow_ti:
+          type: boolean
+        has_black_box_warning:
+          type: boolean
+        black_box_warning:
+          type: string
+        is_beers_list:
+          type: boolean
+        beers_criteria:
+          type: string
+        renal_adjustments:
+          type: array
+          items:
+            $ref: '#/components/schemas/RenalAdjustment'
+        hepatic_adjustments:
+          type: array
+          items:
+            $ref: '#/components/schemas/HepaticAdjustment'
+        age_adjustments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgeAdjustment'
+        monitoring_parameters:
+          type: array
+          items:
+            type: string
+        contraindications:
+          type: array
+          items:
+            type: string
+
+    RenalAdjustment:
+      type: object
+      properties:
+        egfr_min:
+          type: number
+          format: double
+        egfr_max:
+          type: number
+          format: double
+        adjustment_factor:
+          type: number
+          format: double
+        max_dose:
+          type: number
+          format: double
+        recommendation:
+          type: string
+        contraindicated:
+          type: boolean
+
+    HepaticAdjustment:
+      type: object
+      properties:
+        child_pugh_class:
+          type: string
+          enum: ["A", "B", "C"]
+        adjustment_factor:
+          type: number
+          format: double
+        max_dose:
+          type: number
+          format: double
+        recommendation:
+          type: string
+        contraindicated:
+          type: boolean
+
+    AgeAdjustment:
+      type: object
+      properties:
+        min_age:
+          type: integer
+        max_age:
+          type: integer
+        adjustment_factor:
+          type: number
+          format: double
+        max_dose:
+          type: number
+          format: double
+        recommendation:
+          type: string
+        contraindicated:
+          type: boolean
+
+    RulesListResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/DrugRuleSummary'
+
+    DrugRuleSummary:
+      type: object
+      properties:
+        rxnorm_code:
+          type: string
+        drug_name:
+          type: string
+        drug_class:
+          type: string
+        category:
+          type: string
+        dosing_method:
+          type: string
+        is_high_alert:
+          type: boolean
+        is_narrow_ti:
+          type: boolean
+
+    RulesSearchResponse:
+      type: object
+      properties:
+        query:
+          type: string
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/DrugRuleSummary'

@@ -1,0 +1,238 @@
+const { gql } = require('apollo-server-express');
+
+const typeDefs = gql`
+  extend schema @link(url: "https://specs.apollo.dev/federation/v2.0", import: ["@key", "@shareable"])
+
+  type Query {
+    patients(page: Int, limit: Int, generalPractitioner: String): PatientConnection
+    patient(id: ID!): Patient
+    searchPatients(name: String): [Patient]
+  }
+
+  type Mutation {
+    createPatient(patientData: PatientInput!): Patient
+    updatePatient(id: ID!, patientData: PatientInput!): Patient
+    deletePatient(id: ID!): DeleteResponse
+  }
+
+  type DeleteResponse {
+    success: Boolean!
+    message: String
+  }
+
+  type PatientConnection {
+    items: [Patient]
+    total: Int
+    page: Int
+    count: Int
+  }
+
+  type Patient @key(fields: "id") {
+    id: ID!
+    resourceType: String
+    text: TextComponent
+    identifier: [Identifier]
+    active: Boolean
+    name: [HumanName]
+    telecom: [ContactPoint]
+    gender: String
+    birthDate: String
+    deceasedBoolean: Boolean
+    address: [Address]
+    maritalStatus: CodeableConcept
+    multipleBirthBoolean: Boolean
+    contact: [Contact]
+    communication: [Communication]
+    generalPractitioner: [Reference]
+    managingOrganization: Reference
+  }
+
+  input PatientInput {
+    resourceType: String
+    text: TextComponentInput
+    identifier: [IdentifierInput]
+    active: Boolean
+    name: [HumanNameInput]
+    telecom: [ContactPointInput]
+    gender: String
+    birthDate: String
+    deceasedBoolean: Boolean
+    address: [AddressInput]
+    maritalStatus: CodeableConceptInput
+    multipleBirthBoolean: Boolean
+    contact: [ContactInput]
+    communication: [CommunicationInput]
+    generalPractitioner: [ReferenceInput]
+    managingOrganization: ReferenceInput
+  }
+
+  type TextComponent {
+    status: String
+    div: String
+  }
+
+  input TextComponentInput {
+    status: String
+    div: String
+  }
+
+  type Identifier {
+    use: String
+    type: CodeableConcept
+    system: String
+    value: String
+    period: Period
+    assigner: Reference
+  }
+
+  input IdentifierInput {
+    use: String
+    type: CodeableConceptInput
+    system: String
+    value: String
+    period: PeriodInput
+    assigner: ReferenceInput
+  }
+
+  type HumanName {
+    use: String
+    family: String
+    given: [String]
+    prefix: [String]
+    suffix: [String]
+    period: Period
+  }
+
+  input HumanNameInput {
+    use: String
+    family: String
+    given: [String]
+    prefix: [String]
+    suffix: [String]
+    period: PeriodInput
+  }
+
+  type ContactPoint {
+    system: String
+    value: String
+    use: String
+    rank: Int
+    period: Period
+  }
+
+  input ContactPointInput {
+    system: String
+    value: String
+    use: String
+    rank: Int
+    period: PeriodInput
+  }
+
+  type Address {
+    use: String
+    type: String
+    text: String
+    line: [String]
+    city: String
+    district: String
+    state: String
+    postalCode: String
+    country: String
+    period: Period
+  }
+
+  input AddressInput {
+    use: String
+    type: String
+    text: String
+    line: [String]
+    city: String
+    district: String
+    state: String
+    postalCode: String
+    country: String
+    period: PeriodInput
+  }
+
+  type CodeableConcept {
+    coding: [Coding]
+    text: String
+  }
+
+  input CodeableConceptInput {
+    coding: [CodingInput]
+    text: String
+  }
+
+  type Coding {
+    system: String
+    version: String
+    code: String
+    display: String
+    userSelected: Boolean
+  }
+
+  input CodingInput {
+    system: String
+    version: String
+    code: String
+    display: String
+    userSelected: Boolean
+  }
+
+  type Period {
+    start: String
+    end: String
+  }
+
+  input PeriodInput {
+    start: String
+    end: String
+  }
+
+  type Contact {
+    relationship: [CodeableConcept]
+    name: HumanName
+    telecom: [ContactPoint]
+    address: Address
+    gender: String
+    organization: Reference
+    period: Period
+  }
+
+  input ContactInput {
+    relationship: [CodeableConceptInput]
+    name: HumanNameInput
+    telecom: [ContactPointInput]
+    address: AddressInput
+    gender: String
+    organization: ReferenceInput
+    period: PeriodInput
+  }
+
+  type Communication {
+    language: CodeableConcept
+    preferred: Boolean
+  }
+
+  input CommunicationInput {
+    language: CodeableConceptInput
+    preferred: Boolean
+  }
+
+  type Reference {
+    reference: String
+    type: String
+    identifier: Identifier
+    display: String
+  }
+
+  input ReferenceInput {
+    reference: String
+    type: String
+    identifier: IdentifierInput
+    display: String
+  }
+`;
+
+module.exports = typeDefs;

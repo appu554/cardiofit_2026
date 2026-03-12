@@ -1,0 +1,226 @@
+version: '3.8'
+
+# Docker Compose configuration for CDC connector monitoring infrastructure
+# Includes Prometheus, Grafana, and exporters for comprehensive observability
+
+services:
+  # Prometheus - Metrics collection and alerting
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: cdc-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/cdc-connector-rules.yml:/etc/prometheus/rules/cdc-connector-rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=50GB'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: cdc-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin_change_in_production
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+    volumes:
+      - ./grafana/cdc-dashboard.json:/etc/grafana/provisioning/dashboards/cdc-dashboard.json:ro
+      - ./grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - cardiofit-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL Exporter - KB1 (medications)
+  postgres-exporter-kb1:
+    image: prometheuscommunity/postgres-exporter:v0.13.2
+    container_name: postgres-exporter-kb1
+    restart: unless-stopped
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:5432/medications_db?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    volumes:
+      - ./exporters/postgres-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    networks:
+      - cardiofit-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # PostgreSQL Exporter - KB2 (scheduling)
+  postgres-exporter-kb2:
+    image: prometheuscommunity/postgres-exporter:v0.13.2
+    container_name: postgres-exporter-kb2
+    restart: unless-stopped
+    ports:
+      - "9188:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:5433/kb2_scheduling_db?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    volumes:
+      - ./exporters/postgres-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    networks:
+      - cardiofit-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # PostgreSQL Exporter - KB3 (encounter)
+  postgres-exporter-kb3:
+    image: prometheuscommunity/postgres-exporter:v0.13.2
+    container_name: postgres-exporter-kb3
+    restart: unless-stopped
+    ports:
+      - "9189:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:5434/kb3_encounter_db?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    volumes:
+      - ./exporters/postgres-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    networks:
+      - cardiofit-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # PostgreSQL Exporter - KB6 (drug rules)
+  postgres-exporter-kb6:
+    image: prometheuscommunity/postgres-exporter:v0.13.2
+    container_name: postgres-exporter-kb6
+    restart: unless-stopped
+    ports:
+      - "9190:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:5435/kb6_drug_rules_db?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    volumes:
+      - ./exporters/postgres-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    networks:
+      - cardiofit-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # PostgreSQL Exporter - KB7 (guideline evidence)
+  postgres-exporter-kb7:
+    image: prometheuscommunity/postgres-exporter:v0.13.2
+    container_name: postgres-exporter-kb7
+    restart: unless-stopped
+    ports:
+      - "9191:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@host.docker.internal:5436/kb7_guideline_evidence_db?sslmode=disable"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    volumes:
+      - ./exporters/postgres-queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    networks:
+      - cardiofit-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Kafka Exporter - Topic and partition metrics
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka-exporter
+    restart: unless-stopped
+    ports:
+      - "9308:9308"
+    command:
+      - '--kafka.server=kafka:9092'
+      - '--web.listen-address=:9308'
+      - '--topic.filter=cdc\..*'
+      - '--group.filter=.*'
+    networks:
+      - cardiofit-network
+    depends_on:
+      - prometheus
+
+  # Node Exporter - System metrics
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - cardiofit-network
+
+  # Alertmanager - Alert routing and notification
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: cdc-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    networks:
+      - cardiofit-network
+    depends_on:
+      - prometheus
+
+  # cAdvisor - Container metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.0
+    container_name: cadvisor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    privileged: true
+    networks:
+      - cardiofit-network
+
+networks:
+  cardiofit-network:
+    external: true
+
+volumes:
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  alertmanager-data:
+    driver: local

@@ -1,0 +1,756 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safety-gateway-phase2
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v2.0.0
+    tier: critical
+    phase: "2"
+    features: "advanced-orchestration,batch-processing,intelligent-routing"
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+    safety-gateway.platform/phase: "2"
+    safety-gateway.platform/features: "advanced-orchestration,batch-processing,intelligent-routing,comprehensive-metrics"
+spec:
+  replicas: 5  # Increased for Phase 2 load handling
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 2  # Faster rollouts for Phase 2
+  selector:
+    matchLabels:
+      app: safety-gateway
+      version: v2.0.0
+  template:
+    metadata:
+      labels:
+        app: safety-gateway
+        component: safety-platform
+        version: v2.0.0
+        tier: critical
+        phase: "2"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        # Phase 2 specific annotations
+        safety-gateway.platform/orchestration: "advanced"
+        safety-gateway.platform/batch-processing: "enabled"
+        safety-gateway.platform/routing: "intelligent"
+        safety-gateway.platform/metrics: "comprehensive"
+    spec:
+      # Enhanced security context for Phase 2
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [1001]
+      
+      # Enhanced affinity rules for Phase 2 distributed processing
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values: ["safety-gateway"]
+              - key: phase
+                operator: In
+                values: ["2"]
+            topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/worker
+                operator: Exists
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values: ["m5.large", "m5.xlarge", "c5.large", "c5.xlarge"]  # Performance nodes for Phase 2
+      
+      # Phase 2 initialization containers
+      initContainers:
+      - name: database-migration-phase2
+        image: migrate/migrate:latest
+        command: ["/migrate"]
+        args:
+          - "-path"
+          - "/migrations/phase2"
+          - "-database"
+          - "$(TIMESCALEDB_URL)"
+          - "up"
+        env:
+        - name: TIMESCALEDB_URL
+          valueFrom:
+            secretKeyRef:
+              name: safety-gateway-secrets
+              key: timescaledb-url
+        volumeMounts:
+        - name: migrations-phase2
+          mountPath: /migrations/phase2
+          readOnly: true
+      
+      - name: kafka-topics-phase2
+        image: confluentinc/cp-kafka:latest
+        command: ["/bin/bash"]
+        args:
+          - "-c"
+          - |
+            echo "Creating Phase 2 Kafka topics..."
+            
+            # Batch processing topics
+            kafka-topics --bootstrap-server $(KAFKA_BOOTSTRAP_SERVERS) \
+              --create --if-not-exists \
+              --topic safety-batch-requests \
+              --partitions 6 --replication-factor 3
+            
+            kafka-topics --bootstrap-server $(KAFKA_BOOTSTRAP_SERVERS) \
+              --create --if-not-exists \
+              --topic safety-batch-results \
+              --partitions 6 --replication-factor 3
+            
+            # Advanced orchestration topics
+            kafka-topics --bootstrap-server $(KAFKA_BOOTSTRAP_SERVERS) \
+              --create --if-not-exists \
+              --topic safety-orchestration-metrics \
+              --partitions 3 --replication-factor 3
+            
+            kafka-topics --bootstrap-server $(KAFKA_BOOTSTRAP_SERVERS) \
+              --create --if-not-exists \
+              --topic safety-load-balancing-events \
+              --partitions 3 --replication-factor 3
+            
+            # Routing decision topics
+            kafka-topics --bootstrap-server $(KAFKA_BOOTSTRAP_SERVERS) \
+              --create --if-not-exists \
+              --topic safety-routing-decisions \
+              --partitions 6 --replication-factor 3
+            
+            echo "Phase 2 Kafka topics created successfully"
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: safety-gateway-config
+              key: kafka-bootstrap-servers
+      
+      - name: redis-phase2-setup
+        image: redis:7-alpine
+        command: ["/bin/sh"]
+        args:
+          - "-c"
+          - |
+            echo "Setting up Redis for Phase 2..."
+            redis-cli -h $(REDIS_HOST) -p $(REDIS_PORT) CONFIG SET maxmemory-policy allkeys-lru
+            redis-cli -h $(REDIS_HOST) -p $(REDIS_PORT) CONFIG SET maxmemory 1gb
+            redis-cli -h $(REDIS_HOST) -p $(REDIS_PORT) FLUSHDB
+            echo "Redis Phase 2 setup complete"
+        env:
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: safety-gateway-config
+              key: redis-host
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: safety-gateway-config
+              key: redis-port
+      
+      containers:
+      - name: safety-gateway
+        image: safety-gateway-platform:v2.0.0-phase2
+        imagePullPolicy: IfNotPresent
+        
+        # Enhanced security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE  # For binding to privileged ports if needed
+        
+        # Phase 2 container ports
+        ports:
+        - name: http
+          containerPort: 8030
+          protocol: TCP
+        - name: http-batch  # New endpoint for batch processing
+          containerPort: 8031
+          protocol: TCP
+        - name: grpc
+          containerPort: 8032
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        - name: health
+          containerPort: 8033
+          protocol: TCP
+        - name: orchestration  # New endpoint for orchestration management
+          containerPort: 8034
+          protocol: TCP
+        
+        # Phase 2 environment variables
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: PHASE
+          value: "2"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        
+        # Phase 2 feature flags
+        - name: ENABLE_ADVANCED_ORCHESTRATION
+          value: "true"
+        - name: ENABLE_BATCH_PROCESSING
+          value: "true"
+        - name: ENABLE_INTELLIGENT_ROUTING
+          value: "true"
+        - name: ENABLE_COMPREHENSIVE_METRICS
+          value: "true"
+        - name: ENABLE_PERFORMANCE_OPTIMIZATION
+          value: "true"
+        
+        # Phase 2 performance configuration
+        - name: MAX_CONCURRENT_REQUESTS
+          value: "1000"
+        - name: BATCH_MAX_SIZE
+          value: "50"
+        - name: BATCH_TIMEOUT
+          value: "100ms"
+        - name: BATCH_CONCURRENCY
+          value: "10"
+        - name: LOAD_BALANCING_STRATEGY
+          value: "adaptive"
+        - name: ROUTING_MAX_TIME
+          value: "50ms"
+        - name: METRICS_INTERVAL
+          value: "10s"
+        
+        # Configuration from ConfigMap and Secrets
+        envFrom:
+        - configMapRef:
+            name: safety-gateway-phase2-config
+        - secretRef:
+            name: safety-gateway-secrets
+        
+        # Enhanced resource requirements for Phase 2
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+            ephemeral-storage: "2Gi"
+        
+        # Enhanced health checks for Phase 2
+        startupProbe:
+          httpGet:
+            path: /health/startup
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 12
+          successThreshold: 1
+        
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        
+        # Phase 2 specific volume mounts
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+          readOnly: true
+        - name: phase2-config-volume
+          mountPath: /app/config/phase2
+          readOnly: true
+        - name: logs-volume
+          mountPath: /var/log/safety-gateway
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: cache-volume
+          mountPath: /var/cache/safety-gateway
+        - name: metrics-volume
+          mountPath: /var/metrics/safety-gateway
+        - name: batch-processing-volume
+          mountPath: /var/batch/safety-gateway
+        
+        # Lifecycle hooks for graceful Phase 2 shutdown
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - "/bin/sh"
+              - "-c"
+              - |
+                echo "Initiating Phase 2 graceful shutdown..."
+                # Stop accepting new batch requests
+                curl -X POST http://localhost:8034/api/v1/orchestration/shutdown-prepare
+                # Allow current batches to complete
+                sleep 15
+                echo "Phase 2 shutdown preparation complete"
+      
+      # Enhanced log shipping sidecar for Phase 2
+      - name: log-shipper
+        image: fluent/fluent-bit:latest
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        volumeMounts:
+        - name: logs-volume
+          mountPath: /var/log/safety-gateway
+          readOnly: true
+        - name: fluent-bit-phase2-config
+          mountPath: /fluent-bit/etc
+          readOnly: true
+        env:
+        - name: FLUENT_ELASTICSEARCH_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: logging-config
+              key: elasticsearch-host
+        - name: FLUENT_ELASTICSEARCH_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: logging-config
+              key: elasticsearch-port
+        - name: FLUENT_PHASE
+          value: "2"
+      
+      # Metrics collection sidecar for Phase 2
+      - name: metrics-collector
+        image: prom/node-exporter:latest
+        args:
+          - '--path.procfs=/host/proc'
+          - '--path.sysfs=/host/sys'
+          - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+          - '--collector.textfile.directory=/var/metrics/safety-gateway'
+        ports:
+        - name: metrics-node
+          containerPort: 9100
+          protocol: TCP
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        volumeMounts:
+        - name: metrics-volume
+          mountPath: /var/metrics/safety-gateway
+          readOnly: true
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+      
+      # Volumes
+      volumes:
+      - name: config-volume
+        configMap:
+          name: safety-gateway-config
+          items:
+          - key: config.yaml
+            path: config.yaml
+      - name: phase2-config-volume
+        configMap:
+          name: safety-gateway-phase2-config
+          items:
+          - key: phase2-config.yaml
+            path: phase2-config.yaml
+      - name: migrations-phase2
+        configMap:
+          name: safety-gateway-phase2-migrations
+      - name: logs-volume
+        emptyDir:
+          sizeLimit: "2Gi"
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: "500Mi"
+      - name: cache-volume
+        emptyDir:
+          sizeLimit: "1Gi"
+      - name: metrics-volume
+        emptyDir:
+          sizeLimit: "100Mi"
+      - name: batch-processing-volume
+        emptyDir:
+          sizeLimit: "1Gi"
+      - name: fluent-bit-phase2-config
+        configMap:
+          name: fluent-bit-phase2-config
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      
+      # DNS configuration for Phase 2 service discovery
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+        searches:
+        - safety-gateway.svc.cluster.local
+        - svc.cluster.local
+        - cluster.local
+      
+      # Enhanced termination grace period for Phase 2
+      terminationGracePeriodSeconds: 45  # More time for batch processing cleanup
+      
+      # Node selector for Phase 2 performance requirements
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        node.kubernetes.io/instance-type: m5.large
+      
+      # Tolerations for dedicated nodes
+      tolerations:
+      - key: "safety-gateway"
+        operator: "Equal"
+        value: "phase2"
+        effect: "NoSchedule"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safety-gateway-phase2-service
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v2.0.0
+    phase: "2"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8030
+    targetPort: http
+    protocol: TCP
+  - name: http-batch
+    port: 8031
+    targetPort: http-batch
+    protocol: TCP
+  - name: grpc
+    port: 8032
+    targetPort: grpc
+    protocol: TCP
+  - name: orchestration
+    port: 8034
+    targetPort: orchestration
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+  - name: metrics-node
+    port: 9100
+    targetPort: metrics-node
+    protocol: TCP
+  selector:
+    app: safety-gateway
+    version: v2.0.0
+  sessionAffinity: ClientIP  # Important for batch processing
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 300
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safety-gateway-phase2-headless
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v2.0.0
+    phase: "2"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8030
+    targetPort: http
+    protocol: TCP
+  - name: http-batch
+    port: 8031
+    targetPort: http-batch
+    protocol: TCP
+  - name: grpc
+    port: 8032
+    targetPort: grpc
+    protocol: TCP
+  - name: orchestration
+    port: 8034
+    targetPort: orchestration
+    protocol: TCP
+  selector:
+    app: safety-gateway
+    version: v2.0.0
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: safety-gateway-phase2-pdb
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v2.0.0
+    phase: "2"
+spec:
+  minAvailable: 3  # Higher availability for Phase 2
+  selector:
+    matchLabels:
+      app: safety-gateway
+      version: v2.0.0
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: safety-gateway-phase2-hpa
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v2.0.0
+    phase: "2"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: safety-gateway-phase2
+  minReplicas: 5
+  maxReplicas: 20  # Higher scaling for Phase 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60  # Lower threshold for Phase 2 responsiveness
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Pods
+    pods:
+      metric:
+        name: safety_gateway_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "200"  # Higher RPS target for Phase 2
+  - type: Pods
+    pods:
+      metric:
+        name: safety_gateway_batch_queue_size
+      target:
+        type: AverageValue
+        averageValue: "10"  # Scale based on batch queue
+  - type: Pods
+    pods:
+      metric:
+        name: safety_gateway_orchestration_latency_p95
+      target:
+        type: AverageValue
+        averageValue: "100"  # Scale based on latency
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30  # Faster scale-up for Phase 2
+      policies:
+      - type: Percent
+        value: 100  # Aggressive scale-up
+        periodSeconds: 30
+      - type: Pods
+        value: 4
+        periodSeconds: 30
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 180  # Conservative scale-down
+      policies:
+      - type: Percent
+        value: 20
+        periodSeconds: 60
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+      selectPolicy: Min
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: safety-gateway-phase2-network-policy
+  labels:
+    app: safety-gateway
+    component: safety-platform
+    version: v2.0.0
+    phase: "2"
+spec:
+  podSelector:
+    matchLabels:
+      app: safety-gateway
+      version: v2.0.0
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from ingress controllers
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8030
+    - protocol: TCP
+      port: 8031  # Batch processing endpoint
+  # Allow traffic from other services
+  - from:
+    - podSelector:
+        matchLabels:
+          component: clinical-services
+    ports:
+    - protocol: TCP
+      port: 8030
+    - protocol: TCP
+      port: 8031
+    - protocol: TCP
+      port: 8032
+    - protocol: TCP
+      port: 8034  # Orchestration endpoint
+  # Allow monitoring traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+    - protocol: TCP
+      port: 9100
+  # Allow internal Phase 2 communication
+  - from:
+    - podSelector:
+        matchLabels:
+          app: safety-gateway
+          version: v2.0.0
+    ports:
+    - protocol: TCP
+      port: 8030
+    - protocol: TCP
+      port: 8031
+    - protocol: TCP
+      port: 8032
+    - protocol: TCP
+      port: 8034
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow TimescaleDB access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: timescaledb
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow Redis access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow Kafka access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  # Allow CAE service access
+  - to:
+    - podSelector:
+        matchLabels:
+          app: clinical-reasoning-service
+    ports:
+    - protocol: TCP
+      port: 8027
+  # Allow external API access for Phase 2 features
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS
+    - protocol: TCP
+      port: 80   # HTTP

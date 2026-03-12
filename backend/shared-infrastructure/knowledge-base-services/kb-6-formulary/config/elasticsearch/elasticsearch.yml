@@ -1,0 +1,127 @@
+# KB-6 Formulary Elasticsearch Configuration
+
+# Cluster settings
+cluster.name: kb6-formulary-cluster
+node.name: kb6-elasticsearch
+node.roles: [master, data, ingest]
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# Discovery settings (single node for development)
+discovery.type: single-node
+cluster.initial_master_nodes: ["kb6-elasticsearch"]
+
+# Memory and performance settings
+bootstrap.memory_lock: true
+indices.memory.index_buffer_size: 200mb
+indices.memory.min_index_buffer_size: 96mb
+
+# Index settings
+action.auto_create_index: true
+action.destructive_requires_name: true
+
+# Search settings
+search.max_buckets: 65536
+indices.query.bool.max_clause_count: 2048
+
+# Security settings (development mode)
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: false
+xpack.security.transport.ssl.enabled: false
+
+# Monitoring settings
+xpack.monitoring.collection.enabled: true
+
+# Index lifecycle management
+xpack.ilm.enabled: true
+
+# ML settings (disable for resource efficiency)
+xpack.ml.enabled: false
+
+# Watcher settings (disable for development)
+xpack.watcher.enabled: false
+
+# Graph settings (disable for development)
+xpack.graph.enabled: false
+
+# SQL settings
+xpack.sql.enabled: true
+
+# License settings
+xpack.license.self_generated.type: basic
+
+# Logging
+logger.root: INFO
+logger.org.elasticsearch.discovery: DEBUG
+
+# Path settings
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+# Thread pool settings for formulary operations
+thread_pool:
+  search:
+    size: 4
+    queue_size: 1000
+  index:
+    size: 2
+    queue_size: 200
+  bulk:
+    size: 2
+    queue_size: 50
+
+# Circuit breaker settings
+indices.breaker.total.limit: 70%
+indices.breaker.fielddata.limit: 40%
+indices.breaker.request.limit: 40%
+
+# Formulary-specific index settings
+index:
+  number_of_shards: 1
+  number_of_replicas: 0  # Single node setup
+  refresh_interval: 5s
+  max_result_window: 50000
+  
+  # Formulary-optimized analyzers
+  analysis:
+    analyzer:
+      drug_name_analyzer:
+        type: custom
+        tokenizer: standard
+        filter: 
+          - lowercase
+          - asciifolding
+          - drug_synonyms
+          - stemmer
+      
+      autocomplete_analyzer:
+        type: custom
+        tokenizer: autocomplete_tokenizer
+        filter:
+          - lowercase
+          - asciifolding
+    
+    tokenizer:
+      autocomplete_tokenizer:
+        type: edge_ngram
+        min_gram: 2
+        max_gram: 20
+        token_chars: [letter, digit]
+    
+    filter:
+      drug_synonyms:
+        type: synonym
+        synonyms:
+          - "acetaminophen,paracetamol,tylenol,apap"
+          - "ibuprofen,advil,motrin,brufen"
+          - "aspirin,acetylsalicylic acid,asa"
+          - "omeprazole,prilosec,losec"
+          - "metformin,glucophage"
+          - "atorvastatin,lipitor"
+          - "lisinopril,prinivil,zestril"
+          - "simvastatin,zocor"
+          - "amlodipine,norvasc"
+          - "hydrochlorothiazide,hctz,microzide"

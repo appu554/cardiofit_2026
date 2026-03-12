@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphQL API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .panel {
+            flex: 1;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            font-family: monospace;
+            margin-bottom: 10px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            overflow: auto;
+            max-height: 400px;
+        }
+        .patient-card {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+        .patient-name {
+            font-weight: bold;
+            font-size: 18px;
+            margin-bottom: 5px;
+        }
+        .patient-details {
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>GraphQL API Test</h1>
+    
+    <div class="container">
+        <div class="panel">
+            <h2>GraphQL Query</h2>
+            <textarea id="query">query {
+  searchPatients {
+    id
+    name {
+      family
+      given
+    }
+    gender
+    birthDate
+  }
+}</textarea>
+            <div>
+                <label for="token">Auth Token:</label>
+                <input type="text" id="token" style="width: 100%;" placeholder="Bearer eyJhbGciOiJSUzI1NiIs...">
+            </div>
+            <br>
+            <button onclick="executeQuery()">Execute Query</button>
+        </div>
+        
+        <div class="panel">
+            <h2>Response</h2>
+            <pre id="response">// Response will appear here</pre>
+        </div>
+    </div>
+
+    <div class="panel" style="margin-top: 20px;">
+        <h2>Patients</h2>
+        <div id="patients-container"></div>
+    </div>
+
+    <script>
+        async function executeQuery() {
+            const query = document.getElementById('query').value;
+            const token = document.getElementById('token').value;
+            const responseElement = document.getElementById('response');
+            const patientsContainer = document.getElementById('patients-container');
+            
+            try {
+                // Make the GraphQL request
+                const response = await fetch('http://localhost:8006/graphql', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': token
+                    },
+                    body: JSON.stringify({ query })
+                });
+                
+                const data = await response.json();
+                
+                // Display the raw response
+                responseElement.textContent = JSON.stringify(data, null, 2);
+                
+                // Display patients in a more user-friendly format
+                patientsContainer.innerHTML = '';
+                
+                if (data.data && data.data.searchPatients) {
+                    const patients = data.data.searchPatients;
+                    
+                    if (patients.length === 0) {
+                        patientsContainer.innerHTML = '<p>No patients found</p>';
+                    } else {
+                        patients.forEach(patient => {
+                            const patientCard = document.createElement('div');
+                            patientCard.className = 'patient-card';
+                            
+                            const nameDisplay = patient.name && patient.name.length > 0 
+                                ? `${patient.name[0].family}, ${patient.name[0].given.join(' ')}` 
+                                : 'Unknown Name';
+                            
+                            patientCard.innerHTML = `
+                                <div class="patient-name">${nameDisplay}</div>
+                                <div class="patient-details">
+                                    <p><strong>ID:</strong> ${patient.id}</p>
+                                    <p><strong>Gender:</strong> ${patient.gender || 'N/A'}</p>
+                                    <p><strong>Birth Date:</strong> ${patient.birthDate || 'N/A'}</p>
+                                </div>
+                            `;
+                            
+                            patientsContainer.appendChild(patientCard);
+                        });
+                    }
+                } else if (data.errors) {
+                    patientsContainer.innerHTML = `<p>Error: ${data.errors[0].message}</p>`;
+                }
+            } catch (error) {
+                responseElement.textContent = `Error: ${error.message}`;
+                patientsContainer.innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

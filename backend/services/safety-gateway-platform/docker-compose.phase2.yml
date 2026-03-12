@@ -1,0 +1,388 @@
+version: '3.8'
+
+# Phase 2 Advanced Orchestration - Local Development Environment
+# This compose file sets up the complete Phase 2 safety gateway platform with all dependencies
+
+networks:
+  safety-gateway-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  kafka_data:
+    driver: local
+  zookeeper_data:
+    driver: local
+  grafana_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  safety_gateway_logs:
+    driver: local
+  safety_gateway_metrics:
+    driver: local
+
+services:
+  # Core Infrastructure Services
+  
+  postgres:
+    image: timescale/timescaledb:latest-pg14
+    container_name: safety-gateway-postgres
+    environment:
+      POSTGRES_DB: safety_gateway
+      POSTGRES_USER: safety_user
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-safety_dev_password}
+      TIMESCALEDB_TELEMETRY: off
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/migrations:/docker-entrypoint-initdb.d
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safety_user -d safety_gateway"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: safety-gateway-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: safety-gateway-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.12
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: safety-gateway-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.13
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Monitoring Stack
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: safety-gateway-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - prometheus_data:/prometheus
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.20
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: safety-gateway-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin123}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_INSTALL_PLUGINS: 'grafana-clock-panel,grafana-simple-json-datasource'
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.21
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Mock Clinical Reasoning Service (CAE)
+  
+  clinical-reasoning-service:
+    image: clinical-reasoning-service:latest
+    container_name: safety-gateway-cae
+    environment:
+      CAE_PORT: 8027
+      CAE_ENVIRONMENT: development
+      CAE_DATABASE_URL: postgresql://safety_user:${DB_PASSWORD:-safety_dev_password}@postgres:5432/safety_gateway
+      CAE_REDIS_URL: redis://redis:6379
+      CAE_LOG_LEVEL: debug
+    ports:
+      - "8027:8027"
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8027/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # Phase 2 Safety Gateway Platform
+
+  safety-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production  # Use production stage with Phase 2 features
+    container_name: safety-gateway-platform
+    environment:
+      # Service Configuration
+      SGP_ENVIRONMENT: development
+      SGP_PORT: 8030
+      SGP_HTTP_PORT: 8031
+      SGP_LOG_LEVEL: debug
+      
+      # Phase 2 Feature Flags
+      SGP_ENABLE_ADVANCED_ORCHESTRATION: 'true'
+      SGP_ENABLE_BATCH_PROCESSING: 'true'
+      SGP_ENABLE_INTELLIGENT_ROUTING: 'true'
+      SGP_ENABLE_COMPREHENSIVE_METRICS: 'true'
+      
+      # Database Configuration
+      SGP_DB_HOST: postgres
+      SGP_DB_PORT: 5432
+      SGP_DB_NAME: safety_gateway
+      SGP_DB_USER: safety_user
+      SGP_DB_PASSWORD: ${DB_PASSWORD:-safety_dev_password}
+      
+      # Redis Configuration
+      SGP_REDIS_HOST: redis
+      SGP_REDIS_PORT: 6379
+      SGP_REDIS_DB: 0
+      
+      # Kafka Configuration
+      SGP_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SGP_KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      
+      # External Services
+      SGP_CAE_SERVICE_ADDRESS: clinical-reasoning-service:8027
+      
+      # Performance Configuration
+      SGP_MAX_CONCURRENT_REQUESTS: 100
+      SGP_REQUEST_TIMEOUT: 10s
+      SGP_BATCH_MAX_SIZE: 20
+      SGP_BATCH_TIMEOUT: 100ms
+      
+      # Load Balancing Strategy (development environment)
+      SGP_LOAD_BALANCING_STRATEGY: round_robin
+      
+      # Monitoring
+      SGP_METRICS_ENABLED: 'true'
+      SGP_METRICS_INTERVAL: 5s
+      SGP_PROMETHEUS_PORT: 9090
+    ports:
+      - "8030:8030"  # Main HTTP API
+      - "8031:8031"  # gRPC API
+      - "8032:8032"  # Health check endpoint
+      - "9091:9090"  # Metrics endpoint (different from Prometheus)
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - safety_gateway_logs:/var/log/safety-gateway
+      - safety_gateway_metrics:/tmp/metrics
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.40
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      clinical-reasoning-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8032/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Load Testing and Simulation Services (for Phase 2 testing)
+
+  load-generator:
+    image: loadimpact/k6:latest
+    container_name: safety-gateway-load-generator
+    volumes:
+      - ./tests/load:/scripts
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.50
+    depends_on:
+      safety-gateway:
+        condition: service_healthy
+    profiles:
+      - testing  # Only start with --profile testing
+    command: >
+      run /scripts/phase2-load-test.js
+      --vus 10
+      --duration 5m
+      --summary-trend-stats avg,min,med,max,p(95),p(99),count
+      --out json=/tmp/loadtest-results.json
+
+  # API Testing Service
+
+  api-tests:
+    build:
+      context: ./tests/integration
+      dockerfile: Dockerfile.api-tests
+    container_name: safety-gateway-api-tests
+    environment:
+      API_BASE_URL: http://safety-gateway:8030
+      TEST_ENVIRONMENT: development
+      ENABLE_PHASE2_TESTS: 'true'
+    volumes:
+      - ./tests/integration:/app/tests
+      - ./test-results:/app/results
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.51
+    depends_on:
+      safety-gateway:
+        condition: service_healthy
+    profiles:
+      - testing
+    command: >
+      /bin/sh -c "
+        echo 'Waiting for services to be ready...' &&
+        sleep 30 &&
+        go test -v ./tests/integration/phase2_orchestration_test.go -count=1 -race
+      "
+
+# Development utilities
+
+  adminer:
+    image: adminer:latest
+    container_name: safety-gateway-adminer
+    ports:
+      - "8080:8080"
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.60
+    depends_on:
+      - postgres
+    profiles:
+      - development  # Only start with --profile development
+    restart: unless-stopped
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: safety-gateway-kafka-ui
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "8081:8080"
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.61
+    depends_on:
+      - kafka
+    profiles:
+      - development
+    restart: unless-stopped
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: safety-gateway-redis-ui
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8082:8081"
+    networks:
+      safety-gateway-network:
+        ipv4_address: 172.20.0.62
+    depends_on:
+      - redis
+    profiles:
+      - development
+    restart: unless-stopped

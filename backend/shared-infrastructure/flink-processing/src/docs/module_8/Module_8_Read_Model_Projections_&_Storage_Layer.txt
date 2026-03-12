@@ -1,0 +1,972 @@
+# =============================================================================
+# Module 8: Read Model Projections & Storage Layer
+# Configuration & Deployment Guide
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Docker Compose Configuration
+# -----------------------------------------------------------------------------
+version: '3.8'
+
+services:
+  # PostgreSQL - Primary operational database
+  postgres:
+    image: postgres:15
+    container_name: hospital-postgres
+    environment:
+      POSTGRES_DB: hospital_db
+      POSTGRES_USER: hospital_user
+      POSTGRES_PASSWORD: hospital_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts/postgres:/docker-entrypoint-initdb.d
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=5MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+
+  # MongoDB - Document store for clinical records
+  mongodb:
+    image: mongo:7
+    container_name: hospital-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: mongopass
+      MONGO_INITDB_DATABASE: hospital
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./init-scripts/mongodb:/docker-entrypoint-initdb.d
+    command: >
+      mongod 
+      --wiredTigerCacheSizeGB 2
+      --replSet rs0
+      --bind_ip_all
+
+  # Elasticsearch - Full-text search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: hospital-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  # ClickHouse - OLAP analytics
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: hospital-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./init-scripts/clickhouse:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      CLICKHOUSE_DB: hospital_analytics
+      CLICKHOUSE_USER: analytics_user
+      CLICKHOUSE_PASSWORD: analytics_pass
+
+  # InfluxDB - Time-series database
+  influxdb:
+    image: influxdb:2.7
+    container_name: hospital-influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: influxpass
+      DOCKER_INFLUXDB_INIT_ORG: hospital
+      DOCKER_INFLUXDB_INIT_BUCKET: vitals_realtime
+      DOCKER_INFLUXDB_INIT_RETENTION: 7d
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: hospital-influx-token
+
+  # Redis - Caching layer
+  redis:
+    image: redis:7-alpine
+    container_name: hospital-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  es_data:
+  clickhouse_data:
+  influxdb_data:
+  redis_data:
+
+# -----------------------------------------------------------------------------
+# Application Configuration (application.yml)
+# -----------------------------------------------------------------------------
+spring:
+  application:
+    name: hospital-read-projections
+  
+  # PostgreSQL Configuration
+  datasource:
+    url: jdbc:postgresql://localhost:5432/hospital_db
+    username: hospital_user
+    password: hospital_pass
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # JPA Configuration
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+
+  # MongoDB Configuration
+  data:
+    mongodb:
+      uri: mongodb://admin:mongopass@localhost:27017/hospital?authSource=admin
+      database: hospital
+      auto-index-creation: true
+
+  # Redis Configuration
+  redis:
+    host: localhost
+    port: 6379
+    timeout: 3000
+    jedis:
+      pool:
+        max-active: 20
+        max-idle: 10
+        min-idle: 5
+
+# Elasticsearch Configuration
+elasticsearch:
+  uris: http://localhost:9200
+  connection-timeout: 10s
+  socket-timeout: 60s
+
+# ClickHouse Configuration
+clickhouse:
+  url: jdbc:clickhouse://localhost:8123/hospital_analytics
+  username: analytics_user
+  password: analytics_pass
+  socket-timeout: 300000
+  connection-timeout: 10000
+
+# InfluxDB Configuration
+influxdb:
+  url: http://localhost:8086
+  token: hospital-influx-token
+  org: hospital
+  bucket: vitals_realtime
+
+# Kafka Streams Configuration
+kafka:
+  bootstrap-servers: localhost:9092
+  streams:
+    application-id: read-projections
+    state-dir: /tmp/kafka-streams
+    num-stream-threads: 4
+    commit-interval-ms: 1000
+    cache-max-bytes-buffering: 10485760
+
+# Custom Application Configuration
+hospital:
+  projections:
+    # Batch sizes for different projectors
+    batch-size:
+      postgres: 100
+      mongodb: 50
+      elasticsearch: 100
+      clickhouse: 500
+    
+    # Flush intervals (milliseconds)
+    flush-interval:
+      postgres: 5000
+      mongodb: 10000
+      elasticsearch: 5000
+      clickhouse: 30000
+    
+    # Enable/disable individual projectors
+    enabled:
+      postgres: true
+      mongodb: true
+      elasticsearch: true
+      clickhouse: true
+      influxdb: true
+      ups-read-model: true
+    
+    # Retry configuration
+    retry:
+      max-attempts: 3
+      backoff-ms: 1000
+      backoff-multiplier: 2
+
+# Monitoring and Management
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus,info
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  health:
+    elasticsearch:
+      enabled: true
+    mongo:
+      enabled: true
+    redis:
+      enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.hospital: DEBUG
+    org.apache.kafka: WARN
+    org.springframework.data.mongodb: DEBUG
+    org.elasticsearch: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# -----------------------------------------------------------------------------
+# Database Initialization Scripts
+# -----------------------------------------------------------------------------
+
+# PostgreSQL Init Script (init-scripts/postgres/01-init.sql)
+---
+-- Create UPS Read Model table
+CREATE TABLE IF NOT EXISTS ups_read_model (
+    patient_id VARCHAR(50) PRIMARY KEY,
+    mrn VARCHAR(50) NOT NULL,
+    name VARCHAR(200),
+    date_of_birth DATE,
+    age INTEGER,
+    gender VARCHAR(10),
+    department VARCHAR(50),
+    room VARCHAR(20),
+    admission_date TIMESTAMP,
+    length_of_stay_hours DECIMAL(10,2),
+    code_status VARCHAR(50),
+    isolation_type VARCHAR(50),
+    allergies JSONB,
+    active_problems JSONB,
+    active_medications JSONB,
+    latest_vitals JSONB,
+    vital_timestamp TIMESTAMP,
+    news2_score INTEGER,
+    qsofa_score INTEGER,
+    sofa_score INTEGER,
+    apache_score INTEGER,
+    combined_acuity_score DECIMAL(5,2),
+    ml_predictions JSONB,
+    active_alerts JSONB,
+    alert_count INTEGER DEFAULT 0,
+    protocol_status JSONB,
+    last_updated TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ups_department ON ups_read_model(department);
+CREATE INDEX IF NOT EXISTS idx_ups_news2 ON ups_read_model(news2_score DESC);
+CREATE INDEX IF NOT EXISTS idx_ups_acuity ON ups_read_model(combined_acuity_score DESC);
+CREATE INDEX IF NOT EXISTS idx_ups_alerts ON ups_read_model(alert_count DESC);
+CREATE INDEX IF NOT EXISTS idx_ups_admission ON ups_read_model(admission_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_ups_allergies_gin ON ups_read_model USING GIN(allergies);
+CREATE INDEX IF NOT EXISTS idx_ups_problems_gin ON ups_read_model USING GIN(active_problems);
+CREATE INDEX IF NOT EXISTS idx_ups_predictions_gin ON ups_read_model USING GIN(ml_predictions);
+CREATE INDEX IF NOT EXISTS idx_ups_active_alerts_gin ON ups_read_model USING GIN(active_alerts);
+
+# MongoDB Init Script (init-scripts/mongodb/01-init.js)
+---
+db = db.getSiblingDB('hospital');
+
+// Create collections
+db.createCollection('clinical_documents');
+db.createCollection('patient_timelines');
+db.createCollection('ml_explanations');
+
+// Create indexes
+db.clinical_documents.createIndex({ patient_id: 1, document_type: 1 });
+db.clinical_documents.createIndex({ timestamp: -1 });
+db.clinical_documents.createIndex({ department: 1, timestamp: -1 });
+db.clinical_documents.createIndex({ 'content.diagnosis': 'text', 'content.notes': 'text' });
+
+db.patient_timelines.createIndex({ patient_id: 1 });
+db.patient_timelines.createIndex({ 'events.timestamp': -1 });
+
+db.ml_explanations.createIndex({ prediction_id: 1 });
+db.ml_explanations.createIndex({ patient_id: 1, timestamp: -1 });
+db.ml_explanations.createIndex({ model_type: 1 });
+
+# ClickHouse Init Script (init-scripts/clickhouse/01-init.sql)
+---
+CREATE DATABASE IF NOT EXISTS hospital_analytics;
+
+CREATE TABLE IF NOT EXISTS hospital_analytics.clinical_events_fact (
+    event_id String,
+    patient_id String,
+    event_type String,
+    event_timestamp DateTime,
+    source_system String,
+    department String,
+    heart_rate Nullable(Int32),
+    systolic_bp Nullable(Int32),
+    diastolic_bp Nullable(Int32),
+    respiratory_rate Nullable(Int32),
+    temperature Nullable(Float32),
+    oxygen_saturation Nullable(Int32),
+    news2_score Nullable(Int32),
+    qsofa_score Nullable(Int32),
+    sofa_score Nullable(Int32),
+    patient_age Nullable(Int32),
+    patient_gender Nullable(String)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(event_timestamp)
+ORDER BY (department, event_timestamp, patient_id)
+TTL event_timestamp + INTERVAL 2 YEAR;
+
+CREATE TABLE IF NOT EXISTS hospital_analytics.ml_predictions_fact (
+    prediction_id String,
+    patient_id String,
+    model_type String,
+    prediction_timestamp DateTime,
+    probability Float64,
+    risk_category String,
+    confidence Float64,
+    department Nullable(String),
+    patient_age Nullable(Int32),
+    inference_time_ms Int64
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(prediction_timestamp)
+ORDER BY (model_type, prediction_timestamp, patient_id)
+TTL prediction_timestamp + INTERVAL 1 YEAR;
+
+CREATE TABLE IF NOT EXISTS hospital_analytics.alerts_fact (
+    alert_id String,
+    patient_id String,
+    alert_type String,
+    severity String,
+    created_at DateTime,
+    acknowledged_at Nullable(DateTime),
+    response_time_seconds Nullable(Int64),
+    department String,
+    shift String,
+    day_of_week String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (department, severity, created_at)
+TTL created_at + INTERVAL 1 YEAR;
+
+# -----------------------------------------------------------------------------
+# Deployment Commands
+# -----------------------------------------------------------------------------
+
+# Start all services
+docker-compose up -d
+
+# Initialize MongoDB replica set
+docker exec -it hospital-mongodb mongosh --eval "rs.initiate()"
+
+# Verify services
+docker-compose ps
+
+# View logs
+docker-compose logs -f [service_name]
+
+# Build and run application
+mvn clean package
+java -jar target/hospital-read-projections.jar
+
+# Health checks
+curl http://localhost:8080/actuator/health
+curl http://localhost:9200/_cluster/health
+curl http://localhost:8123/ping
+
+# -----------------------------------------------------------------------------
+# Performance Tuning
+# -----------------------------------------------------------------------------
+
+# PostgreSQL tuning
+ALTER SYSTEM SET shared_buffers = '512MB';
+ALTER SYSTEM SET effective_cache_size = '2GB';
+ALTER SYSTEM SET work_mem = '5MB';
+SELECT pg_reload_conf();
+
+# MongoDB tuning
+db.adminCommand({ setParameter: 1, internalQueryExecMaxBlockingSortBytes: 335544320 })
+
+# ClickHouse tuning
+SET max_memory_usage = 10000000000;
+SET max_threads = 8;
+
+# Elasticsearch tuning
+PUT /_cluster/settings
+{
+  "persistent": {
+    "indices.memory.index_buffer_size": "30%"
+  }
+}
+
+
+
+
+package com.hospital.module8.testing;
+
+import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.testcontainers.containers.*;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.util.*;
+import java.util.concurrent.*;
+
+/**
+ * Integration tests for Read Model Projectors
+ */
+@SpringBootTest
+@Testcontainers
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+public class ReadModelProjectionTests {
+    
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15")
+        .withDatabaseName("hospital_test")
+        .withUsername("test")
+        .withPassword("test");
+    
+    @Container
+    static MongoDBContainer mongodb = new MongoDBContainer("mongo:7");
+    
+    @Container
+    static GenericContainer<?> elasticsearch = new GenericContainer<>("docker.elastic.co/elasticsearch/elasticsearch:8.11.0")
+        .withEnv("discovery.type", "single-node")
+        .withEnv("xpack.security.enabled", "false")
+        .withExposedPorts(9200);
+    
+    @Container
+    static ClickHouseContainer clickhouse = new ClickHouseContainer("clickhouse/clickhouse-server:23.8");
+    
+    @Autowired
+    private PostgresProjector postgresProjector;
+    
+    @Autowired
+    private MongoDBProjector mongoProjector;
+    
+    @Autowired
+    private ElasticsearchProjector esProjector;
+    
+    @Autowired
+    private ClickHouseProjector clickhouseProjector;
+    
+    @Autowired
+    private UPSReadModelProjector upsProjector;
+    
+    // =========================================================================
+    // Test 1: PostgreSQL Projector
+    // =========================================================================
+    
+    @Test
+    @Order(1)
+    @DisplayName("Test PostgreSQL event storage")
+    void testPostgresEventStorage() throws Exception {
+        // Create test event
+        EnrichedEvent event = createTestEvent();
+        
+        // Project to PostgreSQL
+        postgresProjector.projectEvent(event);
+        
+        // Verify storage
+        Optional<EnrichedEvent> stored = postgresProjector.getEvent(event.getEventId());
+        
+        Assertions.assertTrue(stored.isPresent());
+        Assertions.assertEquals(event.getPatientId(), stored.get().getPatientId());
+        Assertions.assertEquals(event.getHeartRate(), stored.get().getHeartRate());
+    }
+    
+    @Test
+    @Order(2)
+    @DisplayName("Test PostgreSQL batch insert performance")
+    void testPostgresBatchPerformance() throws Exception {
+        // Generate 10,000 events
+        List<EnrichedEvent> events = generateTestEvents(10000);
+        
+        long startTime = System.currentTimeMillis();
+        
+        // Batch insert
+        postgresProjector.batchInsertEvents(events);
+        
+        long duration = System.currentTimeMillis() - startTime;
+        
+        System.out.println("PostgreSQL batch insert of 10,000 events: " + duration + "ms");
+        
+        // Should complete in < 5 seconds
+        Assertions.assertTrue(duration < 5000, 
+            "Batch insert took too long: " + duration + "ms");
+    }
+    
+    // =========================================================================
+    // Test 2: MongoDB Projector
+    // =========================================================================
+    
+    @Test
+    @Order(3)
+    @DisplayName("Test MongoDB document storage")
+    void testMongoDBDocumentStorage() throws Exception {
+        // Create clinical document
+        ClinicalDocument doc = createTestDocument();
+        
+        // Project to MongoDB
+        mongoProjector.projectDocument(doc);
+        
+        // Verify storage
+        Optional<ClinicalDocument> stored = mongoProjector.getDocument(doc.getDocumentId());
+        
+        Assertions.assertTrue(stored.isPresent());
+        Assertions.assertEquals(doc.getPatientId(), stored.get().getPatientId());
+    }
+    
+    @Test
+    @Order(4)
+    @DisplayName("Test MongoDB patient timeline aggregation")
+    void testMongoDBTimelineAggregation() throws Exception {
+        String patientId = "P12345";
+        
+        // Create multiple events for patient
+        List<EnrichedEvent> events = generateEventsForPatient(patientId, 100);
+        
+        // Project events
+        events.forEach(mongoProjector::projectEventToTimeline);
+        
+        // Get timeline
+        Optional<PatientTimeline> timeline = mongoProjector.getPatientTimeline(patientId);
+        
+        Assertions.assertTrue(timeline.isPresent());
+        Assertions.assertEquals(100, timeline.get().getEvents().size());
+    }
+    
+    // =========================================================================
+    // Test 3: Elasticsearch Projector
+    // =========================================================================
+    
+    @Test
+    @Order(5)
+    @DisplayName("Test Elasticsearch indexing")
+    void testElasticsearchIndexing() throws Exception {
+        // Create patient record
+        PatientRecord record = createTestPatientRecord();
+        
+        // Index to Elasticsearch
+        esProjector.indexPatientRecord(record);
+        
+        // Wait for indexing
+        Thread.sleep(1000);
+        
+        // Search for patient
+        List<PatientRecord> results = esProjector.searchPatients(
+            record.getMrn(), "mrn");
+        
+        Assertions.assertFalse(results.isEmpty());
+        Assertions.assertEquals(record.getMrn(), results.get(0).getMrn());
+    }
+    
+    @Test
+    @Order(6)
+    @DisplayName("Test Elasticsearch full-text search")
+    void testElasticsearchFullTextSearch() throws Exception {
+        // Create documents with different diagnoses
+        esProjector.indexClinicalDocument(
+            createDocumentWithDiagnosis("Sepsis with multiorgan failure"));
+        esProjector.indexClinicalDocument(
+            createDocumentWithDiagnosis("Pneumonia with respiratory failure"));
+        esProjector.indexClinicalDocument(
+            createDocumentWithDiagnosis("Cardiac arrest"));
+        
+        Thread.sleep(1000);
+        
+        // Search for "sepsis"
+        List<ClinicalDocument> results = esProjector.searchClinicalDocuments("sepsis");
+        
+        Assertions.assertFalse(results.isEmpty());
+        Assertions.assertTrue(
+            results.get(0).getContent().get("diagnosis").toString()
+                .toLowerCase().contains("sepsis")
+        );
+    }
+    
+    // =========================================================================
+    // Test 4: ClickHouse Projector
+    // =========================================================================
+    
+    @Test
+    @Order(7)
+    @DisplayName("Test ClickHouse analytics insertion")
+    void testClickHouseInsertion() throws Exception {
+        // Create events
+        List<EnrichedEvent> events = generateTestEvents(1000);
+        
+        // Insert to ClickHouse
+        clickhouseProjector.batchInsertEvents(events);
+        
+        // Query count
+        long count = clickhouseProjector.getEventCount();
+        
+        Assertions.assertTrue(count >= 1000);
+    }
+    
+    @Test
+    @Order(8)
+    @DisplayName("Test ClickHouse aggregation queries")
+    void testClickHouseAggregation() throws Exception {
+        // Insert events with known values
+        List<EnrichedEvent> events = generateEventsWithKnownMetrics();
+        clickhouseProjector.batchInsertEvents(events);
+        
+        // Query average heart rate by department
+        Map<String, Double> avgHRByDept = 
+            clickhouseProjector.getAverageHeartRateByDepartment();
+        
+        Assertions.assertFalse(avgHRByDept.isEmpty());
+        Assertions.assertTrue(avgHRByDept.containsKey("ICU"));
+    }
+    
+    // =========================================================================
+    // Test 5: UPS Read Model
+    // =========================================================================
+    
+    @Test
+    @Order(9)
+    @DisplayName("Test UPS read model projection")
+    void testUPSProjection() throws Exception {
+        String patientId = "P99999";
+        
+        // Create and project enriched event
+        EnrichedEvent event = createTestEvent(patientId);
+        upsProjector.updateUPSFromEvent(event);
+        
+        // Create and project scored event
+        ScoredEvent scoredEvent = createTestScoredEvent(patientId);
+        upsProjector.updateUPSScores(scoredEvent);
+        
+        // Create and project ML prediction
+        MLPrediction prediction = createTestMLPrediction(patientId);
+        upsProjector.updateUPSMLPredictions(prediction);
+        
+        // Get UPS
+        Optional<UPSReadModel> ups = upsProjector.getUPS(patientId);
+        
+        Assertions.assertTrue(ups.isPresent());
+        Assertions.assertEquals(patientId, ups.get().getPatientId());
+        Assertions.assertNotNull(ups.get().getLatestVitals());
+        Assertions.assertNotNull(ups.get().getNews2Score());
+        Assertions.assertNotNull(ups.get().getMlPredictions());
+    }
+    
+    @Test
+    @Order(10)
+    @DisplayName("Test UPS high-acuity patient query")
+    void testUPSHighAcuityQuery() throws Exception {
+        // Create patients with different acuity scores
+        for (int i = 0; i < 5; i++) {
+            String patientId = "P_HIGH_" + i;
+            createAndProjectHighAcuityPatient(patientId, 80.0 + i);
+        }
+        
+        for (int i = 0; i < 5; i++) {
+            String patientId = "P_LOW_" + i;
+            createAndProjectHighAcuityPatient(patientId, 20.0 + i);
+        }
+        
+        // Query high-acuity patients
+        List<UPSReadModel> highAcuity = 
+            upsProjector.getHighAcuityPatients("ICU", 70);
+        
+        Assertions.assertTrue(highAcuity.size() >= 5);
+        Assertions.assertTrue(
+            highAcuity.get(0).getCombinedAcuityScore() >= 70.0
+        );
+    }
+    
+    // =========================================================================
+    // Performance Tests
+    // =========================================================================
+    
+    @Test
+    @Order(11)
+    @DisplayName("Test end-to-end projection latency")
+    void testEndToEndLatency() throws Exception {
+        // Create event
+        EnrichedEvent event = createTestEvent();
+        
+        long startTime = System.nanoTime();
+        
+        // Project to all stores
+        CompletableFuture<Void> postgres = 
+            CompletableFuture.runAsync(() -> postgresProjector.projectEvent(event));
+        CompletableFuture<Void> mongo = 
+            CompletableFuture.runAsync(() -> mongoProjector.projectEventToTimeline(event));
+        CompletableFuture<Void> es = 
+            CompletableFuture.runAsync(() -> esProjector.indexEvent(event));
+        CompletableFuture<Void> clickhouse = 
+            CompletableFuture.runAsync(() -> clickhouseProjector.insertEvent(event));
+        
+        // Wait for all
+        CompletableFuture.allOf(postgres, mongo, es, clickhouse).join();
+        
+        long duration = (System.nanoTime() - startTime) / 1_000_000; // ms
+        
+        System.out.println("End-to-end projection latency: " + duration + "ms");
+        
+        // Should complete in < 500ms
+        Assertions.assertTrue(duration < 500, 
+            "Projection latency too high: " + duration + "ms");
+    }
+    
+    @Test
+    @Order(12)
+    @DisplayName("Test throughput under load")
+    void testThroughputUnderLoad() throws Exception {
+        int eventCount = 10000;
+        List<EnrichedEvent> events = generateTestEvents(eventCount);
+        
+        long startTime = System.currentTimeMillis();
+        
+        // Process events concurrently
+        ExecutorService executor = Executors.newFixedThreadPool(10);
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        
+        for (EnrichedEvent event : events) {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                postgresProjector.projectEvent(event);
+                mongoProjector.projectEventToTimeline(event);
+            }, executor);
+            futures.add(future);
+        }
+        
+        // Wait for completion
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        
+        long duration = System.currentTimeMillis() - startTime;
+        double throughput = (eventCount * 1000.0) / duration; // events/sec
+        
+        System.out.println("Throughput: " + throughput + " events/sec");
+        
+        // Should process at least 500 events/sec
+        Assertions.assertTrue(throughput > 500, 
+            "Throughput too low: " + throughput + " events/sec");
+        
+        executor.shutdown();
+    }
+    
+    // =========================================================================
+    // Data Quality Tests
+    // =========================================================================
+    
+    @Test
+    @Order(13)
+    @DisplayName("Test data consistency across stores")
+    void testDataConsistency() throws Exception {
+        String patientId = "P_CONSISTENCY_TEST";
+        EnrichedEvent event = createTestEvent(patientId);
+        
+        // Project to all stores
+        postgresProjector.projectEvent(event);
+        mongoProjector.projectEventToTimeline(event);
+        upsProjector.updateUPSFromEvent(event);
+        
+        Thread.sleep(1000);
+        
+        // Retrieve from all stores
+        Optional<EnrichedEvent> pgEvent = postgresProjector.getEvent(event.getEventId());
+        Optional<PatientTimeline> timeline = mongoProjector.getPatientTimeline(patientId);
+        Optional<UPSReadModel> ups = upsProjector.getUPS(patientId);
+        
+        // Verify consistency
+        Assertions.assertTrue(pgEvent.isPresent());
+        Assertions.assertTrue(timeline.isPresent());
+        Assertions.assertTrue(ups.isPresent());
+        
+        Assertions.assertEquals(
+            event.getHeartRate(), 
+            pgEvent.get().getHeartRate()
+        );
+        Assertions.assertEquals(
+            event.getHeartRate(), 
+            ((Map<String, Object>)ups.get().getLatestVitals().get("heart_rate"))
+        );
+    }
+    
+    // =========================================================================
+    // Helper Methods
+    // =========================================================================
+    
+    private EnrichedEvent createTestEvent() {
+        return createTestEvent("P" + UUID.randomUUID().toString().substring(0, 8));
+    }
+    
+    private EnrichedEvent createTestEvent(String patientId) {
+        EnrichedEvent event = new EnrichedEvent();
+        event.setEventId(UUID.randomUUID().toString());
+        event.setPatientId(patientId);
+        event.setEventType("VITAL_SIGNS");
+        event.setTimestamp(System.currentTimeMillis());
+        event.setHeartRate(75);
+        event.setSystolicBP(120);
+        event.setDiastolicBP(80);
+        event.setRespiratoryRate(16);
+        event.setTemperature(98.6);
+        event.setOxygenSaturation(98);
+        event.setDepartment("ICU");
+        event.setRoom("ICU-101");
+        return event;
+    }
+    
+    private List<EnrichedEvent> generateTestEvents(int count) {
+        List<EnrichedEvent> events = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            events.add(createTestEvent());
+        }
+        return events;
+    }
+    
+    private ClinicalDocument createTestDocument() {
+        ClinicalDocument doc = new ClinicalDocument();
+        doc.setDocumentId(UUID.randomUUID().toString());
+        doc.setPatientId("P12345");
+        doc.setDocumentType("PROGRESS_NOTE");
+        doc.setTimestamp(System.currentTimeMillis());
+        
+        Map<String, Object> content = new HashMap<>();
+        content.put("diagnosis", "Pneumonia");
+        content.put("notes", "Patient improving on antibiotics");
+        doc.setContent(content);
+        
+        return doc;
+    }
+    
+    private ScoredEvent createTestScoredEvent(String patientId) {
+        ScoredEvent event = new ScoredEvent();
+        event.setPatientId(patientId);
+        event.setNews2Score(5);
+        event.setQsofaScore(1);
+        event.setSofaScore(3);
+        event.setCombinedAcuityScore(65.0);
+        return event;
+    }
+    
+    private MLPrediction createTestMLPrediction(String patientId) {
+        MLPrediction pred = new MLPrediction();
+        pred.setPredictionId(UUID.randomUUID().toString());
+        pred.setPatientId(patientId);
+        pred.setModelType(ModelType.SEPSIS_ONSET);
+        pred.setPrediction(0.35);
+        pred.setConfidence(0.82);
+        pred.setRiskCategory(RiskCategory.MEDIUM);
+        return pred;
+    }
+}
+
+/**
+ * Monitoring and Metrics Collection
+ */
+@Service
+public class ProjectionMetricsCollector {
+    
+    private final MeterRegistry meterRegistry;
+    
+    public ProjectionMetricsCollector(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+    
+    /**
+     * Record projection latency
+     */
+    public void recordProjectionLatency(String projector, long latencyMs) {
+        Timer.builder("projection.latency")
+            .tag("projector", projector)
+            .register(meterRegistry)
+            .record(latencyMs, TimeUnit.MILLISECONDS);
+    }
+    
+    /**
+     * Record projection throughput
+     */
+    public void recordProjectionThroughput(String projector, int eventCount) {
+        Counter.builder("projection.throughput")
+            .tag("projector", projector)
+            .register(meterRegistry)
+            .increment(eventCount);
+    }
+    
+    /**
+     * Record projection errors
+     */
+    public void recordProjectionError(String projector, String errorType) {
+        Counter.builder("projection.errors")
+            .tag("projector", projector)
+            .tag("error_type", errorType)
+            .register(meterRegistry)
+            .increment();
+    }
+    
+    /**
+     * Get current lag
+     */
+    public Gauge recordProjectionLag(String projector, Supplier<Long> lagSupplier) {
+        return Gauge.builder("projection.lag", lagSupplier)
+            .tag("projector", projector)
+            .register(meterRegistry);
+    }
+}

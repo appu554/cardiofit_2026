@@ -1,0 +1,357 @@
+# Docker Compose for KB7 Neo4j Dual-Stream & Service Runtime Layer
+# Extends existing infrastructure with runtime components
+
+version: '3.8'
+
+services:
+  # Neo4j with dual database support for patient and semantic streams
+  neo4j:
+    image: neo4j:5.12-enterprise
+    container_name: kb7-neo4j
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-kb7password}
+      NEO4J_dbms_memory_heap_max__size: 4G
+      NEO4J_dbms_memory_pagecache_size: 4G
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+      NEO4J_dbms_default_database: patient_data
+      NEO4J_dbms_security_auth__enabled: "true"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-conf:/conf
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "${NEO4J_PASSWORD:-kb7password}", "RETURN 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # GraphDB for OWL reasoning (aligned with KB7 Phase 2)
+  graphdb:
+    image: ontotext/graphdb:11.1.1
+    container_name: kb7-graphdb
+    environment:
+      GDB_HEAP_SIZE: 4G
+      GDB_MIN_MEM: 2G
+      GDB_MAX_MEM: 4G
+      GDB_JAVA_OPTS: "-Xmx4g -Xms2g"
+    volumes:
+      - graphdb-data:/opt/graphdb/home
+      - graphdb-import:/opt/graphdb/import
+    ports:
+      - "7200:7200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # ClickHouse for high-performance analytics
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: kb7-clickhouse
+    environment:
+      CLICKHOUSE_DB: kb7_analytics
+      CLICKHOUSE_USER: kb7
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-kb7password}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+      - ./runtime-layer/clickhouse-runtime/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # Redis L2 Cache
+  redis-l2:
+    image: redis:7-alpine
+    container_name: kb7-redis-l2
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-l2-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # Redis L3 Cache
+  redis-l3:
+    image: redis:7-alpine
+    container_name: kb7-redis-l3
+    command: redis-server --appendonly yes --maxmemory 4gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-l3-data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # Apache Kafka for event streaming
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kb7-kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: kb7-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    ports:
+      - "2181:2181"
+    networks:
+      - kb7-runtime
+
+  # Query Router Service
+  query-router:
+    build:
+      context: ./runtime-layer
+      dockerfile: Dockerfile.query-router
+    container_name: kb7-query-router
+    environment:
+      POSTGRES_URL: postgresql://kb_test_user:kb_test_password@kb7-postgres-test:5432/clinical_governance_test
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      NEO4J_URL: bolt://neo4j:7687
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-kb7password}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-kb7password}
+      GRAPHDB_URL: http://graphdb:7200
+      REDIS_L2_URL: redis://redis-l2:6379/0
+      REDIS_L3_URL: redis://redis-l3:6379/0
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      graphdb:
+        condition: service_healthy
+      redis-l2:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # Adapter Microservice
+  adapter-microservice:
+    build:
+      context: ./runtime-layer
+      dockerfile: Dockerfile.adapter
+    container_name: kb7-adapter
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      NEO4J_URL: bolt://neo4j:7687
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-kb7password}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-kb7password}
+      GRAPHDB_URL: http://graphdb:7200
+      POSTGRES_URL: postgresql://kb_test_user:kb_test_password@kb7-postgres-test:5432/clinical_governance_test
+    depends_on:
+      kafka:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      graphdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8081/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # CDC Cache Warmer
+  cdc-cache-warmer:
+    build:
+      context: ./runtime-layer
+      dockerfile: Dockerfile.cache-warmer
+    container_name: kb7-cache-warmer
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_L2_URL: redis://redis-l2:6379/0
+      REDIS_L3_URL: redis://redis-l3:6379/0
+      NEO4J_URL: bolt://neo4j:7687
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-kb7password}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-kb7password}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis-l2:
+        condition: service_healthy
+      redis-l3:
+        condition: service_healthy
+      adapter-microservice:
+        condition: service_healthy
+    networks:
+      - kb7-runtime
+
+  # Event Bus Orchestrator
+  event-bus-orchestrator:
+    build:
+      context: ./runtime-layer
+      dockerfile: Dockerfile.event-bus
+    container_name: kb7-event-bus
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8082/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - kb7-runtime
+
+  # Medication Service Runtime
+  medication-runtime:
+    build:
+      context: ./runtime-layer
+      dockerfile: Dockerfile.medication-runtime
+    container_name: kb7-medication-runtime
+    environment:
+      QUERY_ROUTER_URL: http://query-router:8080
+      EVENT_BUS_URL: http://event-bus-orchestrator:8082
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      query-router:
+        condition: service_healthy
+      event-bus-orchestrator:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    networks:
+      - kb7-runtime
+
+  # Monitoring and Observability
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: kb7-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - kb7-runtime
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: kb7-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    networks:
+      - kb7-runtime
+
+# Network configuration
+networks:
+  kb7-runtime:
+    driver: bridge
+    name: kb7-runtime-network
+
+# Volume definitions
+volumes:
+  neo4j-data:
+    driver: local
+  neo4j-logs:
+    driver: local
+  neo4j-conf:
+    driver: local
+  graphdb-data:
+    driver: local
+  graphdb-import:
+    driver: local
+  clickhouse-data:
+    driver: local
+  clickhouse-logs:
+    driver: local
+  redis-l2-data:
+    driver: local
+  redis-l3-data:
+    driver: local
+  kafka-data:
+    driver: local
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

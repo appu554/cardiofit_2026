@@ -1,0 +1,352 @@
+version: '3.8'
+
+# Healthcare-grade monitoring stack for Medication Service V2
+# Includes Prometheus, Grafana, Jaeger, Alertmanager, and supporting services
+
+services:
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: medication-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/monitoring/alerting/prometheus-rules.yml:/etc/prometheus/rules/medication-service.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--storage.tsdb.retention.size=10GB'
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=metrics"
+      
+  # Grafana for visualization and dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: medication-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/monitoring/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+      - GF_FEATURE_TOGGLES_ENABLE=publicDashboards
+      - GF_SERVER_DOMAIN=grafana.medication-service.local
+      # Healthcare-specific settings
+      - GF_SECURITY_DATA_SOURCE_PROXY_WHITELIST=prometheus:9090,jaeger:16686
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_LOG_LEVEL=warn
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=visualization"
+      
+  # Alertmanager for alert routing and notification
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: medication-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./config/monitoring/alerting/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+      - '--web.route-prefix=/'
+      - '--cluster.listen-address=0.0.0.0:9094'
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=alerting"
+      
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.49
+    container_name: medication-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Jaeger collector HTTP
+      - "6831:6831/udp"  # Jaeger agent UDP
+      - "6832:6832/udp"  # Jaeger agent UDP
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - SPAN_STORAGE_TYPE=memory
+      - COLLECTOR_OTLP_ENABLED=true
+      # Healthcare-specific settings
+      - LOG_LEVEL=warn
+      - ADMIN_HTTP_HOST_PORT=:16687
+    volumes:
+      - jaeger_data:/tmp
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:16686/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=tracing"
+      
+  # OpenTelemetry Collector for telemetry data collection
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.86.0
+    container_name: medication-otel-collector
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8889:8889"   # Prometheus metrics
+    volumes:
+      - ./config/monitoring/otel/otel-collector.yml:/etc/otel-collector.yml:ro
+    command: ["--config=/etc/otel-collector.yml"]
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+      - jaeger
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:13133/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=telemetry"
+      
+  # Elasticsearch for log aggregation (healthcare compliance)
+  elasticsearch:
+    image: elasticsearch:8.9.0
+    container_name: medication-elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - network.host=0.0.0.0
+      # Healthcare-specific settings
+      - xpack.monitoring.collection.enabled=true
+      - cluster.routing.allocation.disk.threshold_enabled=true
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -E 'green|yellow'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=logs"
+      
+  # Kibana for log visualization
+  kibana:
+    image: kibana:8.9.0
+    container_name: medication-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_HOST=0.0.0.0
+      # Healthcare-specific settings
+      - XPACK_SECURITY_ENABLED=false
+      - TELEMETRY_ENABLED=false
+      - NEWSFEED_ENABLED=false
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+    networks:
+      - monitoring
+    depends_on:
+      - elasticsearch
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -E '\"overall\":{\"level\":\"available\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=log-visualization"
+      
+  # Redis for caching monitoring data (if needed)
+  redis-monitoring:
+    image: redis:7.2-alpine
+    container_name: medication-redis-monitoring
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_monitoring_data:/data
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=cache"
+      
+  # Node Exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: medication-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=system-metrics"
+      
+  # cAdvisor for container metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: medication-cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "healthcare.service=monitoring"
+      - "healthcare.component=container-metrics"
+
+# Networks
+networks:
+  monitoring:
+    driver: bridge
+    name: medication-service-monitoring
+    labels:
+      - "healthcare.network=monitoring"
+      - "healthcare.compliance=hipaa"
+
+# Volumes for persistent data
+volumes:
+  prometheus_data:
+    driver: local
+    labels:
+      - "healthcare.data=metrics"
+      - "healthcare.retention=30d"
+      
+  grafana_data:
+    driver: local
+    labels:
+      - "healthcare.data=dashboards"
+      - "healthcare.retention=365d"
+      
+  alertmanager_data:
+    driver: local
+    labels:
+      - "healthcare.data=alerts"
+      - "healthcare.retention=7d"
+      
+  jaeger_data:
+    driver: local
+    labels:
+      - "healthcare.data=traces"
+      - "healthcare.retention=7d"
+      
+  elasticsearch_data:
+    driver: local
+    labels:
+      - "healthcare.data=logs"
+      - "healthcare.retention=2555d"  # 7 years for healthcare compliance
+      
+  kibana_data:
+    driver: local
+    labels:
+      - "healthcare.data=log-config"
+      - "healthcare.retention=365d"
+      
+  redis_monitoring_data:
+    driver: local
+    labels:
+      - "healthcare.data=cache"
+      - "healthcare.retention=7d"
+
+# Health check configurations
+x-healthcheck-config: &default-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+
+# Resource limits for healthcare environment
+x-resource-limits: &default-resources
+  deploy:
+    resources:
+      limits:
+        memory: 1GB
+        cpus: '0.5'
+      reservations:
+        memory: 512MB
+        cpus: '0.25'

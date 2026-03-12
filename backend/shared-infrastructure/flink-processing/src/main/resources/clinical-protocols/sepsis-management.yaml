@@ -1,0 +1,1021 @@
+# ============================================================
+# SEPSIS MANAGEMENT BUNDLE - CDS-COMPLIANT ENHANCED VERSION
+# ============================================================
+# Clinical Guideline: Surviving Sepsis Campaign 2021 (SSC 2021)
+# Evidence Level: STRONG (GRADE 1B-1C)
+# Last Updated: 2025-10-21
+# ============================================================
+
+# ============================================================
+# SECTION 1: PROTOCOL IDENTIFICATION
+# ============================================================
+protocol_id: "SEPSIS-BUNDLE-001"
+name: "Sepsis Management Bundle - Hour-1 and Hour-3 Bundles"
+category: "INFECTIOUS"
+specialty: "CRITICAL_CARE"
+version: "2.0"
+last_updated: "2025-10-21"
+source: "Surviving Sepsis Campaign 2021 Guidelines"
+
+# Required validation fields
+activation_criteria: "See trigger_criteria section"
+priority_determination: "HIGH"
+
+# ============================================================
+# SECTION 2: TRIGGER CRITERIA
+# ============================================================
+# Auto-activation based on SSC 2021 sepsis recognition criteria
+trigger_criteria:
+  match_logic: "ANY_OF"  # Protocol triggers if ANY condition met
+
+  conditions:
+    # Condition 1: Lactate elevation AND organ dysfunction
+    - condition_id: "SEPSIS-TRIG-001"
+      description: "Elevated lactate with hypoperfusion signs"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "lactate"
+          operator: ">="
+          threshold: 2.0
+          unit: "mmol/L"
+          source: "lab_results"
+
+        - condition_id: "SEPSIS-TRIG-001-ORGAN"
+          match_logic: "ANY_OF"
+          conditions:
+            - parameter: "systolic_bp"
+              operator: "<"
+              threshold: 90
+              unit: "mmHg"
+              source: "vital_signs"
+
+            - parameter: "mean_arterial_pressure"
+              operator: "<"
+              threshold: 65
+              unit: "mmHg"
+              source: "vital_signs"
+
+        - parameter: "infection_suspected"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+    # Condition 2: qSOFA score indicating organ dysfunction
+    - condition_id: "SEPSIS-TRIG-002"
+      description: "Quick SOFA score >= 2 with infection"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "qsofa_score"
+          operator: ">="
+          threshold: 2
+          source: "clinical_assessment"
+
+        - parameter: "infection_suspected"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+    # Condition 3: SIRS criteria with suspected infection
+    - condition_id: "SEPSIS-TRIG-003"
+      description: "SIRS >= 2 criteria with suspected infection"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "sirs_score"
+          operator: ">="
+          threshold: 2
+          source: "clinical_assessment"
+
+        - parameter: "infection_suspected"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+# ============================================================
+# SECTION 3: CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.85  # Strong evidence base (SSC 2021)
+
+  modifiers:
+    - modifier_id: "SEPSIS-CONF-001"
+      description: "Severe lactate elevation increases confidence"
+      condition:
+        parameter: "lactate"
+        operator: ">="
+        threshold: 4.0
+        unit: "mmol/L"
+      adjustment: 0.10
+
+    - modifier_id: "SEPSIS-CONF-002"
+      description: "Elderly patients at higher risk"
+      condition:
+        parameter: "age"
+        operator: ">="
+        threshold: 65
+        unit: "years"
+      adjustment: 0.05
+
+    - modifier_id: "SEPSIS-CONF-003"
+      description: "Leukocytosis supports sepsis diagnosis"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "wbc"
+            operator: ">"
+            threshold: 12000
+            unit: "cells/mm3"
+          - parameter: "wbc"
+            operator: "<"
+            threshold: 4000
+            unit: "cells/mm3"
+      adjustment: 0.08
+
+    - modifier_id: "SEPSIS-CONF-004"
+      description: "High NEWS2 score indicates severity"
+      condition:
+        parameter: "news2_score"
+        operator: ">="
+        threshold: 7
+      adjustment: 0.10
+
+    - modifier_id: "SEPSIS-CONF-005"
+      description: "Immunocompromised status increases risk"
+      condition:
+        parameter: "immunosuppressed"
+        operator: "=="
+        threshold: true
+      adjustment: 0.07
+
+  activation_threshold: 0.70
+
+# ============================================================
+# SECTION 4: EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "Surviving Sepsis Campaign Guidelines 2021"
+  guideline_version: "SSC 2021"
+  publication_date: "2021-11"
+  evidence_level: "STRONG"  # GRADE 1B-1C for most recommendations
+
+  key_citations:
+    - citation_id: "SSC-2021-MAIN"
+      authors: "Evans L, Rhodes A, Alhazzani W, et al."
+      title: "Surviving Sepsis Campaign: International Guidelines for Management of Sepsis and Septic Shock 2021"
+      journal: "Intensive Care Medicine"
+      year: 2021
+      pmid: "34599691"
+      doi: "10.1007/s00134-021-06506-y"
+
+    - citation_id: "KUMAR-ANTIBIOTIC-DELAY"
+      authors: "Kumar A, Roberts D, Wood KE, et al."
+      title: "Duration of hypotension before initiation of effective antimicrobial therapy is the critical determinant of survival in human septic shock"
+      journal: "Critical Care Medicine"
+      year: 2006
+      pmid: "16625125"
+      doi: "10.1097/01.CCM.0000217961.75225.E9"
+
+  last_review_date: "2024-06-01"
+  next_review_date: "2026-06-01"
+
+# ============================================================
+# SECTION 5: ACTIONS
+# ============================================================
+actions:
+  # ========== DIAGNOSTIC: Blood Cultures ==========
+  - action_id: "SEPSIS-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+      sequence: "BEFORE"
+      reference_action: "SEPSIS-ACT-004"  # Must be before antibiotics
+
+    diagnostic:
+      test_name: "Blood cultures x 2"
+      test_code: "LOINC-600-7"
+      sample_type: "blood"
+      number_of_samples: 2
+      collection_sites: ["peripheral_site_1", "peripheral_site_2"]
+      urgency: "STAT"
+      instructions: "Draw from 2 separate peripheral sites using aseptic chlorhexidine prep. Collect 8-10 mL per bottle (aerobic and anaerobic). MUST collect before antibiotic administration."
+
+      repeat_testing:
+        repeat_interval_hours: 48
+        repeat_condition:
+          parameter: "persistent_fever_or_bacteremia"
+          operator: "=="
+          threshold: true
+
+    # GUIDELINE INTEGRATION
+    guideline_reference: "GUIDE-SSC-2021"
+    recommendation_id: "SSC-2021-REC-001"
+    evidence_quality: "MODERATE"
+    recommendation_strength: "STRONG"
+    class_of_recommendation: "CLASS_I"
+    level_of_evidence: "B-NR"
+    clinical_rationale: "Blood cultures obtained before antibiotic administration enable targeted therapy and improve antimicrobial stewardship."
+    citation_pmids:
+      - "34599691"
+      - "16625125"
+
+  # ========== DIAGNOSTIC: Lactate ==========
+  - action_id: "SEPSIS-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "Serum lactate"
+      test_code: "LOINC-2524-7"
+      sample_type: "blood"
+      urgency: "STAT"
+      instructions: "STAT lactate measurement for sepsis severity assessment and resuscitation guidance. Goal: normalize to <2.0 mmol/L within 6 hours."
+
+      repeat_testing:
+        repeat_interval_hours: 2
+        repeat_condition:
+          parameter: "lactate"
+          operator: ">="
+          threshold: 2.0
+
+    # GUIDELINE INTEGRATION
+    guideline_reference: "GUIDE-SSC-2021"
+    recommendation_id: "SSC-2021-REC-002"
+    evidence_quality: "MODERATE"
+    recommendation_strength: "STRONG"
+    class_of_recommendation: "CLASS_I"
+    level_of_evidence: "B-R"
+    clinical_rationale: "Lactate elevation indicates tissue hypoperfusion and guides resuscitation. Serial lactate clearance correlates with improved outcomes."
+    citation_pmids:
+      - "34599691"
+      - "16625125"
+
+  # ========== DIAGNOSTIC: CBC and CMP ==========
+  - action_id: "SEPSIS-ACT-003"
+    type: "DIAGNOSTIC"
+    priority: "HIGH"
+    sequence_number: 3
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "Complete blood count with differential and comprehensive metabolic panel"
+      test_code: "LOINC-CBC-CMP"
+      sample_type: "blood"
+      urgency: "STAT"
+      instructions: "Assess for leukocytosis/leukopenia, thrombocytopenia, organ dysfunction (creatinine elevation), and electrolyte abnormalities."
+
+  # ========== MEDICATION: Broad-Spectrum Antibiotics with Selection Algorithm ==========
+  - action_id: "SEPSIS-ACT-004"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60  # Hour-1 bundle
+      sequence: "AFTER"
+      reference_action: "SEPSIS-ACT-001"  # After blood cultures
+
+    # Enhanced medication selection with algorithm
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        # Criteria 1: Standard coverage (no contraindications)
+        - criteria_id: "NO_PENICILLIN_ALLERGY"
+          description: "First-line empiric broad-spectrum coverage for sepsis of unknown source"
+
+          condition:
+            parameter: "allergies"
+            operator: "NOT_CONTAINS"
+            threshold: "penicillin"
+
+          primary_medication:
+            name: "Piperacillin-Tazobactam"
+            generic_name: "Piperacillin-Tazobactam"
+            dose: "4.5"
+            dose_unit: "grams"
+            route: "IV"
+            frequency: "q6h"
+            duration: "5-7 days (de-escalate based on culture results)"
+            administration_instructions: "Infuse over 30 minutes using dedicated IV line. Covers Gram-positive, Gram-negative, and anaerobes."
+
+          alternative_medication:
+            name: "Meropenem"
+            dose: "1"
+            dose_unit: "grams"
+            route: "IV"
+            frequency: "q8h"
+            indication: "Severe penicillin allergy (Note: 1% cross-reactivity risk)"
+            administration_instructions: "Carbapenem alternative for beta-lactam allergy. Infuse over 30 minutes."
+
+        # Criteria 2: Renal dose adjustment
+        - criteria_id: "RENAL_IMPAIRMENT"
+          description: "Dose adjustment for impaired renal function (eGFR <40 mL/min)"
+
+          condition:
+            parameter: "creatinine_clearance"
+            operator: "<"
+            threshold: 40.0
+            unit: "mL/min"
+
+          primary_medication:
+            name: "Piperacillin-Tazobactam (renal-adjusted)"
+            dose: "2.25"
+            dose_unit: "grams"
+            route: "IV"
+            frequency: "q8h"
+            dose_adjustment_rationale: "CrCl <40 mL/min requires dose reduction to prevent accumulation"
+            administration_instructions: "Monitor renal function daily. Adjust dose based on CrCl: <20 mL/min use 2.25g q8h."
+
+        # Criteria 3: Severe beta-lactam allergy requiring non-beta-lactam
+        - criteria_id: "SEVERE_BETA_LACTAM_ALLERGY"
+          description: "Severe penicillin AND carbapenem allergy (anaphylaxis history)"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "allergies"
+                operator: "CONTAINS"
+                threshold: "penicillin"
+              - parameter: "allergy_severity"
+                operator: "=="
+                threshold: "SEVERE"
+
+          primary_medication:
+            name: "Ciprofloxacin + Metronidazole"
+            dose: "400 mg cipro + 500 mg metronidazole"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "q12h (cipro) + q8h (metro)"
+            indication: "Non-beta-lactam combination for dual severe allergy"
+            administration_instructions: "Fluoroquinolone + anaerobic coverage. Infuse cipro over 60 min, metro over 30-60 min."
+
+        # Criteria 4: Immunocompromised requiring broader coverage
+        - criteria_id: "IMMUNOCOMPROMISED_BROAD_COVERAGE"
+          description: "Immunocompromised patients requiring anti-pseudomonal and potentially antifungal coverage"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "immunosuppressed"
+                operator: "=="
+                threshold: true
+              - parameter: "absolute_neutrophil_count"
+                operator: "<"
+                threshold: 500
+                unit: "cells/mm3"
+              - parameter: "transplant_recipient"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Meropenem + Vancomycin"
+            dose: "1 g meropenem + 15-20 mg/kg vancomycin"
+            dose_unit: "grams"
+            route: "IV"
+            frequency: "q8h (meropenem) + q8-12h (vancomycin)"
+            indication: "Broader empiric coverage for immunocompromised with MDR risk and MRSA coverage"
+            administration_instructions: "Anti-pseudomonal carbapenem + MRSA coverage. Consider adding antifungal (micafungin 100mg IV daily) if prolonged neutropenia."
+
+        # Criteria 5: Recent healthcare exposure or MDR risk
+        - criteria_id: "MDR_RISK_FACTORS"
+          description: "Recent hospitalization or healthcare exposure requiring anti-MRSA and anti-pseudomonal coverage"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "recent_hospitalization"
+                operator: "=="
+                threshold: true
+              - parameter: "recent_antibiotic_use"
+                operator: "=="
+                threshold: true
+              - parameter: "nursing_home_resident"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Piperacillin-Tazobactam + Vancomycin"
+            dose: "4.5 g pip-tazo + 15-20 mg/kg vancomycin"
+            dose_unit: "grams"
+            route: "IV"
+            frequency: "q6h (pip-tazo) + q8-12h (vancomycin)"
+            indication: "MDR risk factors requiring empiric MRSA and anti-pseudomonal coverage"
+            administration_instructions: "Dual therapy for healthcare-associated sepsis. Monitor vancomycin trough (target 15-20 mcg/mL)."
+
+    # GUIDELINE INTEGRATION
+    guideline_reference: "GUIDE-SSC-2021"
+    recommendation_id: "SSC-2021-REC-004"
+    evidence_quality: "HIGH"
+    recommendation_strength: "STRONG"
+    class_of_recommendation: "CLASS_I"
+    level_of_evidence: "A"
+    clinical_rationale: "Each hour delay in antibiotic administration increases mortality by 7.6% (Kumar et al). Broad-spectrum empiric antibiotics within 1 hour are critical."
+    citation_pmids:
+      - "34599691"
+      - "16625125"
+
+  # ========== MEDICATION: Fluid Resuscitation ==========
+  - action_id: "SEPSIS-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 180  # Hour-3 bundle (but start immediately)
+
+    medication:
+      name: "0.9% Normal Saline or Lactated Ringer's"
+      dose: "30"
+      dose_unit: "mL/kg"
+      route: "IV"
+      frequency: "Initial bolus (reassess after each 500 mL)"
+      duration: "Complete initial 30 mL/kg within 3 hours"
+      administration_instructions: "Rapid infusion via large-bore IV (18G or larger). Reassess hemodynamics after each 500 mL bolus. Monitor for fluid overload (lung exam, O2 sat). Target MAP >65 mmHg."
+
+    # GUIDELINE INTEGRATION
+    guideline_reference: "GUIDE-SSC-2021"
+    recommendation_id: "SSC-2021-REC-005"
+    evidence_quality: "MODERATE"
+    recommendation_strength: "STRONG"
+    class_of_recommendation: "CLASS_I"
+    level_of_evidence: "B-R"
+    clinical_rationale: "Early aggressive fluid resuscitation (30 mL/kg) within first 3 hours improves tissue perfusion and reduces organ failure in septic shock."
+    citation_pmids:
+      - "34599691"
+
+  # ========== CLINICAL ASSESSMENT: Reassessment ==========
+  - action_id: "SEPSIS-ACT-006"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "HIGH"
+    sequence_number: 6
+
+    clinical_assessment:
+      assessment_type: "Volume status and hemodynamic reassessment"
+      frequency: "q2h for first 6 hours, then q4h"
+      duration_hours: 24
+      specific_parameters:
+        - "Mean arterial pressure (MAP goal >65 mmHg)"
+        - "Urine output (goal >0.5 mL/kg/hr)"
+        - "Lactate clearance (goal normalization <2.0 mmol/L)"
+        - "Lung exam (monitor for fluid overload)"
+        - "Mental status"
+
+  # ========== CONSULTATION: ICU Evaluation ==========
+  - action_id: "SEPSIS-ACT-007"
+    type: "CONSULTATION"
+    priority: "HIGH"
+    sequence_number: 7
+
+    consultation:
+      specialty: "CRITICAL_CARE"
+      urgency: "URGENT"
+      reason: "Septic shock or severe sepsis requiring ICU-level care and potential vasopressor support"
+      specific_questions:
+        - "Need for vasopressor support?"
+        - "ICU transfer indicated?"
+        - "Advanced hemodynamic monitoring required (arterial line, central line)?"
+
+# ============================================================
+# SECTION 6: TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  # Hour-1 Bundle (SSC 2021)
+  - constraint_id: "SEPSIS-HOUR1-BUNDLE"
+    bundle_name: "Hour-1 Bundle"
+    description: "All critical interventions within 1 hour of sepsis recognition"
+    offset_minutes: 60
+    critical: true  # Mortality impact
+
+    required_actions:
+      - action_id: "SEPSIS-ACT-001"
+        description: "Blood cultures obtained"
+      - action_id: "SEPSIS-ACT-002"
+        description: "Lactate measured"
+      - action_id: "SEPSIS-ACT-004"
+        description: "Broad-spectrum antibiotics administered"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 30  # Warning at 30 min remaining
+      critical_alert_at_minutes: 0  # Critical alert at deadline
+      missed_deadline_message: "CRITICAL: Hour-1 sepsis bundle compliance failure. Each hour delay increases mortality by 7.6%."
+
+  # Hour-3 Bundle
+  - constraint_id: "SEPSIS-HOUR3-BUNDLE"
+    bundle_name: "Hour-3 Bundle"
+    description: "Fluid resuscitation and reassessment within 3 hours"
+    offset_minutes: 180
+    critical: true
+
+    required_actions:
+      - action_id: "SEPSIS-ACT-005"
+        description: "30 mL/kg crystalloid fluid bolus completed"
+      - action_id: "SEPSIS-ACT-006"
+        description: "Hemodynamic reassessment performed"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 60
+      critical_alert_at_minutes: 0
+      missed_deadline_message: "Hour-3 bundle incomplete: Reassess fluid status and consider vasopressors if persistent hypotension."
+
+# ============================================================
+# SECTION 7: CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  # Antibiotic allergy
+  - contraindication_id: "SEPSIS-CONTRA-001"
+    condition_description: "Severe penicillin allergy"
+
+    trigger_condition:
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "allergies"
+          operator: "CONTAINS"
+          threshold: "penicillin"
+        - parameter: "allergy_severity"
+          operator: "=="
+          threshold: "SEVERE"
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "SEPSIS-ACT-004"  # Piperacillin-Tazobactam
+
+    alternative_action:
+      action_id: "SEPSIS-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "Ciprofloxacin + Metronidazole"
+        dose: "400 mg cipro + 500 mg metro"
+        route: "IV"
+        frequency: "q12h (cipro) + q8h (metro)"
+      rationale: "Non-beta-lactam alternative for severe penicillin allergy"
+
+  # Fluid overload concern
+  - contraindication_id: "SEPSIS-CONTRA-002"
+    condition_description: "Acute pulmonary edema or severe heart failure"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pulmonary_edema"
+          operator: "=="
+          threshold: true
+        - parameter: "ejection_fraction"
+          operator: "<"
+          threshold: 30
+          unit: "%"
+
+    severity: "MODERATE"
+    affected_actions:
+      - "SEPSIS-ACT-005"  # Aggressive fluid resuscitation
+
+    alternative_action:
+      action_id: "SEPSIS-ALT-002"
+      type: "MEDICATION"
+      medication:
+        name: "Reduced fluid bolus + Early vasopressor"
+        dose: "10-15 mL/kg fluid + norepinephrine 0.05 mcg/kg/min"
+        route: "IV"
+        titration: "Smaller fluid boluses (250-500 mL), reassess frequently. Early vasopressor initiation to avoid fluid overload."
+      rationale: "Cautious fluid resuscitation with early vasopressor support to prevent pulmonary edema"
+
+# ============================================================
+# SECTION 8: MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "SEPSIS-MON-001"
+    parameter: "mean_arterial_pressure"
+
+    target_range:
+      min: 65
+      max: null
+      unit: "mmHg"
+
+    frequency: "continuous"
+    duration_hours: 24
+
+    alert_condition:
+      parameter: "mean_arterial_pressure"
+      operator: "<"
+      threshold: 65
+
+    escalation_action:
+      description: "Initiate vasopressor support (norepinephrine preferred)"
+      reference_action: "SEPSIS-ESC-001"
+
+  - monitoring_id: "SEPSIS-MON-002"
+    parameter: "lactate"
+
+    target_range:
+      min: null
+      max: 2.0
+      unit: "mmol/L"
+
+    frequency: "q2h if elevated"
+    duration_hours: 6
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "lactate"
+          operator: ">="
+          threshold: 4.0
+        - parameter: "lactate_clearance_percent"
+          operator: "<"
+          threshold: 10.0
+
+  - monitoring_id: "SEPSIS-MON-003"
+    parameter: "urine_output"
+
+    target_range:
+      min: 0.5
+      max: null
+      unit: "mL/kg/hr"
+
+    frequency: "hourly"
+    duration_hours: 24
+
+    alert_condition:
+      parameter: "urine_output"
+      operator: "<"
+      threshold: 0.5
+
+# ============================================================
+# SECTION 9: SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  # Elderly patients
+  - population_id: "ELDERLY"
+    description: "Patients ≥65 years old"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "SEPSIS-ACT-004"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Renal function declines with age; adjust antibiotic doses"
+
+        new_parameters:
+          dose: "Reduce dose by 25-50% if CrCl <30 mL/min"
+          monitoring: "Monitor renal function daily; check drug levels if available"
+
+      - action_id: "SEPSIS-ACT-005"
+        modification_type: "CAUTION"
+        rationale: "Increased risk of fluid overload and pulmonary edema"
+
+        new_parameters:
+          dose: "20 mL/kg initial bolus (reduced from 30 mL/kg)"
+          monitoring: "Reassess after 10 mL/kg increments; monitor lung exam and O2 saturation closely"
+
+  # Pregnancy
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "SEPSIS-ACT-004"
+        modification_type: "CONTRAINDICATION"
+        rationale: "Some antibiotics teratogenic or contraindicated in pregnancy"
+
+        contraindications:
+          - "Avoid fluoroquinolones (ciprofloxacin) - cartilage toxicity risk"
+          - "Avoid aminoglycosides (gentamicin) - ototoxicity and nephrotoxicity"
+
+        alternative_medication:
+          name: "Ceftriaxone + Metronidazole"
+          dose: "2 g ceftriaxone + 500 mg metronidazole"
+          route: "IV"
+          frequency: "q24h (ceftriaxone) + q8h (metronidazole)"
+          pregnancy_category: "B (both medications)"
+
+  # Immunocompromised
+  - population_id: "IMMUNOCOMPROMISED"
+    description: "Immunocompromised patients (neutropenic, transplant, HIV, immunosuppressive therapy)"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "absolute_neutrophil_count"
+          operator: "<"
+          threshold: 500
+          unit: "cells/mm3"
+        - parameter: "transplant_recipient"
+          operator: "=="
+          threshold: true
+        - parameter: "immunosuppressive_therapy"
+          operator: "=="
+          threshold: true
+        - parameter: "hiv_infection"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "SEPSIS-ACT-004"
+        modification_type: "BROADER_COVERAGE"
+        rationale: "Higher risk of opportunistic infections, resistant organisms, and invasive fungal infections"
+
+        additional_medications:
+          - name: "Meropenem (anti-pseudomonal carbapenem)"
+            dose: "1"
+            dose_unit: "grams"
+            route: "IV"
+            frequency: "q8h"
+            indication: "Broader Gram-negative coverage including Pseudomonas"
+
+          - name: "Vancomycin (MRSA coverage)"
+            dose: "15-20"
+            dose_unit: "mg/kg"
+            route: "IV"
+            frequency: "q8-12h"
+            indication: "Empiric MRSA and coagulase-negative Staph coverage"
+
+          - name: "Micafungin (antifungal)"
+            dose: "100"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "q24h"
+            indication: "Empiric antifungal if prolonged neutropenia (>7 days) or high fungal risk"
+
+  # Pediatric
+  - population_id: "PEDIATRIC"
+    description: "Patients <18 years old"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: "<"
+      threshold: 18
+      unit: "years"
+
+    modifications:
+      - action_id: "SEPSIS-ACT-004"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Weight-based dosing required in pediatric patients"
+
+        new_parameters:
+          dose: "Piperacillin-Tazobactam 100 mg/kg piperacillin component"
+          max_dose: "4.5 g per dose"
+          route: "IV"
+          frequency: "q6-8h (age-dependent)"
+
+      - action_id: "SEPSIS-ACT-005"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Pediatric fluid resuscitation based on weight"
+
+        new_parameters:
+          dose: "20 mL/kg boluses (can repeat up to 60 mL/kg total)"
+          monitoring: "Reassess after each 20 mL/kg bolus; monitor for fluid overload"
+
+# ============================================================
+# SECTION 10: ESCALATION RULES
+# ============================================================
+escalation_rules:
+  # ICU transfer for persistent hypotension
+  - rule_id: "SEPSIS-ESC-001"
+    description: "ICU transfer for septic shock requiring vasopressor support"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        # Persistent hypotension despite fluids
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "mean_arterial_pressure"
+              operator: "<"
+              threshold: 65
+              unit: "mmHg"
+            - parameter: "fluid_bolus_completed"
+              operator: "=="
+              threshold: true  # 30 mL/kg completed
+
+        # Severe lactate elevation
+        - parameter: "lactate"
+          operator: ">="
+          threshold: 4.0
+          unit: "mmol/L"
+
+        # Organ dysfunction requiring advanced support
+        - parameter: "mechanical_ventilation_required"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "ICU_TRANSFER"
+      urgency: "IMMEDIATE"
+      rationale: "Septic shock requiring vasopressor support, advanced hemodynamic monitoring, and potential organ support"
+
+      required_interventions:
+        - "Central venous access for vasopressor administration"
+        - "Arterial line for continuous blood pressure monitoring"
+        - "Vasopressor initiation (norepinephrine 0.05-0.3 mcg/kg/min, titrate to MAP >65 mmHg)"
+        - "Consider ScvO2 monitoring if lactate not clearing"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "Vasopressor management, advanced hemodynamic monitoring, and multi-organ support strategies"
+
+  # Infectious disease consultation
+  - rule_id: "SEPSIS-ESC-002"
+    description: "Infectious disease consultation for complex sepsis or lack of improvement"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        # No improvement after 6-12 hours
+        - parameter: "no_clinical_improvement_after_hours"
+          operator: ">="
+          threshold: 12
+
+        # Multidrug-resistant organism suspected
+        - parameter: "mdr_organism_risk"
+          operator: "=="
+          threshold: true
+
+        # Immunocompromised host
+        - parameter: "immunosuppressed"
+          operator: "=="
+          threshold: true
+
+        # Fungemia or unusual organism
+        - parameter: "unusual_pathogen"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Complex infection requiring specialist input for antibiotic selection and source control"
+
+      specialist_consultation:
+        - specialty: "INFECTIOUS_DISEASE"
+          urgency: "URGENT"
+          specific_question: "Antibiotic de-escalation/escalation recommendations, source control strategies, and management of resistant organisms"
+
+# ============================================================
+# SECTION 11: DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "SEPSIS-DE-ESC-001"
+    description: "Narrow antibiotic spectrum based on culture results and clinical improvement"
+
+    conditions:
+      - parameter: "culture_results_available"
+        operator: "=="
+        threshold: true
+
+      - parameter: "time_since_antibiotics"
+        operator: ">="
+        threshold: 48
+        unit: "hours"
+
+      - parameter: "clinical_improvement"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "De-escalate to targeted antibiotic therapy based on culture and susceptibility results"
+      rationale: "Antimicrobial stewardship to reduce resistance, adverse effects, and costs"
+      specific_changes:
+        - "Discontinue broad-spectrum empiric agents (e.g., vancomycin if no MRSA, meropenem if susceptible to narrower agents)"
+        - "Switch to culture-directed targeted therapy per susceptibility testing"
+        - "Consider oral step-down therapy if clinically stable and afebrile >24 hours"
+
+  - criteria_id: "SEPSIS-DE-ESC-002"
+    description: "Discontinue vasopressors when hemodynamically stable"
+
+    conditions:
+      - parameter: "mean_arterial_pressure"
+        operator: ">="
+        threshold: 65
+        unit: "mmHg"
+
+      - parameter: "lactate_normalized"
+        operator: "=="
+        threshold: true
+
+      - parameter: "adequate_urine_output"
+        operator: "=="
+        threshold: true
+
+      - parameter: "time_off_vasopressors"
+        operator: ">="
+        threshold: 12
+        unit: "hours"
+
+    recommendation:
+      action: "Transition from ICU-level care to step-down unit; continue monitoring"
+      rationale: "Hemodynamic stability achieved, acute resuscitation phase complete"
+
+# ============================================================
+# SECTION 12: OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "SEPSIS-OUT-001"
+      metric: "mortality_28_day"
+      target: "<15%"
+      benchmark_source: "SSC 2021 Guidelines"
+
+    - outcome_id: "SEPSIS-OUT-002"
+      metric: "hour_1_bundle_compliance"
+      target: ">80%"
+      benchmark_source: "SSC 2021 Quality Measures"
+
+    - outcome_id: "SEPSIS-OUT-003"
+      metric: "hour_3_bundle_compliance"
+      target: ">80%"
+      benchmark_source: "SSC 2021 Quality Measures"
+
+  process_measures:
+    - measure_id: "SEPSIS-PROC-001"
+      description: "Time to antibiotic administration"
+      target: "<60 minutes from sepsis recognition"
+
+    - measure_id: "SEPSIS-PROC-002"
+      description: "Blood cultures obtained before antibiotics"
+      target: ">95% compliance"
+
+    - measure_id: "SEPSIS-PROC-003"
+      description: "Lactate clearance within 6 hours"
+      target: ">70% patients achieve lactate <2.0 mmol/L or >10% reduction"
+
+  balancing_measures:
+    - measure_id: "SEPSIS-BAL-001"
+      description: "Fluid overload and pulmonary edema rate"
+      target: "<5%"
+      specific_events:
+        - "Pulmonary edema requiring diuresis"
+        - "Mechanical ventilation due to fluid overload"
+
+    - measure_id: "SEPSIS-BAL-002"
+      description: "Clostridioides difficile infection rate"
+      target: "<3%"
+      specific_events:
+        - "C. difficile infection within 30 days of antibiotic exposure"
+
+# ============================================================
+# SECTION 13: METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: true
+  estimated_implementation_time_minutes: 180
+  review_cycle_months: 12
+
+  tags:
+    - "time-sensitive"
+    - "high-mortality"
+    - "hour-1-bundle"
+    - "hour-3-bundle"
+    - "septic-shock"
+    - "antimicrobial-stewardship"
+
+  related_protocols:
+    - protocol_id: "SEPTIC-SHOCK-ADVANCED-001"
+      relationship: "COMPLEMENTS"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Migrated to enhanced CDS-compliant YAML structure"
+        - "Added trigger_criteria with AND/OR logic for auto-activation"
+        - "Added confidence_scoring with modifiers and activation threshold"
+        - "Enhanced medication_selection with rule-based algorithm (NO_PENICILLIN_ALLERGY, RENAL_IMPAIRMENT, MDR_RISK, IMMUNOCOMPROMISED)"
+        - "Added time_constraints for Hour-1 and Hour-3 bundles with compliance monitoring"
+        - "Added special_populations (elderly, pregnancy, immunocompromised, pediatric)"
+        - "Added escalation_rules for ICU transfer and ID consultation"
+        - "Added de-escalation_criteria for antimicrobial stewardship"
+        - "Based on SSC 2021 Guidelines with strong evidence (GRADE 1B-1C)"
+
+# ============================================================
+# END OF SEPSIS MANAGEMENT BUNDLE PROTOCOL
+# ============================================================

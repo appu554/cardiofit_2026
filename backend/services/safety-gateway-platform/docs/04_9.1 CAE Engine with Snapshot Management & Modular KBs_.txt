@@ -1,0 +1,632 @@
+﻿# Final Design: CAE Engine with Snapshot Management & Modular KBs
+
+
+## Executive Summary
+
+
+The Clinical Assertion Engine (CAE) evolves from a monolithic GraphDB-based system to a deterministic, snapshot-driven architecture that leverages modular knowledge bases while preserving its v2.1 innovations (Explainability, ML Risk Modulator, What-If API, and test harness).
+
+
+## 1. Core Architecture Transformation
+
+
+### 1.1 Fundamental Changes
+
+
+```typescript
+interface CAEArchitecture {
+  // NEW: Snapshot-driven context management
+  snapshotManager: SnapshotManager;
+  contextGateway: ContextGatewayClient;
+  
+  // NEW: Modular KB access layer
+  kbAccessLayer: {
+    kb1_dosing: DosingKBClient;
+    kb3_guidelines: GuidelinesKBClient; 
+    kb4_safety: SafetyKBClient;
+    kb5_ddi: DDIKBClient;
+    kb7_terminology: TerminologyKBClient;
+    kbGraphInsights?: GraphInsightsKBClient; // Optional derived KB
+  };
+  
+  // PRESERVED: Core v2.1 capabilities
+  explainabilityEngine: ExplainabilityEngine;
+  mlRiskModulator: MLRiskModulator;
+  whatIfEngine: WhatIfAnalysisEngine;
+  testHarness: YAMLTestHarness;
+  
+  // ENHANCED: Checker modules
+  checkers: SnapshotAwareChecker[];
+}
+```
+
+
+### 1.2 Key Design Principles
+
+
+1. **Deterministic Execution**: Every evaluation tied to immutable snapshot
+2. **KB Abstraction**: Checkers never query KBs directly, only through Gateway
+3. **Provenance Tracking**: Every decision includes snapshot + KB version metadata
+4. **Graceful Degradation**: Handle missing KB data without failing entire evaluation
+
+
+## 2. Snapshot-Driven Evaluation Pipeline
+
+
+### 2.1 Main Evaluation Flow
+
+
+```typescript
+class CAEEngine {
+  async evaluate(
+    proposedAction: ClinicalAction,
+    patientContext: PatientContext,
+    snapshotId: string
+  ): Promise<CAEResult> {
+    
+    // Step 1: Validate and retrieve snapshot
+    const snapshot = await this.snapshotManager.getSnapshot(snapshotId);
+    if (!snapshot.isValid()) {
+      throw new InvalidSnapshotError(snapshot.validationErrors);
+    }
+    
+    // Step 2: Resolve KB versions from snapshot
+    const kbVersions = await this.contextGateway.resolveKBVersions(snapshotId);
+    
+    // Step 3: Create evaluation context with locked versions
+    const evalContext = new EvaluationContext({
+      snapshot,
+      kbVersions,
+      proposedAction,
+      patientContext
+    });
+    
+    // Step 4: Run checkers with deterministic context
+    const checkerResults = await this.runCheckers(evalContext);
+    
+    // Step 5: Apply ML risk modulation (if enabled)
+    const modulatedResults = await this.mlRiskModulator.modulate(
+      checkerResults,
+      evalContext
+    );
+    
+    // Step 6: Generate explanations with provenance
+    const explainedResults = this.explainabilityEngine.explain(
+      modulatedResults,
+      evalContext
+    );
+    
+    // Step 7: Aggregate and return
+    return this.aggregateResults(explainedResults, evalContext);
+  }
+}
+```
+
+
+### 2.2 Snapshot Manager Implementation
+
+
+```typescript
+class SnapshotManager {
+  private cache: LRUCache<string, Snapshot>;
+  
+  async getSnapshot(snapshotId: string): Promise<Snapshot> {
+    // Check cache first
+    const cached = this.cache.get(snapshotId);
+    if (cached && !cached.isExpired()) {
+      return cached;
+    }
+    
+    // Fetch from Context Gateway
+    const snapshot = await this.contextGateway.fetchSnapshot(snapshotId);
+    
+    // Validate integrity
+    if (!this.validateChecksum(snapshot)) {
+      throw new SnapshotIntegrityError(snapshotId);
+    }
+    
+    // Cache and return
+    this.cache.set(snapshotId, snapshot);
+    return snapshot;
+  }
+  
+  private validateChecksum(snapshot: Snapshot): boolean {
+    const computed = this.computeChecksum(snapshot.data);
+    return computed === snapshot.checksum;
+  }
+}
+```
+
+
+## 3. KB Access Layer Implementation
+
+
+### 3.1 Unified KB Gateway
+
+
+```typescript
+class KBAccessGateway {
+  private kbClients: Map<string, BaseKBClient>;
+  private cache: SnapshotAwareCache;
+  
+  async query(
+    kbName: string,
+    operation: string,
+    params: any,
+    snapshotId: string
+  ): Promise<KBResult> {
+    // Generate cache key including snapshot
+    const cacheKey = `${snapshotId}:${kbName}:${operation}:${hash(params)}`;
+    
+    // Check cache
+    const cached = await this.cache.get(cacheKey);
+    if (cached) return cached;
+    
+    // Get KB client and version for snapshot
+    const client = this.kbClients.get(kbName);
+    const version = await this.getKBVersion(kbName, snapshotId);
+    
+    // Query with version pinning
+    const result = await client.query(operation, params, version);
+    
+    // Cache with snapshot-aware TTL
+    await this.cache.set(cacheKey, result, this.getTTL(snapshotId));
+    
+    return result;
+  }
+  
+  async queryMultiple(
+    queries: KBQuery[],
+    snapshotId: string
+  ): Promise<Map<string, KBResult>> {
+    // Parallel queries with snapshot context
+    const promises = queries.map(q => 
+      this.query(q.kb, q.operation, q.params, snapshotId)
+    );
+    
+    const results = await Promise.allSettled(promises);
+    return this.processResults(queries, results);
+  }
+}
+```
+
+
+### 3.2 Individual KB Clients
+
+
+```typescript
+class DDIKBClient extends BaseKBClient {
+  async checkInteraction(
+    drug1: string,
+    drug2: string,
+    version: string
+  ): Promise<DDIResult> {
+    const query = {
+      operation: 'checkInteraction',
+      params: { drug1_rxnorm: drug1, drug2_rxnorm: drug2 },
+      version
+    };
+    
+    const result = await this.execute(query);
+    
+    return {
+      exists: result.interaction !== null,
+      severity: result.interaction?.severity || 'NONE',
+      mechanism: result.interaction?.mechanism,
+      evidence: result.interaction?.evidence_level,
+      management: result.interaction?.management_advice
+    };
+  }
+}
+
+
+class DosingKBClient extends BaseKBClient {
+  async getDosingRules(
+    medicationId: string,
+    indication: string,
+    version: string
+  ): Promise<DosingRules> {
+    const query = {
+      operation: 'getDosingRules',
+      params: { medication_id: medicationId, indication },
+      version
+    };
+    
+    const result = await this.execute(query);
+    
+    return {
+      standardDose: result.standard_dose,
+      renalAdjustment: result.renal_adjustment_rules,
+      hepaticAdjustment: result.hepatic_adjustment_rules,
+      pediatricDosing: result.pediatric_rules,
+      maxDose: result.max_dose_limits
+    };
+  }
+}
+```
+
+
+## 4. Enhanced Checker Implementation
+
+
+### 4.1 Snapshot-Aware Base Checker
+
+
+```typescript
+abstract class SnapshotAwareChecker {
+  protected kbGateway: KBAccessGateway;
+  
+  abstract getRequiredKBs(): string[];
+  abstract getRequiredFields(): string[];
+  
+  async check(context: EvaluationContext): Promise<CheckerResult> {
+    // Validate required data present in snapshot
+    const missingFields = this.validateRequiredFields(context.snapshot);
+    if (missingFields.length > 0) {
+      return this.handleMissingData(missingFields, context);
+    }
+    
+    // Perform check with snapshot context
+    const result = await this.performCheck(context);
+    
+    // Add provenance
+    result.provenance = {
+      snapshotId: context.snapshot.id,
+      kbVersions: context.kbVersions,
+      timestamp: new Date()
+    };
+    
+    return result;
+  }
+  
+  protected abstract performCheck(context: EvaluationContext): Promise<CheckerResult>;
+  
+  protected async queryKB(
+    kb: string,
+    operation: string,
+    params: any,
+    context: EvaluationContext
+  ): Promise<any> {
+    return await this.kbGateway.query(
+      kb,
+      operation,
+      params,
+      context.snapshot.id
+    );
+  }
+}
+```
+
+
+### 4.2 DDI Checker with Snapshot Support
+
+
+```typescript
+class DDIChecker extends SnapshotAwareChecker {
+  getRequiredKBs() { return ['kb5_ddi']; }
+  getRequiredFields() { return ['current_medications', 'allergies']; }
+  
+  async performCheck(context: EvaluationContext): Promise<CheckerResult> {
+    const proposedDrug = context.proposedAction.medication;
+    const currentMeds = context.snapshot.data.current_medications;
+    
+    const interactions = [];
+    
+    // Check against each current medication
+    for (const currentMed of currentMeds) {
+      const ddiResult = await this.queryKB(
+        'kb5_ddi',
+        'checkInteraction',
+        {
+          drug1: proposedDrug.rxnorm,
+          drug2: currentMed.rxnorm
+        },
+        context
+      );
+      
+      if (ddiResult.exists) {
+        interactions.push({
+          drug1: proposedDrug.name,
+          drug2: currentMed.name,
+          severity: ddiResult.severity,
+          finding: this.createFinding(ddiResult, context)
+        });
+      }
+    }
+    
+    return {
+      checkerName: 'DDIChecker',
+      passed: interactions.length === 0,
+      findings: interactions.map(i => i.finding),
+      summary: this.generateSummary(interactions)
+    };
+  }
+  
+  private createFinding(ddi: DDIResult, context: EvaluationContext): Finding {
+    return {
+      severity: this.mapSeverity(ddi.severity),
+      code: `DDI-${ddi.drug1}-${ddi.drug2}`,
+      title: `Drug Interaction: ${ddi.drug1} + ${ddi.drug2}`,
+      description: ddi.mechanism || 'Interaction detected',
+      evidence: [{
+        sourceId: `KB5-DDI-v${context.kbVersions.kb5_ddi}`,
+        description: ddi.evidence || 'Clinical database',
+        url: this.generateEvidenceURL(ddi, context)
+      }],
+      recommendations: [{
+        actionText: ddi.management || 'Consider alternative therapy',
+        rationale: 'Minimize interaction risk',
+        priority: this.mapPriority(ddi.severity)
+      }]
+    };
+  }
+}
+```
+
+
+## 5. ML Risk Modulator with Snapshot Context
+
+
+### 5.1 Enhanced ML Modulator
+
+
+```typescript
+class MLRiskModulator {
+  private model: TensorFlowModel;
+  private featureExtractor: SnapshotAwareFeatureExtractor;
+  
+  async modulate(
+    checkerResults: CheckerResult[],
+    context: EvaluationContext
+  ): Promise<CheckerResult[]> {
+    // Extract features from snapshot
+    const features = await this.featureExtractor.extract(context.snapshot);
+    
+    // Add snapshot metadata as features
+    features.snapshotAge = Date.now() - context.snapshot.createdAt;
+    features.dataCompleteness = context.snapshot.completeness;
+    
+    // Get risk score
+    const riskScore = await this.model.predict(features);
+    
+    // Modulate results based on risk
+    return checkerResults.map(result => {
+      if (riskScore > 0.7 && result.severity === 'WARNING') {
+        result.severity = 'CRITICAL';
+        result.mlModulated = true;
+        result.mlRiskScore = riskScore;
+        result.mlExplanation = this.explainModulation(features, riskScore);
+      }
+      return result;
+    });
+  }
+  
+  private explainModulation(features: any, score: number): string {
+    const topFactors = this.getTopRiskFactors(features);
+    return `Risk elevated due to: ${topFactors.join(', ')} (score: ${score.toFixed(2)})`;
+  }
+}
+```
+
+
+## 6. What-If Analysis with Snapshot Comparison
+
+
+### 6.1 Enhanced What-If Engine
+
+
+```typescript
+class WhatIfAnalysisEngine {
+  async analyzeScenarios(
+    baselineSnapshotId: string,
+    scenarios: MedicationScenario[],
+    compareToSnapshotIds?: string[]
+  ): Promise<WhatIfAnalysis> {
+    // Get baseline snapshot
+    const baselineSnapshot = await this.snapshotManager.getSnapshot(baselineSnapshotId);
+    
+    // Analyze each scenario
+    const results = [];
+    for (const scenario of scenarios) {
+      // Create hypothetical context
+      const hypotheticalContext = this.applyScenario(baselineSnapshot, scenario);
+      
+      // Run CAE evaluation
+      const result = await this.caeEngine.evaluate(
+        scenario.proposedAction,
+        hypotheticalContext,
+        baselineSnapshotId // Use same KB versions
+      );
+      
+      results.push({
+        scenario,
+        result,
+        riskDelta: this.calculateRiskDelta(baselineSnapshot, result)
+      });
+    }
+    
+    // Compare across snapshots if requested
+    if (compareToSnapshotIds) {
+      for (const compareId of compareToSnapshotIds) {
+        const compareResults = await this.compareAcrossSnapshots(
+          scenarios,
+          baselineSnapshotId,
+          compareId
+        );
+        results.push(...compareResults);
+      }
+    }
+    
+    return {
+      baseline: baselineSnapshotId,
+      scenarios: results,
+      recommendations: this.generateRecommendations(results),
+      disclaimer: 'HYPOTHETICAL ANALYSIS - NOT FOR CLINICAL USE'
+    };
+  }
+}
+```
+
+
+## 7. Test Harness with Snapshot Support
+
+
+### 7.1 YAML Test Cases
+
+
+```yaml
+scenario_name: "Elderly CKD polypharmacy with aspirin+warfarin"
+snapshot_id: "test-snapshot-elderly-ckd-2024-01"  # Required field
+kb_versions:  # Optional: override specific KB versions for testing
+  kb5_ddi: "5.14.2"
+  kb1_dosing: "3.7.0"
+
+
+context:
+  proposed_action:
+    type: "prescribe_medication"
+    medication:
+      rxnorm: "1191"
+      name: "Aspirin"
+      dose: "325mg daily"
+  
+  # Snapshot should contain this data
+  expected_snapshot_fields:
+    - patient.age
+    - patient.kidney_function
+    - current_medications
+    - lab_values.creatinine
+    - lab_values.egfr
+
+
+expected_outcome:
+  status: "fail"
+  findings:
+    - code: "DDI-001"
+      severity: "CRITICAL"  # ML modulated
+      provenance:
+        snapshot_id: "test-snapshot-elderly-ckd-2024-01"
+        kb_versions.kb5_ddi: "5.14.2"
+  ml_risk_score: ">0.8"
+```
+
+
+## 8. Observability & Metrics
+
+
+### 8.1 Snapshot-Aware Metrics
+
+
+```typescript
+const metrics = {
+  // Latency by snapshot age
+  evaluationLatency: new Histogram({
+    name: 'cae_evaluation_duration_seconds',
+    help: 'CAE evaluation duration',
+    labelNames: ['snapshot_id', 'snapshot_age_bucket', 'checker']
+  }),
+  
+  // KB query performance
+  kbQueryLatency: new Histogram({
+    name: 'cae_kb_query_duration_seconds',
+    help: 'KB query duration',
+    labelNames: ['kb_name', 'operation', 'version', 'snapshot_id']
+  }),
+  
+  // ML modulation tracking
+  mlModulations: new Counter({
+    name: 'cae_ml_modulations_total',
+    help: 'ML severity modulations',
+    labelNames: ['from_severity', 'to_severity', 'snapshot_id']
+  }),
+  
+  // Snapshot validity
+  snapshotErrors: new Counter({
+    name: 'cae_snapshot_errors_total',
+    help: 'Snapshot validation errors',
+    labelNames: ['error_type', 'snapshot_id']
+  })
+};
+```
+
+
+## 9. Migration Strategy
+
+
+### 9.1 Phased Migration from GraphDB
+
+
+```typescript
+class MigrationAdapter {
+  async migrateFromGraphDB(graphQuery: string): Promise<KBQuery[]> {
+    // Parse GraphDB query
+    const parsed = this.parseGraphQuery(graphQuery);
+    
+    // Map to modular KB queries
+    const kbQueries = [];
+    
+    if (parsed.includesDDI) {
+      kbQueries.push({
+        kb: 'kb5_ddi',
+        operation: 'checkInteraction',
+        params: this.extractDDIParams(parsed)
+      });
+    }
+    
+    if (parsed.includesDosing) {
+      kbQueries.push({
+        kb: 'kb1_dosing',
+        operation: 'getDosingRules',
+        params: this.extractDosingParams(parsed)
+      });
+    }
+    
+    // Additional mappings...
+    
+    return kbQueries;
+  }
+}
+```
+
+
+## 10. Implementation Timeline
+
+
+### Phase 1: Foundation (Weeks 1-2)
+- Implement Snapshot Manager
+- Create KB Access Gateway
+- Update base checker classes
+
+
+### Phase 2: Checker Migration (Weeks 3-4)
+- Migrate DDI Checker
+- Migrate Dose Validator
+- Migrate Contraindication Checker
+
+
+### Phase 3: Advanced Features (Weeks 5-6)
+- Integrate ML Risk Modulator with snapshots
+- Implement What-If comparison across snapshots
+- Update test harness for snapshot support
+
+
+### Phase 4: Testing & Optimization (Weeks 7-8)
+- Performance testing with various snapshot sizes
+- Regression testing with pinned KB versions
+- Cache optimization
+
+
+## Summary
+
+
+This architecture ensures the CAE:
+
+
+1. **Maintains Determinism**: Every evaluation reproducible via snapshot
+2. **Preserves Innovation**: All v2.1 features enhanced, not replaced
+3. **Enables Evolution**: Graph intelligence becomes optional derived KB
+4. **Supports Testing**: Snapshot-based test cases ensure consistency
+5. **Facilitates Migration**: Adapter pattern for GraphDB queries
+
+
+The key insight is treating snapshots not as constraints but as enablers of better clinical decision support through guaranteed consistency and reproducibility.

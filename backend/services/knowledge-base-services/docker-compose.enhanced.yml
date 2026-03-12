@@ -1,0 +1,522 @@
+version: '3.8'
+
+services:
+  # ==================== ENHANCED KB POSTGRESQL WITH EXTENSIONS ====================
+  
+  kb-postgres-enhanced:
+    image: timescale/timescaledb-ha:pg15-latest
+    container_name: kb-postgres-enhanced
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=kb_postgres_password
+      - POSTGRES_DB=postgres
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5433:5432"  # Use port 5433 to avoid conflict
+    volumes:
+      - kb_postgres_enhanced_data:/var/lib/postgresql/data
+      - ./scripts/setup-enhanced-postgres.sql:/docker-entrypoint-initdb.d/01-setup.sql
+      - ./migrations:/docker-entrypoint-initdb.d/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+    command: >
+      postgres
+      -c shared_preload_libraries=timescaledb,pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=8MB
+      -c max_wal_size=2GB
+      -c min_wal_size=512MB
+      -c log_statement=ddl
+      -c log_min_duration_statement=1000
+      -c timescaledb.max_background_workers=8
+
+  # ==================== CLICKHOUSE FOR ANALYTICS ====================
+  
+  kb-clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: kb-clickhouse
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"   # Native TCP interface
+    environment:
+      - CLICKHOUSE_USER=kb_analytics
+      - CLICKHOUSE_PASSWORD=kb_clickhouse_password
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - kb_clickhouse_data:/var/lib/clickhouse
+      - kb_clickhouse_logs:/var/log/clickhouse-server
+      - ./analytics/clickhouse:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "clickhouse", "client", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  # ==================== API GATEWAY SERVICE ====================
+  
+  kb-api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: kb-api-gateway
+    ports:
+      - "4000:4000"  # GraphQL Federation Gateway
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - POSTGRES_URL=postgresql://postgres:kb_postgres_password@kb-postgres-enhanced:5432/postgres
+      - REDIS_URL=redis://kb-redis-enhanced:6379/0
+      - KB_DRUG_RULES_URL=http://kb-drug-rules-enhanced:8081/graphql
+      - KB_CLINICAL_PATHWAYS_URL=http://kb-clinical-pathways:8084/graphql
+      - ENABLE_INTROSPECTION=true
+      - ENABLE_PLAYGROUND=true
+      - LOG_LEVEL=debug
+      - METRICS_ENABLED=true
+      - CIRCUIT_BREAKER_ENABLED=true
+      - EVIDENCE_ENVELOPE_ENABLED=true
+    depends_on:
+      kb-postgres-enhanced:
+        condition: service_healthy
+      kb-redis-enhanced:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./api-gateway/src:/app/src:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== ENHANCED KB-DRUG-RULES SERVICE ====================
+  
+  kb-drug-rules-enhanced:
+    build: 
+      context: ./kb-drug-rules
+      dockerfile: Dockerfile
+    container_name: kb-drug-rules-enhanced
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - DEBUG=true
+      - DATABASE_URL=postgresql://kb_drug_rules_user:kb_password@kb-postgres-enhanced:5432/kb_drug_rules
+      - REDIS_URL=redis://kb-redis-enhanced:6379/0
+      - SIGNING_KEY_PATH=/app/keys/signing.key
+      - JWT_SECRET=kb-jwt-secret-key-for-development
+      - SUPPORTED_REGIONS=US,EU,CA,AU
+      - DEFAULT_REGION=US
+      - REQUIRE_APPROVAL=false
+      - REQUIRE_SIGNATURE=false
+      - METRICS_ENABLED=true
+      - TRACING_ENABLED=false
+      - ANALYTICS_ENABLED=true
+      - CLICKHOUSE_URL=http://kb-clickhouse:8123
+      - GOVERNANCE_WORKFLOWS_ENABLED=true
+    depends_on:
+      kb-postgres-enhanced:
+        condition: service_healthy
+      kb-redis-enhanced:
+        condition: service_healthy
+      kb-clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== KB-CLINICAL-PATHWAYS SERVICE ====================
+  
+  kb-clinical-pathways:
+    build: 
+      context: ./kb-clinical-pathways
+      dockerfile: Dockerfile
+    container_name: kb-clinical-pathways
+    ports:
+      - "8084:8084"
+    environment:
+      - PORT=8084
+      - DEBUG=true
+      - DATABASE_URL=postgresql://kb_clinical_pathways_user:kb_password@kb-postgres-enhanced:5432/kb_clinical_pathways
+      - REDIS_URL=redis://kb-redis-enhanced:6379/1
+      - SIGNING_KEY_PATH=/app/keys/signing.key
+      - JWT_SECRET=kb-jwt-secret-key-for-development
+      - SUPPORTED_REGIONS=US,EU,CA,AU
+      - DEFAULT_REGION=US
+      - REQUIRE_APPROVAL=false
+      - REQUIRE_SIGNATURE=false
+      - METRICS_ENABLED=true
+      - TRACING_ENABLED=false
+      - ANALYTICS_ENABLED=true
+      - CLICKHOUSE_URL=http://kb-clickhouse:8123
+      - GOVERNANCE_WORKFLOWS_ENABLED=true
+    depends_on:
+      kb-postgres-enhanced:
+        condition: service_healthy
+      kb-redis-enhanced:
+        condition: service_healthy
+      kb-clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== ENHANCED REDIS WITH CLUSTERING ====================
+  
+  kb-redis-enhanced:
+    image: redis/redis-stack-server:latest
+    container_name: kb-redis-enhanced
+    ports:
+      - "6380:6379"  # Redis
+      - "8001:8001"   # RedisInsight web UI
+    environment:
+      - REDIS_ARGS=--maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - kb_redis_enhanced_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+    command: >
+      redis-stack-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+
+  # ==================== KAFKA FOR EVENT STREAMING ====================
+  
+  kb-kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kb-kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=kb-zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT_DOCKER://kb-kafka:9093
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_DOCKER:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT_DOCKER
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_LOG_RETENTION_HOURS=168
+      - KAFKA_LOG_SEGMENT_BYTES=1073741824
+      - KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS=300000
+      - KAFKA_MESSAGE_MAX_BYTES=1000000
+    depends_on:
+      - kb-zookeeper
+    volumes:
+      - kb_kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== ZOOKEEPER FOR KAFKA ====================
+  
+  kb-zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: kb-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOOKEEPER_TICK_TIME=2000
+      - ZOOKEEPER_INIT_LIMIT=5
+      - ZOOKEEPER_SYNC_LIMIT=2
+    volumes:
+      - kb_zookeeper_data:/var/lib/zookeeper/data
+      - kb_zookeeper_logs:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== PROMETHEUS FOR METRICS ====================
+  
+  kb-prometheus:
+    image: prom/prometheus:latest
+    container_name: kb-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - kb_prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== GRAFANA FOR DASHBOARDS ====================
+  
+  kb-grafana:
+    image: grafana/grafana:latest
+    container_name: kb-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=kb_grafana_admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource,redis-datasource
+    volumes:
+      - kb_grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - kb-prometheus
+      - kb-clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== ML MODEL SERVING WITH MLFLOW ====================
+  
+  kb-mlflow:
+    image: python:3.11-slim
+    container_name: kb-mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=postgresql://mlflow_user:mlflow_password@kb-postgres-enhanced:5432/mlflow
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlflow/artifacts
+      - MLFLOW_HOST=0.0.0.0
+      - MLFLOW_PORT=5000
+    volumes:
+      - kb_mlflow_artifacts:/mlflow/artifacts
+      - ./ml-models:/mlflow/models:ro
+    command: >
+      bash -c "
+        pip install mlflow psycopg2-binary &&
+        mlflow server
+        --backend-store-uri postgresql://mlflow_user:mlflow_password@kb-postgres-enhanced:5432/mlflow
+        --default-artifact-root /mlflow/artifacts
+        --host 0.0.0.0
+        --port 5000
+      "
+    depends_on:
+      kb-postgres-enhanced:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== ELASTICSEARCH FOR ADVANCED SEARCH ====================
+  
+  kb-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: kb-elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - node.name=kb-elasticsearch
+      - cluster.name=kb-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - kb_elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== JAEGER FOR DISTRIBUTED TRACING ====================
+  
+  kb-jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: kb-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # HTTP collector
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=elasticsearch
+      - ES_SERVER_URLS=http://kb-elasticsearch:9200
+    depends_on:
+      - kb-elasticsearch
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:16686/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== ENHANCED ADMINER FOR DATABASE MANAGEMENT ====================
+  
+  kb-adminer-enhanced:
+    image: adminer:latest
+    container_name: kb-adminer-enhanced
+    ports:
+      - "8082:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=kb-postgres-enhanced
+      - ADMINER_DESIGN=pepa-linha
+      - ADMINER_PLUGINS=tables-filter tinymce
+    depends_on:
+      - kb-postgres-enhanced
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+  # ==================== NGINX REVERSE PROXY ====================
+  
+  kb-nginx:
+    image: nginx:alpine
+    container_name: kb-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - kb_nginx_logs:/var/log/nginx
+    depends_on:
+      - kb-api-gateway
+      - kb-drug-rules-enhanced
+      - kb-clinical-pathways
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - kb-enhanced-network
+
+volumes:
+  kb_postgres_enhanced_data:
+    driver: local
+  kb_redis_enhanced_data:
+    driver: local
+  kb_clickhouse_data:
+    driver: local
+  kb_clickhouse_logs:
+    driver: local
+  kb_kafka_data:
+    driver: local
+  kb_zookeeper_data:
+    driver: local
+  kb_zookeeper_logs:
+    driver: local
+  kb_prometheus_data:
+    driver: local
+  kb_grafana_data:
+    driver: local
+  kb_mlflow_artifacts:
+    driver: local
+  kb_elasticsearch_data:
+    driver: local
+  kb_nginx_logs:
+    driver: local
+
+networks:
+  kb-enhanced-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+          gateway: 172.22.0.1

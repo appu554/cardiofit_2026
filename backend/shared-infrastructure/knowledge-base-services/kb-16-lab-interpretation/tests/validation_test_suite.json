@@ -1,0 +1,836 @@
+{
+  "metadata": {
+    "name": "KB-16 Lab Interpretation Clinical Validation Test Suite",
+    "version": "1.0.0",
+    "created": "2025-01-01",
+    "service": "kb-16-lab-interpretation",
+    "compliance": ["FDA 21 CFR Part 820", "IEC 62304", "ISO 13485"],
+    "base_url": "http://localhost:8098/api/v1"
+  },
+  "phases": [
+    {
+      "id": "P1",
+      "name": "KB-8 Dependency Validation",
+      "description": "Ensure KB-16 NEVER becomes a calculator - KB-8 is single source of truth",
+      "tests": [
+        {
+          "id": "P1.1",
+          "name": "KB8_Available_Uses_Live_Calculator",
+          "description": "When KB-8 is available, use its calculated eGFR value",
+          "endpoint": "/panels/patient/{patientId}/assemble/RENAL",
+          "method": "POST",
+          "prerequisites": ["kb8_healthy"],
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {"2160-0": 1.2, "3094-0": 18},
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "calculatedValues.egfr": {"exists": true, "source": "KB-8"},
+            "calculatedValues.egfr.value": {"delta": 71.4, "tolerance": 2.0}
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P1.2",
+          "name": "KB8_Unavailable_Returns_Safe_Failure",
+          "description": "When KB-8 is unavailable, return safe response without calculated value",
+          "endpoint": "/panels/patient/{patientId}/assemble/RENAL",
+          "method": "POST",
+          "prerequisites": ["kb8_unavailable"],
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {"2160-0": 1.2, "3094-0": 18}
+          },
+          "expected": {
+            "status": 200,
+            "calculatedValues.egfr": {"exists": false}
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P1.3",
+          "name": "KB8_Slow_Response_Timeout_Safety",
+          "description": "KB-8 slow response triggers timeout with graceful degradation",
+          "endpoint": "/panels/patient/{patientId}/assemble/RENAL",
+          "method": "POST",
+          "prerequisites": ["kb8_slow_5s"],
+          "timeout_ms": 2000,
+          "expected": {
+            "response_time_ms": {"lt": 3000},
+            "calculatedValues.egfr": {"exists": false}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P1.5",
+          "name": "KB8_EGFR_Male_Matches_CKDEPI_Reference",
+          "description": "55yo male, Cr=1.2 should get eGFR ~71 (CKD-EPI 2021)",
+          "endpoint": "/calculate/egfr",
+          "method": "POST",
+          "input": {
+            "creatinine": 1.2,
+            "age": 55,
+            "sex": "male"
+          },
+          "expected": {
+            "value": {"delta": 71.4, "tolerance": 2.0},
+            "ckdStage": "G2",
+            "equation": "CKD-EPI-2021-RaceFree"
+          },
+          "reference": "KDIGO 2012 Guidelines",
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P1.6",
+          "name": "KB8_EGFR_Female_Matches_CKDEPI_Reference",
+          "description": "55yo female, Cr=1.0 should get eGFR ~66",
+          "endpoint": "/calculate/egfr",
+          "method": "POST",
+          "input": {
+            "creatinine": 1.0,
+            "age": 55,
+            "sex": "female"
+          },
+          "expected": {
+            "value": {"delta": 66.2, "tolerance": 2.0},
+            "ckdStage": "G2"
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P1.8",
+          "name": "KB8_Anion_Gap_Matches_Formula",
+          "description": "Na=140, Cl=105, HCO3=24 should give AG=11",
+          "endpoint": "/calculate/anion-gap",
+          "method": "POST",
+          "input": {
+            "sodium": 140,
+            "chloride": 105,
+            "bicarbonate": 24
+          },
+          "expected": {
+            "value": {"delta": 11.0, "tolerance": 0.5},
+            "isElevated": false
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P1.9",
+          "name": "KB8_High_Anion_Gap_Detected",
+          "description": "Na=140, Cl=100, HCO3=18 should give AG=22 (elevated)",
+          "endpoint": "/calculate/anion-gap",
+          "method": "POST",
+          "input": {
+            "sodium": 140,
+            "chloride": 100,
+            "bicarbonate": 18
+          },
+          "expected": {
+            "value": {"delta": 22.0, "tolerance": 0.5},
+            "isElevated": true
+          },
+          "severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "Core Lab Interpretation Accuracy",
+      "description": "Each lab independently produces medically correct interpretation",
+      "tests": [
+        {
+          "id": "P2.1",
+          "name": "Hemoglobin_Low_Anemia_Classification",
+          "description": "Hgb 8.5 g/dL in male should flag as severe anemia",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "718-7",
+            "value": 8.5,
+            "unit": "g/dL",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "LOW",
+            "severity": "HIGH",
+            "requiresAction": true,
+            "clinicalComment": {"contains": "anemia"}
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P2.2",
+          "name": "Hemoglobin_Normal",
+          "description": "Hgb 14.5 g/dL in male should be normal",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "718-7",
+            "value": 14.5,
+            "unit": "g/dL",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "NORMAL",
+            "severity": "LOW",
+            "isCritical": false
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P2.6",
+          "name": "Platelets_Critical_Low_Thrombocytopenia",
+          "description": "Platelets 15K should trigger panic value",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "777-3",
+            "value": 15,
+            "unit": "x10^3/uL",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_LOW",
+            "isPanic": true,
+            "severity": "CRITICAL",
+            "clinicalComment": {"contains": "bleed"}
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P2.8",
+          "name": "Sodium_Critical_Low_Hyponatremia",
+          "description": "Na 118 mEq/L should trigger severe hyponatremia alert",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2951-2",
+            "value": 118,
+            "unit": "mEq/L",
+            "patientContext": {"age": 70, "sex": "female"}
+          },
+          "expected": {
+            "flag": "CRITICAL_LOW",
+            "isPanic": true,
+            "clinicalComment": {"contains": "hyponatremia"}
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P2.10",
+          "name": "Potassium_Critical_High_Emergency",
+          "description": "K 7.2 mEq/L should trigger cardiac emergency alert",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 7.2,
+            "unit": "mEq/L",
+            "patientContext": {"age": 65, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_HIGH",
+            "isPanic": true,
+            "severity": "CRITICAL",
+            "requiresAction": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P2.13",
+          "name": "Glucose_Critical_Low_Hypoglycemia",
+          "description": "Glucose 35 mg/dL should trigger hypoglycemia alert",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2345-7",
+            "value": 35,
+            "unit": "mg/dL",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_LOW",
+            "isPanic": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P2.14",
+          "name": "Glucose_Critical_High_DKA_Risk",
+          "description": "Glucose 450 mg/dL should trigger DKA risk alert",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2345-7",
+            "value": 450,
+            "unit": "mg/dL",
+            "patientContext": {"age": 45, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_HIGH",
+            "isPanic": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P2.17",
+          "name": "TSH_High_Hypothyroidism",
+          "description": "TSH 12.5 should indicate hypothyroidism",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "3016-3",
+            "value": 12.5,
+            "unit": "mIU/L",
+            "patientContext": {"age": 45, "sex": "female"}
+          },
+          "expected": {
+            "flag": "HIGH",
+            "clinicalComment": {"contains": "hypothyroid"}
+          },
+          "severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "Panel-Level Intelligence",
+      "description": "Panels produce clinically meaningful patterns, not just individual values",
+      "tests": [
+        {
+          "id": "P3.1",
+          "name": "BMP_High_Anion_Gap_Metabolic_Acidosis",
+          "description": "Detect HAGMA pattern from BMP",
+          "endpoint": "/panels/patient/{patientId}/assemble/BMP",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {
+              "2951-2": 140,
+              "2075-0": 100,
+              "1963-8": 18,
+              "2823-3": 4.5,
+              "3094-0": 25,
+              "2160-0": 1.5,
+              "2345-7": 110
+            }
+          },
+          "expected": {
+            "detectedPatterns": {"contains": "High Anion Gap Metabolic Acidosis"},
+            "calculatedValues.anion_gap": {"gt": 16}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P3.4",
+          "name": "CBC_Microcytic_Anemia_Pattern",
+          "description": "Detect microcytic anemia from low Hgb + low MCV",
+          "endpoint": "/panels/patient/{patientId}/assemble/CBC",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {
+              "718-7": 9.5,
+              "4544-3": 30.0,
+              "787-2": 72.0,
+              "789-8": 4.2,
+              "777-3": 250,
+              "6690-2": 7.5
+            }
+          },
+          "expected": {
+            "detectedPatterns": {"contains": "microcytic"}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P3.6",
+          "name": "CBC_Pancytopenia_Emergency",
+          "description": "Detect pancytopenia (all lines low) as critical",
+          "endpoint": "/panels/patient/{patientId}/assemble/CBC",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {
+              "718-7": 7.0,
+              "4544-3": 22.0,
+              "787-2": 88.0,
+              "789-8": 2.8,
+              "777-3": 80,
+              "6690-2": 2.5
+            }
+          },
+          "expected": {
+            "detectedPatterns": {"contains": "pancytopenia"},
+            "severity": "CRITICAL"
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P3.8",
+          "name": "LFT_Hepatocellular_Injury_Pattern",
+          "description": "High ALT/AST with normal ALP indicates hepatocellular injury",
+          "endpoint": "/panels/patient/{patientId}/assemble/LFT",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {
+              "1742-6": 450,
+              "1920-8": 380,
+              "6768-6": 95,
+              "1975-2": 2.5,
+              "1751-7": 3.8
+            }
+          },
+          "expected": {
+            "detectedPatterns": {"contains": "hepatocellular"}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P3.11",
+          "name": "Thyroid_Primary_Hypothyroidism",
+          "description": "High TSH + Low T4 = primary hypothyroidism",
+          "endpoint": "/panels/patient/{patientId}/assemble/THYROID",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {
+              "3016-3": 15.0,
+              "3026-2": 0.5
+            }
+          },
+          "expected": {
+            "detectedPatterns": {"contains": "hypothyroidism"},
+            "detectedPatterns": {"contains": "primary"}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P3.16",
+          "name": "Renal_AKI_Stage_1_Detection",
+          "description": "Cr 1.6 with baseline 1.0 should detect AKI Stage 1",
+          "endpoint": "/panels/patient/{patientId}/assemble/RENAL",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {"2160-0": 1.6, "3094-0": 28},
+            "baselineCreatinine": 1.0
+          },
+          "expected": {
+            "detectedPatterns": {"contains": "AKI"},
+            "detectedPatterns": {"contains": "Stage 1"}
+          },
+          "severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "Context-Aware Interpretation",
+      "description": "Lab interpretation understands THE PATIENT, not just the number",
+      "tests": [
+        {
+          "id": "P4.1",
+          "name": "Pregnancy_Trimester_Specific_Ranges",
+          "description": "Hgb 10.5 is normal in 3rd trimester pregnancy",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "718-7",
+            "value": 10.5,
+            "unit": "g/dL",
+            "patientContext": {
+              "age": 28,
+              "sex": "female",
+              "isPregnant": true,
+              "trimester": 3
+            }
+          },
+          "expected": {
+            "flag": "NORMAL"
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P4.2",
+          "name": "Pediatric_Range_Enforcement",
+          "description": "WBC 12 is normal in pediatric patients",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "6690-2",
+            "value": 12.0,
+            "unit": "x10^3/uL",
+            "patientContext": {
+              "age": 5,
+              "sex": "male",
+              "isPediatric": true
+            }
+          },
+          "expected": {
+            "flag": "NORMAL"
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P4.5",
+          "name": "CKD_Patient_Electrolyte_Risk_Stack",
+          "description": "K 5.3 in CKD4 patient is higher risk",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 5.3,
+            "unit": "mEq/L",
+            "patientContext": {
+              "age": 65,
+              "sex": "male",
+              "hasCKD": true,
+              "ckdStage": "G4"
+            }
+          },
+          "expected": {
+            "severity": "HIGH",
+            "requiresAction": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P4.7",
+          "name": "Sepsis_Suspicion_Lactate_Intelligence",
+          "description": "Lactate 4.5 in suspected sepsis is critical",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2524-7",
+            "value": 4.5,
+            "unit": "mmol/L",
+            "patientContext": {
+              "age": 55,
+              "sex": "male",
+              "clinicalStatus": "suspected_sepsis"
+            }
+          },
+          "expected": {
+            "severity": "CRITICAL",
+            "isCritical": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P4.9",
+          "name": "Medication_Effect_Interpretation",
+          "description": "INR 2.8 in warfarin patient is therapeutic",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "34714-6",
+            "value": 2.8,
+            "unit": "",
+            "patientContext": {
+              "age": 65,
+              "sex": "male",
+              "medications": ["warfarin"]
+            }
+          },
+          "expected": {
+            "clinicalComment": {"contains": "therapeutic"}
+          },
+          "severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "name": "Severity & Risk Tiering",
+      "description": "Output supports medical triage with proper severity classification",
+      "tests": [
+        {
+          "id": "P5.1",
+          "name": "Green_Normal_Classification",
+          "description": "K 4.2 mEq/L should be normal severity",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 4.2,
+            "unit": "mEq/L",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "NORMAL",
+            "severity": "LOW",
+            "requiresAction": false
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P5.5",
+          "name": "Critical_Red_Flashing",
+          "description": "K 7.0 mEq/L should be critical with panic flag",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 7.0,
+            "unit": "mEq/L",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_HIGH",
+            "severity": "CRITICAL",
+            "isCritical": true,
+            "isPanic": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P5.9",
+          "name": "Hemoglobin_Critical_Low",
+          "description": "Hgb 4.5 g/dL should be critical panic",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "718-7",
+            "value": 4.5,
+            "unit": "g/dL",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_LOW",
+            "isPanic": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P5.11",
+          "name": "INR_Critical_High",
+          "description": "INR 9.5 should be critical with bleeding risk",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "34714-6",
+            "value": 9.5,
+            "unit": "",
+            "patientContext": {"age": 65, "sex": "male"}
+          },
+          "expected": {
+            "flag": "CRITICAL_HIGH",
+            "isPanic": true
+          },
+          "severity": "CRITICAL"
+        }
+      ]
+    },
+    {
+      "id": "P7",
+      "name": "Governance & Safety",
+      "description": "Ensure critical values trigger proper notifications and audit trails",
+      "tests": [
+        {
+          "id": "P7.1",
+          "name": "Critical_Value_Triggers_KB14_Task",
+          "description": "Critical lab values should create KB-14 task",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "prerequisites": ["kb14_healthy"],
+          "input": {
+            "code": "2823-3",
+            "value": 7.5,
+            "unit": "mEq/L",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "kb14TaskCreated": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P7.3",
+          "name": "Audit_Trail_Critical_Value",
+          "description": "Critical values should generate audit log entries",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 7.2,
+            "unit": "mEq/L",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "auditLogCreated": true,
+            "auditEvent": "CRITICAL_VALUE_DETECTED"
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P7.7",
+          "name": "Provenance_Tracking_KB8_Calculations",
+          "description": "Calculated values should track provenance to KB-8",
+          "endpoint": "/panels/patient/{patientId}/assemble/RENAL",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {"2160-0": 1.2, "3094-0": 18}
+          },
+          "expected": {
+            "provenance.egfr.source": "KB-8",
+            "provenance.egfr.equation": "CKD-EPI-2021-RaceFree"
+          },
+          "severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "P8",
+      "name": "Performance & Chaos",
+      "description": "Ensure system handles high load and failure gracefully",
+      "tests": [
+        {
+          "id": "P8.1",
+          "name": "Single_Interpretation_Under_100ms",
+          "description": "Single lab interpretation should complete under 100ms",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 4.5,
+            "unit": "mEq/L",
+            "patientContext": {"age": 55, "sex": "male"}
+          },
+          "expected": {
+            "response_time_ms": {"lt": 100}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P8.2",
+          "name": "Panel_Assembly_Under_500ms",
+          "description": "Panel assembly should complete under 500ms",
+          "endpoint": "/panels/patient/{patientId}/assemble/BMP",
+          "method": "POST",
+          "input": {
+            "patientId": "test-patient-001",
+            "labs": {
+              "2951-2": 140, "2823-3": 4.5, "2075-0": 102,
+              "1963-8": 24, "3094-0": 18, "2160-0": 1.1, "2345-7": 95
+            }
+          },
+          "expected": {
+            "response_time_ms": {"lt": 500}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P8.3",
+          "name": "Batch_20_Labs_Under_2_Seconds",
+          "description": "Batch of 20 lab interpretations under 2 seconds",
+          "endpoint": "/interpret/batch",
+          "method": "POST",
+          "input": {
+            "labs": [
+              {"code": "2823-3", "value": 4.0, "unit": "mEq/L"},
+              {"code": "2823-3", "value": 4.1, "unit": "mEq/L"},
+              {"code": "2823-3", "value": 4.2, "unit": "mEq/L"},
+              {"code": "2823-3", "value": 4.3, "unit": "mEq/L"},
+              {"code": "2823-3", "value": 4.4, "unit": "mEq/L"}
+            ]
+          },
+          "expected": {
+            "response_time_ms": {"lt": 2000}
+          },
+          "severity": "HIGH"
+        }
+      ]
+    },
+    {
+      "id": "P9",
+      "name": "Clinical Edge Cases",
+      "description": "Handle real-world messy data and unusual clinical scenarios",
+      "tests": [
+        {
+          "id": "P9.1",
+          "name": "Hemolyzed_Sample_Potassium_Warning",
+          "description": "Hemolyzed sample should warn about K artifact",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2823-3",
+            "value": 6.5,
+            "unit": "mEq/L",
+            "specimenQuality": "hemolyzed"
+          },
+          "expected": {
+            "clinicalComment": {"contains": "hemolysis"}
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P9.6",
+          "name": "Below_Detection_Limit",
+          "description": "Value <0.01 for troponin should be normal",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "10839-9",
+            "valueString": "<0.01",
+            "unit": "ng/mL"
+          },
+          "expected": {
+            "flag": "NORMAL"
+          },
+          "severity": "HIGH"
+        },
+        {
+          "id": "P9.7",
+          "name": "Above_Reportable_Range",
+          "description": "Value >500 for glucose should be critical",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2345-7",
+            "valueString": ">500",
+            "unit": "mg/dL"
+          },
+          "expected": {
+            "flag": "CRITICAL_HIGH",
+            "isPanic": true
+          },
+          "severity": "CRITICAL"
+        },
+        {
+          "id": "P9.14",
+          "name": "Unit_Conversion_Handling",
+          "description": "Glucose 7.0 mmol/L should convert to 126 mg/dL (high)",
+          "endpoint": "/interpret",
+          "method": "POST",
+          "input": {
+            "code": "2345-7",
+            "value": 7.0,
+            "unit": "mmol/L"
+          },
+          "expected": {
+            "flag": "HIGH"
+          },
+          "severity": "HIGH"
+        }
+      ]
+    }
+  ],
+  "test_environment": {
+    "kb8_url": "http://localhost:8097",
+    "kb16_url": "http://localhost:8098",
+    "kb14_url": "http://localhost:8093",
+    "database_url": "postgres://kb16_user:kb_password@localhost:5440/kb_lab_interpretation",
+    "redis_url": "redis://localhost:6395"
+  },
+  "execution_config": {
+    "parallel_execution": true,
+    "max_concurrency": 10,
+    "timeout_ms": 30000,
+    "retry_count": 2,
+    "fail_fast": false
+  }
+}

@@ -1,0 +1,582 @@
+# KB-1 Drug Dosing Governance Schema
+# Version: 1.0.0
+# 
+# This schema defines the structure for all governed drug dosing rules.
+# Every drug in KB-1 must conform to this schema.
+#
+# Key Principle: Every dose computation must be traceable to a regulatory source.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://kb.health/schemas/kb1-dosing-rule.schema.yaml"
+title: "KB-1 Drug Dosing Rule Schema"
+version: "1.0.0"
+
+# ==============================================================================
+# DEFINITIONS
+# ==============================================================================
+
+definitions:
+  
+  # Regulatory authorities recognized by KB-1
+  Authority:
+    type: string
+    enum:
+      - FDA          # US Food and Drug Administration
+      - TGA          # Australia Therapeutic Goods Administration
+      - CDSCO        # India Central Drugs Standard Control Organisation
+      - EMA          # European Medicines Agency
+      - MHRA         # UK Medicines and Healthcare products Regulatory Agency
+      - NICE         # UK National Institute for Health and Care Excellence
+      - WHO          # World Health Organization
+      - IDSA         # Infectious Diseases Society of America
+      - ACCP         # American College of Clinical Pharmacy
+      - ACC_AHA      # American College of Cardiology / American Heart Association
+      - ADA          # American Diabetes Association
+      - KDIGO        # Kidney Disease Improving Global Outcomes
+      - NCCN         # National Comprehensive Cancer Network
+      - LEXICOMP     # Lexicomp (commercial compendium)
+      - MICROMEDEX   # Micromedex (commercial compendium)
+      - BNF          # British National Formulary
+      - AMH          # Australian Medicines Handbook
+      - NFI          # National Formulary of India
+      - INTERNAL     # Internal clinical review (must have CMO approval)
+  
+  # Jurisdictions where rules apply
+  Jurisdiction:
+    type: string
+    enum:
+      - US           # United States
+      - AU           # Australia
+      - IN           # India
+      - UK           # United Kingdom
+      - EU           # European Union
+      - NZ           # New Zealand
+      - CA           # Canada
+      - GLOBAL       # WHO/International
+  
+  # Evidence levels (GRADE-based)
+  EvidenceLevel:
+    type: string
+    enum:
+      - A            # High-quality evidence from RCTs
+      - B            # Moderate evidence from RCTs or observational
+      - C            # Low-quality evidence
+      - D            # Very low/case reports
+      - EXPERT       # Expert consensus/clinical experience
+      - LABEL        # Directly from regulatory label
+  
+  # Dosing methods
+  DosingMethod:
+    type: string
+    enum:
+      - FIXED
+      - WEIGHT_BASED
+      - BSA_BASED
+      - AGE_BASED
+      - RENAL_ADJUSTED
+      - HEPATIC_ADJUSTED
+      - TITRATION
+      - INDICATION_BASED
+  
+  # Dose units
+  DoseUnit:
+    type: string
+    enum:
+      - mg
+      - mcg
+      - g
+      - mg/kg
+      - mcg/kg
+      - mg/m2
+      - units
+      - units/kg
+      - mL
+      - mEq
+      - mmol
+  
+  # Administration routes
+  Route:
+    type: string
+    enum:
+      - PO           # Oral
+      - IV           # Intravenous
+      - IM           # Intramuscular
+      - SQ           # Subcutaneous
+      - SL           # Sublingual
+      - PR           # Rectal
+      - INH          # Inhalation
+      - TOP          # Topical
+      - OPH          # Ophthalmic
+      - OTIC         # Otic
+      - NAS          # Nasal
+      - TD           # Transdermal
+      - IT           # Intrathecal
+  
+  # Dosing frequencies
+  Frequency:
+    type: string
+    enum:
+      - ONCE
+      - DAILY
+      - BID          # Twice daily
+      - TID          # Three times daily
+      - QID          # Four times daily
+      - Q4H
+      - Q6H
+      - Q8H
+      - Q12H
+      - Q24H
+      - Q48H
+      - Q72H
+      - WEEKLY
+      - BIWEEKLY
+      - MONTHLY
+      - PRN          # As needed
+  
+  # Age groups
+  AgeGroup:
+    type: string
+    enum:
+      - NEONATE      # 0-28 days
+      - INFANT       # 1-12 months
+      - TODDLER      # 1-3 years
+      - CHILD        # 3-12 years
+      - ADOLESCENT   # 12-18 years
+      - ADULT        # 18-65 years
+      - GERIATRIC    # >65 years
+  
+  # Renal adjustment basis
+  RenalBasis:
+    type: string
+    enum:
+      - CrCl         # Creatinine Clearance
+      - eGFR         # Estimated GFR
+      - SCr          # Serum Creatinine
+
+# ==============================================================================
+# MAIN SCHEMA
+# ==============================================================================
+
+type: object
+required:
+  - drug
+  - dosing
+  - safety
+  - governance
+
+properties:
+  
+  # --------------------------------------------------------------------------
+  # DRUG IDENTIFICATION
+  # --------------------------------------------------------------------------
+  drug:
+    type: object
+    required:
+      - rxnormCode
+      - name
+      - genericName
+    properties:
+      rxnormCode:
+        type: string
+        description: "RxNorm CUI - primary cross-jurisdiction identifier"
+        pattern: "^[0-9]+$"
+      name:
+        type: string
+        description: "Brand or generic name for display"
+      genericName:
+        type: string
+        description: "INN/USAN generic name"
+      drugClass:
+        type: string
+        description: "Therapeutic classification"
+      atcCode:
+        type: string
+        description: "WHO ATC code (optional)"
+        pattern: "^[A-Z][0-9]{2}[A-Z]{2}[0-9]{2}$"
+      snomedCode:
+        type: string
+        description: "SNOMED CT code for KB-7 integration"
+      amtCode:
+        type: string
+        description: "AMT code for Australia (optional)"
+  
+  # --------------------------------------------------------------------------
+  # DOSING RULES
+  # --------------------------------------------------------------------------
+  dosing:
+    type: object
+    required:
+      - primaryMethod
+      - adult
+    properties:
+      
+      primaryMethod:
+        $ref: "#/definitions/DosingMethod"
+      
+      # Adult dosing
+      adult:
+        type: object
+        properties:
+          standard:
+            type: array
+            items:
+              type: object
+              required:
+                - indication
+                - dose
+                - unit
+                - frequency
+              properties:
+                indication:
+                  type: string
+                route:
+                  $ref: "#/definitions/Route"
+                dose:
+                  type: number
+                doseRange:
+                  type: object
+                  properties:
+                    min:
+                      type: number
+                    max:
+                      type: number
+                unit:
+                  $ref: "#/definitions/DoseUnit"
+                frequency:
+                  $ref: "#/definitions/Frequency"
+                isStartingDose:
+                  type: boolean
+                isMaintenanceDose:
+                  type: boolean
+                notes:
+                  type: string
+          
+          maxDaily:
+            type: number
+          maxSingle:
+            type: number
+          maxUnit:
+            $ref: "#/definitions/DoseUnit"
+      
+      # Weight-based dosing
+      weightBased:
+        type: object
+        properties:
+          dosePerKg:
+            type: number
+          unit:
+            $ref: "#/definitions/DoseUnit"
+          frequency:
+            $ref: "#/definitions/Frequency"
+          minDose:
+            type: number
+          maxDose:
+            type: number
+          useIdealWeight:
+            type: boolean
+          useAdjustedWeight:
+            type: boolean
+          notes:
+            type: string
+      
+      # BSA-based dosing (chemotherapy)
+      bsaBased:
+        type: object
+        properties:
+          dosePerM2:
+            type: number
+          unit:
+            $ref: "#/definitions/DoseUnit"
+          maxAbsoluteDose:
+            type: number
+          cappedAtBSA:
+            type: number
+          notes:
+            type: string
+      
+      # Pediatric dosing
+      pediatric:
+        type: object
+        properties:
+          ageRanges:
+            type: array
+            items:
+              type: object
+              properties:
+                ageGroup:
+                  $ref: "#/definitions/AgeGroup"
+                minAgeMonths:
+                  type: integer
+                maxAgeMonths:
+                  type: integer
+                dosePerKg:
+                  type: number
+                unit:
+                  $ref: "#/definitions/DoseUnit"
+                frequency:
+                  $ref: "#/definitions/Frequency"
+                maxDose:
+                  type: number
+          useWeight:
+            type: boolean
+          minAge:
+            type: integer
+            description: "Minimum age in months"
+          contraindicated:
+            type: boolean
+          notes:
+            type: string
+      
+      # Geriatric dosing
+      geriatric:
+        type: object
+        properties:
+          startLow:
+            type: boolean
+          doseReduction:
+            type: number
+            description: "Percentage reduction (e.g., 50 = 50% of adult dose)"
+          avoidInElderly:
+            type: boolean
+          beersListStatus:
+            type: string
+            description: "Beers Criteria classification"
+          notes:
+            type: string
+      
+      # Renal dosing adjustments
+      renal:
+        type: object
+        properties:
+          adjustmentBasis:
+            $ref: "#/definitions/RenalBasis"
+          adjustments:
+            type: array
+            items:
+              type: object
+              properties:
+                minCrCl:
+                  type: number
+                maxCrCl:
+                  type: number
+                dosePercent:
+                  type: number
+                frequency:
+                  $ref: "#/definitions/Frequency"
+                avoid:
+                  type: boolean
+                dialyzable:
+                  type: boolean
+                supplementDose:
+                  type: number
+                notes:
+                  type: string
+          notes:
+            type: string
+      
+      # Hepatic dosing adjustments
+      hepatic:
+        type: object
+        properties:
+          childPughA:
+            type: object
+            properties:
+              dosePercent:
+                type: number
+              fixedDose:
+                type: number
+              avoid:
+                type: boolean
+              notes:
+                type: string
+          childPughB:
+            type: object
+            properties:
+              dosePercent:
+                type: number
+              fixedDose:
+                type: number
+              avoid:
+                type: boolean
+              notes:
+                type: string
+          childPughC:
+            type: object
+            properties:
+              dosePercent:
+                type: number
+              fixedDose:
+                type: number
+              avoid:
+                type: boolean
+              notes:
+                type: string
+          notes:
+            type: string
+      
+      # Titration schedules
+      titration:
+        type: object
+        properties:
+          steps:
+            type: array
+            items:
+              type: object
+              properties:
+                stepNumber:
+                  type: integer
+                dose:
+                  type: number
+                unit:
+                  $ref: "#/definitions/DoseUnit"
+                frequency:
+                  $ref: "#/definitions/Frequency"
+                durationDays:
+                  type: integer
+                criteria:
+                  type: string
+                notes:
+                  type: string
+          target:
+            type: string
+          maxDose:
+            type: number
+          notes:
+            type: string
+  
+  # --------------------------------------------------------------------------
+  # SAFETY INFORMATION
+  # --------------------------------------------------------------------------
+  safety:
+    type: object
+    properties:
+      highAlertDrug:
+        type: boolean
+        description: "ISMP High-Alert Medication"
+      narrowTherapeuticIndex:
+        type: boolean
+        description: "Narrow therapeutic window requiring TDM"
+      blackBoxWarning:
+        type: boolean
+      blackBoxText:
+        type: string
+        description: "Summarized black box warning text"
+      monitoring:
+        type: array
+        items:
+          type: string
+        description: "Required monitoring parameters"
+      contraindications:
+        type: array
+        items:
+          type: string
+      majorInteractions:
+        type: array
+        items:
+          type: string
+      clinicalNotes:
+        type: string
+  
+  # --------------------------------------------------------------------------
+  # GOVERNANCE (CRITICAL - MUST BE COMPLETE)
+  # --------------------------------------------------------------------------
+  governance:
+    type: object
+    required:
+      - authority
+      - document
+      - jurisdiction
+      - version
+      - approvedBy
+      - approvedAt
+    properties:
+      
+      # Primary regulatory source
+      authority:
+        $ref: "#/definitions/Authority"
+        description: "Primary regulatory/clinical authority"
+      
+      # Document reference
+      document:
+        type: string
+        description: "Official document name (e.g., 'Warfarin Prescribing Information')"
+      section:
+        type: string
+        description: "Specific section (e.g., '2.2 Dosage and Administration')"
+      url:
+        type: string
+        format: uri
+        description: "Link to source document"
+      
+      # Jurisdiction
+      jurisdiction:
+        $ref: "#/definitions/Jurisdiction"
+      
+      # Evidence
+      evidenceLevel:
+        $ref: "#/definitions/EvidenceLevel"
+      
+      # Lifecycle
+      effectiveDate:
+        type: string
+        format: date
+        description: "When this guidance became effective"
+      expirationDate:
+        type: string
+        format: date
+        description: "When to re-review (optional)"
+      
+      # Version control
+      version:
+        type: string
+        pattern: "^[0-9]{4}\\.[0-9]+$"
+        description: "Internal version (e.g., 2025.1)"
+      
+      # Approval chain
+      approvedBy:
+        type: string
+        description: "CMO, Clinical Pharmacist, or other approver"
+      approvedAt:
+        type: string
+        format: date-time
+        description: "When approved for production"
+      
+      # Review tracking
+      lastReviewedAt:
+        type: string
+        format: date-time
+      lastReviewedBy:
+        type: string
+      nextReviewDue:
+        type: string
+        format: date
+      
+      # Change history
+      changeLog:
+        type: array
+        items:
+          type: object
+          properties:
+            date:
+              type: string
+              format: date
+            change:
+              type: string
+            reviewer:
+              type: string
+      
+      # Secondary sources (when primary label lacks detail)
+      secondarySources:
+        type: array
+        items:
+          type: object
+          properties:
+            authority:
+              $ref: "#/definitions/Authority"
+            document:
+              type: string
+            section:
+              type: string
+            reason:
+              type: string
+              description: "Why secondary source was needed"

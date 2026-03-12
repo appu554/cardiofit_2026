@@ -1,0 +1,1349 @@
+package com.cardiofit.flink.patterns;
+
+import com.cardiofit.flink.models.SemanticEvent;
+import com.cardiofit.flink.models.PatternEvent;
+import com.cardiofit.flink.models.EnrichedEvent;
+import com.cardiofit.flink.models.RiskIndicators;
+import com.cardiofit.stream.models.CanonicalEvent;
+import org.apache.flink.cep.CEP;
+import org.apache.flink.cep.PatternStream;
+import org.apache.flink.cep.PatternSelectFunction;
+import org.apache.flink.cep.functions.PatternProcessFunction;
+import org.apache.flink.cep.pattern.Pattern;
+import org.apache.flink.cep.pattern.conditions.SimpleCondition;
+import org.apache.flink.cep.pattern.conditions.IterativeCondition;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.util.Collector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * Clinical pattern detection using Complex Event Processing (CEP)
+ * Implements evidence-based clinical deterioration patterns
+ * Based on CardioFit platform clinical protocols and medical literature
+ */
+public class ClinicalPatterns {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ClinicalPatterns.class);
+
+    /**
+     * Sepsis detection pattern based on qSOFA criteria and clinical deterioration signs
+     * Pattern: Baseline vitals -> Early warning signs -> Critical deterioration
+     * Timeframe: 2-6 hours for early intervention
+     */
+    public static PatternStream<SemanticEvent> detectSepsisPattern(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> sepsisPattern = Pattern
+            .<SemanticEvent>begin("baseline")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> vitals = (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+                    if (vitals == null) return false;
+
+                    // Baseline: Patient has normal or slightly elevated vitals
+                    Integer heartRate = (Integer) vitals.get("heart_rate");
+                    Integer systolic = (Integer) vitals.get("systolic_bp");
+                    Double temperature = (Double) vitals.get("temperature");
+
+                    return heartRate != null && heartRate >= 60 && heartRate <= 110 &&
+                           systolic != null && systolic >= 90 &&
+                           temperature != null && temperature >= 36.0 && temperature <= 38.0;
+                }
+            })
+            .next("early_warning")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> vitals = (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+                    Map<String, Object> labs = (Map<String, Object>) event.getClinicalData().get("labValues");
+
+                    if (vitals == null) return false;
+
+                    // qSOFA criteria: RR ≥22, altered mentation, SBP ≤100
+                    Integer respiratoryRate = (Integer) vitals.get("respiratory_rate");
+                    Integer systolic = (Integer) vitals.get("systolic_bp");
+                    Integer heartRate = (Integer) vitals.get("heart_rate");
+                    Double temperature = (Double) vitals.get("temperature");
+
+                    // Early warning signs
+                    boolean tachycardia = heartRate != null && heartRate > 90;
+                    boolean hypotension = systolic != null && systolic <= 100;
+                    boolean tachypnea = respiratoryRate != null && respiratoryRate >= 22;
+                    boolean fever = temperature != null && (temperature > 38.3 || temperature < 36.0);
+
+                    // Laboratory early indicators
+                    boolean elevatedLactate = false;
+                    boolean elevatedWBC = false;
+                    if (labs != null) {
+                        Double lactate = (Double) labs.get("lactate");
+                        Integer wbc = (Integer) labs.get("wbc_count");
+                        elevatedLactate = lactate != null && lactate > 2.0;
+                        elevatedWBC = wbc != null && (wbc > 12000 || wbc < 4000);
+                    }
+
+                    // At least 2 qSOFA criteria or significant lab abnormalities
+                    int qsofaScore = (tachypnea ? 1 : 0) + (hypotension ? 1 : 0);
+                    return qsofaScore >= 2 || tachycardia || fever || elevatedLactate || elevatedWBC;
+                }
+            })
+            .followedBy("deterioration")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> vitals = (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+                    Map<String, Object> labs = (Map<String, Object>) event.getClinicalData().get("labValues");
+
+                    if (vitals == null) return false;
+
+                    // Critical deterioration indicators
+                    Integer heartRate = (Integer) vitals.get("heart_rate");
+                    Integer systolic = (Integer) vitals.get("systolic_bp");
+                    Integer respiratoryRate = (Integer) vitals.get("respiratory_rate");
+                    Double oxygenSat = (Double) vitals.get("oxygen_saturation");
+
+                    boolean severeHypotension = systolic != null && systolic < 90;
+                    boolean severeTachycardia = heartRate != null && heartRate > 120;
+                    boolean severeHypoxemia = oxygenSat != null && oxygenSat < 90;
+                    boolean severeTachypnea = respiratoryRate != null && respiratoryRate > 30;
+
+                    // Laboratory indicators of organ dysfunction
+                    boolean organDysfunction = false;
+                    if (labs != null) {
+                        Double lactate = (Double) labs.get("lactate");
+                        Double creatinine = (Double) labs.get("creatinine");
+                        Integer platelets = (Integer) labs.get("platelets");
+
+                        organDysfunction = (lactate != null && lactate > 4.0) ||
+                                         (creatinine != null && creatinine > 2.0) ||
+                                         (platelets != null && platelets < 100000);
+                    }
+
+                    return severeHypotension || severeTachycardia || severeHypoxemia ||
+                           severeTachypnea || organDysfunction;
+                }
+            })
+            .within(Duration.ofHours(6)); // 6-hour window for sepsis progression
+
+        return CEP.pattern(input.keyBy(SemanticEvent::getPatientId), sepsisPattern);
+    }
+
+    /**
+     * Cardiac deterioration pattern detection
+     * Pattern: Chest pain/discomfort -> ECG changes -> Cardiac biomarker elevation
+     */
+    public static PatternStream<SemanticEvent> detectCardiacDeteriorationPattern(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> cardiacPattern = Pattern
+            .<SemanticEvent>begin("symptoms")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> symptoms = (Map<String, Object>) event.getClinicalData().get("symptoms");
+                    if (symptoms == null) return false;
+
+                    // Cardiac symptoms
+                    Boolean chestPain = (Boolean) symptoms.get("chest_pain");
+                    Boolean shortnessOfBreath = (Boolean) symptoms.get("shortness_of_breath");
+                    Boolean diaphoresis = (Boolean) symptoms.get("diaphoresis");
+
+                    return (chestPain != null && chestPain) ||
+                           (shortnessOfBreath != null && shortnessOfBreath) ||
+                           (diaphoresis != null && diaphoresis);
+                }
+            })
+            .next("ecg_changes")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> diagnostics = (Map<String, Object>) event.getClinicalData().get("diagnosticResults");
+                    if (diagnostics == null) return false;
+
+                    // ECG abnormalities
+                    String ecgResult = (String) diagnostics.get("ecg_interpretation");
+                    return ecgResult != null &&
+                           (ecgResult.contains("ST elevation") ||
+                            ecgResult.contains("ST depression") ||
+                            ecgResult.contains("T wave inversion") ||
+                            ecgResult.contains("new Q waves"));
+                }
+            })
+            .followedBy("biomarker_elevation")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> labs = (Map<String, Object>) event.getClinicalData().get("labValues");
+                    if (labs == null) return false;
+
+                    // Cardiac biomarkers
+                    Double troponin = (Double) labs.get("troponin_i");
+                    Double ckMb = (Double) labs.get("ck_mb");
+                    Double bnp = (Double) labs.get("bnp");
+
+                    return (troponin != null && troponin > 0.04) || // ng/mL
+                           (ckMb != null && ckMb > 6.3) || // ng/mL
+                           (bnp != null && bnp > 400); // pg/mL
+                }
+            })
+            .within(Duration.ofHours(12)); // 12-hour window for cardiac events
+
+        return CEP.pattern(input.keyBy(event -> ((CanonicalEvent)event).getPatientId()), cardiacPattern);
+    }
+
+    /**
+     * Medication adherence monitoring pattern
+     * Pattern: Medication due -> Absence of administration -> Potential non-adherence
+     */
+    public static PatternStream<SemanticEvent> detectMedicationNonAdherencePattern(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> adherencePattern = Pattern
+            .<SemanticEvent>begin("medication_due")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    if (!"MEDICATION_SCHEDULED".equals(event.getEventType())) return false;
+
+                    Map<String, Object> medication = (Map<String, Object>) event.getClinicalData().get("medicationData");
+                    return medication != null &&
+                           "DUE".equals(medication.get("administration_status"));
+                }
+            })
+            .notFollowedBy("medication_given")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    if (!"MEDICATION_ADMINISTERED".equals(event.getEventType())) return false;
+
+                    Map<String, Object> medication = (Map<String, Object>) event.getClinicalData().get("medicationData");
+                    return medication != null &&
+                           "ADMINISTERED".equals(medication.get("administration_status"));
+                }
+            })
+            .within(Duration.ofHours(2)); // 2-hour window for medication administration
+
+        return CEP.pattern(input.keyBy(event -> ((CanonicalEvent)event).getPatientId()), adherencePattern);
+    }
+
+    /**
+     * Fall risk assessment pattern
+     * Pattern: Mobility changes -> Risk factors -> Environmental hazards
+     */
+    public static PatternStream<SemanticEvent> detectFallRiskPattern(DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> fallRiskPattern = Pattern
+            .<SemanticEvent>begin("mobility_change")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> assessment = (Map<String, Object>) event.getClinicalData().get("assessmentData");
+                    if (assessment == null) return false;
+
+                    String mobilityStatus = (String) assessment.get("mobility_status");
+                    String previousMobility = (String) assessment.get("previous_mobility");
+
+                    // Detect decrease in mobility
+                    return mobilityStatus != null && previousMobility != null &&
+                           (("independent".equals(previousMobility) && "assisted".equals(mobilityStatus)) ||
+                            ("assisted".equals(previousMobility) && "bedbound".equals(mobilityStatus)));
+                }
+            })
+            .next("risk_factors")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) throws Exception {
+                    Map<String, Object> riskFactors = (Map<String, Object>) event.getClinicalData().get("riskFactors");
+                    if (riskFactors == null) return false;
+
+                    Boolean cognitiveImpairment = (Boolean) riskFactors.get("cognitive_impairment");
+                    Boolean medicationSideEffects = (Boolean) riskFactors.get("medication_side_effects");
+                    Boolean historyOfFalls = (Boolean) riskFactors.get("history_of_falls");
+                    Integer age = (Integer) riskFactors.get("age");
+
+                    int riskScore = 0;
+                    if (cognitiveImpairment != null && cognitiveImpairment) riskScore++;
+                    if (medicationSideEffects != null && medicationSideEffects) riskScore++;
+                    if (historyOfFalls != null && historyOfFalls) riskScore++;
+                    if (age != null && age > 65) riskScore++;
+
+                    return riskScore >= 2; // High risk with 2+ factors
+                }
+            })
+            .within(Duration.ofHours(24)); // 24-hour assessment window
+
+        return CEP.pattern(input.keyBy(event -> ((CanonicalEvent)event).getPatientId()), fallRiskPattern);
+    }
+
+    /**
+     * Detect Acute Kidney Injury (AKI) pattern based on KDIGO criteria.
+     * Pattern: Baseline creatinine -> Elevated creatinine -> Risk factors present
+     *
+     * KDIGO Criteria (2012):
+     * - Stage 1: Creatinine ≥1.5x baseline OR ≥0.3 mg/dL increase (48h window)
+     * - Stage 2: Creatinine ≥2.0x baseline
+     * - Stage 3: Creatinine ≥3.0x baseline OR dialysis initiated
+     *
+     * Risk Factors (from RiskIndicators):
+     * - Hypotension (reduced renal perfusion)
+     * - On vasopressors (hemodynamic instability)
+     * - On nephrotoxic medications (direct tubular injury)
+     * - Sepsis/infection (inflammatory injury)
+     *
+     * References:
+     * - KDIGO AKI Guideline 2012
+     * - Kidney Int Suppl 2012;2:1-138
+     *
+     * @param input Stream of enriched events with RiskIndicators
+     * @return Pattern stream matching AKI progression
+     */
+    public static PatternStream<EnrichedEvent> detectAKIPattern(DataStream<EnrichedEvent> input) {
+        Pattern<EnrichedEvent, ?> akiPattern = Pattern
+            .<EnrichedEvent>begin("baseline_creatinine")
+            .where(new SimpleCondition<EnrichedEvent>() {
+                @Override
+                public boolean filter(EnrichedEvent event) throws Exception {
+                    // Baseline: Normal or stable creatinine reading
+                    Map<String, Object> labData = (Map<String, Object>) event.getPayload().get("labValues");
+                    if (labData == null || !labData.containsKey("creatinine")) {
+                        return false;
+                    }
+
+                    Double creatinine = (Double) labData.get("creatinine");
+                    // Baseline creatinine typically < 1.2 mg/dL for healthy adults
+                    return creatinine != null && creatinine < 1.5;
+                }
+            })
+            .next("elevated_creatinine")
+            .where(new SimpleCondition<EnrichedEvent>() {
+                @Override
+                public boolean filter(EnrichedEvent event) throws Exception {
+                    // Elevated creatinine meeting KDIGO Stage 1+ criteria
+                    RiskIndicators risk = event.getRiskIndicators();
+                    if (risk == null) {
+                        return false;
+                    }
+
+                    // Check if elevated creatinine flag is set (≥1.5x baseline)
+                    if (!risk.isElevatedCreatinine()) {
+                        return false;
+                    }
+
+                    // Additional validation: check actual creatinine value
+                    Map<String, Object> labData = (Map<String, Object>) event.getPayload().get("labValues");
+                    if (labData != null && labData.containsKey("creatinine")) {
+                        Double creatinine = (Double) labData.get("creatinine");
+                        // KDIGO Stage 1: ≥1.5x baseline OR absolute increase ≥0.3 mg/dL
+                        return creatinine != null && creatinine >= 1.2;
+                    }
+
+                    return true; // Flag is set, trust RiskIndicators
+                }
+            })
+            .followedBy("risk_factor_present")
+            .where(new SimpleCondition<EnrichedEvent>() {
+                @Override
+                public boolean filter(EnrichedEvent event) throws Exception {
+                    RiskIndicators risk = event.getRiskIndicators();
+                    if (risk == null) {
+                        return false;
+                    }
+
+                    // AKI risk factors from RiskIndicators
+                    boolean hasHypotension = risk.isHypotension(); // SBP < 90 mmHg
+                    boolean onVasopressors = risk.isOnVasopressors(); // Hemodynamic instability
+                    boolean nephrotoxicMeds = risk.isOnNephrotoxicMeds(); // Direct tubular injury
+                    boolean hasSepsis = risk.isFever() && risk.isElevatedLactate(); // Sepsis-induced AKI
+
+                    // At least one major risk factor must be present
+                    return hasHypotension || onVasopressors || nephrotoxicMeds || hasSepsis;
+                }
+            })
+            .within(Duration.ofHours(48)); // KDIGO 48-hour window for acute injury
+
+        return CEP.pattern(input.keyBy(EnrichedEvent::getPatientId), akiPattern);
+    }
+
+    /**
+     * Process detected clinical patterns into actionable alerts
+     */
+    public static class ClinicalPatternProcessor extends PatternProcessFunction<SemanticEvent, PatternEvent> {
+
+        @Override
+        public void processMatch(Map<String, List<SemanticEvent>> pattern,
+                               Context ctx,
+                               Collector<PatternEvent> out) throws Exception {
+
+            String patternName = determinePatternType(pattern);
+            String patientId = extractPatientId(pattern);
+            double confidenceScore = calculateConfidenceScore(pattern, patternName);
+            String severity = determineSeverity(pattern, patternName);
+
+            PatternEvent.Builder patternBuilder = PatternEvent.builder()
+                .id(generatePatternId(patternName, patientId, ctx.timestamp()))
+                .patientId(patientId)
+                .patternType(patternName)
+                .detectionTime(ctx.timestamp())
+                .confidence(confidenceScore)
+                .severity(severity)
+                .involvedEvents(extractEventIds(pattern));
+
+            // Add pattern-specific metadata
+            switch (patternName) {
+                case "SEPSIS_DETERIORATION":
+                    addSepsisMetadata(patternBuilder, pattern);
+                    break;
+                case "CARDIAC_DETERIORATION":
+                    addCardiacMetadata(patternBuilder, pattern);
+                    break;
+                case "MEDICATION_NONADHERENCE":
+                    addMedicationMetadata(patternBuilder, pattern);
+                    break;
+                case "FALL_RISK":
+                    addFallRiskMetadata(patternBuilder, pattern);
+                    break;
+            }
+
+            out.collect(patternBuilder.build());
+        }
+
+        private String determinePatternType(Map<String, List<SemanticEvent>> pattern) {
+            if (pattern.containsKey("baseline") && pattern.containsKey("deterioration")) {
+                return "SEPSIS_DETERIORATION";
+            } else if (pattern.containsKey("symptoms") && pattern.containsKey("biomarker_elevation")) {
+                return "CARDIAC_DETERIORATION";
+            } else if (pattern.containsKey("medication_due")) {
+                return "MEDICATION_NONADHERENCE";
+            } else if (pattern.containsKey("mobility_change")) {
+                return "FALL_RISK";
+            }
+            return "UNKNOWN_PATTERN";
+        }
+
+        private String extractPatientId(Map<String, List<SemanticEvent>> pattern) {
+            return pattern.values().stream()
+                .flatMap(List::stream)
+                .findFirst()
+                .map(SemanticEvent::getPatientId)
+                .orElse("UNKNOWN");
+        }
+
+        private double calculateConfidenceScore(Map<String, List<SemanticEvent>> pattern, String patternType) {
+            // Calculate confidence based on pattern completeness and clinical indicators
+            switch (patternType) {
+                case "SEPSIS_DETERIORATION":
+                    return calculateSepsisConfidence(pattern);
+                case "CARDIAC_DETERIORATION":
+                    return calculateCardiacConfidence(pattern);
+                case "MEDICATION_NONADHERENCE":
+                    return 0.85; // High confidence for clear medication patterns
+                case "FALL_RISK":
+                    return calculateFallRiskConfidence(pattern);
+                default:
+                    return 0.5;
+            }
+        }
+
+        private double calculateSepsisConfidence(Map<String, List<SemanticEvent>> pattern) {
+            double confidence = 0.6; // Base confidence
+
+            List<SemanticEvent> warnings = pattern.get("early_warning");
+            List<SemanticEvent> deterioration = pattern.get("deterioration");
+
+            if (warnings != null && !warnings.isEmpty()) {
+                // Check for multiple qSOFA criteria
+                SemanticEvent warningEvent = warnings.get(0);
+                Map<String, Object> vitals = (Map<String, Object>) warningEvent.getClinicalData().get("vitalSigns");
+                Map<String, Object> labs = (Map<String, Object>) warningEvent.getClinicalData().get("labValues");
+
+                int indicators = 0;
+                if (vitals != null) {
+                    if (vitals.get("respiratory_rate") != null && (Integer) vitals.get("respiratory_rate") >= 22) indicators++;
+                    if (vitals.get("systolic_bp") != null && (Integer) vitals.get("systolic_bp") <= 100) indicators++;
+                }
+                if (labs != null && labs.get("lactate") != null && (Double) labs.get("lactate") > 2.0) indicators++;
+
+                confidence += indicators * 0.1; // +0.1 per indicator
+            }
+
+            if (deterioration != null && !deterioration.isEmpty()) {
+                confidence += 0.2; // Significant deterioration increases confidence
+            }
+
+            return Math.min(confidence, 0.95); // Cap at 95%
+        }
+
+        private double calculateCardiacConfidence(Map<String, List<SemanticEvent>> pattern) {
+            double confidence = 0.7; // Base confidence for cardiac patterns
+
+            List<SemanticEvent> ecgEvents = pattern.get("ecg_changes");
+            List<SemanticEvent> biomarkerEvents = pattern.get("biomarker_elevation");
+
+            if (ecgEvents != null && !ecgEvents.isEmpty()) {
+                Map<String, Object> diagnostics = (Map<String, Object>) ecgEvents.get(0).getClinicalData().get("diagnosticResults");
+                String ecgResult = diagnostics != null ? (String) diagnostics.get("ecg_interpretation") : null;
+                if (ecgResult != null && ecgResult.contains("ST elevation")) {
+                    confidence += 0.2; // STEMI has higher confidence
+                }
+            }
+
+            if (biomarkerEvents != null && !biomarkerEvents.isEmpty()) {
+                Map<String, Object> labs = (Map<String, Object>) biomarkerEvents.get(0).getClinicalData().get("labValues");
+                if (labs != null && labs.get("troponin_i") != null) {
+                    double troponin = (Double) labs.get("troponin_i");
+                    if (troponin > 0.1) confidence += 0.1; // Very elevated troponin
+                }
+            }
+
+            return Math.min(confidence, 0.95);
+        }
+
+        private double calculateFallRiskConfidence(Map<String, List<SemanticEvent>> pattern) {
+            List<SemanticEvent> riskEvents = pattern.get("risk_factors");
+            if (riskEvents == null || riskEvents.isEmpty()) return 0.6;
+
+            Map<String, Object> riskFactors = (Map<String, Object>) riskEvents.get(0).getClinicalData().get("riskFactors");
+            if (riskFactors == null) return 0.6;
+
+            int riskFactorCount = 0;
+            if (Boolean.TRUE.equals(riskFactors.get("cognitive_impairment"))) riskFactorCount++;
+            if (Boolean.TRUE.equals(riskFactors.get("medication_side_effects"))) riskFactorCount++;
+            if (Boolean.TRUE.equals(riskFactors.get("history_of_falls"))) riskFactorCount++;
+
+            Integer age = (Integer) riskFactors.get("age");
+            if (age != null && age > 75) riskFactorCount++;
+
+            return 0.6 + (riskFactorCount * 0.1); // +0.1 per risk factor
+        }
+
+        private String determineSeverity(Map<String, List<SemanticEvent>> pattern, String patternType) {
+            switch (patternType) {
+                case "SEPSIS_DETERIORATION":
+                    return pattern.containsKey("deterioration") ? "CRITICAL" : "HIGH";
+                case "CARDIAC_DETERIORATION":
+                    return "CRITICAL";
+                case "MEDICATION_NONADHERENCE":
+                    return "MEDIUM";
+                case "FALL_RISK":
+                    return "HIGH";
+                default:
+                    return "MEDIUM";
+            }
+        }
+
+        private String generatePatternId(String patternType, String patientId, long timestamp) {
+            return String.format("%s_%s_%d", patternType, patientId, timestamp);
+        }
+
+        private List<String> extractEventIds(Map<String, List<SemanticEvent>> pattern) {
+            return pattern.values().stream()
+                .flatMap(List::stream)
+                .map(SemanticEvent::getId)
+                .collect(java.util.stream.Collectors.toList());
+        }
+
+        private void addSepsisMetadata(PatternEvent.Builder builder, Map<String, List<SemanticEvent>> pattern) {
+            Map<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("pattern_type", "sepsis_deterioration");
+            metadata.put("clinical_protocol", "sepsis_bundle_protocol");
+            metadata.put("intervention_window", "1_hour");
+            metadata.put("recommended_actions", "blood_culture,lactate,antibiotics,fluids");
+            builder.patternDetails(metadata);
+        }
+
+        private void addCardiacMetadata(PatternEvent.Builder builder, Map<String, List<SemanticEvent>> pattern) {
+            Map<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("pattern_type", "cardiac_deterioration");
+            metadata.put("clinical_protocol", "acute_coronary_syndrome");
+            metadata.put("intervention_window", "30_minutes");
+            metadata.put("recommended_actions", "cardiology_consult,ecg_repeat,catheterization");
+            builder.patternDetails(metadata);
+        }
+
+        private void addMedicationMetadata(PatternEvent.Builder builder, Map<String, List<SemanticEvent>> pattern) {
+            Map<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("pattern_type", "medication_nonadherence");
+            metadata.put("clinical_protocol", "medication_reconciliation");
+            metadata.put("intervention_window", "4_hours");
+            metadata.put("recommended_actions", "pharmacist_review,patient_education");
+            builder.patternDetails(metadata);
+        }
+
+        private void addFallRiskMetadata(PatternEvent.Builder builder, Map<String, List<SemanticEvent>> pattern) {
+            Map<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("pattern_type", "fall_risk_assessment");
+            metadata.put("clinical_protocol", "fall_prevention_bundle");
+            metadata.put("intervention_window", "immediate");
+            metadata.put("recommended_actions", "mobility_assessment,environment_modification,monitoring");
+            builder.patternDetails(metadata);
+        }
+    }
+
+    /**
+     * Detect rapid clinical deterioration within 1 hour.
+     * Pattern: HR increase >20 bpm → RR elevated >24 → SpO2 <92%
+     *
+     * Clinical Rationale: This triad indicates acute cardiorespiratory compromise
+     * requiring immediate intervention. Common in sepsis, PE, heart failure.
+     */
+    public static PatternStream<SemanticEvent> detectRapidDeteriorationPattern(
+            DataStream<SemanticEvent> input) {
+
+        Pattern<SemanticEvent, ?> pattern = Pattern.<SemanticEvent>begin("hr_baseline")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return hasVitalSign(event, "heart_rate");
+                }
+            })
+            .followedBy("hr_elevated")
+            .where(new IterativeCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent current, Context<SemanticEvent> ctx) throws Exception {
+                    SemanticEvent baseline = getFirst(ctx, "hr_baseline");
+                    if (baseline == null) return false;
+
+                    double hrIncrease = getVitalValue(current, "heart_rate") -
+                                      getVitalValue(baseline, "heart_rate");
+                    return hrIncrease > 20;  // >20 bpm increase
+                }
+            })
+            .followedBy("rr_elevated")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return hasVitalSign(event, "respiratory_rate") &&
+                           getVitalValue(event, "respiratory_rate") > 24;
+                }
+            })
+            .followedBy("o2sat_decreased")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return hasVitalSign(event, "oxygen_saturation") &&
+                           getVitalValue(event, "oxygen_saturation") < 92;
+                }
+            })
+            .within(Duration.ofHours(1));
+
+        return CEP.pattern(
+            input.keyBy(event -> ((CanonicalEvent)event).getPatientId()),
+            pattern
+        );
+    }
+
+    /**
+     * Detect missing lab monitoring after high-risk medication administration.
+     * Pattern: High-risk med started → Required labs NOT ordered within 48h
+     *
+     * Examples:
+     * - ACE inhibitors → K+, Creatinine
+     * - Warfarin → INR
+     * - Digoxin → Drug level, K+
+     */
+    public static PatternStream<SemanticEvent> detectDrugLabMonitoringPattern(
+            DataStream<SemanticEvent> input) {
+
+        Pattern<SemanticEvent, ?> pattern = Pattern.<SemanticEvent>begin("high_risk_med_started")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    if (!"MEDICATION_ORDERED".equals(event.getEventType().toString()) &&
+                        !"MEDICATION_ADMINISTERED".equals(event.getEventType().toString())) {
+                        return false;
+                    }
+                    String medicationName = getMedicationName(event);
+                    return requiresLabMonitoring(medicationName);
+                }
+            })
+            .notFollowedBy("monitoring_labs_ordered")
+            .where(new IterativeCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event, Context<SemanticEvent> ctx) throws Exception {
+                    SemanticEvent medEvent = getFirst(ctx, "high_risk_med_started");
+                    if (medEvent == null) return false;
+
+                    String medicationName = getMedicationName(medEvent);
+                    List<String> requiredLabs = getRequiredLabs(medicationName);
+
+                    if (!"LAB_ORDER".equals(event.getEventType().toString()) &&
+                        !"LAB_RESULT".equals(event.getEventType().toString())) {
+                        return false;
+                    }
+
+                    String labName = getLabName(event);
+                    return requiredLabs.contains(labName);
+                }
+            })
+            .within(Duration.ofHours(48));
+
+        return CEP.pattern(
+            input.keyBy(event -> ((CanonicalEvent)event).getPatientId()),
+            pattern
+        );
+    }
+
+    /**
+     * Detect compliance with Surviving Sepsis Campaign 1-hour bundle.
+     * Pattern: Sepsis diagnosis → Blood cultures → Antibiotics (all within 1h)
+     *
+     * Clinical Evidence: 1-hour bundle reduces mortality by 50%
+     */
+    public static PatternStream<SemanticEvent> detectSepsisPathwayCompliancePattern(
+            DataStream<SemanticEvent> input) {
+
+        Pattern<SemanticEvent, ?> pattern = Pattern.<SemanticEvent>begin("sepsis_diagnosis")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    Map<String, Object> clinicalData = event.getClinicalData();
+
+                    // Check for sepsis ICD-10 codes
+                    if (clinicalData.containsKey("diagnosis_codes")) {
+                        List<String> diagnoses = (List<String>) clinicalData.get("diagnosis_codes");
+                        for (String code : diagnoses) {
+                            if (code.startsWith("A41")) return true;  // Sepsis codes
+                        }
+                    }
+
+                    // Check qSOFA score
+                    if (clinicalData.containsKey("qsofa_score")) {
+                        Integer qsofaScore = (Integer) clinicalData.get("qsofa_score");
+                        if (qsofaScore != null && qsofaScore >= 2) return true;
+                    }
+
+                    return false;
+                }
+            })
+            .followedBy("blood_cultures_ordered")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return "LAB_ORDER".equals(event.getEventType().toString()) &&
+                           getLabName(event).toLowerCase().contains("blood culture");
+                }
+            })
+            .within(Duration.ofHours(1))
+            .followedBy("antibiotics_started")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return "MEDICATION_ADMINISTERED".equals(event.getEventType().toString()) &&
+                           isAntibiotic(getMedicationName(event));
+                }
+            })
+            .within(Duration.ofHours(1));
+
+        return CEP.pattern(
+            input.keyBy(event -> ((CanonicalEvent)event).getPatientId()),
+            pattern
+        );
+    }
+
+    // ===== Helper Methods for Pattern Detection =====
+
+    private static boolean hasVitalSign(SemanticEvent event, String vitalName) {
+        Map<String, Object> vitals = (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+        return vitals != null && vitals.containsKey(vitalName);
+    }
+
+    private static double getVitalValue(SemanticEvent event, String vitalName) {
+        Map<String, Object> vitals = (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+        if (vitals == null || !vitals.containsKey(vitalName)) return 0.0;
+
+        Object value = vitals.get(vitalName);
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        return 0.0;
+    }
+
+    private static SemanticEvent getFirst(IterativeCondition.Context<SemanticEvent> ctx, String patternName) throws Exception {
+        Iterable<SemanticEvent> events = ctx.getEventsForPattern(patternName);
+        for (SemanticEvent event : events) {
+            return event;  // Return first event
+        }
+        return null;
+    }
+
+    private static String getMedicationName(SemanticEvent event) {
+        Map<String, Object> medData = (Map<String, Object>) event.getClinicalData().get("medicationData");
+        if (medData != null && medData.containsKey("medication_name")) {
+            return (String) medData.get("medication_name");
+        }
+        return "";
+    }
+
+    private static String getLabName(SemanticEvent event) {
+        Map<String, Object> labData = (Map<String, Object>) event.getClinicalData().get("labData");
+        if (labData != null && labData.containsKey("lab_name")) {
+            return (String) labData.get("lab_name");
+        }
+        return "";
+    }
+
+    private static boolean requiresLabMonitoring(String medicationName) {
+        String med = medicationName.toLowerCase();
+        return med.contains("lisinopril") || med.contains("enalapril") ||  // ACE inhibitors
+               med.contains("warfarin") || med.contains("digoxin") ||
+               med.contains("lithium") || med.contains("metformin") ||
+               med.contains("gentamicin") || med.contains("vancomycin");
+    }
+
+    private static List<String> getRequiredLabs(String medicationName) {
+        String med = medicationName.toLowerCase();
+        List<String> labs = new ArrayList<>();
+
+        if (med.contains("lisinopril") || med.contains("enalapril")) {
+            labs.add("Potassium");
+            labs.add("Creatinine");
+        } else if (med.contains("warfarin")) {
+            labs.add("INR");
+            labs.add("PT");
+        } else if (med.contains("digoxin")) {
+            labs.add("Digoxin Level");
+            labs.add("Potassium");
+        } else if (med.contains("lithium")) {
+            labs.add("Lithium Level");
+            labs.add("TSH");
+            labs.add("Creatinine");
+        }
+
+        return labs;
+    }
+
+    private static boolean isAntibiotic(String medicationName) {
+        String med = medicationName.toLowerCase();
+        return med.contains("cillin") ||      // Penicillins
+               med.contains("cef") ||          // Cephalosporins
+               med.contains("vancomycin") ||
+               med.contains("meropenem") ||
+               med.contains("azithromycin") ||
+               med.contains("levofloxacin");
+    }
+
+    // ===== Pattern Select Functions =====
+
+    /**
+     * AKI Pattern Select Function - converts CEP matches into PatternEvent.
+     */
+    public static class AKIPatternSelectFunction implements PatternSelectFunction<EnrichedEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<EnrichedEvent>> pattern) throws Exception {
+            List<EnrichedEvent> baseline = pattern.get("baseline_creatinine");
+            List<EnrichedEvent> elevated = pattern.get("elevated_creatinine");
+            List<EnrichedEvent> riskFactors = pattern.get("risk_factor_present");
+
+            EnrichedEvent baselineEvent = baseline.get(0);
+            EnrichedEvent elevatedEvent = elevated.get(0);
+            EnrichedEvent riskEvent = riskFactors.get(0);
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("ACUTE_KIDNEY_INJURY");
+            patternEvent.setPatientId(baselineEvent.getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+
+            // Determine AKI stage and severity
+            AKIStage stage = determineAKIStage(baselineEvent, elevatedEvent);
+            patternEvent.setSeverity(stage.getSeverity());
+            patternEvent.setConfidence(calculateAKIConfidence(baseline, elevated, riskFactors));
+
+            // Pattern details
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("aki_stage", stage.getStage());
+            patternDetails.put("baseline_creatinine", extractCreatinine(baselineEvent));
+            patternDetails.put("elevated_creatinine", extractCreatinine(elevatedEvent));
+            patternDetails.put("creatinine_ratio", calculateCreatinineRatio(baselineEvent, elevatedEvent));
+            patternDetails.put("time_to_elevation_hours",
+                (elevatedEvent.getEventTime() - baselineEvent.getEventTime()) / (1000.0 * 3600.0));
+
+            // Risk factors
+            RiskIndicators risk = riskEvent.getRiskIndicators();
+            List<String> contributingFactors = new ArrayList<>();
+            if (risk.isHypotension()) contributingFactors.add("HYPOTENSION");
+            if (risk.isOnVasopressors()) contributingFactors.add("VASOPRESSOR_SUPPORT");
+            if (risk.isOnNephrotoxicMeds()) contributingFactors.add("NEPHROTOXIC_MEDICATIONS");
+            if (risk.isFever() && risk.isElevatedLactate()) contributingFactors.add("SEPSIS");
+            patternDetails.put("risk_factors", contributingFactors);
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            // Involved events
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(baselineEvent.getId());
+            involvedEvents.add(elevatedEvent.getId());
+            involvedEvents.add(riskEvent.getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            // Recommended actions based on AKI stage
+            patternEvent.setRecommendedActions(getAKIRecommendedActions(stage));
+
+            LOG.info("Detected AKI pattern for patient {}: Stage {}, Severity {}",
+                patternEvent.getPatientId(), stage.getStage(), stage.getSeverity());
+
+            return patternEvent;
+        }
+
+        private AKIStage determineAKIStage(EnrichedEvent baseline, EnrichedEvent elevated) {
+            double baselineCreat = extractCreatinine(baseline);
+            double elevatedCreat = extractCreatinine(elevated);
+
+            if (baselineCreat == 0.0) {
+                return new AKIStage(1, "HIGH"); // Default to Stage 1 if baseline unknown
+            }
+
+            double ratio = elevatedCreat / baselineCreat;
+
+            if (ratio >= 3.0) {
+                return new AKIStage(3, "CRITICAL"); // KDIGO Stage 3
+            } else if (ratio >= 2.0) {
+                return new AKIStage(2, "HIGH"); // KDIGO Stage 2
+            } else if (ratio >= 1.5 || (elevatedCreat - baselineCreat) >= 0.3) {
+                return new AKIStage(1, "HIGH"); // KDIGO Stage 1
+            } else {
+                return new AKIStage(0, "MEDIUM"); // Pre-AKI or risk
+            }
+        }
+
+        private double extractCreatinine(EnrichedEvent event) {
+            Map<String, Object> labData = (Map<String, Object>) event.getPayload().get("labValues");
+            if (labData != null && labData.containsKey("creatinine")) {
+                Object creat = labData.get("creatinine");
+                if (creat instanceof Number) {
+                    return ((Number) creat).doubleValue();
+                }
+            }
+            return 0.0;
+        }
+
+        private double calculateCreatinineRatio(EnrichedEvent baseline, EnrichedEvent elevated) {
+            double baselineCreat = extractCreatinine(baseline);
+            double elevatedCreat = extractCreatinine(elevated);
+
+            if (baselineCreat == 0.0) return 0.0;
+            return elevatedCreat / baselineCreat;
+        }
+
+        private double calculateAKIConfidence(List<EnrichedEvent> baseline,
+                                             List<EnrichedEvent> elevated,
+                                             List<EnrichedEvent> riskFactors) {
+            double confidence = 0.7; // Base confidence
+
+            // Higher confidence if multiple risk factors present
+            RiskIndicators risk = riskFactors.get(0).getRiskIndicators();
+            int riskFactorCount = 0;
+            if (risk.isHypotension()) riskFactorCount++;
+            if (risk.isOnVasopressors()) riskFactorCount++;
+            if (risk.isOnNephrotoxicMeds()) riskFactorCount++;
+            if (risk.isFever() && risk.isElevatedLactate()) riskFactorCount++;
+
+            confidence += riskFactorCount * 0.05; // +5% per risk factor
+
+            // Higher confidence if rapid deterioration
+            long timeToElevation = elevated.get(0).getEventTime() - baseline.get(0).getEventTime();
+            double hoursToElevation = timeToElevation / (1000.0 * 3600.0);
+            if (hoursToElevation < 24) {
+                confidence += 0.1; // Rapid onset increases confidence
+            }
+
+            return Math.min(confidence, 0.95); // Cap at 95%
+        }
+
+        private List<String> getAKIRecommendedActions(AKIStage stage) {
+            List<String> actions = new ArrayList<>();
+
+            // Common actions for all AKI stages
+            actions.add("REPEAT_CREATININE_MEASUREMENT");
+            actions.add("REVIEW_MEDICATION_LIST");
+            actions.add("ASSESS_FLUID_STATUS");
+
+            if (stage.getStage() >= 2) {
+                actions.add("NEPHROLOGY_CONSULTATION");
+                actions.add("MONITOR_URINE_OUTPUT");
+                actions.add("CONSIDER_RENAL_ULTRASOUND");
+            }
+
+            if (stage.getStage() >= 3) {
+                actions.add("URGENT_NEPHROLOGY_CONSULT");
+                actions.add("ASSESS_FOR_DIALYSIS_INDICATION");
+                actions.add("CENTRAL_LINE_PLACEMENT");
+            }
+
+            return actions;
+        }
+
+        // Helper class to hold AKI stage and severity
+        private static class AKIStage {
+            private final int stage;
+            private final String severity;
+
+            public AKIStage(int stage, String severity) {
+                this.stage = stage;
+                this.severity = severity;
+            }
+
+            public int getStage() { return stage; }
+            public String getSeverity() { return severity; }
+        }
+    }
+
+    /**
+     * Sepsis Early Warning Pattern Select Function
+     * Converts matched sepsis deterioration patterns to PatternEvent
+     */
+    public static class SepsisPatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> baseline = pattern.get("baseline");
+            List<SemanticEvent> earlyWarning = pattern.get("early_warning");
+            List<SemanticEvent> deterioration = pattern.get("deterioration");
+
+            SemanticEvent baselineEvent = baseline.get(0);
+            SemanticEvent warningEvent = earlyWarning.get(0);
+            SemanticEvent deteriorationEvent = deterioration.get(0);
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("SEPSIS_EARLY_WARNING");
+            patternEvent.setPatientId(baselineEvent.getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+
+            // Calculate qSOFA score for severity determination
+            int qsofaScore = calculateQSOFAScore(warningEvent);
+            boolean hasOrganDysfunction = checkOrganDysfunction(deteriorationEvent);
+
+            if (hasOrganDysfunction || qsofaScore >= 3) {
+                patternEvent.setSeverity("CRITICAL");
+                patternEvent.setConfidence(0.92);
+            } else if (qsofaScore >= 2) {
+                patternEvent.setSeverity("HIGH");
+                patternEvent.setConfidence(0.85);
+            } else {
+                patternEvent.setSeverity("MODERATE");
+                patternEvent.setConfidence(0.75);
+            }
+
+            // Pattern details
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("qsofa_score", qsofaScore);
+            patternDetails.put("has_organ_dysfunction", hasOrganDysfunction);
+            patternDetails.put("time_to_deterioration_hours",
+                (deteriorationEvent.getEventTime() - baselineEvent.getEventTime()) / (1000.0 * 3600.0));
+            patternDetails.put("baseline_vitals", extractVitals(baselineEvent));
+            patternDetails.put("warning_vitals", extractVitals(warningEvent));
+            patternDetails.put("deterioration_vitals", extractVitals(deteriorationEvent));
+            patternEvent.setPatternDetails(patternDetails);
+
+            // Involved events
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(baselineEvent.getId());
+            involvedEvents.add(warningEvent.getId());
+            involvedEvents.add(deteriorationEvent.getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            // Surviving Sepsis Campaign 1-hour bundle recommendations
+            patternEvent.setRecommendedActions(Arrays.asList(
+                "OBTAIN_BLOOD_CULTURES",
+                "MEASURE_SERUM_LACTATE",
+                "ADMINISTER_BROAD_SPECTRUM_ANTIBIOTICS",
+                "ADMINISTER_IV_CRYSTALLOID_30ML_KG",
+                "VASOPRESSOR_IF_HYPOTENSIVE",
+                "REPEAT_LACTATE_IF_ELEVATED"
+            ));
+
+            LOG.info("Detected sepsis early warning pattern for patient {}: qSOFA={}, Severity={}",
+                patternEvent.getPatientId(), qsofaScore, patternEvent.getSeverity());
+
+            return patternEvent;
+        }
+
+        private int calculateQSOFAScore(SemanticEvent event) {
+            Map<String, Object> vitals = (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+            if (vitals == null) return 0;
+
+            int score = 0;
+            Integer respiratoryRate = (Integer) vitals.get("respiratory_rate");
+            Integer systolicBP = (Integer) vitals.get("systolic_bp");
+
+            if (respiratoryRate != null && respiratoryRate >= 22) score++;
+            if (systolicBP != null && systolicBP <= 100) score++;
+            // Altered mentation would need additional assessment data
+
+            return score;
+        }
+
+        private boolean checkOrganDysfunction(SemanticEvent event) {
+            Map<String, Object> labs = (Map<String, Object>) event.getClinicalData().get("labValues");
+            if (labs == null) return false;
+
+            Double lactate = (Double) labs.get("lactate");
+            Double creatinine = (Double) labs.get("creatinine");
+            Integer platelets = (Integer) labs.get("platelets");
+
+            return (lactate != null && lactate > 4.0) ||
+                   (creatinine != null && creatinine > 2.0) ||
+                   (platelets != null && platelets < 100000);
+        }
+
+        private Map<String, Object> extractVitals(SemanticEvent event) {
+            return (Map<String, Object>) event.getClinicalData().get("vitalSigns");
+        }
+    }
+
+    /**
+     * Rapid Deterioration Pattern Select Function
+     * Converts matched rapid deterioration patterns to PatternEvent
+     */
+    public static class RapidDeteriorationPatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> hrBaseline = pattern.get("hr_baseline");
+            List<SemanticEvent> hrElevated = pattern.get("hr_elevated");
+            List<SemanticEvent> rrElevated = pattern.get("rr_elevated");
+            List<SemanticEvent> o2satDecreased = pattern.get("o2sat_decreased");
+
+            SemanticEvent baselineEvent = hrBaseline.get(0);
+            SemanticEvent finalEvent = o2satDecreased.get(0);
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("RAPID_CLINICAL_DETERIORATION");
+            patternEvent.setPatientId(baselineEvent.getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+            patternEvent.setSeverity("CRITICAL");
+            patternEvent.setConfidence(0.90);
+
+            // Pattern details
+            Map<String, Object> patternDetails = new HashMap<>();
+            double baselineHR = getVitalValue(baselineEvent, "heart_rate");
+            double elevatedHR = getVitalValue(hrElevated.get(0), "heart_rate");
+            double elevatedRR = getVitalValue(rrElevated.get(0), "respiratory_rate");
+            double decreasedO2 = getVitalValue(finalEvent, "oxygen_saturation");
+
+            patternDetails.put("hr_increase_bpm", elevatedHR - baselineHR);
+            patternDetails.put("baseline_heart_rate", baselineHR);
+            patternDetails.put("elevated_heart_rate", elevatedHR);
+            patternDetails.put("respiratory_rate", elevatedRR);
+            patternDetails.put("oxygen_saturation", decreasedO2);
+            patternDetails.put("deterioration_timespan_minutes",
+                (finalEvent.getEventTime() - baselineEvent.getEventTime()) / (1000.0 * 60.0));
+
+            // Clinical interpretation
+            List<String> clinicalConcerns = new ArrayList<>();
+            if (elevatedHR - baselineHR > 30) clinicalConcerns.add("SEVERE_TACHYCARDIA");
+            if (elevatedRR > 28) clinicalConcerns.add("SEVERE_TACHYPNEA");
+            if (decreasedO2 < 88) clinicalConcerns.add("SEVERE_HYPOXEMIA");
+            patternDetails.put("clinical_concerns", clinicalConcerns);
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            // Involved events
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(baselineEvent.getId());
+            involvedEvents.add(hrElevated.get(0).getId());
+            involvedEvents.add(rrElevated.get(0).getId());
+            involvedEvents.add(finalEvent.getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            // Recommended actions for cardiorespiratory compromise
+            patternEvent.setRecommendedActions(Arrays.asList(
+                "IMMEDIATE_PHYSICIAN_NOTIFICATION",
+                "OBTAIN_ABG_ARTERIAL_BLOOD_GAS",
+                "INCREASE_OXYGEN_SUPPLEMENTATION",
+                "CONSIDER_CHEST_XRAY",
+                "ASSESS_FOR_PE_SEPSIS_HF",
+                "PREPARE_FOR_POTENTIAL_ICU_TRANSFER",
+                "CONTINUOUS_CARDIAC_MONITORING"
+            ));
+
+            LOG.info("Detected rapid deterioration pattern for patient {}: HR increase={} bpm, RR={}, SpO2={}%",
+                patternEvent.getPatientId(), (elevatedHR - baselineHR), elevatedRR, decreasedO2);
+
+            return patternEvent;
+        }
+    }
+
+    /**
+     * Drug-Lab Monitoring Pattern Select Function
+     * Converts matched drug-lab monitoring compliance patterns to PatternEvent
+     */
+    public static class DrugLabMonitoringPatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> medStarted = pattern.get("high_risk_med_started");
+            SemanticEvent medicationEvent = medStarted.get(0);
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("DRUG_LAB_MONITORING_COMPLIANCE");
+            patternEvent.setPatientId(medicationEvent.getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+            patternEvent.setSeverity("MODERATE");
+            patternEvent.setConfidence(0.88);
+
+            // Pattern details
+            String medicationName = getMedicationName(medicationEvent);
+            List<String> requiredLabs = getRequiredLabs(medicationName);
+
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("medication_name", medicationName);
+            patternDetails.put("required_labs", requiredLabs);
+            patternDetails.put("monitoring_window_hours", 48);
+            patternDetails.put("medication_start_time", medicationEvent.getEventTime());
+            patternDetails.put("compliance_status", "MISSING_LABS");
+
+            // Identify specific drug class
+            String drugClass = identifyDrugClass(medicationName);
+            patternDetails.put("drug_class", drugClass);
+            patternDetails.put("monitoring_rationale", getMonitoringRationale(drugClass));
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            // Involved events
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(medicationEvent.getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            // Recommended actions
+            List<String> actions = new ArrayList<>();
+            actions.add("ORDER_REQUIRED_LABS");
+            actions.add("REVIEW_MEDICATION_INDICATION");
+            actions.add("ASSESS_BASELINE_ORGAN_FUNCTION");
+
+            if (drugClass.equals("ACE_INHIBITOR") || drugClass.equals("ARB")) {
+                actions.add("CHECK_POTASSIUM_CREATININE");
+            } else if (drugClass.equals("ANTICOAGULANT")) {
+                actions.add("CHECK_INR_PT_PTT");
+            } else if (drugClass.equals("CARDIAC_GLYCOSIDE")) {
+                actions.add("CHECK_DIGOXIN_LEVEL_POTASSIUM");
+            } else if (drugClass.equals("MOOD_STABILIZER")) {
+                actions.add("CHECK_LITHIUM_LEVEL_THYROID_RENAL");
+            }
+
+            actions.add("PHARMACIST_REVIEW");
+            patternEvent.setRecommendedActions(actions);
+
+            LOG.info("Detected missing lab monitoring for patient {}: medication={}, required_labs={}",
+                patternEvent.getPatientId(), medicationName, requiredLabs);
+
+            return patternEvent;
+        }
+
+        private String identifyDrugClass(String medicationName) {
+            String med = medicationName.toLowerCase();
+            if (med.contains("lisinopril") || med.contains("enalapril")) return "ACE_INHIBITOR";
+            if (med.contains("warfarin")) return "ANTICOAGULANT";
+            if (med.contains("digoxin")) return "CARDIAC_GLYCOSIDE";
+            if (med.contains("lithium")) return "MOOD_STABILIZER";
+            if (med.contains("metformin")) return "ANTIDIABETIC";
+            if (med.contains("gentamicin") || med.contains("vancomycin")) return "NEPHROTOXIC_ANTIBIOTIC";
+            return "HIGH_RISK_MEDICATION";
+        }
+
+        private String getMonitoringRationale(String drugClass) {
+            switch (drugClass) {
+                case "ACE_INHIBITOR": return "Monitor for hyperkalemia and renal dysfunction";
+                case "ANTICOAGULANT": return "Monitor for bleeding risk and therapeutic range";
+                case "CARDIAC_GLYCOSIDE": return "Monitor for toxicity and electrolyte imbalance";
+                case "MOOD_STABILIZER": return "Monitor for toxicity, thyroid and renal function";
+                case "NEPHROTOXIC_ANTIBIOTIC": return "Monitor for nephrotoxicity";
+                default: return "Monitor for adverse effects and organ function";
+            }
+        }
+    }
+
+    /**
+     * Sepsis Pathway Compliance Pattern Select Function
+     * Converts matched sepsis bundle compliance patterns to PatternEvent
+     */
+    public static class SepsisPathwayCompliancePatternSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> sepsisDiagnosis = pattern.get("sepsis_diagnosis");
+            List<SemanticEvent> bloodCultures = pattern.get("blood_cultures_ordered");
+            List<SemanticEvent> antibiotics = pattern.get("antibiotics_started");
+
+            SemanticEvent diagnosisEvent = sepsisDiagnosis.get(0);
+            SemanticEvent cultureEvent = bloodCultures.get(0);
+            SemanticEvent antibioticEvent = antibiotics.get(0);
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("SEPSIS_PATHWAY_COMPLIANCE");
+            patternEvent.setPatientId(diagnosisEvent.getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+
+            // Calculate time intervals
+            double timeToCultures = (cultureEvent.getEventTime() - diagnosisEvent.getEventTime()) / (1000.0 * 60.0);
+            double timeToAntibiotics = (antibioticEvent.getEventTime() - diagnosisEvent.getEventTime()) / (1000.0 * 60.0);
+
+            // Determine compliance level
+            boolean fullCompliance = timeToCultures <= 60 && timeToAntibiotics <= 60;
+            boolean partialCompliance = timeToCultures <= 90 || timeToAntibiotics <= 90;
+
+            if (fullCompliance) {
+                patternEvent.setSeverity("LOW");  // Good compliance
+                patternEvent.setConfidence(0.95);
+            } else if (partialCompliance) {
+                patternEvent.setSeverity("MODERATE");
+                patternEvent.setConfidence(0.88);
+            } else {
+                patternEvent.setSeverity("HIGH");  // Poor compliance
+                patternEvent.setConfidence(0.92);
+            }
+
+            // Pattern details
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("compliance_status", fullCompliance ? "COMPLIANT" : "NON_COMPLIANT");
+            patternDetails.put("time_to_blood_cultures_minutes", timeToCultures);
+            patternDetails.put("time_to_antibiotics_minutes", timeToAntibiotics);
+            patternDetails.put("bundle_completion_time", timeToAntibiotics);
+            patternDetails.put("target_time_minutes", 60);
+
+            // Bundle element completion
+            Map<String, Boolean> bundleElements = new HashMap<>();
+            bundleElements.put("blood_cultures", timeToCultures <= 60);
+            bundleElements.put("antibiotics", timeToAntibiotics <= 60);
+            patternDetails.put("bundle_elements", bundleElements);
+
+            // Clinical quality metrics
+            patternDetails.put("surviving_sepsis_campaign", "1_HOUR_BUNDLE");
+            patternDetails.put("evidence_level", "HIGH");
+            patternDetails.put("mortality_impact", "50_PERCENT_REDUCTION");
+
+            patternEvent.setPatternDetails(patternDetails);
+
+            // Involved events
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(diagnosisEvent.getId());
+            involvedEvents.add(cultureEvent.getId());
+            involvedEvents.add(antibioticEvent.getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            // Recommended actions
+            List<String> actions = new ArrayList<>();
+            if (fullCompliance) {
+                actions.add("CONTINUE_SEPSIS_PROTOCOL");
+                actions.add("MEASURE_LACTATE_CLEARANCE");
+                actions.add("MONITOR_CLINICAL_RESPONSE");
+            } else {
+                actions.add("REVIEW_BUNDLE_COMPLIANCE_BARRIERS");
+                actions.add("IMPLEMENT_PROCESS_IMPROVEMENTS");
+                actions.add("STAFF_EDUCATION_SEPSIS_BUNDLE");
+            }
+            actions.add("ASSESS_SOURCE_CONTROL");
+            actions.add("CONSIDER_ICU_ADMISSION");
+            actions.add("REPEAT_LACTATE_IN_6_HOURS");
+
+            patternEvent.setRecommendedActions(actions);
+
+            LOG.info("Detected sepsis pathway compliance for patient {}: cultures={}min, antibiotics={}min, compliant={}",
+                patternEvent.getPatientId(), timeToCultures, timeToAntibiotics, fullCompliance);
+
+            return patternEvent;
+        }
+    }
+}

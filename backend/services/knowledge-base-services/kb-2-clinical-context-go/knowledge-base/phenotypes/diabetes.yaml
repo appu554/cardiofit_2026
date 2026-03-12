@@ -1,0 +1,158 @@
+# Diabetes Phenotype Definitions
+
+phenotypes:
+  - id: "diabetes_complications_risk"
+    name: "Diabetes Complications Risk"
+    description: "Risk for diabetic complications including nephropathy, retinopathy, neuropathy"
+    category: "diabetes"
+    priority: 1
+    version: "1.0.0"
+    cel_rule: >
+      has_condition('diabetes') &&
+      (lab_value('hba1c') > 8.0 ||
+       lab_value('microalbumin') > 30 ||
+       lab_value('creatinine') > 1.3 ||
+       age > 65)
+    metadata:
+      complications: ["nephropathy", "retinopathy", "neuropathy"]
+      target_hba1c: "<7%"
+
+  - id: "diabetic_kidney_disease"
+    name: "Diabetic Kidney Disease"
+    description: "Evidence of diabetic nephropathy"
+    category: "diabetes"
+    priority: 1
+    version: "1.0.0"
+    cel_rule: >
+      has_condition('diabetes') &&
+      (lab_value('microalbumin') > 30 ||
+       lab_value('egfr') < 60 ||
+       lab_value('acr') > 30)
+    metadata:
+      stage_criteria: "KDIGO CKD stages"
+      monitoring_frequency: "annual"
+
+  - id: "hypoglycemia_risk"
+    name: "Hypoglycemia Risk"
+    description: "High risk for hypoglycemic episodes"
+    category: "diabetes"
+    priority: 2
+    version: "1.0.0"
+    cel_rule: >
+      has_condition('diabetes') &&
+      (has_medication('insulin') || has_medication('sulfonylurea')) &&
+      (age > 70 || 
+       lab_value('creatinine') > 1.5 ||
+       has_condition('cognitive_impairment') ||
+       lab_value('hba1c') < 6.5)
+    metadata:
+      high_risk_medications: ["insulin", "sulfonylurea", "glinide"]
+      target_hba1c_elderly: "7.0-8.5%"
+
+  - id: "insulin_resistance"
+    name: "Insulin Resistance"
+    description: "Clinical markers of insulin resistance"
+    category: "diabetes"
+    priority: 3
+    version: "1.0.0"
+    cel_rule: >
+      (lab_value('fasting_insulin') > 15 ||
+       lab_value('homa_ir') > 2.5 ||
+       has_condition('metabolic_syndrome')) &&
+      (vital_value('bmi') > 30 || 
+       vital_value('waist_circumference') > 102 && gender == 'male' ||
+       vital_value('waist_circumference') > 88 && gender == 'female')
+    metadata:
+      homa_ir_formula: "(glucose * insulin) / 405"
+      threshold: "HOMA-IR > 2.5"
+
+  - id: "gestational_diabetes_risk"
+    name: "Gestational Diabetes Risk"
+    description: "Risk factors for gestational diabetes"
+    category: "diabetes"
+    priority: 2
+    version: "1.0.0"
+    cel_rule: >
+      gender == 'female' &&
+      age >= 25 &&
+      (vital_value('bmi') > 25 ||
+       has_condition('family_history_diabetes') ||
+       has_condition('pcos') ||
+       lab_value('fasting_glucose') > 92)
+    metadata:
+      applicable_population: "pregnant_women"
+      screening_timing: "24-28_weeks"
+
+  - id: "type1_diabetes_autoimmune"
+    name: "Type 1 Diabetes Autoimmune Markers"
+    description: "Autoimmune markers suggestive of Type 1 diabetes"
+    category: "diabetes"
+    priority: 1
+    version: "1.0.0"
+    cel_rule: >
+      has_condition('diabetes') &&
+      age < 30 &&
+      (lab_value('gad_antibodies') > 0 ||
+       lab_value('ia2_antibodies') > 0 ||
+       lab_value('zinc_transporter8_antibodies') > 0 ||
+       lab_value('c_peptide') < 0.6)
+    metadata:
+      autoantibodies: ["GAD", "IA-2", "ZnT8", "IA-1"]
+      c_peptide_threshold: "<0.6 ng/mL"
+
+# Advanced diabetes phenotypes
+  - id: "diabetes_cardiovascular_protection_eligible"
+    name: "CVD Protection Eligible"
+    description: "Diabetes patients eligible for cardiovascular protection therapy"
+    category: "diabetes"
+    priority: 2
+    version: "1.0.0"
+    cel_rule: >
+      has_condition('diabetes') &&
+      (has_condition('cardiovascular_disease') ||
+       age >= 55 && (has_condition('hypertension') || has_condition('hyperlipidemia') || has_condition('smoking')) ||
+       lab_value('egfr') < 60 ||
+       lab_value('microalbumin') > 30)
+    metadata:
+      eligible_medications: ["SGLT2_inhibitors", "GLP1_agonists"]
+      guideline: "ADA/ESC 2023"
+
+validation:
+  required_fields:
+    - age
+    - gender
+    - conditions
+  supported_conditions:
+    - diabetes
+    - type1_diabetes
+    - type2_diabetes
+    - gestational_diabetes
+    - metabolic_syndrome
+    - cardiovascular_disease
+    - hypertension
+    - hyperlipidemia
+    - cognitive_impairment
+    - pcos
+    - family_history_diabetes
+    - smoking
+  supported_labs:
+    - hba1c
+    - fasting_glucose
+    - microalbumin
+    - creatinine
+    - egfr
+    - acr
+    - fasting_insulin
+    - homa_ir
+    - gad_antibodies
+    - ia2_antibodies
+    - zinc_transporter8_antibodies
+    - c_peptide
+  supported_vitals:
+    - bmi
+    - waist_circumference
+  supported_medications:
+    - insulin
+    - sulfonylurea
+    - glinide
+    - metformin

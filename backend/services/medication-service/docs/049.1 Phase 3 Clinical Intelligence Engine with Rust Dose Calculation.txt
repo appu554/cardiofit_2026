@@ -1,0 +1,1280 @@
+# Phase 3: Clinical Intelligence Engine with Rust Dose Calculation
+
+## Executive Overview
+
+Phase 3 executes the core clinical intelligence through three sequential stages: Candidate Generation (safety-vetted therapy options), Dose Calculation (Rust-based precision dosing), and Scoring & Ranking (multi-factor optimization). The entire phase must complete in ≤75ms while maintaining deterministic, auditable clinical decisions through versioned KB queries via Apollo Federation.
+
+## 1. Phase 3 Architecture Overview
+
+### 1.1 Core Components Structure
+
+```go
+// internal/phase3/clinical_intelligence.go
+
+type ClinicalIntelligenceEngine struct {
+    // Sub-engines
+    candidateGenerator *CandidateGenerator
+    doseEngine        *RustDoseEngine
+    scoringEngine     *ScoringRankingEngine
+    
+    // Apollo Federation for KB access
+    apolloClient      *ApolloFederationClient
+    
+    // Evidence tracking
+    evidenceEnvelope  *EvidenceEnvelope
+    
+    // Performance
+    cache            *Phase3Cache
+    metrics          *Phase3Metrics
+    tracer           *Tracer
+}
+
+// Rust FFI bridge for dose calculations
+type RustDoseEngine struct {
+    rustLib          unsafe.Pointer
+    calculateDoseFn  func(*C.char) *C.char
+    validateDoseFn   func(*C.char) *C.char
+}
+```
+
+### 1.2 Phase 3 Data Flow
+
+```go
+// internal/phase3/models.go
+
+type Phase3Input struct {
+    RequestID         string            `json:"request_id"`
+    Manifest         *IntentManifest    `json:"intent_manifest"`
+    EnrichedContext  *EnrichedContext   `json:"enriched_context"`
+    EvidenceEnvelope *EvidenceEnvelope  `json:"evidence_envelope"`
+}
+
+type Phase3Output struct {
+    RequestID         string                `json:"request_id"`
+    CandidateCount   int                   `json:"candidate_count"`
+    SafetyVetted     int                   `json:"safety_vetted_count"`
+    DoseCalculated   int                   `json:"dose_calculated_count"`
+    
+    // Ranked proposals
+    RankedProposals  []MedicationProposal  `json:"ranked_proposals"`
+    
+    // Evidence tracking
+    CandidateEvidence []CandidateEvidence  `json:"candidate_evidence"`
+    DoseEvidence     []DoseCalculation    `json:"dose_evidence"`
+    ScoringEvidence  []ScoringEvidence    `json:"scoring_evidence"`
+    
+    // Performance
+    Phase3Duration   time.Duration         `json:"phase3_duration_ms"`
+    SubPhaseTiming   map[string]time.Duration `json:"sub_phase_timing"`
+}
+
+type MedicationProposal struct {
+    ProposalID       string                `json:"proposal_id"`
+    Rank            int                   `json:"rank"`
+    Score           float64               `json:"score"`
+    
+    // Medication details
+    Medication      MedicationDetails     `json:"medication"`
+    
+    // Dosing
+    DoseCalculation DoseResult           `json:"dose_calculation"`
+    
+    // Safety profile
+    SafetyProfile   SafetyAssessment     `json:"safety_profile"`
+    
+    // Scoring breakdown
+    ScoreBreakdown  ScoreComponents      `json:"score_breakdown"`
+    
+    // Evidence
+    Evidence        ProposalEvidence     `json:"evidence"`
+}
+```
+
+## 2. Phase 3a: Candidate Generation with Safety Vetting
+
+### 2.1 Candidate Generator Implementation
+
+```go
+// internal/phase3/candidate_generator.go
+
+type CandidateGenerator struct {
+    apolloClient     *ApolloFederationClient
+    safetyChecker    *SafetyChecker
+    cache           *CandidateCache
+}
+
+func (cg *CandidateGenerator) GenerateCandidates(
+    ctx context.Context,
+    input *Phase3Input,
+) (*CandidateSet, error) {
+    span, ctx := cg.tracer.Start(ctx, "phase3a.generate_candidates")
+    defer span.End()
+    
+    startTime := time.Now()
+    
+    // Step 1: Get therapy options from manifest
+    therapyOptions := input.Manifest.TherapyOptions
+    
+    // Step 2: Query KB for medication candidates
+    candidates, err := cg.fetchMedicationCandidates(ctx, therapyOptions, input)
+    if err != nil {
+        return nil, fmt.Errorf("failed to fetch candidates: %w", err)
+    }
+    
+    // Step 3: Apply safety vetting in parallel
+    vettedCandidates, err := cg.performSafetyVetting(ctx, candidates, input)
+    if err != nil {
+        return nil, fmt.Errorf("safety vetting failed: %w", err)
+    }
+    
+    // Step 4: Filter absolute contraindications
+    safeCandidates := cg.filterContraindications(vettedCandidates, input)
+    
+    result := &CandidateSet{
+        RequestID:          input.RequestID,
+        InitialCount:       len(candidates),
+        VettedCount:        len(vettedCandidates),
+        SafeCount:          len(safeCandidates),
+        Candidates:         safeCandidates,
+        GenerationDuration: time.Since(startTime),
+    }
+    
+    cg.metrics.RecordCandidateGeneration(result)
+    
+    return result, nil
+}
+
+func (cg *CandidateGenerator) fetchMedicationCandidates(
+    ctx context.Context,
+    therapyOptions []TherapyCandidate,
+    input *Phase3Input,
+) ([]MedicationCandidate, error) {
+    
+    // Build versioned Apollo query
+    query := `
+        query GetMedicationCandidates($therapyClasses: [String!]!, $version: String!) {
+            kb_patient_safe_checks @version(v: $version) {
+                medicationsByClass(classes: $therapyClasses) {
+                    medicationId
+                    rxnorm
+                    name
+                    class
+                    subClass
+                    
+                    contraindications {
+                        conditionCode
+                        severity
+                        type
+                    }
+                    
+                    precautions {
+                        condition
+                        adjustmentNeeded
+                        monitoringRequired
+                    }
+                    
+                    blackBoxWarning
+                }
+            }
+            
+            kb_formulary_stock @version(v: $version) {
+                availability(medicationIds: $medicationIds) {
+                    medicationId
+                    inStock
+                    tier
+                    preferredAlternative
+                    priorAuthRequired
+                }
+            }
+        }
+    `
+    
+    // Extract therapy classes
+    classes := make([]string, len(therapyOptions))
+    for i, opt := range therapyOptions {
+        classes[i] = opt.TherapyClass
+    }
+    
+    variables := map[string]interface{}{
+        "therapyClasses": classes,
+        "version": input.EvidenceEnvelope.KBVersions["kb_patient_safe_checks"],
+    }
+    
+    // Add version headers
+    headers := map[string]string{
+        "X-KB-Version-Safety": input.EvidenceEnvelope.KBVersions["kb_patient_safe_checks"],
+        "X-KB-Version-Formulary": input.EvidenceEnvelope.KBVersions["kb_formulary_stock"],
+    }
+    
+    result, err := cg.apolloClient.QueryWithHeaders(ctx, query, variables, headers)
+    if err != nil {
+        return nil, err
+    }
+    
+    return cg.parseCandidates(result)
+}
+```
+
+### 2.2 Safety Vetting Engine
+
+```go
+// internal/phase3/safety_vetting.go
+
+type SafetyChecker struct {
+    ddiChecker       *DDIChecker
+    allergyChecker   *AllergyChecker
+    renalChecker     *RenalSafetyChecker
+    pregnancyChecker *PregnancySafetyChecker
+}
+
+func (sc *SafetyChecker) PerformSafetyVetting(
+    ctx context.Context,
+    candidates []MedicationCandidate,
+    context *EnrichedContext,
+) ([]VettedCandidate, error) {
+    span, ctx := sc.tracer.Start(ctx, "safety.vetting")
+    defer span.End()
+    
+    // Parallel safety checks for each candidate
+    var wg sync.WaitGroup
+    vettedChan := make(chan VettedCandidate, len(candidates))
+    
+    for _, candidate := range candidates {
+        wg.Add(1)
+        go func(med MedicationCandidate) {
+            defer wg.Done()
+            
+            vetted := sc.vetCandidate(ctx, med, context)
+            vettedChan <- vetted
+        }(candidate)
+    }
+    
+    wg.Wait()
+    close(vettedChan)
+    
+    // Collect results
+    var vetted []VettedCandidate
+    for v := range vettedChan {
+        if v.SafetyScore > 0 { // Exclude absolute contraindications
+            vetted = append(vetted, v)
+        }
+    }
+    
+    return vetted, nil
+}
+
+func (sc *SafetyChecker) vetCandidate(
+    ctx context.Context,
+    candidate MedicationCandidate,
+    context *EnrichedContext,
+) VettedCandidate {
+    
+    vetted := VettedCandidate{
+        Medication:   candidate,
+        SafetyScore:  100.0, // Start with perfect score
+        SafetyChecks: make([]SafetyCheck, 0),
+    }
+    
+    // Check drug-drug interactions
+    ddiResult := sc.ddiChecker.Check(candidate, context.CurrentMedications)
+    if ddiResult.HasInteraction {
+        vetted.SafetyScore -= ddiResult.SeverityScore
+        vetted.SafetyChecks = append(vetted.SafetyChecks, ddiResult)
+    }
+    
+    // Check allergies
+    allergyResult := sc.allergyChecker.Check(candidate, context.Allergies)
+    if allergyResult.HasAllergy {
+        if allergyResult.Type == "ABSOLUTE" {
+            vetted.SafetyScore = 0 // Absolute contraindication
+            vetted.Contraindicated = true
+        } else {
+            vetted.SafetyScore -= allergyResult.SeverityScore
+        }
+        vetted.SafetyChecks = append(vetted.SafetyChecks, allergyResult)
+    }
+    
+    // Check renal safety
+    if context.LabResults.eGFR < 60 {
+        renalResult := sc.renalChecker.Check(candidate, context.LabResults)
+        if renalResult.AdjustmentNeeded {
+            vetted.DoseAdjustmentFactor = renalResult.AdjustmentFactor
+            vetted.SafetyChecks = append(vetted.SafetyChecks, renalResult)
+        }
+    }
+    
+    // Check pregnancy safety if applicable
+    if context.Demographics.PregnancyStatus != "NOT_PREGNANT" {
+        pregnancyResult := sc.pregnancyChecker.Check(candidate, context.Demographics)
+        if pregnancyResult.Contraindicated {
+            vetted.SafetyScore = 0
+            vetted.Contraindicated = true
+        }
+        vetted.SafetyChecks = append(vetted.SafetyChecks, pregnancyResult)
+    }
+    
+    return vetted
+}
+```
+
+## 3. Phase 3b: Rust Dose Calculation Engine
+
+### 3.1 Rust Engine Implementation
+
+```rust
+// rust/dose_engine/src/lib.rs
+
+use serde::{Deserialize, Serialize};
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+
+#[derive(Deserialize)]
+pub struct DoseCalculationRequest {
+    medication_id: String,
+    rxnorm: String,
+    patient: PatientParameters,
+    indication: String,
+    renal_adjustment_factor: Option<f64>,
+    hepatic_adjustment_factor: Option<f64>,
+    dosing_rules: DosingRules,
+}
+
+#[derive(Deserialize)]
+pub struct PatientParameters {
+    age: f64,
+    weight_kg: f64,
+    height_cm: f64,
+    sex: String,
+    egfr: Option<f64>,
+    creatinine_clearance: Option<f64>,
+    bilirubin: Option<f64>,
+    albumin: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub struct DosingRules {
+    weight_based: bool,
+    bsa_based: bool,
+    age_based: bool,
+    
+    standard_dose: StandardDose,
+    min_dose: DoseLimit,
+    max_dose: DoseLimit,
+    
+    renal_adjustments: Vec<RenalAdjustment>,
+    hepatic_adjustments: Vec<HepaticAdjustment>,
+    pediatric_rules: Option<PediatricDosing>,
+    geriatric_rules: Option<GeriatricDosing>,
+}
+
+#[derive(Serialize)]
+pub struct DoseCalculationResult {
+    calculated_dose: f64,
+    unit: String,
+    frequency: String,
+    route: String,
+    
+    adjustments_applied: Vec<Adjustment>,
+    
+    min_safe_dose: f64,
+    max_safe_dose: f64,
+    
+    warnings: Vec<DoseWarning>,
+    evidence: DoseEvidence,
+    
+    calculation_method: String,
+    confidence: f64,
+}
+
+// Main dose calculation function
+pub fn calculate_dose(request: &DoseCalculationRequest) -> DoseCalculationResult {
+    let mut calculator = DoseCalculator::new(request);
+    
+    // Step 1: Calculate base dose
+    let base_dose = calculator.calculate_base_dose();
+    
+    // Step 2: Apply patient-specific adjustments
+    let adjusted_dose = calculator.apply_adjustments(base_dose);
+    
+    // Step 3: Validate against safety limits
+    let safe_dose = calculator.validate_safety_limits(adjusted_dose);
+    
+    // Step 4: Determine frequency and route
+    let (frequency, route) = calculator.determine_administration();
+    
+    // Step 5: Generate warnings if needed
+    let warnings = calculator.generate_warnings(safe_dose);
+    
+    DoseCalculationResult {
+        calculated_dose: safe_dose,
+        unit: calculator.get_unit(),
+        frequency,
+        route,
+        adjustments_applied: calculator.get_adjustments(),
+        min_safe_dose: calculator.get_min_dose(),
+        max_safe_dose: calculator.get_max_dose(),
+        warnings,
+        evidence: calculator.get_evidence(),
+        calculation_method: calculator.get_method(),
+        confidence: calculator.calculate_confidence(),
+    }
+}
+
+impl DoseCalculator {
+    fn calculate_base_dose(&self) -> f64 {
+        let rules = &self.request.dosing_rules;
+        
+        if rules.weight_based {
+            self.calculate_weight_based_dose()
+        } else if rules.bsa_based {
+            self.calculate_bsa_based_dose()
+        } else if rules.age_based {
+            self.calculate_age_based_dose()
+        } else {
+            self.get_standard_dose()
+        }
+    }
+    
+    fn calculate_weight_based_dose(&self) -> f64 {
+        let weight = self.request.patient.weight_kg;
+        let dose_per_kg = self.request.dosing_rules.standard_dose.mg_per_kg;
+        
+        weight * dose_per_kg
+    }
+    
+    fn calculate_bsa_based_dose(&self) -> f64 {
+        let bsa = self.calculate_bsa();
+        let dose_per_m2 = self.request.dosing_rules.standard_dose.mg_per_m2;
+        
+        bsa * dose_per_m2
+    }
+    
+    fn calculate_bsa(&self) -> f64 {
+        // Mosteller formula
+        let height = self.request.patient.height_cm;
+        let weight = self.request.patient.weight_kg;
+        
+        ((height * weight) / 3600.0).sqrt()
+    }
+    
+    fn apply_adjustments(&mut self, base_dose: f64) -> f64 {
+        let mut adjusted = base_dose;
+        
+        // Apply renal adjustment if needed
+        if let Some(egfr) = self.request.patient.egfr {
+            adjusted = self.apply_renal_adjustment(adjusted, egfr);
+        }
+        
+        // Apply hepatic adjustment if needed
+        if let Some(bilirubin) = self.request.patient.bilirubin {
+            adjusted = self.apply_hepatic_adjustment(adjusted, bilirubin);
+        }
+        
+        // Apply geriatric adjustment if applicable
+        if self.request.patient.age >= 65.0 {
+            adjusted = self.apply_geriatric_adjustment(adjusted);
+        }
+        
+        // Apply pediatric adjustment if applicable
+        if self.request.patient.age < 18.0 {
+            adjusted = self.apply_pediatric_adjustment(adjusted);
+        }
+        
+        adjusted
+    }
+    
+    fn apply_renal_adjustment(&mut self, dose: f64, egfr: f64) -> f64 {
+        for adjustment in &self.request.dosing_rules.renal_adjustments {
+            if egfr >= adjustment.egfr_min && egfr <= adjustment.egfr_max {
+                self.adjustments.push(Adjustment {
+                    adjustment_type: "RENAL".to_string(),
+                    factor: adjustment.dose_factor,
+                    reason: format!("eGFR = {:.1} mL/min", egfr),
+                });
+                
+                return dose * adjustment.dose_factor;
+            }
+        }
+        dose
+    }
+    
+    fn validate_safety_limits(&self, dose: f64) -> f64 {
+        let min = self.request.dosing_rules.min_dose.value;
+        let max = self.request.dosing_rules.max_dose.value;
+        
+        dose.max(min).min(max)
+    }
+}
+
+// FFI exports for Go integration
+#[no_mangle]
+pub extern "C" fn calculate_dose_ffi(request_json: *const c_char) -> *mut c_char {
+    let c_str = unsafe { CStr::from_ptr(request_json) };
+    let request_str = c_str.to_str().unwrap();
+    
+    let request: DoseCalculationRequest = serde_json::from_str(request_str).unwrap();
+    let result = calculate_dose(&request);
+    
+    let result_json = serde_json::to_string(&result).unwrap();
+    CString::new(result_json).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn free_result(s: *mut c_char) {
+    if s.is_null() {
+        return;
+    }
+    unsafe {
+        CString::from_raw(s);
+    }
+}
+```
+
+### 3.2 Go Integration with Rust Engine
+
+```go
+// internal/phase3/rust_bridge.go
+
+// #cgo LDFLAGS: -L${SRCDIR}/../rust/dose_engine/target/release -ldose_engine
+// #include <stdlib.h>
+// char* calculate_dose_ffi(const char* request_json);
+// void free_result(char* result);
+import "C"
+import (
+    "encoding/json"
+    "unsafe"
+)
+
+type RustDoseEngine struct {
+    metrics *DoseMetrics
+}
+
+func (rde *RustDoseEngine) CalculateDose(
+    ctx context.Context,
+    candidate VettedCandidate,
+    context *EnrichedContext,
+    dosingRules *DosingRules,
+) (*DoseResult, error) {
+    span, ctx := rde.tracer.Start(ctx, "rust.calculate_dose")
+    defer span.End()
+    
+    startTime := time.Now()
+    
+    // Prepare request for Rust
+    request := DoseCalculationRequest{
+        MedicationID: candidate.Medication.ID,
+        RxNorm:      candidate.Medication.RxNorm,
+        Patient: PatientParameters{
+            Age:       context.Demographics.Age,
+            WeightKg:  context.Demographics.Weight,
+            HeightCm:  context.Demographics.Height,
+            Sex:       context.Demographics.Sex,
+            EGFR:      context.LabResults.EGFR,
+            Bilirubin: context.LabResults.Bilirubin,
+        },
+        Indication:            candidate.Medication.Indication,
+        RenalAdjustmentFactor: candidate.DoseAdjustmentFactor,
+        DosingRules:          dosingRules,
+    }
+    
+    // Serialize to JSON
+    requestJSON, err := json.Marshal(request)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Call Rust function
+    cRequest := C.CString(string(requestJSON))
+    defer C.free(unsafe.Pointer(cRequest))
+    
+    cResult := C.calculate_dose_ffi(cRequest)
+    defer C.free_result(cResult)
+    
+    // Parse result
+    resultJSON := C.GoString(cResult)
+    
+    var result DoseResult
+    if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+        return nil, err
+    }
+    
+    // Add metadata
+    result.CalculationTime = time.Since(startTime)
+    result.RustEngineVersion = "1.0.0"
+    
+    rde.metrics.RecordDoseCalculation(result)
+    
+    return &result, nil
+}
+```
+
+## 4. Phase 3c: Scoring and Ranking Engine
+
+### 4.1 Multi-Factor Scoring Implementation
+
+```go
+// internal/phase3/scoring_engine.go
+
+type ScoringRankingEngine struct {
+    apolloClient    *ApolloFederationClient
+    scoringWeights  ScoringWeights
+    cache          *ScoringCache
+}
+
+type ScoringWeights struct {
+    GuidelineAdherence   float64 `json:"guideline_adherence"`    // 0.25
+    PatientSpecific      float64 `json:"patient_specific"`        // 0.20
+    SafetyProfile        float64 `json:"safety_profile"`          // 0.20
+    FormularyPreference  float64 `json:"formulary_preference"`    // 0.15
+    CostEffectiveness    float64 `json:"cost_effectiveness"`      // 0.10
+    AdherenceLikelihood  float64 `json:"adherence_likelihood"`    // 0.10
+}
+
+func (sre *ScoringRankingEngine) ScoreAndRank(
+    ctx context.Context,
+    dosedCandidates []DosedCandidate,
+    input *Phase3Input,
+) ([]MedicationProposal, error) {
+    span, ctx := sre.tracer.Start(ctx, "phase3c.score_and_rank")
+    defer span.End()
+    
+    startTime := time.Now()
+    
+    // Step 1: Fetch additional scoring data from KBs
+    scoringData, err := sre.fetchScoringData(ctx, dosedCandidates, input)
+    if err != nil {
+        return nil, fmt.Errorf("failed to fetch scoring data: %w", err)
+    }
+    
+    // Step 2: Calculate scores for each candidate
+    scoredProposals := make([]MedicationProposal, 0, len(dosedCandidates))
+    
+    for _, candidate := range dosedCandidates {
+        score := sre.calculateScore(candidate, scoringData, input)
+        
+        proposal := MedicationProposal{
+            ProposalID:      generateULID(),
+            Medication:      candidate.Medication,
+            DoseCalculation: candidate.DoseResult,
+            SafetyProfile:   candidate.SafetyProfile,
+            Score:          score.Total,
+            ScoreBreakdown: score,
+            Evidence: ProposalEvidence{
+                GuidelineSource: scoringData.Guidelines[candidate.Medication.ID],
+                FormularyData:   scoringData.Formulary[candidate.Medication.ID],
+                ResistanceData:  scoringData.Resistance[candidate.Medication.ID],
+            },
+        }
+        
+        scoredProposals = append(scoredProposals, proposal)
+    }
+    
+    // Step 3: Sort by score (descending)
+    sort.Slice(scoredProposals, func(i, j int) bool {
+        return scoredProposals[i].Score > scoredProposals[j].Score
+    })
+    
+    // Step 4: Assign ranks
+    for i := range scoredProposals {
+        scoredProposals[i].Rank = i + 1
+    }
+    
+    sre.metrics.RecordScoring(time.Since(startTime), len(scoredProposals))
+    
+    return scoredProposals, nil
+}
+
+func (sre *ScoringRankingEngine) calculateScore(
+    candidate DosedCandidate,
+    scoringData *ScoringData,
+    input *Phase3Input,
+) ScoreComponents {
+    
+    components := ScoreComponents{}
+    
+    // 1. Guideline Adherence Score
+    components.GuidelineAdherence = sre.calculateGuidelineScore(
+        candidate,
+        scoringData.Guidelines[candidate.Medication.ID],
+        input.EnrichedContext.Phenotype,
+    )
+    
+    // 2. Patient-Specific Score
+    components.PatientSpecific = sre.calculatePatientSpecificScore(
+        candidate,
+        input.EnrichedContext,
+    )
+    
+    // 3. Safety Profile Score
+    components.SafetyProfile = candidate.SafetyProfile.SafetyScore / 100.0
+    
+    // 4. Formulary Preference Score
+    components.FormularyPreference = sre.calculateFormularyScore(
+        candidate,
+        scoringData.Formulary[candidate.Medication.ID],
+    )
+    
+    // 5. Cost-Effectiveness Score
+    components.CostEffectiveness = sre.calculateCostScore(
+        candidate,
+        scoringData.Formulary[candidate.Medication.ID],
+    )
+    
+    // 6. Adherence Likelihood Score
+    components.AdherenceLikelihood = sre.calculateAdherenceScore(
+        candidate.DoseResult,
+        input.EnrichedContext,
+    )
+    
+    // Calculate weighted total
+    components.Total = 
+        components.GuidelineAdherence * sre.scoringWeights.GuidelineAdherence +
+        components.PatientSpecific * sre.scoringWeights.PatientSpecific +
+        components.SafetyProfile * sre.scoringWeights.SafetyProfile +
+        components.FormularyPreference * sre.scoringWeights.FormularyPreference +
+        components.CostEffectiveness * sre.scoringWeights.CostEffectiveness +
+        components.AdherenceLikelihood * sre.scoringWeights.AdherenceLikelihood
+    
+    return components
+}
+
+func (sre *ScoringRankingEngine) fetchScoringData(
+    ctx context.Context,
+    candidates []DosedCandidate,
+    input *Phase3Input,
+) (*ScoringData, error) {
+    
+    // Build medication ID list
+    medIDs := make([]string, len(candidates))
+    for i, c := range candidates {
+        medIDs[i] = c.Medication.ID
+    }
+    
+    // Query multiple KBs via Apollo Federation
+    query := `
+        query GetScoringData($medIds: [String!]!, $phenotype: String!, $versions: VersionInput!) {
+            kb_guidelines @version(v: $versions.guidelines) {
+                guidelineRecommendations(
+                    medicationIds: $medIds,
+                    phenotype: $phenotype
+                ) {
+                    medicationId
+                    recommendationLevel
+                    evidenceGrade
+                    firstLine
+                    alternativeTo
+                }
+            }
+            
+            kb_formulary_stock @version(v: $versions.formulary) {
+                formularyDetails(medicationIds: $medIds) {
+                    medicationId
+                    tier
+                    copay
+                    priorAuthRequired
+                    preferredStatus
+                    stockLevel
+                    averageCost
+                }
+            }
+            
+            kb_resistance_profiles @version(v: $versions.resistance) {
+                resistanceData(
+                    medicationIds: $medIds,
+                    region: $region
+                ) {
+                    medicationId
+                    susceptibilityRate
+                    resistancePattern
+                    lastUpdated
+                }
+            }
+            
+            kb_clinical_context @version(v: $versions.context) {
+                patientSpecificFactors(
+                    phenotype: $phenotype,
+                    medicationIds: $medIds
+                ) {
+                    medicationId
+                    phenotypeSpecificEfficacy
+                    expectedOutcome
+                    timeToEffect
+                }
+            }
+        }
+    `
+    
+    variables := map[string]interface{}{
+        "medIds":    medIDs,
+        "phenotype": input.EnrichedContext.Phenotype,
+        "region":    input.EnrichedContext.Demographics.Region,
+        "versions": map[string]string{
+            "guidelines": input.EvidenceEnvelope.KBVersions["kb_guidelines"],
+            "formulary":  input.EvidenceEnvelope.KBVersions["kb_formulary_stock"],
+            "resistance": input.EvidenceEnvelope.KBVersions["kb_resistance_profiles"],
+            "context":    input.EvidenceEnvelope.KBVersions["kb_clinical_context"],
+        },
+    }
+    
+    result, err := sre.apolloClient.Query(ctx, query, variables)
+    if err != nil {
+        return nil, err
+    }
+    
+    return sre.parseScoringData(result), nil
+}
+```
+
+### 4.2 Advanced Scoring Algorithms
+
+```go
+// internal/phase3/scoring_algorithms.go
+
+func (sre *ScoringRankingEngine) calculateGuidelineScore(
+    candidate DosedCandidate,
+    guideline GuidelineRecommendation,
+    phenotype string,
+) float64 {
+    score := 0.0
+    
+    // First-line therapy gets highest score
+    if guideline.FirstLine {
+        score = 1.0
+    } else if guideline.RecommendationLevel == "STRONG" {
+        score = 0.9
+    } else if guideline.RecommendationLevel == "MODERATE" {
+        score = 0.7
+    } else if guideline.RecommendationLevel == "WEAK" {
+        score = 0.5
+    } else {
+        score = 0.3
+    }
+    
+    // Adjust for evidence grade
+    switch guideline.EvidenceGrade {
+    case "A":
+        score *= 1.0
+    case "B":
+        score *= 0.9
+    case "C":
+        score *= 0.8
+    case "D":
+        score *= 0.7
+    default:
+        score *= 0.6
+    }
+    
+    // Phenotype-specific adjustment
+    if guideline.PhenotypeSpecific == phenotype {
+        score *= 1.1 // 10% bonus for phenotype-specific recommendation
+    }
+    
+    return math.Min(score, 1.0)
+}
+
+func (sre *ScoringRankingEngine) calculatePatientSpecificScore(
+    candidate DosedCandidate,
+    context *EnrichedContext,
+) float64 {
+    score := 1.0
+    
+    // Age-appropriateness
+    if context.Demographics.Age > 65 {
+        if candidate.Medication.GeriatricConsiderations.Appropriate {
+            score *= 1.0
+        } else if candidate.Medication.GeriatricConsiderations.UseCaution {
+            score *= 0.8
+        } else {
+            score *= 0.6
+        }
+    }
+    
+    // Renal function appropriateness
+    if context.LabResults.EGFR < 60 {
+        if candidate.DoseResult.AdjustmentsApplied.HasRenal {
+            score *= 1.0 // Properly adjusted
+        } else if candidate.Medication.RenalExcretion > 0.5 {
+            score *= 0.7 // Needs adjustment but not applied
+        }
+    }
+    
+    // Previous medication history
+    if sre.hasFailedSimilarMedication(candidate.Medication, context) {
+        score *= 0.5
+    }
+    
+    // Genetic factors if available
+    if context.GeneticMarkers != nil {
+        score *= sre.calculatePharmacogenomicScore(
+            candidate.Medication,
+            context.GeneticMarkers,
+        )
+    }
+    
+    return score
+}
+
+func (sre *ScoringRankingEngine) calculateAdherenceScore(
+    doseResult *DoseResult,
+    context *EnrichedContext,
+) float64 {
+    score := 1.0
+    
+    // Frequency impact
+    switch doseResult.Frequency {
+    case "ONCE_DAILY":
+        score *= 1.0
+    case "TWICE_DAILY":
+        score *= 0.9
+    case "THREE_TIMES_DAILY":
+        score *= 0.7
+    case "FOUR_TIMES_DAILY":
+        score *= 0.5
+    }
+    
+    // Route impact
+    switch doseResult.Route {
+    case "ORAL":
+        score *= 1.0
+    case "SUBCUTANEOUS":
+        score *= 0.8
+    case "INTRAMUSCULAR":
+        score *= 0.7
+    case "INTRAVENOUS":
+        score *= 0.5
+    }
+    
+    // Complexity of regimen
+    if context.CurrentMedications.Count > 5 {
+        score *= 0.9 // Polypharmacy penalty
+    }
+    
+    // Patient preference if known
+    if context.PatientPreferences != nil {
+        if context.PatientPreferences.PreferredRoute == doseResult.Route {
+            score *= 1.1
+        }
+    }
+    
+    return math.Min(score, 1.0)
+}
+```
+
+## 5. Complete Phase 3 Orchestration
+
+### 5.1 Main Phase 3 Execution
+
+```go
+// internal/phase3/orchestrator.go
+
+func (cie *ClinicalIntelligenceEngine) ExecutePhase3(
+    ctx context.Context,
+    input *Phase3Input,
+) (*Phase3Output, error) {
+    span, ctx := cie.tracer.Start(ctx, "phase3.execute")
+    defer span.End()
+    
+    phase3Start := time.Now()
+    subPhaseTiming := make(map[string]time.Duration)
+    
+    // Phase 3a: Generate and vet candidates
+    candidateStart := time.Now()
+    candidateSet, err := cie.candidateGenerator.GenerateCandidates(ctx, input)
+    if err != nil {
+        return nil, fmt.Errorf("candidate generation failed: %w", err)
+    }
+    subPhaseTiming["3a_candidates"] = time.Since(candidateStart)
+    
+    // Phase 3b: Calculate doses using Rust engine
+    doseStart := time.Now()
+    dosedCandidates, doseEvidence, err := cie.calculateDoses(ctx, candidateSet, input)
+    if err != nil {
+        return nil, fmt.Errorf("dose calculation failed: %w", err)
+    }
+    subPhaseTiming["3b_dosing"] = time.Since(doseStart)
+    
+    // Phase 3c: Score and rank proposals
+    scoringStart := time.Now()
+    rankedProposals, err := cie.scoringEngine.ScoreAndRank(ctx, dosedCandidates, input)
+    if err != nil {
+        return nil, fmt.Errorf("scoring and ranking failed: %w", err)
+    }
+    subPhaseTiming["3c_scoring"] = time.Since(scoringStart)
+    
+    // Build output
+    output := &Phase3Output{
+        RequestID:        input.RequestID,
+        CandidateCount:   candidateSet.InitialCount,
+        SafetyVetted:     candidateSet.VettedCount,
+        DoseCalculated:   len(dosedCandidates),
+        RankedProposals:  rankedProposals,
+        DoseEvidence:     doseEvidence,
+        Phase3Duration:   time.Since(phase3Start),
+        SubPhaseTiming:   subPhaseTiming,
+    }
+    
+    // Record metrics
+    cie.metrics.RecordPhase3Completion(output)
+    
+    // Verify we met the 75ms SLA
+    if output.Phase3Duration > 75*time.Millisecond {
+        cie.logger.Warn("Phase 3 exceeded SLA",
+            "duration", output.Phase3Duration,
+            "requestID", input.RequestID,
+        )
+    }
+    
+    return output, nil
+}
+
+func (cie *ClinicalIntelligenceEngine) calculateDoses(
+    ctx context.Context,
+    candidateSet *CandidateSet,
+    input *Phase3Input,
+) ([]DosedCandidate, []DoseCalculation, error) {
+    
+    // Fetch dosing rules from KB
+    dosingRules, err := cie.fetchDosingRules(ctx, candidateSet.Candidates, input)
+    if err != nil {
+        return nil, nil, err
+    }
+    
+    // Calculate doses in parallel using Rust engine
+    var wg sync.WaitGroup
+    dosedChan := make(chan DosedCandidate, len(candidateSet.Candidates))
+    evidenceChan := make(chan DoseCalculation, len(candidateSet.Candidates))
+    
+    for _, candidate := range candidateSet.Candidates {
+        wg.Add(1)
+        go func(cand VettedCandidate) {
+            defer wg.Done()
+            
+            rules := dosingRules[cand.Medication.ID]
+            doseResult, err := cie.doseEngine.CalculateDose(
+                ctx,
+                cand,
+                input.EnrichedContext,
+                rules,
+            )
+            
+            if err != nil {
+                cie.logger.Error("Dose calculation failed",
+                    "medication", cand.Medication.Name,
+                    "error", err,
+                )
+                return
+            }
+            
+            dosedChan <- DosedCandidate{
+                VettedCandidate: cand,
+                DoseResult:      doseResult,
+            }
+            
+            evidenceChan <- DoseCalculation{
+                MedicationID: cand.Medication.ID,
+                Method:       doseResult.CalculationMethod,
+                Adjustments:  doseResult.AdjustmentsApplied,
+            }
+        }(candidate)
+    }
+    
+    wg.Wait()
+    close(dosedChan)
+    close(evidenceChan)
+    
+    // Collect results
+    var dosedCandidates []DosedCandidate
+    var doseEvidence []DoseCalculation
+    
+    for dc := range dosedChan {
+        dosedCandidates = append(dosedCandidates, dc)
+    }
+    
+    for de := range evidenceChan {
+        doseEvidence = append(doseEvidence, de)
+    }
+    
+    return dosedCandidates, doseEvidence, nil
+}
+```
+
+## 6. Performance Optimizations
+
+### 6.1 Parallel Processing Strategy
+
+```go
+// internal/phase3/performance.go
+
+type ParallelProcessor struct {
+    maxWorkers int
+    batchSize  int
+}
+
+func (pp *ParallelProcessor) ProcessBatch(
+    ctx context.Context,
+    items []interface{},
+    processor func(context.Context, interface{}) (interface{}, error),
+) []interface{} {
+    
+    // Create worker pool
+    workers := pp.maxWorkers
+    if len(items) < workers {
+        workers = len(items)
+    }
+    
+    jobChan := make(chan interface{}, len(items))
+    resultChan := make(chan interface{}, len(items))
+    
+    // Start workers
+    var wg sync.WaitGroup
+    for i := 0; i < workers; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for item := range jobChan {
+                result, err := processor(ctx, item)
+                if err != nil {
+                    pp.logger.Error("Processing failed", "error", err)
+                    continue
+                }
+                resultChan <- result
+            }
+        }()
+    }
+    
+    // Queue jobs
+    for _, item := range items {
+        jobChan <- item
+    }
+    close(jobChan)
+    
+    // Wait and collect
+    wg.Wait()
+    close(resultChan)
+    
+    var results []interface{}
+    for result := range resultChan {
+        results = append(results, result)
+    }
+    
+    return results
+}
+```
+
+## 7. Testing Strategy
+
+### 7.1 Integration Tests
+
+```go
+// internal/phase3/integration_test.go
+
+func TestPhase3CompleteFlow(t *testing.T) {
+    // Setup
+    engine := setupTestEngine(t)
+    input := createTestInput()
+    
+    // Execute Phase 3
+    ctx := context.Background()
+    output, err := engine.ExecutePhase3(ctx, input)
+    
+    // Assertions
+    require.NoError(t, err)
+    assert.Greater(t, output.CandidateCount, 0)
+    assert.Greater(t, output.SafetyVetted, 0)
+    assert.Greater(t, len(output.RankedProposals), 0)
+    
+    // Verify ranking order
+    for i := 1; i < len(output.RankedProposals); i++ {
+        assert.GreaterOrEqual(t,
+            output.RankedProposals[i-1].Score,
+            output.RankedProposals[i].Score,
+        )
+    }
+    
+    // Verify timing
+    assert.Less(t, output.Phase3Duration, 75*time.Millisecond)
+}
+```
+
+### 7.2 Rust Engine Tests
+
+```rust
+// rust/dose_engine/src/tests.rs
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_weight_based_dosing() {
+        let request = create_test_request();
+        let result = calculate_dose(&request);
+        
+        assert_eq!(result.calculated_dose, 500.0);
+        assert_eq!(result.unit, "mg");
+        assert_eq!(result.frequency, "TWICE_DAILY");
+    }
+    
+    #[test]
+    fn test_renal_adjustment() {
+        let mut request = create_test_request();
+        request.patient.egfr = Some(25.0);
+        
+        let result = calculate_dose(&request);
+        
+        assert!(result.adjustments_applied.iter()
+            .any(|a| a.adjustment_type == "RENAL"));
+        assert!(result.calculated_dose < 500.0);
+    }
+}
+```
+
+## 8. Configuration
+
+```yaml
+# config/phase3.yaml
+phase3:
+  candidate_generation:
+    max_candidates: 20
+    safety_vetting:
+      parallel_workers: 5
+      timeout_per_check: 10ms
+    cache_ttl: 1h
+    
+  dose_calculation:
+    rust_engine:
+      lib_path: "./rust/dose_engine/target/release/libdose_engine.so"
+      max_parallel_calculations: 10
+      timeout: 20ms
+    fallback_to_standard_dose: true
+    
+  scoring:
+    weights:
+      guideline_adherence: 0.25
+      patient_specific: 0.20
+      safety_profile: 0.20
+      formulary_preference: 0.15
+      cost_effectiveness: 0.10
+      adherence_likelihood: 0.10
+    
+    cache_scoring_data: true
+    scoring_data_ttl: 30m
+    
+  performance:
+    target_latency_ms: 75
+    sub_phase_targets:
+      candidates_ms: 25
+      dosing_ms: 25
+      scoring_ms: 25
+```
+
+This Phase 3 implementation provides:
+
+1. **Safety-First Candidate Generation**: Parallel vetting with contraindication filtering
+2. **Precision Dosing via Rust**: High-performance, deterministic dose calculations
+3. **Multi-Factor Scoring**: Comprehensive ranking based on clinical and operational factors
+4. **Evidence Tracking**: Complete audit trail through Evidence Envelope
+5. **Performance Optimized**: Parallel processing and strategic caching to meet 75ms SLA
+6. **Apollo Federation Integration**: All KB queries use versioned endpoints
+
+The Rust engine ensures deterministic, high-performance dose calculations while the Go orchestrator manages the complex workflow and evidence tracking.

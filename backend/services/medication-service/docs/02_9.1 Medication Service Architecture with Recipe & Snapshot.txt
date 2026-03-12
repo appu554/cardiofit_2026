@@ -1,0 +1,408 @@
+﻿# Final Proposal: Medication Service Architecture with Recipe & Snapshot Management
+
+
+## Executive Summary
+
+
+The Medication Service requires significant architectural enhancements to support the new Recipe Resolution and Snapshot Management paradigm. The service now owns recipe resolution internally and orchestrates snapshot creation through the Context Gateway, ensuring complete data consistency across the Calculate → Validate → Commit pattern.
+
+
+## 1. Revised Core Architecture
+
+
+### 1.1 Key Architectural Changes
+
+
+```typescript
+// medication-service/architecture.ts
+
+
+interface MedicationServiceArchitecture {
+  // NEW: Recipe Resolution is now internal
+  recipeResolver: RecipeResolver;
+  
+  // NEW: Direct integration with Context Gateway for snapshots
+  contextGateway: ContextGatewayClient;
+  
+  // EXISTING: Knowledge Base access via Apollo Federation
+  apolloFederation: ApolloFederationClient;
+  
+  // EXISTING: Core calculation engines
+  candidateBuilder: CandidateBuilder;
+  doseCalculationEngine: RustDoseEngine;
+  scoringEngine: ScoringEngine;
+  
+  // EXISTING: Persistence layer
+  proposalRepository: ProposalRepository;
+  outboxPublisher: OutboxEventPublisher;
+}
+```
+
+
+### 1.2 Updated Service Boundaries
+
+
+The Medication Service now has expanded responsibilities:
+- **Owns Recipe Resolution** (previously external)
+- **Orchestrates Snapshot Creation** (via Context Gateway)
+- **Includes Snapshot Reference** in all proposals
+- **Maintains Recipe Definitions** as part of its domain
+
+
+## 2. Enhanced 4-Phase Workflow Implementation
+
+
+### Phase 1: Ingestion & Recipe Resolution (ENHANCED)
+
+
+```typescript
+class MedicationService {
+  private recipeResolver: RecipeResolver;
+  
+  async phase1_ingestAndResolve(
+    request: MedicationRequest
+  ): Promise<{manifest: IntentManifest, recipe: WorkflowRecipe}> {
+    // Step 1: Apply Orchestrator Rule Base (ORB)
+    const intentManifest = await this.orchestratorRuleBase.classify(
+      request.indication,
+      request.clinicalContext
+    );
+    
+    // Step 2: Resolve complete recipe (NEW - internal)
+    const recipe = this.recipeResolver.resolveWorkflowRecipe(
+      intentManifest.protocolId,
+      intentManifest.contextNeeds
+    );
+    
+    // Recipe includes ALL fields needed for:
+    // - Medication calculation (demographics, labs)
+    // - Safety validation (allergies, conditions)
+    // - Audit requirements (provider, encounter)
+    
+    return { manifest: intentManifest, recipe };
+  }
+}
+```
+
+
+### Phase 2: Context Assembly via Snapshot (TRANSFORMED)
+
+
+```typescript
+class MedicationService {
+  private contextGateway: ContextGatewayClient;
+  
+  async phase2_assembleContext(
+    recipe: WorkflowRecipe,
+    patientId: string
+  ): Promise<ClinicalSnapshot> {
+    // NEW: Medication Service triggers snapshot creation
+    // Context Gateway handles all data fetching atomically
+    const snapshot = await this.contextGateway.createSnapshot(
+      recipe,
+      patientId
+    );
+    
+    // Snapshot is immutable and signed
+    // Contains ALL data needed for phases 3 & validation
+    return snapshot;
+  }
+}
+```
+
+
+### Phase 3: Clinical Intelligence Engine (SNAPSHOT-AWARE)
+
+
+```typescript
+class MedicationService {
+  async phase3_clinicalIntelligence(
+    manifest: IntentManifest,
+    snapshot: ClinicalSnapshot
+  ): Promise<ScoredProposal[]> {
+    // All calculations now use snapshot.data
+    
+    // Step 3a: Candidate Generation
+    const candidates = await this.candidateBuilder.generate(
+      manifest.therapyOptions,
+      snapshot.data // Uses snapshot instead of live data
+    );
+    
+    // Step 3b: Dose Calculation (Rust Engine)
+    const dosedCandidates = await this.doseCalculationEngine.calculate(
+      candidates,
+      snapshot.data
+    );
+    
+    // Step 3c: Scoring & Ranking
+    const scoredProposals = await this.scoringEngine.rank(
+      dosedCandidates,
+      snapshot.data,
+      await this.fetchKnowledgeBaseData()
+    );
+    
+    return scoredProposals;
+  }
+  
+  private async fetchKnowledgeBaseData() {
+    // Parallel KB queries via Apollo Federation
+    return await this.apolloFederation.query({
+      kb1_dosing: { /* query */ },
+      kb3_guidelines: { /* query */ },
+      kb6_formulary: { /* query */ },
+      kb7_resistance: { /* query */ }
+    });
+  }
+}
+```
+
+
+### Phase 4: Proposal Generation with Snapshot Reference (CRITICAL CHANGE)
+
+
+```typescript
+class MedicationService {
+  async phase4_generateProposal(
+    scoredProposals: ScoredProposal[],
+    snapshot: ClinicalSnapshot,
+    manifest: IntentManifest
+  ): Promise<MedicationProposal> {
+    const proposal: MedicationProposal = {
+      proposalId: generateULID(),
+      patientId: snapshot.patientId,
+      therapies: scoredProposals,
+      
+      // CRITICAL: Include snapshot reference for validation
+      snapshotReference: {
+        snapshotId: snapshot.id,
+        checksum: snapshot.checksum,
+        createdAt: snapshot.createdAt,
+        expiresAt: snapshot.expiresAt,
+        includedFields: snapshot.includedFields,
+        signature: snapshot.signature
+      },
+      
+      // Evidence for audit
+      evidenceEnvelope: {
+        snapshotId: snapshot.id,
+        kbVersions: await this.apolloFederation.getVersions(),
+        protocolUsed: manifest.protocolId,
+        proposalGeneratedAt: new Date()
+      }
+    };
+    
+    // Persist with outbox pattern
+    await this.persistProposal(proposal);
+    
+    return proposal;
+  }
+}
+```
+
+
+## 3. Recipe Resolver Implementation
+
+
+### 3.1 Internal Recipe Management
+
+
+```typescript
+class RecipeResolver {
+  private recipeDefinitions: Map<string, RecipeTemplate>;
+  
+  resolveWorkflowRecipe(
+    protocolId: string,
+    contextNeeds: ContextNeeds
+  ): WorkflowRecipe {
+    const template = this.recipeDefinitions.get(protocolId);
+    
+    // Merge requirements from different phases
+    const calculationFields = this.getCalculationFields(protocolId);
+    const safetyFields = this.getSafetyFields(protocolId);
+    const auditFields = this.getAuditFields();
+    
+    // Add conditional fields based on context
+    const conditionalFields = this.resolveConditionalFields(
+      contextNeeds,
+      template.conditionalRules
+    );
+    
+    return {
+      recipeId: `${protocolId}_${timestamp}`,
+      requiredFields: this.mergeAndDeduplicate([
+        calculationFields,
+        safetyFields,
+        auditFields,
+        conditionalFields
+      ]),
+      freshnessRequirements: template.freshnessRules,
+      ttlSeconds: this.calculateTTL(protocolId),
+      allowLiveFetch: false, // Default to false for safety
+      allowedLiveFields: [] // Exceptional cases only
+    };
+  }
+}
+```
+
+
+## 4. Knowledge Base Integration Pattern
+
+
+### 4.1 Apollo Federation Usage
+
+
+```typescript
+class KnowledgeBaseClient {
+  async fetchForCalculation(
+    medicationIds: string[],
+    patientPhenotype: string
+  ): Promise<KBData> {
+    const query = gql`
+      query MedicationCalculation($meds: [ID!], $phenotype: String!) {
+        kb1_dosing {
+          dosingRules(medicationIds: $meds) {
+            medicationId
+            weightBased
+            renalAdjustment
+            hepaticAdjustment
+          }
+        }
+        kb3_guidelines {
+          phenotypeGuidelines(phenotype: $phenotype) {
+            preferredTherapies
+            contraindications
+          }
+        }
+        kb6_formulary {
+          formularyStatus(medicationIds: $meds) {
+            tier
+            priorAuth
+            alternatives
+          }
+        }
+      }
+    `;
+    
+    return await this.apolloClient.query({ query, variables });
+  }
+}
+```
+
+
+## 5. Error Handling & Resilience
+
+
+### 5.1 Snapshot-Specific Error Handling
+
+
+```typescript
+class MedicationServiceErrorHandler {
+  async handleSnapshotErrors(error: Error): Promise<void> {
+    if (error instanceof SnapshotCreationError) {
+      // Recipe might be invalid or data sources unavailable
+      await this.fallbackToMinimalRecipe();
+    } else if (error instanceof SnapshotExpiredError) {
+      // Cannot proceed with expired snapshot
+      throw new ClinicalSafetyError('Snapshot expired, restart workflow');
+    }
+  }
+}
+```
+
+
+## 6. Data Flow Diagram
+
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant MS as Medication Service
+    participant RR as Recipe Resolver (Internal)
+    participant CG as Context Gateway
+    participant AF as Apollo Federation
+    participant KB as Knowledge Bases
+    
+    C->>MS: Request Medication
+    
+    rect rgb(240, 240, 255)
+        Note over MS,RR: Phase 1: Recipe Resolution
+        MS->>RR: Resolve Recipe
+        RR-->>MS: WorkflowRecipe
+    end
+    
+    rect rgb(240, 255, 240)
+        Note over MS,CG: Phase 2: Snapshot Creation
+        MS->>CG: Create Snapshot(recipe, patientId)
+        CG->>CG: Atomic data fetch
+        CG-->>MS: ClinicalSnapshot
+    end
+    
+    rect rgb(255, 240, 240)
+        Note over MS,KB: Phase 3: Intelligence Engine
+        MS->>AF: Query KBs
+        AF->>KB: Parallel queries
+        KB-->>AF: Knowledge data
+        AF-->>MS: Aggregated results
+        MS->>MS: Calculate with snapshot.data
+    end
+    
+    rect rgb(255, 255, 240)
+        Note over MS: Phase 4: Proposal
+        MS->>MS: Generate proposal with snapshot ref
+        MS-->>C: MedicationProposal
+    end
+```
+
+
+## 7. Critical Implementation Requirements
+
+
+### 7.1 Mandatory Changes
+
+
+1. **Recipe Resolver Integration**
+   - Must be implemented as internal module
+   - Recipe definitions stored and versioned locally
+   - Support for conditional field resolution
+
+
+2. **Snapshot Orchestration**
+   - Service MUST call Context Gateway for snapshot creation
+   - Never fetch data directly from sources
+   - Always include snapshot reference in proposals
+
+
+3. **Knowledge Base Queries**
+   - Use Apollo Federation for all KB access
+   - Never embed clinical rules in service code
+   - Cache KB responses appropriately
+
+
+### 7.2 Performance Considerations
+
+
+```typescript
+interface PerformanceTargets {
+  recipeResolution: '<10ms',      // Internal lookup
+  snapshotCreation: '<100ms',     // Context Gateway handles
+  kbQueries: '<50ms',              // Parallel via Apollo
+  calculations: '<50ms',           // Rust engine optimized
+  totalLatency: '<250ms'           // End-to-end
+}
+```
+
+
+## Summary
+
+
+This architecture ensures the Medication Service:
+
+
+1. **Owns Recipe Resolution** - No external dependencies for recipe logic
+2. **Orchestrates Snapshots** - Ensures data consistency via Context Gateway
+3. **Leverages Knowledge Bases** - All clinical logic externalized
+4. **Maintains Audit Trail** - Every decision traceable to specific snapshot
+5. **Enables Safe Validation** - Safety Gateway uses same snapshot data
+
+
+The key insight is that the Medication Service has evolved from a simple calculator to an intelligent orchestrator that manages the complete lifecycle of medication proposals while ensuring data consistency through immutable snapshots.

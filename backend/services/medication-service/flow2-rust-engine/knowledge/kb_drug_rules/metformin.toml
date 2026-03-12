@@ -1,0 +1,202 @@
+# Metformin (Biguanide) - Complete Dose Calculation & Safety Rules
+
+# Version: 2.0.0
+# Evidence: ADA-SOC-2025, FDA-Label-2024, KDIGO-CKD-2022
+
+[meta]
+drug_id = "metformin"
+generic_name = "metformin"
+version = "2.0.0"
+evidence_sources = ["ADA-SOC-2025", "FDA-Label-2024", "KDIGO-CKD-2022"]
+last_updated = "2025-08-16"
+clinical_reviewer = "Dr. Clinical Expert"
+
+# DOSE CALCULATION RULES - Required for real calculations
+[dose_calculation]
+
+[dose_calculation.base_dose]
+default_mg = 500.0
+calculation_method = "indication_based"
+weight_factor_mg_per_kg = 10.0  # Starting point for weight-based adjustment
+
+[dose_calculation.dose_limits]
+absolute_min_mg = 500.0
+absolute_max_mg = 2550.0
+max_mg_per_day = 2550.0
+
+# Weight adjustment bands
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 40.0
+max_kg = 70.0
+factor = 0.8
+action = "multiply"
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 70.1
+max_kg = 100.0
+factor = 1.0
+action = "multiply"
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 100.1
+max_kg = 150.0
+factor = 1.2
+action = "multiply"
+
+# Age adjustment bands
+[[dose_calculation.age_adjustment.bands]]
+min_years = 18
+max_years = 65
+factor = 1.0
+action = "multiply"
+
+[[dose_calculation.age_adjustment.bands]]
+min_years = 66
+max_years = 120
+factor = 0.8
+action = "multiply"
+
+# Indication-specific dosing
+[dose_calculation.indication_specific.type_2_diabetes]
+base_dose_mg = 500.0
+starting_dose_mg = 500.0
+frequency_per_day = 2
+titration_increment_mg = 500.0
+titration_interval_days = 7
+max_dose_mg_per_day = 2000.0
+
+[dose_calculation.indication_specific.gestational_diabetes]
+base_dose_mg = 500.0
+starting_dose_mg = 500.0
+frequency_per_day = 2
+max_dose_mg_per_day = 2000.0
+
+# SAFETY VERIFICATION RULES - Required for safety checks
+[safety_verification]
+[[safety_verification.monitoring_requirements]]
+lab_test = "egfr"
+frequency = "every_3_months"
+action_on_alert = "hold_if_<30"
+reason = "Risk of lactic acidosis when eGFR < 30"
+
+
+[safety_verification.absolute_contraindications]
+pregnancy = false  # Safe in pregnancy for gestational diabetes
+breastfeeding = false  # Safe during breastfeeding
+allergy_classes = ["biguanide"]
+conditions = ["diabetic_ketoacidosis", "severe_metabolic_acidosis"]
+
+[safety_verification.renal_safety]
+enabled = true
+metric = "egfr_ckd_epi"
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 0.0
+max_egfr = 29.0
+action = "contraindicated"
+reason = "eGFR < 30: contraindicated due to lactic acidosis risk"
+evidence = ["FDA-BLACK-BOX-2024"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 30.0
+max_egfr = 44.0
+action = "dose_cap"
+max_dose_mg_per_day = 1000.0
+monitoring_required = ["renal_function_q3months"]
+reason = "eGFR 30-44: reduce dose, monitor closely"
+evidence = ["FDA-2017", "KDIGO-2022"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 45.0
+max_egfr = 59.0
+action = "dose_cap"
+max_dose_mg_per_day = 1500.0
+monitoring_required = ["renal_function_q6months"]
+reason = "eGFR 45-59: moderate dose reduction"
+evidence = ["FDA-2017", "KDIGO-2022"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 60.0
+max_egfr = 999.0
+action = "proceed"
+reason = "Normal renal function"
+evidence = ["FDA-2017", "KDIGO-2022"]
+
+# Drug interactions
+[[safety_verification.interactions.major]]
+interacting_drug_classes = ["iodinated_contrast"]
+action = "temporary_discontinuation"
+duration_hours = 48
+reason = "Contrast-induced nephropathy risk"
+
+[[safety_verification.interactions.moderate]]
+interacting_drug_classes = ["alcohol", "cimetidine"]
+action = "monitor_closely"
+monitoring_required = ["lactic_acid_levels", "renal_function"]
+reason = "May increase lactic acidosis risk"
+
+# MONITORING REQUIREMENTS (top-level)
+[[monitoring_requirements]]
+lab_test = "egfr"
+frequency = "every_3_months"
+action_on_alert = "dose_reduction_or_discontinuation"
+reason = "Monitor for declining renal function"
+
+[[monitoring_requirements]]
+lab_test = "vitamin_b12"
+frequency = "annually"
+action_on_alert = "monitor_closely"
+reason = "Metformin-induced B12 deficiency with long-term use"
+
+[[monitoring_requirements]]
+lab_test = "hba1c"
+frequency = "every_3_months"
+action_on_alert = "adjust_dose"
+reason = "Monitor glycemic control effectiveness"
+
+[hard_contraindications]
+pregnancy = false  # Safe in pregnancy for gestational diabetes
+allergy_codes = ["BIGUANIDE"]
+
+[hepatic]
+# Metformin contraindicated in severe hepatic impairment
+max_child_pugh = "B"    # Block if Child-Pugh > B (severe hepatic impairment)
+
+[renal]
+# Critical renal adjustments - lactic acidosis risk
+bands = [
+  { min = 0,   max = 29, action = "block", reason = "eGFR < 30: contraindicated due to lactic acidosis risk" },
+  { min = 30,  max = 44, action = "cap", max_dose_mg_per_day = 1000, split = "BID", reason = "eGFR 30-44: reduce dose, monitor closely" },
+  { min = 45,  max = 59, action = "cap", max_dose_mg_per_day = 1500, split = "BID", reason = "eGFR 45-59: moderate dose reduction" },
+  { min = 60,  max = 300, action = "allow", reason = "Normal renal function" }
+]
+egfr_metric = "egfr_only"  # Use eGFR specifically for metformin
+
+[dose_limits]
+absolute_max_mg_per_day = 2000
+absolute_min_mg = 500
+
+[duplicate_class]
+class_id = "BIGUANIDE"
+block_combination = true  # Only one biguanide at a time
+flag_severity = "major"
+
+[qt_rules]
+applies = false  # Metformin doesn't affect QT interval
+
+# Special considerations for metformin
+[special_rules]
+# Hold before contrast procedures
+contrast_hold_hours = 48
+# Hold before major surgery
+surgery_hold_hours = 24
+# Monitor B12 levels with long-term use
+b12_monitoring = true
+
+# Clinical Notes:
+# - Start low, titrate slowly to minimize GI side effects
+# - Hold before contrast procedures (48h before, 48h after)
+# - Monitor for lactic acidosis symptoms
+# - Check B12 levels annually with long-term use
+# - Contraindicated in acute kidney injury
+# - Safe first-line therapy for T2DM

@@ -1,0 +1,347 @@
+================================================================================
+MODULE 3 SEMANTIC MESH - COMPONENT REUSABILITY MAP
+================================================================================
+
+Legend: [✓] Exists & Reusable  [✗] Needs Creation  [~] Partially Complete  [?] Check
+
+================================================================================
+1. DATA MODELS LAYER - /com/cardiofit/flink/models/
+================================================================================
+
+    PRIMARY OUTPUT MODEL
+    ┌─────────────────────────────────────────────────┐
+    │ SemanticEvent.java                         [✓] │
+    │ ├─ id, patientId, encounterId                   │
+    │ ├─ semanticAnnotations (Map)                    │
+    │ ├─ clinicalConcepts (Set)                       │
+    │ ├─ confidenceScores (Map)                       │
+    │ ├─ clinicalInferences (List)                    │
+    │ └─ Inner Classes:                               │
+    │    ├─ ClinicalAlert              [✓] READY     │
+    │    ├─ GuidelineRecommendation    [✓] READY     │
+    │    ├─ DrugInteraction            [✓] READY     │
+    │    ├─ Contraindication           [✓] READY     │
+    │    └─ SemanticQuality            [✓] READY     │
+    └─────────────────────────────────────────────────┘
+
+    PATIENT STATE MODELS
+    ┌─────────────────────────────────────────────────┐
+    │ PatientContext.java                        [✓] │
+    │ ├─ patientId, acuityScore                       │
+    │ ├─ activeMedications (Map)                      │
+    │ ├─ allergies (List)                            │
+    │ ├─ chronicConditions (List)                     │
+    │ ├─ riskFactors (List)                          │
+    │ └─ Inner Classes: Demographics, Location, etc.  │
+    │                                                 │
+    │ PatientContextState.java                   [✓] │
+    │ ├─ RocksDB-persisted unified state              │
+    │ ├─ latestVitals (Map)                          │
+    │ ├─ recentLabs (Map<String, LabResult>)         │
+    │ ├─ activeMedications (Map<String, Med>)        │
+    │ └─ activeAlerts, riskIndicators, scores, etc.  │
+    └─────────────────────────────────────────────────┘
+
+    SUPPORTING MODELS
+    ┌─────────────────────────────────────────────────┐
+    │ DrugInteraction.java               [✓] READY   │
+    │ AllergyAlert.java                  [✓] READY   │
+    │ EnrichedEvent.java                 [✓] EXTEND  │
+    │ EventType.java                     [✓] USE     │
+    │ RiskIndicators.java                [✓] USE     │
+    └─────────────────────────────────────────────────┘
+
+================================================================================
+2. CLINICAL LOGIC LAYER - /com/cardiofit/flink/recommendations/
+================================================================================
+
+    RECOMMENDATION ENGINE
+    ┌────────────────────────────────────────────────────────┐
+    │ RecommendationEngine.java                     [✓] USE  │
+    │ ├─ generateImmediateActions()                           │
+    │ ├─ generateSuggestedLabs()                              │
+    │ ├─ determineMonitoringFrequency()                       │
+    │ ├─ generateReferrals()                                  │
+    │ └─ generateEvidenceBasedInterventions()                 │
+    │                                                         │
+    │ Recommendations.java                          [✓] USE  │
+    │ ├─ immediateActions (List<String>)                     │
+    │ ├─ suggestedLabs (List<String>)                        │
+    │ ├─ monitoringFrequency (String)                        │
+    │ ├─ referrals (List<String>)                            │
+    │ └─ evidenceBasedInterventions (List<String>)           │
+    └────────────────────────────────────────────────────────┘
+
+================================================================================
+3. PROCESSOR LAYER - /com/cardiofit/flink/operators/Module3_SemanticMesh.java
+================================================================================
+
+    SEMANTIC REASONING PROCESSOR
+    ┌─────────────────────────────────────────────────────────┐
+    │ SemanticReasoningProcessor          [✓] ENHANCE        │
+    │ ├─ processElement(): EnrichedEvent → SemanticEvent      │
+    │ ├─ State: SemanticContext (per-patient)                │
+    │ ├─ WORKING Methods:                                     │
+    │ │  ├─ assessClinicalSignificance()                      │
+    │ │  ├─ stratifyRisk()                                    │
+    │ │  ├─ extractClinicalConcepts()                         │
+    │ │  ├─ calculateConfidenceScores()                       │
+    │ │  ├─ generateClinicalInferences()                      │
+    │ │  └─ analyzeTemporalContext()                          │
+    │ └─ TODO: Integrate RecommendationEngine                │
+    └─────────────────────────────────────────────────────────┘
+
+    GUIDELINE PROCESSOR
+    ┌─────────────────────────────────────────────────────────┐
+    │ ClinicalGuidelineProcessor          [~] INCOMPLETE     │
+    │ ├─ Receives: KB3 Clinical Protocols (broadcast)         │
+    │ ├─ Current: Pass-through only                           │
+    │ └─ TODO: Apply KB3 guidelines, match protocols          │
+    └─────────────────────────────────────────────────────────┘
+
+    DRUG SAFETY PROCESSOR
+    ┌─────────────────────────────────────────────────────────┐
+    │ DrugSafetyProcessor                 [✗] PLACEHOLDER    │
+    │ ├─ Receives: KB5 Drug Interactions (broadcast)          │
+    │ ├─ Current: checkDrugInteractions() is stub             │
+    │ ├─ TODO: Implement drug-drug checking                   │
+    │ └─ TODO: Implement drug-allergy checking                │
+    └─────────────────────────────────────────────────────────┘
+
+    TERMINOLOGY PROCESSOR
+    ┌─────────────────────────────────────────────────────────┐
+    │ TerminologyStandardizationProcessor [~] INCOMPLETE     │
+    │ ├─ Receives: KB7 Terminology (broadcast)                │
+    │ ├─ Current: Basic mapping to standard terms             │
+    │ └─ TODO: Full SNOMED/ICD integration                    │
+    └─────────────────────────────────────────────────────────┘
+
+    INNER CLASSES (State Patterns)
+    ┌─────────────────────────────────────────────────────────┐
+    │ SemanticContext            [✓] REUSE PATTERN           │
+    │ ClinicalRule               [✓] REUSE PATTERN           │
+    │ KnowledgeBaseUpdate        [✓] REUSE PATTERN           │
+    └─────────────────────────────────────────────────────────┘
+
+================================================================================
+4. NEW COMPONENTS TO CREATE
+================================================================================
+
+    CLINICAL LOGIC PACKAGE (NEW)
+    /com/cardiofit/flink/clinical/
+    ┌─────────────────────────────────────────────────────────┐
+    │ ContraindicationChecker.java        [✗] CREATE         │
+    │ ├─ checkDrugDrugInteractions()                          │
+    │ └─ checkDrugAllergyContraindications()                  │
+    │                                                         │
+    │ DrugInteractionEngine.java          [✗] CREATE         │
+    │ ├─ detectInteractions()                                 │
+    │ ├─ calculateSeverity()                                  │
+    │ └─ generateRecommendations()                            │
+    │                                                         │
+    │ ClinicalProtocolMatcher.java        [✗] CREATE         │
+    │ ├─ matchProtocols()                                     │
+    │ ├─ evaluateApplicability()                              │
+    │ └─ extractActionItems()                                 │
+    │                                                         │
+    │ DosageValidator.java                [✗] CREATE         │
+    │ ├─ validateDosage()                                     │
+    │ ├─ checkKidneyFunction()                                │
+    │ └─ checkDrugInteractionDosage()                         │
+    └─────────────────────────────────────────────────────────┘
+
+    ENRICHMENT PACKAGE (NEW)
+    /com/cardiofit/flink/enrichment/
+    ┌─────────────────────────────────────────────────────────┐
+    │ DrugInteractionEnricher.java        [✗] CREATE         │
+    │ └─ Adds drugInteractions to SemanticEvent               │
+    │                                                         │
+    │ ContraindicationEnricher.java       [✗] CREATE         │
+    │ └─ Adds contraindications to SemanticEvent              │
+    │                                                         │
+    │ RecommendationEnricher.java         [✗] CREATE (NEW)  │
+    │ └─ Integrates RecommendationEngine into pipeline        │
+    └─────────────────────────────────────────────────────────┘
+
+    KB CLIENT PACKAGE (ENHANCE)
+    /com/cardiofit/flink/clients/
+    ┌─────────────────────────────────────────────────────────┐
+    │ Neo4jGraphClient.java              [✓] EXISTS (ref)    │
+    │                                                         │
+    │ KnowledgeBaseClient.java           [?] CHECK/CREATE   │
+    │ ├─ queryKB3_ClinicalProtocols()                         │
+    │ ├─ queryKB4_DrugCalculations()                          │
+    │ ├─ queryKB5_DrugInteractions()                          │
+    │ ├─ queryKB6_ValidationRules()                           │
+    │ └─ queryKB7_Terminology()                               │
+    └─────────────────────────────────────────────────────────┘
+
+================================================================================
+5. DATA FLOW & PROCESSING PIPELINE
+================================================================================
+
+    INPUT STREAM
+         │
+         ├─ EnrichedEvent (from Module 2)
+         │  └─ Contains: immediateAlerts, riskIndicators, clinicalScores
+         │
+    PROCESSING CHAIN
+         │
+         ├→ SemanticReasoningProcessor [✓ WORKING]
+         │  ├─ Calculate clinical significance
+         │  ├─ Extract clinical concepts
+         │  ├─ Generate inferences
+         │  └─ Create base SemanticEvent
+         │
+         ├→ ClinicalGuidelineProcessor [~ INCOMPLETE]
+         │  └─ Apply KB3 protocols
+         │
+         ├→ DrugSafetyProcessor [✗ STUB]
+         │  ├─ Query KB5 drug interactions
+         │  └─ Check patient allergies
+         │
+         ├→ RecommendationEnricher [✗ NEW]
+         │  └─ Call RecommendationEngine
+         │
+         ├→ TerminologyStandardizationProcessor [~ INCOMPLETE]
+         │  └─ Map to standard terminology
+         │
+    OUTPUT ROUTES
+         │
+         ├─→ SEMANTIC_MESH_UPDATES topic
+         ├─→ SAFETY_EVENTS topic
+         ├─→ ALERT_MANAGEMENT topic
+         └─→ CLINICAL_REASONING_EVENTS topic
+
+================================================================================
+6. STATE MANAGEMENT ARCHITECTURE
+================================================================================
+
+    FLINK KEYED STATE (per patientId)
+    ┌──────────────────────────────────────────────────┐
+    │ ValueState<SemanticContext>                  [✓] │
+    │ ├─ activeInferences                              │
+    │ ├─ confidenceScores                              │
+    │ └─ clinicalConcepts                              │
+    │                                                  │
+    │ MapState<String, ClinicalRule>               [✓] │
+    │ └─ activeClinicalRules                           │
+    │                                                  │
+    │ MapState<String, Long>                       [✓] │
+    │ └─ ruleLastApplied                               │
+    └──────────────────────────────────────────────────┘
+
+    REFERENCE: PatientContextState (RocksDB Pattern)
+    ┌──────────────────────────────────────────────────┐
+    │ Unified patient state                        [✓] │
+    │ ├─ latestVitals                                  │
+    │ ├─ recentLabs                                    │
+    │ ├─ activeMedications                             │
+    │ ├─ activeAlerts                                  │
+    │ ├─ riskIndicators                                │
+    │ ├─ Clinical scores (NEWS2, qSOFA, etc.)         │
+    │ └─ FHIR/Neo4j enrichment                         │
+    └──────────────────────────────────────────────────┘
+
+================================================================================
+7. KNOWLEDGE BASE INTEGRATION POINTS
+================================================================================
+
+    KB3 (Clinical Protocols)
+    └─→ ClinicalGuidelineProcessor [~ INCOMPLETE]
+        └─ TODO: Implement protocol matching
+
+    KB4 (Drug Calculations)
+    └─→ DosageValidator [✗ NEW]
+        └─ TODO: Implement dosage validation
+
+    KB5 (Drug Interactions)
+    └─→ DrugSafetyProcessor [✗ STUB]
+        └─ TODO: Query for drug interactions
+
+    KB6 (Validation Rules)
+    └─→ TerminologyStandardizationProcessor [~ INCOMPLETE]
+        └─ Reference: Not actively processed yet
+
+    KB7 (Terminology)
+    └─→ TerminologyStandardizationProcessor [~ INCOMPLETE]
+        └─ TODO: Full terminology mapping
+
+================================================================================
+8. REUSABILITY SCORECARD
+================================================================================
+
+    IMMEDIATE REUSE (Copy & Use As-Is)
+    ├─ SemanticEvent.java                             [✓✓✓]
+    ├─ PatientContext.java                            [✓✓✓]
+    ├─ PatientContextState.java                       [✓✓✓]
+    ├─ RecommendationEngine.java                      [✓✓✓]
+    ├─ DrugInteraction.java                           [✓✓✓]
+    ├─ AllergyAlert.java                              [✓✓✓]
+    ├─ EventType.java                                 [✓✓]
+    └─ RiskIndicators.java                            [✓✓]
+
+    EXTEND & ENHANCE
+    ├─ SemanticReasoningProcessor                     [✓✓]
+    ├─ EnrichedEvent.java                             [✓✓]
+    ├─ ClinicalGuidelineProcessor                     [✓]
+    ├─ TerminologyStandardizationProcessor            [✓]
+    └─ Recommendations.java                           [✓]
+
+    STUB - IMPLEMENT LOGIC
+    ├─ DrugSafetyProcessor                            [✗]
+    └─ Neo4jGraphClient (as reference)                [?]
+
+    NEW - CREATE FROM SCRATCH
+    ├─ ContraindicationChecker                        [✗✗]
+    ├─ DrugInteractionEngine                          [✗✗]
+    ├─ ClinicalProtocolMatcher                        [✗✗]
+    ├─ DosageValidator                                [✗✗]
+    ├─ DrugInteractionEnricher                        [✗]
+    ├─ ContraindicationEnricher                       [✗]
+    ├─ RecommendationEnricher                         [✗]
+    └─ KnowledgeBaseClient                            [?✗]
+
+================================================================================
+9. EXECUTION CONFIGURATION
+================================================================================
+
+    Parallelism: 4
+    Checkpoint Interval: 30 seconds
+    Min Pause Between Checkpoints: 5 seconds
+
+    Input Topic: CLINICAL_PATTERNS (from Module 2)
+    KB Topics: KB3, KB4, KB5, KB6, KB7 (broadcast)
+    
+    Output Topics:
+    - SEMANTIC_MESH_UPDATES (primary)
+    - SAFETY_EVENTS (drug interactions)
+    - ALERT_MANAGEMENT (clinical alerts)
+    - CLINICAL_REASONING_EVENTS (recommendations)
+
+================================================================================
+10. COMPLETION ESTIMATE
+================================================================================
+
+    Current Status: ~40% Complete
+
+    Breakdown by Component:
+    ├─ Data Models:           95% (15/16 exist)
+    ├─ Clinical Logic:        90% (RecommendationEngine exists)
+    ├─ Processor Framework:   40% (structure exists, logic incomplete)
+    ├─ Drug Safety Logic:     10% (stub only)
+    ├─ Protocol Matching:     20% (not implemented)
+    ├─ Knowledge Base Queries: 15% (not implemented)
+    ├─ Enrichment Pipeline:   30% (partially working)
+    └─ Testing:               5% (minimal)
+
+    Estimated Work Distribution:
+    - Reuse Existing (30%): 15-20 hours
+    - Enhance Existing (35%): 20-30 hours
+    - Implement New (35%): 30-50 hours
+    
+    Total Estimated: 65-100 hours (~2-3 weeks, 1 developer)
+
+================================================================================
+END OF MODULE 3 COMPONENT MAP
+================================================================================

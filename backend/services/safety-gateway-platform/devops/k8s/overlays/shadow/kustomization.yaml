@@ -1,0 +1,158 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base resources
+resources:
+- ../../base
+
+# Namespace for shadow environment
+namespace: safety-shadow
+
+# Common labels for shadow environment
+commonLabels:
+  environment: shadow
+  deployment-type: shadow
+  safety-tier: non-enforcing
+
+# Common annotations
+commonAnnotations:
+  deployment.kubernetes.io/revision: "1"
+  safety-gateway.io/environment: "shadow"
+  safety-gateway.io/traffic-mode: "mirror-only"
+
+# Name prefix for shadow resources
+namePrefix: shadow-
+
+# Images - use specific shadow tag for testing
+images:
+- name: safety-gateway-platform
+  newTag: shadow-latest
+
+# ConfigMap generator for shadow-specific configuration
+configMapGenerator:
+- name: safety-gateway-config
+  behavior: replace
+  literals:
+  - environment=shadow
+  - log_level=debug
+  - port=8030
+  - metrics_port=9090
+  - kafka_bootstrap_servers=kafka.safety-shadow.svc.cluster.local:9092
+  - timescaledb_host=timescaledb.safety-shadow.svc.cluster.local
+  - timescaledb_port=5432
+  - timescaledb_database=safety_shadow
+  - redis_url=redis://redis.safety-shadow.svc.cluster.local:6379
+  - cae_service_endpoint=clinical-reasoning-service.clinical.svc.cluster.local:8027
+  - shadow_mode_enabled=true
+  - enforcement_enabled=false
+  - traffic_mirror_only=true
+  - comparison_logging=true
+  - fail_on_mismatch=false
+
+# Secret generator for shadow-specific secrets
+secretGenerator:
+- name: safety-gateway-secrets
+  behavior: replace
+  literals:
+  - timescaledb-url=postgresql://safety_shadow:shadow_password@timescaledb.safety-shadow.svc.cluster.local:5432/safety_shadow?sslmode=require
+  - redis-password=shadow_redis_password
+  - kafka-sasl-password=shadow_kafka_password
+  - jwt-signing-key=shadow_jwt_key_change_in_production
+
+# Patches for shadow-specific modifications
+patches:
+# Modify deployment for shadow mode
+- target:
+    kind: Deployment
+    name: safety-gateway
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 2  # Fewer replicas for shadow environment
+    
+    - op: add
+      path: /spec/template/metadata/annotations/shadow.safety-gateway.io~1mode
+      value: "mirror-only"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: SHADOW_MODE
+        value: "true"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ENFORCEMENT_ENABLED
+        value: "false"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: TRAFFIC_MIRROR_ONLY
+        value: "true"
+    
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "256Mi"
+    
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "512Mi"
+
+# Modify HPA for shadow environment
+- target:
+    kind: HorizontalPodAutoscaler
+    name: safety-gateway-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 2
+    
+    - op: replace
+      path: /spec/maxReplicas
+      value: 5
+    
+    - op: replace
+      path: /spec/metrics/0/resource/target/averageUtilization
+      value: 80  # Higher threshold for shadow environment
+
+# Modify PDB for shadow environment
+- target:
+    kind: PodDisruptionBudget
+    name: safety-gateway-pdb
+  patch: |-
+    - op: replace
+      path: /spec/minAvailable
+      value: 1  # Lower availability requirement for shadow
+
+# Service modifications for shadow
+- target:
+    kind: Service
+    name: safety-gateway-service
+  patch: |-
+    - op: add
+      path: /metadata/annotations/shadow.safety-gateway.io~1mode
+      value: "mirror-only"
+    
+    - op: add
+      path: /spec/ports/-
+      value:
+        name: debug
+        port: 8033
+        targetPort: 8033
+        protocol: TCP
+
+# Remove network policies for shadow (allow all traffic for testing)
+- target:
+    kind: NetworkPolicy
+    name: safety-gateway-network-policy
+  patch: |-
+    - op: replace
+      path: /spec/policyTypes
+      value: []
+
+# Additional shadow-specific resources
+resources:
+- shadow-monitoring.yaml
+- shadow-service-monitor.yaml

@@ -1,0 +1,847 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"kb-7-terminology/internal/models"
+
+	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
+)
+
+// FederationSDL contains the Apollo Federation schema definition for KB-7 Terminology Service
+const FederationSDL = `
+extend type Query {
+  # Terminology System Operations
+  terminologySystems(status: TerminologyStatus): [TerminologySystem!]!
+  terminologySystem(identifier: String!): TerminologySystem
+  
+  # Concept Operations
+  searchConcepts(input: ConceptSearchInput!): ConceptSearchResult!
+  lookupConcept(system: String!, code: String!): ConceptLookupResult
+  validateCode(input: CodeValidationInput!): CodeValidationResult!
+  
+  # Value Set Operations
+  valueSets(domain: String, status: ValueSetStatus): [ValueSet!]!
+  valueSet(url: String!, version: String): ValueSet
+  expandValueSet(url: String!, version: String, filter: String): ValueSetExpansion
+  
+  # Concept Mapping Operations
+  conceptMappings(
+    sourceSystem: String, 
+    targetSystem: String, 
+    equivalence: MappingEquivalence
+  ): [ConceptMapping!]!
+  translateConcept(input: ConceptTranslationInput!): ConceptTranslationResult!
+  
+  # Batch Operations
+  batchLookupConcepts(requests: [ConceptLookupRequest!]!): [ConceptLookupResult!]!
+  batchValidateCodes(requests: [CodeValidationRequest!]!): [CodeValidationResult!]!
+}
+
+extend type Mutation {
+  # Administrative Operations (if enabled)
+  refreshTerminologySystem(systemUri: String!): OperationResult!
+  rebuildValueSetExpansion(valueSetUrl: String!): OperationResult!
+}
+
+# Core Types
+type TerminologySystem @key(fields: "id") {
+  id: ID!
+  systemUri: String!
+  systemName: String!
+  version: String!
+  description: String
+  publisher: String
+  status: TerminologyStatus!
+  metadata: JSON
+  supportedRegions: [String!]!
+  conceptCount: Int
+  hierarchyMeaning: String
+  compositional: Boolean
+  versionNeeded: Boolean
+  content: ContentType
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type TerminologyConcept @key(fields: "id") {
+  id: ID!
+  systemId: String!
+  code: String!
+  display: String!
+  definition: String
+  status: ConceptStatus!
+  parentCodes: [String!]!
+  childCodes: [String!]!
+  properties: JSON
+  designations: [ConceptDesignation!]!
+  clinicalDomain: String
+  specialty: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ConceptDesignation {
+  language: String!
+  use: JSON
+  value: String!
+}
+
+type ValueSet @key(fields: "id") {
+  id: ID!
+  url: String!
+  identifier: [Identifier!]
+  version: String!
+  name: String!
+  title: String
+  description: String
+  status: ValueSetStatus!
+  experimental: Boolean
+  date: DateTime
+  publisher: String
+  contact: [ContactPoint!]
+  useContext: [UsageContext!]
+  jurisdiction: [CodeableConcept!]
+  purpose: String
+  copyright: String
+  clinicalDomain: String
+  compose: ValueSetCompose
+  expansion: ValueSetExpansion
+  supportedRegions: [String!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  expiredAt: DateTime
+}
+
+type ValueSetCompose {
+  lockedDate: String
+  inactive: Boolean
+  include: [ValueSetInclude!]!
+  exclude: [ValueSetExclude!]!
+}
+
+type ValueSetInclude {
+  system: String
+  version: String
+  concept: [ValueSetConcept!]
+  filter: [ValueSetFilter!]
+  valueSet: [String!]
+}
+
+type ValueSetExclude {
+  system: String
+  version: String
+  concept: [ValueSetConcept!]
+  filter: [ValueSetFilter!]
+  valueSet: [String!]
+}
+
+type ValueSetConcept {
+  code: String!
+  display: String
+  designation: [ConceptDesignation!]
+}
+
+type ValueSetFilter {
+  property: String!
+  op: FilterOperator!
+  value: String!
+}
+
+type ValueSetExpansion {
+  identifier: String
+  timestamp: DateTime!
+  total: Int
+  offset: Int
+  parameter: [ExpansionParameter!]
+  contains: [ValueSetExpansionConcept!]!
+}
+
+type ValueSetExpansionConcept {
+  system: String
+  abstract: Boolean
+  inactive: Boolean
+  version: String
+  code: String
+  display: String
+  designation: [ConceptDesignation!]
+  contains: [ValueSetExpansionConcept!]
+}
+
+type ExpansionParameter {
+  name: String!
+  valueString: String
+  valueBoolean: Boolean
+  valueInteger: Int
+  valueDecimal: Float
+  valueUri: String
+  valueCode: String
+}
+
+type ConceptMapping @key(fields: "id") {
+  id: ID!
+  sourceSystemId: String!
+  sourceCode: String!
+  targetSystemId: String!
+  targetCode: String!
+  equivalence: MappingEquivalence!
+  mappingType: String!
+  confidence: Float!
+  comment: String
+  mappedBy: String
+  evidence: JSON
+  verified: Boolean!
+  verifiedBy: String
+  verifiedAt: DateTime
+  usageCount: Int!
+  lastUsedAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Search and Lookup Results
+type ConceptSearchResult {
+  total: Int!
+  concepts: [TerminologyConcept!]!
+  facets: [SearchFacet!]
+}
+
+type ConceptLookupResult {
+  concept: TerminologyConcept!
+  properties: JSON
+  designations: [ConceptDesignation!]
+  parents: [TerminologyConcept!]
+  children: [TerminologyConcept!]
+  system: TerminologySystem!
+}
+
+type CodeValidationResult {
+  valid: Boolean!
+  code: String!
+  system: String!
+  display: String
+  message: String
+  severity: ValidationSeverity!
+  issues: [ValidationIssue!]
+}
+
+type ValidationIssue {
+  severity: ValidationSeverity!
+  code: String!
+  details: String!
+  location: String
+}
+
+type ConceptTranslationResult {
+  result: Boolean!
+  message: String
+  matches: [ConceptTranslationMatch!]!
+}
+
+type ConceptTranslationMatch {
+  equivalence: MappingEquivalence
+  concept: ConceptTranslationConcept!
+  source: String
+  comment: String
+  dependsOn: [ConceptTranslationDependency!]
+  product: [ConceptTranslationProduct!]
+}
+
+type ConceptTranslationConcept {
+  system: String
+  version: String
+  code: String
+  display: String
+}
+
+type ConceptTranslationDependency {
+  property: String!
+  system: String
+  value: String!
+  display: String
+}
+
+type ConceptTranslationProduct {
+  property: String!
+  system: String
+  value: String!
+  display: String
+}
+
+type SearchFacet {
+  name: String!
+  values: [SearchFacetValue!]!
+}
+
+type SearchFacetValue {
+  value: String!
+  count: Int!
+}
+
+# Input Types
+input ConceptSearchInput {
+  query: String
+  systemUri: String
+  count: Int = 20
+  offset: Int = 0
+  filter: JSON
+  includeDesignations: Boolean = false
+  includeFacets: Boolean = false
+}
+
+input CodeValidationInput {
+  code: String!
+  system: String!
+  version: String
+  display: String
+  abstract: Boolean
+}
+
+input ConceptTranslationInput {
+  code: String!
+  system: String!
+  version: String
+  targetSystem: String!
+  conceptMapUrl: String
+  reverse: Boolean = false
+}
+
+input ConceptLookupRequest {
+  system: String!
+  code: String!
+}
+
+input CodeValidationRequest {
+  code: String!
+  system: String!
+  version: String
+  display: String
+}
+
+# Supporting Types
+type Identifier {
+  use: IdentifierUse
+  type: CodeableConcept
+  system: String
+  value: String!
+  period: Period
+  assigner: Reference
+}
+
+type ContactPoint {
+  system: ContactPointSystem
+  value: String
+  use: ContactPointUse
+  rank: Int
+  period: Period
+}
+
+type UsageContext {
+  code: Coding!
+  valueCodeableConcept: CodeableConcept
+  valueQuantity: Quantity
+  valueRange: Range
+  valueReference: Reference
+}
+
+type CodeableConcept {
+  coding: [Coding!]
+  text: String
+}
+
+type Coding {
+  system: String
+  version: String
+  code: String
+  display: String
+  userSelected: Boolean
+}
+
+type Quantity {
+  value: Float
+  comparator: String
+  unit: String
+  system: String
+  code: String
+}
+
+type Range {
+  low: Quantity
+  high: Quantity
+}
+
+type Reference {
+  reference: String
+  type: String
+  identifier: Identifier
+  display: String
+}
+
+type Period {
+  start: DateTime
+  end: DateTime
+}
+
+type OperationResult {
+  success: Boolean!
+  message: String
+  details: JSON
+}
+
+# Enumerations
+enum TerminologyStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+  UNKNOWN
+}
+
+enum ConceptStatus {
+  ACTIVE
+  INACTIVE
+  ENTERED_IN_ERROR
+}
+
+enum ValueSetStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+  UNKNOWN
+}
+
+enum ContentType {
+  NOT_PRESENT
+  EXAMPLE
+  FRAGMENT
+  COMPLETE
+  SUPPLEMENT
+}
+
+enum MappingEquivalence {
+  RELATEDTO
+  EQUIVALENT
+  EQUAL
+  WIDER
+  SUBSUMES
+  NARROWER
+  SPECIALIZES
+  INEXACT
+  UNMATCHED
+  DISJOINT
+}
+
+enum FilterOperator {
+  EQUALS
+  IS_A
+  DESCENDENT_OF
+  IS_NOT_A
+  REGEX
+  IN
+  NOT_IN
+  GENERALIZES
+  EXISTS
+}
+
+enum ValidationSeverity {
+  FATAL
+  ERROR
+  WARNING
+  INFORMATION
+}
+
+enum IdentifierUse {
+  USUAL
+  OFFICIAL
+  TEMP
+  SECONDARY
+  OLD
+}
+
+enum ContactPointSystem {
+  PHONE
+  FAX
+  EMAIL
+  PAGER
+  URL
+  SMS
+  OTHER
+}
+
+enum ContactPointUse {
+  HOME
+  WORK
+  TEMP
+  OLD
+  MOBILE
+}
+
+# Custom Scalars
+scalar DateTime
+scalar JSON
+`
+
+// GraphQLRequest represents a GraphQL query request
+type GraphQLRequest struct {
+	Query         string                 `json:"query"`
+	OperationName string                 `json:"operationName,omitempty"`
+	Variables     map[string]interface{} `json:"variables,omitempty"`
+}
+
+// GraphQLResponse represents a GraphQL response
+type GraphQLResponse struct {
+	Data   interface{}            `json:"data,omitempty"`
+	Errors []GraphQLError         `json:"errors,omitempty"`
+}
+
+// GraphQLError represents a GraphQL error
+type GraphQLError struct {
+	Message   string                 `json:"message"`
+	Path      []interface{}          `json:"path,omitempty"`
+	Extensions map[string]interface{} `json:"extensions,omitempty"`
+}
+
+// FederationHandler handles Apollo Federation requests
+func (s *EnhancedServer) FederationHandler(c *gin.Context) {
+	// Return the SDL for schema introspection
+	if c.Request.Method == "GET" {
+		c.Header("Content-Type", "text/plain")
+		c.String(http.StatusOK, FederationSDL)
+		return
+	}
+
+	// Handle GraphQL queries for federation
+	var req GraphQLRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		s.logger.WithError(err).Error("Failed to parse GraphQL request")
+		c.JSON(http.StatusBadRequest, GraphQLResponse{
+			Errors: []GraphQLError{{Message: "Invalid request format"}},
+		})
+		return
+	}
+
+	// Execute GraphQL query
+	response := s.executeGraphQLQuery(req, c)
+	c.JSON(http.StatusOK, response)
+}
+
+// executeGraphQLQuery processes GraphQL queries and delegates to REST endpoints
+func (s *EnhancedServer) executeGraphQLQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	// This is a simplified implementation that maps GraphQL to REST
+	// In a production system, you'd use a proper GraphQL execution engine
+	
+	query := strings.TrimSpace(req.Query)
+	s.logger.WithFields(logrus.Fields{
+		"operation": req.OperationName,
+		"query":     query[:min(len(query), 200)], // Truncate for logging
+	}).Debug("Executing GraphQL query")
+
+	// Handle introspection queries
+	if strings.Contains(query, "__schema") || strings.Contains(query, "__type") {
+		return s.handleIntrospectionQuery(req)
+	}
+
+	// Map GraphQL operations to REST endpoints
+	switch {
+	case strings.Contains(query, "terminologySystems"):
+		return s.handleTerminologySystemsQuery(req, c)
+	case strings.Contains(query, "searchConcepts"):
+		return s.handleSearchConceptsQuery(req, c)
+	case strings.Contains(query, "lookupConcept"):
+		return s.handleLookupConceptQuery(req, c)
+	case strings.Contains(query, "validateCode"):
+		return s.handleValidateCodeQuery(req, c)
+	case strings.Contains(query, "valueSets"):
+		return s.handleValueSetsQuery(req, c)
+	case strings.Contains(query, "conceptMappings"):
+		return s.handleConceptMappingsQuery(req, c)
+	case strings.Contains(query, "batchLookupConcepts"):
+		return s.handleBatchLookupQuery(req, c)
+	case strings.Contains(query, "batchValidateCodes"):
+		return s.handleBatchValidateQuery(req, c)
+	default:
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: "Unsupported GraphQL operation"}},
+		}
+	}
+}
+
+// handleIntrospectionQuery handles GraphQL introspection
+func (s *EnhancedServer) handleIntrospectionQuery(req GraphQLRequest) GraphQLResponse {
+	// Return minimal introspection data
+	// In production, you'd implement full schema introspection
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"__schema": map[string]interface{}{
+				"types": []map[string]interface{}{
+					{
+						"name": "TerminologySystem",
+						"kind": "OBJECT",
+					},
+					{
+						"name": "TerminologyConcept", 
+						"kind": "OBJECT",
+					},
+				},
+			},
+		},
+	}
+}
+
+// handleTerminologySystemsQuery handles terminologySystems GraphQL query
+func (s *EnhancedServer) handleTerminologySystemsQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	// Extract status parameter if present
+	var status string
+	if variables := req.Variables; variables != nil {
+		if statusVar, exists := variables["status"]; exists {
+			status = statusVar.(string)
+		}
+	}
+
+	// Call the REST endpoint internally
+	systems, err := s.terminologyService.GetTerminologySystems(c.Request.Context(), status)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"terminologySystems": systems,
+		},
+	}
+}
+
+// handleSearchConceptsQuery handles searchConcepts GraphQL query
+func (s *EnhancedServer) handleSearchConceptsQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	// Extract search input from variables
+	input := req.Variables["input"].(map[string]interface{})
+	
+	query := ""
+	if q, exists := input["query"]; exists {
+		query = q.(string)
+	}
+	
+	systemUri := ""
+	if s, exists := input["systemUri"]; exists {
+		systemUri = s.(string)
+	}
+
+	count := 20
+	if c, exists := input["count"]; exists {
+		count = int(c.(float64))
+	}
+
+	offset := 0
+	if o, exists := input["offset"]; exists {
+		offset = int(o.(float64))
+	}
+
+	// Call the search service
+	result, err := s.enhancedSearchService.SearchConcepts(c.Request.Context(), query, systemUri, count, offset)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"searchConcepts": result,
+		},
+	}
+}
+
+// handleLookupConceptQuery handles lookupConcept GraphQL query
+func (s *EnhancedServer) handleLookupConceptQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	system := req.Variables["system"].(string)
+	code := req.Variables["code"].(string)
+
+	result, err := s.terminologyService.LookupConcept(c.Request.Context(), system, code)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"lookupConcept": result,
+		},
+	}
+}
+
+// handleValidateCodeQuery handles validateCode GraphQL query  
+func (s *EnhancedServer) handleValidateCodeQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	input := req.Variables["input"].(map[string]interface{})
+	
+	code := input["code"].(string)
+	system := input["system"].(string)
+	
+	version := ""
+	if v, exists := input["version"]; exists && v != nil {
+		version = v.(string)
+	}
+	
+	display := ""
+	if d, exists := input["display"]; exists && d != nil {
+		display = d.(string)
+	}
+
+	result, err := s.validationService.ValidateCode(c.Request.Context(), code, system, version, display)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"validateCode": result,
+		},
+	}
+}
+
+// handleValueSetsQuery handles valueSets GraphQL query
+func (s *EnhancedServer) handleValueSetsQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	var domain, status string
+	
+	if req.Variables != nil {
+		if d, exists := req.Variables["domain"]; exists && d != nil {
+			domain = d.(string)
+		}
+		if s, exists := req.Variables["status"]; exists && s != nil {
+			status = s.(string)
+		}
+	}
+
+	result, err := s.expansionService.GetValueSets(c.Request.Context(), domain, status)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"valueSets": result,
+		},
+	}
+}
+
+// handleConceptMappingsQuery handles conceptMappings GraphQL query
+func (s *EnhancedServer) handleConceptMappingsQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	var sourceSystem, targetSystem, equivalence string
+	
+	if req.Variables != nil {
+		if ss, exists := req.Variables["sourceSystem"]; exists && ss != nil {
+			sourceSystem = ss.(string)
+		}
+		if ts, exists := req.Variables["targetSystem"]; exists && ts != nil {
+			targetSystem = ts.(string)
+		}
+		if e, exists := req.Variables["equivalence"]; exists && e != nil {
+			equivalence = e.(string)
+		}
+	}
+
+	result, err := s.conceptMapService.GetConceptMappings(c.Request.Context(), sourceSystem, targetSystem, equivalence)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"conceptMappings": result,
+		},
+	}
+}
+
+// handleBatchLookupQuery handles batchLookupConcepts GraphQL query
+func (s *EnhancedServer) handleBatchLookupQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	requests := req.Variables["requests"].([]interface{})
+	
+	// Convert to proper request format
+	lookupRequests := make([]models.LookupRequest, len(requests))
+	for i, r := range requests {
+		reqMap := r.(map[string]interface{})
+		lookupRequests[i] = models.LookupRequest{
+			System: reqMap["system"].(string),
+			Code:   reqMap["code"].(string),
+		}
+	}
+
+	// Create a batch request
+	batchRequest := models.BatchLookupRequest{
+		Requests: lookupRequests,
+	}
+	
+	result, err := s.terminologyService.BatchLookup(batchRequest)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"batchLookupConcepts": result,
+		},
+	}
+}
+
+// handleBatchValidateQuery handles batchValidateCodes GraphQL query
+func (s *EnhancedServer) handleBatchValidateQuery(req GraphQLRequest, c *gin.Context) GraphQLResponse {
+	requests := req.Variables["requests"].([]interface{})
+	
+	// Convert to proper request format
+	validateRequests := make([]models.ValidationRequest, len(requests))
+	for i, r := range requests {
+		reqMap := r.(map[string]interface{})
+		validationReq := models.ValidationRequest{
+			Code:   reqMap["code"].(string),
+			System: reqMap["system"].(string),
+		}
+		
+		if version, exists := reqMap["version"]; exists && version != nil {
+			validationReq.Version = version.(string)
+		}
+		
+		if display, exists := reqMap["display"]; exists && display != nil {
+			validationReq.Display = display.(string)
+		}
+		
+		validateRequests[i] = validationReq
+	}
+
+	// Create a batch validation request
+	batchRequest := models.BatchValidationRequest{
+		Requests: validateRequests,
+	}
+	
+	result, err := s.validationService.BatchValidate(batchRequest)
+	if err != nil {
+		return GraphQLResponse{
+			Errors: []GraphQLError{{Message: err.Error()}},
+		}
+	}
+
+	return GraphQLResponse{
+		Data: map[string]interface{}{
+			"batchValidateCodes": result,
+		},
+	}
+}
+
+// Helper function
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

@@ -1,0 +1,772 @@
+# ============================================================
+# ENHANCED CLINICAL PROTOCOL TEMPLATE (CDS-Compliant)
+# ============================================================
+#
+# This template defines the complete structure for clinical protocols
+# aligned with the Clinical Decision Support (CDS) specification.
+#
+# Version: 2.0
+# Specification: Based on cds.txt, Clinical_Knowledge_Base_Structure.txt, ProtocolLoader.txt
+# Last Updated: 2025-10-21
+#
+# USAGE:
+# 1. Copy this template for new protocols
+# 2. Fill in all sections marked with [REQUIRED]
+# 3. Optional sections can be omitted if not applicable
+# 4. Validate with ProtocolValidator before deployment
+#
+# ============================================================
+
+# ============================================================
+# SECTION 1: PROTOCOL IDENTIFICATION [REQUIRED]
+# ============================================================
+protocol_id: "PROTOCOL-XXX-001"  # [REQUIRED] Unique identifier (e.g., SEPSIS-BUNDLE-001)
+name: "Protocol Name"  # [REQUIRED] Human-readable name
+category: "CATEGORY_NAME"  # [REQUIRED] INFECTIOUS, CARDIOVASCULAR, NEUROLOGICAL, ENDOCRINE, RESPIRATORY, RENAL, GASTROINTESTINAL, HEMATOLOGIC, TRAUMA, OTHER
+specialty: "SPECIALTY_NAME"  # [OPTIONAL] CRITICAL_CARE, EMERGENCY, CARDIOLOGY, NEUROLOGY, etc.
+version: "1.0"  # [REQUIRED] Semantic versioning
+last_updated: "2025-01-15"  # [REQUIRED] ISO date format (YYYY-MM-DD)
+
+# ============================================================
+# SECTION 2: TRIGGER CRITERIA [REQUIRED FOR AUTO-ACTIVATION]
+# ============================================================
+# Defines when this protocol should activate automatically
+# based on patient state. Uses AND/OR logic for condition evaluation.
+
+trigger_criteria:
+  match_logic: "ALL_OF"  # [REQUIRED] "ALL_OF" (AND) or "ANY_OF" (OR)
+
+  conditions:
+    # Simple condition example (single parameter)
+    - condition_id: "PROTOCOL-TRIG-001"  # [REQUIRED] Unique identifier
+      description: "Brief description of what this condition checks"  # [OPTIONAL]
+      parameter: "parameter_name"  # [REQUIRED] e.g., "lactate", "systolic_bp", "temperature"
+      operator: ">="  # [REQUIRED] ">=", "<=", "==", "!=", "CONTAINS", "NOT_CONTAINS"
+      threshold: 2.0  # [REQUIRED] Value to compare against (number, string, or boolean)
+      unit: "mmol/L"  # [OPTIONAL] Unit of measurement
+      source: "lab_results"  # [OPTIONAL] Where parameter comes from (lab_results, vital_signs, clinical_assessment)
+
+    # Nested condition example (AND/OR within AND/OR)
+    - condition_id: "PROTOCOL-TRIG-002"
+      description: "Example of nested OR logic within AND"
+      match_logic: "ANY_OF"  # This condition satisfied if ANY sub-condition true
+      conditions:
+        - parameter: "systolic_bp"
+          operator: "<"
+          threshold: 90
+          unit: "mmHg"
+          source: "vital_signs"
+
+        - parameter: "mean_arterial_pressure"
+          operator: "<"
+          threshold: 65
+          unit: "mmHg"
+          source: "vital_signs"
+
+    # Boolean condition example
+    - condition_id: "PROTOCOL-TRIG-003"
+      parameter: "infection_suspected"
+      operator: "=="
+      threshold: true  # Boolean value
+      source: "clinical_assessment"
+
+    # Contains operator example (for lists/arrays)
+    - condition_id: "PROTOCOL-TRIG-004"
+      parameter: "chief_complaint"
+      operator: "CONTAINS"
+      threshold: "chest pain"
+      source: "clinical_assessment"
+
+# ============================================================
+# SECTION 3: CONFIDENCE SCORING [OPTIONAL BUT RECOMMENDED]
+# ============================================================
+# Allows ranking of multiple matching protocols by confidence score.
+# Score = base_confidence + sum(modifier adjustments)
+# Protocol only activates if final score >= activation_threshold
+
+confidence_scoring:
+  base_confidence: 0.85  # [REQUIRED] Starting confidence (0.0-1.0)
+
+  modifiers:
+    # Modifier increases confidence if condition met
+    - modifier_id: "PROTOCOL-CONF-001"  # [REQUIRED]
+      description: "Why this increases confidence"  # [OPTIONAL]
+      condition:
+        parameter: "severity_indicator"
+        operator: ">="
+        threshold: 5
+      adjustment: 0.10  # [REQUIRED] Can be positive or negative (-0.15 to 0.15 typical)
+
+    # Modifier decreases confidence
+    - modifier_id: "PROTOCOL-CONF-002"
+      description: "Reduces confidence if uncertain diagnosis"
+      condition:
+        parameter: "diagnostic_certainty"
+        operator: "<"
+        threshold: 0.7
+      adjustment: -0.10  # Negative adjustment
+
+    # Complex modifier with nested conditions
+    - modifier_id: "PROTOCOL-CONF-003"
+      description: "Increases confidence if multiple risk factors"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "age"
+            operator: ">="
+            threshold: 65
+          - parameter: "comorbidity_count"
+            operator: ">="
+            threshold: 3
+      adjustment: 0.08
+
+  activation_threshold: 0.70  # [REQUIRED] Minimum confidence to activate protocol (0.0-1.0)
+
+# ============================================================
+# SECTION 4: EVIDENCE SOURCE [REQUIRED]
+# ============================================================
+# Provides clinical evidence base for protocol recommendations
+
+evidence_source:
+  primary_guideline: "Guideline Name (Organization Year)"  # [REQUIRED] e.g., "Surviving Sepsis Campaign 2021"
+  guideline_version: "Version identifier"  # [OPTIONAL] e.g., "SSC 2021"
+  publication_date: "2021-10"  # [OPTIONAL] YYYY-MM format
+  evidence_level: "STRONG"  # [REQUIRED] "STRONG", "MODERATE", "WEAK" (GRADE system)
+
+  key_citations:
+    - citation_id: "CITE-001"  # [OPTIONAL]
+      authors: "First Author, Second Author, et al."
+      title: "Full article title"
+      journal: "Journal Name"
+      year: 2021
+      pmid: "12345678"  # [OPTIONAL] PubMed ID
+      doi: "10.xxxx/xxxxx"  # [OPTIONAL] Digital Object Identifier
+
+  last_review_date: "2024-06-01"  # [OPTIONAL] When protocol was last reviewed
+  next_review_date: "2025-06-01"  # [OPTIONAL] When next review scheduled
+
+# ============================================================
+# SECTION 5: ACTIONS [REQUIRED]
+# ============================================================
+# Defines clinical interventions recommended by this protocol
+
+actions:
+  # ==========================================================
+  # ACTION TYPE 1: MEDICATION WITH SELECTION ALGORITHM
+  # ==========================================================
+  - action_id: "PROTOCOL-ACT-001"  # [REQUIRED] Unique identifier
+    type: "MEDICATION"  # [REQUIRED] MEDICATION, DIAGNOSTIC, PROCEDURE, CLINICAL_ASSESSMENT, CONSULTATION
+    priority: "CRITICAL"  # [REQUIRED] CRITICAL, HIGH, MEDIUM, LOW
+    sequence_number: 1  # [OPTIONAL] Order of execution (1, 2, 3...)
+
+    timing:
+      window: "IMMEDIATE"  # [OPTIONAL] IMMEDIATE, URGENT, ROUTINE
+      max_delay_minutes: 60  # [OPTIONAL] Maximum acceptable delay
+      sequence: "BEFORE"  # [OPTIONAL] BEFORE, AFTER, CONCURRENT
+      reference_action: "PROTOCOL-ACT-002"  # [OPTIONAL] Action this must happen before/after
+
+    # Enhanced medication selection with algorithm
+    medication_selection:
+      selection_strategy: "RULE_BASED"  # [REQUIRED] RULE_BASED, FORMULARY_BASED
+
+      selection_criteria:
+        # Criteria 1: Primary medication (no contraindications)
+        - criteria_id: "NO_ALLERGY"  # [REQUIRED]
+          description: "First-line therapy for patients without contraindications"
+
+          condition:
+            parameter: "allergies"
+            operator: "NOT_CONTAINS"
+            threshold: "penicillin"
+
+          primary_medication:
+            name: "Medication Name"  # [REQUIRED]
+            generic_name: "Generic Name"  # [OPTIONAL]
+            dose: "2 g"  # [REQUIRED]
+            dose_unit: "grams"  # [OPTIONAL]
+            route: "IV"  # [REQUIRED] IV, PO, IM, SC, PR, etc.
+            frequency: "q24h"  # [REQUIRED] q6h, q12h, q24h, once, PRN
+            duration: "7-14 days"  # [OPTIONAL]
+            administration_instructions: "Infuse over 30 minutes"  # [OPTIONAL]
+
+          alternative_medication:
+            name: "Alternative Medication"
+            dose: "750 mg"
+            route: "IV"
+            frequency: "q24h"
+            indication: "Severe penicillin allergy"  # [REQUIRED] Why using alternative
+            administration_instructions: "Infuse over 90 minutes"
+
+        # Criteria 2: Renal dose adjustment
+        - criteria_id: "RENAL_IMPAIRMENT"
+          description: "Dose adjustment for impaired renal function"
+
+          condition:
+            parameter: "creatinine_clearance"
+            operator: "<"
+            threshold: 40.0
+            unit: "mL/min"
+
+          primary_medication:
+            name: "Medication Name"
+            dose: "1 g"  # Reduced dose
+            route: "IV"
+            frequency: "q24h"
+            dose_adjustment_rationale: "CrCl <40 mL/min"
+            administration_instructions: "Monitor renal function daily"
+
+        # Criteria 3: High-risk population requiring broader coverage
+        - criteria_id: "HIGH_RISK_FACTORS"
+          description: "Broader antimicrobial coverage for high-risk patients"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "immunosuppressed"
+                operator: "=="
+                threshold: true
+              - parameter: "recent_hospitalization"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Broad-Spectrum Medication"
+            dose: "1 g"
+            route: "IV"
+            frequency: "q8h"
+            indication: "High-risk features requiring broader coverage"
+
+    # Simple medication (no selection algorithm)
+    medication:
+      name: "Simple Medication"  # Use this if NO medication_selection needed
+      dose: "500 mg"
+      route: "PO"
+      frequency: "q12h"
+
+  # ==========================================================
+  # ACTION TYPE 2: DIAGNOSTIC TEST
+  # ==========================================================
+  - action_id: "PROTOCOL-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 60
+      sequence: "BEFORE"
+      reference_action: "PROTOCOL-ACT-001"  # Must happen before medications
+
+    diagnostic:
+      test_name: "Test Name"  # [REQUIRED]
+      test_code: "LOINC-12345"  # [OPTIONAL] LOINC code
+      sample_type: "blood"  # [OPTIONAL] blood, urine, csf, etc.
+      number_of_samples: 2  # [OPTIONAL]
+      collection_sites: ["peripheral", "central_line"]  # [OPTIONAL]
+      urgency: "STAT"  # [REQUIRED] STAT, URGENT, ROUTINE
+      instructions: "Collect before antibiotic administration"  # [OPTIONAL]
+
+      repeat_testing:
+        repeat_interval_hours: 2  # [OPTIONAL]
+        repeat_condition:
+          parameter: "initial_value"
+          operator: ">="
+          threshold: 2.0
+
+  # ==========================================================
+  # ACTION TYPE 3: PROCEDURE
+  # ==========================================================
+  - action_id: "PROTOCOL-ACT-003"
+    type: "PROCEDURE"
+    priority: "HIGH"
+
+    procedure:
+      procedure_name: "Procedure Name"  # [REQUIRED]
+      procedure_code: "CPT-12345"  # [OPTIONAL] CPT code
+      indication: "Why this procedure is needed"  # [REQUIRED]
+      urgency: "URGENT"  # [REQUIRED] EMERGENT, URGENT, ELECTIVE
+      consent_required: true  # [OPTIONAL]
+      estimated_duration_minutes: 30  # [OPTIONAL]
+      location: "ICU bedside"  # [OPTIONAL]
+
+  # ==========================================================
+  # ACTION TYPE 4: CLINICAL ASSESSMENT
+  # ==========================================================
+  - action_id: "PROTOCOL-ACT-004"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "HIGH"
+
+    clinical_assessment:
+      assessment_type: "Assessment Type"  # [REQUIRED] e.g., "Volume status reassessment"
+      frequency: "q2h"  # [REQUIRED]
+      duration_hours: 6  # [OPTIONAL]
+      specific_parameters:
+        - "Heart rate"
+        - "Blood pressure"
+        - "Urine output"
+        - "Mental status"
+
+  # ==========================================================
+  # ACTION TYPE 5: CONSULTATION
+  # ==========================================================
+  - action_id: "PROTOCOL-ACT-005"
+    type: "CONSULTATION"
+    priority: "MEDIUM"
+
+    consultation:
+      specialty: "CRITICAL_CARE"  # [REQUIRED]
+      urgency: "URGENT"  # [REQUIRED] STAT, URGENT, ROUTINE
+      reason: "Persistent hypotension despite resuscitation"  # [REQUIRED]
+      specific_questions:
+        - "Need for vasopressor support?"
+        - "ICU transfer indicated?"
+
+# ============================================================
+# SECTION 6: TIME CONSTRAINTS [OPTIONAL - For Time-Sensitive Protocols]
+# ============================================================
+# Tracks critical time windows for interventions (e.g., sepsis bundles, STEMI door-to-balloon)
+
+time_constraints:
+  # Example: Hour-1 Bundle
+  - constraint_id: "PROTOCOL-TIME-001"  # [REQUIRED]
+    bundle_name: "Hour-1 Bundle"  # [REQUIRED] Human-readable name
+    description: "All interventions within 1 hour of recognition"  # [OPTIONAL]
+    offset_minutes: 60  # [REQUIRED] Time from protocol trigger (minutes)
+    critical: true  # [REQUIRED] Does missing this deadline impact mortality?
+
+    required_actions:
+      - action_id: "PROTOCOL-ACT-001"
+        description: "Broad-spectrum antibiotics"
+      - action_id: "PROTOCOL-ACT-002"
+        description: "Blood cultures before antibiotics"
+
+    compliance_monitoring:
+      track_completion: true  # [OPTIONAL] Track bundle compliance
+      alert_at_minutes: 30  # [OPTIONAL] Generate WARNING alert when this many minutes remain
+      critical_alert_at_minutes: 0  # [OPTIONAL] Generate CRITICAL alert at deadline
+      missed_deadline_message: "Hour-1 bundle compliance failure"  # [OPTIONAL]
+
+  # Example: Hour-3 Bundle
+  - constraint_id: "PROTOCOL-TIME-002"
+    bundle_name: "Hour-3 Bundle"
+    description: "Reassessment and escalation"
+    offset_minutes: 180
+    critical: false
+
+    required_actions:
+      - action_id: "PROTOCOL-ACT-REASSESS-001"
+        description: "Repeat lactate if initial elevated"
+
+# ============================================================
+# SECTION 7: CONTRAINDICATIONS [OPTIONAL BUT RECOMMENDED]
+# ============================================================
+# Defines conditions that contraindicate specific actions and alternatives
+
+contraindications:
+  # Absolute contraindication (CRITICAL severity)
+  - contraindication_id: "PROTOCOL-CONTRA-001"  # [REQUIRED]
+    condition_description: "Severe allergy to medication class"  # [REQUIRED]
+
+    trigger_condition:
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "allergies"
+          operator: "CONTAINS"
+          threshold: "penicillin"
+        - parameter: "allergy_severity"
+          operator: "=="
+          threshold: "SEVERE"  # MILD, MODERATE, SEVERE
+
+    severity: "CRITICAL"  # [REQUIRED] CRITICAL (absolute), MODERATE (relative)
+    affected_actions:  # [REQUIRED] List of action_ids that are contraindicated
+      - "PROTOCOL-ACT-001"
+
+    alternative_action:
+      action_id: "PROTOCOL-ACT-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "Alternative Medication"
+        dose: "750 mg"
+        route: "IV"
+        frequency: "q24h"
+      rationale: "Alternative for beta-lactam allergy"  # [REQUIRED]
+
+  # Relative contraindication (MODERATE severity - caution advised)
+  - contraindication_id: "PROTOCOL-CONTRA-002"
+    condition_description: "Acute pulmonary edema (fluid caution)"
+
+    trigger_condition:
+      parameter: "pulmonary_edema"
+      operator: "=="
+      threshold: true
+
+    severity: "MODERATE"
+    affected_actions:
+      - "PROTOCOL-ACT-FLUID-001"
+
+    alternative_action:
+      action_id: "PROTOCOL-ACT-ALT-002"
+      type: "MEDICATION"
+      medication:
+        name: "Vasopressor"
+        dose: "0.1 mcg/kg/min"
+        route: "IV"
+        titration: "Titrate to MAP ≥65 mmHg"
+      rationale: "Early vasopressor support instead of aggressive fluids"
+
+# ============================================================
+# SECTION 8: MONITORING REQUIREMENTS [OPTIONAL]
+# ============================================================
+# Defines parameters to monitor during protocol execution
+
+monitoring_requirements:
+  - monitoring_id: "PROTOCOL-MON-001"  # [REQUIRED]
+    parameter: "mean_arterial_pressure"  # [REQUIRED]
+
+    target_range:
+      min: 65  # [OPTIONAL]
+      max: null  # [OPTIONAL] null if no upper limit
+      unit: "mmHg"  # [REQUIRED]
+
+    frequency: "continuous"  # [REQUIRED] continuous, q1h, q2h, q4h, q6h, q12h, q24h
+    duration_hours: 24  # [OPTIONAL] How long to monitor
+
+    alert_condition:
+      parameter: "mean_arterial_pressure"
+      operator: "<"
+      threshold: 65
+
+    escalation_action:
+      description: "Initiate vasopressor support"
+      reference_action: "PROTOCOL-ESC-001"
+
+  - monitoring_id: "PROTOCOL-MON-002"
+    parameter: "lactate"
+
+    target_range:
+      min: null
+      max: 2.0
+      unit: "mmol/L"
+
+    frequency: "q2h if elevated"
+    duration_hours: 6
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "lactate"
+          operator: ">="
+          threshold: 4.0
+        - parameter: "lactate_clearance"
+          operator: "<"
+          threshold: 10.0  # <10% clearance
+
+# ============================================================
+# SECTION 9: SPECIAL POPULATIONS [OPTIONAL]
+# ============================================================
+# Defines modifications for specific patient populations
+
+special_populations:
+  # Elderly patients
+  - population_id: "ELDERLY"  # [REQUIRED]
+    description: "Patients ≥65 years"  # [REQUIRED]
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "PROTOCOL-ACT-001"  # [REQUIRED] Which action to modify
+        modification_type: "DOSE_ADJUSTMENT"  # [REQUIRED] DOSE_ADJUSTMENT, CONTRAINDICATION, CAUTION, BROADER_COVERAGE
+        rationale: "Renal function declines with age"  # [REQUIRED]
+
+        new_parameters:
+          dose: "1 g if CrCl <30 mL/min"
+          monitoring: "Monitor renal function daily"
+
+      - action_id: "PROTOCOL-ACT-FLUID-001"
+        modification_type: "CAUTION"
+        rationale: "Increased risk of fluid overload"
+
+        new_parameters:
+          dose: "20 mL/kg initial bolus (reduced from 30)"
+          monitoring: "Reassess volume status after 10 mL/kg"
+
+  # Pregnancy
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "PROTOCOL-ACT-001"
+        modification_type: "CONTRAINDICATION"
+        rationale: "Medication teratogenic in pregnancy"
+
+        contraindications:
+          - "Medication X (Category X in pregnancy)"
+
+        alternative_medication:
+          name: "Pregnancy-Safe Alternative"
+          dose: "500 mg"
+          route: "IV"
+          frequency: "q8h"
+          pregnancy_category: "B"
+
+  # Immunocompromised
+  - population_id: "IMMUNOCOMPROMISED"
+    description: "Immunocompromised patients (neutropenic, transplant, etc)"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "absolute_neutrophil_count"
+          operator: "<"
+          threshold: 500
+        - parameter: "transplant_recipient"
+          operator: "=="
+          threshold: true
+        - parameter: "immunosuppressive_therapy"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "PROTOCOL-ACT-001"
+        modification_type: "BROADER_COVERAGE"
+        rationale: "Higher risk of resistant organisms and fungal infections"
+
+        additional_medications:
+          - name: "Anti-pseudomonal Agent"
+            dose: "1 g"
+            route: "IV"
+            frequency: "q8h"
+            indication: "Empiric anti-pseudomonal coverage"
+
+          - name: "Antifungal"
+            dose: "100 mg"
+            route: "IV"
+            frequency: "q24h"
+            indication: "Empiric antifungal if prolonged neutropenia"
+
+  # Pediatric
+  - population_id: "PEDIATRIC"
+    description: "Patients <18 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: "<"
+      threshold: 18
+      unit: "years"
+
+    modifications:
+      - action_id: "PROTOCOL-ACT-001"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Weight-based dosing required in pediatrics"
+
+        new_parameters:
+          dose: "50 mg/kg"
+          max_dose: "2 g"
+          route: "IV"
+          frequency: "q24h"
+
+# ============================================================
+# SECTION 10: ESCALATION RULES [OPTIONAL]
+# ============================================================
+# Defines automatic escalation recommendations (e.g., ICU transfer)
+
+escalation_rules:
+  # ICU transfer for severe condition
+  - rule_id: "PROTOCOL-ESC-001"  # [REQUIRED]
+    description: "ICU transfer for severe deterioration"  # [OPTIONAL]
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "severity_score"
+          operator: ">="
+          threshold: 8
+
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "mean_arterial_pressure"
+              operator: "<"
+              threshold: 65
+            - parameter: "fluid_bolus_completed"
+              operator: "=="
+              threshold: true
+
+    recommendation:
+      escalation_level: "ICU_TRANSFER"  # [REQUIRED] CONSULT, TRANSFER, IMMEDIATE_TRANSFER
+      urgency: "IMMEDIATE"  # [REQUIRED] STAT, IMMEDIATE, URGENT, ROUTINE
+      rationale: "Condition requiring intensive care and organ support"  # [REQUIRED]
+
+      required_interventions:
+        - "Central venous access"
+        - "Arterial line for continuous BP monitoring"
+        - "Vasopressor initiation"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "Vasopressor management and organ support"
+
+  # Specialist consultation
+  - rule_id: "PROTOCOL-ESC-002"
+    description: "Specialist consultation for complex management"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "no_improvement_after_hours"
+          operator: ">="
+          threshold: 6
+
+        - parameter: "number_of_failing_organs"
+          operator: ">="
+          threshold: 2
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Complex case requiring specialist input"
+
+      specialist_consultation:
+        - specialty: "SPECIALTY_NAME"
+          urgency: "URGENT"
+          specific_question: "Management recommendations for complex presentation"
+
+# ============================================================
+# SECTION 11: DE-ESCALATION CRITERIA [OPTIONAL]
+# ============================================================
+# Defines when to de-escalate or discontinue interventions
+
+de_escalation_criteria:
+  - criteria_id: "PROTOCOL-DE-ESC-001"  # [REQUIRED]
+    description: "Narrow antibiotic spectrum based on culture results"  # [REQUIRED]
+
+    conditions:
+      - parameter: "culture_results_available"
+        operator: "=="
+        threshold: true
+
+      - parameter: "time_since_antibiotics"
+        operator: ">="
+        threshold: 48
+        unit: "hours"
+
+    recommendation:
+      action: "Narrow antibiotic spectrum based on culture and susceptibility"  # [REQUIRED]
+      rationale: "Antimicrobial stewardship"  # [REQUIRED]
+      specific_changes:
+        - "Discontinue broad-spectrum agent"
+        - "Start targeted therapy per susceptibility"
+
+  - criteria_id: "PROTOCOL-DE-ESC-002"
+    description: "Stop intervention when clinical improvement achieved"
+
+    conditions:
+      - parameter: "clinical_improvement"
+        operator: "=="
+        threshold: true
+
+      - parameter: "lactate_normalized"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Transition to maintenance therapy"
+      rationale: "Acute resuscitation goals met"
+
+# ============================================================
+# SECTION 12: OUTCOME TRACKING [OPTIONAL]
+# ============================================================
+# Defines metrics for protocol effectiveness monitoring
+
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "PROTOCOL-OUT-001"  # [REQUIRED]
+      metric: "mortality_28_day"  # [REQUIRED]
+      target: "<15%"  # [REQUIRED]
+      benchmark_source: "Guideline Name 2021"  # [OPTIONAL]
+
+    - outcome_id: "PROTOCOL-OUT-002"
+      metric: "bundle_compliance"
+      target: ">80%"
+      benchmark_source: "Guideline Name 2021"
+
+  process_measures:
+    - measure_id: "PROTOCOL-PROC-001"  # [REQUIRED]
+      description: "Time to intervention"  # [REQUIRED]
+      target: "<60 minutes"  # [REQUIRED]
+
+    - measure_id: "PROTOCOL-PROC-002"
+      description: "Compliance with protocol steps"
+      target: ">95% compliance"
+
+  balancing_measures:
+    - measure_id: "PROTOCOL-BAL-001"  # [REQUIRED]
+      description: "Adverse event rate"  # [REQUIRED]
+      target: "<5%"  # [REQUIRED]
+      specific_events:
+        - "Drug-related adverse events"
+        - "Procedure complications"
+
+# ============================================================
+# SECTION 13: METADATA [OPTIONAL]
+# ============================================================
+# Additional protocol metadata for management and tracking
+
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"  # [OPTIONAL] CLINICAL_PATHWAY, GUIDELINE, ORDER_SET
+  implementation_complexity: "HIGH"  # [OPTIONAL] LOW, MEDIUM, HIGH
+  requires_icu_level_care: true  # [OPTIONAL]
+  estimated_implementation_time_minutes: 180  # [OPTIONAL]
+  review_cycle_months: 12  # [OPTIONAL] How often to review protocol
+
+  tags:
+    - "time-sensitive"
+    - "high-mortality"
+    - "multi-disciplinary"
+
+  related_protocols:
+    - protocol_id: "RELATED-PROTOCOL-001"
+      relationship: "SUPERSEDES"  # SUPERSEDES, COMPLEMENTS, ALTERNATIVE_TO
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-01-15"
+      version: "1.0"
+
+  change_log:
+    - version: "1.0"
+      date: "2025-01-15"
+      changes:
+        - "Initial protocol creation"
+        - "Based on Guideline Name 2021"
+
+# ============================================================
+# END OF ENHANCED PROTOCOL TEMPLATE
+# ============================================================
+#
+# VALIDATION CHECKLIST:
+# [ ] protocol_id unique and follows naming convention
+# [ ] name descriptive and human-readable
+# [ ] category matches enum values
+# [ ] trigger_criteria complete with match_logic and conditions
+# [ ] confidence_scoring has base_confidence and activation_threshold
+# [ ] evidence_source has primary_guideline and evidence_level
+# [ ] actions list not empty, each has action_id and type
+# [ ] All action_ids unique within protocol
+# [ ] medication_selection has selection_criteria if used
+# [ ] time_constraints reference valid action_ids
+# [ ] contraindications reference valid action_ids
+# [ ] special_populations reference valid action_ids
+# [ ] escalation_rules have escalation_level and rationale
+#
+# Run: java -jar protocol-validator.jar <protocol-file.yaml>
+#
+# ============================================================

@@ -1,0 +1,359 @@
+# Cardiovascular Phenotypes Library
+# Comprehensive cardiovascular disease phenotyping and risk stratification
+
+metadata:
+  kb_name: "kb_clinical_context"
+  version: "2.0.0"
+  institution: "Clinical Synthesis Hub"
+  effective_date: "2025-09-01"
+  expires_date: "2026-09-01"
+  clinical_domains: ["cardiovascular"]
+
+phenotypes:
+  
+  # ========== HYPERTENSION PHENOTYPES ==========
+  
+  - id: "PHE-CV000001"
+    name: "Hypertension Stage 1 High Risk"
+    domain: "cardiovascular"
+    version: "2.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Stage 1 hypertension in patients with elevated cardiovascular risk"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        ((bp.systolic >= 130 && bp.systolic < 140) ||
+         (bp.diastolic >= 80 && bp.diastolic < 90)) &&
+        (risk.ascvd_10yr >= 10 || patient.has_diabetes || 
+         patient.has_ckd || patient.age >= 65)
+      data_requirements:
+        - field: "bp.systolic"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+          units: "mmHg"
+          time_window: "3m"
+          validation_rules:
+            min_value: 70
+            max_value: 250
+        - field: "bp.diastolic"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+          units: "mmHg"
+          time_window: "3m"
+          validation_rules:
+            min_value: 40
+            max_value: 150
+        - field: "risk.ascvd_10yr"
+          type: "float"
+          required: false
+          source: "calculated"
+          units: "%"
+        - field: "patient.has_diabetes"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.has_ckd"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.age"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+          units: "years"
+    
+    priority: 500
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "standard"
+      monitoring_level: "enhanced"
+      care_setting: "primary"
+      clinical_urgency: "routine"
+    
+    clinical_implications:
+      - implication: "Initiate antihypertensive therapy"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "medication_change"
+      - implication: "Lifestyle modifications counseling required"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "education"
+      - implication: "Follow-up blood pressure monitoring in 1-3 months"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "follow_up"
+    
+    evidence_links:
+      kb3_guidelines: ["ACC-AHA-HTN-2017-002", "AHA-BP-TARGETS-2024"]
+      kb4_safety_rules: ["SAF-HTN-001", "SAF-BP-MONITORING-001"]
+      literature_refs:
+        - pmid: "29146535"
+          citation: "2017 ACC/AHA/AAPA/ABC/ACPM/AGS/APhA/ASH/ASPC/NMA/PCNA Guideline"
+          evidence_level: "1A"
+
+  - id: "PHE-CV000002"
+    name: "Hypertension Stage 2"
+    domain: "cardiovascular"
+    version: "2.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Stage 2 hypertension requiring immediate treatment"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        (bp.systolic >= 140 || bp.diastolic >= 90) &&
+        bp.systolic < 180 && bp.diastolic < 120
+      data_requirements:
+        - field: "bp.systolic"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+          units: "mmHg"
+          time_window: "1m"
+        - field: "bp.diastolic"
+          type: "integer"
+          required: true
+          source: "context_gateway"
+          units: "mmHg"
+          time_window: "1m"
+    
+    priority: 600
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "standard"
+      monitoring_level: "enhanced"
+      care_setting: "primary"
+    
+    clinical_implications:
+      - implication: "Immediate antihypertensive therapy initiation"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "medication_change"
+      - implication: "Consider combination therapy if >20/10 mmHg above target"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "medication_change"
+    
+    evidence_links:
+      kb3_guidelines: ["ACC-AHA-HTN-2017-002"]
+      kb4_safety_rules: ["SAF-HTN-002"]
+
+  # ========== HEART FAILURE PHENOTYPES ==========
+  
+  - id: "PHE-CV000003"
+    name: "Heart Failure with Reduced Ejection Fraction"
+    domain: "cardiovascular"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Heart failure with reduced left ventricular ejection fraction"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.has_heart_failure &&
+        patient.lvef <= 40 &&
+        (patient.bnp > 400 || patient.nt_probnp > 1800)
+      data_requirements:
+        - field: "patient.has_heart_failure"
+          type: "boolean"
+          required: true
+          source: "context_gateway"
+        - field: "patient.lvef"
+          type: "integer"
+          required: false
+          source: "ehr"
+          units: "%"
+          time_window: "6m"
+          validation_rules:
+            min_value: 10
+            max_value: 80
+        - field: "patient.bnp"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "pg/mL"
+          time_window: "1m"
+        - field: "patient.nt_probnp"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "pg/mL"
+          time_window: "1m"
+    
+    priority: 700
+    
+    outputs:
+      risk_category: "very_high"
+      treatment_intensity: "aggressive"
+      monitoring_level: "intensive"
+      care_setting: "specialty"
+      clinical_urgency: "urgent"
+    
+    clinical_implications:
+      - implication: "Guideline-directed medical therapy optimization required"
+        severity: "critical"
+        action_required: true
+        timeframe: "within_24h"
+        action_type: "medication_change"
+      - implication: "Cardiology consultation if not established"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "referral"
+      - implication: "Consider advanced heart failure therapies if optimal medical therapy"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "referral"
+    
+    evidence_links:
+      kb3_guidelines: ["ACC-AHA-HF-2022-001", "ESC-HF-2021-001"]
+      kb4_safety_rules: ["SAF-HF-ACE-001", "SAF-HF-BB-001"]
+
+  # ========== CORONARY ARTERY DISEASE ==========
+  
+  - id: "PHE-CV000004"
+    name: "Acute Coronary Syndrome"
+    domain: "cardiovascular"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Acute coronary syndrome with elevated cardiac biomarkers"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        (patient.troponin_i > 0.04 || patient.troponin_t > 0.014) &&
+        (patient.chest_pain || patient.dyspnea || patient.diaphoresis) &&
+        patient.presentation_time <= 24
+      data_requirements:
+        - field: "patient.troponin_i"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "ng/mL"
+          time_window: "24h"
+        - field: "patient.troponin_t"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "ng/mL"
+          time_window: "24h"
+        - field: "patient.chest_pain"
+          type: "boolean"
+          required: false
+          source: "patient_reported"
+        - field: "patient.dyspnea"
+          type: "boolean"
+          required: false
+          source: "patient_reported"
+        - field: "patient.diaphoresis"
+          type: "boolean"
+          required: false
+          source: "patient_reported"
+        - field: "patient.presentation_time"
+          type: "float"
+          required: false
+          source: "ehr"
+          units: "hours"
+    
+    priority: 980  # Very high priority for acute conditions
+    
+    outputs:
+      risk_category: "extreme"
+      treatment_intensity: "aggressive"
+      monitoring_level: "critical"
+      care_setting: "emergency"
+      clinical_urgency: "stat"
+    
+    clinical_implications:
+      - implication: "Immediate cardiology consultation and catheterization lab activation"
+        severity: "emergency"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "referral"
+      - implication: "Dual antiplatelet therapy initiation"
+        severity: "critical"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "medication_change"
+      - implication: "Continuous telemetry monitoring"
+        severity: "critical"
+        action_required: true
+        timeframe: "immediate"
+        action_type: "follow_up"
+    
+    evidence_links:
+      kb3_guidelines: ["ACC-AHA-ACS-2020-001", "ESC-ACS-2020-001"]
+      kb4_safety_rules: ["SAF-ACS-ANTI-001", "SAF-PCI-001"]
+
+  # ========== ATRIAL FIBRILLATION ==========
+  
+  - id: "PHE-CV000005"
+    name: "Atrial Fibrillation High Stroke Risk"
+    domain: "cardiovascular"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Atrial fibrillation with high stroke risk requiring anticoagulation"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.has_atrial_fibrillation &&
+        patient.chads2_vasc_score >= 2 &&
+        !patient.contraindication_anticoagulation
+      data_requirements:
+        - field: "patient.has_atrial_fibrillation"
+          type: "boolean"
+          required: true
+          source: "context_gateway"
+        - field: "patient.chads2_vasc_score"
+          type: "integer"
+          required: false
+          source: "calculated"
+          validation_rules:
+            min_value: 0
+            max_value: 9
+        - field: "patient.contraindication_anticoagulation"
+          type: "boolean"
+          required: false
+          source: "ehr"
+    
+    priority: 750
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "standard"
+      monitoring_level: "enhanced"
+      care_setting: "primary"
+    
+    clinical_implications:
+      - implication: "Anticoagulation therapy strongly recommended"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "medication_change"
+      - implication: "Assess bleeding risk with HAS-BLED score"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "lab_order"
+    
+    evidence_links:
+      kb3_guidelines: ["AHA-AF-2019-001", "ESC-AF-2020-001"]
+      kb4_safety_rules: ["SAF-ANTICOAG-001", "SAF-AF-001"]

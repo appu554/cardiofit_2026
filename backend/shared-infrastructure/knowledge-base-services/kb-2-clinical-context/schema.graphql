@@ -1,0 +1,241 @@
+# Apollo Federation Schema for KB-2 Clinical Context Service
+# This schema provides clinical context building, phenotype detection, and risk assessment
+
+scalar DateTime
+scalar UUID
+
+# Core patient entity (federated)
+type Patient @key(fields: "id") {
+  id: ID!
+  # Clinical context for this patient
+  clinicalContext: PatientContext
+  # Detected phenotypes for this patient
+  detectedPhenotypes: [DetectedPhenotype!]!
+  # Risk assessment for this patient
+  riskAssessment: RiskAssessment
+  # Care gaps for this patient
+  careGaps: [CareGap!]!
+}
+
+# Patient clinical context
+type PatientContext {
+  id: ID!
+  patientId: ID!
+  contextId: String!
+  timestamp: DateTime!
+  demographics: Demographics!
+  activeConditions: [Condition!]!
+  recentLabs: [LabResult!]!
+  currentMedications: [Medication!]!
+  detectedPhenotypes: [DetectedPhenotype!]!
+  riskFactors: JSON
+  careGaps: [String!]!
+  ttl: DateTime!
+}
+
+# Demographics information
+type Demographics {
+  ageYears: Int!
+  sex: String!
+  race: String
+  ethnicity: String
+}
+
+# Medical condition
+type Condition {
+  code: String!
+  system: String!
+  name: String!
+  onsetDate: DateTime!
+  severity: String
+}
+
+# Laboratory result
+type LabResult {
+  loincCode: String!
+  value: Float!
+  unit: String!
+  resultDate: DateTime!
+  abnormalFlag: String
+}
+
+# Medication
+type Medication {
+  rxNormCode: String!
+  name: String!
+  dose: String!
+  frequency: String!
+  startDate: DateTime!
+}
+
+# Detected phenotype
+type DetectedPhenotype {
+  phenotypeId: String!
+  confidence: Float!
+  detectedAt: DateTime!
+  supportingEvidence: [JSON!]!
+}
+
+# Phenotype definition
+type PhenotypeDefinition {
+  id: ID!
+  phenotypeId: String!
+  name: String!
+  version: String!
+  description: String!
+  criteria: PhenotypeCriteria!
+  clinicalSignificance: ClinicalSignificance!
+  status: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# Phenotype criteria
+type PhenotypeCriteria {
+  requiredConditions: [ConditionCriteria!]!
+  requiredLabs: [LabCriteria!]!
+  requiredMedications: [MedicationCriteria!]!
+  exclusionCriteria: [String!]!
+}
+
+# Condition criteria
+type ConditionCriteria {
+  type: String!
+  codes: [String!]!
+  timeWindow: String!
+  minOccurrences: Int!
+}
+
+# Lab criteria
+type LabCriteria {
+  loincCode: String!
+  operator: String!
+  value: Float!
+  unit: String!
+  timeWindow: String!
+}
+
+# Medication criteria
+type MedicationCriteria {
+  rxNormCodes: [String!]!
+  durationDays: Int!
+}
+
+# Clinical significance
+type ClinicalSignificance {
+  riskImplications: [String!]!
+  treatmentModifications: [String!]!
+  monitoringRequirements: [String!]!
+}
+
+# Risk assessment
+type RiskAssessment {
+  patientId: ID!
+  riskScores: JSON!
+  riskFactors: JSON!
+  recommendations: [String!]!
+  confidenceScore: Float!
+  assessmentTimestamp: DateTime!
+}
+
+# Care gap
+type CareGap {
+  id: UUID!
+  type: String!
+  description: String!
+  priority: String!
+  dueDays: Int!
+  actions: [String!]!
+}
+
+# Context building response
+type ContextBuildResponse {
+  context: PatientContext!
+  phenotypes: [String!]!
+  riskScores: JSON!
+  cacheHit: Boolean!
+  processedAt: DateTime!
+}
+
+# Phenotype detection response
+type PhenotypeDetectionResponse {
+  patientId: ID!
+  detectedPhenotypes: [DetectedPhenotype!]!
+  totalPhenotypes: Int!
+  processingTimeMs: Int!
+  timestamp: DateTime!
+}
+
+# System health
+type SystemHealth {
+  status: String!
+  timestamp: DateTime!
+  checks: JSON!
+}
+
+# Context statistics
+type ContextStatistics {
+  totalContexts: Int!
+  cacheHitRate: Float!
+  averageProcessingTime: Float!
+  phenotypeDetectionRate: Float!
+}
+
+# JSON scalar for complex data
+scalar JSON
+
+# Input types for mutations
+input BuildContextInput {
+  patientId: ID!
+  patient: JSON!
+  transactionId: String
+}
+
+input PhenotypeDetectionInput {
+  patientId: ID!
+  patientData: JSON!
+  phenotypeIds: [String!]
+}
+
+input RiskAssessmentInput {
+  patientId: ID!
+  riskTypes: [String!]
+  patientData: JSON
+}
+
+# Query operations
+type Query {
+  # Get patient context history
+  patientContextHistory(patientId: ID!): [PatientContext!]!
+
+  # Get context statistics
+  contextStatistics: ContextStatistics!
+
+  # Get phenotype definitions
+  phenotypeDefinitions: [PhenotypeDefinition!]!
+
+  # Get care gaps for a patient
+  patientCareGaps(patientId: ID!, includeResolved: Boolean, timeframeDays: Int): [CareGap!]!
+
+  # System health check
+  systemHealth: SystemHealth!
+
+  # Federation queries are auto-generated
+}
+
+# Mutation operations
+type Mutation {
+  # Build clinical context for a patient
+  buildContext(input: BuildContextInput!): ContextBuildResponse!
+
+  # Detect phenotypes for a patient
+  detectPhenotypes(input: PhenotypeDetectionInput!): PhenotypeDetectionResponse!
+
+  # Assess risk for a patient
+  assessRisk(input: RiskAssessmentInput!): RiskAssessment!
+
+  # Clear context cache
+  clearCache: Boolean!
+}
+
+# Federation types are auto-generated by gqlgen federation plugin

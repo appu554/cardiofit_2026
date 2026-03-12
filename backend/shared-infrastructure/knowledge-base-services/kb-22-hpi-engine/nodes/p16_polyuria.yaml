@@ -1,0 +1,210 @@
+# P16 Polyuria - HPI Node Definition
+# Bayesian differential for excessive urination in cardio-renal-metabolic patients.
+# Triggered by: patient self-report of increased urinary frequency via KB-21.
+# Output: posterior probabilities for polyuria aetiology -> feeds KB-23 workup card.
+
+node_id: P16_POLYURIA
+version: "1.0.0"
+description: "Excessive urination differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Strata supported
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket -- open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ADA_Standards_2025; KDIGO_CKD_2024; DI_Central_Diabetes_Insipidus_Review_2023"
+
+# ============================================================================
+# 6 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.90 (0.10 reserved for G15 Other bucket).
+# In DM+HTN cohorts, uncontrolled DM (osmotic diuresis) is the leading cause.
+# ============================================================================
+differentials:
+  - id: UNCONTROLLED_DM
+    label: "Uncontrolled Diabetes Mellitus (osmotic diuresis)"
+    population_reference: "ADA Standards of Care 2025; UKPDS Group, Lancet 1998"
+    priors:
+      DM_HTN_base: 0.35
+
+  - id: DM_INSIPIDUS
+    label: "Diabetes Insipidus (central or nephrogenic)"
+    population_reference: "Christ-Crain M, Nat Rev Dis Primers 2019; Robertson GL, NEJM 2016"
+    priors:
+      DM_HTN_base: 0.08
+
+  - id: CKD_TUBULAR
+    label: "CKD Tubular Concentrating Defect"
+    population_reference: "KDIGO CKD 2024; Sterns RH, JASN 2015"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: DIURETIC_EXCESS
+    label: "Diuretic Excess (thiazide, loop diuretic)"
+    population_reference: "ESC HTN 2023; NICE NG136 2022"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: PRIMARY_POLYDIPSIA
+    label: "Primary Polydipsia (psychogenic or dipsogenic)"
+    population_reference: "Fenske W, NEJM 2018; Christ-Crain M, Nat Rev Dis Primers 2019"
+    priors:
+      DM_HTN_base: 0.07
+
+  - id: OTHER
+    label: "Other (hypercalcaemia, UTI, prostate, medication effect)"
+    population_reference: "BMJ Best Practice Polyuria 2024"
+    priors:
+      DM_HTN_base: 0.10
+
+# Safety floors -- posterior never drops below these values
+safety_floors:
+  UNCONTROLLED_DM: 0.05
+  DM_INSIPIDUS: 0.02
+
+# ============================================================================
+# Safety Triggers (F-02 parallel evaluation)
+# ============================================================================
+safety_triggers:
+  - flag_id: RF01_SEVERE_OSMOTIC_DIURESIS
+    severity: IMMEDIATE
+    trigger_expression: "UNCONTROLLED_DM.posterior > 0.50 AND Q001 == YES"
+    recommended_action: "Suspected severe osmotic diuresis from uncontrolled DM. Check capillary glucose and HbA1c STAT. If glucose > 300 mg/dL, assess for DKA/HHS. SNOMED: 267384006"
+
+  - flag_id: RF02_DI_SEVERE_VOLUME_LOSS
+    severity: URGENT
+    trigger_expression: "DM_INSIPIDUS.posterior > 0.35"
+    recommended_action: "Possible diabetes insipidus with significant volume loss risk. Order serum sodium, urine osmolality, and paired serum osmolality. SNOMED: 15771004"
+
+# ============================================================================
+# 7 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# ============================================================================
+questions:
+  - id: Q001
+    text_en: "Has your blood sugar been running high recently (above 250 mg/dL or 14 mmol/L)?"
+    text_hi: "Kya haal mein aapka blood sugar bahut zyada raha hai (250 mg/dL ya 14 mmol/L se upar)?"
+    mandatory: true
+    lr_positive:
+      UNCONTROLLED_DM: 4.50
+      DM_INSIPIDUS: 0.60
+      CKD_TUBULAR: 0.80
+      DIURETIC_EXCESS: 0.70
+      PRIMARY_POLYDIPSIA: 0.50
+    lr_negative:
+      UNCONTROLLED_DM: 0.30
+      DM_INSIPIDUS: 1.20
+      CKD_TUBULAR: 1.10
+      DIURETIC_EXCESS: 1.15
+      PRIMARY_POLYDIPSIA: 1.10
+
+  - id: Q002
+    text_en: "Are you passing large volumes of very dilute (clear, water-like) urine, even at night?"
+    text_hi: "Kya aapka peshab bahut paatla (saaf paani jaisa) aata hai, raat mein bhi?"
+    mandatory: true
+    lr_positive:
+      UNCONTROLLED_DM: 1.20
+      DM_INSIPIDUS: 5.00
+      CKD_TUBULAR: 2.50
+      DIURETIC_EXCESS: 1.50
+      PRIMARY_POLYDIPSIA: 3.00
+    lr_negative:
+      UNCONTROLLED_DM: 0.90
+      DM_INSIPIDUS: 0.25
+      CKD_TUBULAR: 0.50
+      DIURETIC_EXCESS: 0.80
+      PRIMARY_POLYDIPSIA: 0.40
+
+  - id: Q003
+    text_en: "Has there been a recent increase in your diuretic dose or a new diuretic started?"
+    text_hi: "Kya haal mein aapki diuretic (peshab badhane wali) dawai ki dose badhi hai ya nayi dawai shuru hui hai?"
+    mandatory: true
+    lr_positive:
+      UNCONTROLLED_DM: 0.70
+      DM_INSIPIDUS: 0.60
+      CKD_TUBULAR: 0.80
+      DIURETIC_EXCESS: 5.50
+      PRIMARY_POLYDIPSIA: 0.50
+    lr_negative:
+      UNCONTROLLED_DM: 1.10
+      DM_INSIPIDUS: 1.10
+      CKD_TUBULAR: 1.05
+      DIURETIC_EXCESS: 0.25
+      PRIMARY_POLYDIPSIA: 1.10
+
+  - id: Q004
+    text_en: "Are you feeling excessively thirsty all the time, even after drinking plenty of water?"
+    text_hi: "Kya aapko har waqt bahut zyada pyaas lagti hai, paani peene ke baad bhi?"
+    mandatory: false
+    lr_positive:
+      UNCONTROLLED_DM: 2.80
+      DM_INSIPIDUS: 4.00
+      CKD_TUBULAR: 1.30
+      DIURETIC_EXCESS: 1.50
+      PRIMARY_POLYDIPSIA: 3.50
+    lr_negative:
+      UNCONTROLLED_DM: 0.50
+      DM_INSIPIDUS: 0.30
+      CKD_TUBULAR: 0.80
+      DIURETIC_EXCESS: 0.70
+      PRIMARY_POLYDIPSIA: 0.40
+
+  - id: Q005
+    text_en: "Do you have known kidney disease or has your doctor said your kidney function is reduced?"
+    text_hi: "Kya aapko kidney ki bimari hai ya doctor ne kaha hai ki kidney ki kaamkaji kam hai?"
+    mandatory: false
+    lr_positive:
+      UNCONTROLLED_DM: 1.20
+      DM_INSIPIDUS: 1.50
+      CKD_TUBULAR: 3.80
+      DIURETIC_EXCESS: 1.30
+      PRIMARY_POLYDIPSIA: 0.50
+    lr_negative:
+      UNCONTROLLED_DM: 0.90
+      DM_INSIPIDUS: 0.80
+      CKD_TUBULAR: 0.30
+      DIURETIC_EXCESS: 0.90
+      PRIMARY_POLYDIPSIA: 1.15
+
+  - id: Q006
+    text_en: "Did the increased urination start suddenly, or has it been gradually worsening?"
+    text_hi: "Kya zyada peshab aana achanak shuru hua ya dheere-dheere badha hai?"
+    mandatory: false
+    lr_positive:
+      UNCONTROLLED_DM: 1.80
+      DM_INSIPIDUS: 3.50
+      CKD_TUBULAR: 0.60
+      DIURETIC_EXCESS: 2.50
+      PRIMARY_POLYDIPSIA: 0.80
+    lr_negative:
+      UNCONTROLLED_DM: 0.70
+      DM_INSIPIDUS: 0.50
+      CKD_TUBULAR: 1.60
+      DIURETIC_EXCESS: 0.60
+      PRIMARY_POLYDIPSIA: 1.10
+
+  - id: Q007
+    text_en: "Do you find yourself drinking water out of habit or boredom, even when not particularly thirsty?"
+    text_hi: "Kya aap aadat ya bore hone par paani peete hain, jab zyada pyaas nahi bhi lagti?"
+    mandatory: false
+    lr_positive:
+      UNCONTROLLED_DM: 0.50
+      DM_INSIPIDUS: 0.40
+      CKD_TUBULAR: 0.60
+      DIURETIC_EXCESS: 0.50
+      PRIMARY_POLYDIPSIA: 5.00
+    lr_negative:
+      UNCONTROLLED_DM: 1.10
+      DM_INSIPIDUS: 1.15
+      CKD_TUBULAR: 1.10
+      DIURETIC_EXCESS: 1.10
+      PRIMARY_POLYDIPSIA: 0.30

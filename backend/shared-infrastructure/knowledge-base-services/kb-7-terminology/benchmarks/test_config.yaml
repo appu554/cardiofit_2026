@@ -1,0 +1,377 @@
+# KB7 Terminology Phase 3.5 Test Configuration
+# ============================================
+
+# Database configurations
+postgresql:
+  host: localhost
+  port: 5433
+  database: terminology_db
+  user: kb7_user
+  password: kb7_password
+  max_connections: 20
+  min_connections: 5
+
+redis:
+  host: localhost
+  port: 6380
+  db: 0
+  max_connections: 10
+
+neo4j:
+  uri: bolt://localhost:7687
+  user: neo4j
+  password: kb7_neo4j
+  max_connection_lifetime: 3600
+  max_connection_pool_size: 50
+
+# Service endpoints
+query_router:
+  url: http://localhost:8090
+  health_endpoint: /health
+  metrics_endpoint: /metrics
+  timeout_seconds: 30
+
+fhir_service:
+  url: http://localhost:8014
+  terminology_endpoint: /terminology
+  health_endpoint: /health
+  timeout_seconds: 30
+
+# Google FHIR configuration
+google_fhir:
+  project_id: cardiofit-demo
+  location: us-central1
+  dataset_id: kb7_terminology
+  fhir_store_id: kb7-fhir-store
+  credentials_path: null  # Will use default credentials
+
+# Performance targets (Phase 3.5 Success Criteria)
+performance_targets:
+  postgresql_p95_ms: 10      # PostgreSQL lookup queries <10ms (95th percentile)
+  graphdb_p95_ms: 50         # GraphDB reasoning queries <50ms (95th percentile)
+  router_uptime_pct: 99.9    # Query router uptime >99.9%
+  cache_hit_ratio_pct: 90    # Cache hit ratio >90% for frequent operations
+  fhir_response_p95_ms: 200  # FHIR endpoints <200ms P95
+
+# Test parameters
+test_parameters:
+  warmup_requests: 100
+  test_requests: 1000
+  concurrent_users: 10
+  test_duration_seconds: 300
+  iterations_per_operation: 100
+  operation_timeout_seconds: 30
+
+# Load testing scenarios
+load_test_scenarios:
+  stress_test:
+    description: "Gradually increase load to find breaking point"
+    max_users: 100
+    ramp_up_time_seconds: 300
+    test_duration_seconds: 600
+    ramp_down_time_seconds: 60
+    think_time_ms: [100, 2000]
+    request_distribution:
+      concept_lookup: 0.4
+      concept_search: 0.2
+      valueset_expand: 0.15
+      fhir_lookup: 0.15
+      semantic_query: 0.1
+
+  soak_test:
+    description: "Sustained load over extended period"
+    max_users: 50
+    ramp_up_time_seconds: 120
+    test_duration_seconds: 3600  # 1 hour
+    ramp_down_time_seconds: 60
+    think_time_ms: [500, 3000]
+    request_distribution:
+      concept_lookup: 0.5
+      concept_search: 0.25
+      valueset_expand: 0.15
+      fhir_lookup: 0.1
+
+  spike_test:
+    description: "Sudden spike in load"
+    max_users: 20
+    ramp_up_time_seconds: 60
+    test_duration_seconds: 300
+    ramp_down_time_seconds: 60
+    think_time_ms: [50, 500]
+    spike_users: 80
+    spike_duration_seconds: 120
+    request_distribution:
+      concept_lookup: 0.6
+      fhir_lookup: 0.4
+
+  capacity_test:
+    description: "Find maximum capacity"
+    max_users: 200
+    ramp_up_time_seconds: 600  # 10 minutes
+    test_duration_seconds: 300  # 5 minutes sustained
+    ramp_down_time_seconds: 120
+    think_time_ms: [100, 1000]
+    request_distribution:
+      concept_lookup: 0.3
+      concept_search: 0.2
+      valueset_expand: 0.2
+      fhir_lookup: 0.2
+      semantic_query: 0.1
+
+# Performance test workloads
+performance_workloads:
+  realistic_mixed:
+    description: "Mixed workload representing typical usage"
+    distribution:
+      - name: concept_lookup
+        type: postgresql
+        weight: 0.35
+        complexity: simple
+        cache_friendly: true
+      - name: concept_search
+        type: postgresql
+        weight: 0.25
+        complexity: medium
+        cache_friendly: false
+      - name: valueset_expansion
+        type: postgresql
+        weight: 0.15
+        complexity: medium
+        cache_friendly: true
+      - name: semantic_relationships
+        type: neo4j
+        weight: 0.15
+        complexity: complex
+        cache_friendly: false
+      - name: fhir_operations
+        type: fhir
+        weight: 0.10
+        complexity: medium
+        cache_friendly: true
+
+  heavy_reasoning:
+    description: "Heavy semantic reasoning workload"
+    distribution:
+      - name: inference_chain
+        type: neo4j
+        weight: 0.40
+        complexity: complex
+        cache_friendly: false
+      - name: concept_clustering
+        type: neo4j
+        weight: 0.30
+        complexity: complex
+        cache_friendly: false
+      - name: hierarchy_traversal
+        type: neo4j
+        weight: 0.20
+        complexity: medium
+        cache_friendly: true
+      - name: concept_lookup
+        type: postgresql
+        weight: 0.10
+        complexity: simple
+        cache_friendly: true
+
+  fhir_heavy:
+    description: "FHIR-focused workload"
+    distribution:
+      - name: codesystem_lookup
+        type: fhir
+        weight: 0.30
+        complexity: medium
+        cache_friendly: true
+      - name: valueset_expand
+        type: fhir
+        weight: 0.25
+        complexity: medium
+        cache_friendly: true
+      - name: conceptmap_translate
+        type: fhir
+        weight: 0.20
+        complexity: complex
+        cache_friendly: false
+      - name: terminology_search
+        type: fhir
+        weight: 0.15
+        complexity: medium
+        cache_friendly: false
+      - name: hybrid_query
+        type: router
+        weight: 0.10
+        complexity: complex
+        cache_friendly: true
+
+  cache_optimized:
+    description: "Cache-friendly operations for hit ratio testing"
+    distribution:
+      - name: concept_lookup
+        type: postgresql
+        weight: 0.60
+        complexity: simple
+        cache_friendly: true
+      - name: valueset_expansion
+        type: postgresql
+        weight: 0.20
+        complexity: medium
+        cache_friendly: true
+      - name: hierarchy_traversal
+        type: neo4j
+        weight: 0.15
+        complexity: medium
+        cache_friendly: true
+      - name: codesystem_lookup
+        type: fhir
+        weight: 0.05
+        complexity: medium
+        cache_friendly: true
+
+# Test data configuration
+test_data:
+  terminology_systems:
+    - system: http://snomed.info/sct
+      name: SNOMED CT
+      sample_codes:
+        - "424144002"  # Current smoker
+        - "38341003"   # Hypertensive disorder
+        - "195967001"  # Asthma
+        - "13645005"   # Chronic obstructive lung disease
+        - "44054006"   # Diabetes mellitus type 2
+        - "233604007"  # Pneumonia
+        - "22298006"   # Myocardial infarction
+        - "840539006"  # COVID-19
+        - "302509004"  # Kidney disease
+        - "386661006"  # Fever
+
+    - system: http://loinc.org
+      name: LOINC
+      sample_codes:
+        - "8480-6"   # Systolic blood pressure
+        - "8462-4"   # Diastolic blood pressure
+        - "33747-0"  # General appearance
+        - "1975-2"   # Bilirubin
+        - "6690-2"   # Leukocytes
+        - "789-8"    # Erythrocytes
+        - "718-7"    # Hemoglobin
+        - "4548-4"   # Hemoglobin A1c
+        - "33743-4"  # Fasting glucose
+        - "14647-2"  # Cholesterol
+
+    - system: http://www.nlm.nih.gov/research/umls/rxnorm
+      name: RxNorm
+      sample_codes:
+        - "1191"     # Aspirin
+        - "161"      # Acetaminophen
+        - "5224"     # Ibuprofen
+        - "8124"     # Lisinopril
+        - "197361"   # Metformin
+        - "198039"   # Simvastatin
+        - "596976"   # Atorvastatin
+
+  value_sets:
+    - id: cardiovascular-conditions
+      url: http://cardiofit.com/fhir/ValueSet/cardiovascular-conditions
+      name: Cardiovascular Conditions
+    - id: diabetes-medications
+      url: http://cardiofit.com/fhir/ValueSet/diabetes-medications
+      name: Diabetes Medications
+    - id: respiratory-conditions
+      url: http://cardiofit.com/fhir/ValueSet/respiratory-conditions
+      name: Respiratory Conditions
+    - id: laboratory-tests
+      url: http://cardiofit.com/fhir/ValueSet/laboratory-tests
+      name: Laboratory Tests
+    - id: vital-signs
+      url: http://cardiofit.com/fhir/ValueSet/vital-signs
+      name: Vital Signs
+
+  concept_maps:
+    - id: snomed-to-loinc
+      url: http://cardiofit.com/fhir/ConceptMap/snomed-to-loinc
+      name: SNOMED CT to LOINC Mapping
+    - id: rxnorm-to-snomed
+      url: http://cardiofit.com/fhir/ConceptMap/rxnorm-to-snomed
+      name: RxNorm to SNOMED CT Mapping
+    - id: icd10-to-snomed
+      url: http://cardiofit.com/fhir/ConceptMap/icd10-to-snomed
+      name: ICD-10 to SNOMED CT Mapping
+
+# Benchmark operations configuration
+benchmark_operations:
+  codesystem_lookup: true
+  codesystem_validate: true
+  valueset_expand: true
+  valueset_validate: true
+  conceptmap_translate: true
+  search_operations: true
+  create_operations: false  # Disabled to avoid creating test data
+
+# Monitoring and alerting
+monitoring:
+  enabled: true
+  metrics_collection_interval_seconds: 1.0
+  system_metrics:
+    - cpu_usage
+    - memory_usage
+    - disk_io
+    - network_io
+    - database_connections
+    - cache_hit_ratio
+
+# Reporting configuration
+reporting:
+  output_formats:
+    - json
+    - html
+    - junit_xml
+  include_charts: true
+  include_raw_data: false
+  max_error_details: 10
+  chart_types:
+    - latency_timeline
+    - throughput_graph
+    - error_rate_chart
+    - resource_utilization
+
+# CI/CD integration
+ci_cd:
+  fail_on_criteria_failure: true
+  fail_on_performance_degradation: true
+  performance_regression_threshold_pct: 20  # Fail if performance degrades >20%
+  export_metrics_prometheus: true
+  export_metrics_grafana: true
+
+# Docker and containerization
+docker:
+  enabled: false
+  test_containers:
+    - postgresql_test
+    - redis_test
+    - neo4j_test
+  network_name: kb7_test_network
+
+# Security and authentication
+security:
+  enable_tls: false
+  verify_certificates: true
+  authentication_timeout_seconds: 30
+
+# Logging configuration
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_path: kb7_performance_test.log
+  max_file_size_mb: 100
+  backup_count: 5
+
+# Advanced configuration
+advanced:
+  enable_profiling: false
+  profiling_interval_seconds: 10
+  memory_leak_detection: true
+  connection_leak_detection: true
+  custom_metrics:
+    - name: terminology_cache_efficiency
+      query: "cache_hits / (cache_hits + cache_misses)"
+    - name: query_complexity_score
+      query: "avg(query_execution_time) * avg(result_set_size)"

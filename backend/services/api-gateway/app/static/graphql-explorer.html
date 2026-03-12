@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clinical Synthesis Hub - GraphQL Explorer</title>
+    <style>
+        body {
+            height: 100%;
+            margin: 0;
+            width: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #graphiql {
+            height: 100vh;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+        .auth-section {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .auth-section input {
+            padding: 8px;
+            width: 300px;
+            border: none;
+            border-radius: 4px;
+        }
+        .auth-section button {
+            padding: 8px 16px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .auth-section button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/graphiql@1.8.0/graphiql.min.css" />
+</head>
+<body>
+    <div class="header">
+        <h1>Clinical Synthesis Hub - GraphQL Explorer</h1>
+        <div class="auth-section">
+            <input type="text" id="token-input" placeholder="Enter JWT token" />
+            <button id="set-token-btn">Set Token</button>
+        </div>
+    </div>
+
+    <div id="graphiql"></div>
+
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/graphiql@1.8.0/graphiql.min.js"></script>
+
+    <script>
+        // Store the token in a variable that can be updated
+        let authToken = '';
+
+        // Function to create a fetcher with the current token
+        const createFetcher = (token) => {
+            return (graphQLParams) => {
+                const graphqlEndpoint = window.location.origin + '/graphql';
+                console.log('Fetching from:', graphqlEndpoint);
+                console.log('With token:', token ? 'Bearer ' + token.substring(0, 10) + '...' : 'none');
+                console.log('Query:', JSON.stringify(graphQLParams));
+
+                return fetch(graphqlEndpoint, {
+                    method: 'post',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': token ? `Bearer ${token}` : ''
+                    },
+                    body: JSON.stringify(graphQLParams)
+                })
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    return response.json();
+                })
+                .then(result => {
+                    console.log('Response data:', result);
+                    return result;
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    return { errors: [{ message: error.message }] };
+                });
+            };
+        };
+
+        // Check for token in URL parameters
+        const getTokenFromUrl = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('token') || '';
+        };
+
+        // Set token from URL if available
+        const urlToken = getTokenFromUrl();
+        if (urlToken) {
+            authToken = urlToken;
+            document.getElementById('token-input').value = urlToken;
+            console.log('Token loaded from URL parameter');
+        } else {
+            // Check if the token input already has a value (set by the server)
+            const tokenInput = document.getElementById('token-input');
+            if (tokenInput.value) {
+                authToken = tokenInput.value;
+                console.log('Token loaded from input value');
+            }
+        }
+
+        // Set token button
+        document.getElementById('set-token-btn').addEventListener('click', () => {
+            // Get the token from the input field
+            const tokenInput = document.getElementById('token-input');
+            authToken = tokenInput.value;
+
+            // Update URL with token parameter
+            const url = new URL(window.location.href);
+            if (authToken) {
+                url.searchParams.set('token', authToken);
+            } else {
+                url.searchParams.delete('token');
+            }
+            window.history.replaceState({}, '', url.toString());
+
+            // Re-render GraphiQL with the new token
+            renderGraphiQL();
+
+            // Show a message to the user
+            alert('Token set! You can now make authenticated requests.');
+        });
+
+        // Function to render GraphiQL with the current token
+        const renderGraphiQL = () => {
+            const fetcher = createFetcher(authToken);
+
+            // Render GraphiQL with the new fetcher
+            ReactDOM.render(
+                React.createElement(GraphiQL, {
+                    fetcher: fetcher,
+                    defaultVariableEditorOpen: true
+                }),
+                document.getElementById('graphiql')
+            );
+
+            console.log('GraphiQL rendered with token:', authToken ? authToken.substring(0, 10) + '...' : 'none');
+        };
+
+        // Initial render
+        renderGraphiQL();
+    </script>
+</body>
+</html>

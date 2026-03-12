@@ -1,0 +1,371 @@
+# Kubernetes Services for Medication Service V2
+# High-availability service definitions with load balancing
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: medication-service-v2
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: service
+    version: v1
+    tier: backend
+  annotations:
+    description: "Main HTTP/HTTPS service for Medication Service V2"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:us-east-1:123456789:certificate/cert-id"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8005"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP  # Use ClusterIP with Ingress for better control
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 300
+  selector:
+    app: medication-service-v2
+    component: api-server
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8005
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 8005
+    protocol: TCP
+  - name: metrics
+    port: 8005
+    targetPort: 8005
+    protocol: TCP
+
+---
+# gRPC Service for internal service communication
+apiVersion: v1
+kind: Service
+metadata:
+  name: medication-service-v2-grpc
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: grpc-service
+    version: v1
+    tier: backend
+  annotations:
+    description: "gRPC service for internal service-to-service communication"
+spec:
+  type: ClusterIP
+  selector:
+    app: medication-service-v2
+    component: api-server
+  ports:
+  - name: grpc
+    port: 50005
+    targetPort: 50005
+    protocol: TCP
+
+---
+# Headless service for StatefulSet-like operations
+apiVersion: v1
+kind: Service
+metadata:
+  name: medication-service-v2-headless
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: headless-service
+    version: v1
+  annotations:
+    description: "Headless service for direct pod communication"
+spec:
+  clusterIP: None
+  selector:
+    app: medication-service-v2
+    component: api-server
+  ports:
+  - name: http
+    port: 8005
+    targetPort: 8005
+    protocol: TCP
+  - name: grpc
+    port: 50005
+    targetPort: 50005
+    protocol: TCP
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: cardiofit-medication-v2
+  labels:
+    app: postgres
+    component: database
+    version: v1
+  annotations:
+    description: "PostgreSQL database service"
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+    component: database
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+    protocol: TCP
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: cardiofit-medication-v2
+  labels:
+    app: redis
+    component: cache
+    version: v1
+  annotations:
+    description: "Redis cache service"
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+    component: cache
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: 6379
+    protocol: TCP
+
+---
+# Service Monitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: medication-service-v2-monitor
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: medication-service-v2
+      component: service
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    scheme: http
+    scrapeTimeout: 10s
+    honorLabels: true
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: 'go_.*'
+      action: drop  # Drop Go runtime metrics to reduce noise
+  - port: metrics
+    interval: 60s
+    path: /health/metrics
+    scheme: http
+    scrapeTimeout: 10s
+    honorLabels: true
+
+---
+# Pod Monitor for individual pod metrics
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: medication-service-v2-pods
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: pod-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: medication-service-v2
+      component: api-server
+  podMetricsEndpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    scheme: http
+  - port: metrics
+    interval: 60s
+    path: /debug/metrics
+    scheme: http
+
+---
+# External Service for Context Gateway
+apiVersion: v1
+kind: Service
+metadata:
+  name: context-gateway-service
+  namespace: cardiofit-medication-v2
+  labels:
+    app: context-gateway
+    component: external-service
+spec:
+  type: ExternalName
+  externalName: context-gateway.cardiofit-context.svc.cluster.local
+  ports:
+  - port: 8020
+    targetPort: 8020
+    protocol: TCP
+
+---
+# External Service for Apollo Federation
+apiVersion: v1
+kind: Service
+metadata:
+  name: apollo-federation-service
+  namespace: cardiofit-medication-v2
+  labels:
+    app: apollo-federation
+    component: external-service
+spec:
+  type: ExternalName
+  externalName: apollo-federation.cardiofit-graphql.svc.cluster.local
+  ports:
+  - port: 4000
+    targetPort: 4000
+    protocol: TCP
+
+---
+# External Service for Rust Engine
+apiVersion: v1
+kind: Service
+metadata:
+  name: rust-engine-service
+  namespace: cardiofit-medication-v2
+  labels:
+    app: rust-engine
+    component: external-service
+spec:
+  type: ExternalName
+  externalName: rust-engine.cardiofit-clinical.svc.cluster.local
+  ports:
+  - port: 8095
+    targetPort: 8095
+    protocol: TCP
+
+---
+# External Service for Flow2 Go Engine
+apiVersion: v1
+kind: Service
+metadata:
+  name: flow2-go-engine-service
+  namespace: cardiofit-medication-v2
+  labels:
+    app: flow2-go-engine
+    component: external-service
+spec:
+  type: ExternalName
+  externalName: flow2-go-engine.cardiofit-workflow.svc.cluster.local
+  ports:
+  - port: 8085
+    targetPort: 8085
+    protocol: TCP
+
+---
+# Service Account for the application
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: medication-service-v2
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: serviceaccount
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789:role/medication-service-v2-role"
+automountServiceAccountToken: true
+
+---
+# ClusterRole for necessary permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: medication-service-v2-role
+  labels:
+    app: medication-service-v2
+    component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding to bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: medication-service-v2-binding
+  labels:
+    app: medication-service-v2
+    component: rbac
+subjects:
+- kind: ServiceAccount
+  name: medication-service-v2
+  namespace: cardiofit-medication-v2
+roleRef:
+  kind: ClusterRole
+  name: medication-service-v2-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Role for namespace-specific permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: medication-service-v2-namespace-role
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: rbac
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# RoleBinding for namespace permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: medication-service-v2-namespace-binding
+  namespace: cardiofit-medication-v2
+  labels:
+    app: medication-service-v2
+    component: rbac
+subjects:
+- kind: ServiceAccount
+  name: medication-service-v2
+  namespace: cardiofit-medication-v2
+roleRef:
+  kind: Role
+  name: medication-service-v2-namespace-role
+  apiGroup: rbac.authorization.k8s.io

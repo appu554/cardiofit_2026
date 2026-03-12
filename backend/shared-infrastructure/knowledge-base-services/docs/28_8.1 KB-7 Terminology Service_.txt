@@ -1,0 +1,930 @@
+﻿# KB-7 Terminology Service: Detailed Design & Implementation
+
+
+## System Architecture
+
+
+### Service Overview
+```yaml
+service_name: KB-7 Terminology Service
+primary_function: Medical code mapping and terminology resolution
+criticality: High (foundation for all other KBs)
+expected_load: 10,000 RPS
+latency_target: p95 < 5ms for lookups
+data_volume: ~2M concepts, ~10M mappings
+```
+
+
+## Database Design
+
+
+### PostgreSQL Schema (Primary Store)
+
+
+```sql
+-- Core terminology schema
+CREATE SCHEMA terminology;
+SET search_path TO terminology;
+
+
+-- Main concepts table with partitioning for performance
+CREATE TABLE concepts (
+    id BIGSERIAL,
+    concept_uuid UUID DEFAULT gen_random_uuid(),
+    system VARCHAR(20) NOT NULL,
+    code VARCHAR(100) NOT NULL,
+    version VARCHAR(20) NOT NULL,
+    effective_date DATE NOT NULL,
+    
+    -- Terminology data
+    preferred_term TEXT NOT NULL,
+    fully_specified_name TEXT,
+    synonyms TEXT[] DEFAULT '{}',
+    
+    -- Hierarchy
+    parent_codes TEXT[] DEFAULT '{}',
+    is_leaf BOOLEAN DEFAULT FALSE,
+    semantic_tag VARCHAR(100),
+    
+    -- Search optimization
+    search_vector tsvector,
+    metaphone_key TEXT,
+    
+    -- Status
+    active BOOLEAN DEFAULT TRUE,
+    replaced_by VARCHAR(100),
+    
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    PRIMARY KEY (id, system),
+    UNIQUE (system, code, version)
+) PARTITION BY LIST (system);
+
+
+-- Create partitions per terminology system
+CREATE TABLE concepts_rxnorm PARTITION OF concepts FOR VALUES IN ('RxNorm');
+CREATE TABLE concepts_snomed PARTITION OF concepts FOR VALUES IN ('SNOMED');
+CREATE TABLE concepts_loinc PARTITION OF concepts FOR VALUES IN ('LOINC');
+CREATE TABLE concepts_icd10 PARTITION OF concepts FOR VALUES IN ('ICD10');
+
+
+-- Specialized drug terminology table
+CREATE TABLE drug_concepts (
+    id BIGSERIAL PRIMARY KEY,
+    rxnorm_cui VARCHAR(20) UNIQUE NOT NULL,
+    
+    -- Drug identification
+    ingredient VARCHAR(500) NOT NULL,
+    strength VARCHAR(100),
+    dose_form VARCHAR(200),
+    brand_names TEXT[] DEFAULT '{}',
+    
+    -- Classification
+    atc_codes TEXT[] DEFAULT '{}',
+    drug_class VARCHAR(200),
+    schedule VARCHAR(10),
+    
+    -- Clinical attributes
+    is_generic BOOLEAN,
+    is_vaccine BOOLEAN DEFAULT FALSE,
+    is_insulin BOOLEAN DEFAULT FALSE,
+    
+    -- Relationships
+    has_tradename TEXT[],
+    consists_of JSONB, -- For multi-ingredient drugs
+    
+    -- Search
+    search_vector tsvector,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+-- Cross-terminology mappings
+CREATE TABLE terminology_maps (
+    id BIGSERIAL PRIMARY KEY,
+    source_system VARCHAR(20) NOT NULL,
+    source_code VARCHAR(100) NOT NULL,
+    source_version VARCHAR(20),
+    
+    target_system VARCHAR(20) NOT NULL,
+    target_code VARCHAR(100) NOT NULL,
+    target_version VARCHAR(20),
+    
+    map_type VARCHAR(50) NOT NULL,
+    map_quality DECIMAL(3,2),
+    
+    -- Validation
+    validated_by VARCHAR(100),
+    validation_date DATE,
+    evidence TEXT,
+    
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    
+    UNIQUE (source_system, source_code, target_system, target_code)
+);
+
+
+-- Lab reference ranges with LOINC
+CREATE TABLE lab_references (
+    id BIGSERIAL PRIMARY KEY,
+    loinc_code VARCHAR(20) NOT NULL,
+    test_name TEXT NOT NULL,
+    
+    -- Reference ranges
+    unit VARCHAR(50) NOT NULL,
+    normal_low DECIMAL,
+    normal_high DECIMAL,
+    critical_low DECIMAL,
+    critical_high DECIMAL,
+    
+    -- Population specifics
+    age_low INTEGER,
+    age_high INTEGER,
+    sex CHAR(1),
+    conditions JSONB,
+    
+    source VARCHAR(100) NOT NULL,
+    effective_date DATE,
+    
+    INDEX idx_lab_loinc (loinc_code)
+);
+
+
+-- Performance indexes
+CREATE INDEX idx_concepts_code ON concepts(code);
+CREATE INDEX idx_concepts_search ON concepts USING GIN(search_vector);
+CREATE INDEX idx_concepts_metaphone ON concepts(metaphone_key);
+CREATE INDEX idx_drug_search ON drug_concepts USING GIN(search_vector);
+CREATE INDEX idx_maps_source ON terminology_maps(source_system, source_code);
+CREATE INDEX idx_maps_target ON terminology_maps(target_system, target_code);
+
+
+-- Full-text search configuration
+CREATE TEXT SEARCH CONFIGURATION medical_english (COPY = english);
+ALTER TEXT SEARCH CONFIGURATION medical_english
+    ALTER MAPPING FOR asciiword WITH medical_synonym, english_stem;
+
+
+-- Update search vectors trigger
+CREATE OR REPLACE FUNCTION update_search_vector() RETURNS trigger AS $$
+BEGIN
+    NEW.search_vector := 
+        setweight(to_tsvector('medical_english', NEW.preferred_term), 'A') ||
+        setweight(to_tsvector('medical_english', array_to_string(NEW.synonyms, ' ')), 'B') ||
+        setweight(to_tsvector('medical_english', NEW.code), 'C');
+    NEW.metaphone_key := metaphone(NEW.preferred_term, 10);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER update_concepts_search 
+    BEFORE INSERT OR UPDATE ON concepts 
+    FOR EACH ROW EXECUTE FUNCTION update_search_vector();
+```
+
+
+### Redis Cache Layer
+
+
+```yaml
+cache_structure:
+  primary_keys:
+    pattern: "term:{system}:{code}:{version}"
+    ttl: 86400  # 24 hours
+    
+  mapping_keys:
+    pattern: "map:{source_system}:{source_code}:{target_system}"
+    ttl: 86400
+    
+  search_cache:
+    pattern: "search:{query_hash}"
+    ttl: 3600  # 1 hour
+    
+  hot_terms:  # Pre-loaded common terms
+    - "term:RxNorm:*:*"  # Top 1000 drugs
+    - "term:LOINC:*:*"   # Common lab codes
+    - "term:ICD10:*:*"   # Frequent diagnoses
+```
+
+
+## API Design
+
+
+### GraphQL Schema
+
+
+```graphql
+type Query {
+  # Single concept lookup
+  getConcept(
+    system: TerminologySystem!
+    code: String!
+    version: String
+  ): Concept
+  
+  # Search across terminologies
+  searchConcepts(
+    query: String!
+    systems: [TerminologySystem!]
+    limit: Int = 20
+    fuzzy: Boolean = false
+  ): ConceptSearchResult!
+  
+  # Map between terminologies
+  mapCode(
+    sourceSystem: TerminologySystem!
+    sourceCode: String!
+    targetSystem: TerminologySystem!
+  ): MappingResult
+  
+  # Batch operations
+  batchLookup(
+    requests: [ConceptRequest!]!
+  ): [Concept]!
+  
+  # Drug-specific queries
+  getDrugInfo(rxnormCui: String!): DrugConcept
+  findDrugByName(name: String!): [DrugConcept!]!
+  
+  # Lab reference ranges
+  getLabReference(
+    loincCode: String!
+    age: Int
+    sex: Sex
+  ): LabReference
+}
+
+
+enum TerminologySystem {
+  RXNORM
+  SNOMED
+  LOINC
+  ICD10
+  ICD9
+  CPT
+  ATC
+  NDC
+}
+
+
+type Concept {
+  id: ID!
+  system: TerminologySystem!
+  code: String!
+  version: String!
+  preferredTerm: String!
+  synonyms: [String!]!
+  parents: [String!]
+  active: Boolean!
+  effectiveDate: Date!
+  mappings: [Mapping!]
+}
+
+
+type DrugConcept {
+  rxnormCui: String!
+  ingredient: String!
+  strength: String
+  doseForm: String
+  brandNames: [String!]!
+  atcCodes: [String!]!
+  isGeneric: Boolean!
+  clinicalAttributes: DrugAttributes!
+}
+
+
+type ConceptSearchResult {
+  results: [SearchHit!]!
+  totalCount: Int!
+  searchTime: Float!
+  didYouMean: String
+}
+
+
+type SearchHit {
+  concept: Concept!
+  score: Float!
+  matchType: MatchType!
+  highlightedTerm: String
+}
+
+
+enum MatchType {
+  EXACT
+  SYNONYM
+  FUZZY
+  SEMANTIC
+}
+```
+
+
+### REST API Endpoints
+
+
+```yaml
+endpoints:
+  - path: /v1/lookup/{system}/{code}
+    method: GET
+    cache: true
+    example: /v1/lookup/rxnorm/197381
+    
+  - path: /v1/search
+    method: GET
+    params:
+      - q: string (required)
+      - systems: array
+      - fuzzy: boolean
+    example: /v1/search?q=metformin&systems=rxnorm,atc
+    
+  - path: /v1/map
+    method: GET
+    params:
+      - source: "system:code"
+      - target: system
+    example: /v1/map?source=rxnorm:197381&target=atc
+    
+  - path: /v1/batch
+    method: POST
+    body: array of lookup requests
+    max_batch_size: 100
+    
+  - path: /v1/drug/{rxnorm}
+    method: GET
+    cache: true
+    
+  - path: /v1/lab/{loinc}/reference
+    method: GET
+    params:
+      - age: integer
+      - sex: M|F
+```
+
+
+## Data Ingestion Pipeline
+
+
+### ETL Architecture
+
+
+```python
+# ingestion/pipeline.py
+import asyncio
+import asyncpg
+import pandas as pd
+from typing import List, Dict
+import hashlib
+
+
+class TerminologyIngestionPipeline:
+    def __init__(self):
+        self.db_pool = None
+        self.redis_client = None
+        self.stats = {
+            'processed': 0,
+            'errors': 0,
+            'skipped': 0
+        }
+    
+    async def ingest_rxnorm(self, source_path: str):
+        """Ingest RxNorm from RRF files"""
+        
+        # Load RxConso for concepts
+        rxconso = pd.read_csv(
+            f"{source_path}/RXNCONSO.RRF",
+            sep='|',
+            header=None,
+            names=['RXCUI', 'LAT', 'TS', 'LUI', 'STT', 'SUI', 'ISPREF', 
+                   'RXAUI', 'SAUI', 'SCUI', 'SDUI', 'SAB', 'TTY', 'CODE',
+                   'STR', 'SRL', 'SUPPRESS', 'CVF'],
+            dtype=str,
+            quoting=3
+        )
+        
+        # Filter for English, non-suppressed
+        rxconso = rxconso[
+            (rxconso['LAT'] == 'ENG') & 
+            (rxconso['SUPPRESS'] == 'N')
+        ]
+        
+        # Group by RXCUI to collect all names
+        grouped = rxconso.groupby('RXCUI').agg({
+            'STR': lambda x: list(x),
+            'TTY': 'first',
+            'CODE': 'first'
+        }).reset_index()
+        
+        # Batch insert
+        batch_size = 1000
+        for i in range(0, len(grouped), batch_size):
+            batch = grouped.iloc[i:i+batch_size]
+            await self._insert_rxnorm_batch(batch)
+    
+    async def _insert_rxnorm_batch(self, batch: pd.DataFrame):
+        async with self.db_pool.acquire() as conn:
+            # Prepare insert statement
+            stmt = """
+                INSERT INTO concepts 
+                (system, code, version, preferred_term, synonyms, active)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (system, code, version) 
+                DO UPDATE SET
+                    preferred_term = EXCLUDED.preferred_term,
+                    synonyms = EXCLUDED.synonyms,
+                    updated_at = NOW()
+            """
+            
+            # Prepare data
+            data = []
+            for _, row in batch.iterrows():
+                data.append((
+                    'RxNorm',
+                    row['RXCUI'],
+                    '2024-11',  # Version
+                    row['STR'][0] if row['STR'] else '',
+                    row['STR'][1:] if len(row['STR']) > 1 else [],
+                    True
+                ))
+            
+            # Execute batch
+            await conn.executemany(stmt, data)
+            self.stats['processed'] += len(data)
+    
+    async def ingest_loinc(self, source_path: str):
+        """Ingest LOINC from CSV"""
+        loinc_df = pd.read_csv(
+            f"{source_path}/Loinc.csv",
+            dtype=str
+        )
+        
+        # Map LOINC fields
+        for _, row in loinc_df.iterrows():
+            await self._insert_loinc_concept(row)
+    
+    async def _insert_loinc_concept(self, row):
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO concepts 
+                (system, code, version, preferred_term, synonyms, 
+                 fully_specified_name, active)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (system, code, version) DO NOTHING
+            """,
+                'LOINC',
+                row['LOINC_NUM'],
+                '2.74',
+                row['LONG_COMMON_NAME'],
+                [row['SHORTNAME']] if pd.notna(row['SHORTNAME']) else [],
+                row['FullySpecifiedName'],
+                row['STATUS'] == 'ACTIVE'
+            )
+            
+            # Insert lab references if available
+            if pd.notna(row['NORM_RANGE']):
+                await self._parse_lab_reference(row)
+```
+
+
+### Validation Framework
+
+
+```python
+# validation/quality_checks.py
+class TerminologyQualityValidator:
+    
+    async def validate_ingestion(self, system: str) -> Dict:
+        """Run quality checks after ingestion"""
+        
+        checks = {
+            'total_concepts': 0,
+            'active_concepts': 0,
+            'orphan_concepts': 0,
+            'missing_mappings': 0,
+            'validation_errors': []
+        }
+        
+        async with self.db_pool.acquire() as conn:
+            # Count checks
+            checks['total_concepts'] = await conn.fetchval(
+                "SELECT COUNT(*) FROM concepts WHERE system = $1",
+                system
+            )
+            
+            checks['active_concepts'] = await conn.fetchval(
+                "SELECT COUNT(*) FROM concepts WHERE system = $1 AND active",
+                system
+            )
+            
+            # Check for orphan concepts (no parents but not marked as root)
+            orphans = await conn.fetch("""
+                SELECT code, preferred_term 
+                FROM concepts 
+                WHERE system = $1 
+                  AND array_length(parent_codes, 1) IS NULL
+                  AND code != '138875005'  -- SNOMED root
+                LIMIT 10
+            """, system)
+            
+            if orphans:
+                checks['orphan_concepts'] = len(orphans)
+                checks['validation_errors'].append(
+                    f"Found {len(orphans)} orphan concepts"
+                )
+            
+            # Verify critical mappings exist
+            if system == 'RxNorm':
+                missing = await self._check_rxnorm_atc_mappings()
+                checks['missing_mappings'] = missing
+        
+        return checks
+    
+    async def _check_rxnorm_atc_mappings(self) -> int:
+        """Verify RxNorm to ATC mappings for common drugs"""
+        
+        common_drugs = [
+            '197381',  # Metformin
+            '197361',  # Aspirin
+            '29046',   # Lisinopril
+        ]
+        
+        async with self.db_pool.acquire() as conn:
+            missing = 0
+            for rxnorm in common_drugs:
+                exists = await conn.fetchval("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM terminology_maps
+                        WHERE source_system = 'RxNorm'
+                          AND source_code = $1
+                          AND target_system = 'ATC'
+                    )
+                """, rxnorm)
+                
+                if not exists:
+                    missing += 1
+        
+        return missing
+```
+
+
+## Performance Optimization
+
+
+### Caching Strategy
+
+
+```go
+// cache/terminology_cache.go
+package cache
+
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "time"
+    "github.com/redis/go-redis/v9"
+)
+
+
+type TerminologyCache struct {
+    redis *redis.Client
+    ttl   time.Duration
+}
+
+
+func (tc *TerminologyCache) GetConcept(
+    ctx context.Context, 
+    system, code string,
+) (*Concept, error) {
+    key := fmt.Sprintf("term:%s:%s", system, code)
+    
+    // Try cache first
+    val, err := tc.redis.Get(ctx, key).Result()
+    if err == nil {
+        var concept Concept
+        if err := json.Unmarshal([]byte(val), &concept); err == nil {
+            return &concept, nil
+        }
+    }
+    
+    // Cache miss - fetch from DB
+    concept, err := tc.fetchFromDB(ctx, system, code)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Cache the result
+    data, _ := json.Marshal(concept)
+    tc.redis.Set(ctx, key, data, tc.ttl)
+    
+    return concept, nil
+}
+
+
+func (tc *TerminologyCache) PreloadCommonTerms(ctx context.Context) error {
+    // Load top drugs
+    drugs := []string{
+        "197381", "197361", "29046", "316049", "197517",
+    }
+    
+    for _, rxnorm := range drugs {
+        tc.GetConcept(ctx, "RxNorm", rxnorm)
+    }
+    
+    return nil
+}
+```
+
+
+### Query Optimization
+
+
+```sql
+-- Optimized search function
+CREATE OR REPLACE FUNCTION search_concepts(
+    p_query TEXT,
+    p_systems TEXT[],
+    p_limit INT DEFAULT 20,
+    p_fuzzy BOOLEAN DEFAULT FALSE
+) RETURNS TABLE (
+    system VARCHAR,
+    code VARCHAR,
+    term TEXT,
+    score REAL,
+    match_type VARCHAR
+) AS $$
+BEGIN
+    -- Exact match first
+    RETURN QUERY
+    SELECT 
+        c.system,
+        c.code,
+        c.preferred_term,
+        1.0::REAL as score,
+        'exact'::VARCHAR as match_type
+    FROM concepts c
+    WHERE c.system = ANY(p_systems)
+      AND (c.code = p_query OR c.preferred_term ILIKE p_query)
+    LIMIT p_limit;
+    
+    IF FOUND THEN
+        RETURN;
+    END IF;
+    
+    -- Full-text search
+    RETURN QUERY
+    SELECT 
+        c.system,
+        c.code,
+        c.preferred_term,
+        ts_rank(c.search_vector, query) as score,
+        'fulltext'::VARCHAR as match_type
+    FROM concepts c,
+         plainto_tsquery('medical_english', p_query) query
+    WHERE c.system = ANY(p_systems)
+      AND c.search_vector @@ query
+    ORDER BY score DESC
+    LIMIT p_limit;
+    
+    IF NOT FOUND AND p_fuzzy THEN
+        -- Fuzzy match using trigrams
+        RETURN QUERY
+        SELECT 
+            c.system,
+            c.code,
+            c.preferred_term,
+            similarity(c.preferred_term, p_query) as score,
+            'fuzzy'::VARCHAR as match_type
+        FROM concepts c
+        WHERE c.system = ANY(p_systems)
+          AND c.preferred_term % p_query
+        ORDER BY score DESC
+        LIMIT p_limit;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+
+## Testing Strategy
+
+
+### Unit Tests
+
+
+```python
+# tests/test_terminology.py
+import pytest
+import asyncio
+
+
+class TestTerminologyService:
+    
+    @pytest.mark.asyncio
+    async def test_rxnorm_lookup(self, kb7_client):
+        """Test RxNorm concept lookup"""
+        
+        result = await kb7_client.get_concept(
+            system='RxNorm',
+            code='197381'
+        )
+        
+        assert result is not None
+        assert result['preferredTerm'].lower() == 'metformin'
+        assert 'A10BA02' in result.get('atcCodes', [])
+    
+    @pytest.mark.asyncio
+    async def test_search_accuracy(self, kb7_client):
+        """Test search returns relevant results"""
+        
+        results = await kb7_client.search(
+            query='diabetes medication',
+            systems=['RxNorm']
+        )
+        
+        # Should return antidiabetic drugs
+        drug_names = [r['concept']['preferredTerm'].lower() 
+                     for r in results['results']]
+        
+        assert any('metformin' in name for name in drug_names)
+        assert any('insulin' in name for name in drug_names)
+    
+    @pytest.mark.asyncio
+    async def test_code_mapping(self, kb7_client):
+        """Test cross-terminology mapping"""
+        
+        result = await kb7_client.map_code(
+            source_system='RxNorm',
+            source_code='197381',
+            target_system='ATC'
+        )
+        
+        assert result['targetCode'] == 'A10BA02'
+        assert result['mapType'] == 'exact'
+    
+    @pytest.mark.asyncio 
+    async def test_batch_performance(self, kb7_client):
+        """Test batch lookup performance"""
+        
+        codes = [str(197381 + i) for i in range(100)]
+        
+        start = asyncio.get_event_loop().time()
+        results = await kb7_client.batch_lookup(
+            requests=[
+                {'system': 'RxNorm', 'code': code}
+                for code in codes
+            ]
+        )
+        elapsed = asyncio.get_event_loop().time() - start
+        
+        assert len(results) == 100
+        assert elapsed < 0.1  # 100ms for 100 lookups
+```
+
+
+### Clinical Validation
+
+
+```python
+# tests/clinical/test_drug_safety.py
+class TestDrugTerminologyClinical:
+    
+    @pytest.mark.clinical
+    async def test_insulin_identification(self, kb7_client):
+        """Verify all insulin products are correctly identified"""
+        
+        insulin_rxnorms = [
+            '311040',  # Insulin regular
+            '311041',  # Insulin NPH
+            '847187',  # Insulin glargine
+        ]
+        
+        for rxnorm in insulin_rxnorms:
+            drug = await kb7_client.get_drug_info(rxnorm)
+            assert drug['isInsulin'] == True
+            assert 'A10A' in drug['atcCodes'][0]  # ATC for insulins
+    
+    @pytest.mark.clinical
+    async def test_lab_reference_ranges(self, kb7_client):
+        """Verify lab reference ranges are clinically appropriate"""
+        
+        # Glucose test
+        ref = await kb7_client.get_lab_reference(
+            loinc_code='2345-7',  # Glucose
+            age=45,
+            sex='M'
+        )
+        
+        assert ref['normalLow'] >= 70
+        assert ref['normalHigh'] <= 110
+        assert ref['criticalLow'] <= 40
+        assert ref['criticalHigh'] >= 400
+```
+
+
+## Monitoring & Operations
+
+
+### Key Metrics
+
+
+```yaml
+prometheus_metrics:
+  - name: terminology_lookups_total
+    type: counter
+    labels: [system, cache_hit]
+    
+  - name: terminology_search_duration_seconds
+    type: histogram
+    labels: [system]
+    
+  - name: terminology_mapping_success_rate
+    type: gauge
+    labels: [source_system, target_system]
+    
+  - name: terminology_cache_hit_rate
+    type: gauge
+    
+  - name: terminology_data_freshness_days
+    type: gauge
+    labels: [system]
+```
+
+
+### Health Checks
+
+
+```go
+// health/checks.go
+func (s *TerminologyService) HealthCheck() HealthStatus {
+    checks := []Check{
+        s.checkDatabase(),
+        s.checkRedis(),
+        s.checkDataFreshness(),
+        s.checkCriticalMappings(),
+    }
+    
+    for _, check := range checks {
+        if !check.Passed {
+            return HealthStatus{
+                Status: "unhealthy",
+                Checks: checks,
+            }
+        }
+    }
+    
+    return HealthStatus{
+        Status: "healthy",
+        Checks: checks,
+    }
+}
+```
+
+
+## Deployment Configuration
+
+
+```yaml
+# k8s/kb-7-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kb-7-terminology
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: terminology
+        image: kb7-terminology:latest
+        env:
+        - name: DB_POOL_SIZE
+          value: "20"
+        - name: REDIS_POOL_SIZE
+          value: "10"
+        - name: CACHE_TTL
+          value: "86400"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8087
+          initialDelaySeconds: 30
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8087
+          initialDelaySeconds: 60
+```
+
+
+This design provides a robust, performant terminology service that forms the foundation for all other knowledge bases. The multi-layered caching, optimized search, and comprehensive validation ensure both performance and clinical accuracy.

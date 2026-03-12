@@ -1,0 +1,284 @@
+# Docker Compose for Context Services Integration
+# Orchestrates Go Context Gateway, Rust Clinical Data Hub, and supporting infrastructure
+version: '3.8'
+
+services:
+  # Go Context Gateway Service
+  context-gateway-go:
+    build:
+      context: ./context-gateway-go
+      dockerfile: Dockerfile
+    image: context-gateway-go:latest
+    container_name: context-gateway-go
+    ports:
+      - "8017:8017"  # gRPC
+      - "8117:8117"  # HTTP metrics
+    environment:
+      - GRPC_PORT=8017
+      - HTTP_PORT=8117
+      - REDIS_ADDR=redis-cluster:6379
+      - MONGO_URI=mongodb://mongo-context:27017
+      - DB_NAME=clinical_context_go
+      - ENVIRONMENT=production
+    depends_on:
+      - redis-cluster
+      - mongo-context
+      - clinical-data-hub-rust
+    networks:
+      - context-network
+    volumes:
+      - context-gateway-logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:8017"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Rust Clinical Data Hub Service  
+  clinical-data-hub-rust:
+    build:
+      context: ./clinical-data-hub-rust
+      dockerfile: Dockerfile
+    image: clinical-data-hub-rust:latest
+    container_name: clinical-data-hub-rust
+    ports:
+      - "8018:8018"  # gRPC
+      - "8118:8118"  # HTTP metrics
+    environment:
+      - GRPC_PORT=8018
+      - HTTP_PORT=8118
+      - REDIS_ADDRS=redis-cluster:6379
+      - POSTGRES_URL=postgresql://postgres:password@postgres-hub:5432/clinical_data_hub
+      - KAFKA_BROKERS=kafka:9092
+      - ENVIRONMENT=production
+      - L1_CACHE_SIZE_MB=1024
+      - LOG_LEVEL=info
+    depends_on:
+      - redis-cluster
+      - postgres-hub
+      - kafka
+    networks:
+      - context-network
+    volumes:
+      - clinical-hub-logs:/app/logs
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.5'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Redis Cluster for Multi-Layer Caching
+  redis-cluster:
+    image: redis:7-alpine
+    container_name: redis-cluster
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000
+    volumes:
+      - redis-data:/data
+      - redis-config:/usr/local/etc/redis
+    networks:
+      - context-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MongoDB for Go Context Gateway
+  mongo-context:
+    image: mongo:7
+    container_name: mongo-context
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+      - MONGO_INITDB_DATABASE=clinical_context_go
+    volumes:
+      - mongo-context-data:/data/db
+      - mongo-context-config:/data/configdb
+    networks:
+      - context-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL for Rust Clinical Data Hub
+  postgres-hub:
+    image: postgres:15-alpine
+    container_name: postgres-hub
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    environment:
+      - POSTGRES_DB=clinical_data_hub
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres-hub-data:/var/lib/postgresql/data
+      - ./clinical-data-hub-rust/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - context-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d clinical_data_hub"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+
+  # Kafka for Stream Processing
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka-context
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper
+    networks:
+      - context-network
+    restart: unless-stopped
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper-context
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - context-network
+    restart: unless-stopped
+
+  # Prometheus for Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-context
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    volumes:
+      - prometheus-config:/etc/prometheus
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - context-network
+    restart: unless-stopped
+
+  # Grafana for Metrics Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-context
+    ports:
+      - "3001:3000"  # Different port to avoid conflicts
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - context-network
+    restart: unless-stopped
+
+  # Consul for Service Discovery
+  consul:
+    image: hashicorp/consul:latest
+    container_name: consul-context
+    ports:
+      - "8500:8500"
+    command: consul agent -server -bootstrap -ui -client=0.0.0.0 -data-dir=/consul/data
+    volumes:
+      - consul-data:/consul/data
+    networks:
+      - context-network
+    restart: unless-stopped
+
+  # Load Balancer / API Gateway
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-context-gateway
+    ports:
+      - "8080:8080"  # HTTP load balancer
+      - "8443:8443"  # HTTPS load balancer
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      - context-gateway-go
+      - clinical-data-hub-rust
+    networks:
+      - context-network
+    restart: unless-stopped
+
+# Named volumes for data persistence
+volumes:
+  redis-data:
+    driver: local
+  redis-config:
+    driver: local
+  mongo-context-data:
+    driver: local
+  mongo-context-config:
+    driver: local
+  postgres-hub-data:
+    driver: local
+  kafka-data:
+    driver: local
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  prometheus-config:
+    driver: local
+  grafana-data:
+    driver: local
+  consul-data:
+    driver: local
+  context-gateway-logs:
+    driver: local
+  clinical-hub-logs:
+    driver: local
+  nginx-logs:
+    driver: local
+
+# Network for service communication
+networks:
+  context-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

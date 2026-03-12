@@ -1,0 +1,421 @@
+﻿Final Design: Recipe Resolution & Snapshot Management
+Consolidated Architecture Overview
+The Calculate phase is now complete with Recipe Resolution and Snapshot Management integrated into the Medication Service. Here's the definitive implementation:
+1. Complete System Architecture
+graph TB
+    subgraph "Calculate Phase"
+        WE[Workflow Engine] --> MS[Medication Service]
+        
+        subgraph "Medication Service Internal"
+            MS --> RR[Recipe Resolver]
+            RR --> CG[Context Gateway]
+            CG --> SS[Snapshot Store]
+            SS --> PC[Proposal Calculator]
+            PC --> RE[Rust Dose Engine]
+        end
+        
+        MS --> AF1[Apollo Federation]
+        AF1 --> KB1[KB-1: Dosing]
+        AF1 --> KB3[KB-3: Guidelines]
+        AF1 --> KB7[KB-7: Terminology]
+    end
+    
+    subgraph "Validate Phase"
+        WE --> SG[Safety Gateway]
+        SG --> |Uses Snapshot ID|CG2[Context Gateway]
+        SG --> AF2[Apollo Federation]
+        AF2 --> KB4[KB-4: Safety]
+        AF2 --> KB5[KB-5: DDI]
+    end
+
+
+2. Recipe Resolver Implementation
+// medication-service/recipe-resolver.ts
+
+
+export class RecipeResolver {
+  private recipeDefinitions: Map<string, RecipeDefinition>;
+  
+  constructor() {
+    this.loadRecipeDefinitions();
+  }
+  
+  resolveWorkflowRecipe(intent: string): WorkflowRecipe {
+    // Get base requirements for medication calculation
+    const medicationFields = this.getMedicationRequiredFields(intent);
+    
+    // Get safety validation requirements
+    const safetyFields = this.getSafetyRequiredFields(intent);
+    
+    // Get audit requirements
+    const auditFields = this.getAuditFields();
+    
+    // Merge and deduplicate
+    const allFields = this.mergeFields(
+      medicationFields,
+      safetyFields,
+      auditFields
+    );
+    
+    return {
+      recipeId: `${intent}_workflow_v2_${Date.now()}`,
+      requiredFields: allFields,
+      freshnessRequirements: this.getFreshnessRequirements(intent),
+      ttlSeconds: this.getTTL(intent),
+      allowLiveFetch: this.determineIfLiveFetchAllowed(intent),
+      allowedLiveFields: this.getAllowedLiveFields(intent)
+    };
+  }
+  
+  private getMedicationRequiredFields(intent: string): DataField[] {
+    switch(intent) {
+      case 'prescribe_medication':
+        return [
+          { name: 'patient_demographics', freshness: 86400 },
+          { name: 'active_problems', freshness: 86400 },
+          { name: 'current_medications', freshness: 3600 },
+          { name: 'recent_vitals', freshness: 3600 },
+          { name: 'kidney_function', freshness: 172800 },
+          { name: 'liver_function', freshness: 172800 }
+        ];
+      case 'adjust_therapy':
+        return [
+          // Additional fields for therapy adjustment
+          { name: 'medication_history', freshness: 86400 },
+          { name: 'therapeutic_drug_levels', freshness: 43200 },
+          { name: 'adherence_data', freshness: 604800 }
+        ];
+      default:
+        return this.getDefaultFields();
+    }
+  }
+  
+  private getSafetyRequiredFields(intent: string): DataField[] {
+    // Safety Gateway always needs these
+    return [
+      { name: 'allergies', freshness: 2592000 }, // 30 days
+      { name: 'adverse_reactions', freshness: 2592000 },
+      { name: 'pregnancy_status', freshness: 86400 },
+      { name: 'genetic_markers', freshness: null }, // Never expires
+      { name: 'active_conditions', freshness: 86400 }
+    ];
+  }
+}
+
+
+3. Snapshot Creation Process
+// context-gateway/snapshot-manager.ts
+
+
+export class SnapshotManager {
+  private snapshotStore: SnapshotStore;
+  private dataSources: DataSourceRegistry;
+  private signer: SnapshotSigner;
+  
+  async createSnapshot(
+    recipe: WorkflowRecipe,
+    patientId: string
+  ): Promise<ClinicalSnapshot> {
+    // Step 1: Begin atomic transaction
+    const transaction = await this.beginTransaction();
+    
+    try {
+      // Step 2: Fetch all required data atomically
+      const fetchPromises = recipe.requiredFields.map(field =>
+        this.fetchFieldWithFreshness(
+          transaction,
+          patientId,
+          field,
+          recipe.freshnessRequirements.get(field.name)
+        )
+      );
+      
+      const rawData = await Promise.all(fetchPromises);
+      
+      // Step 3: Assemble snapshot structure
+      const snapshot: ClinicalSnapshot = {
+        id: generateULID(),
+        patientId,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + recipe.ttlSeconds * 1000),
+        createdBy: 'medication-service',
+        
+        // Data content
+        data: this.assembleData(rawData),
+        includedFields: recipe.requiredFields.map(f => f.name),
+        requiredFreshness: recipe.freshnessRequirements,
+        
+        // Governance
+        allowLiveFetch: recipe.allowLiveFetch,
+        allowedLiveFields: recipe.allowedLiveFields,
+        
+        // Will be filled next
+        checksum: '',
+        signature: '',
+        evidenceEnvelope: this.getCurrentEvidenceEnvelope()
+      };
+      
+      // Step 4: Make data immutable
+      Object.freeze(snapshot.data);
+      
+      // Step 5: Calculate checksum
+      snapshot.checksum = this.calculateChecksum(snapshot);
+      
+      // Step 6: Sign snapshot
+      snapshot.signature = await this.signer.sign(snapshot.checksum);
+      
+      // Step 7: Store immutably
+      await this.snapshotStore.save(snapshot);
+      
+      // Step 8: Commit transaction
+      await transaction.commit();
+      
+      return snapshot;
+      
+    } catch (error) {
+      await transaction.rollback();
+      throw new SnapshotCreationError(error);
+    }
+  }
+  
+  private calculateChecksum(snapshot: ClinicalSnapshot): string {
+    // Canonicalize the data object
+    const canonical = this.canonicalize(snapshot.data);
+    
+    // Calculate SHA-256
+    return crypto
+      .createHash('sha256')
+      .update(canonical)
+      .digest('hex');
+  }
+  
+  private canonicalize(obj: any): string {
+    // Sort keys recursively and stringify
+    return JSON.stringify(this.sortKeysRecursive(obj));
+  }
+}
+
+
+4. Medication Service Integration
+// medication-service/medication-service.ts
+
+
+export class MedicationService {
+  private recipeResolver: RecipeResolver;
+  private contextGateway: ContextGateway;
+  private proposalCalculator: ProposalCalculator;
+  private apolloFederation: ApolloFederationClient;
+  
+  async generateProposal(
+    intent: string,
+    patientId: string
+  ): Promise<MedicationProposal> {
+    // Phase 0: Recipe Resolution
+    const recipe = this.recipeResolver.resolveWorkflowRecipe(intent);
+    
+    // Phase 0.5: Snapshot Creation
+    const snapshot = await this.contextGateway.createSnapshot(
+      recipe,
+      patientId
+    );
+    
+    // Phase 1: Ingestion & Local Decision (using snapshot data)
+    const intentManifest = await this.resolveIntent(
+      intent,
+      snapshot.data
+    );
+    
+    // Phase 2: Context already assembled in snapshot
+    
+    // Phase 3: Clinical Intelligence Engine
+    const candidates = await this.generateCandidates(
+      intentManifest,
+      snapshot.data
+    );
+    
+    // Phase 3b: Dose Calculation (Rust Engine)
+    const dosedCandidates = await this.calculateDoses(
+      candidates,
+      snapshot.data
+    );
+    
+    // Phase 3c: Scoring & Ranking
+    const rankedTherapies = await this.scoreAndRank(
+      dosedCandidates,
+      snapshot.data
+    );
+    
+    // Phase 4: Proposal Generation
+    return {
+      proposalId: generateId(),
+      patientId,
+      intent,
+      therapies: rankedTherapies,
+      
+      // Critical: Include snapshot reference
+      snapshotReference: {
+        snapshotId: snapshot.id,
+        checksum: snapshot.checksum,
+        createdAt: snapshot.createdAt,
+        expiresAt: snapshot.expiresAt,
+        includedFields: snapshot.includedFields,
+        signature: snapshot.signature
+      },
+      
+      evidenceEnvelope: {
+        ...snapshot.evidenceEnvelope,
+        kbVersions: await this.apolloFederation.getVersions(),
+        proposalGeneratedAt: new Date()
+      }
+    };
+  }
+}
+
+
+5. Safety Gateway Usage
+// safety-gateway/safety-gateway.ts
+
+
+export class SafetyGateway {
+  private contextGateway: ContextGateway;
+  private apolloFederation: ApolloFederationClient;
+  private caeEngine: CAEEngine;
+  private protocolEngine: ProtocolEngine;
+  
+  async validate(
+    proposal: MedicationProposal,
+    patientId: string
+  ): Promise<SafetyVerdict> {
+    // Step 1: Validate snapshot integrity
+    if (!this.validateSnapshotReference(proposal.snapshotReference)) {
+      throw new SnapshotIntegrityError('Invalid snapshot signature or checksum');
+    }
+    
+    // Step 2: Retrieve snapshot using ID (from cache or Context Gateway)
+    const snapshot = await this.contextGateway.getSnapshot(
+      proposal.snapshotReference.snapshotId
+    );
+    
+    // Step 3: Verify checksum matches
+    if (snapshot.checksum !== proposal.snapshotReference.checksum) {
+      throw new SnapshotIntegrityError('Snapshot checksum mismatch');
+    }
+    
+    // Step 4: Check for required fields
+    const missingFields = this.checkRequiredFields(snapshot.includedFields);
+    
+    // Step 5: Handle missing fields if any
+    let validationData = snapshot.data;
+    if (missingFields.length > 0 && snapshot.allowLiveFetch) {
+      validationData = await this.handleMissingFields(
+        snapshot,
+        missingFields,
+        patientId
+      );
+    }
+    
+    // Step 6: Perform validation using Apollo Federation for KB access
+    const [safetyChecks, ddiChecks] = await Promise.all([
+      this.apolloFederation.query({
+        kb: 'KB-4',
+        operation: 'checkSafety',
+        params: { proposal, context: validationData }
+      }),
+      this.apolloFederation.query({
+        kb: 'KB-5',
+        operation: 'checkInteractions',
+        params: { drugs: proposal.therapies, context: validationData }
+      })
+    ]);
+    
+    // Step 7: Run engines
+    const [caeResult, protocolResult] = await Promise.all([
+      this.caeEngine.evaluate(proposal, validationData, safetyChecks),
+      this.protocolEngine.evaluate(proposal, validationData)
+    ]);
+    
+    // Step 8: Return verdict with evidence
+    return {
+      status: this.aggregateResults(caeResult, protocolResult),
+      details: {
+        cae: caeResult,
+        protocol: protocolResult,
+        ddi: ddiChecks,
+        safety: safetyChecks
+      },
+      evidenceEnvelope: {
+        snapshotId: snapshot.id,
+        snapshotChecksum: snapshot.checksum,
+        validationPerformedAt: new Date(),
+        kbVersions: await this.apolloFederation.getVersions()
+      }
+    };
+  }
+}
+
+
+6. Complete Data Flow Diagram
+sequenceDiagram
+    participant WE as Workflow Engine
+    participant MS as Medication Service
+    participant RR as Recipe Resolver
+    participant CG as Context Gateway
+    participant SS as Snapshot Store
+    participant AF as Apollo Federation
+    participant KB as Knowledge Bases
+    participant RE as Rust Engine
+    participant SG as Safety Gateway
+    
+    WE->>MS: generateProposal(intent, patientId)
+    
+    rect rgb(200, 230, 255)
+        Note over MS,SS: Snapshot Creation Phase
+        MS->>RR: resolveWorkflowRecipe(intent)
+        RR-->>MS: WorkflowRecipe
+        MS->>CG: createSnapshot(recipe, patientId)
+        CG->>CG: Fetch data atomically
+        CG->>CG: Calculate checksum
+        CG->>CG: Sign snapshot
+        CG->>SS: Store immutably
+        CG-->>MS: ClinicalSnapshot
+    end
+    
+    rect rgb(230, 255, 200)
+        Note over MS,KB: Proposal Calculation Phase
+        MS->>AF: Query KB-1, KB-3, KB-7
+        AF->>KB: Parallel queries
+        KB-->>AF: Results
+        AF-->>MS: Aggregated data
+        MS->>RE: calculateDoses(candidates)
+        RE-->>MS: Dosed therapies
+        MS->>MS: Score and rank
+    end
+    
+    MS-->>WE: MedicationProposal (with SnapshotReference)
+    
+    rect rgb(255, 230, 200)
+        Note over WE,SG: Validation Phase
+        WE->>SG: validate(proposal, patientId)
+        SG->>CG: getSnapshot(snapshotId)
+        CG-->>SG: ClinicalSnapshot
+        SG->>SG: Verify checksum
+        SG->>AF: Query KB-4, KB-5
+        AF->>KB: Safety & DDI checks
+        KB-->>AF: Results
+        AF-->>SG: Validation data
+        SG-->>WE: SafetyVerdict
+    end
+
+
+Key Implementation Points
+1. Recipe Resolver is internal to Medication Service, not a separate service
+2. Snapshot Creation happens once, before any calculation
+3. Apollo Federation provides unified KB access for both services
+4. Safety Gateway never creates new snapshots, only uses existing ones
+5. Checksum & Signature ensure data integrity and authenticity
+6. Live Fetch is exceptional and strictly governed
+This architecture ensures:
+* Complete data consistency across Calculate and Validate phases
+* Full auditability with immutable snapshots
+* Clean separation of concerns
+* Optimal performance with no redundant data fetching

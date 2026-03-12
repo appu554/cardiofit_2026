@@ -1,0 +1,212 @@
+# P17 Chest Tightness - HPI Node Definition
+# Bayesian differential for non-pain chest discomfort in CRM patients.
+# Distinct from P01_CHEST_PAIN: this node targets pressure, tightness, heaviness
+# without frank pain -- common atypical angina presentation in DM patients.
+# Triggered by: patient self-report of chest tightness/pressure via KB-21.
+# Output: posterior probabilities -> feeds KB-23 workup card.
+
+node_id: P17_CHEST_TIGHTNESS
+version: "1.0.0"
+description: "Non-pain chest discomfort differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Strata supported
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket -- open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_Chronic_Coronary_Syndromes_2024; AHA_Chest_Pain_2021; ACG_GERD_2022"
+
+# ============================================================================
+# 6 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.90 (0.10 reserved for G15 Other bucket).
+# DM patients have high rate of silent/atypical ischaemia (Canto JAMA 2012).
+# ============================================================================
+differentials:
+  - id: ANGINA_EQUIVALENT
+    label: "Angina Equivalent (atypical ischaemic presentation)"
+    population_reference: "ESC CCS 2024; Canto JG, JAMA 2012; AHA Chest Pain 2021"
+    priors:
+      DM_HTN_base: 0.30
+
+  - id: BRONCHOSPASM
+    label: "Bronchospasm (asthma, COPD exacerbation)"
+    population_reference: "GINA 2024; GOLD COPD 2024"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: GERD
+    label: "Gastroesophageal Reflux Disease"
+    population_reference: "ACG Clinical Guideline GERD 2022; Katz PO, Am J Gastroenterol 2022"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: ANXIETY
+    label: "Anxiety / Panic Disorder"
+    population_reference: "APA DSM-5-TR; Huffman JC, Am J Cardiol 2002"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: PERICARDITIS
+    label: "Pericarditis"
+    population_reference: "ESC Pericardial Diseases 2015; Imazio M, NEJM 2013"
+    priors:
+      DM_HTN_base: 0.08
+
+  - id: OTHER
+    label: "Other (musculoskeletal, costochondritis, pleural)"
+    population_reference: "BMJ Best Practice Chest Pain 2024"
+    priors:
+      DM_HTN_base: 0.10
+
+# Safety floors -- posterior never drops below these values
+safety_floors:
+  ANGINA_EQUIVALENT: 0.05
+  PERICARDITIS: 0.02
+
+# ============================================================================
+# Safety Triggers (F-02 parallel evaluation)
+# ============================================================================
+safety_triggers:
+  - flag_id: RF01_ATYPICAL_ACS
+    severity: IMMEDIATE
+    trigger_expression: "ANGINA_EQUIVALENT.posterior > 0.40"
+    recommended_action: "Suspected atypical angina/ACS equivalent in DM patient. Obtain 12-lead ECG and serial troponin. DM patients have 42% rate of painless MI (Canto JAMA 2012). SNOMED: 194828000"
+
+  - flag_id: RF02_PERICARDITIS_EFFUSION
+    severity: URGENT
+    trigger_expression: "PERICARDITIS.posterior > 0.35 AND Q006 == YES"
+    recommended_action: "Possible pericarditis with positional features. Order echocardiogram to rule out pericardial effusion. Check CRP, ESR. SNOMED: 373945007"
+
+# ============================================================================
+# 7 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# ============================================================================
+questions:
+  - id: Q001
+    text_en: "Does the chest tightness come on with physical exertion like walking uphill or climbing stairs?"
+    text_hi: "Kya chhati mein jakdan mehnat karne par aati hai jaise chadhai par chalna ya seedhiyan chadhna?"
+    mandatory: true
+    lr_positive:
+      ANGINA_EQUIVALENT: 4.50
+      BRONCHOSPASM: 2.00
+      GERD: 0.60
+      ANXIETY: 0.50
+      PERICARDITIS: 0.80
+    lr_negative:
+      ANGINA_EQUIVALENT: 0.35
+      BRONCHOSPASM: 0.70
+      GERD: 1.20
+      ANXIETY: 1.30
+      PERICARDITIS: 1.10
+
+  - id: Q002
+    text_en: "Does the discomfort go away within a few minutes of resting?"
+    text_hi: "Kya takleef kuch minute aaram karne par theek ho jaati hai?"
+    mandatory: true
+    lr_positive:
+      ANGINA_EQUIVALENT: 3.80
+      BRONCHOSPASM: 1.50
+      GERD: 0.80
+      ANXIETY: 0.60
+      PERICARDITIS: 0.50
+    lr_negative:
+      ANGINA_EQUIVALENT: 0.40
+      BRONCHOSPASM: 0.80
+      GERD: 1.20
+      ANXIETY: 1.40
+      PERICARDITIS: 1.30
+
+  - id: Q003
+    text_en: "Is there associated wheezing or difficulty breathing out?"
+    text_hi: "Kya saath mein saans mein seeti ki aawaaz ya saans bahar nikalne mein dikkat hai?"
+    mandatory: true
+    lr_positive:
+      ANGINA_EQUIVALENT: 0.60
+      BRONCHOSPASM: 5.50
+      GERD: 0.70
+      ANXIETY: 0.80
+      PERICARDITIS: 0.50
+    lr_negative:
+      ANGINA_EQUIVALENT: 1.15
+      BRONCHOSPASM: 0.25
+      GERD: 1.10
+      ANXIETY: 1.05
+      PERICARDITIS: 1.10
+
+  - id: Q004
+    text_en: "Does the tightness worsen after meals or when lying down flat?"
+    text_hi: "Kya jakdan khaana khaane ke baad ya seedha letne par badhti hai?"
+    mandatory: false
+    lr_positive:
+      ANGINA_EQUIVALENT: 0.80
+      BRONCHOSPASM: 0.70
+      GERD: 4.20
+      ANXIETY: 0.60
+      PERICARDITIS: 1.80
+    lr_negative:
+      ANGINA_EQUIVALENT: 1.05
+      BRONCHOSPASM: 1.10
+      GERD: 0.35
+      ANXIETY: 1.10
+      PERICARDITIS: 0.80
+
+  - id: Q005
+    text_en: "Is the chest tightness accompanied by a feeling of panic, rapid breathing, or tingling in your hands?"
+    text_hi: "Kya chhati ki jakdan ke saath ghabrahat, tez saans, ya haathon mein jhunjhunahat hoti hai?"
+    mandatory: false
+    lr_positive:
+      ANGINA_EQUIVALENT: 0.70
+      BRONCHOSPASM: 1.20
+      GERD: 0.50
+      ANXIETY: 5.00
+      PERICARDITIS: 0.40
+    lr_negative:
+      ANGINA_EQUIVALENT: 1.10
+      BRONCHOSPASM: 0.90
+      GERD: 1.10
+      ANXIETY: 0.25
+      PERICARDITIS: 1.10
+
+  - id: Q006
+    text_en: "Does the tightness get worse when you lean forward or take a deep breath?"
+    text_hi: "Kya jakdan aage jhukne ya lambi saans lene par badhti hai?"
+    mandatory: false
+    lr_positive:
+      ANGINA_EQUIVALENT: 0.50
+      BRONCHOSPASM: 1.30
+      GERD: 0.70
+      ANXIETY: 0.80
+      PERICARDITIS: 4.50
+    lr_negative:
+      ANGINA_EQUIVALENT: 1.10
+      BRONCHOSPASM: 0.90
+      GERD: 1.05
+      ANXIETY: 1.05
+      PERICARDITIS: 0.35
+
+  - id: Q007
+    text_en: "Do you get relief from antacid medications or drinking cold water?"
+    text_hi: "Kya antacid dawai ya thanda paani peene se aaram milta hai?"
+    mandatory: false
+    lr_positive:
+      ANGINA_EQUIVALENT: 0.60
+      BRONCHOSPASM: 0.50
+      GERD: 4.00
+      ANXIETY: 0.80
+      PERICARDITIS: 0.40
+    lr_negative:
+      ANGINA_EQUIVALENT: 1.15
+      BRONCHOSPASM: 1.10
+      GERD: 0.30
+      ANXIETY: 1.05
+      PERICARDITIS: 1.15

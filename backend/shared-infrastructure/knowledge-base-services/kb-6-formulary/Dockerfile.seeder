@@ -1,0 +1,62 @@
+# KB-6 Formulary Database Seeder Dockerfile
+# Builds a container that seeds the PostgreSQL database with production data
+
+# ============================================================================
+# Build Stage
+# ============================================================================
+FROM golang:1.22-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /app
+
+# Copy go mod files first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the seeder command
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o kb6-seeder ./cmd/seeder/main.go
+
+# ============================================================================
+# Production Stage
+# ============================================================================
+FROM alpine:3.19
+
+# Add labels for container metadata
+LABEL maintainer="CardioFit Platform Team"
+LABEL service="kb-6-formulary-seeder"
+LABEL description="Database seeder for KB-6 Formulary Service"
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/kb6-seeder .
+
+# Copy seeds directory
+COPY seeds ./seeds
+
+# Create non-root user for security
+RUN addgroup -g 1000 appgroup && \
+    adduser -D -u 1000 -G appgroup appuser && \
+    chown -R appuser:appgroup /app
+
+USER appuser
+
+# Default environment variables
+ENV DB_HOST=kb6-postgres \
+    DB_PORT=5432 \
+    DB_NAME=kb_formulary \
+    DB_USER=kb6_admin \
+    DB_PASSWORD=kb6_secure_password
+
+# Run the seeder
+ENTRYPOINT ["./kb6-seeder"]

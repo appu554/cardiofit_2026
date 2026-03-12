@@ -1,0 +1,465 @@
+name: KB-7 Knowledge Factory Pipeline
+
+on:
+  repository_dispatch:
+    types: [terminology-update]
+  workflow_dispatch:  # Allow manual triggers for testing
+
+env:
+  GCS_BUCKET_SOURCES: sincere-hybrid-477206-h2-kb-sources-production
+  GCS_BUCKET_ARTIFACTS: sincere-hybrid-477206-h2-kb-artifacts-production
+  GCP_PROJECT_ID: sincere-hybrid-477206-h2
+  SNAPSHOT_VERSION: ${{ github.event.client_payload.version || github.run_number }}
+  REGISTRY_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  # ============================================================================
+  # STAGE 1: DOWNLOAD - Pull source files from GCS
+  # Estimated time: 5-8 minutes
+  # ============================================================================
+  download:
+    name: "Stage 1: Download Source Files"
+    runs-on: ubuntu-latest
+    outputs:
+      snomed_file: ${{ steps.download.outputs.snomed_file }}
+      rxnorm_file: ${{ steps.download.outputs.rxnorm_file }}
+      loinc_file: ${{ steps.download.outputs.loinc_file }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download source files from GCS
+        id: download
+        run: |
+          set -e
+          mkdir -p sources
+
+          # Get GCS keys from repository dispatch payload or use defaults
+          SNOMED_KEY="${{ github.event.client_payload.snomed_key || 'snomed-ct/latest/SnomedCT_InternationalRF2_PRODUCTION_latest.zip' }}"
+          RXNORM_KEY="${{ github.event.client_payload.rxnorm_key || 'rxnorm/latest/RxNorm_full_latest.zip' }}"
+          LOINC_KEY="${{ github.event.client_payload.loinc_key || 'loinc/latest/loinc-complete-latest.zip' }}"
+
+          echo "Downloading SNOMED-CT RF2 snapshot from: $SNOMED_KEY"
+          gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$SNOMED_KEY" ./sources/snomed.zip
+
+          echo "Downloading RxNorm RRF files from: $RXNORM_KEY"
+          gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$RXNORM_KEY" ./sources/rxnorm.zip
+
+          echo "Downloading LOINC CSV files from: $LOINC_KEY"
+          gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$LOINC_KEY" ./sources/loinc.zip
+
+          # Extract archives
+          echo "Extracting archives..."
+          mkdir -p sources/extracted/{snomed,rxnorm,loinc}
+          unzip -q sources/snomed.zip -d sources/extracted/snomed || echo "SNOMED already extracted"
+          unzip -q sources/rxnorm.zip -d sources/extracted/rxnorm || echo "RxNorm already extracted"
+          unzip -q sources/loinc.zip -d sources/extracted/loinc || echo "LOINC already extracted"
+
+          echo "snomed_file=$(find sources/extracted/snomed -name '*.txt' -o -name '*.rf2' | head -1)" >> $GITHUB_OUTPUT
+          echo "rxnorm_file=$(find sources/extracted/rxnorm -name 'RXNCONSO.RRF' | head -1)" >> $GITHUB_OUTPUT
+          echo "loinc_file=$(find sources/extracted/loinc -name 'Loinc.csv' -o -name 'loinc.csv' | head -1)" >> $GITHUB_OUTPUT
+
+      - name: Upload extracted sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-files
+          path: sources/extracted/
+          retention-days: 7
+
+  # ============================================================================
+  # STAGE 2: TRANSFORM - Convert sources to RDF/OWL
+  # Estimated time: 15-20 minutes
+  # ============================================================================
+  transform:
+    name: "Stage 2: Transform to RDF/OWL"
+    needs: download
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Download extracted sources
+        uses: actions/download-artifact@v4
+        with:
+          name: source-files
+          path: sources/extracted/
+
+      - name: Transform SNOMED-CT RF2 to OWL
+        run: |
+          docker run --rm \
+            -v $(pwd)/sources/extracted/snomed:/input \
+            -v $(pwd)/output:/output \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:latest \
+            /app/scripts/transform-snomed.sh
+
+      - name: Transform RxNorm RRF to RDF
+        run: |
+          docker run --rm \
+            -v $(pwd)/sources/extracted/rxnorm:/input \
+            -v $(pwd)/output:/output \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:latest \
+            python /app/scripts/transform-rxnorm.py
+
+      - name: Transform LOINC CSV to RDF
+        run: |
+          docker run --rm \
+            -v $(pwd)/sources/extracted/loinc:/input \
+            -v $(pwd)/output:/output \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:latest \
+            python /app/scripts/transform-loinc.py
+
+      - name: Upload transformed ontologies
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformed-ontologies
+          path: output/
+          retention-days: 7
+
+  # ============================================================================
+  # STAGE 3: MERGE - Combine ontologies
+  # Estimated time: 8-12 minutes
+  # ============================================================================
+  merge:
+    name: "Stage 3: Merge Ontologies"
+    needs: transform
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Download transformed ontologies
+        uses: actions/download-artifact@v4
+        with:
+          name: transformed-ontologies
+          path: output/
+
+      - name: Merge with ROBOT
+        run: |
+          docker run --rm \
+            -v $(pwd)/output:/workspace \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:latest \
+            /app/scripts/merge-ontologies.sh
+
+      - name: Upload merged ontology
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-ontology
+          path: output/kb7-merged.owl
+          retention-days: 7
+
+  # ============================================================================
+  # STAGE 4: REASONING - Apply OWL inference (MEMORY INTENSIVE)
+  # Estimated time: 20-30 minutes
+  # REQUIRES: GitHub Larger Runners (16GB RAM)
+  # ============================================================================
+  reasoning:
+    name: "Stage 4: OWL Reasoning (ELK)"
+    needs: merge
+    runs-on: ubuntu-latest-16-core  # GitHub Larger Runner - 16GB RAM
+    # ALTERNATIVE OPTIONS (if cost is concern):
+    # - Option B: Migrate to AWS CodeBuild with custom instance sizing
+    # - Option C: Split into 3 parallel jobs (SNOMED, RxNorm, LOINC) then merge
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download merged ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: merged-ontology
+          path: output/
+
+      - name: Configure JVM for large ontology
+        run: |
+          echo "ROBOT_JAVA_ARGS=-Xmx14G -XX:+UseG1GC -XX:MaxGCPauseMillis=200" >> $GITHUB_ENV
+
+      - name: Run ELK reasoner via ROBOT
+        run: |
+          docker run --rm \
+            -v $(pwd)/output:/workspace \
+            -e ROBOT_JAVA_ARGS="${{ env.ROBOT_JAVA_ARGS }}" \
+            ghcr.io/${{ github.repository_owner }}/robot:latest \
+            /app/scripts/run-reasoning.sh
+        timeout-minutes: 45  # Safety timeout
+
+      - name: Verify reasoning output
+        run: |
+          if [ ! -f output/kb7-inferred.owl ]; then
+            echo "ERROR: Reasoning failed - output file not found"
+            exit 1
+          fi
+
+          # Check file size (should be larger than input)
+          MERGED_SIZE=$(stat -c%s output/kb7-merged.owl)
+          INFERRED_SIZE=$(stat -c%s output/kb7-inferred.owl)
+
+          if [ $INFERRED_SIZE -lt $MERGED_SIZE ]; then
+            echo "ERROR: Inferred ontology smaller than input"
+            exit 1
+          fi
+
+          echo "Reasoning complete: $INFERRED_SIZE bytes"
+
+      - name: Upload inferred ontology
+        uses: actions/upload-artifact@v4
+        with:
+          name: inferred-ontology
+          path: output/kb7-inferred.owl
+          retention-days: 7
+
+  # ============================================================================
+  # STAGE 5: VALIDATION - Run 5 SPARQL quality gates
+  # Estimated time: 5-8 minutes
+  # ============================================================================
+  validation:
+    name: "Stage 5: Quality Validation"
+    needs: reasoning
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download inferred ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: inferred-ontology
+          path: output/
+
+      - name: Run SPARQL validation queries
+        run: |
+          docker run --rm \
+            -v $(pwd)/output:/workspace \
+            -v $(pwd)/knowledge-factory/validation:/queries \
+            ghcr.io/${{ github.repository_owner }}/robot:latest \
+            robot verify \
+              --input /workspace/kb7-inferred.owl \
+              --queries /queries/*.sparql \
+              --output-dir /workspace/validation-results
+
+      - name: Parse validation results
+        id: validate
+        run: |
+          set -e
+          FAILED=0
+
+          # Check each validation result
+          for result in output/validation-results/*.txt; do
+            if grep -q "FAIL" "$result"; then
+              echo "FAILED: $(basename $result)"
+              cat "$result"
+              FAILED=1
+            else
+              echo "PASSED: $(basename $result)"
+            fi
+          done
+
+          if [ $FAILED -eq 1 ]; then
+            echo "validation_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "validation_status=passed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-results
+          path: output/validation-results/
+          retention-days: 30
+
+  # ============================================================================
+  # STAGE 6: PACKAGE - Convert to Turtle and create manifest
+  # Estimated time: 10-15 minutes
+  # ============================================================================
+  package:
+    name: "Stage 6: Package Kernel"
+    needs: validation
+    runs-on: ubuntu-latest
+    outputs:
+      kernel_version: ${{ steps.package.outputs.version }}
+      concept_count: ${{ steps.package.outputs.concept_count }}
+      triple_count: ${{ steps.package.outputs.triple_count }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download inferred ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: inferred-ontology
+          path: output/
+
+      - name: Package kernel
+        id: package
+        run: |
+          docker run --rm \
+            -v $(pwd)/output:/workspace \
+            ghcr.io/${{ github.repository_owner }}/robot:latest \
+            /app/scripts/package-kernel.sh
+
+      - name: Generate metadata manifest
+        run: |
+          CONCEPT_COUNT=$(cat output/kb7-manifest.json | jq -r '.concept_count')
+          TRIPLE_COUNT=$(cat output/kb7-manifest.json | jq -r '.triple_count')
+          VERSION=$(date +%Y%m%d)
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "concept_count=$CONCEPT_COUNT" >> $GITHUB_OUTPUT
+          echo "triple_count=$TRIPLE_COUNT" >> $GITHUB_OUTPUT
+
+          cat > output/kb7-manifest.json <<EOF
+          {
+            "version": "$VERSION",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "built_by": "${{ github.actor }}",
+            "concept_count": $CONCEPT_COUNT,
+            "triple_count": $TRIPLE_COUNT,
+            "snomed_version": "$(cat sources/extracted/snomed/version.txt)",
+            "rxnorm_version": "$(cat sources/extracted/rxnorm/version.txt)",
+            "loinc_version": "$(cat sources/extracted/loinc/version.txt)",
+            "source_checksum": "$(sha256sum sources/extracted/* | sha256sum | awk '{print $1}')",
+            "git_commit": "${{ github.sha }}",
+            "workflow_run": "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: Create versioned snapshot
+        run: |
+          VERSION=$(date +%Y%m%d)
+          mkdir -p artifacts/$VERSION
+          cp output/kb7-kernel.ttl artifacts/$VERSION/
+          cp output/kb7-manifest.json artifacts/$VERSION/
+          tar -czf artifacts/kb7-$VERSION.tar.gz -C artifacts/$VERSION .
+
+      - name: Upload packaged kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-kernel
+          path: artifacts/
+          retention-days: 90
+
+  # ============================================================================
+  # STAGE 7: UPLOAD - Push to GCS and notify
+  # Estimated time: 3-5 minutes
+  # ============================================================================
+  upload:
+    name: "Stage 7: Upload & Notify"
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download packaged kernel
+        uses: actions/download-artifact@v4
+        with:
+          name: packaged-kernel
+          path: artifacts/
+
+      - name: Upload to GCS
+        run: |
+          VERSION=$(date +%Y%m%d)
+
+          # Upload versioned kernel
+          gsutil -m cp -r artifacts/$VERSION/* \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$VERSION/
+
+          # Update 'latest' pointer
+          gsutil cp artifacts/$VERSION/kb7-kernel.ttl \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/latest/kb7-kernel.ttl
+
+          gsutil cp artifacts/$VERSION/kb7-manifest.json \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/latest/kb7-manifest.json
+
+          echo "✅ Uploaded kernel version $VERSION to GCS"
+          echo "📍 URI: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/$VERSION/"
+
+      - name: Notify Slack on success
+        if: success()
+        uses: slackapi/slack-github-action@v1
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "✅ KB-7 Knowledge Factory: ${{ needs.package.outputs.kernel_version }} kernel published",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*KB-7 Knowledge Factory Pipeline Complete*\n\n*Version:* ${{ needs.package.outputs.kernel_version }}\n*Concepts:* ${{ needs.package.outputs.concept_count }}\n*Triples:* ${{ needs.package.outputs.triple_count }}\n*Built by:* ${{ github.actor }}\n*Workflow:* <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "❌ KB-7 Knowledge Factory: Pipeline failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*KB-7 Knowledge Factory Pipeline Failed*\n\n*Stage:* ${{ job.status }}\n*Workflow:* <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>\n\n<!channel> Manual intervention required"
+                  }
+                }
+              ]
+            }
+
+# ============================================================================
+# COST ESTIMATION
+# ============================================================================
+# Standard runners: Free (included in GitHub plan)
+# Larger runners (16GB): ~$0.16/min for reasoning stage
+#
+# Monthly cost estimate (1 run/month):
+# - Reasoning stage: 30 min × $0.16/min = $4.80
+# - GCS storage: $5.00 (200GB at $0.02/GB)
+# - GCP Cloud Run Jobs: $2.00 (download jobs)
+# - GCP Cloud Workflows: $0.50
+# - Data transfer: $1.00
+# TOTAL: ~$13-15/month
+#
+# ALTERNATIVE COST SAVINGS:
+# - Use standard runner + OOM retry: Free but unreliable
+# - Migrate reasoning to GCP Cloud Run Jobs: Custom instance sizing
+# - Split reasoning into parallel jobs: More complex but cheaper
+# ============================================================================

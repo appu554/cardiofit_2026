@@ -1,0 +1,1073 @@
+﻿# 🔬 **Phase 7: Evidence Repository - Complete Design**
+
+
+## 📋 **Executive Summary**
+
+
+**Goal:** Build a comprehensive evidence management system that automatically tracks, updates, and integrates medical literature citations into your CDS protocols.
+
+
+**Timeline:** 10 days (80 hours)  
+**Complexity:** Medium-High  
+**Business Value:** High (regulatory compliance + clinical credibility)
+
+
+---
+
+
+## 🎯 **Phase 7 Objectives**
+
+
+### **What We're Building:**
+
+
+1. **PubMed Integration Layer** (2 days)
+   - Automatic citation fetching via NCBI E-utilities API
+   - PMID-based reference management
+   - Citation metadata extraction
+
+
+2. **Evidence Storage System** (2 days)
+   - Citation database (YAML + Java models)
+   - Evidence quality assessment (GRADE framework)
+   - Version tracking for citations
+
+
+3. **Automatic Update Engine** (2 days)
+   - Scheduled PubMed searches for protocol updates
+   - New evidence notifications
+   - Guideline change detection
+
+
+4. **Citation Management** (2 days)
+   - Multiple citation formats (AMA, Vancouver, APA)
+   - Inline citation rendering
+   - Bibliography generation
+
+
+5. **Protocol Integration** (2 days)
+   - Link evidence to protocol steps
+   - Evidence strength indicators in UI
+   - "Last updated" tracking per protocol
+
+
+---
+
+
+## 🏗️ **System Architecture**
+
+
+### **High-Level Design:**
+
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    PHASE 7 ARCHITECTURE                  │
+└─────────────────────────────────────────────────────────┘
+
+
+┌──────────────────┐      ┌──────────────────┐
+│  PubMed API      │◄─────│  Citation        │
+│  (E-utilities)   │      │  Fetcher         │
+└──────────────────┘      └──────┬───────────┘
+                                 │
+                                 ▼
+                    ┌────────────────────────┐
+                    │  Evidence Repository   │
+                    │  - Citations (YAML)    │
+                    │  - Quality Scores      │
+                    │  - Update History      │
+                    └────────┬───────────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+┌───────────────┐   ┌────────────────┐   ┌──────────────┐
+│ Citation      │   │ Update         │   │ Format       │
+│ Manager       │   │ Engine         │   │ Service      │
+│ - CRUD ops    │   │ - Scheduled    │   │ - AMA style  │
+│ - Search      │   │ - Notifications│   │ - Vancouver  │
+│ - Validation  │   │ - Versioning   │   │ - APA style  │
+└───────┬───────┘   └────────┬───────┘   └──────┬───────┘
+        │                    │                    │
+        └────────────────────┼────────────────────┘
+                             ▼
+                    ┌────────────────────────┐
+                    │  Protocol Integration  │
+                    │  (Phases 1-6)          │
+                    └────────────────────────┘
+```
+
+
+---
+
+
+## 📦 **Core Components**
+
+
+### **1. Evidence Model (Citation.java)**
+
+
+```java
+package com.hospitalsystem.evidence;
+
+
+import java.time.LocalDate;
+import java.util.*;
+
+
+public class Citation {
+    // Core identifiers
+    private String citationId;        // Internal ID (UUID)
+    private String pmid;               // PubMed ID (primary key)
+    private String doi;                // Digital Object Identifier
+    
+    // Citation metadata
+    private String title;
+    private List<String> authors;
+    private String journal;
+    private String volume;
+    private String issue;
+    private String pages;
+    private LocalDate publicationDate;
+    private String abstractText;
+    
+    // Evidence quality (GRADE framework)
+    private EvidenceLevel evidenceLevel;  // HIGH, MODERATE, LOW, VERY_LOW
+    private StudyType studyType;          // RCT, META_ANALYSIS, COHORT, etc.
+    private int sampleSize;
+    private boolean peerReviewed;
+    
+    // Clinical relevance
+    private List<String> keywords;
+    private List<String> meshTerms;       // Medical Subject Headings
+    private List<String> protocolIds;     // Which protocols cite this
+    
+    // Update tracking
+    private LocalDate addedDate;
+    private LocalDate lastVerified;
+    private boolean needsReview;          // Flag for outdated citations
+    
+    // Citation formatting cache
+    private Map<CitationFormat, String> formattedCitations;
+}
+
+
+public enum EvidenceLevel {
+    HIGH("High quality", "RCTs with consistent results"),
+    MODERATE("Moderate quality", "RCTs with limitations or strong observational"),
+    LOW("Low quality", "Observational studies with limitations"),
+    VERY_LOW("Very low quality", "Case reports, expert opinion");
+}
+
+
+public enum StudyType {
+    SYSTEMATIC_REVIEW("Systematic Review/Meta-Analysis"),
+    RANDOMIZED_CONTROLLED_TRIAL("Randomized Controlled Trial"),
+    COHORT_STUDY("Cohort Study"),
+    CASE_CONTROL("Case-Control Study"),
+    CASE_SERIES("Case Series"),
+    EXPERT_OPINION("Expert Opinion/Guidelines");
+}
+```
+
+
+---
+
+
+### **2. PubMed Integration (PubMedService.java)**
+
+
+```java
+package com.hospitalsystem.evidence;
+
+
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+import org.w3c.dom.*;
+import javax.xml.parsers.*;
+
+
+@Service
+public class PubMedService {
+    private static final String EUTILS_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
+    private static final String API_KEY = "YOUR_NCBI_API_KEY"; // Free registration
+    
+    private final RestTemplate restTemplate;
+    
+    /**
+     * Fetch citation by PMID
+     * Uses efetch.fcgi endpoint
+     */
+    public Citation fetchCitation(String pmid) {
+        String url = String.format(
+            "%sefetch.fcgi?db=pubmed&id=%s&retmode=xml&api_key=%s",
+            EUTILS_BASE, pmid, API_KEY
+        );
+        
+        String xmlResponse = restTemplate.getForObject(url, String.class);
+        return parsePubMedXML(xmlResponse);
+    }
+    
+    /**
+     * Search PubMed for relevant studies
+     * Uses esearch.fcgi endpoint
+     */
+    public List<String> searchPubMed(String query, int maxResults) {
+        String url = String.format(
+            "%sesearch.fcgi?db=pubmed&term=%s&retmax=%d&api_key=%s",
+            EUTILS_BASE, 
+            URLEncoder.encode(query, StandardCharsets.UTF_8),
+            maxResults,
+            API_KEY
+        );
+        
+        String xmlResponse = restTemplate.getForObject(url, String.class);
+        return extractPMIDs(xmlResponse);
+    }
+    
+    /**
+     * Check for updates to existing citations
+     * Compares current metadata with stored version
+     */
+    public boolean hasBeenRetracted(String pmid) {
+        Citation current = fetchCitation(pmid);
+        return current.getTitle().toLowerCase().contains("retracted") ||
+               current.getAbstractText().toLowerCase().contains("retraction");
+    }
+    
+    /**
+     * Find related articles
+     * Uses elink.fcgi endpoint
+     */
+    public List<String> findRelatedArticles(String pmid, int maxResults) {
+        String url = String.format(
+            "%selink.fcgi?dbfrom=pubmed&id=%s&retmax=%d&api_key=%s",
+            EUTILS_BASE, pmid, maxResults, API_KEY
+        );
+        
+        String xmlResponse = restTemplate.getForObject(url, String.class);
+        return extractPMIDs(xmlResponse);
+    }
+    
+    private Citation parsePubMedXML(String xml) {
+        // Parse XML response and extract all citation fields
+        // Implementation includes error handling for missing fields
+    }
+}
+```
+
+
+**Why PubMed E-utilities?**
+- ✅ Free API (with registration)
+- ✅ 10 requests/second with API key
+- ✅ Comprehensive metadata
+- ✅ MeSH term integration
+- ✅ Related article suggestions
+
+
+---
+
+
+### **3. Evidence Repository (EvidenceRepository.java)**
+
+
+```java
+package com.hospitalsystem.evidence;
+
+
+import org.springframework.stereotype.Repository;
+import java.util.*;
+import java.util.stream.Collectors;
+
+
+@Repository
+public class EvidenceRepository {
+    private final Map<String, Citation> citationsByPMID = new HashMap<>();
+    private final Map<String, Citation> citationsById = new HashMap<>();
+    private final Map<String, Set<String>> citationsByProtocol = new HashMap<>();
+    
+    /**
+     * Add or update citation
+     */
+    public void saveCitation(Citation citation) {
+        citationsByPMID.put(citation.getPmid(), citation);
+        citationsById.put(citation.getCitationId(), citation);
+        
+        // Index by protocols
+        for (String protocolId : citation.getProtocolIds()) {
+            citationsByProtocol
+                .computeIfAbsent(protocolId, k -> new HashSet<>())
+                .add(citation.getCitationId());
+        }
+    }
+    
+    /**
+     * Find citations for a protocol
+     */
+    public List<Citation> getCitationsForProtocol(String protocolId) {
+        return citationsByProtocol.getOrDefault(protocolId, Collections.emptySet())
+            .stream()
+            .map(citationsById::get)
+            .filter(Objects::nonNull)
+            .sorted(Comparator.comparing(Citation::getEvidenceLevel)
+                             .thenComparing(Citation::getPublicationDate).reversed())
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Find citations needing review
+     * (older than 2 years without verification)
+     */
+    public List<Citation> getCitationsNeedingReview() {
+        LocalDate cutoff = LocalDate.now().minusYears(2);
+        return citationsByPMID.values().stream()
+            .filter(c -> c.getLastVerified().isBefore(cutoff))
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Search citations by keyword
+     */
+    public List<Citation> searchByKeyword(String keyword) {
+        String lowerKeyword = keyword.toLowerCase();
+        return citationsByPMID.values().stream()
+            .filter(c -> c.getTitle().toLowerCase().contains(lowerKeyword) ||
+                        c.getKeywords().stream()
+                            .anyMatch(k -> k.toLowerCase().contains(lowerKeyword)))
+            .collect(Collectors.toList());
+    }
+}
+```
+
+
+---
+
+
+### **4. Citation Formatter (CitationFormatter.java)**
+
+
+```java
+package com.hospitalsystem.evidence;
+
+
+import org.springframework.stereotype.Service;
+
+
+@Service
+public class CitationFormatter {
+    
+    /**
+     * Format citation in AMA style
+     * (American Medical Association - most common in medicine)
+     */
+    public String formatAMA(Citation citation) {
+        StringBuilder sb = new StringBuilder();
+        
+        // Authors (max 6, then "et al")
+        List<String> authors = citation.getAuthors();
+        if (authors.size() <= 6) {
+            sb.append(String.join(", ", authors));
+        } else {
+            sb.append(String.join(", ", authors.subList(0, 6)));
+            sb.append(", et al");
+        }
+        
+        // Title
+        sb.append(". ").append(citation.getTitle());
+        if (!citation.getTitle().endsWith(".")) sb.append(".");
+        
+        // Journal (italicized in output)
+        sb.append(" ").append(citation.getJournal()).append(".");
+        
+        // Year;Volume(Issue):Pages
+        sb.append(" ").append(citation.getPublicationDate().getYear());
+        sb.append(";").append(citation.getVolume());
+        if (citation.getIssue() != null) {
+            sb.append("(").append(citation.getIssue()).append(")");
+        }
+        sb.append(":").append(citation.getPages()).append(".");
+        
+        // PMID
+        sb.append(" PMID: ").append(citation.getPmid()).append(".");
+        
+        return sb.toString();
+    }
+    
+    /**
+     * Format citation in Vancouver style
+     * (numbered reference style)
+     */
+    public String formatVancouver(Citation citation, int referenceNumber) {
+        return String.format("%d. %s", referenceNumber, formatAMA(citation));
+    }
+    
+    /**
+     * Generate inline citation
+     * Example: "as shown in recent trials^12,15,18^"
+     */
+    public String formatInline(List<Integer> referenceNumbers) {
+        if (referenceNumbers.isEmpty()) return "";
+        if (referenceNumbers.size() == 1) {
+            return "^" + referenceNumbers.get(0) + "^";
+        }
+        return "^" + referenceNumbers.stream()
+            .map(String::valueOf)
+            .collect(Collectors.joining(",")) + "^";
+    }
+    
+    /**
+     * Generate bibliography for a protocol
+     */
+    public String generateBibliography(List<Citation> citations) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## References\n\n");
+        
+        for (int i = 0; i < citations.size(); i++) {
+            sb.append(formatVancouver(citations.get(i), i + 1));
+            sb.append("\n\n");
+        }
+        
+        return sb.toString();
+    }
+}
+```
+
+
+**Example Output:**
+
+
+```
+## References
+
+
+1. Singer M, Deutschman CS, Seymour CW, et al. The Third International 
+   Consensus Definitions for Sepsis and Septic Shock (Sepsis-3). 
+   JAMA. 2016;315(8):801-810. PMID: 26903338.
+
+
+2. Rhodes A, Evans LE, Alhazzani W, et al. Surviving Sepsis Campaign: 
+   International Guidelines for Management of Sepsis and Septic Shock: 2016. 
+   Intensive Care Med. 2017;43(3):304-377. PMID: 28101605.
+```
+
+
+---
+
+
+### **5. Update Engine (EvidenceUpdateService.java)**
+
+
+```java
+package com.hospitalsystem.evidence;
+
+
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+
+@Service
+public class EvidenceUpdateService {
+    private final PubMedService pubMedService;
+    private final EvidenceRepository repository;
+    private final NotificationService notificationService;
+    
+    /**
+     * Check for retractions daily
+     */
+    @Scheduled(cron = "0 0 2 * * *") // 2 AM daily
+    public void checkForRetractions() {
+        List<Citation> allCitations = repository.getAllCitations();
+        
+        for (Citation citation : allCitations) {
+            try {
+                if (pubMedService.hasBeenRetracted(citation.getPmid())) {
+                    citation.setNeedsReview(true);
+                    repository.saveCitation(citation);
+                    
+                    notificationService.sendAlert(
+                        "RETRACTION ALERT",
+                        String.format("Citation PMID %s has been retracted: %s",
+                            citation.getPmid(), citation.getTitle())
+                    );
+                }
+            } catch (Exception e) {
+                // Log error but continue checking others
+            }
+            
+            // Respect PubMed rate limits (10/sec with API key)
+            Thread.sleep(100);
+        }
+    }
+    
+    /**
+     * Search for new evidence monthly
+     */
+    @Scheduled(cron = "0 0 3 1 * *") // 3 AM on 1st of month
+    public void searchForNewEvidence() {
+        // Get all protocols
+        List<Protocol> protocols = protocolService.getAllProtocols();
+        
+        for (Protocol protocol : protocols) {
+            // Build search query from protocol keywords
+            String query = buildSearchQuery(protocol);
+            
+            // Search PubMed (last 30 days)
+            query += " AND (\"last 30 days\"[PDat])";
+            List<String> newPMIDs = pubMedService.searchPubMed(query, 20);
+            
+            // Fetch and evaluate new citations
+            for (String pmid : newPMIDs) {
+                Citation citation = pubMedService.fetchCitation(pmid);
+                
+                // Only add high-quality evidence
+                if (isHighQuality(citation)) {
+                    citation.getProtocolIds().add(protocol.getProtocolId());
+                    repository.saveCitation(citation);
+                    
+                    notificationService.sendAlert(
+                        "NEW EVIDENCE AVAILABLE",
+                        String.format("Protocol %s: New %s study found (PMID: %s)",
+                            protocol.getTitle(),
+                            citation.getStudyType(),
+                            pmid)
+                    );
+                }
+            }
+        }
+    }
+    
+    /**
+     * Verify old citations quarterly
+     */
+    @Scheduled(cron = "0 0 4 1 */3 *") // 4 AM on 1st day of quarter
+    public void verifyCitations() {
+        List<Citation> needsReview = repository.getCitationsNeedingReview();
+        
+        for (Citation citation : needsReview) {
+            // Re-fetch from PubMed
+            Citation updated = pubMedService.fetchCitation(citation.getPmid());
+            
+            // Check for changes
+            if (!citation.getTitle().equals(updated.getTitle())) {
+                notificationService.sendAlert(
+                    "CITATION UPDATED",
+                    String.format("PMID %s metadata has changed", citation.getPmid())
+                );
+            }
+            
+            citation.setLastVerified(LocalDate.now());
+            repository.saveCitation(citation);
+        }
+    }
+    
+    private boolean isHighQuality(Citation citation) {
+        return citation.getStudyType() == StudyType.SYSTEMATIC_REVIEW ||
+               citation.getStudyType() == StudyType.RANDOMIZED_CONTROLLED_TRIAL ||
+               (citation.getSampleSize() > 100 && citation.isPeerReviewed());
+    }
+}
+```
+
+
+---
+
+
+## 📁 **Data Structure**
+
+
+### **citations.yaml** (Evidence Database)
+
+
+```yaml
+citations:
+  - citation_id: "cit_001"
+    pmid: "26903338"
+    doi: "10.1001/jama.2016.0287"
+    title: "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3)"
+    authors:
+      - "Singer M"
+      - "Deutschman CS"
+      - "Seymour CW"
+      - "Shankar-Hari M"
+      - "Annane D"
+      - "Bauer M"
+    journal: "JAMA"
+    volume: "315"
+    issue: "8"
+    pages: "801-810"
+    publication_date: "2016-02-23"
+    abstract: "Sepsis is defined as life-threatening organ dysfunction..."
+    
+    evidence_level: HIGH
+    study_type: SYSTEMATIC_REVIEW
+    sample_size: 148907
+    peer_reviewed: true
+    
+    keywords:
+      - "sepsis"
+      - "septic shock"
+      - "SOFA score"
+      - "qSOFA"
+    mesh_terms:
+      - "D018805" # Sepsis
+      - "D012772" # Shock, Septic
+    
+    protocol_ids:
+      - "sepsis_management"
+      - "icu_admission_criteria"
+    
+    added_date: "2024-01-15"
+    last_verified: "2025-01-15"
+    needs_review: false
+
+
+  - citation_id: "cit_002"
+    pmid: "28101605"
+    doi: "10.1007/s00134-017-4683-6"
+    title: "Surviving Sepsis Campaign: International Guidelines for Management of Sepsis and Septic Shock: 2016"
+    # ... (similar structure)
+```
+
+
+---
+
+
+## 🔗 **Protocol Integration**
+
+
+### **Enhanced Protocol Model**
+
+
+Add evidence tracking to existing `Protocol.java`:
+
+
+```java
+public class Protocol {
+    // ... existing fields ...
+    
+    // NEW: Evidence tracking
+    private List<String> citationIds;           // References used
+    private LocalDate evidenceLastUpdated;      // Last evidence review
+    private EvidenceStrength overallStrength;   // Aggregate evidence quality
+    private Map<String, List<String>> stepCitations; // Citations per step
+}
+
+
+public enum EvidenceStrength {
+    STRONG("Strong recommendation", "High-quality evidence"),
+    MODERATE("Moderate recommendation", "Moderate-quality evidence"),
+    WEAK("Weak recommendation", "Low-quality evidence"),
+    EXPERT_OPINION("Expert opinion", "Insufficient evidence");
+}
+```
+
+
+### **Linking Citations to Steps**
+
+
+```java
+// In Protocol YAML
+steps:
+  - step_number: 1
+    title: "Recognize Sepsis"
+    action: "Calculate qSOFA score (≥2 suggests sepsis)"
+    evidence_citations: ["cit_001", "cit_002"]  # NEW
+    evidence_strength: HIGH                      # NEW
+```
+
+
+---
+
+
+## 🎨 **UI Integration**
+
+
+### **Citation Display Components**
+
+
+**1. Inline Evidence Indicators**
+
+
+```
+┌────────────────────────────────────────┐
+│  Step 1: Recognize Sepsis             │
+│  ────────────────────────────          │
+│  Calculate qSOFA score ^1,2^           │
+│  Evidence: ●●●●● (5 RCTs)             │
+└────────────────────────────────────────┘
+```
+
+
+**2. Evidence Sidebar**
+
+
+```
+┌──────────────────────────────┐
+│  📚 Supporting Evidence      │
+├──────────────────────────────┤
+│  [1] Singer et al. 2016      │
+│      JAMA • RCT • n=148,907  │
+│      ★★★★★ High Quality      │
+│                              │
+│  [2] Rhodes et al. 2017      │
+│      ICM • Guidelines        │
+│      ★★★★☆ Strong            │
+│                              │
+│  📅 Last updated: Jan 2025   │
+└──────────────────────────────┘
+```
+
+
+**3. Full Bibliography Page**
+
+
+```
+═══════════════════════════════════════════
+SEPSIS MANAGEMENT PROTOCOL - REFERENCES
+═══════════════════════════════════════════
+
+
+PRIMARY EVIDENCE (HIGH QUALITY)
+────────────────────────────────
+
+
+1. Singer M, Deutschman CS, Seymour CW, et al. 
+   The Third International Consensus Definitions 
+   for Sepsis and Septic Shock (Sepsis-3). 
+   JAMA. 2016;315(8):801-810. 
+   
+   Study Type: Systematic Review/Meta-Analysis
+   Sample Size: 148,907 patients
+   Evidence Level: HIGH
+   
+   Key Findings:
+   • New sepsis definition (SOFA ≥2)
+   • qSOFA for screening
+   • 10% mortality increase per hour delay
+
+
+...
+```
+
+
+---
+
+
+## 📊 **10-Day Implementation Plan**
+
+
+### **Day 1-2: Core Models & PubMed Integration**
+
+
+**Deliverables:**
+- ✅ `Citation.java` (complete model)
+- ✅ `EvidenceLevel` and `StudyType` enums
+- ✅ `PubMedService.java` (API integration)
+- ✅ Unit tests for PubMed parsing
+
+
+**Tasks:**
+1. Register for NCBI E-utilities API key (free, instant)
+2. Implement XML parsing for PubMed responses
+3. Create citation model with all metadata fields
+4. Test with 10 sample PMIDs
+
+
+**Success Criteria:**
+- Fetch citation by PMID in <2 seconds
+- Parse all metadata fields correctly
+- Handle missing fields gracefully
+
+
+---
+
+
+### **Day 3-4: Evidence Repository**
+
+
+**Deliverables:**
+- ✅ `EvidenceRepository.java`
+- ✅ `citations.yaml` (20 seed citations)
+- ✅ `CitationDatabaseLoader.java`
+- ✅ Search and filtering functionality
+
+
+**Tasks:**
+1. Build in-memory repository with indexing
+2. Create YAML schema for citations
+3. Implement multi-index loading
+4. Add search by PMID, keyword, protocol
+
+
+**Success Criteria:**
+- Load 20 citations in <100ms
+- Search by keyword returns results in <50ms
+- Protocol lookup returns sorted citations
+
+
+---
+
+
+### **Day 5-6: Citation Formatting & Bibliography**
+
+
+**Deliverables:**
+- ✅ `CitationFormatter.java`
+- ✅ AMA, Vancouver, inline formats
+- ✅ Bibliography generator
+- ✅ Integration with Protocol model
+
+
+**Tasks:**
+1. Implement AMA citation formatting
+2. Implement Vancouver (numbered) style
+3. Create inline citation renderer
+4. Generate protocol bibliographies
+
+
+**Success Criteria:**
+- Citations match published AMA style examples
+- Bibliography generates in <200ms
+- Inline citations render correctly in UI
+
+
+---
+
+
+### **Day 7-8: Update Engine**
+
+
+**Deliverables:**
+- ✅ `EvidenceUpdateService.java`
+- ✅ Scheduled tasks (retraction check, new evidence search)
+- ✅ `NotificationService.java` integration
+- ✅ Update history tracking
+
+
+**Tasks:**
+1. Implement daily retraction checking
+2. Build monthly new evidence search
+3. Create quarterly verification job
+4. Add email/dashboard notifications
+
+
+**Success Criteria:**
+- Scheduled jobs execute without errors
+- Retractions detected within 24 hours
+- New evidence found and evaluated monthly
+
+
+---
+
+
+### **Day 9-10: UI Integration & Testing**
+
+
+**Deliverables:**
+- ✅ Evidence indicators in protocol steps
+- ✅ Citation sidebar component
+- ✅ Bibliography page
+- ✅ Integration tests (60 total tests)
+
+
+**Tasks:**
+1. Add evidence badges to protocol UI
+2. Create citation detail modal
+3. Build bibliography export (PDF)
+4. Comprehensive integration testing
+
+
+**Success Criteria:**
+- Evidence displays on all protocol pages
+- Citations clickable to PubMed
+- Bibliography exports correctly
+- All 60 tests passing
+
+
+---
+
+
+## 🧪 **Testing Strategy**
+
+
+### **Test Coverage (60 tests)**
+
+
+**Unit Tests (35 tests):**
+- PubMedService: Fetch, search, parse (12 tests)
+- CitationFormatter: AMA, Vancouver, inline (8 tests)
+- EvidenceRepository: CRUD, search, filter (10 tests)
+- UpdateService: Retraction, search, verify (5 tests)
+
+
+**Integration Tests (20 tests):**
+- Full citation lifecycle (fetch → store → format → display)
+- Protocol-citation linking
+- Bibliography generation
+- Update workflows
+
+
+**E2E Tests (5 tests):**
+- View protocol with citations
+- Click citation to PubMed
+- Export bibliography
+- Receive update notification
+- Search citations by keyword
+
+
+---
+
+
+## 📈 **Success Metrics**
+
+
+| Metric | Target | Measurement |
+|--------|--------|-------------|
+| **Citation Coverage** | 100% of protocols | All 3 protocols have ≥5 citations |
+| **Evidence Quality** | 80% HIGH/MODERATE | GRADE assessment |
+| **Update Frequency** | Daily retractions | Automated checks |
+| **Response Time** | <2s citation fetch | PubMed API latency |
+| **Bibliography Export** | <1s for 50 refs | PDF generation time |
+
+
+---
+
+
+## 🚀 **Quick Start Checklist**
+
+
+**Before Starting:**
+- [ ] Register for NCBI E-utilities API key (https://www.ncbi.nlm.nih.gov/account/)
+- [ ] Review AMA citation style guide
+- [ ] Identify 20 key citations for seed data
+- [ ] Set up Spring scheduling (`@EnableScheduling`)
+
+
+**Day 1 Morning:**
+- [ ] Create `com.hospitalsystem.evidence` package
+- [ ] Implement `Citation.java` model
+- [ ] Write first PubMed test (fetch PMID 26903338)
+
+
+---
+
+
+## 💡 **Pro Tips**
+
+
+### **1. PubMed Rate Limits**
+```java
+// WITH API key: 10 requests/second
+// WITHOUT API key: 3 requests/second
+
+
+// Always include delays
+Thread.sleep(100); // 100ms = 10 req/sec
+```
+
+
+### **2. Citation Caching**
+```java
+// Cache formatted citations to avoid recomputation
+private Map<CitationFormat, String> formattedCache;
+
+
+public String getFormatted(CitationFormat format) {
+    return formattedCache.computeIfAbsent(
+        format, 
+        f -> formatter.format(this, f)
+    );
+}
+```
+
+
+### **3. Batch PubMed Requests**
+```java
+// Fetch multiple PMIDs in one request
+String pmids = "26903338,28101605,27492764";
+String url = EUTILS_BASE + "efetch.fcgi?db=pubmed&id=" + pmids;
+// Returns all citations in one XML response
+```
+
+
+### **4. MeSH Term Matching**
+```java
+// Use MeSH terms for smart protocol matching
+if (citation.getMeshTerms().contains("D018805")) { // Sepsis
+    citation.getProtocolIds().add("sepsis_management");
+}
+```
+
+
+---
+
+
+## 🎯 **Expected Outcomes**
+
+
+**After Phase 7:**
+
+
+1. **Every protocol step backed by evidence** 📚
+   - Inline citations (e.g., "^1,3,5^")
+   - Evidence strength indicators (●●●●● vs ●●○○○)
+   - Direct links to PubMed
+
+
+2. **Automatic evidence monitoring** 🤖
+   - Daily retraction checks
+   - Monthly new evidence alerts
+   - Quarterly citation verification
+
+
+3. **Professional bibliography generation** 📄
+   - AMA-compliant references
+   - Exportable to PDF/Word
+   - Suitable for publication
+
+
+4. **Regulatory compliance** ✅
+   - Traceable evidence trail
+   - Versioned citations
+   - Audit-ready documentation
+
+
+---
+
+
+## 🔄 **Integration with Previous Phases**
+
+
+**Phase 1 (Protocols):**
+- Add `citationIds` to Protocol.java
+- Display evidence badges in UI
+
+
+**Phase 5 (Guidelines):**
+- Link guidelines to supporting evidence
+- Track guideline update dates
+
+
+**Phase 6 (Medications):**
+- Cite medication dosing references
+- Link interactions to evidence
+
+
+---
+
+
+## 🎉 **Ready to Build?**
+
+
+**Reply with "START PHASE 7" and I'll provide:**
+
+
+1. Complete `Citation.java` implementation (200 lines)
+2. `PubMedService.java` with XML parsing (350 lines)
+3. `EvidenceRepository.java` (175 lines)
+4. `CitationFormatter.java` with AMA/Vancouver (225 lines)
+5. 20 seed citations YAML for your 3 protocols
+6. First day's implementation guide (step-by-step)
+
+
+**This is the second-to-last phase! You're almost done!** 🏆

@@ -1,0 +1,203 @@
+# Clinical Context Recipe: Apollo Federation Context
+# Implements Apollo Federation GraphQL context for unified data access
+# Based on ContextRecipeBook.txt specifications
+
+recipe_id: "apollo_federation_context_v1"
+recipe_name: "Apollo Federation GraphQL Context"
+version: "1.0"
+clinical_scenario: "graphql_federation"
+workflow_category: "query_initiated"
+execution_pattern: "optimistic"
+
+# Performance requirements (Production SLA)
+sla_ms: 150  # Context gathering budget
+cache_duration_seconds: 600
+real_data_only: true
+mock_data_detection: true
+mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Clinical recipe references
+clinical_recipe_refs:
+  - "graphql-federation-v1.0"
+
+# Triggers
+triggers:
+  - domain: "graphql"
+  - action: ["query", "federate"]
+  - workflow_type: "query_initiated"
+
+# Required data points for Apollo Federation
+required_data_points:
+  - name: "federated_patient_data"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["id", "demographics", "medications", "conditions", "allergies", "observations"]
+    required: true
+    max_age_hours: 1
+    quality_threshold: 0.90
+    timeout_ms: 100
+    retry_count: 2
+    fallback_sources: ["patient_service", "fhir_store"]
+    cache_strategy: "l1_l2_l3"
+    protocol: "graphql"
+
+# Optional data points
+optional_data_points:
+  - name: "federated_analytics"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["patient_analytics", "population_data", "trends"]
+    required: false
+    max_age_hours: 24
+    quality_threshold: 0.80
+    timeout_ms: 150
+    retry_count: 1
+    fallback_sources: []
+    protocol: "graphql"
+    fallback: "skip_analytics"
+
+# Conditional rules for additional data requirements
+conditional_rules:
+  - condition: "query.includes_medications == true"
+    description: "Medication queries require enhanced medication context"
+    additional_data_points:
+      - name: "enhanced_medication_context"
+        source_type: "apollo_federation"
+        endpoint: "http://localhost:4000/graphql"
+        fields: ["medication_interactions", "dosing_history", "adherence_data"]
+        required: true
+        max_age_hours: 0.5
+        quality_threshold: 0.90
+        timeout_ms: 120
+        retry_count: 2
+
+  - condition: "query.includes_conditions == true"
+    description: "Condition queries require enhanced condition context"
+    additional_data_points:
+      - name: "enhanced_condition_context"
+        source_type: "apollo_federation"
+        endpoint: "http://localhost:4000/graphql"
+        fields: ["condition_progression", "related_conditions", "treatment_history"]
+        required: true
+        max_age_hours: 4
+        quality_threshold: 0.85
+        timeout_ms: 120
+        retry_count: 2
+
+# Quality constraints
+quality_constraints:
+  minimum_completeness: 0.80
+  maximum_age_hours: 4
+  required_fields: ["federated_patient_data"]
+  accuracy_threshold: 0.85
+
+# Safety requirements (Production)
+safety_requirements:
+  minimum_completeness_score: 0.80
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "RETURN_PARTIAL"
+  stale_data_action: "FLAG_FOR_REVIEW"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Performance strategy (GraphQL optimized)
+performance_strategy:
+  parallelization: false  # GraphQL handles its own optimization
+  sla_budget_ms: 150
+  circuit_breaker: true
+  retry_policy: "exponential_backoff"
+
+# Cache strategy (Production L1/L2/L3)
+cache_strategy:
+  l1_ttl_seconds: 600    # 10 minutes
+  l2_ttl_seconds: 3600   # 1 hour
+  l3_ttl_seconds: 86400  # 24 hours
+  cache_key_pattern: "context:federation:{patient_id}:{query_hash}"
+  invalidation_events:
+    - "clinical-data-changes.patient.updated"
+    - "clinical-data-changes.medication.updated"
+    - "clinical-data-changes.condition.updated"
+    - "clinical-data-changes.allergy.updated"
+
+# Assembly rules (Production)
+assembly_rules:
+  parallel_execution: false  # GraphQL handles parallelization
+  timeout_budget_ms: 130  # 130ms of the 150ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: true
+  enforce_quality_constraints: true
+  fail_fast: false
+
+# QoS Tier
+qos_tier: "gold"
+max_latency: 150
+availability: "99.9%"
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2025-07-31T10:00:00Z"
+  version: "1.0"
+  effective_date: "2025-07-31T00:00:00Z"
+  expiry_date: "2026-07-31T00:00:00Z"
+  clinical_board_approval_id: "CGB-APOLLO-FEDERATION-20250731"
+  tags: ["approved", "production", "graphql", "federation"]
+  change_log:
+    - "v1.0: Initial production implementation with Apollo Federation integration"
+
+# Data source endpoints (Production)
+data_sources:
+  - service: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    timeout_ms: 130
+    health_check: "/health"
+    protocol: "graphql"
+
+# Apollo Federation specific configuration
+apollo_federation_configuration:
+  gateway_endpoint: "http://localhost:4000/graphql"
+  playground_endpoint: "http://localhost:4000/playground"
+  
+  federated_services:
+    - "patient_service"
+    - "medication_service"
+    - "condition_service"
+    - "observation_service"
+    - "encounter_service"
+  
+  schema_composition:
+    - "unified_patient_schema"
+    - "federated_medication_schema"
+    - "federated_condition_schema"
+  
+  query_optimization:
+    - "query_planning"
+    - "field_merging"
+    - "batch_loading"
+    - "caching_strategies"
+
+# GraphQL-specific features
+graphql_features:
+  query_complexity_analysis: true
+  query_depth_limiting: true
+  query_timeout_enforcement: true
+  result_caching: true
+  subscription_support: false  # Not needed for context service
+
+# Clinical decision support integration
+clinical_decision_support:
+  unified_data_access: true
+  cross_service_queries: true
+  federated_analytics: true
+  real_time_updates: true
+
+# Audit and compliance
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true
+  log_graphql_queries: true
+  track_federation_performance: true

@@ -1,0 +1,820 @@
+name: KB-7 Knowledge Factory Pipeline - Australia
+
+on:
+  repository_dispatch:
+    types: [terminology-update-au]
+  workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: 'Force full rebuild (ignore cache)'
+        type: boolean
+        default: false
+  schedule:
+    # AU: Wednesday 2 AM AEST (Tuesday 4 PM UTC)
+    - cron: '0 16 * * 2'
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write
+  actions: write
+
+env:
+  REGION: au
+  GCS_BUCKET_SOURCES: sincere-hybrid-477206-h2-kb-sources-production
+  GCS_BUCKET_ARTIFACTS: sincere-hybrid-477206-h2-kb-artifacts-production
+  GCP_PROJECT_ID: sincere-hybrid-477206-h2
+  SNAPSHOT_VERSION: ${{ github.event.client_payload.version || github.run_number }}
+  # AU has its own packages in GHCR
+  REGISTRY_OWNER: ${{ github.repository_owner }}
+  # Use AU repo SHA for image tags
+  DOCKER_IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ============================================================================
+  # STAGE 0: CLEANUP - Delete old artifacts to free quota
+  # ============================================================================
+  cleanup:
+    name: "Stage 0: Cleanup Old Artifacts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            console.log(`Cleaning up AU artifacts for ${owner}/${repo}...`);
+
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+
+            console.log(`Found ${artifacts.data.total_count} artifacts`);
+
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - 1);
+
+            let deleted = 0;
+            for (const artifact of artifacts.data.artifacts) {
+              const createdAt = new Date(artifact.created_at);
+
+              const knownArtifacts = [
+                'source-files-au', 'transformed-ontologies-au',
+                'merged-ontology-au', 'inferred-ontology-au',
+                'validation-results-au', 'packaged-kernel-au'
+              ];
+
+              if (createdAt < cutoffDate || knownArtifacts.includes(artifact.name)) {
+                try {
+                  await github.rest.actions.deleteArtifact({
+                    owner,
+                    repo,
+                    artifact_id: artifact.id
+                  });
+                  console.log(`Deleted: ${artifact.name} (${artifact.id})`);
+                  deleted++;
+                } catch (error) {
+                  console.log(`Could not delete ${artifact.name}: ${error.message}`);
+                }
+              }
+            }
+
+            console.log(`\nCleanup complete! Deleted ${deleted} artifacts.`);
+
+  # ============================================================================
+  # STAGE 0.5: BUILD IMAGES - Build and push AU Docker images to GHCR
+  # ============================================================================
+  build-images:
+    name: "Stage 0.5: Build Docker Images"
+    needs: cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push robot
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.robot
+          push: true
+          tags: ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:${{ env.DOCKER_IMAGE_TAG }}
+
+      - name: Build and push snomed-toolkit
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.snomed-toolkit
+          push: true
+          tags: ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:${{ env.DOCKER_IMAGE_TAG }}
+
+      - name: Build and push converters
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.converters
+          push: true
+          tags: ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:${{ env.DOCKER_IMAGE_TAG }}
+
+      - name: Summary
+        run: |
+          echo "### 🐳 Docker Images Built" >> $GITHUB_STEP_SUMMARY
+          echo "- robot: ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:${{ env.DOCKER_IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "- snomed-toolkit: ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:${{ env.DOCKER_IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "- converters: ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:${{ env.DOCKER_IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # STAGE 1: DOWNLOAD - Pull AU source files from GCS
+  # Australian sources: SNOMED CT-AU + AMT (bundled) + LOINC
+  # ============================================================================
+  download:
+    name: "Stage 1: Download Australian Sources"
+    needs: [cleanup, build-images]
+    runs-on: ubuntu-latest
+    outputs:
+      snomed_au_zip: ${{ steps.download.outputs.snomed_au_zip }}
+      loinc_dir: ${{ steps.download.outputs.loinc_dir }}
+      snomed_version: ${{ steps.extract_versions.outputs.snomed_version }}
+      amt_version: ${{ steps.extract_versions.outputs.amt_version }}
+      loinc_version: ${{ steps.extract_versions.outputs.loinc_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download Australian source files from GCS
+        id: download
+        run: |
+          set -e
+          mkdir -p sources/extracted
+
+          echo "Downloading Australian sources..."
+
+          # ================================================================
+          # SNOMED CT-AU (includes SNOMED International + AU Extension + AMT)
+          # Downloaded by GCP Cloud Run Job to GCS
+          # ================================================================
+          SNOMED_AU_KEY="${{ github.event.client_payload.snomed_au_key || 'au/snomed-au/latest/SnomedCT_Release_AU.zip' }}"
+          echo "  SNOMED CT-AU: $SNOMED_AU_KEY"
+
+          gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$SNOMED_AU_KEY" ./sources/ || {
+            echo "SNOMED CT-AU not found at expected path, checking alternate locations..."
+            # Try to find the latest AU SNOMED file
+            LATEST_AU=$(gsutil ls "gs://${{ env.GCS_BUCKET_SOURCES }}/au/snomed-au/" 2>/dev/null | grep -E '\.zip$' | tail -1 || echo "")
+            if [ -n "$LATEST_AU" ]; then
+              echo "  Found: $LATEST_AU"
+              gsutil cp "$LATEST_AU" ./sources/
+            else
+              echo "ERROR: No SNOMED CT-AU file found in GCS"
+              exit 1
+            fi
+          }
+
+          # ================================================================
+          # LOINC (International lab codes - same for all regions)
+          # ================================================================
+          LOINC_KEY="${{ github.event.client_payload.loinc_key || 'us/loinc/latest/loinc-complete-latest.zip' }}"
+          echo "  LOINC: $LOINC_KEY"
+
+          gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/$LOINC_KEY" ./sources/ || {
+            echo "LOINC not found, trying alternate paths..."
+            gsutil cp "gs://${{ env.GCS_BUCKET_SOURCES }}/loinc/latest/loinc-complete-latest.zip" ./sources/ || echo "LOINC not available"
+          }
+
+          # Extract LOINC
+          mkdir -p sources/extracted/loinc
+          LOINC_FILE=$(find sources/ -maxdepth 1 -name "loinc*.zip" | head -1)
+          if [ -n "$LOINC_FILE" ]; then
+            unzip -q "$LOINC_FILE" -d sources/extracted/loinc || echo "LOINC extraction issue"
+            echo "loinc_dir=sources/extracted/loinc" >> $GITHUB_OUTPUT
+          else
+            echo "loinc_dir=" >> $GITHUB_OUTPUT
+          fi
+
+          # SNOMED-AU ZIP stays in sources/ directory (will be extracted by snomed-toolkit)
+          SNOMED_AU_FILE=$(find sources/ -maxdepth 1 -name "*.zip" ! -name "loinc*.zip" | head -1)
+          echo "snomed_au_zip=$SNOMED_AU_FILE" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "Download complete for Australia region"
+          ls -lh sources/
+
+      - name: Extract terminology versions
+        id: extract_versions
+        run: |
+          set -e
+          echo "Extracting terminology versions for AU..."
+
+          # ============================================================
+          # SNOMED CT-AU Version (from filename or RF2 metadata)
+          # Format: SnomedCT_Release_AU1000036_YYYYMMDD.zip
+          # ============================================================
+          SNOMED_AU_FILE=$(find sources/ -maxdepth 1 -name "*.zip" ! -name "loinc*.zip" | head -1)
+          if [ -n "$SNOMED_AU_FILE" ]; then
+            # Try to extract version from filename
+            SNOMED_VERSION=$(basename "$SNOMED_AU_FILE" | grep -oP '\d{8}' | head -1 || echo "")
+            if [ -z "$SNOMED_VERSION" ]; then
+              # Fallback to today's date format
+              SNOMED_VERSION=$(date +%Y%m%d)
+            fi
+          else
+            SNOMED_VERSION="unknown"
+          fi
+          echo "  SNOMED CT-AU Version: $SNOMED_VERSION"
+          echo "snomed_version=$SNOMED_VERSION" >> $GITHUB_OUTPUT
+
+          # ============================================================
+          # AMT Version (bundled with SNOMED CT-AU from NTS)
+          # AMT module ID: 900062011000036103
+          # ============================================================
+          # AMT is included in the SNOMED CT-AU RF2 package
+          # Version matches SNOMED CT-AU version
+          AMT_VERSION="$SNOMED_VERSION"
+          echo "  AMT Version: $AMT_VERSION (bundled with SNOMED CT-AU)"
+          echo "amt_version=$AMT_VERSION" >> $GITHUB_OUTPUT
+
+          # ============================================================
+          # LOINC Version
+          # ============================================================
+          LOINC_DIR="sources/extracted/loinc"
+          if [ -d "$LOINC_DIR" ]; then
+            if [ -f "$LOINC_DIR/LoincVersion.txt" ]; then
+              LOINC_VERSION=$(cat "$LOINC_DIR/LoincVersion.txt" | head -1)
+            else
+              LOINC_FILE=$(find sources/ -maxdepth 1 -name "loinc*.zip" | head -1)
+              LOINC_VERSION=$(basename "$LOINC_FILE" | grep -oP '(?<=loinc-)\d+\.\d+' | head -1 || echo "unknown")
+            fi
+          else
+            LOINC_VERSION="N/A"
+          fi
+          echo "  LOINC Version: $LOINC_VERSION"
+          echo "loinc_version=$LOINC_VERSION" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "Version extraction complete for AU"
+
+      - name: Upload source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-files-au
+          path: sources/
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 2: TRANSFORM - Convert AU sources to RDF/OWL
+  # SNOMED CT-AU + AMT use RF2 format (same as international SNOMED)
+  # ============================================================================
+  transform:
+    name: "Stage 2: Transform Australian Terminologies"
+    needs: download
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download source files
+        uses: actions/download-artifact@v4
+        with:
+          name: source-files-au
+          path: sources/
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Transform SNOMED CT-AU RF2 to OWL
+        run: |
+          echo "Transforming SNOMED CT-AU (includes AMT) to OWL..."
+
+          # SNOMED CT-AU includes both the AU extension and AMT in RF2 format
+          # The snomed-toolkit handles RF2 transformation
+          docker run --rm \
+            -v $(pwd)/sources:/input \
+            -v $(pwd)/output:/output \
+            -e REGION=au \
+            -e OUTPUT_PREFIX=snomed-au \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/snomed-toolkit:${{ env.DOCKER_IMAGE_TAG }}
+
+          echo "SNOMED CT-AU + AMT transformation complete"
+          ls -lh output/
+
+      - name: Transform LOINC CSV to RDF
+        run: |
+          echo "Transforming LOINC CSV to RDF..."
+
+          if [ -d "sources/extracted/loinc" ] && [ "$(ls -A sources/extracted/loinc)" ]; then
+            docker run --rm \
+              -v $(pwd)/sources/extracted/loinc:/input \
+              -v $(pwd)/output:/output \
+              ghcr.io/${{ steps.lowercase.outputs.owner }}/converters:${{ env.DOCKER_IMAGE_TAG }} \
+              -c "python /app/scripts/transform-loinc.py"
+            echo "LOINC transformation complete"
+          else
+            echo "LOINC sources not available, skipping..."
+          fi
+
+      - name: Upload transformed ontologies
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformed-ontologies-au
+          path: output/
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 3: MERGE - Combine AU ontologies
+  # Merge: SNOMED CT-AU + AMT + LOINC
+  # ============================================================================
+  merge:
+    name: "Stage 3: Merge Australian Ontologies"
+    needs: transform
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download transformed ontologies
+        uses: actions/download-artifact@v4
+        with:
+          name: transformed-ontologies-au
+          path: output/
+
+      - name: Merge with ROBOT
+        run: |
+          echo "Merging Australian ontologies (SNOMED-AU + AMT + LOINC)..."
+
+          docker run --rm \
+            -v $(pwd)/output:/workspace \
+            -e REGION=au \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:${{ env.DOCKER_IMAGE_TAG }} \
+            /app/scripts/merge-ontologies.sh
+
+          echo "Merge complete"
+          ls -lh output/
+
+      - name: Upload merged ontology
+        uses: actions/upload-artifact@v4
+        with:
+          name: merged-ontology-au
+          path: output/kb7-merged.ttl
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 4: REASONING - Download pre-computed reasoning from GCS
+  # Uses ELK reasoner results computed locally and uploaded to GCS
+  # ============================================================================
+  gcs-reasoning:
+    name: "Stage 4: Download AU Reasoning from GCS"
+    needs: merge
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Download pre-computed reasoning from GCS
+        run: |
+          echo "Downloading pre-computed AU reasoning..."
+          echo "Source: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/local-reasoning/kb7-inferred.ttl"
+
+          gsutil cp "gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/local-reasoning/kb7-inferred.ttl" output/ || {
+            echo "AU reasoning not found, trying legacy path..."
+            gsutil cp "gs://${{ env.GCS_BUCKET_ARTIFACTS }}/local-reasoning/kb7-inferred-au.ttl" output/kb7-inferred.ttl || {
+              echo "ERROR: No pre-computed reasoning found for AU"
+              exit 1
+            }
+          }
+
+          gsutil cp "gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/local-reasoning/manifest.json" output/ || echo "No manifest found"
+
+          echo "Download complete"
+          ls -lh output/
+
+      - name: Verify downloaded file
+        run: |
+          if [ ! -f output/kb7-inferred.ttl ]; then
+            echo "ERROR: kb7-inferred.ttl not found"
+            exit 1
+          fi
+
+          FILE_SIZE=$(stat -c%s output/kb7-inferred.ttl)
+          echo "File size: $FILE_SIZE bytes"
+
+          # AU kernel expected size: ~500MB (SNOMED-AU + AMT + LOINC)
+          MIN_SIZE=100000000  # 100MB minimum
+
+          if [ $FILE_SIZE -lt $MIN_SIZE ]; then
+            echo "WARNING: File smaller than expected for AU region"
+          fi
+
+          echo "Pre-computed AU reasoning verified"
+
+      - name: Upload inferred ontology artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: inferred-ontology-au
+          path: output/kb7-inferred.ttl
+          retention-days: 1
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 5: VALIDATION - Run quality gates for AU
+  # Validates SNOMED-AU + AMT + LOINC presence and structure
+  # ============================================================================
+  validation:
+    name: "Stage 5: Validate Australian Kernel"
+    needs: gcs-reasoning
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download inferred ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: inferred-ontology-au
+          path: output/
+
+      - name: Run AU-specific validation
+        run: |
+          mkdir -p output/validation-results
+
+          echo "Running validation on AU kernel..."
+
+          FILE="output/kb7-inferred.ttl"
+
+          # Check 1: File exists
+          if [ ! -f "$FILE" ]; then
+            echo "FAIL: kb7-inferred.ttl not found"
+            exit 1
+          fi
+          echo "File exists: $FILE"
+
+          # Check 2: File size
+          FILE_SIZE=$(stat -f%z "$FILE" 2>/dev/null || stat -c%s "$FILE")
+          echo "File size: $(numfmt --to=iec $FILE_SIZE 2>/dev/null || echo "$FILE_SIZE bytes")"
+
+          # Check 3: Line count
+          LINE_COUNT=$(wc -l < "$FILE")
+          echo "Line count: $LINE_COUNT"
+
+          # Check 4: Verify SNOMED namespace
+          echo ""
+          echo "Checking SNOMED CT-AU presence..."
+          if grep -q "http://snomed.info/id/" "$FILE"; then
+            SNOMED_COUNT=$(grep -c "http://snomed.info/id/" "$FILE" || echo "0")
+            echo "SNOMED namespace present (~$SNOMED_COUNT occurrences)"
+          else
+            echo "FAIL: No SNOMED concepts found"
+            exit 1
+          fi
+
+          # Check 5: Verify AU Extension module (32506021000036107)
+          echo "Checking AU Extension module..."
+          if grep -q "32506021000036107" "$FILE"; then
+            echo "AU Extension module present (32506021000036107)"
+          else
+            echo "WARNING: AU Extension module ID not found"
+          fi
+
+          # Check 6: Verify AMT module (900062011000036103)
+          echo "Checking AMT module..."
+          if grep -q "900062011000036103" "$FILE"; then
+            echo "AMT module present (900062011000036103)"
+          else
+            echo "WARNING: AMT module ID not found - may be bundled differently"
+          fi
+
+          # Check 7: Verify LOINC namespace
+          echo "Checking LOINC presence..."
+          if grep -q "http://loinc.org/" "$FILE"; then
+            LOINC_COUNT=$(grep -c "http://loinc.org/" "$FILE" || echo "0")
+            echo "LOINC namespace present (~$LOINC_COUNT occurrences)"
+          else
+            echo "INFO: LOINC not found (may not be included in this build)"
+          fi
+
+          # Check 8: Valid Turtle format
+          if ! grep -q "@prefix" "$FILE"; then
+            echo "FAIL: No @prefix declarations - not valid Turtle"
+            exit 1
+          fi
+          echo "Turtle format validated"
+
+          echo ""
+          echo "AU Validation PASSED"
+
+      - name: Upload validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-results-au
+          path: output/validation-results/
+          retention-days: 7
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 6: PACKAGE - Create AU kernel package
+  # ============================================================================
+  package:
+    name: "Stage 6: Package Australian Kernel"
+    needs: [download, validation]
+    runs-on: ubuntu-latest
+    outputs:
+      kernel_version: ${{ steps.package.outputs.version }}
+      concept_count: ${{ steps.package.outputs.concept_count }}
+      triple_count: ${{ steps.package.outputs.triple_count }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase registry owner
+        id: lowercase
+        run: echo "owner=$(echo '${{ env.REGISTRY_OWNER }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download inferred ontology
+        uses: actions/download-artifact@v4
+        with:
+          name: inferred-ontology-au
+          path: output/
+
+      - name: Package kernel
+        id: package
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v $(pwd)/output:/workspace \
+            -e REGION=au \
+            -e OUTPUT_FILE="kb7-kernel-au.ttl" \
+            ghcr.io/${{ steps.lowercase.outputs.owner }}/robot:${{ env.DOCKER_IMAGE_TAG }} \
+            /app/scripts/package-kernel.sh
+
+      - name: Generate metadata manifest
+        run: |
+          VERSION=$(date +%Y%m%d)
+
+          # Read counts from package script output
+          CONCEPT_COUNT=$(cat output/kb7-manifest.json | jq -r '.concept_count' 2>/dev/null || echo "0")
+          TRIPLE_COUNT=$(cat output/kb7-manifest.json | jq -r '.triple_count' 2>/dev/null || echo "0")
+          FILE_SIZE=$(cat output/kb7-manifest.json | jq -r '.file_size' 2>/dev/null || stat -c%s output/kb7-kernel-au.ttl 2>/dev/null || echo "0")
+          CHECKSUM=$(sha256sum output/kb7-kernel-au.ttl 2>/dev/null | cut -d' ' -f1 || echo "unknown")
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "concept_count=$CONCEPT_COUNT" >> $GITHUB_OUTPUT
+          echo "triple_count=$TRIPLE_COUNT" >> $GITHUB_OUTPUT
+
+          # Terminology versions from download stage
+          SNOMED_VERSION="${{ needs.download.outputs.snomed_version }}"
+          AMT_VERSION="${{ needs.download.outputs.amt_version }}"
+          LOINC_VERSION="${{ needs.download.outputs.loinc_version }}"
+
+          # AU-specific manifest
+          cat > output/kb7-manifest.json <<EOF
+          {
+            "version": "$VERSION",
+            "region": "au",
+            "region_display": "Australia",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "built_by": "${{ github.actor }}",
+            "kernel_uri": "http://cardiofit.ai/kernels/au/$VERSION",
+            "concept_count": $CONCEPT_COUNT,
+            "triple_count": $TRIPLE_COUNT,
+            "file_size": $FILE_SIZE,
+            "checksum_sha256": "$CHECKSUM",
+            "terminologies": {
+              "snomed_au": {
+                "version": "$SNOMED_VERSION",
+                "module_id": "32506021000036107",
+                "uri": "http://snomed.info/"
+              },
+              "amt": {
+                "version": "$AMT_VERSION",
+                "module_id": "900062011000036103",
+                "uri": "http://snomed.info/"
+              },
+              "loinc": {
+                "version": "$LOINC_VERSION",
+                "uri": "http://loinc.org/"
+              }
+            },
+            "reasoner": "ELK v0.5.0 (via ROBOT v1.9.5)",
+            "git_commit": "${{ github.sha }}",
+            "workflow_run": "${{ github.run_id }}"
+          }
+          EOF
+
+          echo "AU Manifest generated"
+          cat output/kb7-manifest.json | jq '.'
+
+      - name: Create versioned snapshot
+        run: |
+          VERSION=$(date +%Y%m%d)
+
+          mkdir -p artifacts/$VERSION
+          cp output/kb7-kernel-au.ttl artifacts/$VERSION/ 2>/dev/null || cp output/kb7-kernel.ttl artifacts/$VERSION/kb7-kernel-au.ttl
+          cp output/kb7-manifest.json artifacts/$VERSION/
+          tar -czf artifacts/kb7-au-$VERSION.tar.gz -C artifacts/$VERSION .
+
+      - name: Upload packaged kernel
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-kernel-au
+          path: artifacts/
+          retention-days: 7
+          overwrite: true
+
+  # ============================================================================
+  # STAGE 7: UPLOAD - Push AU kernel to GCS
+  # ============================================================================
+  upload:
+    name: "Stage 7: Upload AU Kernel to GCS"
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Download packaged kernel
+        uses: actions/download-artifact@v4
+        with:
+          name: packaged-kernel-au
+          path: artifacts/
+
+      - name: Upload to GCS
+        run: |
+          VERSION=$(date +%Y%m%d)
+
+          mkdir -p ~/.gsutil/tracker-files
+          chmod 755 ~/.gsutil/tracker-files
+
+          cat > ~/.boto <<EOF
+          [GSUtil]
+          parallel_composite_upload_threshold = 0
+          resumable_threshold = 0
+          EOF
+
+          echo "Uploading AU kernel version $VERSION..."
+
+          # Upload versioned kernel
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-manifest.json \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/$VERSION/kb7-manifest.json
+
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-kernel-au.ttl \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/$VERSION/kb7-kernel-au.ttl
+
+          echo "Updating 'latest' pointer..."
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-kernel-au.ttl \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/latest/kb7-kernel-au.ttl
+
+          gsutil -o "GSUtil:parallel_composite_upload_threshold=0" cp artifacts/$VERSION/kb7-manifest.json \
+            gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/latest/kb7-manifest.json
+
+          echo "Uploaded AU kernel version $VERSION to GCS"
+          echo "URI: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/$VERSION/"
+
+      - name: Pipeline complete notification
+        run: |
+          echo "KB-7 AU Pipeline Complete"
+          echo "Version: $(date +%Y%m%d)"
+          echo "GCS: gs://${{ env.GCS_BUCKET_ARTIFACTS }}/au/$(date +%Y%m%d)/"
+
+  # ============================================================================
+  # STAGE 8: DEPLOY - Import to AU Neo4j instance
+  # ============================================================================
+  deploy:
+    name: "Stage 8: Deploy AU Kernel to Neo4j"
+    needs: [download, package, upload]
+    runs-on: ubuntu-latest
+    if: ${{ success() && vars.GRAPHDB_DEPLOY_ENABLED == 'true' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests google-cloud-storage google-auth psycopg2-binary
+
+      - name: Deploy to AU Neo4j
+        env:
+          NEO4J_URL: ${{ secrets.NEO4J_URL_AU }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD_AU }}
+          NEO4J_DATABASE: kb7-au
+          REGION: au
+          VERSION_ID: ${{ needs.package.outputs.kernel_version }}
+          SNOMED_VERSION: ${{ needs.download.outputs.snomed_version }}
+          AMT_VERSION: ${{ needs.download.outputs.amt_version }}
+          LOINC_VERSION: ${{ needs.download.outputs.loinc_version }}
+          CONCEPT_COUNT: ${{ needs.package.outputs.concept_count }}
+          ENABLE_CDC: ${{ vars.ENABLE_CDC || 'false' }}
+        run: |
+          echo "Deploying KB-7 AU kernel to Neo4j..."
+          echo "   Version: $VERSION_ID"
+          echo "   Target: $NEO4J_URL (database: $NEO4J_DATABASE)"
+
+          python scripts/deploy_neo4j.py
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "KB-7 AU Deployment Complete"
+          echo "═══════════════════════════════════════════"
+          echo "   Region:         Australia (AU)"
+          echo "   Version:        ${{ needs.package.outputs.kernel_version }}"
+          echo "   Concepts:       ${{ needs.package.outputs.concept_count }}"
+          echo "   SNOMED CT-AU:   ${{ needs.download.outputs.snomed_version }}"
+          echo "   AMT:            ${{ needs.download.outputs.amt_version }}"
+          echo "   LOINC:          ${{ needs.download.outputs.loinc_version }}"

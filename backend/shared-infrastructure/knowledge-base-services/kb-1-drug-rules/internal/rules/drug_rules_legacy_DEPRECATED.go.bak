@@ -1,0 +1,1141 @@
+// Package rules provides the built-in drug dosing rules repository.
+// Contains 24 drugs across 5 categories as specified in the OpenAPI documentation.
+package rules
+
+import (
+	"strings"
+	"sync"
+
+	"kb-1-drug-rules/internal/models"
+)
+
+// Repository provides access to drug rules.
+type Repository struct {
+	rules map[string]*models.DrugRule
+	mu    sync.RWMutex
+}
+
+// NewRepository creates a new rules repository with all 24 built-in drugs.
+func NewRepository() *Repository {
+	r := &Repository{
+		rules: make(map[string]*models.DrugRule),
+	}
+	r.loadBuiltInRules()
+	return r
+}
+
+// GetByRxNorm retrieves a drug rule by RxNorm code.
+func (r *Repository) GetByRxNorm(rxnorm string) (*models.DrugRule, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rule, ok := r.rules[rxnorm]
+	return rule, ok
+}
+
+// GetAll returns all drug rules.
+func (r *Repository) GetAll() []*models.DrugRule {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]*models.DrugRule, 0, len(r.rules))
+	for _, rule := range r.rules {
+		result = append(result, rule)
+	}
+	return result
+}
+
+// Search searches drug rules by name or category.
+func (r *Repository) Search(query string, category string, highAlertOnly bool) []*models.DrugRule {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var results []*models.DrugRule
+	queryLower := strings.ToLower(query)
+	categoryLower := strings.ToLower(category)
+
+	for _, rule := range r.rules {
+		// Filter by high alert
+		if highAlertOnly && !rule.IsHighAlert {
+			continue
+		}
+
+		// Filter by category
+		if category != "" && strings.ToLower(rule.Category) != categoryLower {
+			continue
+		}
+
+		// Filter by name query
+		if query != "" {
+			nameLower := strings.ToLower(rule.DrugName)
+			if !strings.Contains(nameLower, queryLower) {
+				continue
+			}
+		}
+
+		results = append(results, rule)
+	}
+
+	return results
+}
+
+// loadBuiltInRules initializes all 24 drug rules.
+func (r *Repository) loadBuiltInRules() {
+	// ============================================================================
+	// DIABETES MEDICATIONS (4 drugs)
+	// ============================================================================
+
+	// Metformin - RxNorm 6809
+	r.rules["6809"] = &models.DrugRule{
+		RxNormCode:   "6809",
+		DrugName:     "Metformin",
+		DrugClass:    "Biguanide",
+		Category:     "diabetes",
+		DosingMethod: "FIXED",
+		DefaultDose:  500,
+		MinDose:      500,
+		MaxDose:      1000,
+		MaxDailyDose: 2000,
+		DoseUnit:     "mg",
+		Frequency:    "BID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Renal function", "B12 levels annually", "Lactic acid if symptomatic"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 45, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 30, EGFRMax: 44, AdjustmentFactor: 0.5, MaxDose: 1000, Recommendation: "Reduce max dose to 1000mg/day"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in eGFR <30"},
+		},
+	}
+
+	// Empagliflozin - RxNorm 1545653
+	r.rules["1545653"] = &models.DrugRule{
+		RxNormCode:   "1545653",
+		DrugName:     "Empagliflozin",
+		DrugClass:    "SGLT2 Inhibitor",
+		Category:     "diabetes",
+		DosingMethod: "FIXED",
+		DefaultDose:  10,
+		MinDose:      10,
+		MaxDose:      25,
+		MaxDailyDose: 25,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Renal function", "Blood pressure", "Signs of DKA", "Genital infections"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 45, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 30, EGFRMax: 44, AdjustmentFactor: 1.0, Recommendation: "May continue for CV/renal benefit"},
+			{EGFRMin: 20, EGFRMax: 29, AdjustmentFactor: 1.0, Recommendation: "Continue if already on therapy"},
+			{EGFRMin: 0, EGFRMax: 19, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Do not initiate if eGFR <20"},
+		},
+	}
+
+	// Liraglutide - RxNorm 475968
+	r.rules["475968"] = &models.DrugRule{
+		RxNormCode:         "475968",
+		DrugName:           "Liraglutide",
+		DrugClass:          "GLP-1 Receptor Agonist",
+		Category:           "diabetes",
+		DosingMethod:       "TITRATION",
+		DefaultDose:        0.6,
+		MinDose:            0.6,
+		MaxDose:            1.8,
+		MaxDailyDose:       1.8,
+		DoseUnit:           "mg",
+		Frequency:          "QD",
+		Route:              "subcutaneous",
+		IsHighAlert:        false,
+		IsNarrowTI:         false,
+		HasBlackBoxWarning: true,
+		BlackBoxWarning:    "Risk of thyroid C-cell tumors. Contraindicated in MEN2 or personal/family history of MTC.",
+		Monitoring:         []string{"Blood glucose", "HbA1c", "Thyroid nodules", "Signs of pancreatitis"},
+	}
+
+	// Insulin Glargine - RxNorm 261551
+	r.rules["261551"] = &models.DrugRule{
+		RxNormCode:   "261551",
+		DrugName:     "Insulin Glargine",
+		DrugClass:    "Long-acting Insulin",
+		Category:     "diabetes",
+		DosingMethod: "WEIGHT_BASED",
+		DefaultDose:  10,
+		MinDose:      1,
+		MaxDose:      100,
+		MaxDailyDose: 100,
+		DoseUnit:     "units",
+		Frequency:    "QD",
+		Route:        "subcutaneous",
+		DosePerKg:    0.2,
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood glucose", "HbA1c", "Hypoglycemia symptoms", "Injection site reactions"},
+	}
+
+	// ============================================================================
+	// CARDIOVASCULAR MEDICATIONS (7 drugs)
+	// ============================================================================
+
+	// Lisinopril - RxNorm 29046
+	r.rules["29046"] = &models.DrugRule{
+		RxNormCode:   "29046",
+		DrugName:     "Lisinopril",
+		DrugClass:    "ACE Inhibitor",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  5,
+		MinDose:      2.5,
+		MaxDose:      40,
+		MaxDailyDose: 40,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Potassium", "Creatinine", "Cough"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 10, EGFRMax: 29, AdjustmentFactor: 0.5, Recommendation: "Start at 2.5-5mg, titrate slowly"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 0.25, Recommendation: "Start at 2.5mg, use with caution"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start low (2.5-5mg) in elderly"},
+		},
+	}
+
+	// Ramipril - RxNorm 35296
+	r.rules["35296"] = &models.DrugRule{
+		RxNormCode:   "35296",
+		DrugName:     "Ramipril",
+		DrugClass:    "ACE Inhibitor",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  2.5,
+		MinDose:      1.25,
+		MaxDose:      10,
+		MaxDailyDose: 10,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Potassium", "Creatinine", "Cough"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 40, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 20, EGFRMax: 39, AdjustmentFactor: 0.5, MaxDose: 5, Recommendation: "Start 1.25mg, max 5mg"},
+			{EGFRMin: 0, EGFRMax: 19, AdjustmentFactor: 0.25, MaxDose: 2.5, Recommendation: "Start 1.25mg, max 2.5mg"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 1.25mg in elderly"},
+		},
+	}
+
+	// Enalapril - RxNorm 3827
+	r.rules["3827"] = &models.DrugRule{
+		RxNormCode:   "3827",
+		DrugName:     "Enalapril",
+		DrugClass:    "ACE Inhibitor",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  5,
+		MinDose:      2.5,
+		MaxDose:      40,
+		MaxDailyDose: 40,
+		DoseUnit:     "mg",
+		Frequency:    "QD-BID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Potassium", "Creatinine", "Cough"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 10, EGFRMax: 29, AdjustmentFactor: 0.5, MaxDose: 20, Recommendation: "Start at 2.5mg, max 20mg/day"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 0.25, MaxDose: 10, Recommendation: "2.5mg on dialysis days"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 2.5mg in elderly"},
+		},
+	}
+
+	// Losartan - RxNorm 52175
+	r.rules["52175"] = &models.DrugRule{
+		RxNormCode:   "52175",
+		DrugName:     "Losartan",
+		DrugClass:    "ARB",
+		Category:     "cardiovascular",
+		DosingMethod: "FIXED",
+		DefaultDose:  50,
+		MinDose:      25,
+		MaxDose:      100,
+		MaxDailyDose: 100,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Potassium", "Creatinine"},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, MaxDose: 50, Recommendation: "Start at 25mg, max 50mg"},
+			{ChildPughClass: "C", AdjustmentFactor: 0.25, MaxDose: 25, Recommendation: "Use with extreme caution"},
+		},
+	}
+
+	// Valsartan - RxNorm 69749
+	r.rules["69749"] = &models.DrugRule{
+		RxNormCode:   "69749",
+		DrugName:     "Valsartan",
+		DrugClass:    "ARB",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  80,
+		MinDose:      40,
+		MaxDose:      320,
+		MaxDailyDose: 320,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Potassium", "Creatinine"},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, MaxDose: 80, Recommendation: "Max 80mg in moderate impairment"},
+			{ChildPughClass: "C", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in severe hepatic impairment"},
+		},
+	}
+
+	// Metoprolol Succinate - RxNorm 866924
+	r.rules["866924"] = &models.DrugRule{
+		RxNormCode:   "866924",
+		DrugName:     "Metoprolol Succinate",
+		DrugClass:    "Beta Blocker",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  25,
+		MinDose:      12.5,
+		MaxDose:      200,
+		MaxDailyDose: 400,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Heart rate", "Blood pressure", "Heart failure symptoms"},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 12.5-25mg in elderly"},
+		},
+	}
+
+	// Carvedilol - RxNorm 20352
+	r.rules["20352"] = &models.DrugRule{
+		RxNormCode:   "20352",
+		DrugName:     "Carvedilol",
+		DrugClass:    "Alpha/Beta Blocker",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  3.125,
+		MinDose:      3.125,
+		MaxDose:      50,
+		MaxDailyDose: 100,
+		DoseUnit:     "mg",
+		Frequency:    "BID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Heart rate", "Blood pressure", "Weight", "Heart failure symptoms"},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Use with caution"},
+			{ChildPughClass: "C", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in severe hepatic impairment"},
+		},
+	}
+
+	// Amlodipine - RxNorm 17767
+	r.rules["17767"] = &models.DrugRule{
+		RxNormCode:   "17767",
+		DrugName:     "Amlodipine",
+		DrugClass:    "Calcium Channel Blocker",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  5,
+		MinDose:      2.5,
+		MaxDose:      10,
+		MaxDailyDose: 10,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Heart rate", "Edema"},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 2.5mg in elderly"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Start at 2.5mg in hepatic impairment"},
+			{ChildPughClass: "C", AdjustmentFactor: 0.5, Recommendation: "Start at 2.5mg, titrate slowly"},
+		},
+	}
+
+	// Nifedipine - RxNorm 7417
+	r.rules["7417"] = &models.DrugRule{
+		RxNormCode:   "7417",
+		DrugName:     "Nifedipine",
+		DrugClass:    "Calcium Channel Blocker",
+		Category:     "cardiovascular",
+		DosingMethod: "FIXED",
+		DefaultDose:  30,
+		MinDose:      30,
+		MaxDose:      90,
+		MaxDailyDose: 120,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Heart rate", "Edema", "Headache"},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 30mg in elderly, titrate slowly"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Reduce dose in hepatic impairment"},
+			{ChildPughClass: "C", AdjustmentFactor: 0.5, Recommendation: "Use with caution"},
+		},
+	}
+
+	// Atorvastatin - RxNorm 83367
+	r.rules["83367"] = &models.DrugRule{
+		RxNormCode:   "83367",
+		DrugName:     "Atorvastatin",
+		DrugClass:    "HMG-CoA Reductase Inhibitor",
+		Category:     "cardiovascular",
+		DosingMethod: "FIXED",
+		DefaultDose:  20,
+		MinDose:      10,
+		MaxDose:      80,
+		MaxDailyDose: 80,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"LFTs", "Lipid panel", "CK if muscle symptoms", "Blood glucose"},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in active liver disease"},
+			{ChildPughClass: "C", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in active liver disease"},
+		},
+	}
+
+	// Furosemide - RxNorm 4603
+	r.rules["4603"] = &models.DrugRule{
+		RxNormCode:   "4603",
+		DrugName:     "Furosemide",
+		DrugClass:    "Loop Diuretic",
+		Category:     "cardiovascular",
+		DosingMethod: "FIXED",
+		DefaultDose:  40,
+		MinDose:      20,
+		MaxDose:      200,
+		MaxDailyDose: 600,
+		DoseUnit:     "mg",
+		Frequency:    "QD-BID",
+		Route:        "oral/IV",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Electrolytes", "Renal function", "Blood pressure", "Fluid status"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 15, EGFRMax: 29, AdjustmentFactor: 1.5, Recommendation: "May need higher doses for effect"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 2.0, Recommendation: "Higher doses often required, max 600mg/day"},
+		},
+	}
+
+	// Spironolactone - RxNorm 9997
+	r.rules["9997"] = &models.DrugRule{
+		RxNormCode:   "9997",
+		DrugName:     "Spironolactone",
+		DrugClass:    "Potassium-sparing Diuretic",
+		Category:     "cardiovascular",
+		DosingMethod: "FIXED",
+		DefaultDose:  25,
+		MinDose:      12.5,
+		MaxDose:      100,
+		MaxDailyDose: 400,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Potassium", "Renal function", "Blood pressure"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 30, EGFRMax: 49, AdjustmentFactor: 0.5, MaxDose: 25, Recommendation: "Use with caution, monitor K+"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in severe renal impairment"},
+		},
+	}
+
+	// ============================================================================
+	// PREGNANCY-SAFE ANTIHYPERTENSIVES (3 drugs)
+	// ============================================================================
+
+	// Labetalol - RxNorm 6135
+	r.rules["6135"] = &models.DrugRule{
+		RxNormCode:   "6135",
+		DrugName:     "Labetalol",
+		DrugClass:    "Alpha/Beta Blocker",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  100,
+		MinDose:      100,
+		MaxDose:      400,
+		MaxDailyDose: 2400,
+		DoseUnit:     "mg",
+		Frequency:    "BID-TID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Heart rate", "Fetal heart rate in pregnancy"},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at lower dose in elderly"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Reduce dose in hepatic impairment"},
+			{ChildPughClass: "C", AdjustmentFactor: 0.25, Recommendation: "Use with caution"},
+		},
+	}
+
+	// Methyldopa - RxNorm 6876
+	r.rules["6876"] = &models.DrugRule{
+		RxNormCode:   "6876",
+		DrugName:     "Methyldopa",
+		DrugClass:    "Central Alpha-2 Agonist",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  250,
+		MinDose:      250,
+		MaxDose:      500,
+		MaxDailyDose: 2000,
+		DoseUnit:     "mg",
+		Frequency:    "BID-TID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "LFTs", "Hemolytic anemia signs", "Coombs test"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 10, EGFRMax: 49, AdjustmentFactor: 0.66, Recommendation: "Extend dosing interval to Q8-12H"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 0.5, Recommendation: "Give Q12-24H"},
+		},
+	}
+
+	// Hydralazine - RxNorm 5470
+	r.rules["5470"] = &models.DrugRule{
+		RxNormCode:   "5470",
+		DrugName:     "Hydralazine",
+		DrugClass:    "Direct Vasodilator",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  25,
+		MinDose:      10,
+		MaxDose:      100,
+		MaxDailyDose: 300,
+		DoseUnit:     "mg",
+		Frequency:    "TID-QID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Blood pressure", "Heart rate", "ANA for lupus-like syndrome"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 10, EGFRMax: 29, AdjustmentFactor: 0.66, Recommendation: "Extend dosing interval"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 0.5, Recommendation: "Use with caution, Q12-24H"},
+		},
+	}
+
+	// ============================================================================
+	// ANTICOAGULANTS (4 drugs)
+	// ============================================================================
+
+	// Warfarin - RxNorm 11289
+	r.rules["11289"] = &models.DrugRule{
+		RxNormCode:   "11289",
+		DrugName:     "Warfarin",
+		DrugClass:    "Vitamin K Antagonist",
+		Category:     "anticoagulant",
+		DosingMethod: "FIXED",
+		DefaultDose:  5,
+		MinDose:      1,
+		MaxDose:      10,
+		MaxDailyDose: 10,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  true,
+		IsNarrowTI:   true,
+		Monitoring:   []string{"INR", "Signs of bleeding", "Drug interactions"},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.75, Recommendation: "Start low (2-3mg) in elderly, increased bleeding risk"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 0.75, Recommendation: "Reduce dose, monitor INR closely"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Significant dose reduction, frequent INR"},
+			{ChildPughClass: "C", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in severe hepatic impairment"},
+		},
+	}
+
+	// Apixaban - RxNorm 1364430
+	r.rules["1364430"] = &models.DrugRule{
+		RxNormCode:   "1364430",
+		DrugName:     "Apixaban",
+		DrugClass:    "Direct Factor Xa Inhibitor",
+		Category:     "anticoagulant",
+		DosingMethod: "FIXED",
+		DefaultDose:  5,
+		MinDose:      2.5,
+		MaxDose:      5,
+		MaxDailyDose: 10,
+		DoseUnit:     "mg",
+		Frequency:    "BID",
+		Route:        "oral",
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Renal function", "Signs of bleeding", "Hemoglobin"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "5mg BID standard dose"},
+			{EGFRMin: 25, EGFRMax: 49, AdjustmentFactor: 1.0, Recommendation: "5mg BID unless age ≥80, weight ≤60kg, or Cr ≥1.5"},
+			{EGFRMin: 15, EGFRMax: 24, AdjustmentFactor: 0.5, MaxDose: 2.5, Recommendation: "2.5mg BID recommended"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Not recommended in ESRD"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 80, MaxAge: 150, AdjustmentFactor: 0.5, MaxDose: 2.5, Recommendation: "2.5mg BID if ≥2 of: age ≥80, weight ≤60kg, Cr ≥1.5"},
+		},
+	}
+
+	// Rivaroxaban - RxNorm 1114195
+	r.rules["1114195"] = &models.DrugRule{
+		RxNormCode:   "1114195",
+		DrugName:     "Rivaroxaban",
+		DrugClass:    "Direct Factor Xa Inhibitor",
+		Category:     "anticoagulant",
+		DosingMethod: "FIXED",
+		DefaultDose:  20,
+		MinDose:      10,
+		MaxDose:      20,
+		MaxDailyDose: 20,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Renal function", "Signs of bleeding", "Hemoglobin", "CBC"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "20mg QD with food"},
+			{EGFRMin: 30, EGFRMax: 49, AdjustmentFactor: 1.0, Recommendation: "20mg QD - use with caution"},
+			{EGFRMin: 15, EGFRMax: 29, AdjustmentFactor: 0.75, MaxDose: 15, Recommendation: "15mg QD for AF; avoid in VTE treatment"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid - insufficient data in ESRD"},
+		},
+	}
+
+	// Dabigatran - RxNorm 1037042
+	r.rules["1037042"] = &models.DrugRule{
+		RxNormCode:   "1037042",
+		DrugName:     "Dabigatran",
+		DrugClass:    "Direct Thrombin Inhibitor",
+		Category:     "anticoagulant",
+		DosingMethod: "FIXED",
+		DefaultDose:  150,
+		MinDose:      75,
+		MaxDose:      150,
+		MaxDailyDose: 300,
+		DoseUnit:     "mg",
+		Frequency:    "BID",
+		Route:        "oral",
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Renal function", "Signs of bleeding", "aPTT if needed"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "150mg BID standard dose"},
+			{EGFRMin: 30, EGFRMax: 49, AdjustmentFactor: 0.5, MaxDose: 75, Recommendation: "75mg BID with P-gp inhibitors"},
+			{EGFRMin: 15, EGFRMax: 29, AdjustmentFactor: 0.5, MaxDose: 75, Recommendation: "75mg BID - limited data"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in CrCl <15 or dialysis"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 75, MaxAge: 150, AdjustmentFactor: 1.0, Recommendation: "Consider 110mg BID if high bleeding risk"},
+		},
+	}
+
+	// Edoxaban - RxNorm 1599538
+	r.rules["1599538"] = &models.DrugRule{
+		RxNormCode:   "1599538",
+		DrugName:     "Edoxaban",
+		DrugClass:    "Direct Factor Xa Inhibitor",
+		Category:     "anticoagulant",
+		DosingMethod: "FIXED",
+		DefaultDose:  60,
+		MinDose:      30,
+		MaxDose:      60,
+		MaxDailyDose: 60,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Renal function", "Signs of bleeding", "CBC"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 95, EGFRMax: 999, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid if CrCl >95 - reduced efficacy"},
+			{EGFRMin: 50, EGFRMax: 94, AdjustmentFactor: 1.0, Recommendation: "60mg QD"},
+			{EGFRMin: 15, EGFRMax: 49, AdjustmentFactor: 0.5, MaxDose: 30, Recommendation: "30mg QD"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in CrCl <15"},
+		},
+	}
+
+	// Enoxaparin - RxNorm 67108
+	r.rules["67108"] = &models.DrugRule{
+		RxNormCode:   "67108",
+		DrugName:     "Enoxaparin",
+		DrugClass:    "Low Molecular Weight Heparin",
+		Category:     "anticoagulant",
+		DosingMethod: "WEIGHT_BASED",
+		DefaultDose:  40,
+		MinDose:      30,
+		MaxDose:      150,
+		MaxDailyDose: 300,
+		DoseUnit:     "mg",
+		Frequency:    "Q12H-QD",
+		Route:        "subcutaneous",
+		DosePerKg:    1.0,
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Anti-Xa levels if indicated", "Platelet count", "Signs of bleeding", "Renal function"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "1mg/kg Q12H for treatment"},
+			{EGFRMin: 15, EGFRMax: 29, AdjustmentFactor: 0.5, Recommendation: "1mg/kg Q24H or 0.5mg/kg Q12H"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Use with extreme caution, consider UFH"},
+		},
+	}
+
+	// Heparin - RxNorm 5224
+	r.rules["5224"] = &models.DrugRule{
+		RxNormCode:   "5224",
+		DrugName:     "Heparin",
+		DrugClass:    "Unfractionated Heparin",
+		Category:     "anticoagulant",
+		DosingMethod: "WEIGHT_BASED",
+		DefaultDose:  80,
+		MinDose:      60,
+		MaxDose:      100,
+		MaxDailyDose: 40000,
+		DoseUnit:     "units/kg",
+		Frequency:    "Continuous",
+		Route:        "IV",
+		DosePerKg:    80,
+		IsHighAlert:  true,
+		IsNarrowTI:   true,
+		Monitoring:   []string{"aPTT every 6h until stable", "Platelet count", "Signs of HIT", "Signs of bleeding"},
+	}
+
+	// ============================================================================
+	// ANTIBIOTICS (4 drugs)
+	// ============================================================================
+
+	// Amoxicillin - RxNorm 723
+	r.rules["723"] = &models.DrugRule{
+		RxNormCode:   "723",
+		DrugName:     "Amoxicillin",
+		DrugClass:    "Aminopenicillin",
+		Category:     "antibiotic",
+		DosingMethod: "FIXED",
+		DefaultDose:  500,
+		MinDose:      250,
+		MaxDose:      1000,
+		MaxDailyDose: 3000,
+		DoseUnit:     "mg",
+		Frequency:    "TID",
+		Route:        "oral",
+		DosePerKg:    25,
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Signs of allergic reaction", "Renal function if prolonged use"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 10, EGFRMax: 29, AdjustmentFactor: 0.66, Recommendation: "250-500mg Q12H"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 0.5, Recommendation: "250-500mg Q24H"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 0, MaxAge: 12, AdjustmentFactor: 1.0, Recommendation: "Pediatric: 25-50mg/kg/day divided Q8H"},
+		},
+	}
+
+	// Vancomycin - RxNorm 11124
+	r.rules["11124"] = &models.DrugRule{
+		RxNormCode:   "11124",
+		DrugName:     "Vancomycin",
+		DrugClass:    "Glycopeptide",
+		Category:     "antibiotic",
+		DosingMethod: "WEIGHT_BASED",
+		DefaultDose:  1000,
+		MinDose:      500,
+		MaxDose:      2000,
+		MaxDailyDose: 4000,
+		DoseUnit:     "mg",
+		Frequency:    "Q12H",
+		Route:        "IV",
+		DosePerKg:    15,
+		IsHighAlert:  false,
+		IsNarrowTI:   true,
+		Monitoring:   []string{"Trough levels (target 10-20)", "Renal function", "Signs of nephrotoxicity", "Red man syndrome"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "15-20mg/kg Q12H"},
+			{EGFRMin: 30, EGFRMax: 49, AdjustmentFactor: 1.0, Recommendation: "15-20mg/kg Q24H"},
+			{EGFRMin: 10, EGFRMax: 29, AdjustmentFactor: 1.0, Recommendation: "15-20mg/kg Q48H, follow levels"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 1.0, Recommendation: "Load 25mg/kg, redose by levels"},
+		},
+	}
+
+	// Gentamicin - RxNorm 1596450
+	r.rules["1596450"] = &models.DrugRule{
+		RxNormCode:   "1596450",
+		DrugName:     "Gentamicin",
+		DrugClass:    "Aminoglycoside",
+		Category:     "antibiotic",
+		DosingMethod: "WEIGHT_BASED",
+		DefaultDose:  360,
+		MinDose:      80,
+		MaxDose:      700,
+		MaxDailyDose: 700,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "IV",
+		DosePerKg:    5,
+		IsHighAlert:  true,
+		IsNarrowTI:   true,
+		Monitoring:   []string{"Peak/trough levels", "Renal function", "Audiometry if prolonged", "Vestibular function"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 60, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "5-7mg/kg Q24H"},
+			{EGFRMin: 40, EGFRMax: 59, AdjustmentFactor: 1.0, Recommendation: "5-7mg/kg Q36H"},
+			{EGFRMin: 20, EGFRMax: 39, AdjustmentFactor: 1.0, Recommendation: "5-7mg/kg Q48H"},
+			{EGFRMin: 0, EGFRMax: 19, AdjustmentFactor: 1.0, Recommendation: "Dose by levels, extended interval"},
+		},
+	}
+
+	// Ciprofloxacin - RxNorm 2551
+	r.rules["2551"] = &models.DrugRule{
+		RxNormCode:         "2551",
+		DrugName:           "Ciprofloxacin",
+		DrugClass:          "Fluoroquinolone",
+		Category:           "antibiotic",
+		DosingMethod:       "FIXED",
+		DefaultDose:        500,
+		MinDose:            250,
+		MaxDose:            750,
+		MaxDailyDose:       1500,
+		DoseUnit:           "mg",
+		Frequency:          "BID",
+		Route:              "oral",
+		IsHighAlert:        false,
+		IsNarrowTI:         false,
+		HasBlackBoxWarning: true,
+		BlackBoxWarning:    "Risk of tendinitis and tendon rupture. Avoid in patients with history of tendon disorders or taking corticosteroids.",
+		Monitoring:         []string{"Tendon pain", "QT interval", "CNS effects", "Blood glucose"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 15, EGFRMax: 29, AdjustmentFactor: 0.5, Recommendation: "250-500mg Q12H"},
+			{EGFRMin: 0, EGFRMax: 14, AdjustmentFactor: 0.5, Recommendation: "250-500mg Q18-24H"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 1.0, Recommendation: "Increased tendon rupture risk in elderly"},
+		},
+	}
+
+	// ============================================================================
+	// PAIN MEDICATIONS (4 drugs)
+	// ============================================================================
+
+	// Acetaminophen - RxNorm 161
+	r.rules["161"] = &models.DrugRule{
+		RxNormCode:   "161",
+		DrugName:     "Acetaminophen",
+		DrugClass:    "Analgesic/Antipyretic",
+		Category:     "pain",
+		DosingMethod: "FIXED",
+		DefaultDose:  650,
+		MinDose:      325,
+		MaxDose:      1000,
+		MaxDailyDose: 4000,
+		DoseUnit:     "mg",
+		Frequency:    "Q6H PRN",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"LFTs if chronic use", "Total daily dose from all sources"},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 0.75, MaxDose: 3000, Recommendation: "Max 3g/day in mild impairment"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, MaxDose: 2000, Recommendation: "Max 2g/day in moderate impairment"},
+			{ChildPughClass: "C", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in severe hepatic impairment"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.75, MaxDose: 3000, Recommendation: "Max 3g/day in elderly"},
+		},
+	}
+
+	// Ibuprofen - RxNorm 5640
+	r.rules["5640"] = &models.DrugRule{
+		RxNormCode:   "5640",
+		DrugName:     "Ibuprofen",
+		DrugClass:    "NSAID",
+		Category:     "pain",
+		DosingMethod: "FIXED",
+		DefaultDose:  400,
+		MinDose:      200,
+		MaxDose:      800,
+		MaxDailyDose: 3200,
+		DoseUnit:     "mg",
+		Frequency:    "Q6-8H PRN",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		IsBeersList:  true,
+		BeersCriteria: "Avoid chronic use in elderly due to GI bleeding, renal injury, CV risk.",
+		Monitoring:   []string{"Renal function", "GI symptoms", "Blood pressure", "Signs of bleeding"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 60, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "Use with caution"},
+			{EGFRMin: 30, EGFRMax: 59, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in CKD 3 or worse"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated in severe renal impairment"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in elderly (Beers Criteria)"},
+		},
+	}
+
+	// Morphine - RxNorm 7052
+	r.rules["7052"] = &models.DrugRule{
+		RxNormCode:         "7052",
+		DrugName:           "Morphine",
+		DrugClass:          "Opioid Analgesic",
+		Category:           "pain",
+		DosingMethod:       "FIXED",
+		DefaultDose:        15,
+		MinDose:            5,
+		MaxDose:            30,
+		MaxDailyDose:       200,
+		DoseUnit:           "mg",
+		Frequency:          "Q4H PRN",
+		Route:              "oral",
+		IsHighAlert:        true,
+		IsNarrowTI:         false,
+		HasBlackBoxWarning: true,
+		BlackBoxWarning:    "Risk of addiction, abuse, misuse, respiratory depression, and neonatal opioid withdrawal syndrome.",
+		Monitoring:         []string{"Pain level", "Respiratory rate", "Sedation level", "Bowel function"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 30, EGFRMax: 49, AdjustmentFactor: 0.75, Recommendation: "Reduce dose 25%, extend interval"},
+			{EGFRMin: 10, EGFRMax: 29, AdjustmentFactor: 0.5, Recommendation: "Reduce dose 50%, accumulation of M6G"},
+			{EGFRMin: 0, EGFRMax: 9, AdjustmentFactor: 0.25, Recommendation: "Use alternative opioid (hydromorphone, fentanyl)"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 0.75, Recommendation: "Reduce dose 25%"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Reduce dose 50%"},
+			{ChildPughClass: "C", AdjustmentFactor: 0.25, Recommendation: "Use with extreme caution"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 50% dose in elderly"},
+		},
+	}
+
+	// Oxycodone - RxNorm 7804
+	r.rules["7804"] = &models.DrugRule{
+		RxNormCode:         "7804",
+		DrugName:           "Oxycodone",
+		DrugClass:          "Opioid Analgesic",
+		Category:           "pain",
+		DosingMethod:       "FIXED",
+		DefaultDose:        5,
+		MinDose:            2.5,
+		MaxDose:            20,
+		MaxDailyDose:       160,
+		DoseUnit:           "mg",
+		Frequency:          "Q4-6H PRN",
+		Route:              "oral",
+		IsHighAlert:        true,
+		IsNarrowTI:         false,
+		HasBlackBoxWarning: true,
+		BlackBoxWarning:    "Risk of addiction, abuse, misuse, respiratory depression, and neonatal opioid withdrawal syndrome.",
+		Monitoring:         []string{"Pain level", "Respiratory rate", "Sedation level", "Bowel function"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 60, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 30, EGFRMax: 59, AdjustmentFactor: 0.75, Recommendation: "Reduce starting dose 25-50%"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0.5, Recommendation: "Reduce dose 50%, titrate carefully"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 0.66, Recommendation: "Start at 1/3 to 1/2 usual dose"},
+			{ChildPughClass: "B", AdjustmentFactor: 0.5, Recommendation: "Start at 1/2 usual dose"},
+			{ChildPughClass: "C", AdjustmentFactor: 0.33, Recommendation: "Use with extreme caution"},
+		},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0.5, Recommendation: "Start at 50% dose in elderly"},
+		},
+	}
+
+	// ============================================================================
+	// GASTROINTESTINAL/POLYPHARMACY (3 drugs)
+	// ============================================================================
+
+	// Pantoprazole - RxNorm 40790
+	r.rules["40790"] = &models.DrugRule{
+		RxNormCode:   "40790",
+		DrugName:     "Pantoprazole",
+		DrugClass:    "Proton Pump Inhibitor",
+		Category:     "gastrointestinal",
+		DosingMethod: "FIXED",
+		DefaultDose:  40,
+		MinDose:      20,
+		MaxDose:      80,
+		MaxDailyDose: 80,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		IsBeersList:  true,
+		BeersCriteria: "Avoid use for >8 weeks unless high-risk patient. Risk of C. diff, bone loss, B12 deficiency.",
+		Monitoring:   []string{"B12 levels if prolonged use", "Magnesium if prolonged use", "C. diff if diarrhea"},
+	}
+
+	// Omeprazole - RxNorm 7646
+	r.rules["7646"] = &models.DrugRule{
+		RxNormCode:   "7646",
+		DrugName:     "Omeprazole",
+		DrugClass:    "Proton Pump Inhibitor",
+		Category:     "gastrointestinal",
+		DosingMethod: "FIXED",
+		DefaultDose:  20,
+		MinDose:      10,
+		MaxDose:      40,
+		MaxDailyDose: 40,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		IsBeersList:  true,
+		BeersCriteria: "Avoid use for >8 weeks unless high-risk patient. Risk of C. diff, bone loss, B12 deficiency, hypomagnesemia.",
+		Monitoring:   []string{"B12 levels if prolonged use", "Magnesium if prolonged use"},
+	}
+
+	// Diphenhydramine - RxNorm 3498
+	r.rules["3498"] = &models.DrugRule{
+		RxNormCode:   "3498",
+		DrugName:     "Diphenhydramine",
+		DrugClass:    "First-Generation Antihistamine",
+		Category:     "antihistamine",
+		DosingMethod: "FIXED",
+		DefaultDose:  25,
+		MinDose:      25,
+		MaxDose:      50,
+		MaxDailyDose: 300,
+		DoseUnit:     "mg",
+		Frequency:    "Q6-8H PRN",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		IsBeersList:  true,
+		BeersCriteria: "Avoid in elderly. High anticholinergic burden: confusion, urinary retention, constipation, falls.",
+		Monitoring:   []string{"Mental status", "Urinary retention", "Constipation", "Fall risk"},
+		AgeAdjustments: []models.AgeAdjustment{
+			{MinAge: 65, MaxAge: 150, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in elderly - use non-anticholinergic alternatives (loratadine, cetirizine)"},
+		},
+	}
+
+	// ============================================================================
+	// PHASE II SCENARIO DRUGS - CYP3A4 INHIBITORS
+	// ============================================================================
+
+	// Clarithromycin - RxNorm 21212 - Strong CYP3A4 Inhibitor
+	r.rules["21212"] = &models.DrugRule{
+		RxNormCode:   "21212",
+		DrugName:     "Clarithromycin",
+		DrugClass:    "Macrolide Antibiotic",
+		Category:     "antibiotic",
+		DosingMethod: "FIXED",
+		DefaultDose:  500,
+		MinDose:      250,
+		MaxDose:      500,
+		MaxDailyDose: 1000,
+		DoseUnit:     "mg",
+		Frequency:    "BID",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		HasBlackBoxWarning: true,
+		BlackBoxWarning: "Strong CYP3A4 inhibitor - major drug interactions with DOACs, statins, colchicine",
+		Monitoring:   []string{"QTc interval", "Hepatic function", "Signs of C. diff", "DDI with CYP3A4 substrates"},
+		Contraindications: []string{
+			"MAJOR DDI: Rivaroxaban - increases AUC by 54%, bleeding risk",
+			"MAJOR DDI: Apixaban - increased exposure, bleeding risk",
+			"MAJOR DDI: Simvastatin/Lovastatin - rhabdomyolysis risk",
+			"MAJOR DDI: Colchicine - fatal toxicity reported",
+			"MODERATE DDI: Dabigatran - increased exposure via P-gp inhibition",
+		},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0.5, MaxDose: 250, Recommendation: "250mg BID or 500mg QD"},
+		},
+		HepaticAdjustments: []models.HepaticAdjustment{
+			{ChildPughClass: "A", AdjustmentFactor: 1.0, Recommendation: "No adjustment needed"},
+			{ChildPughClass: "B", AdjustmentFactor: 1.0, Recommendation: "Use with caution"},
+			{ChildPughClass: "C", AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Avoid in severe hepatic impairment"},
+		},
+	}
+
+	// Eplerenone - RxNorm 298869 - Alternative to Spironolactone (lower K+ risk)
+	r.rules["298869"] = &models.DrugRule{
+		RxNormCode:   "298869",
+		DrugName:     "Eplerenone",
+		DrugClass:    "Selective Aldosterone Blocker",
+		Category:     "cardiovascular",
+		DosingMethod: "TITRATION",
+		DefaultDose:  25,
+		MinDose:      25,
+		MaxDose:      50,
+		MaxDailyDose: 50,
+		DoseUnit:     "mg",
+		Frequency:    "QD",
+		Route:        "oral",
+		IsHighAlert:  false,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Potassium", "Renal function", "Blood pressure"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 50, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "Start 25mg QD, titrate to 50mg"},
+			{EGFRMin: 30, EGFRMax: 49, AdjustmentFactor: 0.5, MaxDose: 25, Recommendation: "Max 25mg QD, monitor K+ closely"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0, Contraindicated: true, Recommendation: "Contraindicated if CrCl <30 or K+ >5.0"},
+		},
+	}
+
+	// Dalteparin - RxNorm 1362831 - LMWH for cancer-associated thrombosis
+	r.rules["1362831"] = &models.DrugRule{
+		RxNormCode:   "1362831",
+		DrugName:     "Dalteparin",
+		DrugClass:    "Low Molecular Weight Heparin",
+		Category:     "anticoagulant",
+		DosingMethod: "WEIGHT_BASED",
+		DefaultDose:  200,
+		MinDose:      100,
+		MaxDose:      200,
+		MaxDailyDose: 18000,
+		DoseUnit:     "IU/kg",
+		Frequency:    "QD",
+		Route:        "subcutaneous",
+		IsHighAlert:  true,
+		IsNarrowTI:   false,
+		Monitoring:   []string{"Anti-Xa levels", "Platelet count", "Signs of bleeding", "Renal function"},
+		RenalAdjustments: []models.RenalAdjustment{
+			{EGFRMin: 30, EGFRMax: 999, AdjustmentFactor: 1.0, Recommendation: "200 IU/kg QD for treatment"},
+			{EGFRMin: 0, EGFRMax: 29, AdjustmentFactor: 0.75, Recommendation: "Consider anti-Xa monitoring, reduce if accumulation"},
+		},
+	}
+}

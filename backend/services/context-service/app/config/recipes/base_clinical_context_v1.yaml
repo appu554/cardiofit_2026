@@ -1,0 +1,165 @@
+# Base Clinical Context Recipe
+# Provides common data points and configurations that other recipes can inherit from
+# Approved by Clinical Governance Board as foundation recipe
+
+recipe_id: "base_clinical_context_v1"
+recipe_name: "Base Clinical Context Recipe"
+version: "1.0"
+clinical_scenario: "base"
+workflow_category: "base"
+execution_pattern: "base"
+
+# Base performance requirements
+sla_ms: 100
+cache_duration_seconds: 300
+real_data_only: true
+mock_data_detection: true
+
+# Common data points that most recipes need
+required_data_points:
+  - name: "patient_demographics"
+    source_type: "patient_service"
+    fields: ["patient_id", "age", "gender", "date_of_birth"]
+    required: true
+    max_age_hours: 24
+    quality_threshold: 0.90
+    timeout_ms: 5000
+    retry_count: 2
+    fallback_sources: ["fhir_store"]
+
+  - name: "patient_identifiers"
+    source_type: "patient_service"
+    fields: ["mrn", "ssn", "insurance_id", "external_ids"]
+    required: true
+    max_age_hours: 168  # 1 week
+    quality_threshold: 0.95
+    timeout_ms: 3000
+    retry_count: 1
+    fallback_sources: ["fhir_store"]
+
+  - name: "active_encounter"
+    source_type: "encounter_service"
+    fields: ["encounter_id", "encounter_type", "admission_date", "location", "status"]
+    required: false
+    max_age_hours: 24
+    quality_threshold: 0.85
+    timeout_ms: 5000
+    retry_count: 2
+    fallback_sources: ["fhir_store"]
+
+# Base conditional rules
+conditional_rules:
+  - condition: "patient.age < 18"
+    description: "Pediatric patient requires guardian information"
+    additional_data_points:
+      - name: "guardian_information"
+        source_type: "patient_service"
+        fields: ["guardian_name", "relationship", "contact_info", "consent_status"]
+        required: true
+        max_age_hours: 168  # 1 week
+        quality_threshold: 0.95
+        timeout_ms: 5000
+        retry_count: 2
+
+  - condition: "patient.age >= 65"
+    description: "Elderly patient may have special considerations"
+    additional_data_points:
+      - name: "geriatric_considerations"
+        source_type: "patient_service"
+        fields: ["cognitive_status", "functional_status", "fall_risk", "polypharmacy_risk"]
+        required: false
+        max_age_hours: 72
+        quality_threshold: 0.80
+        timeout_ms: 8000
+        retry_count: 1
+
+# Base quality constraints
+quality_constraints:
+  minimum_completeness: 0.80
+  maximum_age_hours: 24
+  required_fields: ["patient_demographics", "patient_identifiers"]
+  accuracy_threshold: 0.85
+
+# Base safety requirements
+safety_requirements:
+  minimum_completeness_score: 0.80
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "FAIL_WORKFLOW"
+  stale_data_action: "FLAG_FOR_REVIEW"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Base cache strategy
+cache_strategy:
+  l1_ttl_seconds: 300  # 5 minutes
+  l2_ttl_seconds: 600  # 10 minutes
+  l3_ttl_seconds: 1200 # 20 minutes
+  cache_key_pattern: "context:base:{patient_id}"
+  invalidation_events:
+    - "clinical-data-changes.patient.demographics.updated"
+    - "clinical-data-changes.patient.identifiers.updated"
+    - "clinical-data-changes.patient.encounter.updated"
+
+# Base assembly rules
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 80  # 80ms of the 100ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: true
+  enforce_quality_constraints: true
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2024-01-10T08:00:00Z"
+  version: "1.0"
+  effective_date: "2024-01-10T00:00:00Z"
+  expiry_date: "2025-01-10T00:00:00Z"
+  clinical_board_approval_id: "CGB-BASE-CONTEXT-20240110"
+  tags: ["approved", "production", "base", "foundation", "inheritance"]
+  change_log:
+    - "v1.0: Initial approved base recipe for inheritance"
+
+# Common data source endpoints
+data_sources:
+  - service: "patient_service"
+    endpoint: "http://localhost:8003"
+    timeout_ms: 5000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "encounter_service"
+    endpoint: "http://localhost:8020"
+    timeout_ms: 5000
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "fhir_store"
+    endpoint: "projects/cardiofit-905a8/locations/asia-south1/datasets/clinical-synthesis-hub/fhirStores/fhir-store"
+    timeout_ms: 8000
+    protocol: "google_healthcare_api"
+
+# Base audit requirements
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true
+
+# Common clinical safety checks
+clinical_safety:
+  patient_identity_verification: true
+  encounter_context_validation: true
+  data_consistency_checking: true
+  temporal_validation: true
+  cross_reference_validation: true
+
+# Base performance monitoring
+performance_monitoring:
+  track_response_times: true
+  monitor_cache_hit_ratios: true
+  alert_on_sla_violations: true
+  measure_data_quality: true
+  track_error_rates: true

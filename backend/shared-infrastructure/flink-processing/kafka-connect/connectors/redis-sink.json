@@ -1,0 +1,33 @@
+{
+  "name": "redis-clinical-events-sink",
+  "config": {
+    "connector.class": "com.github.jcustenborder.kafka.connect.redis.RedisSinkConnector",
+    "topics": "prod.ehr.alerts.critical,prod.ehr.fhir.upsert",
+    "redis.hosts": "localhost:6379",
+    "redis.password": "RedisCardioFit2024!",
+    "redis.database": 0,
+    "redis.client.mode": "Standalone",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": false,
+    "transforms": "routeToRedis,createKey,setTTL,extractCritical",
+    "transforms.routeToRedis.type": "org.apache.kafka.connect.transforms.Filter",
+    "transforms.routeToRedis.predicate": "has-destinations",
+    "transforms.routeToRedis.predicate.destinations": "redis,cache,real-time,alerts,critical",
+    "transforms.createKey.type": "org.apache.kafka.connect.transforms.ValueToKey",
+    "transforms.createKey.fields": "patientId,sourceEventType",
+    "transforms.setTTL.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+    "transforms.setTTL.static.field": "redis_ttl",
+    "transforms.setTTL.static.value": "3600",
+    "transforms.extractCritical.type": "org.apache.kafka.connect.transforms.Filter",
+    "transforms.extractCritical.condition": "${priority} == 'CRITICAL' || ${priority} == 'HIGH'",
+    "redis.operation.type": "SET",
+    "redis.key.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+    "redis.value.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+    "redis.key.prefix": "cardiofit:clinical:",
+    "redis.expire.seconds": 1800,
+    "errors.tolerance": "all",
+    "errors.log.enable": true,
+    "errors.retry.timeout": "30000"
+  }
+}

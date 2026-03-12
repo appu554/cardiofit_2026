@@ -1,0 +1,134 @@
+www.kidney-international.org chapter 2
+
+|                                                                      | HbA1c   |                                                                                                              |             |                     |
+|----------------------------------------------------------------------|---------|--------------------------------------------------------------------------------------------------------------|-------------|---------------------|
+| Population                                                           | Measure | Frequency                                                                                                    | Reliability | GMI                 |
+| CKD G1–G3b                                                           | Yes     | <ul><li>Twice per year</li><li>Up to 4 times per year if not achieving target or change in therapy</li></ul> | High        | Occasionally useful |
+| CKD G4–G5<br>including treatment by<br>dialysis or kidney transplant | Yes     | <ul><li>Twice per year</li><li>Up to 4 times per year if not achieving target or change in therapy</li></ul> | Low         | Likely useful       |
+
+Figure 11 | Frequency of glycated hemoglobin (HbA1c) measurement and use of glucose management indicator (GMI) in chronic kidney disease (CKD). G1–G3b, estimated glomerular filtration rate (eGFR)  $\geq$ 30 ml/min per 1.73 m<sup>2</sup>; G4–G5, eGFR <30 ml/min per 1.73 m<sup>2</sup>.
+
+Practice Point 2.1.1: Monitoring long-term glycemic control by HbA1c twice per year is reasonable for patients with diabetes. HbA1c may be measured as often as 4 times per year if the glycemic target is not met or after a change in glucose-lowering therapy.
+
+HbA1c monitoring facilitates control of diabetes to achieve glycemic targets that prevent diabetic complications. In both T1D or T2D, lower achieved levels of HbA1c <7% (<53 mmol/mol) versus 8%–9% (64–75 mmol/mol) reduce risk of overall microvascular complications, including nephropathy and retinopathy, and macrovascular complications in some RCTs. 189-193 The potential harm of monitoring by HbA1c is that it may underestimate (more commonly) or overestimate (less commonly) the actual degree of glycemia control compared to directly measured blood glucose in advanced CKD. No advantages of glycated albumin or fructosamine over HbA1c are known for glycemic monitoring in CKD. Frequency of HbA1c testing is recommended as often as 4 times per year to align with a 10-12-week time period for which it reflects ambient glycemia according to normal duration of red blood cell survival. In the judgment of the Work Group, it is reasonable to test HbA1c twice per year in many patients who are stable and achieving glycemic goals. Measuring HbA1c more frequently would be reasonable in patients with adjustments in glucose-lowering medication, changes in lifestyle factors, or marked changes in measured blood glucose values, or those who are less concerned about the burden or costs of more frequent laboratory testing.<sup>226</sup>
+
+# Practice Point 2.1.2: Accuracy and precision of HbA1c measurement declines with advanced CKD (G4–G5), particularly among patients treated by dialysis, in whom HbA1c measurements have low reliability.
+
+Correlations of directly measured blood glucose levels with 3 glycemic biomarkers—HbA1c, glycated albumin, and fructosamine—were progressively weaker with advanced CKD stages (G4–G5), especially kidney failure treated by dialysis. <sup>196,197,205,210,227</sup> However, HbA1c remains the glycemic biomarker of choice in advanced CKD because glycated albumin and fructosamine provide no advantages over HbA1c and have clinically relevant assay biases to the low and high levels, respectively, with hypoalbuminemia, a common
+
+condition among patients with proteinuria, malnutrition, or treated by peritoneal dialysis. <sup>228</sup>
+
+Practice Point 2.1.3: A glucose management indicator (GMI) derived from continuous glucose monitoring (CGM) data can be used to index glycemia for individuals in whom HbA1c is not concordant with directly measured blood glucose levels or clinical symptoms.
+
+CGM and self-monitoring of blood glucose (SMBG) yield direct measurements of interstitial and blood glucose, respectively, that are not known to be biased by CKD or its treatments, including dialysis or kidney transplant (Figure 12<sup>229</sup>). Therefore, if it is a clinical concern that HbA1c may be yielding biased estimates of long-term glycemia (e.g., discordant with SMBG, random blood glucose levels, or hypoglycemic or hyperglycemic symptoms), it is reasonable to use CGM to generate a glucose management indicator (GMI).<sup>228</sup> The GMI can be derived from CGM that is performed with results either blinded to the patients during monitoring ("professional" version) or available to the patient in real time. The GMI is a measure of average blood glucose that is calculated from CGM and expressed in the units of HbA1c (%), facilitating interpretation of the HbA1c values. For example, if HbA1c is lower than a concurrent GMI measure, the HbA1c can be interpreted to underestimate average blood glucose by the difference in measurements, allowing adjustment of HbA1c targets accordingly. 230,231 GMI may be useful for patients with advanced CKD, including those treated with dialysis, for whom reliability of HbA1c is low. It should be noted that the assay bias of HbA1c relative to GMI could potentially change over time within a patient, particularly when there are clinical changes that affect red blood cell turnover or protein glycation. In these situations, GMI needs to be re-established regularly.
+
+Practice Point 2.1.4: Daily glycemic monitoring with CGM or self-monitoring of blood glucose (SMBG) may help prevent hypoglycemia and improve glycemic control when glucose-lowering therapies associated with risk of hypoglycemia are used.
+
+In addition to long-term glycemic control, minute-tominute glycemic variability and episodes of hypoglycemia are important therapeutic targets for people with diabetes and CKD, especially those with T1D and those treated with chapter 2 www.kidney-international.org
+
+# **Glossary of glucose monitoring terms**
+
+### **Self-monitoring of blood glucose (SMBG)**
+
+Since sampling is performed intermittently, episodes of hypoglycemia or hyperglycemia are often harder to detect
+
+# **Continuous glucose monitoring (CGM)**
+
+Minimally invasive subcutaneous sensors which sample interstitial glucose at regular intervals (e.g., every 5–15 min). There are three categories of CGMs:
+
+# **(a) Retrospective CGM**
+
+Glucose levels are not visible while the device is worn. Instead, a report is generated for evaluation after the CGM is removed
+
+# **(b) Real-time CGM (rtCGM)**
+
+![](_page_1_Picture_9.jpeg)
+
+Refers to sensors transmitting and/or displaying the data automatically throughout the day, so that the patient can review glucose levels and adjust treatment as needed
+
+#### **(c) Intermittently scanned CGM**
+
+![](_page_1_Picture_12.jpeg)
+
+CGM or FGM for short. Glucose levels can be seen while the device is worn when they are queried
+
+# **Glucose management indicator (GMI)**
+
+Provides a measure of average blood glucose levels calculated from CGM readings, expressed in units of A1C (%), that can be used to gauge whether clinical A1C levels are falsely high or low
+
+![](_page_1_Figure_16.jpeg)
+
+Figure 12 | Glossary of glucose-monitoring terms. Adapted from American Diabetes Association, Clinical targets for continuous glucose monitoring data interpretation: recommendations from the international consensus on time in range, American Diabetes Association, 2019. Copyright and all rights reserved. Material from this publication has been used with the permission of American Diabetes Association.<sup>229</sup>
+
+hypoglycemic medications such as insulin. For daily glycemic monitoring, CGM and SMBG are frequently used but relatively high-cost options to assess real-time blood glucose. Real-time assessments of glucose promote effective selfmanagement. Advanced CKD substantially increases the risk of hypoglycemia in patients with diabetes treated by many oral agents and insulin. Daily monitoring improves the safety of glucose-lowering therapy by identifying fluctuations in glucose as a means to avoid hypoglycemia. CGM and SMBG also aid in achieving glycemic targets. SMBG was emphasized in previous clinical practice guidelines for daily glycemic monitoring in patients with diabetes and CKD.230,231 However, CGM was not generally available for clinical use at that time (2007), and the potential advantages of the latter may make it preferable to SMBG among patients in whom daily monitoring is desired.
+
+In the judgment of the Work Group, there is no clear advantage of CGM or SMBG for patients with diabetes and CKD treated by oral glucose-lowering agents that do not cause hypoglycemia.<sup>226</sup> However, daily monitoring may mitigate the higher risk of hypoglycemia associated with taking insulin or certain oral agents (Figure 13). Although there are burdens and expenses, daily glycemic monitoring to achieve targets while avoiding hypoglycemia is prudent. In the judgment of the Work Group, many patients with diabetes and CKD would choose daily glycemic monitoring by CGM or, when CGM not readily available, SMBG, especially patients with T1D and patients using glucose-lowering therapies associated with hypoglycemia. Glucose-lowering agents not associated with hypoglycemia are preferable therapies for patients with diabetes and CKD who do not use CGM or SMBG, such as those without access to these technologies or www.kidney-international.org chapter 2
+
+| Antihyperglycemic agents                                                                                      | Risk of hypoglycemia | Rationale for CGM or SMBG |
+|---------------------------------------------------------------------------------------------------------------|----------------------|---------------------------|
+| <ul><li>Insulin</li><li>Sulfonylureas</li><li>Meglitinides</li></ul>                                          | Higher               | Higher                    |
+| <ul><li>Metformin</li><li>SGLT2 inhibitors</li><li>GLP-1 receptor agonists</li><li>DPP-4 inhibitors</li></ul> | Lower                | Lower                     |
+
+Figure 13 | Relationship of glucose-lowering drug choice to risk of hypoglycemia and rationale for using continuous glucose monitoring (CGM) or self-monitoring of blood glucose (SMBG). DPP-4, dipeptidyl peptidase-4; GLP-1, glucagon-like peptide-1; SGLT2, sodium-glucose cotransporter-2.
+
+ability to do self-monitoring, or preference to avoid the daily burden.
+
+Practice Point 2.1.5: For patients with T2D and CKD who choose not to do daily glycemic monitoring by CGM or SMBG, glucose-lowering agents that pose a lower risk of hypoglycemia are preferred and should be administered in doses that are appropriate for the level of eGFR.
+
+Patients with diabetes and more advanced CKD stages are at increased risk of hypoglycemia. Selecting glucose-lowering agents with very low or no hypoglycemia risk should be considered, especially for patients who cannot perform or choose not to perform daily blood glucose monitoring.
+
+Risk of hypoglycemia is high in patients with advanced CKD who are treated by glucose-lowering agents that raise blood insulin levels (exogenous insulin, sulfonylureas, meglitinides). Therefore, without daily glycemic monitoring, it is often difficult to avoid hypoglycemic episodes. This risk can be averted by using glucose-lowering agents that are not inherently associated with occurrence of hypoglycemia (metformin, SGLT2i, GLP-1 RA, dipeptidyl peptidase-4 [DPP-4] inhibitors).
+
+Practice Point 2.1.6: CGM devices are rapidly evolving with multiple functionalities (e.g., real-time and intermittently scanned CGM). Newer CGM devices may offer advantages for certain patients, depending on their values, goals, and preferences.
+
+CGM technology has greatly impacted diabetes self-management by providing glycemic assessment moment-to-moment, allowing patients to make real-time decisions about their hyperglycemic treatment. The technology continues to quickly develop with multiple permutations and functionalities, including real-time and intermittently scanned CGM, alarms for low and high values, direct cell phone linkage, factory calibration, new metrics such as GMI and ambulatory glucose profiles, and integration into closed-loop insulin delivery systems. Multiple devices allowing for continuous or flash glucose monitoring are now available. Consultation with a specialist in diabetes technology (certified diabetes educator or other provider) can help patients select the device that is most appropriate for patients with diabetes and CKD.
+
+Currently available devices have multiple functionalities that may include the ability to save, export, and share data to communicate with ambulatory insulin pumps directly, and to set alarms for low or high glucose levels, as well as for their rates of rise or decline. These devices differ in their accuracy, need for calibration (with fingerstick-derived blood glucose data), placement, sensor life, warm-up time, type of transmitter, display options, live data—sharing capacity, cost, and insurance coverage. Specialists in diabetes technology can assist patients with staying current with these advances and helping them choose the right CGM system for their individual needs.
+
+#### Research recommendations
+
+In patients with T1D or T2D and advanced CKD, especially kidney failure treated by dialysis or kidney transplant, research is needed to:
+
+- Develop methods to identify patients for whom HbA1c produces a biased estimate of long-term glycemia and develop alternate approaches to monitoring glycemia in such patients.
+- Develop methods to identify patients at high risk of hypoglycemia or poor glycemic control who may benefit from CGM or SMBG.
+- Develop approaches to effectively apply CGM to glycemic assessment in patients at high risk of hypoglycemia or for whom HbA1c is biased.
+- Determine overall benefits and harms of using SMBG and CGM.
+- Develop and validate alternative biomarkers for long-term glycemic monitoring.
+- Define optimal approaches for monitoring glycemia.
+- Test whether CGM helps to control glycemia and improve clinical outcomes.
+
+# 2.2 Glycemic targets
+
+Recommendation 2.2.1: We recommend an individualized HbA1c target ranging from <6.5% to <8.0% in patients with diabetes and CKD not treated with dialysis (Figure 14) (1C).
+
+This recommendation places a higher value on the potential benefits of an individualized target aimed at balancing the chapter 2 www.kidney-international.org
+
+| < 6.5%       | HbA1c                                         | < 8.0%         |  |
+|--------------|-----------------------------------------------|----------------|--|
+| CKD G1       | Severity of CKD                               | CKD G5         |  |
+| Absent/minor | Macrovascular complications                   | Present/severe |  |
+| Few          | Comorbidities                                 | Many           |  |
+| Long         | Life expectancy                               | Short          |  |
+| Present      | Hypoglycemia awareness                        | Impaired       |  |
+| Available    | Resources for hypoglycemia management         | Scarce         |  |
+| Low          | Propensity of treatment to cause hypoglycemia | High           |  |
+
+Figure 14 | Factors guiding decisions on individual glycated hemoglobin (HbA1c) targets. CKD, chronic kidney disease; G1, estimated glomerular filtration rate (eGFR)  $\geq$ 90 ml/min per 1.73 m<sup>2</sup>; G5, eGFR <15 ml/min per 1.73 m<sup>2</sup>.
+
+long-term benefits of glycemic control with the short-term risks of hypoglycemia. The recommendation places a lower value on the simplicity of a single target that is recommended for all patients with diabetes and CKD. For patients for whom prevention of complications is the key goal, a lower HbA1c target (e.g., <6.5% or <7.0%) might be preferred. For those with multiple comorbidities or increased burden of hypoglycemia, a higher HbA1c target (e.g., <7.5% or <8.0%) might be preferred (Figure 14). This recommendation applies to patients with T1D or T2D.
+
+# **Key information**
+
+Balance of benefits and harms. HbA1c targets are central to guide glucose-lowering treatment. In the general diabetes population, higher HbA1c levels have been associated with increased risk of microvascular and macrovascular complications. Moreover, in clinical trials, targeting lower HbA1c levels has reduced the rates of chronic diabetes complications in patients with T1D<sup>190,232–238</sup> or T2D.<sup>239–246</sup> The main harm associated with lower HbA1c targets is hypoglycemia. In the Action to Control Cardiovascular Risk in Diabetes (ACCORD) trial of T2D, mortality was also higher among participants assigned to the lower HbA1c target, perhaps due to hypoglycemia and related cardiovascular events.<sup>240</sup>
+
+Among patients with diabetes and CKD, a U-shaped association of HbA1c with adverse health outcomes has been observed, suggesting risks with both inadequately controlled blood glucose and excessively lowered blood glucose. 247 However, the benefits and harms for the proposed HbA1c targets on patients with T2D are derived mostly from studies that used glucose-lowering agents known to increase hypoglycemia risk. Patients randomized to lower HbA1c levels had increased rates of severe hypoglycemia in these studies. Notably, however, lower HbA1c targets may not necessarily lead to a significant increase in hypoglycemia rates when attained using medications with a lower risk of hypoglycemia.
+
+Data from RCTs support the recommendation of targeting an individualized HbA1c level of <6.5% to <8.0% in patients with diabetes and CKD, compared with higher HbA1c targets. HbA1c targets in this range are associated with better overall survival and cardiovascular outcomes, along with decreased
+
+incidence of moderately increased albuminuria and other microvascular outcomes, such as retinopathy. HbA1c levels in this range may also be associated with lower risk of progression to advanced CKD and kidney failure.
+
+However, the benefits of more-stringent glycemic control (i.e., lower HbA1c targets) compared with less-stringent glycemic control (i.e., higher HbA1c targets) manifest over many years of treatment. 191,248,249 In addition, morestringent glycemic control compared with less-stringent glycemic control increases the risk of hypoglycemia.<sup>240</sup> Individual patient factors modify both anticipated benefits and anticipated risks of more-stringent glycemic control (Figure 14). For example, younger patients with few comorbidities, mild-to-moderate CKD, and longer life expectancy may anticipate substantial cumulative long-term benefits of stringent glycemic control and therefore prefer a lower HbA1c target. Patients who are treated with medications that do not cause substantial hypoglycemia, who have preserved hypoglycemia awareness and resources to detect and intervene early in the course of hypoglycemia, and who have demonstrated an ability to attain stringent HbA1c targets without hypoglycemia may also prefer a lower HbA1c target. Patients with opposite characteristics may prefer higher HbA1c targets. A flexible approach allows each patient to optimize these tradeoffs, whereas a "one-size-fitsall" single HbA1c target may offer insufficient long-term organ protection for some patients and place others at undue risk of hypoglycemia. Therefore, individualization of HbA1c targets in patients with diabetes and CKD should be an interactive process that includes individual assessment of risk, life expectancy, disease/therapy burden, and patient preferences.
+
+**Quality of evidence.** A systematic review with 3 comparisons examining the effects of lower ( $\leq$ 7.0%,  $\leq$ 6.5%, and  $\leq$ 6.0%) versus higher (standard of care) HbA1c targets in patients with diabetes and CKD was undertaken.
+
+The updated Cochrane systematic review<sup>250</sup> identified 11 studies that compared a target HbA1c <7.0% to higher HbA1c targets (standard glycemic control) (Supplementary Table S11<sup>190</sup>,191,232,234,235,240,242–244,246,251–253) Three studies were also identified but were not eligible for inclusion in the meta-analysis.<sup>233</sup>,236,254 The review found that a target of

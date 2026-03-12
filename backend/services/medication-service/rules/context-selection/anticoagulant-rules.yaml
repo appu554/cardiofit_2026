@@ -1,0 +1,162 @@
+# Anticoagulant Context Selection Rules
+# These rules determine the appropriate context recipe for anticoagulant medications
+# based on patient characteristics, clinical scenario, and risk factors
+
+ruleSet:
+  id: "anticoagulant-context-rules"
+  version: "2.1"
+  medication:
+    class: "anticoagulant"
+    examples: ["warfarin", "apixaban", "rivaroxaban", "dabigatran", "heparin"]
+  
+  metadata:
+    author: "Pharmacy & Therapeutics Committee"
+    approvedDate: "2024-01-15"
+    nextReview: "2025-01-15"
+    evidence: ["CHEST Guidelines 2024", "ACC/AHA 2019", "ESC 2020"]
+    description: "Context selection rules for anticoagulant medications"
+  
+  rules:
+    # Rule 1: High-risk anticoagulation (elderly + renal impairment)
+    - id: "ANTICOAG-001"
+      name: "Anticoagulant Elderly Renal High-Risk"
+      priority: 95
+      context_recipe: "anticoagulation_elderly_renal_context_v3"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class == anticoagulant"
+          - "patient.age_group == elderly"
+          - "patient.renal_function != normal"
+        any_of:
+          - "medication.name in warfarin"
+          - "medication.is_narrow_therapeutic_index == true"
+        none_of:
+          - "patient.hospice_enrolled == true"
+      
+      scoring:
+        base_score: 85
+        modifiers:
+          - condition: "patient.age >= 85"
+            add_score: 10
+          - condition: "patient.renal_function == severe_impairment"
+            add_score: 15
+      
+      clinical_rationale: |
+        Elderly patients with renal impairment require comprehensive anticoagulation 
+        assessment including bleeding risk scores (HAS-BLED), fall risk assessment,
+        precise renal function for dosing adjustments, and enhanced monitoring protocols.
+        Context includes drug interaction screening, lab monitoring schedules, and
+        bleeding precaution education.
+      
+      evidence_level: "high"
+      guideline_refs: ["CHEST 2024", "KDIGO 2021"]
+    
+    # Rule 2: Standard anticoagulation for elderly patients
+    - id: "ANTICOAG-002"
+      name: "Anticoagulant Elderly Standard"
+      priority: 80
+      context_recipe: "anticoagulation_elderly_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class == anticoagulant"
+          - "patient.age_group == elderly"
+        none_of:
+          - "patient.renal_function == severe_impairment"
+          - "patient.renal_function == moderate_impairment"
+      
+      scoring:
+        base_score: 75
+        modifiers:
+          - condition: "patient.age >= 80"
+            add_score: 8
+      
+      clinical_rationale: |
+        Elderly patients on anticoagulation require enhanced monitoring and 
+        bleeding risk assessment. Context includes fall risk evaluation,
+        cognitive assessment for compliance, and family education.
+      
+      evidence_level: "high"
+      guideline_refs: ["ACC/AHA 2019"]
+    
+    # Rule 3: Emergency anticoagulation
+    - id: "ANTICOAG-003"
+      name: "Emergency Anticoagulation"
+      priority: 90
+      context_recipe: "anticoagulation_emergency_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class == anticoagulant"
+        any_of:
+          - "situation.urgency == emergency"
+          - "situation.urgency == stat"
+          - "situation.emergency_override == true"
+      
+      scoring:
+        base_score: 88
+        modifiers:
+          - condition: "situation.urgency == emergency"
+            add_score: 12
+      
+      clinical_rationale: |
+        Emergency anticoagulation requires rapid assessment of bleeding risk,
+        contraindications, and immediate monitoring setup. Context includes
+        emergency reversal agents availability and intensive monitoring protocols.
+      
+      evidence_level: "moderate"
+      guideline_refs: ["Emergency Medicine Guidelines 2023"]
+    
+    # Rule 4: Standard anticoagulation
+    - id: "ANTICOAG-004"
+      name: "Anticoagulant Standard"
+      priority: 60
+      context_recipe: "anticoagulation_standard_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class == anticoagulant"
+        none_of:
+          - "patient.age_group == elderly"
+          - "situation.urgency == emergency"
+          - "situation.urgency == stat"
+      
+      scoring:
+        base_score: 65
+      
+      clinical_rationale: |
+        Standard anticoagulation therapy requires baseline coagulation studies,
+        drug interaction screening, and patient education on bleeding precautions.
+        Context includes routine monitoring schedules and dietary counseling.
+      
+      evidence_level: "high"
+      guideline_refs: ["CHEST 2024"]
+    
+    # Rule 5: Pediatric anticoagulation
+    - id: "ANTICOAG-005"
+      name: "Pediatric Anticoagulation"
+      priority: 85
+      context_recipe: "anticoagulation_pediatric_context_v2"
+      
+      trigger:
+        all_of:
+          - "medication.therapeutic_class == anticoagulant"
+        any_of:
+          - "patient.age_group == child"
+          - "patient.age_group == adolescent"
+          - "patient.age_group == infant"
+      
+      scoring:
+        base_score: 82
+        modifiers:
+          - condition: "patient.age < 2"
+            add_score: 15
+      
+      clinical_rationale: |
+        Pediatric anticoagulation requires specialized dosing calculations,
+        age-appropriate monitoring, and family education. Context includes
+        pediatric-specific bleeding risk assessment and developmental considerations.
+      
+      evidence_level: "moderate"
+      guideline_refs: ["Pediatric Cardiology Guidelines 2023"]

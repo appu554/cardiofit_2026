@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  graphdb:
+    image: ontotext/graphdb:10.7.0
+    container_name: kb7-graphdb
+    ports:
+      - "7200:7200"  # GraphDB Workbench
+      - "7300:7300"  # GraphDB HTTP API
+    environment:
+      - GDB_HEAP_SIZE=4g
+      - GDB_JAVA_OPTS=-Xms2g -Xmx4g -Dfile.encoding=UTF-8
+    volumes:
+      - graphdb_data:/opt/graphdb/home
+      - ./scripts/graphdb-init:/docker-entrypoint-initdb.d
+      - ./data/ontologies:/import/ontologies:ro
+      - ./data/terminology:/import/terminology:ro
+    networks:
+      - kb7-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/repositories"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # GraphDB Repository Management Service
+  graphdb-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile.graphdb-manager
+    container_name: kb7-graphdb-manager
+    depends_on:
+      graphdb:
+        condition: service_healthy
+    environment:
+      - GRAPHDB_URL=http://graphdb:7200
+      - TERMINOLOGY_REPO=kb7-terminology
+      - ONTOLOGY_REPO=kb7-ontologies
+      - ENABLE_OWL2RL=true
+      - BATCH_SIZE=10000
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./data:/data:ro
+    networks:
+      - kb7-network
+    restart: "no"
+
+  # Redis for GraphDB query caching
+  redis-graphdb:
+    image: redis:7.2-alpine
+    container_name: kb7-redis-graphdb
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_graphdb_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - kb7-network
+    restart: unless-stopped
+
+  # Prometheus for GraphDB monitoring
+  prometheus-graphdb:
+    image: prom/prometheus:v2.45.0
+    container_name: kb7-prometheus-graphdb
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_graphdb_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=7d'
+    networks:
+      - kb7-network
+    restart: unless-stopped
+
+  # Grafana for GraphDB dashboards
+  grafana-graphdb:
+    image: grafana/grafana:10.1.0
+    container_name: kb7-grafana-graphdb
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_graphdb_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - kb7-network
+    restart: unless-stopped
+
+volumes:
+  graphdb_data:
+    driver: local
+  redis_graphdb_data:
+    driver: local
+  prometheus_graphdb_data:
+    driver: local
+  grafana_graphdb_data:
+    driver: local
+
+networks:
+  kb7-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Development override for local development
+# Use: docker-compose -f docker-compose.graphdb.yml -f docker-compose.graphdb.dev.yml up

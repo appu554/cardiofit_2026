@@ -1,0 +1,306 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://clinical-kb.health/schemas/treatment-preference/v2.0.0",
+  "title": "Treatment Preference Schema v2.0",
+  "description": "Schema for institutional treatment selection preferences and medication algorithms",
+  "type": "object",
+  "required": ["id", "condition", "version", "selection_rules"],
+  
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^PREF-[A-Z]{2,4}-[0-9]{3}$",
+      "description": "Treatment preference identifier (e.g., PREF-HTN-001)"
+    },
+    "condition": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Clinical condition or domain"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version"
+    },
+    "effective_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when preferences become active"
+    },
+    "deprecated_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when preferences were deprecated"
+    },
+    "institution": {
+      "type": "string",
+      "description": "Institution or health system"
+    },
+    "clinical_domain": {
+      "type": "string",
+      "enum": [
+        "cardiovascular", "diabetes", "respiratory", "renal", "hepatic",
+        "oncology", "neurology", "psychiatry", "infectious", "rheumatology",
+        "hematology", "endocrine", "gastroenterology", "pain_management"
+      ],
+      "description": "Clinical specialty domain"
+    },
+    
+    "selection_rules": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Treatment selection rules based on phenotypes",
+      "items": {
+        "type": "object",
+        "required": ["phenotype", "preferences"],
+        "properties": {
+          "phenotype": {
+            "type": "string",
+            "pattern": "^PHE-[A-Z0-9]{8}$",
+            "description": "Target phenotype ID"
+          },
+          "patient_criteria": {
+            "type": "string",
+            "description": "Additional patient criteria (CEL expression)"
+          },
+          "contraindications": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Absolute contraindications"
+          },
+          "relative_contraindications": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Relative contraindications requiring caution"
+          },
+          
+          "preferences": {
+            "type": "object",
+            "properties": {
+              "first_line": {
+                "type": "array",
+                "description": "First-line treatment options",
+                "items": {
+                  "type": "object",
+                  "required": ["class", "rationale"],
+                  "properties": {
+                    "class": {
+                      "type": "string",
+                      "description": "Medication class (e.g., ace_inhibitor)"
+                    },
+                    "specific_agent": {
+                      "type": "string",
+                      "description": "Specific medication if preferred"
+                    },
+                    "dosing": {
+                      "type": "object",
+                      "properties": {
+                        "starting_dose": { "type": "string" },
+                        "target_dose": { "type": "string" },
+                        "max_dose": { "type": "string" },
+                        "titration_schedule": { "type": "string" }
+                      }
+                    },
+                    "condition": {
+                      "type": "string",
+                      "description": "Condition when this agent is preferred (CEL expression)"
+                    },
+                    "rationale": {
+                      "type": "string",
+                      "description": "Clinical rationale for preference"
+                    },
+                    "evidence_level": {
+                      "type": "string",
+                      "enum": ["1A", "1B", "2A", "2B", "2C", "expert_opinion"],
+                      "description": "Level of supporting evidence"
+                    },
+                    "cost_tier": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 4,
+                      "description": "Formulary cost tier"
+                    }
+                  }
+                }
+              },
+              
+              "alternatives": {
+                "type": "array",
+                "description": "Alternative treatment options",
+                "items": {
+                  "type": "object",
+                  "required": ["class", "when"],
+                  "properties": {
+                    "class": { "type": "string" },
+                    "specific_agent": { "type": "string" },
+                    "when": { 
+                      "type": "string",
+                      "description": "When to use alternative (CEL expression)"
+                    },
+                    "rationale": { "type": "string" },
+                    "dosing": {
+                      "type": "object",
+                      "properties": {
+                        "starting_dose": { "type": "string" },
+                        "target_dose": { "type": "string" },
+                        "max_dose": { "type": "string" }
+                      }
+                    },
+                    "monitoring_requirements": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              },
+              
+              "avoid": {
+                "type": "array",
+                "description": "Medications to avoid",
+                "items": {
+                  "type": "object",
+                  "required": ["class", "reason"],
+                  "properties": {
+                    "class": { "type": "string" },
+                    "specific_agent": { "type": "string" },
+                    "reason": { 
+                      "type": "string",
+                      "description": "Reason to avoid"
+                    },
+                    "unless": { 
+                      "type": "string",
+                      "description": "Exception conditions (CEL expression)"
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": ["contraindicated", "caution", "avoid_if_possible"]
+                    }
+                  }
+                }
+              },
+              
+              "combination_therapy": {
+                "type": "array",
+                "description": "Recommended medication combinations",
+                "items": {
+                  "type": "object",
+                  "required": ["agents", "indication"],
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "minItems": 2
+                    },
+                    "indication": { "type": "string" },
+                    "sequence": { 
+                      "type": "string",
+                      "enum": ["simultaneous", "sequential", "conditional"]
+                    },
+                    "monitoring": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              },
+              
+              "formulary_preferences": {
+                "type": "object",
+                "description": "Institution-specific formulary preferences",
+                "patternProperties": {
+                  "^[a-z_]+$": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    
+    "clinical_context": {
+      "type": "object",
+      "description": "Clinical context and evidence supporting preferences",
+      "properties": {
+        "evidence_sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source_type": {
+                "type": "string",
+                "enum": ["guideline", "literature", "institutional_policy", "quality_measure"]
+              },
+              "reference": { "type": "string" },
+              "evidence_level": { "type": "string" },
+              "recommendation_class": { "type": "string" }
+            }
+          }
+        },
+        "quality_measures": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Related quality measure identifiers"
+        },
+        "cost_effectiveness": {
+          "type": "object",
+          "properties": {
+            "cost_per_qaly": { "type": "number" },
+            "budget_impact": { "type": "string" },
+            "cost_comparison": { "type": "string" }
+          }
+        },
+        "patient_preference_considerations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Factors for shared decision making"
+        }
+      }
+    },
+    
+    "governance": {
+      "type": "object",
+      "description": "Governance and maintenance information",
+      "properties": {
+        "approval_authority": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Who approved these preferences"
+        },
+        "review_committee": { "type": "string" },
+        "last_review_date": { "type": "string", "format": "date" },
+        "next_review_date": { "type": "string", "format": "date" },
+        "review_frequency": {
+          "type": "string",
+          "enum": ["quarterly", "semi_annual", "annual", "biennial"]
+        },
+        "change_control": {
+          "type": "object",
+          "properties": {
+            "approval_required": { "type": "boolean" },
+            "impact_assessment_required": { "type": "boolean" },
+            "clinical_validation_required": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    
+    "metadata": {
+      "type": "object",
+      "description": "Administrative metadata",
+      "properties": {
+        "author": { "type": "string" },
+        "clinical_reviewer": { "type": "string" },
+        "created_date": { "type": "string", "format": "date-time" },
+        "modified_date": { "type": "string", "format": "date-time" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "implementation_status": {
+          "type": "string",
+          "enum": ["draft", "review", "approved", "active", "deprecated"]
+        }
+      }
+    }
+  }
+}

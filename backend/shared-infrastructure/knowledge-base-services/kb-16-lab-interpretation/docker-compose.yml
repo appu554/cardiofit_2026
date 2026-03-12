@@ -1,0 +1,113 @@
+services:
+  # PostgreSQL Database for KB-16
+  postgres:
+    image: postgres:15-alpine
+    container_name: kb16-postgres
+    environment:
+      POSTGRES_USER: kb16_user
+      POSTGRES_PASSWORD: kb_password
+      POSTGRES_DB: kb_lab_interpretation
+    ports:
+      - "5446:5432"
+    volumes:
+      - kb16_postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb16_user -d kb_lab_interpretation"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-network
+
+  # Redis Cache for KB-16
+  redis:
+    image: redis:7-alpine
+    container_name: kb16-redis
+    ports:
+      - "6395:6379"
+    volumes:
+      - kb16_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-network
+
+  # KB-8 Calculator Service
+  kb-8:
+    build:
+      context: ../kb-8-calculator-service
+      dockerfile: Dockerfile
+    container_name: kb-8-calculator
+    ports:
+      - "8097:8080"
+    environment:
+      PORT: 8080
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+      METRICS_ENABLED: "true"
+      PLAYGROUND_ENABLED: "true"
+      DEFAULT_REGION: GLOBAL
+      INDIA_ADJUSTMENTS: "true"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks:
+      - kb-network
+
+  # KB-16 Lab Interpretation Service
+  kb-16:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-16-lab-interpretation
+    ports:
+      - "8098:8095"
+    environment:
+      PORT: 8095
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      # Database
+      DATABASE_URL: postgres://kb16_user:kb_password@postgres:5432/kb_lab_interpretation?sslmode=disable
+      # Redis
+      REDIS_URL: redis://redis:6379/6
+      # KB-8 Integration
+      KB8_SERVICE_URL: http://kb-8:8080
+      KB8_ENABLED: "true"
+      # KB-2 Integration (optional, for patient context)
+      KB2_SERVICE_URL: http://host.docker.internal:8086
+      KB2_ENABLED: "false"
+      # KB-14 Integration (optional, for task creation)
+      KB14_SERVICE_URL: http://host.docker.internal:8093
+      KB14_ENABLED: "false"
+      # Metrics
+      METRICS_ENABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kb-8:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8095/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - kb-network
+
+volumes:
+  kb16_postgres_data:
+  kb16_redis_data:
+
+networks:
+  kb-network:
+    driver: bridge

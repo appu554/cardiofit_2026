@@ -1,0 +1,204 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: device-ingestion-service
+  namespace: clinical-synthesis-hub
+  labels:
+    app: device-ingestion-service
+    component: api
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: device-ingestion-service
+  template:
+    metadata:
+      labels:
+        app: device-ingestion-service
+        component: api
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: device-ingestion-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: device-ingestion
+        image: clinical-synthesis-hub/device-ingestion:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8015
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8015"
+        envFrom:
+        - configMapRef:
+            name: device-ingestion-config
+        - secretRef:
+            name: device-ingestion-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8015
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8015
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /api/v1/health
+            port: 8015
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 10
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: google-cloud-credentials
+          mountPath: /etc/google-cloud
+          readOnly: true
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /etc/google-cloud/credentials.json
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: google-cloud-credentials
+        secret:
+          secretName: device-ingestion-secrets
+          items:
+          - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+            path: credentials.json
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbox-publisher-service
+  namespace: clinical-synthesis-hub
+  labels:
+    app: outbox-publisher-service
+    component: background-processor
+    version: v1
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: outbox-publisher-service
+  template:
+    metadata:
+      labels:
+        app: outbox-publisher-service
+        component: background-processor
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: outbox-publisher-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: outbox-publisher
+        image: clinical-synthesis-hub/outbox-publisher:latest
+        imagePullPolicy: Always
+        envFrom:
+        - configMapRef:
+            name: outbox-publisher-config
+        - secretRef:
+            name: outbox-publisher-secrets
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - run_outbox_publisher.py
+            - --health-check
+          initialDelaySeconds: 120
+          periodSeconds: 60
+          timeoutSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - python
+            - run_outbox_publisher.py
+            - --health-check
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 15
+          failureThreshold: 3
+        startupProbe:
+          exec:
+            command:
+            - python
+            - run_outbox_publisher.py
+            - --health-check
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 15
+          failureThreshold: 10
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: google-cloud-credentials
+          mountPath: /etc/google-cloud
+          readOnly: true
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /etc/google-cloud/credentials.json
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: google-cloud-credentials
+        secret:
+          secretName: outbox-publisher-secrets
+          items:
+          - key: GOOGLE_APPLICATION_CREDENTIALS_JSON
+            path: credentials.json

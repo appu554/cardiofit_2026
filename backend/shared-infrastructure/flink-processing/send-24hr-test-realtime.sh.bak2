@@ -1,0 +1,288 @@
+#!/bin/bash
+
+# ============================================================================
+# 24-Hour Sepsis Test - Real-time Simulation with 1-hour Validation Window
+# ============================================================================
+# Sends events to patient-events-v1 with timestamps that stay within Module 1's
+# 1-hour future tolerance window by sending events in real-time with delays
+# ============================================================================
+
+KAFKA_BROKER="localhost:9092"
+PATIENT_ID="PAT-ROHAN-001"
+
+# Start time is 24 hours ago (so all events are in the past, passing validation)
+CURRENT_TIME=$(date +%s)000
+BASE_TIME=$((CURRENT_TIME - 86400000))  # 24 hours ago
+
+echo "🔬 24-Hour Sepsis Pattern Test - Real-time Simulation"
+echo "====================================================="
+echo "Patient: $PATIENT_ID"
+echo "Current Time: $CURRENT_TIME ($(date '+%Y-%m-%d %H:%M:%S'))"
+echo "Base Time: $BASE_TIME (24 hours ago)"
+echo "Strategy: Using past timestamps (last 24h) with small delays for ordering"
+echo "Duration: ~14 seconds (14 events with 1-sec delays)"
+echo ""
+
+# ============================================================================
+# EVENT 1: Baseline vitals (T+0h) - SEND NOW
+# ============================================================================
+echo "📤 Event 1/14: Baseline vitals (T+0h)"
+T1=$BASE_TIME
+EVENT1='{"patient_id":"PAT-ROHAN-001","event_time":'$T1',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":37.0,"heartRate":75,"respiratoryRate":16,"systolicBP":120,"diastolicBP":80,"oxygenSaturation":98,"consciousness":"Alert","supplementalOxygen":false},"metadata":{"device_id":"MONITOR-ICU-BED-12","measurement_method":"continuous"}}'
+
+echo "$EVENT1" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates 2 hours)
+echo "⏳ Waiting 2 minutes (simulates T+2h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 2: Initial infection markers (T+2h)
+# ============================================================================
+echo ""
+echo "📤 Event 2/14: Initial infection markers (T+2h)"
+T2=$((BASE_TIME + 7200000))
+EVENT2='{"patient_id":"PAT-ROHAN-001","event_time":'$T2',"type":"lab_result","source":"central_lab_system","payload":{"wbc":12500,"procalcitonin":0.8,"lactate":1.2,"creatinine":0.9,"bilirubin":0.7,"platelet":220000},"metadata":{"lab_order_id":"LAB-001","test_type":"routine_panel"}}'
+
+echo "$EVENT2" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+4h)
+echo "⏳ Waiting 2 minutes (simulates T+4h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 3: Early signs - mild fever (T+4h)
+# ============================================================================
+echo ""
+echo "📤 Event 3/14: Early signs - mild fever (T+4h)"
+T3=$((BASE_TIME + 14400000))
+EVENT3='{"patient_id":"PAT-ROHAN-001","event_time":'$T3',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":38.2,"heartRate":88,"respiratoryRate":18,"systolicBP":118,"diastolicBP":78,"oxygenSaturation":96,"consciousness":"Alert","supplementalOxygen":false},"metadata":{"device_id":"MONITOR-ICU-BED-12","alert_triggered":false}}'
+
+echo "$EVENT3" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+6h)
+echo "⏳ Waiting 2 minutes (simulates T+6h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 4: Infection worsening (T+6h) - KEY SEPSIS EVENT 1
+# ============================================================================
+echo ""
+echo "📤 Event 4/14: Infection worsening - elevated WBC (T+6h) [SEPSIS PATTERN 1/3]"
+T4=$((BASE_TIME + 21600000))
+EVENT4='{"patient_id":"PAT-ROHAN-001","event_time":'$T4',"type":"lab_result","source":"central_lab_system","payload":{"wbc":15000,"procalcitonin":1.2,"lactate":1.5,"creatinine":1.0,"bilirubin":0.8,"platelet":200000},"metadata":{"lab_order_id":"LAB-002-INFECTION","test_type":"infection_panel","urgency":"stat"}}'
+
+echo "$EVENT4" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+8h)
+echo "⏳ Waiting 2 minutes (simulates T+8h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 5: SIRS criteria met (T+8h) - KEY SEPSIS EVENT 2
+# ============================================================================
+echo ""
+echo "📤 Event 5/14: SIRS criteria met (T+8h) [SEPSIS PATTERN 2/3]"
+T5=$((BASE_TIME + 28800000))
+EVENT5='{"patient_id":"PAT-ROHAN-001","event_time":'$T5',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":39.2,"heartRate":105,"respiratoryRate":24,"systolicBP":115,"diastolicBP":75,"oxygenSaturation":94,"consciousness":"Alert","supplementalOxygen":false},"metadata":{"device_id":"MONITOR-ICU-BED-12","alert_triggered":true,"alert_type":"SIRS_CRITERIA"}}'
+
+echo "$EVENT5" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+10h)
+echo "⏳ Waiting 2 minutes (simulates T+10h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 6: Early organ dysfunction (T+10h)
+# ============================================================================
+echo ""
+echo "📤 Event 6/14: Early organ dysfunction - rising lactate (T+10h)"
+T6=$((BASE_TIME + 36000000))
+EVENT6='{"patient_id":"PAT-ROHAN-001","event_time":'$T6',"type":"lab_result","source":"point_of_care_lab","payload":{"lactate":2.2,"wbc":16000,"procalcitonin":1.8,"creatinine":1.3,"bilirubin":1.0,"platelet":180000},"metadata":{"lab_order_id":"LAB-003-SEPSIS","test_type":"sepsis_panel","urgency":"critical"}}'
+
+echo "$EVENT6" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+12h)
+echo "⏳ Waiting 2 minutes (simulates T+12h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 7: Septic shock (T+12h) - KEY SEPSIS EVENT 3
+# ============================================================================
+echo ""
+echo "📤 Event 7/14: Septic shock - hypotension (T+12h) [SEPSIS PATTERN 3/3 - COMPLETE!]"
+T7=$((BASE_TIME + 43200000))
+EVENT7='{"patient_id":"PAT-ROHAN-001","event_time":'$T7',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":38.8,"heartRate":118,"respiratoryRate":28,"systolicBP":85,"diastolicBP":55,"oxygenSaturation":88,"consciousness":"Confused","supplementalOxygen":true},"metadata":{"device_id":"MONITOR-ICU-BED-12","alert_triggered":true,"critical_alert":"HYPOTENSION_SEPTIC_SHOCK"}}'
+
+echo "$EVENT7" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+echo "🚨 SEPSIS PATTERN COMPLETE: Module 4 should detect sepsis now!"
+
+# Wait 1 minute
+sleep 60
+
+# ============================================================================
+# EVENT 8: Confirmation labs (T+12h)
+# ============================================================================
+echo ""
+echo "📤 Event 8/14: Confirmation labs - severe sepsis (T+12h)"
+EVENT8='{"patient_id":"PAT-ROHAN-001","event_time":'$T7',"type":"lab_result","source":"point_of_care_lab","payload":{"lactate":2.8,"wbc":16500,"procalcitonin":2.5,"creatinine":1.6,"bilirubin":1.4,"platelet":140000},"metadata":{"lab_order_id":"LAB-004-SHOCK","test_type":"sepsis_shock_panel","urgency":"critical"}}'
+
+echo "$EVENT8" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+14h)
+echo "⏳ Waiting 2 minutes (simulates T+14h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 9: Post-resuscitation (T+14h)
+# ============================================================================
+echo ""
+echo "📤 Event 9/14: Post-resuscitation vitals - improving (T+14h)"
+T9=$((BASE_TIME + 50400000))
+EVENT9='{"patient_id":"PAT-ROHAN-001","event_time":'$T9',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":38.5,"heartRate":110,"respiratoryRate":26,"systolicBP":95,"diastolicBP":60,"oxygenSaturation":92,"consciousness":"Drowsy","supplementalOxygen":true},"metadata":{"device_id":"MONITOR-ICU-BED-12","intervention":"fluid_resuscitation_vasopressors"}}'
+
+echo "$EVENT9" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+16h)
+echo "⏳ Waiting 2 minutes (simulates T+16h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 10: Follow-up labs (T+16h)
+# ============================================================================
+echo ""
+echo "📤 Event 10/14: Follow-up labs - slight improvement (T+16h)"
+T10=$((BASE_TIME + 57600000))
+EVENT10='{"patient_id":"PAT-ROHAN-001","event_time":'$T10',"type":"lab_result","source":"central_lab_system","payload":{"lactate":2.4,"wbc":15800,"procalcitonin":2.3,"creatinine":1.5,"bilirubin":1.3,"platelet":145000},"metadata":{"lab_order_id":"LAB-005-FOLLOWUP","test_type":"sepsis_monitoring"}}'
+
+echo "$EVENT10" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+18h)
+echo "⏳ Waiting 2 minutes (simulates T+18h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 11: Stabilizing (T+18h)
+# ============================================================================
+echo ""
+echo "📤 Event 11/14: Stabilizing vitals (T+18h)"
+T11=$((BASE_TIME + 64800000))
+EVENT11='{"patient_id":"PAT-ROHAN-001","event_time":'$T11',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":38.0,"heartRate":102,"respiratoryRate":22,"systolicBP":105,"diastolicBP":65,"oxygenSaturation":94,"consciousness":"Alert","supplementalOxygen":true},"metadata":{"device_id":"MONITOR-ICU-BED-12","intervention":"continued_vasopressor_support"}}'
+
+echo "$EVENT11" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+20h)
+echo "⏳ Waiting 2 minutes (simulates T+20h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 12: Continued improvement (T+20h)
+# ============================================================================
+echo ""
+echo "📤 Event 12/14: Continued improvement (T+20h)"
+T12=$((BASE_TIME + 72000000))
+EVENT12='{"patient_id":"PAT-ROHAN-001","event_time":'$T12',"type":"lab_result","source":"central_lab_system","payload":{"lactate":2.0,"wbc":14200,"procalcitonin":2.0,"creatinine":1.4,"bilirubin":1.2,"platelet":150000},"metadata":{"lab_order_id":"LAB-006-TREND","test_type":"trending_panel"}}'
+
+echo "$EVENT12" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+22h)
+echo "⏳ Waiting 2 minutes (simulates T+22h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 13: Near-normal (T+22h)
+# ============================================================================
+echo ""
+echo "📤 Event 13/14: Near-normal vitals (T+22h)"
+T13=$((BASE_TIME + 79200000))
+EVENT13='{"patient_id":"PAT-ROHAN-001","event_time":'$T13',"type":"vital_signs","source":"bedside_monitor_001","payload":{"temperature":37.5,"heartRate":95,"respiratoryRate":20,"systolicBP":110,"diastolicBP":70,"oxygenSaturation":96,"consciousness":"Alert","supplementalOxygen":true},"metadata":{"device_id":"MONITOR-ICU-BED-12","intervention":"weaning_vasopressors"}}'
+
+echo "$EVENT13" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# Wait 2 minutes (simulates T+24h)
+echo "⏳ Waiting 2 minutes (simulates T+24h)..."
+sleep 120
+
+# ============================================================================
+# EVENT 14: 24-hour assessment (T+24h)
+# ============================================================================
+echo ""
+echo "📤 Event 14/14: 24-hour assessment - recovering (T+24h)"
+T14=$((BASE_TIME + 86400000))
+EVENT14='{"patient_id":"PAT-ROHAN-001","event_time":'$T14',"type":"lab_result","source":"central_lab_system","payload":{"lactate":1.6,"wbc":13000,"procalcitonin":1.5,"creatinine":1.2,"bilirubin":1.0,"platelet":160000},"metadata":{"lab_order_id":"LAB-007-24HR","test_type":"24_hour_assessment"}}'
+
+echo "$EVENT14" | docker exec -i kafka kafka-console-producer \
+  --broker-list $KAFKA_BROKER \
+  --topic patient-events-v1
+echo "✅ Sent at $(date '+%H:%M:%S')"
+
+# ============================================================================
+# Summary
+# ============================================================================
+echo ""
+echo "🎉 All 14 Events Sent Successfully!"
+echo "===================================="
+echo "Total time: ~28 minutes (compressed 24-hour timeline)"
+echo ""
+echo "📊 Module 4 Pattern Detection Expected:"
+echo "  ✅ SEPSIS pattern detected after Event 7"
+echo "     Events 4 (infection) → 5 (SIRS) → 7 (shock) within 6-hour window"
+echo ""
+echo "🔍 Monitor Module 4 Output Now:"
+echo ""
+echo "  # Check alert-management.v1 for sepsis alert"
+echo "  docker exec kafka kafka-console-consumer \\"
+echo "    --bootstrap-server localhost:9092 \\"
+echo "    --topic alert-management.v1 \\"
+echo "    --from-beginning \\"
+echo "    --max-messages 10"
+echo ""
+echo "  # Check pattern-events.v1 for all patterns"
+echo "  docker exec kafka kafka-console-consumer \\"
+echo "    --bootstrap-server localhost:9092 \\"
+echo "    --topic pattern-events.v1 \\"
+echo "    --from-beginning \\"
+echo "    --max-messages 10"
+echo ""
+echo "🌐 Flink Web UI: http://localhost:8081"
+echo "   Module 4 Job ID: Check metrics for pattern matches"
+echo ""

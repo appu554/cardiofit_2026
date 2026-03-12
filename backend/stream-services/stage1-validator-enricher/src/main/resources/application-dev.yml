@@ -1,0 +1,96 @@
+# Development Configuration for Stage 1: Validator & Enricher Service
+
+server:
+  port: 8041
+
+spring:
+  application:
+    name: stage1-validator-enricher
+  
+  # Kafka Configuration for Development
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:pkc-619z3.us-east1.gcp.confluent.cloud:9092}
+    security:
+      protocol: ${KAFKA_SECURITY_PROTOCOL:SASL_SSL}
+    sasl:
+      mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
+      jaas:
+        config: ${KAFKA_SASL_JAAS_CONFIG:org.apache.kafka.common.security.plain.PlainLoginModule required username="LGJ3AQ2L6VRPW4S2" password="2hYzQLmG1XGyQ9oLZcjwAIBdAZUS6N4JoWD8oZQhk0qVBmmyVVHU7TqoLjYef0kl";}
+    
+    streams:
+      application-id: stage1-validator-enricher-dev
+      default-key-serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+      default-value-serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+      bootstrap-servers: ${spring.kafka.bootstrap-servers}
+      security:
+        protocol: ${spring.kafka.security.protocol}
+      properties:
+        # Development settings
+        num.stream.threads: 1
+        commit.interval.ms: 1000
+        cache.max.bytes.buffering: 1048576  # 1MB
+        default.deserialization.exception.handler: org.apache.kafka.streams.errors.LogAndContinueExceptionHandler
+        default.production.exception.handler: org.apache.kafka.streams.errors.DefaultProductionExceptionHandler
+  
+  # Redis Configuration for Development
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 2000ms
+
+# Management and Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,kafka-streams
+  endpoint:
+    health:
+      show-details: always
+
+# Logging Configuration for Development
+logging:
+  level:
+    com.clinicalsynthesis.validator: DEBUG
+    org.apache.kafka.streams: INFO
+    org.springframework.kafka: INFO
+    org.springframework.data.redis: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%logger{36}] - %msg%n"
+
+# Application-specific Configuration
+app:
+  # Patient Service Configuration
+  patient-service:
+    url: ${PATIENT_SERVICE_URL:http://localhost:8003/api/v1/patient}
+    timeout: 5000ms
+    retry-attempts: 3
+  
+  # Validation Configuration
+  validation:
+    enabled: true
+    rules-version: "1.0.0"
+    cache-validation-rules: true
+    emergency-bypass: true
+  
+  # Patient Context Configuration
+  patient-context:
+    cache-ttl-seconds: 300
+    fallback-to-service: true
+    timeout-ms: 3000
+  
+  # Kafka Topics Configuration
+  topics:
+    input: raw-device-data.v1
+    output: validated-device-data.v1
+    dlq: failed-validation.v1
+  
+  # Circuit Breaker Configuration
+  circuit-breaker:
+    enabled: true
+    failure-threshold: 10
+    recovery-timeout-seconds: 60
+    medical-data-bypass: true

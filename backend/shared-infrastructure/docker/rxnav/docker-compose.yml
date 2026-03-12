@@ -1,0 +1,52 @@
+# RxNav-in-a-Box: Local RxNorm API Server
+# Provides unlimited local RxNorm API calls without rate limits
+# Key Feature: Deterministic NDC → SPL SetID mapping via RxNorm SPL Links
+#
+# Documentation: https://lhncbc.nlm.nih.gov/RxNav/applications/RxNav-in-a-Box.html
+#
+# Usage:
+#   docker-compose up -d
+#   curl http://localhost:4000/REST/version
+#
+# Key APIs:
+#   - /REST/rxcui.json?idtype=NDC&id={ndc}     → Get RxCUI from NDC
+#   - /REST/rxcui/{rxcui}/related?tty=SBD+SCD  → Get related concepts
+#   - /REST/rxcui/{rxcui}/property?propName=SPL_SET_ID → Get DailyMed SetID
+#   - /REST/interaction/list.json?rxcuis={rxcui1}+{rxcui2} → Drug interactions
+
+version: '3.8'
+
+services:
+  rxnav:
+    image: lhncbc/rxnav-in-a-box:latest
+    container_name: cardiofit-rxnav
+    ports:
+      - "4000:4000"
+    volumes:
+      - rxnav-data:/var/lib/mysql
+    environment:
+      # RxNorm data will be downloaded on first startup (may take 30-60 minutes)
+      - MYSQL_ROOT_PASSWORD=rxnav_root_2024
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/REST/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s  # 10 min startup for initial data load
+    restart: unless-stopped
+    labels:
+      - "cardiofit.service=rxnav"
+      - "cardiofit.phase=3a"
+      - "cardiofit.purpose=terminology-lookup"
+    networks:
+      - cardiofit-network
+
+networks:
+  cardiofit-network:
+    name: cardiofit-kb-network
+    external: true
+
+volumes:
+  rxnav-data:
+    name: cardiofit-rxnav-data
+    driver: local

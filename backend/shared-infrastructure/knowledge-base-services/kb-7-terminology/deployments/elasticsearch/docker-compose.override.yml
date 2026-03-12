@@ -1,0 +1,60 @@
+version: '3.8'
+
+# Development overrides for Elasticsearch cluster
+# Automatically sets up indices and sample data
+
+services:
+  # Setup service that initializes the cluster
+  elasticsearch-setup:
+    image: curlimages/curl:latest
+    container_name: cardiofit-elasticsearch-setup
+    depends_on:
+      elasticsearch-master:
+        condition: service_healthy
+    volumes:
+      - ./config:/config:ro
+      - ./scripts:/scripts:ro
+    networks:
+      - cardiofit-global-network
+    command: |
+      sh -c "
+        apk add --no-cache jq bash &&
+        chmod +x /scripts/setup_cluster.sh &&
+        ELASTICSEARCH_URL=http://elasticsearch-master:9200 /scripts/setup_cluster.sh
+      "
+    restart: "no"
+
+  # Development Elasticsearch with reduced memory for local testing
+  elasticsearch-master:
+    environment:
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"  # Reduced from 4g for development
+    volumes:
+      - elasticsearch_master_data:/usr/share/elasticsearch/data
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./config/medical_analyzers.json:/usr/share/elasticsearch/config/analysis/medical_analyzers.json:ro
+      - ./config/clinical_terms_mapping.json:/usr/share/elasticsearch/config/mappings/clinical_terms_mapping.json:ro
+      - ./config/index_templates.json:/usr/share/elasticsearch/config/templates/index_templates.json:ro
+
+  elasticsearch-data-1:
+    environment:
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"  # Reduced from 4g for development
+
+  # Enable development mode for Kibana
+  kibana:
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch-master:9200
+      - SERVER_NAME=cardiofit-kibana-dev
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=5601
+      - LOGGING_LEVEL=debug
+      - KIBANA_DEV_MODE=true
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - ./config/kibana-dev-dashboard.json:/usr/share/kibana/config/dashboard.json:ro
+
+volumes:
+  elasticsearch_master_data:
+  elasticsearch_data1:
+  kibana_data:
+  curator_logs:

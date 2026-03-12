@@ -1,0 +1,307 @@
+// Protocol Buffer definition for Medication Microservice gRPC interface
+// Implements the two-phase Propose/Commit operations
+
+syntax = "proto3";
+
+package medication.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// === TWO-PHASE OPERATIONS SERVICE ===
+
+service MedicationService {
+  // Phase 1: Propose Medication (Stateless)
+  rpc ProposeMedication(ProposeMedicationRequest) returns (ProposeMedicationResponse);
+  
+  // Phase 2: Commit Prescription (Stateful)
+  rpc CommitPrescription(CommitPrescriptionRequest) returns (CommitPrescriptionResponse);
+  
+  // Cancel Prescription
+  rpc CancelPrescription(CancelPrescriptionRequest) returns (CancelPrescriptionResponse);
+  
+  // Query Operations
+  rpc GetPrescription(GetPrescriptionRequest) returns (GetPrescriptionResponse);
+  rpc GetMedication(GetMedicationRequest) returns (GetMedicationResponse);
+}
+
+// === PHASE 1: PROPOSE MEDICATION ===
+
+message ProposeMedicationRequest {
+  // Patient and Medication
+  string patient_id = 1;
+  string medication_id = 2;
+  string prescriber_id = 3;
+  
+  // Clinical Context
+  string indication = 4;
+  Frequency requested_frequency = 5;
+  Duration requested_duration = 6;
+  string special_instructions = 7;
+  
+  // Request Metadata
+  string request_id = 8;
+  google.protobuf.Timestamp requested_at = 9;
+}
+
+message ProposeMedicationResponse {
+  bool success = 1;
+  string proposal_id = 2;
+  string error_message = 3;
+  repeated string warnings = 4;
+  
+  // Proposal Details
+  string proposal_summary = 5;
+  double confidence_score = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  
+  // Calculated Dose Information
+  DoseSpecification calculated_dose = 8;
+  Frequency final_frequency = 9;
+  Duration final_duration = 10;
+  Quantity calculated_quantity = 11;
+  
+  // Clinical Information
+  repeated string clinical_notes = 12;
+  CalculationMetadata calculation_metadata = 13;
+}
+
+// === PHASE 2: COMMIT PRESCRIPTION ===
+
+message CommitPrescriptionRequest {
+  // Proposal Reference
+  string proposal_id = 1;
+  
+  // Commitment Context
+  string committed_by = 2;
+  bool safety_validation_passed = 3;
+  
+  // Optional Modifications from Safety Gateway
+  DoseModification dose_modifications = 4;
+  FrequencyModification frequency_modifications = 5;
+  DurationModification duration_modifications = 6;
+  QuantityModification quantity_modifications = 7;
+  
+  // Validation Metadata
+  ValidationMetadata validation_metadata = 8;
+  google.protobuf.Timestamp committed_at = 9;
+}
+
+message CommitPrescriptionResponse {
+  bool success = 1;
+  string prescription_id = 2;
+  string error_message = 3;
+  
+  // Commitment Details
+  string prescription_summary = 4;
+  bool modifications_applied = 5;
+  ModificationSummary modification_summary = 6;
+  
+  // Audit Information
+  google.protobuf.Timestamp committed_at = 7;
+  string committed_by = 8;
+}
+
+// === CANCEL PRESCRIPTION ===
+
+message CancelPrescriptionRequest {
+  oneof identifier {
+    string prescription_id = 1;
+    string proposal_id = 2;
+  }
+  
+  string cancelled_by = 3;
+  string cancellation_reason = 4;
+  google.protobuf.Timestamp cancelled_at = 5;
+}
+
+message CancelPrescriptionResponse {
+  bool success = 1;
+  string error_message = 2;
+  google.protobuf.Timestamp cancelled_at = 3;
+}
+
+// === QUERY OPERATIONS ===
+
+message GetPrescriptionRequest {
+  string prescription_id = 1;
+}
+
+message GetPrescriptionResponse {
+  bool found = 1;
+  Prescription prescription = 2;
+}
+
+message GetMedicationRequest {
+  string medication_id = 1;
+}
+
+message GetMedicationResponse {
+  bool found = 1;
+  Medication medication = 2;
+}
+
+// === CORE DATA TYPES ===
+
+message DoseSpecification {
+  double value = 1;
+  string unit = 2;
+  string route = 3;
+  string calculation_method = 4;
+  map<string, string> calculation_factors = 5;
+}
+
+message Frequency {
+  string type = 1; // scheduled, prn, once, continuous
+  int32 interval_hours = 2;
+  int32 times_per_day = 3;
+  repeated string specific_times = 4;
+  int32 max_doses_per_day = 5;
+  string conditions = 6;
+  string display_string = 7;
+}
+
+message Duration {
+  int32 days = 1;
+  int32 weeks = 2;
+  int32 months = 3;
+  bool indefinite = 4;
+  string until_condition = 5;
+  string display_string = 6;
+}
+
+message Quantity {
+  double amount = 1;
+  string unit = 2;
+  int32 days_supply = 3;
+  string display_string = 4;
+}
+
+message Prescription {
+  string prescription_id = 1;
+  string proposal_id = 2;
+  string patient_id = 3;
+  string medication_id = 4;
+  
+  // Prescription Details
+  DoseSpecification dose = 5;
+  Frequency frequency = 6;
+  Duration duration = 7;
+  Quantity quantity = 8;
+  
+  string prescriber_id = 9;
+  string indication = 10;
+  string special_instructions = 11;
+  int32 refills = 12;
+  
+  // Status and Lifecycle
+  string status = 13;
+  google.protobuf.Timestamp proposal_timestamp = 14;
+  google.protobuf.Timestamp commit_timestamp = 15;
+  string committed_by = 16;
+  
+  // Metadata
+  int32 version = 17;
+  google.protobuf.Timestamp created_at = 18;
+  google.protobuf.Timestamp updated_at = 19;
+}
+
+message Medication {
+  string medication_id = 1;
+  string rxnorm_code = 2;
+  repeated string ndc_codes = 3;
+  string generic_name = 4;
+  repeated string brand_names = 5;
+  
+  // Clinical Properties
+  string therapeutic_class = 6;
+  string pharmacologic_class = 7;
+  bool is_high_alert = 8;
+  bool is_controlled_substance = 9;
+  int32 dea_schedule = 10;
+  
+  // Dosing Information
+  string dosing_type = 11;
+  double standard_dose_min = 12;
+  double standard_dose_max = 13;
+  double weight_based_dose_mg_kg = 14;
+  double bsa_based_dose_mg_m2 = 15;
+  double max_single_dose = 16;
+  double max_daily_dose = 17;
+  
+  // Adjustment Requirements
+  bool renal_adjustment_required = 18;
+  bool hepatic_adjustment_required = 19;
+  bool therapeutic_drug_monitoring = 20;
+  
+  // Formulations
+  repeated Formulation formulations = 21;
+  
+  // Metadata
+  google.protobuf.Timestamp created_at = 22;
+  google.protobuf.Timestamp updated_at = 23;
+}
+
+message Formulation {
+  string dosage_form = 1;
+  double strength = 2;
+  string strength_unit = 3;
+  string route_of_administration = 4;
+  string release_mechanism = 5;
+  string storage_requirements = 6;
+}
+
+// === MODIFICATION TYPES ===
+
+message DoseModification {
+  double new_value = 1;
+  string new_unit = 2;
+  string modification_reason = 3;
+  string modified_by = 4;
+}
+
+message FrequencyModification {
+  Frequency new_frequency = 1;
+  string modification_reason = 2;
+  string modified_by = 3;
+}
+
+message DurationModification {
+  Duration new_duration = 1;
+  string modification_reason = 2;
+  string modified_by = 3;
+}
+
+message QuantityModification {
+  Quantity new_quantity = 1;
+  string modification_reason = 2;
+  string modified_by = 3;
+}
+
+message ModificationSummary {
+  bool dose_modified = 1;
+  bool frequency_modified = 2;
+  bool duration_modified = 3;
+  bool quantity_modified = 4;
+  repeated string modification_reasons = 5;
+}
+
+// === METADATA TYPES ===
+
+message CalculationMetadata {
+  string recipe_id = 1;
+  string recipe_version = 2;
+  google.protobuf.Timestamp calculation_timestamp = 3;
+  map<string, string> business_context_summary = 4;
+  repeated string context_warnings = 5;
+}
+
+message ValidationMetadata {
+  bool drug_interaction_checked = 1;
+  bool allergy_checked = 2;
+  bool contraindication_checked = 3;
+  bool dose_limit_checked = 4;
+  repeated string safety_warnings = 5;
+  repeated string safety_overrides = 6;
+  string validation_engine_version = 7;
+  google.protobuf.Timestamp validated_at = 8;
+}

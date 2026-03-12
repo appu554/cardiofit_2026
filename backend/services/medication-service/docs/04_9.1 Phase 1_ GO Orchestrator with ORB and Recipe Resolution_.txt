@@ -1,0 +1,973 @@
+﻿# Phase 1: GO Orchestrator with ORB and Recipe Resolution
+
+
+## Executive Overview
+
+
+Phase 1 represents the critical entry point where clinical intent is classified and the appropriate recipe is resolved. The GO Orchestrator performs high-speed, in-memory processing using the Orchestrator Rule Base (ORB) to determine both the context recipe (data requirements) and clinical recipe (therapeutic protocols). This phase must complete in ≤25ms while maintaining deterministic behavior.
+
+
+## 1. Architecture Design
+
+
+### 1.1 Core Components
+
+
+```go
+// cmd/orchestrator/main.go
+package main
+
+
+type MedicationOrchestrator struct {
+    // Core engines
+    orb              *ORBEngine
+    recipeResolver   *RecipeResolver
+    
+    // Apollo Federation client
+    apolloClient     *ApolloFederationClient
+    
+    // Context Gateway client for snapshot creation (Phase 2)
+    contextGateway   *ContextGatewayClient
+    
+    // Caching layer
+    cache            *InMemoryCache
+    
+    // Monitoring
+    metrics          *MetricsCollector
+    tracer           *Tracer
+}
+
+
+type ORBEngine struct {
+    // In-memory rule base
+    ruleBase         *RuleBase
+    intentClassifier *IntentClassifier
+    protocolMatcher  *ClinicalProtocolMatcher
+    
+    // Version management
+    version          string
+    loadedAt         time.Time
+}
+
+
+type RecipeResolver struct {
+    // Recipe templates indexed by protocol
+    contextRecipes   map[string]*ContextRecipe
+    clinicalRecipes  map[string]*ClinicalRecipe
+    
+    // Conditional logic engine
+    conditionalEngine *ConditionalFieldResolver
+}
+```
+
+
+### 1.2 Data Structures
+
+
+```go
+// internal/phase1/models.go
+
+
+// Input from client
+type MedicationRequest struct {
+    RequestID        string                 `json:"request_id"`
+    PatientID        string                 `json:"patient_id"`
+    EncounterID      string                 `json:"encounter_id"`
+    
+    // Clinical context
+    Indication       string                 `json:"indication"`        // e.g., "hypertension_stage2_ckd"
+    ClinicalContext  ClinicalContextInput   `json:"clinical_context"`
+    Urgency          UrgencyLevel           `json:"urgency"`           // ROUTINE, URGENT, STAT
+    
+    // Provider context
+    Provider         ProviderContext        `json:"provider"`
+    CareSettings     CareSettings           `json:"care_settings"`
+    
+    // Special considerations
+    Preferences      PatientPreferences     `json:"preferences,omitempty"`
+    Constraints      []ClinicalConstraint   `json:"constraints,omitempty"`
+}
+
+
+// Output from Phase 1
+type IntentManifest struct {
+    ManifestID       string                 `json:"manifest_id"`
+    RequestID        string                 `json:"request_id"`
+    GeneratedAt      time.Time              `json:"generated_at"`
+    
+    // Classification results
+    PrimaryIntent    ClinicalIntent         `json:"primary_intent"`
+    SecondaryIntents []ClinicalIntent       `json:"secondary_intents,omitempty"`
+    
+    // Protocol selection
+    ProtocolID       string                 `json:"protocol_id"`
+    ProtocolVersion  string                 `json:"protocol_version"`
+    EvidenceGrade    string                 `json:"evidence_grade"`
+    
+    // Recipe references
+    ContextRecipeID  string                 `json:"context_recipe_id"`
+    ClinicalRecipeID string                 `json:"clinical_recipe_id"`
+    
+    // Computed requirements
+    RequiredFields   []FieldRequirement     `json:"required_fields"`
+    OptionalFields   []FieldRequirement     `json:"optional_fields"`
+    
+    // Freshness requirements
+    DataFreshness    FreshnessRequirements  `json:"data_freshness"`
+    SnapshotTTL      int                    `json:"snapshot_ttl_seconds"`
+    
+    // Therapy options determined by ORB
+    TherapyOptions   []TherapyCandidate     `json:"therapy_options"`
+    
+    // Provenance
+    ORBVersion       string                 `json:"orb_version"`
+    RulesApplied     []AppliedRule          `json:"rules_applied"`
+}
+
+
+type ClinicalIntent struct {
+    Category         string                 `json:"category"`     // TREATMENT, PROPHYLAXIS, SYMPTOM_CONTROL
+    Condition        string                 `json:"condition"`    // Coded condition (SNOMED/ICD)
+    Severity         string                 `json:"severity"`     // MILD, MODERATE, SEVERE, CRITICAL
+    Phenotype        string                 `json:"phenotype"`    // Patient phenotype classification
+    TimeHorizon      string                 `json:"time_horizon"` // ACUTE, CHRONIC, MAINTENANCE
+}
+
+
+type TherapyCandidate struct {
+    TherapyClass     string                 `json:"therapy_class"`    // ACE_INHIBITOR, ARB, etc.
+    PreferenceOrder  int                    `json:"preference_order"`
+    Rationale        string                 `json:"rationale"`
+    GuidelineSource  string                 `json:"guideline_source"`
+}
+```
+
+
+## 2. ORB Engine Implementation
+
+
+### 2.1 Rule Base Structure
+
+
+```go
+// internal/orb/rulebase.go
+
+
+type RuleBase struct {
+    rules            []*ClinicalRule
+    indexByCondition map[string][]*ClinicalRule  // Fast lookup by condition
+    indexByPhenotype map[string][]*ClinicalRule  // Fast lookup by phenotype
+    
+    // Precompiled decision trees for performance
+    decisionTrees    map[string]*DecisionTree
+}
+
+
+type ClinicalRule struct {
+    RuleID           string
+    Priority         int
+    
+    // Matching criteria
+    Conditions       []ConditionMatcher
+    Phenotypes       []PhenotypeMatcher
+    CareSettings     []string
+    
+    // Actions
+    ProtocolID       string
+    TherapyClasses   []string
+    RequiredData     []string
+    
+    // Evidence
+    GuidelineRef     string
+    EvidenceLevel    string
+    LastUpdated      time.Time
+}
+
+
+// Preload all rules into memory on startup
+func (rb *RuleBase) LoadRules(ctx context.Context, apollo *ApolloFederationClient) error {
+    // Query Apollo Federation for rule definitions
+    query := `
+        query LoadORBRules {
+            kb_guideline_evidence {
+                orbRules {
+                    ruleId
+                    priority
+                    conditions
+                    phenotypes
+                    protocolId
+                    therapyClasses
+                    guidelineRef
+                    evidenceLevel
+                }
+            }
+        }
+    `
+    
+    result, err := apollo.Query(ctx, query, nil)
+    if err != nil {
+        return fmt.Errorf("failed to load ORB rules: %w", err)
+    }
+    
+    // Parse and index rules
+    rb.parseAndIndexRules(result)
+    
+    // Build decision trees for complex conditions
+    rb.buildDecisionTrees()
+    
+    return nil
+}
+```
+
+
+### 2.2 Intent Classification Logic
+
+
+```go
+// internal/orb/classifier.go
+
+
+func (orb *ORBEngine) ClassifyIntent(
+    ctx context.Context,
+    request *MedicationRequest,
+) (*IntentManifest, error) {
+    span, ctx := orb.tracer.Start(ctx, "orb.classify_intent")
+    defer span.End()
+    
+    startTime := time.Now()
+    
+    // Step 1: Extract clinical features
+    features := orb.extractFeatures(request)
+    
+    // Step 2: Match against rule base
+    matchedRules := orb.findMatchingRules(features)
+    if len(matchedRules) == 0 {
+        return nil, ErrNoMatchingProtocol
+    }
+    
+    // Step 3: Select highest priority rule
+    selectedRule := orb.selectBestRule(matchedRules, features)
+    
+    // Step 4: Load protocol details
+    protocol, err := orb.loadProtocol(ctx, selectedRule.ProtocolID)
+    if err != nil {
+        return nil, fmt.Errorf("failed to load protocol: %w", err)
+    }
+    
+    // Step 5: Build intent manifest
+    manifest := &IntentManifest{
+        ManifestID:      generateULID(),
+        RequestID:       request.RequestID,
+        GeneratedAt:     time.Now(),
+        
+        PrimaryIntent: ClinicalIntent{
+            Category:    orb.determineCategory(request.Indication),
+            Condition:   request.Indication,
+            Severity:    features.Severity,
+            Phenotype:   features.Phenotype,
+            TimeHorizon: orb.determineTimeHorizon(request),
+        },
+        
+        ProtocolID:      selectedRule.ProtocolID,
+        ProtocolVersion: protocol.Version,
+        EvidenceGrade:   selectedRule.EvidenceLevel,
+        
+        TherapyOptions:  orb.buildTherapyOptions(selectedRule, protocol),
+        
+        ORBVersion:      orb.version,
+        RulesApplied: []AppliedRule{{
+            RuleID:      selectedRule.RuleID,
+            Confidence:  calculateConfidence(matchedRules, selectedRule),
+            AppliedAt:   time.Now(),
+        }},
+    }
+    
+    // Record metrics
+    orb.metrics.RecordClassification(time.Since(startTime), manifest.ProtocolID)
+    
+    return manifest, nil
+}
+
+
+func (orb *ORBEngine) findMatchingRules(features *ClinicalFeatures) []*ClinicalRule {
+    // Use indices for O(1) lookup
+    candidateRules := make(map[string]*ClinicalRule)
+    
+    // Check condition index
+    if rules, ok := orb.ruleBase.indexByCondition[features.Condition]; ok {
+        for _, rule := range rules {
+            candidateRules[rule.RuleID] = rule
+        }
+    }
+    
+    // Check phenotype index
+    if rules, ok := orb.ruleBase.indexByPhenotype[features.Phenotype]; ok {
+        for _, rule := range rules {
+            candidateRules[rule.RuleID] = rule
+        }
+    }
+    
+    // Filter by detailed matching
+    var matchedRules []*ClinicalRule
+    for _, rule := range candidateRules {
+        if orb.evaluateRule(rule, features) {
+            matchedRules = append(matchedRules, rule)
+        }
+    }
+    
+    // Sort by priority
+    sort.Slice(matchedRules, func(i, j int) bool {
+        return matchedRules[i].Priority > matchedRules[j].Priority
+    })
+    
+    return matchedRules
+}
+```
+
+
+## 3. Recipe Resolution Implementation
+
+
+### 3.1 Recipe Resolver with Conditional Logic
+
+
+```go
+// internal/recipes/resolver.go
+
+
+type RecipeResolver struct {
+    contextRecipes   map[string]*ContextRecipe
+    clinicalRecipes  map[string]*ClinicalRecipe
+    apolloClient     *ApolloFederationClient
+    cache           *RecipeCache
+}
+
+
+func (rr *RecipeResolver) ResolveRecipes(
+    ctx context.Context,
+    manifest *IntentManifest,
+    request *MedicationRequest,
+) error {
+    span, ctx := rr.tracer.Start(ctx, "recipe.resolve")
+    defer span.End()
+    
+    // Step 1: Resolve Context Recipe (data requirements)
+    contextRecipe, err := rr.resolveContextRecipe(ctx, manifest.ProtocolID)
+    if err != nil {
+        return fmt.Errorf("failed to resolve context recipe: %w", err)
+    }
+    
+    // Step 2: Apply conditional field requirements
+    contextRecipe = rr.applyConditionalFields(contextRecipe, request)
+    
+    // Step 3: Resolve Clinical Recipe (therapy protocols)
+    clinicalRecipe, err := rr.resolveClinicalRecipe(ctx, manifest.ProtocolID)
+    if err != nil {
+        return fmt.Errorf("failed to resolve clinical recipe: %w", err)
+    }
+    
+    // Step 4: Merge requirements
+    requiredFields, optionalFields := rr.mergeFieldRequirements(
+        contextRecipe,
+        clinicalRecipe,
+    )
+    
+    // Step 5: Update manifest with recipe details
+    manifest.ContextRecipeID = contextRecipe.ID
+    manifest.ClinicalRecipeID = clinicalRecipe.ID
+    manifest.RequiredFields = requiredFields
+    manifest.OptionalFields = optionalFields
+    manifest.DataFreshness = rr.determineFreshnessRequirements(
+        contextRecipe,
+        clinicalRecipe,
+    )
+    manifest.SnapshotTTL = rr.calculateSnapshotTTL(manifest.DataFreshness)
+    
+    return nil
+}
+
+
+type ContextRecipe struct {
+    ID               string
+    ProtocolID       string
+    Version          string
+    
+    // Core required fields for all patients
+    CoreFields       []FieldSpec
+    
+    // Conditional fields based on patient characteristics
+    ConditionalRules []ConditionalFieldRule
+    
+    // Freshness requirements per field category
+    FreshnessRules   map[string]FreshnessRule
+}
+
+
+type ConditionalFieldRule struct {
+    Condition        string     // Expression to evaluate
+    RequiredFields   []FieldSpec
+    Rationale        string
+}
+
+
+func (rr *RecipeResolver) applyConditionalFields(
+    recipe *ContextRecipe,
+    request *MedicationRequest,
+) *ContextRecipe {
+    enhanced := &ContextRecipe{
+        ID:         recipe.ID,
+        ProtocolID: recipe.ProtocolID,
+        Version:    recipe.Version,
+        CoreFields: recipe.CoreFields,
+    }
+    
+    // Evaluate each conditional rule
+    for _, rule := range recipe.ConditionalRules {
+        if rr.evaluateCondition(rule.Condition, request) {
+            enhanced.CoreFields = append(enhanced.CoreFields, rule.RequiredFields...)
+        }
+    }
+    
+    // Deduplicate fields
+    enhanced.CoreFields = rr.deduplicateFields(enhanced.CoreFields)
+    
+    return enhanced
+}
+```
+
+
+### 3.2 Clinical Recipe Resolution
+
+
+```go
+// internal/recipes/clinical.go
+
+
+type ClinicalRecipe struct {
+    ID                string
+    ProtocolID        string
+    Version           string
+    
+    // Therapy selection rules
+    TherapySelectionRules []TherapyRule
+    
+    // Dosing strategy
+    DosingStrategy    DosingStrategy
+    
+    // Safety requirements
+    SafetyChecks      []SafetyCheckRequirement
+    
+    // Monitoring requirements
+    MonitoringPlan    MonitoringRequirements
+}
+
+
+func (rr *RecipeResolver) resolveClinicalRecipe(
+    ctx context.Context,
+    protocolID string,
+) (*ClinicalRecipe, error) {
+    // Check cache first
+    if cached, ok := rr.cache.GetClinicalRecipe(protocolID); ok {
+        return cached, nil
+    }
+    
+    // Query Apollo Federation for clinical recipe
+    query := `
+        query GetClinicalRecipe($protocolId: String!) {
+            kb_guideline_evidence {
+                clinicalRecipe(protocolId: $protocolId) {
+                    id
+                    version
+                    therapyRules {
+                        priority
+                        drugClass
+                        conditions
+                        contraindications
+                    }
+                    dosingStrategy {
+                        approach
+                        adjustmentFactors
+                    }
+                    safetyChecks {
+                        checkType
+                        severity
+                        mandatory
+                    }
+                    monitoringRequirements {
+                        parameter
+                        frequency
+                        duration
+                    }
+                }
+            }
+        }
+    `
+    
+    variables := map[string]interface{}{
+        "protocolId": protocolID,
+    }
+    
+    result, err := rr.apolloClient.Query(ctx, query, variables)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query clinical recipe: %w", err)
+    }
+    
+    recipe := rr.parseClinicalRecipe(result)
+    
+    // Cache for future use
+    rr.cache.SetClinicalRecipe(protocolID, recipe)
+    
+    return recipe, nil
+}
+```
+
+
+## 4. Apollo Federation Integration
+
+
+### 4.1 Apollo Client Configuration
+
+
+```go
+// internal/apollo/client.go
+
+
+type ApolloFederationClient struct {
+    endpoint     string
+    httpClient   *http.Client
+    authToken    string
+    
+    // Circuit breaker for resilience
+    breaker      *circuitbreaker.CircuitBreaker
+    
+    // Metrics
+    metrics      *ApolloMetrics
+}
+
+
+func NewApolloFederationClient(config *Config) *ApolloFederationClient {
+    client := &ApolloFederationClient{
+        endpoint: config.ApolloEndpoint,
+        httpClient: &http.Client{
+            Timeout: 5 * time.Second, // Aggressive timeout for Phase 1
+            Transport: &http.Transport{
+                MaxIdleConns:        100,
+                MaxIdleConnsPerHost: 10,
+                IdleConnTimeout:     90 * time.Second,
+            },
+        },
+        authToken: config.AuthToken,
+    }
+    
+    // Configure circuit breaker
+    client.breaker = circuitbreaker.NewCircuitBreaker(circuitbreaker.Settings{
+        MaxRequests: 3,
+        Interval:    10 * time.Second,
+        Timeout:     30 * time.Second,
+        OnStateChange: func(name string, from, to circuitbreaker.State) {
+            client.metrics.RecordStateChange(from, to)
+        },
+    })
+    
+    return client
+}
+
+
+func (c *ApolloFederationClient) Query(
+    ctx context.Context,
+    query string,
+    variables map[string]interface{},
+) (interface{}, error) {
+    // Execute with circuit breaker
+    result, err := c.breaker.Execute(func() (interface{}, error) {
+        return c.executeQuery(ctx, query, variables)
+    })
+    
+    if err != nil {
+        // Check if we should fail open (use cached/default values)
+        if c.shouldFailOpen(err) {
+            return c.getDefaultResponse(query), nil
+        }
+        return nil, err
+    }
+    
+    return result, nil
+}
+```
+
+
+## 5. Performance Optimizations
+
+
+### 5.1 In-Memory Caching Strategy
+
+
+```go
+// internal/cache/memory.go
+
+
+type InMemoryCache struct {
+    orbRules     *sync.Map  // Rule base cache
+    recipes      *sync.Map  // Recipe cache
+    protocols    *sync.Map  // Protocol cache
+    
+    // LRU cache for dynamic content
+    lru          *lru.Cache
+    
+    // Metrics
+    hits         atomic.Int64
+    misses       atomic.Int64
+}
+
+
+func (c *InMemoryCache) PreloadCriticalData(ctx context.Context) error {
+    // Preload all ORB rules
+    rules, err := c.loadAllORBRules(ctx)
+    if err != nil {
+        return err
+    }
+    for _, rule := range rules {
+        c.orbRules.Store(rule.RuleID, rule)
+    }
+    
+    // Preload common protocols
+    commonProtocols := []string{
+        "hypertension_ckd",
+        "diabetes_type2",
+        "heart_failure",
+        "copd_exacerbation",
+    }
+    
+    for _, protocolID := range commonProtocols {
+        protocol, err := c.loadProtocol(ctx, protocolID)
+        if err != nil {
+            log.Printf("Failed to preload protocol %s: %v", protocolID, err)
+            continue
+        }
+        c.protocols.Store(protocolID, protocol)
+    }
+    
+    return nil
+}
+```
+
+
+### 5.2 Parallel Processing
+
+
+```go
+// internal/orb/parallel.go
+
+
+func (orb *ORBEngine) ParallelFeatureExtraction(
+    request *MedicationRequest,
+) *ClinicalFeatures {
+    features := &ClinicalFeatures{}
+    var wg sync.WaitGroup
+    
+    // Extract features in parallel
+    wg.Add(4)
+    
+    go func() {
+        defer wg.Done()
+        features.Demographic = orb.extractDemographic(request)
+    }()
+    
+    go func() {
+        defer wg.Done()
+        features.Clinical = orb.extractClinical(request)
+    }()
+    
+    go func() {
+        defer wg.Done()
+        features.Phenotype = orb.determinePhenotype(request)
+    }()
+    
+    go func() {
+        defer wg.Done()
+        features.RiskFactors = orb.extractRiskFactors(request)
+    }()
+    
+    wg.Wait()
+    return features
+}
+```
+
+
+## 6. Error Handling and Fallback
+
+
+### 6.1 Graceful Degradation
+
+
+```go
+// internal/orb/fallback.go
+
+
+func (orb *ORBEngine) HandleClassificationFailure(
+    ctx context.Context,
+    request *MedicationRequest,
+    err error,
+) (*IntentManifest, error) {
+    // Log the error for investigation
+    orb.logger.Error("Classification failed", 
+        "error", err,
+        "request_id", request.RequestID,
+    )
+    
+    // Try fallback classification
+    if manifest, fallbackErr := orb.fallbackClassification(request); fallbackErr == nil {
+        manifest.Warnings = append(manifest.Warnings, Warning{
+            Code:    "FALLBACK_CLASSIFICATION",
+            Message: "Using simplified classification due to primary failure",
+        })
+        return manifest, nil
+    }
+    
+    // If critical (STAT) request, use emergency protocol
+    if request.Urgency == STAT {
+        return orb.emergencyProtocol(request), nil
+    }
+    
+    return nil, fmt.Errorf("classification failed with no fallback: %w", err)
+}
+
+
+func (orb *ORBEngine) emergencyProtocol(request *MedicationRequest) *IntentManifest {
+    return &IntentManifest{
+        ManifestID:       generateULID(),
+        RequestID:        request.RequestID,
+        GeneratedAt:      time.Now(),
+        ProtocolID:       "EMERGENCY_FALLBACK",
+        ProtocolVersion:  "1.0.0",
+        EvidenceGrade:    "EMERGENCY",
+        ContextRecipeID:  "emergency_context",
+        ClinicalRecipeID: "emergency_clinical",
+        RequiredFields:   getEmergencyRequiredFields(),
+        DataFreshness:    FreshnessRequirements{MaxAge: 1 * time.Hour},
+        SnapshotTTL:      300, // 5 minutes
+        Warnings: []Warning{{
+            Code:    "EMERGENCY_PROTOCOL",
+            Message: "Using emergency fallback protocol",
+        }},
+    }
+}
+```
+
+
+## 7. Monitoring and Observability
+
+
+### 7.1 Metrics Collection
+
+
+```go
+// internal/metrics/phase1.go
+
+
+type Phase1Metrics struct {
+    // Latency metrics
+    classificationDuration   *prometheus.HistogramVec
+    recipeResolutionDuration *prometheus.HistogramVec
+    
+    // Success metrics
+    classificationSuccess    *prometheus.CounterVec
+    protocolMatches         *prometheus.CounterVec
+    
+    // Cache metrics
+    cacheHitRate            *prometheus.GaugeVec
+    
+    // Rule metrics
+    ruleEvaluations         *prometheus.CounterVec
+    ruleMatchRate           *prometheus.GaugeVec
+}
+
+
+func (m *Phase1Metrics) RecordClassification(
+    duration time.Duration,
+    protocolID string,
+    success bool,
+) {
+    m.classificationDuration.WithLabelValues(protocolID).Observe(duration.Seconds())
+    
+    if success {
+        m.classificationSuccess.WithLabelValues(protocolID).Inc()
+    }
+    
+    // Update rule match rate
+    m.updateRuleMatchRate(protocolID)
+}
+```
+
+
+## 8. Testing Strategy
+
+
+### 8.1 Unit Tests
+
+
+```go
+// internal/orb/classifier_test.go
+
+
+func TestORBClassification(t *testing.T) {
+    tests := []struct {
+        name     string
+        request  *MedicationRequest
+        expected *IntentManifest
+    }{
+        {
+            name: "Hypertension with CKD",
+            request: &MedicationRequest{
+                Indication: "hypertension_stage2",
+                ClinicalContext: ClinicalContextInput{
+                    Comorbidities: []string{"ckd_stage_3"},
+                },
+            },
+            expected: &IntentManifest{
+                ProtocolID: "htn_ckd_protocol",
+                TherapyOptions: []TherapyCandidate{
+                    {TherapyClass: "ACE_INHIBITOR", PreferenceOrder: 1},
+                    {TherapyClass: "ARB", PreferenceOrder: 2},
+                },
+            },
+        },
+    }
+    
+    orb := setupTestORB(t)
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            manifest, err := orb.ClassifyIntent(context.Background(), tt.request)
+            require.NoError(t, err)
+            assert.Equal(t, tt.expected.ProtocolID, manifest.ProtocolID)
+            assert.Equal(t, tt.expected.TherapyOptions, manifest.TherapyOptions)
+        })
+    }
+}
+```
+
+
+### 8.2 Benchmark Tests
+
+
+```go
+// internal/orb/bench_test.go
+
+
+func BenchmarkPhase1Classification(b *testing.B) {
+    orb := setupBenchmarkORB(b)
+    request := createTypicalRequest()
+    
+    b.ResetTimer()
+    b.RunParallel(func(pb *testing.PB) {
+        for pb.Next() {
+            manifest, err := orb.ClassifyIntent(context.Background(), request)
+            if err != nil {
+                b.Fatal(err)
+            }
+            _ = manifest
+        }
+    })
+    
+    // Ensure we meet 25ms SLA
+    if b.Elapsed()/time.Duration(b.N) > 25*time.Millisecond {
+        b.Fatalf("Phase 1 exceeded 25ms SLA: %v", b.Elapsed()/time.Duration(b.N))
+    }
+}
+```
+
+
+## 9. Configuration Management
+
+
+### 9.1 Phase 1 Configuration
+
+
+```yaml
+# config/phase1.yaml
+phase1:
+  orb:
+    version: "2.1.0"
+    rule_refresh_interval: 5m
+    max_rules_in_memory: 10000
+    decision_timeout: 20ms
+    
+  recipe_resolution:
+    cache_ttl: 1h
+    conditional_rule_timeout: 5ms
+    
+  apollo_federation:
+    endpoint: "https://apollo-gateway.internal:4000/graphql"
+    timeout: 5s
+    retry_policy:
+      max_attempts: 2
+      backoff: exponential
+      
+  performance:
+    target_latency_ms: 25
+    max_parallel_rules: 100
+    cache_size_mb: 512
+    
+  fallback:
+    enable_emergency_protocol: true
+    degraded_mode_threshold: 50ms
+```
+
+
+## 10. Deployment Considerations
+
+
+### 10.1 Startup Sequence
+
+
+```go
+// cmd/orchestrator/startup.go
+
+
+func (o *MedicationOrchestrator) Initialize(ctx context.Context) error {
+    log.Info("Starting Phase 1 initialization")
+    
+    // Step 1: Connect to Apollo Federation
+    if err := o.apolloClient.HealthCheck(ctx); err != nil {
+        return fmt.Errorf("apollo federation unavailable: %w", err)
+    }
+    
+    // Step 2: Load ORB rules into memory
+    if err := o.orb.LoadRules(ctx, o.apolloClient); err != nil {
+        return fmt.Errorf("failed to load ORB rules: %w", err)
+    }
+    log.Info("Loaded ORB rules", "count", o.orb.RuleCount())
+    
+    // Step 3: Preload recipe templates
+    if err := o.recipeResolver.PreloadRecipes(ctx); err != nil {
+        return fmt.Errorf("failed to preload recipes: %w", err)
+    }
+    
+    // Step 4: Warm up caches
+    if err := o.cache.Warmup(ctx); err != nil {
+        log.Warn("Cache warmup failed", "error", err)
+        // Non-fatal, continue
+    }
+    
+    // Step 5: Start background refresh
+    go o.startBackgroundRefresh(ctx)
+    
+    log.Info("Phase 1 initialization complete")
+    return nil
+}
+```
+
+
+This Phase 1 implementation provides:
+
+
+1. **Deterministic Classification**: In-memory ORB rules ensure consistent intent classification
+2. **Recipe Resolution**: Internal recipe management with conditional field logic
+3. **Apollo Integration**: All KB access through federated GraphQL
+4. **Performance**: Aggressive caching and parallel processing to meet 25ms SLA
+5. **Resilience**: Circuit breakers, fallback protocols, and graceful degradation
+6. **Observability**: Comprehensive metrics and tracing
+
+
+Ready to proceed with Phase 2 (Context Assembly) or would you like me to elaborate on any aspect of Phase 1?

@@ -1,0 +1,216 @@
+# Clinical Context Recipe: Safety Gateway Platform Context (PRODUCTION)
+# Implements Safety Gateway Platform integration for safety validation
+# Based on ContextRecipeBook.txt specifications
+
+recipe_id: "safety_gateway_context_v1"
+recipe_name: "Safety Gateway Platform Integration Context"
+version: "1.0"
+clinical_scenario: "safety_validation"
+workflow_category: "command_initiated"
+execution_pattern: "pessimistic"
+
+# Performance requirements (Production SLA)
+sla_ms: 200  # Context gathering budget
+cache_duration_seconds: 60  # Short cache for safety data
+real_data_only: true
+mock_data_detection: true
+mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Clinical recipe references
+clinical_recipe_refs:
+  - "safety-validation-v1.0"
+
+# Triggers
+triggers:
+  - domain: ["medication", "procedure", "order"]
+  - action: ["prescribe", "schedule", "execute"]
+  - workflow_type: "command_initiated"
+  - requires_safety_validation: true
+
+# Required data points for Safety Gateway integration
+required_data_points:
+  - name: "safety_validation"
+    source_type: "safety_gateway"
+    endpoint: "http://localhost:8030"
+    fields: ["request_id", "safety_status", "risk_score", "engine_results", "processing_time_ms", "explanation"]
+    required: true
+    max_age_hours: 0  # Real-time
+    quality_threshold: 0.98
+    timeout_ms: 200
+    retry_count: 1
+    fallback_sources: []
+    protocol: "grpc"
+    critical: true
+    fallback: "fail_closed"
+
+# Optional data points
+optional_data_points:
+  - name: "safety_analytics"
+    source_type: "safety_gateway"
+    endpoint: "http://localhost:8030/api/v1/analytics"
+    fields: ["historical_risk_patterns", "similar_case_outcomes", "population_statistics"]
+    required: false
+    max_age_hours: 24
+    quality_threshold: 0.80
+    timeout_ms: 150
+    retry_count: 1
+    fallback_sources: []
+    protocol: "http"
+    fallback: "skip_analytics"
+
+# Conditional rules for additional data requirements
+conditional_rules:
+  - condition: "risk_score > 0.8"
+    description: "High-risk case requires enhanced safety validation"
+    additional_data_points:
+      - name: "enhanced_safety_check"
+        source_type: "safety_gateway"
+        endpoint: "http://localhost:8030/api/v1/enhanced-validate"
+        fields: ["detailed_risk_analysis", "mitigation_strategies", "monitoring_requirements"]
+        required: true
+        max_age_hours: 0
+        quality_threshold: 0.99
+        timeout_ms: 300
+        retry_count: 1
+
+  - condition: "patient.high_risk_category == true"
+    description: "High-risk patient requires comprehensive safety assessment"
+    additional_data_points:
+      - name: "comprehensive_safety_assessment"
+        source_type: "safety_gateway"
+        endpoint: "http://localhost:8030/api/v1/comprehensive-assess"
+        fields: ["multi_engine_analysis", "cross_validation_results", "safety_recommendations"]
+        required: true
+        max_age_hours: 0
+        quality_threshold: 0.98
+        timeout_ms: 250
+        retry_count: 1
+
+# Quality constraints
+quality_constraints:
+  minimum_completeness: 0.95
+  maximum_age_hours: 0.1  # 6 minutes max for safety data
+  required_fields: ["safety_validation"]
+  accuracy_threshold: 0.98
+
+# Safety requirements (Production - Safety First)
+safety_requirements:
+  minimum_completeness_score: 0.95
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "FAIL_CLOSED"
+  critical_missing_data_action: "FAIL_WORKFLOW"
+  stale_data_action: "FAIL_WORKFLOW"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Safety-first performance strategy
+performance_strategy:
+  parallelization: false  # Sequential for safety validation
+  sla_budget_ms: 200
+  circuit_breaker: true
+  retry_policy: "immediate_retry_once"
+  fail_closed: true  # Fail safely if service unavailable
+  fail_fast: true
+
+# Cache strategy (Safety-focused - short TTL)
+cache_strategy:
+  l1_ttl_seconds: 60     # 1 minute (safety data must be fresh)
+  l2_ttl_seconds: 300    # 5 minutes
+  l3_ttl_seconds: 600    # 10 minutes
+  cache_key_pattern: "context:safety:{patient_id}:{action_type}:{timestamp}"
+  invalidation_events:
+    - "clinical-data-changes.patient.medication.added"
+    - "clinical-data-changes.patient.medication.updated"
+    - "clinical-data-changes.patient.allergy.added"
+    - "clinical-data-changes.patient.condition.updated"
+    - "safety-rules.updated"
+
+# Assembly rules (Production - Safety First)
+assembly_rules:
+  parallel_execution: false  # Sequential for safety validation
+  timeout_budget_ms: 180  # 180ms of the 200ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: true
+  enforce_quality_constraints: true
+  fail_fast: true
+  fail_closed: true
+
+# QoS Tier (Highest priority for safety)
+qos_tier: "platinum"
+max_latency: 200
+availability: "99.99%"
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2025-07-31T10:00:00Z"
+  version: "1.0"
+  effective_date: "2025-07-31T00:00:00Z"
+  expiry_date: "2026-07-31T00:00:00Z"
+  clinical_board_approval_id: "CGB-SAFETY-GATEWAY-20250731"
+  tags: ["approved", "production", "safety", "validation", "critical"]
+  change_log:
+    - "v1.0: Initial production implementation with Safety Gateway Platform integration"
+
+# Data source endpoints (Production)
+data_sources:
+  - service: "safety_gateway"
+    endpoint: "http://localhost:8030"
+    timeout_ms: 200
+    health_check: "/health"
+    protocol: "grpc"
+
+# Safety Gateway specific configuration
+safety_gateway_configuration:
+  engines:
+    - "cae_engine"
+    - "allergy_engine"
+    - "protocol_engine"
+    - "constraint_validator"
+  
+  validation_tiers:
+    - tier: 1  # TierVetoCritical
+      engines: ["cae_engine", "allergy_engine", "constraint_validator"]
+      timeout_ms: 100
+    - tier: 2  # TierAdvisory
+      engines: ["protocol_engine"]
+      timeout_ms: 80
+  
+  performance_targets:
+    - "sub_200ms_response"
+    - "fail_closed_safety"
+    - "comprehensive_logging"
+  
+  safety_features:
+    - "circuit_breaker_protection"
+    - "fail_closed_on_error"
+    - "comprehensive_audit_trail"
+    - "real_time_monitoring"
+
+# Clinical decision support integration
+clinical_decision_support:
+  safety_validation: true
+  risk_assessment: true
+  mitigation_strategies: true
+  monitoring_recommendations: true
+  override_token_management: true
+
+# Override token configuration
+override_tokens:
+  enabled: true
+  require_justification: true
+  audit_all_overrides: true
+  escalation_required: true
+  expiry_time_minutes: 60
+
+# Audit and compliance (Enhanced for Safety)
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true
+  log_safety_decisions: true
+  track_override_usage: true
+  monitor_safety_outcomes: true
+  alert_on_safety_violations: true

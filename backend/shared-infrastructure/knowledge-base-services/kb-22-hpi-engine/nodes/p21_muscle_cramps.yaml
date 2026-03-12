@@ -1,0 +1,212 @@
+# P21 Muscle Cramps - HPI Node Definition
+# Bayesian differential for muscle cramps in cardio-renal-metabolic patients.
+# Electrolyte disturbance (K+, Mg2+, Ca2+) is common with diuretics and CKD.
+# Statin myopathy affects 5-29% of statin users (Stroes ES, EHJ 2015).
+# Triggered by: patient self-report of muscle cramps or spasms via KB-21.
+# Output: posterior probabilities -> feeds KB-23 workup card.
+
+node_id: P21_MUSCLE_CRAMPS
+version: "1.0.0"
+description: "Muscle cramps differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Strata supported
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket -- open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "KDIGO_CKD_2024; ESC_Dyslipidaemia_2019; ADA_Standards_2025"
+
+# ============================================================================
+# 6 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.90 (0.10 reserved for G15 Other bucket).
+# In DM+HTN cohort, electrolyte imbalance from diuretics is the commonest cause.
+# ============================================================================
+differentials:
+  - id: ELECTROLYTE_IMBALANCE
+    label: "Electrolyte Imbalance (hypoK, hypoMg, hypoCa)"
+    population_reference: "KDIGO CKD 2024; Palmer BF, NEJM 2015; Sterns RH, AJKD 2016"
+    priors:
+      DM_HTN_base: 0.30
+
+  - id: STATIN_MYOPATHY
+    label: "Statin-Associated Muscle Symptoms (SAMS)"
+    population_reference: "ESC Dyslipidaemia 2019; Stroes ES, EHJ 2015; SAMSON Trial, NEJM 2021"
+    priors:
+      DM_HTN_base: 0.22
+
+  - id: CKD_RELATED
+    label: "CKD-Related Cramps (uraemia, dialysis-associated)"
+    population_reference: "KDIGO CKD 2024; Kobrin SM, Semin Dial 2007"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: PERIPHERAL_NEUROPATHY
+    label: "Peripheral Neuropathy (diabetic or uraemic)"
+    population_reference: "ADA Standards 2025; Pop-Busui R, Diabetes Care 2017"
+    priors:
+      DM_HTN_base: 0.10
+
+  - id: DEHYDRATION
+    label: "Dehydration (SGLT2i, diuretics, poor intake)"
+    population_reference: "KDIGO DM-CKD 2024; Zinman B, NEJM 2015 (EMPA-REG)"
+    priors:
+      DM_HTN_base: 0.13
+
+  - id: OTHER
+    label: "Other (hypothyroid, vitamin D deficiency, restless legs)"
+    population_reference: "BMJ Best Practice Muscle Cramps 2024"
+    priors:
+      DM_HTN_base: 0.10
+
+# Safety floors -- posterior never drops below these values
+safety_floors:
+  ELECTROLYTE_IMBALANCE: 0.05
+  CKD_RELATED: 0.03
+
+# ============================================================================
+# Safety Triggers (F-02 parallel evaluation)
+# ============================================================================
+safety_triggers:
+  - flag_id: RF01_SEVERE_HYPOKALAEMIA
+    severity: IMMEDIATE
+    trigger_expression: "ELECTROLYTE_IMBALANCE.posterior > 0.45 AND Q001 == YES"
+    recommended_action: "Suspected severe electrolyte disturbance with muscle cramps and cardiac symptoms. Check serum K+, Mg2+, Ca2+ STAT. ECG for QT prolongation. If K+ < 3.0 mEq/L, urgent IV replacement. SNOMED: 43339004"
+
+  - flag_id: RF02_RHABDOMYOLYSIS_RISK
+    severity: URGENT
+    trigger_expression: "STATIN_MYOPATHY.posterior > 0.40 AND Q003 == YES"
+    recommended_action: "Statin myopathy with severe symptoms -- risk of rhabdomyolysis. Check CK level STAT. If CK > 10x ULN, stop statin and check renal function. SNOMED: 240131006"
+
+# ============================================================================
+# 7 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# ============================================================================
+questions:
+  - id: Q001
+    text_en: "Are the cramps accompanied by palpitations, weakness, or irregular heartbeat?"
+    text_hi: "Kya cramps ke saath dhadkan badhna, kamzori, ya dil ki dharkan aniyamit hona bhi hai?"
+    mandatory: true
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 4.50
+      STATIN_MYOPATHY: 0.50
+      CKD_RELATED: 1.50
+      PERIPHERAL_NEUROPATHY: 0.40
+      DEHYDRATION: 1.80
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 0.40
+      STATIN_MYOPATHY: 1.15
+      CKD_RELATED: 0.80
+      PERIPHERAL_NEUROPATHY: 1.15
+      DEHYDRATION: 0.70
+
+  - id: Q002
+    text_en: "Are you currently taking a statin medication (like atorvastatin or rosuvastatin)?"
+    text_hi: "Kya aap abhi statin dawai le rahe hain (jaise atorvastatin ya rosuvastatin)?"
+    mandatory: true
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 0.90
+      STATIN_MYOPATHY: 4.50
+      CKD_RELATED: 0.80
+      PERIPHERAL_NEUROPATHY: 0.80
+      DEHYDRATION: 0.80
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 1.05
+      STATIN_MYOPATHY: 0.10
+      CKD_RELATED: 1.10
+      PERIPHERAL_NEUROPATHY: 1.10
+      DEHYDRATION: 1.10
+
+  - id: Q003
+    text_en: "Do you have muscle pain or tenderness that is persistent (not just during cramps) and affects both sides?"
+    text_hi: "Kya maansapeshiyon mein dard ya chhuane par dard lagaataar rehta hai (sirf cramp ke samay nahi) aur dono taraf hai?"
+    mandatory: true
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 0.80
+      STATIN_MYOPATHY: 4.00
+      CKD_RELATED: 1.50
+      PERIPHERAL_NEUROPATHY: 1.30
+      DEHYDRATION: 0.60
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 1.10
+      STATIN_MYOPATHY: 0.40
+      CKD_RELATED: 0.80
+      PERIPHERAL_NEUROPATHY: 0.85
+      DEHYDRATION: 1.10
+
+  - id: Q004
+    text_en: "Are you taking a diuretic (water tablet) or has your diuretic dose been increased recently?"
+    text_hi: "Kya aap diuretic (paani ki goli) le rahe hain ya haal mein uski dose badhi hai?"
+    mandatory: true
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 3.80
+      STATIN_MYOPATHY: 0.80
+      CKD_RELATED: 1.20
+      PERIPHERAL_NEUROPATHY: 0.60
+      DEHYDRATION: 3.00
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 0.40
+      STATIN_MYOPATHY: 1.05
+      CKD_RELATED: 0.90
+      PERIPHERAL_NEUROPATHY: 1.10
+      DEHYDRATION: 0.50
+
+  - id: Q005
+    text_en: "Do the cramps happen mainly at night, especially in your calves?"
+    text_hi: "Kya cramps zyaadatar raat mein aate hain, khaaskar pindiyon mein?"
+    mandatory: false
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 2.00
+      STATIN_MYOPATHY: 0.80
+      CKD_RELATED: 3.50
+      PERIPHERAL_NEUROPATHY: 1.80
+      DEHYDRATION: 1.50
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 0.70
+      STATIN_MYOPATHY: 1.10
+      CKD_RELATED: 0.45
+      PERIPHERAL_NEUROPATHY: 0.70
+      DEHYDRATION: 0.80
+
+  - id: Q006
+    text_en: "Do you also have tingling, burning, or numbness in your feet?"
+    text_hi: "Kya aapke pairon mein jhunjhunahat, jalan, ya sunn hona bhi hai?"
+    mandatory: false
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 1.20
+      STATIN_MYOPATHY: 0.70
+      CKD_RELATED: 1.50
+      PERIPHERAL_NEUROPATHY: 5.00
+      DEHYDRATION: 0.40
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 0.90
+      STATIN_MYOPATHY: 1.10
+      CKD_RELATED: 0.80
+      PERIPHERAL_NEUROPATHY: 0.25
+      DEHYDRATION: 1.15
+
+  - id: Q007
+    text_en: "Have you been drinking less water than usual, or have you had diarrhoea or excessive sweating recently?"
+    text_hi: "Kya aap aam se kam paani pee rahe hain, ya haal mein dast ya bahut zyada paseena aaya hai?"
+    mandatory: false
+    lr_positive:
+      ELECTROLYTE_IMBALANCE: 2.50
+      STATIN_MYOPATHY: 0.50
+      CKD_RELATED: 1.20
+      PERIPHERAL_NEUROPATHY: 0.50
+      DEHYDRATION: 5.00
+    lr_negative:
+      ELECTROLYTE_IMBALANCE: 0.60
+      STATIN_MYOPATHY: 1.10
+      CKD_RELATED: 0.90
+      PERIPHERAL_NEUROPATHY: 1.10
+      DEHYDRATION: 0.25

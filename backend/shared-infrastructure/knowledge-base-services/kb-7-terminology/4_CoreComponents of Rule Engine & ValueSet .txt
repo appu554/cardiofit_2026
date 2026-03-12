@@ -1,0 +1,1371 @@
+﻿# Deep Dive: Four Core Components Implementation
+
+
+## Component 1: Value Set Loader
+
+
+### Purpose
+
+
+The Value Set Loader is responsible for importing JSON Value Set files into the system, making them available for the Three-Check Pipeline. Think of it as the "data ingestion layer" that bridges static JSON definitions with the runtime query system.
+
+
+### Architectural Context
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         VALUE SET LOADER                                     │
+│                                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │   JSON      │    │   Parser    │    │  Validator  │    │   Storage   │  │
+│  │   Files     │───▶│   Engine    │───▶│   Engine    │───▶│   Writer    │  │
+│  │             │    │             │    │             │    │             │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│        │                  │                  │                  │          │
+│        │                  │                  │                  │          │
+│        ▼                  ▼                  ▼                  ▼          │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │  File       │    │  FHIR R4    │    │  Business   │    │ PostgreSQL  │  │
+│  │  System     │    │  Schema     │    │  Rules      │    │ + Redis     │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### Design Principles
+
+
+**1. Idempotent Loading**
+
+
+The loader must handle repeated imports gracefully. If you run the loader twice with the same JSON file, the second run should either update existing records or skip unchanged ones. This is critical for CI/CD pipelines where Value Sets might be reloaded on every deployment.
+
+
+The idempotency strategy uses a combination of:
+- Primary key conflicts (UPSERT semantics)
+- Version comparison (only update if version changes)
+- Checksum validation (detect content changes)
+
+
+**2. Transactional Integrity**
+
+
+Each Value Set import must be atomic. If a Value Set has 500 codes and code #347 fails validation, the entire Value Set import should roll back. This prevents partial state where a Value Set exists but is incomplete.
+
+
+The transaction boundary encompasses:
+- Value Set definition record
+- All associated codes
+- All compose/include references
+- Cache invalidation
+
+
+**3. Schema Validation**
+
+
+Before any database writes, the loader validates against the FHIR R4 Value Set schema. This catches malformed JSON files early, before they corrupt the database.
+
+
+Validation layers:
+- **Structural**: Required fields present (id, url, status)
+- **Semantic**: Code systems are valid URIs
+- **Referential**: Referenced Value Sets exist (for EXTENSIONAL types)
+- **Business**: No duplicate codes within a Value Set
+
+
+### Loading Strategies by Definition Type
+
+
+**EXPLICIT Value Sets**
+
+
+These are the simplest case. The JSON file contains a pre-computed `expansion.contains` array with all codes. The loader:
+
+
+1. Parses the JSON file
+2. Extracts metadata (id, url, version, title, description)
+3. Extracts all codes from `expansion.contains`
+4. Writes to `value_set_definitions` table
+5. Writes each code to `value_set_codes` table
+6. Invalidates any cached expansion for this Value Set
+
+
+The key insight is that EXPLICIT Value Sets are "pre-expanded" — the heavy lifting of collecting codes was done when the JSON was authored. The loader just persists this pre-computed state.
+
+
+**INTENSIONAL Value Sets**
+
+
+These are defined by a rule, not an explicit list. For example, "all descendants of Diabetes mellitus (73211009)". The loader:
+
+
+1. Parses the JSON file
+2. Extracts the filter/rule from `compose.include[].filter`
+3. Stores the **rule definition**, not the expanded codes
+4. Marks `definition_type` as INTENSIONAL
+5. Stores the root concept and expression
+
+
+The actual expansion happens at query time, not load time. This is important because:
+- SNOMED CT is updated quarterly
+- New descendants may be added
+- The Value Set automatically includes them
+
+
+**EXTENSIONAL Value Sets**
+
+
+These compose other Value Sets. For example, "All Diabetes codes UNION All CKD codes". The loader:
+
+
+1. Parses the JSON file
+2. Identifies referenced Value Sets from `compose.include[].valueSet`
+3. Validates that referenced Value Sets exist
+4. Stores the composition references in `value_set_includes` table
+5. Does NOT store individual codes
+
+
+Expansion requires recursively expanding all referenced Value Sets and combining them.
+
+
+### Incremental vs Full Load
+
+
+**Full Load Strategy**
+
+
+Used for initial setup or major updates:
+
+
+1. Load all JSON files from directory
+2. Build dependency graph (for EXTENSIONAL references)
+3. Topologically sort to ensure dependencies load first
+4. Clear existing data (within transaction)
+5. Load in dependency order
+6. Rebuild all caches
+
+
+**Incremental Load Strategy**
+
+
+Used for CI/CD and updates:
+
+
+1. Scan directory for JSON files
+2. Compare checksums against stored checksums
+3. Identify changed files only
+4. For each changed file:
+   - Determine affected dependents (reverse dependency lookup)
+   - Invalidate caches for affected Value Sets
+   - Update only changed records
+5. Refresh affected caches
+
+
+### Cache Warming
+
+
+After loading, the system should pre-warm frequently accessed Value Sets into Redis. This prevents a "cold start" where the first request to each Value Set hits PostgreSQL.
+
+
+The warming strategy:
+
+
+1. Identify "hot" Value Sets (configured list or based on historical access patterns)
+2. Expand each hot Value Set
+3. Serialize to JSON
+4. Store in Redis with appropriate TTL
+5. Build in-memory hash maps for O(1) lookup
+
+
+### Error Handling and Recovery
+
+
+**Validation Errors**
+
+
+When a JSON file fails validation:
+- Log detailed error with file name and line number
+- Continue processing other files (don't fail entire batch)
+- Report summary of failures at end
+- Optionally fail the entire job if any file fails (configurable)
+
+
+**Database Errors**
+
+
+When a database write fails:
+- Roll back the transaction for that Value Set
+- Log the error with full context
+- Continue with next Value Set
+- Report summary of database failures
+
+
+**Partial State Recovery**
+
+
+If the loader crashes mid-import:
+- On restart, scan for incomplete loads (marker records)
+- Roll back incomplete Value Sets
+- Resume from the failed file
+
+
+### Versioning and Audit Trail
+
+
+The loader maintains version history:
+
+
+1. Each Value Set has a `version` field from the JSON
+2. A separate `value_set_history` table tracks all versions
+3. When a new version is loaded:
+   - Previous version is archived to history
+   - New version becomes active
+   - Timestamp records when the change occurred
+4. This enables:
+   - Auditing what codes were active at a point in time
+   - Rolling back to previous versions
+   - Comparing versions to see what changed
+
+
+---
+
+
+## Component 2: CDSS Evaluate Endpoint
+
+
+### Purpose
+
+
+The CDSS Evaluate endpoint is the primary integration point between your clinical system and KB7. It receives patient data, evaluates it against clinical rules, and returns actionable alerts and recommendations.
+
+
+### Architectural Context
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      CDSS EVALUATE ENDPOINT                                  │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                     Request Processing                               │   │
+│  │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐        │   │
+│  │  │  Parse    │  │ Validate  │  │ Normalize │  │ Enrich    │        │   │
+│  │  │  Request  │─▶│  Input    │─▶│  Codes    │─▶│  Context  │        │   │
+│  │  └───────────┘  └───────────┘  └───────────┘  └───────────┘        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                     Fact Building                                    │   │
+│  │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐        │   │
+│  │  │ Condition │  │Medication │  │   Lab     │  │ Procedure │        │   │
+│  │  │   Facts   │  │   Facts   │  │   Facts   │  │   Facts   │        │   │
+│  │  └───────────┘  └───────────┘  └───────────┘  └───────────┘        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                     Rule Evaluation                                  │   │
+│  │  ┌───────────────────────────────────────────────────────────────┐  │   │
+│  │  │  Working Memory  ──▶  Rule Engine  ──▶  Fired Rules           │  │   │
+│  │  └───────────────────────────────────────────────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                     Response Building                                │   │
+│  │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐        │   │
+│  │  │  Alerts   │  │    HCC    │  │Terminology│  │  Metrics  │        │   │
+│  │  │  Builder  │  │  Mapper   │  │  Enricher │  │  Recorder │        │   │
+│  │  └───────────┘  └───────────┘  └───────────┘  └───────────┘        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### Request Processing Phase
+
+
+**Input Parsing**
+
+
+The endpoint accepts patient data in a structured format. The parser:
+
+
+1. Deserializes JSON into typed structures
+2. Handles optional fields gracefully
+3. Normalizes date/time formats to UTC
+4. Extracts patient identifiers for logging/audit
+
+
+**Input Validation**
+
+
+Before any processing, validate:
+
+
+- Patient ID is present and non-empty
+- At least one clinical data element exists (conditions, meds, or labs)
+- Code systems are recognized URIs
+- Lab values have valid numeric values and units
+- Timestamps are parseable and not in the future
+
+
+**Code Normalization**
+
+
+Clinical systems often send codes in inconsistent formats:
+- SNOMED codes might be "73211009" or "http://snomed.info/sct|73211009"
+- ICD-10 codes might be "E11.9" or "E119" (with/without dot)
+- LOINC codes might be "2160-0" or "2160_0"
+
+
+The normalizer:
+1. Extracts the pure code from URIs
+2. Normalizes ICD-10 formatting (adds dots if missing)
+3. Validates code format against system-specific patterns
+4. Maps legacy/local codes to standard codes if mappings exist
+
+
+**Context Enrichment**
+
+
+Before fact building, enrich the request with contextual data:
+
+
+- Patient demographics (age, sex) if available — needed for HCC
+- Encounter type (inpatient, outpatient, ED) — affects rule applicability
+- Facility/location — affects formulary and protocol selection
+- Timestamp — for time-sensitive rules
+
+
+### Fact Building Phase
+
+
+The Fact Builder transforms raw patient data into structured facts that the Rule Engine can evaluate. This is the bridge between clinical data and rule logic.
+
+
+**Condition Fact Building**
+
+
+For each patient condition:
+
+
+1. **Value Set Matching**: Use the Three-Check Pipeline to find which Value Sets the code belongs to. A single code might match multiple Value Sets (e.g., "Diabetic ketoacidosis" matches both `vs-diabetes-mellitus` and might trigger `vs-metabolic-emergency`).
+
+
+2. **Subsumption Enrichment**: If a code doesn't directly match a Value Set, check if it's subsumed by any Value Set anchor concept. This is where Neo4j queries happen.
+
+
+3. **Fact Creation**: Create a Condition Fact with:
+   - Original code and system
+   - Display name
+   - List of matched Value Set IDs
+   - Match type for each (exact or subsumption)
+   - If subsumption: the ancestor code that matched
+
+
+**Medication Fact Building**
+
+
+For each patient medication:
+
+
+1. **Drug Class Identification**: Map the specific drug to therapeutic classes using Value Sets (e.g., "lisinopril 10mg" → `vs-meds-ace-inhibitors`).
+
+
+2. **Active Ingredient Extraction**: For combination drugs, identify all active ingredients. This requires traversing the AMT hierarchy to find "has active ingredient" relationships.
+
+
+3. **Dose Normalization**: Convert doses to standard units for rule comparison (e.g., mcg to mg).
+
+
+4. **Fact Creation**: Create a Medication Fact with:
+   - Drug code and name
+   - Matched drug class Value Sets
+   - Active ingredients
+   - Dose and route
+   - Start date (for duration-based rules)
+
+
+**Lab Result Fact Building**
+
+
+For each lab result:
+
+
+1. **Test Type Identification**: Map LOINC codes to logical test types using Value Sets (e.g., "2160-0" → `vs-lab-creatinine`).
+
+
+2. **Unit Normalization**: Convert to standard units. Creatinine might be reported in mg/dL or µmol/L. Rules expect one standard unit.
+
+
+3. **Reference Range Context**: If reference ranges are provided, calculate whether the value is normal, high, or low.
+
+
+4. **Temporal Context**: Record the timestamp for time-sensitive rules (e.g., "creatinine increased by 50% in 48 hours").
+
+
+5. **Fact Creation**: Create a Lab Fact with:
+   - Test code and name
+   - Matched Value Set IDs
+   - Normalized value and unit
+   - Interpretation (H/L/N)
+   - Timestamp
+
+
+**Working Memory Assembly**
+
+
+After building all facts, assemble them into Working Memory:
+
+
+1. Index facts by type (Condition, Medication, Lab)
+2. Index facts by Value Set ID (for fast rule lookup)
+3. Calculate derived facts:
+   - Age from date of birth
+   - eGFR from creatinine (if not provided)
+   - BMI from height/weight (if not provided)
+4. Store temporal relationships (which lab is most recent)
+
+
+### Rule Evaluation Phase
+
+
+With Working Memory populated, invoke the Rule Engine (detailed in Component 3). The evaluation:
+
+
+1. Identifies applicable rules based on fact types present
+2. Evaluates each rule's conditions against Working Memory
+3. Collects all fired rules
+4. Resolves conflicts (when rules contradict)
+5. Returns ordered list of alerts
+
+
+### Response Building Phase
+
+
+**Alert Building**
+
+
+For each fired rule, build an alert:
+
+
+1. **Severity Assignment**: Map rule priority to alert severity (CRITICAL, WARNING, INFO)
+
+
+2. **Message Templating**: Fill rule message templates with patient-specific values:
+   - "Creatinine is {{value}} mg/dL" → "Creatinine is 2.8 mg/dL"
+
+
+3. **Evidence Assembly**: Collect the facts that caused the rule to fire:
+   - Which conditions matched
+   - Which medications matched
+   - Which lab values triggered thresholds
+
+
+4. **Recommendation Formatting**: Format actionable recommendations from the rule
+
+
+5. **Reference Linking**: Attach clinical guideline references
+
+
+**HCC Mapping**
+
+
+In parallel with rule evaluation, calculate HCC risk:
+
+
+1. Map all condition codes to HCC categories
+2. Apply hierarchy rules (HCC17 trumps HCC18)
+3. Look up coefficients for patient demographics
+4. Calculate total risk score
+5. Include in response
+
+
+**Terminology Enrichment**
+
+
+Enhance the response with terminology context:
+
+
+1. For any inferred relationships (subsumption matches), include the inference chain
+2. Add human-readable display names for all codes
+3. Include cross-terminology mappings if relevant
+
+
+**Metrics Recording**
+
+
+Record performance and outcome metrics:
+
+
+1. Total processing time
+2. Time spent in each phase
+3. Cache hit/miss ratios
+4. Number of rules evaluated vs fired
+5. Neo4j query count and latency
+
+
+### Concurrency and Performance
+
+
+**Parallel Fact Building**
+
+
+Fact building for different types can happen in parallel:
+- Condition facts, Medication facts, and Lab facts have no dependencies
+- Use goroutines with a WaitGroup
+- Aggregate results into Working Memory
+
+
+**Batched Value Set Lookups**
+
+
+Instead of checking each code against each Value Set individually:
+1. Collect all codes from the request
+2. Batch query: "Which Value Sets contain any of these codes?"
+3. Results come back as a map: code → []ValueSetIDs
+
+
+**Early Termination**
+
+
+For rules with "any" conditions (not "all"):
+- If the first condition matches, skip remaining conditions
+- If a CRITICAL alert fires, optionally skip lower-priority rules
+
+
+### Error Handling
+
+
+**Partial Success**
+
+
+If some facts fail to build (e.g., unknown code system):
+- Log the error
+- Continue with successfully built facts
+- Include warning in response: "Some codes could not be processed"
+
+
+**Timeout Handling**
+
+
+Set a maximum request timeout (e.g., 5 seconds):
+- If timeout approaches, return partial results
+- Include indicator that evaluation was truncated
+- Log for investigation
+
+
+**Graceful Degradation**
+
+
+If Neo4j is unavailable:
+- Fall back to exact match only (skip subsumption)
+- Include warning in response
+- System remains functional, just less complete
+
+
+---
+
+
+## Component 3: Rule Engine
+
+
+### Purpose
+
+
+The Rule Engine evaluates clinical protocols and guidelines against patient facts to produce actionable alerts. It's the "brain" that encodes clinical knowledge as executable logic.
+
+
+### Architectural Context
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           RULE ENGINE                                        │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      Rule Repository                                 │   │
+│  │                                                                      │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │   │
+│  │  │   Sepsis    │  │   Renal     │  │  Cardiac    │  ...             │   │
+│  │  │   Rules     │  │   Rules     │  │   Rules     │                  │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      Evaluation Pipeline                             │   │
+│  │                                                                      │   │
+│  │  ┌───────────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐     │   │
+│  │  │ Condition │   │  Action   │   │ Conflict  │   │  Result   │     │   │
+│  │  │ Evaluator │──▶│ Executor  │──▶│ Resolver  │──▶│ Collector │     │   │
+│  │  └───────────┘   └───────────┘   └───────────┘   └───────────┘     │   │
+│  │        │                                                             │   │
+│  │        ▼                                                             │   │
+│  │  ┌───────────────────────────────────────────────────────────────┐  │   │
+│  │  │                 Expression Evaluator                          │  │   │
+│  │  │                                                               │  │   │
+│  │  │  Exists()  │  LabValue()  │  SubsumedBy()  │  Count()  │ ... │  │   │
+│  │  └───────────────────────────────────────────────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                    │                                        │
+│                                    ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                      Working Memory Interface                        │   │
+│  │                                                                      │   │
+│  │  GetFactsByType()  │  GetFactsByValueSet()  │  GetLatestLab()  │ ...│   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### Rule Structure
+
+
+**Anatomy of a Rule**
+
+
+Each rule consists of:
+
+
+1. **Metadata**
+   - Unique identifier
+   - Human-readable name and description
+   - Category (Sepsis, Renal, Cardiac, etc.)
+   - Priority (CRITICAL, HIGH, MEDIUM, LOW)
+   - Version and effective date
+   - Author and approval status
+
+
+2. **Conditions**
+   - Required conditions (ALL must be true)
+   - Optional conditions (ANY can be true)
+   - Exclusion conditions (if ANY true, rule doesn't fire)
+
+
+3. **Actions**
+   - Alert type (CLINICAL_ALERT, PROTOCOL_ACTIVATION, INFO)
+   - Severity level
+   - Message template
+   - Recommendations list
+   - References
+
+
+4. **Context**
+   - Applicable encounter types (ED, Inpatient, Outpatient)
+   - Applicable facilities (if not universal)
+   - Time constraints (e.g., only if within 24 hours of admission)
+
+
+### Condition Types and Expressions
+
+
+**Exists Expression**
+
+
+Checks if a fact matching a Value Set is present in Working Memory.
+
+
+```
+Exists(Condition: vs-sepsis-diagnosis)
+```
+
+
+The evaluator:
+1. Queries Working Memory for Condition facts
+2. Checks if any fact has `vs-sepsis-diagnosis` in its matched Value Sets
+3. Returns true if found, false otherwise
+
+
+**LabValue Expression**
+
+
+Checks a lab result against a threshold.
+
+
+```
+LabValue(vs-lab-creatinine) > 1.5
+```
+
+
+The evaluator:
+1. Queries Working Memory for Lab facts matching `vs-lab-creatinine`
+2. Gets the most recent value (if multiple)
+3. Compares value against threshold
+4. Returns true if comparison succeeds
+
+
+Supports operators: `>`, `>=`, `<`, `<=`, `==`, `!=`
+
+
+**LabDelta Expression**
+
+
+Checks change in a lab value over time.
+
+
+```
+LabDelta(vs-lab-creatinine, 48h) > 50%
+```
+
+
+The evaluator:
+1. Gets all Lab facts matching `vs-lab-creatinine`
+2. Finds the most recent and the baseline (within 48h window)
+3. Calculates percentage change
+4. Compares against threshold
+
+
+**SubsumedBy Expression**
+
+
+Checks if a patient's code is a subtype of a reference concept.
+
+
+```
+SubsumedBy(patient.condition, snomed:73211009)
+```
+
+
+The evaluator:
+1. Gets all Condition codes from Working Memory
+2. For each, queries Neo4j to check subsumption
+3. Returns true if any code is subsumed
+
+
+**Count Expression**
+
+
+Counts facts matching criteria.
+
+
+```
+Count(Medication: vs-meds-nephrotoxic) >= 2
+```
+
+
+The evaluator:
+1. Queries Working Memory for Medication facts matching the Value Set
+2. Counts unique matches
+3. Compares count against threshold
+
+
+**Age Expression**
+
+
+Checks patient age.
+
+
+```
+Age >= 65
+```
+
+
+The evaluator:
+1. Gets patient date of birth from context
+2. Calculates age as of encounter date
+3. Compares against threshold
+
+
+**Temporal Expression**
+
+
+Checks time-based conditions.
+
+
+```
+TimeSince(Medication: vs-meds-anticoagulants.start) < 7d
+```
+
+
+The evaluator:
+1. Gets medication start date from fact
+2. Calculates duration since start
+3. Compares against threshold
+
+
+### Condition Combination Logic
+
+
+**Required Conditions (AND)**
+
+
+All must be true for rule to fire:
+
+
+```
+required = [
+    "Exists(Condition: vs-sepsis-diagnosis)",
+    "Exists(Condition: vs-respiratory-failure)",
+    "LabValue(vs-lab-lactate) > 2.0"
+]
+```
+
+
+Evaluation short-circuits: if first condition is false, skip remaining.
+
+
+**Optional Conditions (OR)**
+
+
+Any one being true is sufficient:
+
+
+```
+optional = [
+    "LabValue(vs-lab-lactate) > 4.0",
+    "Exists(Medication: vs-meds-vasopressors)"
+]
+```
+
+
+Evaluation short-circuits: if first condition is true, skip remaining.
+
+
+**Exclusion Conditions (NOT)**
+
+
+If any is true, rule does not fire:
+
+
+```
+exclusions = [
+    "Exists(Condition: vs-comfort-care-only)",
+    "Age < 18"
+]
+```
+
+
+Evaluated first — if any exclusion matches, skip all other evaluation.
+
+
+### Rule Evaluation Algorithm
+
+
+**Phase 1: Rule Selection**
+
+
+Not all rules need evaluation for every patient. Pre-filter based on:
+
+
+1. **Fact Type Matching**: If rule requires Medication facts and patient has none, skip
+2. **Category Filtering**: If request specifies categories (e.g., only Sepsis rules), filter
+3. **Context Matching**: If rule is ED-only and patient is inpatient, skip
+
+
+This narrows the rule set from potentially hundreds to a relevant subset.
+
+
+**Phase 2: Exclusion Check**
+
+
+For each selected rule, check exclusions first:
+
+
+1. Evaluate each exclusion condition
+2. If ANY exclusion is true, mark rule as "excluded" and skip
+3. Record which exclusion triggered (for debugging)
+
+
+**Phase 3: Required Condition Evaluation**
+
+
+For rules passing exclusion check:
+
+
+1. Evaluate required conditions in order
+2. Short-circuit on first false
+3. If all true, rule "fires"
+4. Record which conditions matched (for evidence)
+
+
+**Phase 4: Optional Condition Evaluation**
+
+
+If rule has optional conditions:
+
+
+1. Evaluate only if required conditions passed
+2. Record which optional conditions matched
+3. Optional matches may affect alert severity or recommendations
+
+
+**Phase 5: Action Execution**
+
+
+For each fired rule:
+
+
+1. Create an alert from the action template
+2. Substitute variables with actual values
+3. Set severity based on rule priority and matched conditions
+4. Collect evidence (the facts that caused firing)
+
+
+### Conflict Resolution
+
+
+When multiple rules fire, some may conflict:
+
+
+**Priority-Based Resolution**
+
+
+Higher priority rules take precedence:
+- CRITICAL overrides HIGH
+- If same priority, both alerts are included
+
+
+**Specificity-Based Resolution**
+
+
+More specific rules override general ones:
+- "DKA Protocol" (specific) vs "Diabetes Alert" (general)
+- Specificity determined by condition count and depth
+
+
+**Mutual Exclusion Groups**
+
+
+Some rules are explicitly mutually exclusive:
+- "Start Anticoagulation" vs "Hold Anticoagulation"
+- Only the one with higher priority/confidence fires
+
+
+**Aggregation**
+
+
+Some rules should aggregate rather than conflict:
+- Multiple drug interaction warnings combine into one alert
+- Evidence from all triggering rules is merged
+
+
+### Rule Loading and Management
+
+
+**Rule Sources**
+
+
+Rules can come from:
+1. JSON/TOML files in a rules directory
+2. Database tables (for dynamic rule management)
+3. External rule service (for enterprise deployments)
+
+
+**Rule Compilation**
+
+
+At startup or reload:
+1. Parse rule definitions
+2. Validate syntax and references
+3. Compile expressions into evaluable form
+4. Build indexes (by category, by required Value Sets)
+5. Cache compiled rules in memory
+
+
+**Hot Reload**
+
+
+Rules should be reloadable without restart:
+1. Watch rules directory for changes
+2. On change, load new rule set
+3. Validate before activating
+4. Atomic swap of rule set
+5. Old rules continue serving in-flight requests
+
+
+**Versioning**
+
+
+Rules have versions and effective dates:
+1. Multiple versions can exist simultaneously
+2. Evaluation uses version effective as of encounter date
+3. Enables retrospective analysis with historical rules
+
+
+### Performance Considerations
+
+
+**Rule Indexing**
+
+
+Build indexes to quickly find relevant rules:
+- By required Value Set: "Which rules need vs-sepsis-diagnosis?"
+- By fact type: "Which rules need Lab facts?"
+- By category: "All Sepsis rules"
+
+
+**Condition Ordering**
+
+
+Order conditions by evaluation cost:
+1. Cheap conditions first (Exists checks against Working Memory)
+2. Expensive conditions last (Neo4j subsumption queries)
+3. Most likely to fail first (for short-circuit benefit)
+
+
+**Memoization**
+
+
+Cache expression results within a single evaluation:
+- If multiple rules check `Exists(Condition: vs-diabetes)`, evaluate once
+- Store in evaluation context, not globally
+
+
+---
+
+
+## Component 4: O(1) Hash Map Optimization for Exact Match
+
+
+### Purpose
+
+
+The current exact match implementation uses a linear loop through expanded codes. For Value Sets with hundreds of codes, this becomes a bottleneck. The hash map optimization provides constant-time lookup regardless of Value Set size.
+
+
+### Architectural Context
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    EXACT MATCH: BEFORE vs AFTER                              │
+│                                                                             │
+│  BEFORE (Linear Loop):                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  for _, code := range expanded.Codes {    // O(n) per lookup        │   │
+│  │      if code.Code == inputCode {                                     │   │
+│  │          return true                                                 │   │
+│  │      }                                                               │   │
+│  │  }                                                                   │   │
+│  │                                                                      │   │
+│  │  500 codes × 50 rules × 10 patient codes = 250,000 comparisons      │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  AFTER (Hash Map):                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  return expanded.CodeIndex[system][code]  // O(1) per lookup        │   │
+│  │                                                                      │   │
+│  │  50 rules × 10 patient codes = 500 hash lookups                     │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### Data Structure Design
+
+
+**Two-Level Map**
+
+
+The hash map uses a two-level structure:
+- Level 1: Code System (string) → Level 2 Map
+- Level 2: Code (string) → Code Entry
+
+
+Why two levels?
+- Same code can exist in different systems (e.g., "410" might be ICD-10 and a local code)
+- System-first lookup enables system-specific optimizations
+- Matches FHIR's system|code paradigm
+
+
+**Code Entry Structure**
+
+
+The value stored isn't just a boolean — it includes metadata:
+- Display name (for response building)
+- Original index (for deterministic ordering)
+- Any additional attributes from the Value Set
+
+
+**Alternative: Composite Key**
+
+
+Instead of nested maps, use a composite key:
+- Key: "system|code" (e.g., "http://snomed.info/sct|73211009")
+- Simpler structure but requires string concatenation on every lookup
+
+
+Trade-off analysis:
+- Nested maps: Two hash lookups, no string allocation
+- Composite key: One hash lookup, one string allocation
+- For high-volume systems, nested maps typically win
+
+
+### Building the Index
+
+
+**At Expansion Time**
+
+
+When a Value Set is expanded (Step 1 of Three-Check Pipeline):
+
+
+1. Create empty two-level map
+2. Iterate through expanded codes once
+3. For each code:
+   - Get or create system-level map
+   - Insert code with metadata
+4. Store both the list (for iteration) and map (for lookup)
+
+
+**Memory Considerations**
+
+
+The hash map adds memory overhead:
+- Go map overhead: ~48 bytes per entry
+- 500 codes = ~24KB additional memory per Value Set
+- 50 Value Sets = ~1.2MB total
+- Acceptable trade-off for O(1) lookup
+
+
+**Lazy vs Eager Building**
+
+
+Eager (recommended for hot Value Sets):
+- Build index immediately when Value Set is loaded
+- Index is ready for first request
+- Slightly longer startup time
+
+
+Lazy (for rarely-used Value Sets):
+- Build index on first access
+- Reduces startup memory footprint
+- First request pays the cost
+
+
+### Thread Safety
+
+
+**Immutable After Build**
+
+
+The hash map should be immutable after construction:
+- Built once during expansion
+- Never modified during lookups
+- No locks needed for reads
+
+
+**Copy-on-Write for Updates**
+
+
+If a Value Set is updated:
+1. Build new expansion with new hash map
+2. Atomically swap the pointer
+3. Old expansion is garbage collected after in-flight requests complete
+
+
+### Cache Integration
+
+
+**Redis Serialization**
+
+
+When caching expanded Value Sets in Redis:
+1. Serialize the code list (not the hash map)
+2. On cache hit, deserialize and rebuild hash map
+3. Hash map building is fast (~1ms for 500 codes)
+
+
+Why not serialize the hash map?
+- JSON/MessagePack don't efficiently represent Go maps
+- Rebuilding is cheap
+- Keeps cache format simple
+
+
+**In-Memory Cache Layer**
+
+
+For frequently accessed Value Sets, add an in-memory cache:
+1. L1: In-memory with pre-built hash map (fastest)
+2. L2: Redis with code list (fast, shared)
+3. L3: PostgreSQL (slow, persistent)
+
+
+The in-memory cache holds the fully hydrated structure including hash map.
+
+
+### Lookup Algorithm
+
+
+**Contains Check**
+
+
+To check if a code is in a Value Set:
+
+
+1. Get expanded Value Set (from cache or database)
+2. Check if system exists in Level 1 map
+   - If not: return false immediately
+3. Check if code exists in Level 2 map
+   - If not: return false
+4. Return true (and optionally the code entry for metadata)
+
+
+**Batch Lookup**
+
+
+For checking multiple codes at once:
+
+
+1. Group input codes by system
+2. For each system:
+   - Get Level 2 map once
+   - Check all codes for that system
+3. Return map of code → boolean
+
+
+This minimizes Level 1 map lookups when multiple codes share a system.
+
+
+### Performance Benchmarks
+
+
+**Expected Performance**
+
+
+| Operation | Before (Loop) | After (Hash Map) | Improvement |
+|-----------|---------------|------------------|-------------|
+| Single lookup (100 codes) | ~500ns | ~50ns | 10x |
+| Single lookup (1000 codes) | ~5µs | ~50ns | 100x |
+| Batch lookup (10 codes, 500 code VS) | ~25µs | ~500ns | 50x |
+| Memory per Value Set | baseline | +24KB | - |
+
+
+**When It Matters Most**
+
+
+The optimization has biggest impact when:
+- Value Sets are large (500+ codes)
+- Many patient codes to check (10+ conditions)
+- Many rules reference the same Value Set
+- High request volume (amortizes build cost)
+
+
+### Edge Cases
+
+
+**Empty Value Set**
+
+
+Handle gracefully:
+- Empty hash map is valid
+- All lookups return false
+- No special case needed
+
+
+**Unknown System**
+
+
+When code system isn't in the map:
+- Return false immediately
+- Don't create empty Level 2 map (wastes memory)
+- Log for monitoring (might indicate data issue)
+
+
+**Case Sensitivity**
+
+
+SNOMED/LOINC codes are case-sensitive:
+- Store and lookup with original case
+- ICD-10 codes should be normalized to uppercase during loading
+- Document the case sensitivity rules
+
+
+**Unicode Normalization**
+
+
+Some codes might have unicode issues:
+- Normalize to NFC form during loading
+- Use same normalization during lookup
+- Rare in practice but prevents subtle bugs
+
+
+### Integration with Three-Check Pipeline
+
+
+**Modified Step 2**
+
+
+The exact match step becomes:
+
+
+1. Get expanded Value Set (unchanged)
+2. Instead of loop, use hash map lookup
+3. If hit: return exact match result
+4. If miss: proceed to Step 3 (subsumption)
+
+
+**Performance Impact**
+
+
+With 500-code Value Sets and 10 patient conditions:
+- Before: 5000 comparisons (500 × 10)
+- After: 10 hash lookups
+- Step 2 drops from ~2.5ms to ~0.05ms
+
+
+This makes Step 2 essentially free, leaving Step 3 (subsumption) as the only significant cost when exact match fails.
+
+
+---
+
+
+## Summary: How the Four Components Connect
+
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        SYSTEM FLOW                                           │
+│                                                                             │
+│  1. VALUE SET LOADER (Startup/Update)                                        │
+│     ├── Reads JSON files                                                     │
+│     ├── Validates against schema                                             │
+│     ├── Stores in PostgreSQL                                                 │
+│     ├── Builds hash map indexes ◄─────────────────┐                         │
+│     └── Warms Redis cache                         │                         │
+│                                                    │                         │
+│  2. CDSS EVALUATE ENDPOINT (Request Time)         │                         │
+│     ├── Receives patient data                     │                         │
+│     ├── Builds facts from codes                   │                         │
+│     │   └── Uses THREE-CHECK PIPELINE             │                         │
+│     │       ├── Step 1: Get expanded Value Set    │                         │
+│     │       ├── Step 2: O(1) HASH MAP LOOKUP ─────┘                         │
+│     │       └── Step 3: Neo4j subsumption (if needed)                       │
+│     ├── Populates Working Memory                                            │
+│     └── Invokes Rule Engine                                                 │
+│                                                                             │
+│  3. RULE ENGINE (Evaluation Time)                                           │
+│     ├── Selects applicable rules                                            │
+│     ├── Evaluates conditions                                                │
+│     │   └── References Value Sets by ID ──────────────────────────────┐     │
+│     ├── Executes actions for fired rules                              │     │
+│     └── Returns alerts                                                │     │
+│                                                                       │     │
+│  4. O(1) HASH MAP (Optimization Layer)                                │     │
+│     └── Provides instant exact match for Step 2 ◄─────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+The four components form a cohesive system:
+
+
+1. **Value Set Loader** populates the system with clinical terminology
+2. **O(1) Hash Map** makes that terminology instantly queryable
+3. **CDSS Evaluate Endpoint** processes patient data using the terminology
+4. **Rule Engine** applies clinical logic referencing the terminology
+
+
+Each component is designed to be:
+- **Independent**: Can be tested and deployed separately
+- **Scalable**: Handles large data volumes efficiently
+- **Observable**: Provides metrics and logging for monitoring
+- **Resilient**: Degrades gracefully under failure
+
+
+Would you like me to dive deeper into any specific aspect or discuss implementation patterns for any of these components?

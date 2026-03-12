@@ -1,0 +1,353 @@
+# Docker Compose for Unified KB Services Monitoring Stack
+version: '3.8'
+
+networks:
+  kb-monitoring:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+services:
+  # Prometheus - Metrics collection and alerting
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: kb-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--log.level=info'
+    volumes:
+      - ./prometheus-unified.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ./recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "monitoring.component=prometheus"
+      - "monitoring.description=Metrics collection and alerting"
+
+  # Grafana - Visualization and dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: kb-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=kb-admin-2024
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_USERS_AUTO_ASSIGN_ORG=true
+      - GF_USERS_AUTO_ASSIGN_ORG_ROLE=Viewer
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-worldmap-panel,grafana-piechart-panel
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+      - GF_ALERTING_ENABLED=true
+      - GF_UNIFIED_ALERTING_ENABLED=true
+      - GF_DATABASE_TYPE=postgres
+      - GF_DATABASE_HOST=grafana-db:5432
+      - GF_DATABASE_NAME=grafana
+      - GF_DATABASE_USER=grafana
+      - GF_DATABASE_PASSWORD=grafana_password
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./unified-kb-dashboard.json:/etc/grafana/provisioning/dashboards/unified-kb-dashboard.json:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - grafana-db
+      - prometheus
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "monitoring.component=grafana"
+      - "monitoring.description=Dashboards and visualization"
+
+  # PostgreSQL for Grafana
+  grafana-db:
+    image: postgres:15-alpine
+    container_name: kb-grafana-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=grafana
+      - POSTGRES_USER=grafana
+      - POSTGRES_PASSWORD=grafana_password
+    volumes:
+      - grafana-db-data:/var/lib/postgresql/data
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grafana -d grafana"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Alertmanager - Alert routing and notification
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: kb-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+      - '--cluster.listen-address=0.0.0.0:9094'
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "monitoring.component=alertmanager"
+      - "monitoring.description=Alert routing and notifications"
+
+  # Node Exporter - System metrics
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: kb-node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - kb-monitoring
+    labels:
+      - "monitoring.component=node-exporter"
+      - "monitoring.description=System metrics collection"
+
+  # Redis Exporter for cache monitoring
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.52.0
+    container_name: kb-redis-exporter
+    restart: unless-stopped
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://host.docker.internal:6379
+      - REDIS_PASSWORD=""
+    networks:
+      - kb-monitoring
+    labels:
+      - "monitoring.component=redis-exporter"
+      - "monitoring.description=Redis cache metrics"
+
+  # Postgres Exporter for database monitoring
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.13.2
+    container_name: kb-postgres-exporter
+    restart: unless-stopped
+    ports:
+      - "9187:9187"
+    environment:
+      - DATA_SOURCE_NAME=postgresql://kb_user:kb_password@host.docker.internal:5432/knowledge_bases?sslmode=disable
+    networks:
+      - kb-monitoring
+    labels:
+      - "monitoring.component=postgres-exporter"
+      - "monitoring.description=PostgreSQL metrics collection"
+
+  # Loki - Log aggregation
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: kb-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "monitoring.component=loki"
+      - "monitoring.description=Log aggregation and storage"
+
+  # Promtail - Log collection agent
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: kb-promtail
+    restart: unless-stopped
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - promtail-data:/tmp/positions
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - kb-monitoring
+    labels:
+      - "monitoring.component=promtail"
+      - "monitoring.description=Log collection agent"
+
+  # Jaeger - Distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.49
+    container_name: kb-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # jaeger.thrift over HTTP
+      - "14250:14250"  # gRPC
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    volumes:
+      - jaeger-data:/badger
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:14269/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "monitoring.component=jaeger"
+      - "monitoring.description=Distributed tracing"
+
+  # Victoria Metrics - Long-term storage
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.93.4
+    container_name: kb-victoriametrics
+    restart: unless-stopped
+    ports:
+      - "8428:8428"
+    command:
+      - '-storageDataPath=/victoria-metrics-data'
+      - '-retentionPeriod=12m'  # 12 months retention
+      - '-httpListenAddr=:8428'
+      - '-promscrape.config=/etc/prometheus/prometheus.yml'
+    volumes:
+      - victoria-data:/victoria-metrics-data
+      - ./prometheus-unified.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - kb-monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8428/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "monitoring.component=victoriametrics"
+      - "monitoring.description=Long-term metrics storage"
+
+  # Elasticsearch Exporter for Formulary service
+  elasticsearch-exporter:
+    image: prometheuscommunity/elasticsearch-exporter:v1.5.0
+    container_name: kb-elasticsearch-exporter
+    restart: unless-stopped
+    ports:
+      - "9114:9114"
+    command:
+      - '--es.uri=http://host.docker.internal:9200'
+      - '--es.all'
+      - '--es.indices'
+      - '--es.shards'
+    networks:
+      - kb-monitoring
+    labels:
+      - "monitoring.component=elasticsearch-exporter"
+      - "monitoring.description=Elasticsearch metrics for formulary"
+
+  # MongoDB Exporter for Clinical Context service
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.39
+    container_name: kb-mongodb-exporter
+    restart: unless-stopped
+    ports:
+      - "9216:9216"
+    environment:
+      - MONGODB_URI=mongodb://host.docker.internal:27017
+    networks:
+      - kb-monitoring
+    labels:
+      - "monitoring.component=mongodb-exporter"
+      - "monitoring.description=MongoDB metrics for clinical context"
+
+volumes:
+  prometheus-data:
+    driver: local
+    labels:
+      - "monitoring.volume=prometheus-data"
+      
+  grafana-data:
+    driver: local
+    labels:
+      - "monitoring.volume=grafana-data"
+      
+  grafana-db-data:
+    driver: local
+    labels:
+      - "monitoring.volume=grafana-db-data"
+      
+  alertmanager-data:
+    driver: local
+    labels:
+      - "monitoring.volume=alertmanager-data"
+      
+  loki-data:
+    driver: local
+    labels:
+      - "monitoring.volume=loki-data"
+      
+  promtail-data:
+    driver: local
+    labels:
+      - "monitoring.volume=promtail-data"
+      
+  jaeger-data:
+    driver: local
+    labels:
+      - "monitoring.volume=jaeger-data"
+      
+  victoria-data:
+    driver: local
+    labels:
+      - "monitoring.volume=victoria-data"

@@ -1,0 +1,162 @@
+# alertmanager.yml
+# Alertmanager configuration for CDC connector alert routing
+
+global:
+  resolve_timeout: 5m
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+
+# Alert routing tree
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default'
+
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # Warning alerts - standard notification
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 1m
+      repeat_interval: 2h
+
+    # Info alerts - low priority
+    - match:
+        severity: info
+      receiver: 'info-alerts'
+      group_wait: 5m
+      repeat_interval: 24h
+
+    # Component-specific routing
+    - match:
+        component: cdc
+      receiver: 'cdc-team'
+      continue: true
+
+    - match:
+        component: postgresql
+      receiver: 'database-team'
+      continue: true
+
+    - match:
+        component: kafka
+      receiver: 'platform-team'
+      continue: true
+
+# Inhibition rules - suppress alerts
+inhibit_rules:
+  # Suppress warning if critical alert is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'connector']
+
+  # Suppress task alerts if connector is down
+  - source_match:
+      alertname: 'CDCConnectorDown'
+    target_match:
+      alertname: 'CDCConnectorTaskFailed'
+    equal: ['connector']
+
+  # Suppress lag alerts if connector is paused
+  - source_match:
+      alertname: 'CDCConnectorPaused'
+    target_match:
+      alertname: 'CDCReplicationLagHigh'
+    equal: ['connector']
+
+# Alert receivers
+receivers:
+  # Default receiver
+  - name: 'default'
+    slack_configs:
+      - channel: '#cdc-alerts'
+        username: 'Alertmanager'
+        title: 'Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}\n{{ end }}'
+        send_resolved: true
+
+  # Critical alerts - PagerDuty + Slack
+  - name: 'critical-alerts'
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+        description: '{{ .GroupLabels.alertname }}: {{ .CommonAnnotations.summary }}'
+        severity: 'critical'
+    slack_configs:
+      - channel: '#cdc-critical'
+        username: 'Critical Alert'
+        color: 'danger'
+        title: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}*Summary:* {{ .Annotations.summary }}\n*Description:* {{ .Annotations.description }}\n*Runbook:* {{ .Annotations.runbook }}\n{{ end }}'
+        send_resolved: true
+
+  # Warning alerts - Slack only
+  - name: 'warning-alerts'
+    slack_configs:
+      - channel: '#cdc-alerts'
+        username: 'Warning Alert'
+        color: 'warning'
+        title: '⚠️  WARNING: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}*Summary:* {{ .Annotations.summary }}\n*Description:* {{ .Annotations.description }}\n{{ end }}'
+        send_resolved: true
+
+  # Info alerts - Slack only
+  - name: 'info-alerts'
+    slack_configs:
+      - channel: '#cdc-info'
+        username: 'Info Alert'
+        color: 'good'
+        title: 'ℹ️  INFO: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}'
+        send_resolved: false
+
+  # CDC team alerts
+  - name: 'cdc-team'
+    email_configs:
+      - to: 'data-engineering@cardiofit.com'
+        from: 'alertmanager@cardiofit.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: 'alertmanager@cardiofit.com'
+        auth_password: 'YOUR_EMAIL_PASSWORD'
+        headers:
+          Subject: '[CDC Alert] {{ .GroupLabels.alertname }}'
+        html: |
+          <h2>{{ .GroupLabels.alertname }}</h2>
+          {{ range .Alerts }}
+          <p><strong>Summary:</strong> {{ .Annotations.summary }}</p>
+          <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+          <p><strong>Severity:</strong> {{ .Labels.severity }}</p>
+          <p><strong>Runbook:</strong> <a href="{{ .Annotations.runbook }}">{{ .Annotations.runbook }}</a></p>
+          {{ end }}
+
+  # Database team alerts
+  - name: 'database-team'
+    email_configs:
+      - to: 'database-team@cardiofit.com'
+        from: 'alertmanager@cardiofit.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: 'alertmanager@cardiofit.com'
+        auth_password: 'YOUR_EMAIL_PASSWORD'
+
+  # Platform team alerts
+  - name: 'platform-team'
+    email_configs:
+      - to: 'platform-team@cardiofit.com'
+        from: 'alertmanager@cardiofit.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: 'alertmanager@cardiofit.com'
+        auth_password: 'YOUR_EMAIL_PASSWORD'
+
+# Notification templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'

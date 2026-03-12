@@ -1,0 +1,843 @@
+# ============================================================
+# ENHANCED CLINICAL PROTOCOL: Acute Respiratory Failure Management
+# ============================================================
+# Version: 2.0 (CDS-Compliant)
+# Based on: ATS/ERS 2017 Respiratory Failure Guidelines
+# Last Updated: 2025-10-21
+# ============================================================
+
+protocol_id: "RESP-FAILURE-001"
+name: "Acute Respiratory Failure Management"
+category: "RESPIRATORY"
+specialty: "PULMONOLOGY"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# TRIGGER CRITERIA
+# ============================================================
+trigger_criteria:
+  match_logic: "ANY_OF"
+
+  conditions:
+    - condition_id: "RESP-TRIG-001"
+      description: "Hypoxemic respiratory failure"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pao2"
+          operator: "<"
+          threshold: 60
+          unit: "mmHg"
+          source: "lab_results"
+
+        - parameter: "spo2"
+          operator: "<"
+          threshold: 90
+          unit: "percent"
+          source: "vital_signs"
+
+        - parameter: "pao2_fio2_ratio"
+          operator: "<"
+          threshold: 300
+          source: "lab_results"
+
+    - condition_id: "RESP-TRIG-002"
+      description: "Hypercapnic respiratory failure"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "paco2"
+          operator: ">"
+          threshold: 50
+          unit: "mmHg"
+          source: "lab_results"
+
+        - parameter: "ph"
+          operator: "<"
+          threshold: 7.35
+          source: "lab_results"
+
+    - condition_id: "RESP-TRIG-003"
+      description: "Clinical signs of respiratory distress"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "respiratory_rate"
+          operator: ">"
+          threshold: 30
+          unit: "breaths/min"
+          source: "vital_signs"
+
+        - parameter: "accessory_muscle_use"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+        - parameter: "altered_mental_status"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+# ============================================================
+# CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.90
+
+  modifiers:
+    - modifier_id: "RESP-CONF-001"
+      description: "ABG confirms severe hypoxemia"
+      condition:
+        parameter: "pao2"
+        operator: "<"
+        threshold: 50
+        unit: "mmHg"
+      adjustment: 0.10
+
+    - modifier_id: "RESP-CONF-002"
+      description: "Severe hypercapnia with acidosis"
+      condition:
+        match_logic: "ALL_OF"
+        conditions:
+          - parameter: "paco2"
+            operator: ">"
+            threshold: 60
+            unit: "mmHg"
+          - parameter: "ph"
+            operator: "<"
+            threshold: 7.30
+      adjustment: 0.08
+
+    - modifier_id: "RESP-CONF-003"
+      description: "ARDS criteria met (bilateral infiltrates, PaO2/FiO2 <300)"
+      condition:
+        match_logic: "ALL_OF"
+        conditions:
+          - parameter: "pao2_fio2_ratio"
+            operator: "<"
+            threshold: 300
+          - parameter: "bilateral_infiltrates"
+            operator: "=="
+            threshold: true
+      adjustment: 0.07
+
+  activation_threshold: 0.70
+
+# ============================================================
+# EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "ATS/ERS Acute Respiratory Failure Guidelines 2017"
+  guideline_version: "2017.1"
+  publication_date: "2017-01"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "CITE-001"
+      authors: "Rochwerg B, Brochard L, Elliott MW, et al."
+      title: "Official ERS/ATS clinical practice guidelines: noninvasive ventilation for acute respiratory failure"
+      journal: "Eur Respir J"
+      year: 2017
+      pmid: "28860265"
+      doi: "10.1183/13993003.02426-2016"
+
+    - citation_id: "CITE-002"
+      authors: "ARDSNet"
+      title: "Ventilation with Lower Tidal Volumes as Compared with Traditional Tidal Volumes for Acute Lung Injury"
+      journal: "N Engl J Med"
+      year: 2000
+      pmid: "10793162"
+
+  last_review_date: "2024-01-01"
+  next_review_date: "2026-01-01"
+
+# ============================================================
+# ACTIONS
+# ============================================================
+actions:
+  - action_id: "RESP-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 15
+
+    diagnostic:
+      test_name: "Arterial blood gas analysis"
+      test_code: "24336-0"
+      sample_type: "arterial blood"
+      urgency: "STAT"
+      instructions: "Note FiO2 at time of sampling; calculate A-a gradient and PaO2/FiO2 ratio"
+
+  - action_id: "RESP-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "Portable chest X-ray"
+      urgency: "STAT"
+      instructions: "Identify etiology (pneumonia, pulmonary edema, pneumothorax) and guide treatment"
+
+  - action_id: "RESP-ACT-003"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 3
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 5
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "MILD_HYPOXEMIA"
+          description: "Nasal cannula for mild hypoxemia"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "spo2"
+                operator: ">="
+                threshold: 88
+              - parameter: "spo2"
+                operator: "<"
+                threshold: 92
+
+          primary_medication:
+            name: "Nasal cannula oxygen"
+            dose: "1-6"
+            dose_unit: "L/min"
+            route: "Inhalation"
+            frequency: "continuous"
+            administration_instructions: "Start with 2-4 L/min; titrate to SpO2 target 88-92% (COPD) or 92-96% (non-COPD)"
+
+        - criteria_id: "MODERATE_HYPOXEMIA"
+          description: "Face mask for moderate hypoxemia"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "spo2"
+                operator: ">="
+                threshold: 85
+              - parameter: "spo2"
+                operator: "<"
+                threshold: 88
+
+          primary_medication:
+            name: "Simple face mask or non-rebreather mask"
+            dose: "6-15"
+            dose_unit: "L/min"
+            route: "Inhalation"
+            frequency: "continuous"
+            administration_instructions: "Simple face mask 6-10 L/min for moderate; non-rebreather 10-15 L/min for severe"
+
+        - criteria_id: "SEVERE_HYPOXEMIA"
+          description: "High-flow nasal cannula for persistent hypoxemia"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "spo2"
+                operator: "<"
+                threshold: 85
+
+              - match_logic: "ALL_OF"
+                conditions:
+                  - parameter: "spo2"
+                    operator: "<"
+                    threshold: 90
+                  - parameter: "non_rebreather_mask_failed"
+                    operator: "=="
+                    threshold: true
+
+          primary_medication:
+            name: "High-flow nasal cannula (HFNC)"
+            dose: "30-60"
+            dose_unit: "L/min"
+            route: "Inhalation"
+            frequency: "continuous"
+            administration_instructions: "Provides PEEP (3-5 cmH2O), washout of dead space; FiO2 30-100% as needed"
+
+        - criteria_id: "COPD_TARGET"
+          description: "Lower SpO2 target for COPD patients"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "copd_diagnosis"
+                operator: "=="
+                threshold: true
+              - parameter: "chronic_co2_retention"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Titrated oxygen therapy"
+            dose: "titrate to SpO2 88-92%"
+            route: "Inhalation"
+            frequency: "continuous"
+            dose_adjustment_rationale: "Avoid suppressing hypoxic drive in COPD; target SpO2 88-92%"
+
+  - action_id: "RESP-ACT-004"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    clinical_assessment:
+      assessment_type: "Treat underlying cause"
+      frequency: "continuous reassessment"
+      specific_parameters:
+        - "Pneumonia/Sepsis: broad-spectrum antibiotics"
+        - "Cardiogenic pulmonary edema: diuretics, afterload reduction"
+        - "COPD/Asthma: bronchodilators, corticosteroids"
+        - "Pulmonary embolism: anticoagulation"
+        - "ARDS: lung-protective ventilation, prone positioning"
+
+  - action_id: "RESP-ACT-005"
+    type: "PROCEDURE"
+    priority: "HIGH"
+    sequence_number: 5
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 30
+
+    procedure:
+      procedure_name: "Non-invasive positive pressure ventilation (BiPAP/CPAP)"
+      indication: "Hypercapnic respiratory failure (COPD, cardiogenic pulmonary edema) or selected hypoxemic failure"
+      urgency: "URGENT"
+      consent_required: false
+      location: "ICU bedside"
+
+  - action_id: "RESP-ACT-006"
+    type: "PROCEDURE"
+    priority: "CRITICAL"
+    sequence_number: 6
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 10
+
+    procedure:
+      procedure_name: "Endotracheal intubation and mechanical ventilation"
+      indication: "Apnea, severe hypoxemia (PaO2 <50), hypercapnic coma (pH <7.20), hemodynamic instability, inability to protect airway"
+      urgency: "EMERGENT"
+      consent_required: false
+      location: "ICU or emergency department"
+
+  - action_id: "RESP-ACT-007"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "CRITICAL"
+    sequence_number: 7
+
+    timing:
+      window: "IMMEDIATE"
+
+    clinical_assessment:
+      assessment_type: "Continuous ICU monitoring"
+      frequency: "continuous"
+      specific_parameters:
+        - "Continuous pulse oximetry"
+        - "Cardiac telemetry"
+        - "Vital signs every 15 min initially"
+        - "Serial ABGs"
+        - "Work of breathing assessment"
+
+  - action_id: "RESP-ACT-008"
+    type: "CONSULTATION"
+    priority: "HIGH"
+    sequence_number: 8
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    consultation:
+      specialty: "PULMONOLOGY"
+      urgency: "URGENT"
+      reason: "Severe respiratory failure, ARDS management, ventilator optimization"
+      specific_questions:
+        - "Need for advanced respiratory support (prone positioning, ECMO)?"
+        - "Optimal ventilator strategy for ARDS?"
+        - "Liberation from mechanical ventilation planning?"
+
+# ============================================================
+# TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "RESP-TIME-001"
+    bundle_name: "Immediate Assessment Bundle"
+    description: "ABG and oxygen therapy within 15 minutes"
+    offset_minutes: 15
+    critical: true
+
+    required_actions:
+      - action_id: "RESP-ACT-001"
+        description: "Arterial blood gas"
+      - action_id: "RESP-ACT-003"
+        description: "Supplemental oxygen initiation"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 10
+      critical_alert_at_minutes: 15
+      missed_deadline_message: "Respiratory failure assessment bundle delayed"
+
+  - constraint_id: "RESP-TIME-002"
+    bundle_name: "Stabilization Bundle"
+    description: "Imaging and etiology-specific treatment within 60 minutes"
+    offset_minutes: 60
+    critical: true
+
+    required_actions:
+      - action_id: "RESP-ACT-002"
+        description: "Chest X-ray"
+      - action_id: "RESP-ACT-004"
+        description: "Treat underlying cause"
+
+# ============================================================
+# CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "RESP-CONTRA-001"
+    condition_description: "NIV contraindicated if unable to protect airway"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "glasgow_coma_scale"
+          operator: "<"
+          threshold: 10
+        - parameter: "impaired_consciousness"
+          operator: "=="
+          threshold: true
+        - parameter: "severe_facial_trauma"
+          operator: "=="
+          threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "RESP-ACT-005"
+
+    alternative_action:
+      action_id: "RESP-ALT-001"
+      type: "PROCEDURE"
+      procedure:
+        procedure_name: "Endotracheal intubation"
+        urgency: "EMERGENT"
+      rationale: "Proceed directly to intubation for airway protection"
+
+  - contraindication_id: "RESP-CONTRA-002"
+    condition_description: "Hemodynamic instability contraindicates NIV"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "systolic_bp"
+          operator: "<"
+          threshold: 90
+          unit: "mmHg"
+        - parameter: "septic_shock"
+          operator: "=="
+          threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "RESP-ACT-005"
+
+    alternative_action:
+      action_id: "RESP-ALT-002"
+      type: "PROCEDURE"
+      procedure:
+        procedure_name: "Endotracheal intubation"
+        urgency: "EMERGENT"
+      rationale: "Stabilize hemodynamics; intubation may be needed"
+
+  - contraindication_id: "RESP-CONTRA-003"
+    condition_description: "Comfort measures only (CMO) status"
+
+    trigger_condition:
+      parameter: "cmo_status"
+      operator: "=="
+      threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "RESP-ACT-005"
+      - "RESP-ACT-006"
+
+    alternative_action:
+      action_id: "RESP-ALT-003"
+      type: "CLINICAL_ASSESSMENT"
+      rationale: "Intubation inconsistent with comfort-focused goals; provide comfort-focused oxygen therapy only"
+
+# ============================================================
+# MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "RESP-MON-001"
+    parameter: "oxygen_saturation"
+
+    target_range:
+      min: 88
+      max: 96
+      unit: "percent"
+
+    frequency: "continuous"
+    duration_hours: null
+
+    alert_condition:
+      parameter: "spo2"
+      operator: "<"
+      threshold: 85
+
+    escalation_action:
+      description: "Escalate oxygen delivery or prepare for intubation"
+
+  - monitoring_id: "RESP-MON-002"
+    parameter: "arterial_blood_gas"
+
+    target_range:
+      min: null
+      max: null
+      unit: "mmHg"
+
+    frequency: "30-60 min after therapy changes, then q4-6h when stable"
+    duration_hours: null
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pao2"
+          operator: "<"
+          threshold: 50
+        - parameter: "ph"
+          operator: "<"
+          threshold: 7.25
+
+  - monitoring_id: "RESP-MON-003"
+    parameter: "respiratory_rate"
+
+    target_range:
+      min: null
+      max: 30
+      unit: "breaths/min"
+
+    frequency: "continuous for first 2-4 hours, then hourly"
+    duration_hours: null
+
+    alert_condition:
+      parameter: "respiratory_rate"
+      operator: ">"
+      threshold: 35
+
+# ============================================================
+# SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "COPD"
+    description: "Patients with chronic obstructive pulmonary disease"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "copd_diagnosis"
+          operator: "=="
+          threshold: true
+        - parameter: "chronic_co2_retention"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "RESP-ACT-003"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Lower SpO2 target to avoid suppressing hypoxic drive"
+
+        new_parameters:
+          target_spo2: "88-92% (avoid over-oxygenation)"
+          monitoring: "Monitor for CO2 retention; repeat ABG 30-60 min after oxygen changes"
+
+      - action_id: "RESP-ACT-005"
+        modification_type: "BROADER_COVERAGE"
+        rationale: "NIV highly effective in COPD exacerbations; first-line therapy"
+
+        additional_medications:
+          - name: "BiPAP"
+            indication: "First-line respiratory support in COPD exacerbation"
+
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "RESP-ACT-003"
+        modification_type: "CAUTION"
+        rationale: "Maintain higher SpO2 target for fetal oxygenation"
+
+        new_parameters:
+          target_spo2: "95-100% (higher target for fetal well-being)"
+          monitoring: "Continuous fetal monitoring if >24 weeks gestation"
+
+      - action_id: "RESP-ACT-006"
+        modification_type: "CAUTION"
+        rationale: "Pregnancy increases risk of difficult intubation and aspiration"
+
+        new_parameters:
+          precautions: "Left lateral tilt if >20 weeks to prevent aortocaval compression; RSI with cricoid pressure; consider smaller ET tube"
+
+  - population_id: "IMMUNOCOMPROMISED"
+    description: "Immunocompromised patients (neutropenic, transplant, HIV)"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "absolute_neutrophil_count"
+          operator: "<"
+          threshold: 500
+        - parameter: "transplant_recipient"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "RESP-ACT-005"
+        modification_type: "CAUTION"
+        rationale: "NIV may delay needed intubation; lower threshold for intubation"
+
+        new_parameters:
+          caution: "Early intubation if NIV trial unsuccessful after 1 hour; higher mortality with delayed intubation in immunocompromised"
+
+# ============================================================
+# ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "RESP-ESC-001"
+    description: "Immediate intubation for severe hypoxemia or respiratory arrest"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pao2"
+          operator: "<"
+          threshold: 50
+          unit: "mmHg"
+
+        - parameter: "spo2"
+          operator: "<"
+          threshold: 85
+          unit: "percent"
+
+        - parameter: "apnea"
+          operator: "=="
+          threshold: true
+
+        - parameter: "respiratory_arrest"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "IMMEDIATE_TRANSFER"
+      urgency: "STAT"
+      rationale: "Life-threatening hypoxemia requires immediate airway management"
+
+      required_interventions:
+        - "Emergent endotracheal intubation"
+        - "Preoxygenate with 100% O2"
+        - "RSI with etomidate and rocuronium"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "ICU admission and mechanical ventilation management"
+
+  - rule_id: "RESP-ESC-002"
+    description: "NIV failure requires intubation"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "on_niv"
+              operator: "=="
+              threshold: true
+            - parameter: "worsening_abg"
+              operator: "=="
+              threshold: true
+
+        - parameter: "patient_niv_intolerance"
+          operator: "=="
+          threshold: true
+
+        - parameter: "hemodynamic_instability_on_niv"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "IMMEDIATE_TRANSFER"
+      urgency: "IMMEDIATE"
+      rationale: "NIV failure indicates need for definitive airway"
+
+      required_interventions:
+        - "Prepare for intubation immediately"
+        - "Pulmonary/critical care consultation"
+
+  - rule_id: "RESP-ESC-003"
+    description: "ECMO evaluation for severe ARDS"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pao2_fio2_ratio"
+          operator: "<"
+          threshold: 80
+
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "ph"
+              operator: "<"
+              threshold: 7.20
+            - parameter: "optimal_ventilation_settings"
+              operator: "=="
+              threshold: true
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Severe refractory ARDS may benefit from ECMO"
+
+      specialist_consultation:
+        - specialty: "PULMONOLOGY"
+          urgency: "URGENT"
+          specific_question: "ECMO candidacy for refractory hypoxemia"
+
+# ============================================================
+# DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "RESP-DE-ESC-001"
+    description: "Wean oxygen as oxygenation improves"
+
+    conditions:
+      - parameter: "pao2"
+        operator: ">"
+        threshold: 60
+        unit: "mmHg"
+
+      - parameter: "underlying_cause_treated"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Wean oxygen delivery as tolerated to room air or baseline home oxygen"
+      rationale: "Minimize oxygen exposure once adequate oxygenation achieved"
+      specific_changes:
+        - "Reduce FiO2 by 10-20% increments"
+        - "Target SpO2 90-94%"
+        - "Monitor for desaturation with weaning"
+
+  - criteria_id: "RESP-DE-ESC-002"
+    description: "Spontaneous breathing trial if intubated"
+
+    conditions:
+      - parameter: "improved_oxygenation"
+        operator: "=="
+        threshold: true
+
+      - parameter: "ph_normalized"
+        operator: "=="
+        threshold: true
+
+      - parameter: "hemodynamically_stable"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Spontaneous breathing trial (SBT) for extubation readiness"
+      rationale: "Daily SBT reduces duration of mechanical ventilation"
+
+# ============================================================
+# OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "RESP-OUT-001"
+      metric: "time_to_spo2_target"
+      target: "<30 minutes"
+      benchmark_source: "BTS Oxygen Guidelines"
+
+    - outcome_id: "RESP-OUT-002"
+      metric: "niv_success_rate_copd"
+      target: ">80%"
+      benchmark_source: "Cochrane Review NIV COPD"
+
+    - outcome_id: "RESP-OUT-003"
+      metric: "intubation_rate_reduction_niv"
+      target: ">50% reduction vs standard care"
+      benchmark_source: "ATS/ERS NIV Guidelines 2017"
+
+  process_measures:
+    - measure_id: "RESP-PROC-001"
+      description: "ABG obtained within 15 minutes"
+      target: ">95%"
+
+    - measure_id: "RESP-PROC-002"
+      description: "Oxygen therapy initiated within 5 minutes"
+      target: ">98%"
+
+  balancing_measures:
+    - measure_id: "RESP-BAL-001"
+      description: "Oxygen toxicity from prolonged high FiO2"
+      target: "<5% with FiO2 >60% for >48 hours"
+
+# ============================================================
+# METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: true
+  estimated_implementation_time_minutes: 60
+  review_cycle_months: 24
+
+  tags:
+    - "time-sensitive"
+    - "critical-care"
+    - "respiratory"
+    - "icu"
+
+  related_protocols:
+    - protocol_id: "ARDS-MANAGEMENT-001"
+      relationship: "COMPLEMENTS"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Enhanced to CDS-compliant structure"
+        - "Added tiered oxygen delivery selection algorithm"
+        - "Added confidence scoring and special populations"
+        - "Added time constraints and escalation rules"
+
+# ============================================================
+# END OF PROTOCOL
+# ============================================================

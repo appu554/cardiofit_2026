@@ -1,0 +1,141 @@
+# KB-14 Care Navigator & Tasking Engine
+# Docker Compose for local development and testing
+
+version: '3.8'
+
+services:
+  # KB-14 Care Navigator Service
+  kb-14-care-navigator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-14-care-navigator
+    ports:
+      - "8091:8091"
+    environment:
+      # Server Configuration
+      - PORT=8091
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+
+      # Database Configuration
+      - DATABASE_URL=postgres://kb14user:kb14password@kb-14-postgres:5432/kb_care_navigator?sslmode=disable
+
+      # Redis Configuration
+      - REDIS_URL=redis://kb-14-redis:6379/0
+
+      # KB Service Integration URLs (using Docker network container names)
+      # KB-3 Guidelines - connects via kb3-network
+      - KB3_TEMPORAL_URL=http://kb3-guidelines:8083
+      - KB3_ENABLED=true
+      # KB-9 Care Gaps - connects via kb9-network
+      - KB9_CARE_GAPS_URL=http://kb-9-care-gaps:8089
+      - KB9_ENABLED=true
+      # KB-12 Order Sets - connects via kb12-network (port 8092 internal, 8094 external)
+      - KB12_ORDER_SETS_URL=http://kb-12-ordersets:8092
+      - KB12_ENABLED=true
+
+      # Worker Configuration
+      - WORKERS_ENABLED=true
+      - ESCALATION_CHECK_INTERVAL=60
+      - SYNC_INTERVAL_MINUTES=5
+
+      # Cache Configuration
+      - CACHE_TTL_SECONDS=300
+      - CACHE_ENABLED=true
+    depends_on:
+      kb-14-postgres:
+        condition: service_healthy
+      kb-14-redis:
+        condition: service_healthy
+    networks:
+      - kb-14-network
+      - kb3-network
+      - kb9-network
+      - kb12-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # PostgreSQL Database
+  kb-14-postgres:
+    image: postgres:16-alpine
+    container_name: kb-14-postgres
+    ports:
+      - "5438:5432"
+    environment:
+      - POSTGRES_USER=kb14user
+      - POSTGRES_PASSWORD=kb14password
+      - POSTGRES_DB=kb_care_navigator
+    volumes:
+      - kb-14-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - kb-14-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb14user -d kb_care_navigator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis Cache
+  kb-14-redis:
+    image: redis:7-alpine
+    container_name: kb-14-redis
+    ports:
+      - "6391:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - kb-14-redis-data:/data
+    networks:
+      - kb-14-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # Adminer - Database Management UI (optional, for development)
+  kb-14-adminer:
+    image: adminer:4
+    container_name: kb-14-adminer
+    ports:
+      - "8191:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=kb-14-postgres
+    depends_on:
+      - kb-14-postgres
+    networks:
+      - kb-14-network
+    profiles:
+      - dev
+    restart: unless-stopped
+
+networks:
+  kb-14-network:
+    driver: bridge
+    name: kb-14-network
+  # External networks to connect to other KB services
+  kb3-network:
+    external: true
+    name: kb-3-guidelines_kb3-network
+  kb9-network:
+    external: true
+    name: kb-network
+  kb12-network:
+    external: true
+    name: kb-services-network
+
+volumes:
+  kb-14-postgres-data:
+    name: kb-14-postgres-data
+  kb-14-redis-data:
+    name: kb-14-redis-data

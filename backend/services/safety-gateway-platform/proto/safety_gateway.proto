@@ -1,0 +1,275 @@
+syntax = "proto3";
+
+package safety_gateway;
+
+option go_package = "safety-gateway-platform/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// Safety Gateway Platform service definition
+service SafetyGateway {
+  // Validate safety request
+  rpc ValidateSafety(SafetyRequest) returns (SafetyResponse);
+  
+  // Get engine status
+  rpc GetEngineStatus(EngineStatusRequest) returns (EngineStatusResponse);
+  
+  // Validate override token
+  rpc ValidateOverride(OverrideRequest) returns (OverrideResponse);
+  
+  // Get service health
+  rpc GetHealth(HealthRequest) returns (HealthResponse);
+  
+  // Phase 2: Get snapshot processing statistics
+  rpc GetSnapshotStats(SnapshotStatsRequest) returns (SnapshotStatsResponse);
+}
+
+// Safety validation request
+message SafetyRequest {
+  string request_id = 1;
+  string patient_id = 2;
+  string clinician_id = 3;
+  string action_type = 4;
+  string priority = 5;
+  repeated string medication_ids = 6;
+  repeated string condition_ids = 7;
+  repeated string allergy_ids = 8;
+  map<string, string> context = 9;
+  google.protobuf.Timestamp timestamp = 10;
+  string source = 11;
+  
+  // Phase 2: Snapshot support
+  SnapshotReference snapshot_reference = 12;
+  bool use_snapshot_mode = 13;
+}
+
+// Safety validation response
+message SafetyResponse {
+  string request_id = 1;
+  SafetyStatus status = 2;
+  double risk_score = 3;
+  repeated string critical_violations = 4;
+  repeated string warnings = 5;
+  repeated EngineResult engine_results = 6;
+  repeated string engines_failed = 7;
+  Explanation explanation = 8;
+  OverrideToken override_token = 9;
+  int64 processing_time_ms = 10;
+  string context_version = 11;
+  google.protobuf.Timestamp timestamp = 12;
+  map<string, string> metadata = 13;
+}
+
+// Safety status enumeration
+enum SafetyStatus {
+  SAFETY_STATUS_UNSPECIFIED = 0;
+  SAFETY_STATUS_SAFE = 1;
+  SAFETY_STATUS_UNSAFE = 2;
+  SAFETY_STATUS_WARNING = 3;
+  SAFETY_STATUS_MANUAL_REVIEW = 4;
+  SAFETY_STATUS_ERROR = 5;
+}
+
+// Engine result
+message EngineResult {
+  string engine_id = 1;
+  string engine_name = 2;
+  SafetyStatus status = 3;
+  double risk_score = 4;
+  repeated string violations = 5;
+  repeated string warnings = 6;
+  double confidence = 7;
+  int64 duration_ms = 8;
+  int32 tier = 9;
+  string error = 10;
+  map<string, string> metadata = 11;
+}
+
+// Explanation
+message Explanation {
+  ExplanationLevel level = 1;
+  string summary = 2;
+  repeated ExplanationDetail details = 3;
+  double confidence = 4;
+  repeated Evidence evidence = 5;
+  repeated ActionableGuidance actionable = 6;
+  google.protobuf.Timestamp generated_at = 7;
+}
+
+// Explanation level
+enum ExplanationLevel {
+  EXPLANATION_LEVEL_UNSPECIFIED = 0;
+  EXPLANATION_LEVEL_BASIC = 1;
+  EXPLANATION_LEVEL_DETAILED = 2;
+  EXPLANATION_LEVEL_EXPERT = 3;
+}
+
+// Explanation detail
+message ExplanationDetail {
+  string category = 1;
+  string severity = 2;
+  string description = 3;
+  string clinical_rationale = 4;
+  double confidence = 5;
+  string engine_source = 6;
+  string recommended_action = 7;
+}
+
+// Evidence
+message Evidence {
+  string type = 1;
+  string source = 2;
+  string description = 3;
+  string strength = 4;
+  string url = 5;
+  map<string, string> metadata = 6;
+}
+
+// Actionable guidance
+message ActionableGuidance {
+  string action = 1;
+  string priority = 2;
+  repeated string steps = 3;
+  repeated string monitoring = 4;
+  string timeline = 5;
+  string responsible = 6;
+}
+
+// Override token
+message OverrideToken {
+  string token_id = 1;
+  string request_id = 2;
+  string patient_id = 3;
+  DecisionSummary decision_summary = 4;
+  OverrideLevel required_level = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  string context_hash = 7;
+  google.protobuf.Timestamp created_at = 8;
+  string signature = 9;
+}
+
+// Decision summary
+message DecisionSummary {
+  SafetyStatus status = 1;
+  repeated string critical_violations = 2;
+  repeated string engines_failed = 3;
+  double risk_score = 4;
+  string explanation = 5;
+}
+
+// Override level
+enum OverrideLevel {
+  OVERRIDE_LEVEL_UNSPECIFIED = 0;
+  OVERRIDE_LEVEL_RESIDENT = 1;
+  OVERRIDE_LEVEL_ATTENDING = 2;
+  OVERRIDE_LEVEL_PHARMACIST = 3;
+  OVERRIDE_LEVEL_CHIEF = 4;
+}
+
+// Engine status request
+message EngineStatusRequest {
+  string engine_id = 1; // Optional: specific engine, empty for all
+}
+
+// Engine status response
+message EngineStatusResponse {
+  repeated EngineInfo engines = 1;
+  map<string, string> metadata = 2;
+}
+
+// Engine information
+message EngineInfo {
+  string id = 1;
+  string name = 2;
+  repeated string capabilities = 3;
+  int32 tier = 4;
+  int32 priority = 5;
+  int64 timeout_ms = 6;
+  EngineStatus status = 7;
+  google.protobuf.Timestamp last_check = 8;
+  int32 failure_count = 9;
+  map<string, string> metadata = 10;
+}
+
+// Engine status
+enum EngineStatus {
+  ENGINE_STATUS_UNSPECIFIED = 0;
+  ENGINE_STATUS_HEALTHY = 1;
+  ENGINE_STATUS_DEGRADED = 2;
+  ENGINE_STATUS_UNHEALTHY = 3;
+}
+
+// Override validation request
+message OverrideRequest {
+  string token_id = 1;
+  string clinician_id = 2;
+  string reason = 3;
+}
+
+// Override validation response
+message OverrideResponse {
+  bool valid = 1;
+  string reason = 2;
+  OverrideToken token = 3;
+  string clinician_id = 4;
+  google.protobuf.Timestamp validated_at = 5;
+}
+
+// Health check request
+message HealthRequest {
+  bool detailed = 1;
+}
+
+// Health check response
+message HealthResponse {
+  HealthStatus status = 1;
+  string message = 2;
+  map<string, string> details = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// Health status
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_UNHEALTHY = 3;
+}
+
+// Phase 2: Snapshot reference for reproducible safety evaluations
+message SnapshotReference {
+  string snapshot_id = 1;
+  string checksum = 2;
+  google.protobuf.Timestamp created_at = 3;
+  double data_completeness = 4;
+  string version = 5;
+  map<string, string> metadata = 6;
+}
+
+// Snapshot processing statistics
+message SnapshotStats {
+  int64 l1_cache_hits = 1;
+  int64 l1_cache_misses = 2;
+  int64 l2_cache_hits = 3;
+  int64 l2_cache_misses = 4;
+  int64 total_requests = 5;
+  double l1_hit_rate = 6;
+  double l2_hit_rate = 7;
+  double overall_hit_rate = 8;
+  int64 cache_size = 9;
+  map<string, string> metadata = 10;
+}
+
+// Snapshot statistics request
+message SnapshotStatsRequest {
+  bool detailed = 1;
+}
+
+// Snapshot statistics response
+message SnapshotStatsResponse {
+  SnapshotStats cache_stats = 1;
+  map<string, string> engine_stats = 2;
+  bool snapshot_mode_enabled = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  map<string, string> metadata = 5;
+}

@@ -1,0 +1,1617 @@
+# Context Recipe Book - Data Gathering Edition
+
+## Overview
+This is the complete set of **Context Recipes** that live in the Context Service and define HOW to efficiently gather data required by Clinical Logic Recipes. These recipes orchestrate data fetching across multiple sources using our hybrid architecture.
+
+## Enhanced Context Recipe Structure
+
+```yaml
+ContextRecipe:
+  # Identity & Linkage
+  id: unique-identifier-v1.0
+  name: Human-readable name
+  description: Data gathering purpose
+  clinicalRecipeRefs: [List of clinical recipes this serves]
+  
+  # Activation
+  triggers:
+    - domain: "medication|order|lab"
+    - action: "prescribe|modify|review"
+    - urgency: "emergent|urgent|routine"
+  
+  # Data Requirements
+  dataRequirements:
+    realTime:  # Direct microservice calls
+      - source: service-name
+        endpoint: specific-endpoint
+        data: fields-needed
+        freshness: "<5min"
+        timeout: 20ms
+    
+    federated:  # Apollo Federation GraphQL
+      - source: federation
+        query: GraphQL-query
+        freshness: "<1hr"
+        timeout: 50ms
+    
+    analytical:  # Elasticsearch
+      - source: elasticsearch
+        index: index-name
+        query: ES-query
+        freshness: "<24hr"
+        timeout: 100ms
+    
+    external:  # Third-party integrations
+      - source: external-system
+        api: endpoint
+        freshness: "<1hr"
+        timeout: 200ms
+  
+  # Performance Optimization
+  performanceStrategy:
+    parallelization: true|false
+    cachingStrategy:
+      l1_ttl: seconds
+      l2_ttl: seconds
+    prefetchPatterns: [Predictive loading]
+    fallbackStrategy: [Degradation plan]
+  
+  # Quality of Service
+  qosTier: "platinum|gold|silver|bronze"
+  maxLatency: milliseconds
+  
+  # Data Assembly
+  assemblyStrategy:
+    streaming: true|false
+    partialResults: true|false
+    mergeLogic: "How to combine sources"
+```
+
+## Complete Context Recipe Catalog
+
+### 1. MEDICATION CONTEXT RECIPES
+
+#### Context Recipe 1.1: Basic Medication Safety Context
+```yaml
+id: medication-safety-base-context-v1.0
+name: "Basic Medication Safety Data Gathering"
+clinicalRecipeRefs: 
+  - "medication-safety-base-v3.0"
+  - "medication-safety-interactions-v3.0"
+triggers:
+  - domain: "medication"
+  - action: ["prescribe", "modify", "renew"]
+
+dataRequirements:
+  federated:
+    query: |
+      query MedicationSafetyBase($patientId: ID!, $timestamp: DateTime!) {
+        patient(id: $patientId) {
+          demographics {
+            age
+            weight
+            gender
+            pregnancyStatus
+            lactationStatus
+          }
+          allergies {
+            substance
+            type
+            severity
+            reactions
+            verificationStatus
+            lastUpdated
+          }
+        }
+      }
+    freshness: "<1hr"
+    timeout: 40ms
+    
+  realTime:
+    - source: "medication-service"
+      endpoint: "/active-medications"
+      data: |
+        {
+          patientId
+          includePending: true
+          fields: [drugCode, genericName, dose, frequency, 
+                  startDate, prescriber, lastAdministered]
+        }
+      freshness: "<5min"
+      timeout: 30ms
+    
+    - source: "order-service"
+      endpoint: "/recent-orders"
+      data: |
+        {
+          patientId
+          orderTypes: ["MEDICATION"]
+          status: ["PENDING", "ACTIVE"]
+          window: "24hr"
+        }
+      freshness: "real-time"
+      timeout: 20ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "medication-history"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"range": {"date": {"gte": "now-90d"}}}
+            ]
+          },
+          "aggs": {
+            "adherence": {
+              "avg": {"field": "adherenceRate"}
+            }
+          }
+        }
+      freshness: "<24hr"
+      timeout: 50ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 300  # 5 minutes
+    l2_ttl: 3600  # 1 hour
+  fallbackStrategy:
+    - "Use cached allergies if <24hr old"
+    - "Skip adherence data if unavailable"
+    
+qosTier: "gold"
+maxLatency: 80
+```
+
+#### Context Recipe 1.2: Renal Function Context
+```yaml
+id: medication-renal-context-v1.0
+name: "Renal Function Assessment Data"
+clinicalRecipeRefs: ["medication-safety-renal-v3.0"]
+triggers:
+  - domain: "medication"
+  - action: "prescribe"
+  - drugProperties: ["renallyCleared", "nephrotoxic"]
+
+dataRequirements:
+  realTime:
+    - source: "lab-service"
+      endpoint: "/latest-results"
+      data: |
+        {
+          patientId
+          tests: ["CREATININE", "EGFR", "BUN"]
+          maxAge: "2hr"
+        }
+      freshness: "<2hr"
+      timeout: 25ms
+      fallback: "Use most recent if <24hr"
+    
+    - source: "lab-service"
+      endpoint: "/lab-trends"
+      data: |
+        {
+          patientId
+          tests: ["CREATININE"]
+          window: "7d"
+          includeDeltas: true
+        }
+      freshness: "<1hr"
+      timeout: 30ms
+
+  federated:
+    query: |
+      query RenalContext($patientId: ID!) {
+        patient(id: $patientId) {
+          demographics { age, weight, race, gender }
+          problems(icd10Prefix: ["N17", "N18"]) {
+            code
+            description
+            stage
+            onsetDate
+            lastUpdated
+          }
+          procedures(recent: 7d, types: ["CONTRAST_STUDY"]) {
+            date
+            type
+            contrastDetails {
+              agent
+              volume
+            }
+          }
+        }
+      }
+    freshness: "<4hr"
+    timeout: 40ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "lab-results"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"terms": {"testCode": ["CREATININE", "EGFR"]}},
+              {"range": {"resultDate": {"gte": "now-90d"}}}
+            ]
+          },
+          "aggs": {
+            "renal_trend": {
+              "date_histogram": {
+                "field": "resultDate",
+                "interval": "week"
+              },
+              "aggs": {
+                "avg_creatinine": {"avg": {"field": "value"}}
+              }
+            }
+          }
+        }
+      freshness: "<12hr"
+      timeout: 60ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 600  # 10 minutes for recent labs
+    l2_ttl: 3600  # 1 hour for problems
+  prefetchPatterns:
+    - "If CKD diagnosis exists, pre-cache renal labs"
+    
+qosTier: "gold"
+maxLatency: 90
+```
+
+#### Context Recipe 1.3: Chemotherapy Context
+```yaml
+id: chemotherapy-safety-context-v1.0
+name: "Comprehensive Oncology Data Gathering"
+clinicalRecipeRefs: ["medication-safety-chemotherapy-v3.0"]
+triggers:
+  - domain: "medication"
+  - action: "prescribe"
+  - drugClass: ["CHEMOTHERAPY", "TARGETED_THERAPY", "IMMUNOTHERAPY"]
+
+dataRequirements:
+  realTime:
+    - source: "vitals-service"
+      endpoint: "/current-vitals"
+      data: |
+        {
+          patientId
+          types: ["HEIGHT", "WEIGHT", "BSA"]
+          maxAge: "24hr"
+        }
+      freshness: "<24hr"
+      timeout: 20ms
+      critical: true  # Cannot proceed without BSA
+    
+    - source: "lab-service"
+      endpoint: "/oncology-labs"
+      data: |
+        {
+          patientId
+          panels: ["CBC_DIFF", "CMP", "LFT"]
+          maxAge: "72hr"
+          includeNadir: true
+        }
+      freshness: "<72hr"
+      timeout: 30ms
+
+  federated:
+    query: |
+      query ChemoContext($patientId: ID!) {
+        patient(id: $patientId) {
+          oncology {
+            diagnosis {
+              type
+              stage
+              histology
+              molecularMarkers
+              diagnosisDate
+            }
+            protocolEnrollment {
+              protocolId
+              protocolName
+              arm
+              cycleNumber
+              cycleDay
+              nextCycleDate
+            }
+            treatmentHistory {
+              priorRegimens {
+                drugs
+                cycles
+                bestResponse
+                toxicities {
+                  grade
+                  type
+                  doselimiting
+                }
+              }
+              cumulativeDoses {
+                anthracycline { total, limit }
+                bleomycin { total, limit }
+                cisplatin { total }
+              }
+            }
+            performanceStatus {
+              ECOG { score, date }
+              karnofskyIndex
+            }
+          }
+        }
+      }
+    freshness: "<4hr"
+    timeout: 60ms
+
+  external:
+    - source: "clinical-trials-api"
+      endpoint: "/protocol-requirements"
+      data: |
+        {
+          protocolId: "${protocolEnrollment.protocolId}"
+          cycleDay: "${protocolEnrollment.cycleDay}"
+        }
+      freshness: "<24hr"
+      timeout: 150ms
+      cache: "aggressive"  # Protocols rarely change
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 300  # 5 min for labs
+    l2_ttl: 86400  # 24hr for protocol data
+  criticalPath: ["BSA calculation", "Current labs"]
+  
+qosTier: "platinum"  # Chemo errors can be fatal
+maxLatency: 100
+```
+
+#### Context Recipe 1.4: Anticoagulation Context
+```yaml
+id: anticoagulation-context-v1.0
+name: "Anticoagulation Monitoring Data"
+clinicalRecipeRefs: ["medication-safety-anticoagulation-v3.0"]
+triggers:
+  - domain: "medication"
+  - action: ["prescribe", "modify"]
+  - drugClass: ["ANTICOAGULANT", "ANTIPLATELET"]
+
+dataRequirements:
+  realTime:
+    - source: "lab-service"
+      endpoint: "/coagulation-studies"
+      data: |
+        {
+          patientId
+          tests: ["INR", "PTT", "PLATELET", "ANTI_XA"]
+          includeHistory: "30d"
+          criticalOnly: false
+        }
+      freshness: "<4hr"
+      timeout: 25ms
+
+  federated:
+    query: |
+      query AnticoagContext($patientId: ID!) {
+        patient(id: $patientId) {
+          riskScores {
+            HASBLED {
+              score
+              components
+              lastCalculated
+            }
+            CHA2DS2VASC {
+              score
+              components
+            }
+          }
+          procedures(upcoming: 30d) {
+            date
+            type
+            bleedingRisk
+            anticoagManagement {
+              holdRequired
+              bridgingRequired
+              resumeTiming
+            }
+          }
+          problems(
+            categories: ["BLEEDING", "THROMBOSIS", "AFIB"]
+          ) {
+            code
+            description
+            active
+            severity
+          }
+        }
+      }
+    freshness: "<12hr"
+    timeout: 45ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "anticoag-monitoring"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"exists": {"field": "INR"}}
+            ]
+          },
+          "aggs": {
+            "ttr": {  # Time in Therapeutic Range
+              "scripted_metric": {
+                "init_script": "state.inRange = 0; state.total = 0;",
+                "map_script": "/* Calculate if in range */",
+                "reduce_script": "/* Calculate percentage */"
+              }
+            }
+          }
+        }
+      freshness: "<24hr"
+      timeout: 80ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 1800  # 30 min for INR
+    l2_ttl: 86400  # 24hr for risk scores
+  
+qosTier: "platinum"
+maxLatency: 85
+```
+
+### 2. PROCEDURE CONTEXT RECIPES
+
+#### Context Recipe 2.1: Pre-Procedure Universal Context
+```yaml
+id: procedure-universal-context-v1.0
+name: "Universal Pre-Procedure Data"
+clinicalRecipeRefs: ["procedure-safety-universal-v3.0"]
+triggers:
+  - domain: "procedure"
+  - action: "schedule"
+  - procedureType: "invasive"
+
+dataRequirements:
+  realTime:
+    - source: "medication-service"
+      endpoint: "/anticoagulation-status"
+      data: |
+        {
+          patientId
+          includeAntiplatelets: true
+          lastDoseInfo: true
+          holdOrders: true
+        }
+      freshness: "real-time"
+      timeout: 25ms
+      critical: true
+
+    - source: "consent-service"
+      endpoint: "/procedure-consent"
+      data: |
+        {
+          patientId
+          procedureCode
+          includeRisksDocumented: true
+        }
+      freshness: "<24hr"
+      timeout: 20ms
+
+  federated:
+    query: |
+      query PreProcedureContext($patientId: ID!) {
+        patient(id: $patientId) {
+          allergies(types: ["LATEX", "CHLORHEXIDINE", "IODINE"]) {
+            substance
+            severity
+            reactions
+          }
+          labs(recent: 24hr) {
+            coagulation {
+              INR { value, timestamp }
+              PTT { value, timestamp }
+              platelets { value, timestamp }
+            }
+            metabolic {
+              glucose { value, timestamp }
+              creatinine { value, timestamp }
+            }
+          }
+          pregnancy {
+            status
+            lastMenstrualPeriod
+            testDate
+          }
+        }
+      }
+    freshness: "<4hr"
+    timeout: 40ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 300  # 5 min
+    l2_ttl: 1800  # 30 min
+  criticalPath: ["Anticoagulation status", "Consent"]
+  
+qosTier: "gold"
+maxLatency: 75
+```
+
+#### Context Recipe 2.2: Anesthesia Context
+```yaml
+id: anesthesia-safety-context-v1.0
+name: "Pre-Anesthesia Evaluation Data"
+clinicalRecipeRefs: ["procedure-safety-anesthesia-v3.0"]
+triggers:
+  - domain: "procedure"
+  - action: "schedule"
+  - requiresAnesthesia: true
+
+dataRequirements:
+  realTime:
+    - source: "vitals-service"
+      endpoint: "/recent-vitals"
+      data: |
+        {
+          patientId
+          window: "24hr"
+          includeAll: true
+        }
+      freshness: "<1hr"
+      timeout: 20ms
+
+  federated:
+    query: |
+      query AnesthesiaContext($patientId: ID!) {
+        patient(id: $patientId) {
+          airwayAssessment {
+            mallampatiClass
+            neckMobility
+            mouthOpening
+            thyromental Distance
+            upperLipBiteTest
+            lastAssessment
+          }
+          anesthesiaHistory {
+            previousAnesthetics {
+              date
+              type
+              complications
+              difficultAirway
+            }
+            familyHistory {
+              malignantHyperthermia
+              pseudocholinesteraseDeficiency
+            }
+          }
+          cardiacRisk {
+            RCRI {
+              score
+              components
+            }
+            functionalCapacity {
+              METS
+              limitations
+            }
+          }
+          medications(classes: ["MAOI", "BETA_BLOCKER", "STEROID"]) {
+            name
+            dose
+            lastDose
+            perioperativeInstructions
+          }
+        }
+      }
+    freshness: "<12hr"
+    timeout: 50ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "surgical-outcomes"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"exists": {"field": "anesthesiaComplications"}}
+            ]
+          }
+        }
+      freshness: "<7d"
+      timeout: 60ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 3600  # 1hr
+    l2_ttl: 86400  # 24hr for history
+  prefetchPatterns:
+    - "Pre-load for scheduled OR cases"
+  
+qosTier: "gold"
+maxLatency: 90
+```
+
+### 3. ADMISSION & DISCHARGE CONTEXT RECIPES
+
+#### Context Recipe 3.1: Admission Context
+```yaml
+id: admission-safety-context-v1.0
+name: "Comprehensive Admission Data"
+clinicalRecipeRefs: ["admission-safety-v3.0"]
+triggers:
+  - domain: "admission"
+  - action: "admit"
+  - type: ["EMERGENCY", "DIRECT", "TRANSFER"]
+
+dataRequirements:
+  realTime:
+    - source: "ed-service"
+      endpoint: "/triage-data"
+      data: |
+        {
+          patientId
+          includeChiefComplaint: true
+          includeVitals: true
+          includeAcuity: true
+        }
+      freshness: "real-time"
+      timeout: 20ms
+      conditional: "if ED admission"
+
+  federated:
+    query: |
+      query AdmissionContext($patientId: ID!) {
+        patient(id: $patientId) {
+          medicationReconciliation {
+            sources {
+              patientProvided {
+                medications
+                lastUpdated
+                verified
+              }
+              pharmacyFill {
+                medications
+                fillDates
+                pharmacy
+              }
+              providerList {
+                medications
+                prescriber
+                lastVerified
+              }
+            }
+            discrepancies {
+              identified
+              resolved
+            }
+          }
+          riskAssessments {
+            fallRisk { score, factors }
+            pressureInjury { braden Score }
+            VTE { padua Score }
+            readmission { LACE Score }
+          }
+          socialDeterminants {
+            housing Status
+            transportation
+            socialSupport
+            healthLiteracy
+          }
+        }
+      }
+    freshness: "<2hr"
+    timeout: 60ms
+
+  external:
+    - source: "hie-gateway"
+      endpoint: "/recent-encounters"
+      data: |
+        {
+          patientId
+          window: "90d"
+          includeDischarges: true
+          includeMedications: true
+        }
+      freshness: "<24hr"
+      timeout: 200ms
+      fallback: "Skip if unavailable"
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 1800  # 30 min
+    l2_ttl: 7200  # 2 hrs
+  streamingResults: true  # Don't wait for HIE
+  
+qosTier: "gold"
+maxLatency: 150
+```
+
+#### Context Recipe 3.2: Discharge Context
+```yaml
+id: discharge-safety-context-v1.0
+name: "Discharge Readiness Data"
+clinicalRecipeRefs: ["discharge-safety-v3.0"]
+triggers:
+  - domain: "discharge"
+  - action: ["plan", "execute"]
+
+dataRequirements:
+  realTime:
+    - source: "results-service"
+      endpoint: "/pending-results"
+      data: |
+        {
+          patientId
+          includeTypes: ["LAB", "IMAGING", "PATHOLOGY"]
+          criticalOnly: false
+        }
+      freshness: "real-time"
+      timeout: 25ms
+      critical: true
+
+    - source: "appointment-service"
+      endpoint: "/followup-status"
+      data: |
+        {
+          patientId
+          requiredSpecialties: "${dischargeRequirements}"
+          window: "30d"
+        }
+      freshness: "real-time"
+      timeout: 30ms
+
+  federated:
+    query: |
+      query DischargeContext($patientId: ID!) {
+        patient(id: $patientId) {
+          dischargeCriteria {
+            clinical {
+              vitalsStable24hr
+              symptomsControlled
+              labsAcceptable
+            }
+            functional {
+              ambulation
+              oralIntake
+              painControlled
+              oxygenRequirement
+            }
+            education {
+              diagnosisUnderstanding
+              medicationTeaching
+              warningSignsReviewed
+              followupInstructed
+            }
+          }
+          barriers {
+            transportation
+            medicationAccess {
+              insuranceCoverage
+              priorAuths
+              copayAssistance
+            }
+            dmeNeeds {
+              ordered
+              delivered
+              trainingComplete
+            }
+          }
+        }
+      }
+    freshness: "<1hr"
+    timeout: 45ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "readmission-risk"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"match": {"diagnosis": "${primaryDiagnosis}"}}
+            ]
+          },
+          "aggs": {
+            "readmit_rate": {
+              "terms": {
+                "field": "30dayReadmit"
+              }
+            }
+          }
+        }
+      freshness: "<24hr"
+      timeout: 60ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 300  # 5 min
+    l2_ttl: 1800  # 30 min
+  criticalPath: ["Pending results", "Followup appointments"]
+  
+qosTier: "gold"
+maxLatency: 100
+```
+
+### 4. POPULATION-SPECIFIC CONTEXT RECIPES
+
+#### Context Recipe 4.1: Pediatric Context
+```yaml
+id: pediatric-safety-context-v1.0
+name: "Pediatric-Specific Data Gathering"
+clinicalRecipeRefs: ["population-pediatric-v3.0"]
+triggers:
+  - patientAge: "<18 years"
+  - domain: ["medication", "procedure"]
+
+dataRequirements:
+  realTime:
+    - source: "vitals-service"
+      endpoint: "/pediatric-vitals"
+      data: |
+        {
+          patientId
+          includeGrowthParameters: true
+          percentileCalculations: true
+          ageAdjustedNormals: true
+        }
+      freshness: "<4hr"
+      timeout: 25ms
+
+  federated:
+    query: |
+      query PediatricContext($patientId: ID!) {
+        patient(id: $patientId) {
+          pediatrics {
+            ageInMonths
+            gestationalAgeAtBirth
+            correctedAge
+            growthChart {
+              weightPercentile
+              heightPercentile
+              headCircumference
+              BMIPercentile
+            }
+            development {
+              milestones
+              delays
+              assessmentTools
+            }
+            immunizations {
+              upToDate
+              due
+              contraindications
+            }
+            dosing {
+              weightBased {
+                currentWeight
+                dosingWeight
+                lastUpdated
+              }
+              BSA
+              creatinineClearance  # Schwartz
+            }
+          }
+        }
+      }
+    freshness: "<24hr"
+    timeout: 40ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 3600  # 1hr for weight
+    l2_ttl: 86400  # 24hr for immunizations
+  
+qosTier: "platinum"  # Pediatric errors are high risk
+maxLatency: 70
+```
+
+#### Context Recipe 4.2: Geriatric Context
+```yaml
+id: geriatric-safety-context-v1.0
+name: "Geriatric Assessment Data"
+clinicalRecipeRefs: ["population-geriatric-v3.0"]
+triggers:
+  - patientAge: ">=65 years"
+  - domain: "medication"
+
+dataRequirements:
+  federated:
+    query: |
+      query GeriatricContext($patientId: ID!) {
+        patient(id: $patientId) {
+          geriatrics {
+            assessments {
+              cognitive {
+                MMSE { score, date }
+                MOCA { score, date }
+                dementia { diagnosed, type, severity }
+              }
+              functional {
+                ADLs { score, independent }
+                IADLs { score, assistance Needed }
+                gaitSpeed
+                gripStrength
+              }
+              frailty {
+                friedCriteria
+                frailtyIndex
+                clinicalFrailtyScale
+              }
+            }
+            medications {
+              count
+              beersCriteria {
+                inappropriate
+                conditionallyInappropriate
+                interactions
+              }
+              anticholinergicBurden {
+                score
+                contributingMeds
+              }
+            }
+            social {
+              livingArrangement
+              caregiver
+              medicationManagement
+            }
+          }
+        }
+      }
+    freshness: "<7d"
+    timeout: 50ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "geriatric-outcomes"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"range": {"age": {"gte": 65}}}
+            ]
+          },
+          "aggs": {
+            "fall_risk": {
+              "sum": {"field": "fallEvents"}
+            },
+            "readmissions": {
+              "sum": {"field": "30dayReadmit"}
+            }
+          }
+        }
+      freshness: "<30d"
+      timeout: 60ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 7200  # 2hr
+    l2_ttl: 86400  # 24hr
+  
+qosTier: "gold"
+maxLatency: 80
+```
+
+### 5. EMERGENCY CONTEXT RECIPES
+
+#### Context Recipe 5.1: Code Blue Context
+```yaml
+id: code-blue-context-v1.0
+name: "Emergency Resuscitation Data"
+clinicalRecipeRefs: ["emergency-code-blue-v3.0"]
+triggers:
+  - domain: "emergency"
+  - action: "code-blue"
+  - priority: "STAT"
+
+dataRequirements:
+  realTime:
+    - source: "adt-service"
+      endpoint: "/code-status"
+      data: |
+        {
+          patientId
+          includeAdvanceDirectives: true
+        }
+      freshness: "real-time"
+      timeout: 10ms
+      critical: true
+      fallback: "Assume full code if unavailable"
+
+    - source: "medication-service"
+      endpoint: "/emergency-meds"
+      data: |
+        {
+          patientId
+          last: "10min"
+          drugs: ["EPINEPHRINE", "AMIODARONE"]
+        }
+      freshness: "real-time"
+      timeout: 15ms
+
+  federated:
+    query: |
+      query CodeBlueContext($patientId: ID!) {
+        patient(id: $patientId) {
+          demographics {
+            age
+            weight  # For dosing
+          }
+          allergies(severity: "SEVERE") {
+            substance
+          }
+        }
+      }
+    freshness: "<24hr"
+    timeout: 20ms
+    fallback: "Use cached or defaults"
+
+performanceStrategy:
+  parallelization: false  # Sequential for speed
+  cachingStrategy:
+    l1_ttl: 86400  # 24hr for demographics
+  circuitBreaker: "aggressive"
+  
+qosTier: "platinum"
+maxLatency: 30  # Every millisecond counts
+```
+
+#### Context Recipe 5.2: Sepsis Alert Context
+```yaml
+id: sepsis-alert-context-v1.0
+name: "Sepsis Recognition Data"
+clinicalRecipeRefs: ["protocol-sepsis-v2.0"]
+triggers:
+  - domain: "emergency"
+  - alert: "sepsis-screening"
+  - sirs_criteria: ">=2"
+
+dataRequirements:
+  realTime:
+    - source: "vitals-service"
+      endpoint: "/continuous-monitoring"
+      data: |
+        {
+          patientId
+          window: "1hr"
+          parameters: ["TEMP", "HR", "RR", "BP"]
+          includeDeltas: true
+        }
+      freshness: "real-time"
+      timeout: 15ms
+
+    - source: "lab-service"
+      endpoint: "/stat-results"
+      data: |
+        {
+          patientId
+          tests: ["LACTATE", "WBC", "PROCALCITONIN"]
+          priorityStat: true
+        }
+      freshness: "<30min"
+      timeout: 20ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "sepsis-ml-scores"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}},
+              {"range": {"timestamp": {"gte": "now-1h"}}}
+            ]
+          },
+          "sort": [{"ml_sepsis_score": "desc"}]
+        }
+      freshness: "<5min"
+      timeout: 30ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 60  # 1 min for vitals
+  streamingUpdates: true
+  
+qosTier: "platinum"
+maxLatency: 50
+```
+
+### 6. MONITORING CONTEXT RECIPES
+
+#### Context Recipe 6.1: Drug Level Monitoring Context
+```yaml
+id: drug-monitoring-context-v1.0
+name: "Therapeutic Drug Monitoring Data"
+clinicalRecipeRefs: ["monitoring-narrow-therapeutic-v3.0"]
+triggers:
+  - domain: "medication"
+  - monitoring: "drug-level"
+  - drugs: ["DIGOXIN", "VANCOMYCIN", "PHENYTOIN", "LITHIUM"]
+
+dataRequirements:
+  realTime:
+    - source: "lab-service"
+      endpoint: "/drug-levels"
+      data: |
+        {
+          patientId
+          drug: "${drugName}"
+          includeHistory: true
+          includeDoseTiming: true
+        }
+      freshness: "<2hr"
+      timeout: 25ms
+
+  federated:
+    query: |
+      query DrugMonitoringContext($patientId: ID!, $drug: String!) {
+        patient(id: $patientId) {
+          drugMonitoring(drug: $drug) {
+            currentRegimen {
+              dose
+              frequency
+              route
+              lastChange
+            }
+            levels {
+              latest {
+                value
+                drawnTime
+                interpretation
+                dosingRelation  # Peak/trough
+              }
+              history(days: 90) {
+                values
+                doses
+                adjustments
+              }
+            }
+            pharmacokinetics {
+              clearance
+              halfLife
+              steadyState
+              proteinBinding
+            }
+          }
+        }
+      }
+    freshness: "<4hr"
+    timeout: 40ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 3600  # 1hr
+    l2_ttl: 86400  # 24hr for PK data
+  
+qosTier: "gold"
+maxLatency: 70
+```
+
+### 7. EXTERNAL INTEGRATION CONTEXT RECIPES
+
+#### Context Recipe 7.1: PDMP Integration Context
+```yaml
+id: pdmp-integration-context-v1.0
+name: "Prescription Drug Monitoring Program Data"
+clinicalRecipeRefs: ["medication-safety-controlled-v3.0"]
+triggers:
+  - domain: "medication"
+  - controlledSubstance: true
+  - deaSchedule: [2, 3, 4]
+
+dataRequirements:
+  external:
+    - source: "state-pdmp-api"
+      endpoint: "/patient-report"
+      data: |
+        {
+          patientIdentifiers: {
+            firstName: "${demographics.firstName}"
+            lastName: "${demographics.lastName}"
+            dob: "${demographics.dateOfBirth}"
+          }
+          reportWindow: "12months"
+          includeRiskScores: true
+        }
+      freshness: "<24hr"
+      timeout: 3000ms  # External APIs are slow
+      authentication: "OAuth2"
+      fallback: "Alert provider if unavailable"
+      retries: 2
+
+performanceStrategy:
+  parallelization: false  # Sequential for external
+  cachingStrategy:
+    l1_ttl: 86400  # 24hr
+    l2_ttl: 604800  # 7 days
+  asyncPattern: true  # Don't block on external
+  
+qosTier: "silver"
+maxLatency: 3500
+```
+
+#### Context Recipe 7.2: HIE Query Context
+```yaml
+id: hie-query-context-v1.0
+name: "Health Information Exchange Data"
+clinicalRecipeRefs: ["admission-safety-v3.0", "discharge-safety-v3.0"]
+triggers:
+  - domain: ["admission", "discharge"]
+  - queryHIE: true
+
+dataRequirements:
+  external:
+    - source: "regional-hie"
+      endpoint: "/patient-summary"
+      data: |
+        {
+          patientId: "${masterPatientIndex}"
+          sections: [
+            "RECENT_ENCOUNTERS",
+            "MEDICATIONS",
+            "ALLERGIES",
+            "PROBLEMS",
+            "PROCEDURES"
+          ]
+          dateRange: "90days"
+        }
+      freshness: "<48hr"
+      timeout: 5000ms
+      fallback: "Use local data only"
+      
+    - source: "national-hie"
+      endpoint: "/continuity-of-care"
+      data: |
+        {
+          patientId: "${nationalId}"
+          format: "CCDA"
+        }
+      freshness: "<7d"
+      timeout: 8000ms
+      optional: true
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 86400  # 24hr
+    l2_ttl: 604800  # 7 days
+  asyncPattern: true
+  backgroundRefresh: true
+  
+qosTier: "bronze"
+maxLatency: 10000
+```
+
+### 8. ANALYTICAL & ML-ENHANCED CONTEXT RECIPES
+
+#### Context Recipe 8.1: Risk Prediction Context
+```yaml
+id: risk-prediction-context-v1.0
+name: "ML Risk Score Data Aggregation"
+clinicalRecipeRefs: ["Multiple - Risk Scoring"]
+triggers:
+  - domain: "*"
+  - mlModels: ["READMISSION", "DETERIORATION", "FALLS"]
+
+dataRequirements:
+  analytical:
+    - source: "elasticsearch"
+      index: "patient-features"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"patientId": "$patientId"}}
+            ]
+          },
+          "_source": [
+            "demographics.*",
+            "vitals.trends.*",
+            "labs.deltas.*",
+            "medications.polypharmacy.*",
+            "utilization.*"
+          ]
+        }
+      freshness: "<1hr"
+      timeout: 100ms
+
+    - source: "feature-store"
+      endpoint: "/patient-features"
+      data: |
+        {
+          patientId
+          featureSets: [
+            "CLINICAL_DETERIORATION_V3",
+            "READMISSION_RISK_V2",
+            "MEDICATION_ADHERENCE_V1"
+          ]
+          includeExplanations: true
+        }
+      freshness: "<30min"
+      timeout: 150ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 1800  # 30 min
+    l2_ttl: 3600  # 1hr
+  computeAsync: true  # Don't block clinical workflow
+  
+qosTier: "silver"
+maxLatency: 200
+```
+
+### 9. QUALITY METRIC CONTEXT RECIPES
+
+#### Context Recipe 9.1: Core Measures Context
+```yaml
+id: core-measures-context-v1.0
+name: "Quality Measure Data Collection"
+clinicalRecipeRefs: ["quality-core-measures-v3.0"]
+triggers:
+  - diagnosis: ["AMI", "CHF", "PNEUMONIA", "STROKE"]
+  - qualityProgram: ["CMS", "TJC", "NCQA"]
+
+dataRequirements:
+  federated:
+    query: |
+      query CoreMeasuresContext($patientId: ID!, $condition: String!) {
+        patient(id: $patientId) {
+          qualityMeasures(condition: $condition) {
+            applicable
+            status
+            numerator
+            denominator
+            exclusions
+            exceptions
+            missingElements
+            documentationGaps
+          }
+          timeline {
+            admission
+            diagnosis
+            interventions {
+              measure
+              performed
+              timestamp
+              withinWindow
+            }
+          }
+        }
+      }
+    freshness: "<1hr"
+    timeout: 60ms
+
+  analytical:
+    - source: "elasticsearch"
+      index: "quality-metrics"
+      query: |
+        {
+          "bool": {
+            "must": [
+              {"term": {"facility": "${facility}"}},
+              {"term": {"measure": "${measure}"}}
+            ]
+          },
+          "aggs": {
+            "compliance_rate": {
+              "avg": {"field": "compliant"}
+            }
+          }
+        }
+      freshness: "<24hr"
+      timeout: 80ms
+
+performanceStrategy:
+  parallelization: true
+  cachingStrategy:
+    l1_ttl: 3600  # 1hr
+    l2_ttl: 86400  # 24hr
+  backgroundProcessing: true
+  
+qosTier: "bronze"
+maxLatency: 300
+```
+
+## Context Recipe Orchestration
+
+### Dynamic Recipe Selection
+```yaml
+RecipeSelector:
+  inputs:
+    - clinicalContext
+    - urgency
+    - userRole
+    - systemLoad
+    
+  logic:
+    - matchClinicalRecipe
+    - determineDataNeeds
+    - selectOptimalSources
+    - applyPerformanceTier
+    
+  output:
+    - orderedRecipeList
+    - executionPlan
+    - fallbackStrategy
+```
+
+### Source Selection Algorithm
+```yaml
+SourceSelection:
+  factors:
+    dataFreshness:
+      critical: "Direct microservice"
+      recent: "Apollo Federation"
+      historical: "Elasticsearch"
+      
+    queryComplexity:
+      simple: "Direct call"
+      relational: "Federation"
+      analytical: "Elasticsearch"
+      
+    systemLoad:
+      high: "Prefer cache, increase ES usage"
+      normal: "Balanced approach"
+      low: "Maximize freshness"
+```
+
+### Performance Optimization Patterns
+
+#### 1. Parallel Execution Strategy
+```yaml
+ParallelExecution:
+  grouping:
+    - "Group by data source type"
+    - "Execute source groups in parallel"
+    - "Stream results as available"
+    
+  example:
+    group1_realtime: ["lab-service", "medication-service"]
+    group2_federated: ["patient-demographics", "problems"]
+    group3_analytical: ["adherence-patterns", "risk-scores"]
+```
+
+#### 2. Smart Caching Strategy
+```yaml
+CachingStrategy:
+  levels:
+    L1_RequestCache:
+      - "Same request, same patient"
+      - "TTL: 5 minutes"
+      - "Storage: In-memory"
+      
+    L2_PatientCache:
+      - "Cross-request, same patient"
+      - "TTL: Based on data type"
+      - "Storage: Redis"
+      
+    L3_PopulationCache:
+      - "Reference data, protocols"
+      - "TTL: 24 hours"
+      - "Storage: Redis + DB"
+```
+
+#### 3. Fallback Cascade
+```yaml
+FallbackStrategy:
+  cascade:
+    1_Primary: "Optimal data source"
+    2_Secondary: "Alternative source"
+    3_Cache: "Recent cached data"
+    4_Degraded: "Minimum safety data"
+    5_Manual: "Provider decision"
+```
+
+## Recipe Governance
+
+### Version Management
+```yaml
+VersionControl:
+  strategy:
+    development: "Feature branches"
+    testing: "Shadow mode comparison"
+    deployment: "Blue-green with rollback"
+    
+  compatibility:
+    forward: "New recipes work with old clinical"
+    backward: "Old recipes work with new clinical"
+```
+
+### Performance Monitoring
+```yaml
+Monitoring:
+  metrics:
+    - "Recipe execution time"
+    - "Data source latency"
+    - "Cache hit rates"
+    - "Fallback frequency"
+    - "Clinical override rates"
+    
+  alerts:
+    - "Recipe timeout > threshold"
+    - "Source unavailable"
+    - "Cache miss spike"
+    - "Unusual override pattern"
+```
+
+### Clinical Validation
+```yaml
+Validation:
+  process:
+    - "Simulation with historical data"
+    - "Shadow mode tracking"
+    - "Clinical review of edge cases"
+    - "Outcome correlation analysis"
+    
+  governance:
+    - "Clinical owner per recipe"
+    - "Technical owner per recipe"
+    - "Regular review cycle"
+    - "Change advisory board"
+```
+
+## Integration with Clinical Recipes
+
+### Recipe Pairing
+```yaml
+RecipePairs:
+  - clinical: "medication-safety-renal-v3.0"
+    context: "medication-renal-context-v1.0"
+    
+  - clinical: "procedure-safety-anesthesia-v3.0"
+    context: "anesthesia-safety-context-v1.0"
+    
+  - clinical: "emergency-code-blue-v3.0"
+    context: "code-blue-context-v1.0"
+```
+
+### Data Contract
+```yaml
+DataContract:
+  request:
+    - recipeId
+    - patientId
+    - urgency
+    - context
+    
+  response:
+    - requestId
+    - data (structured per recipe)
+    - metadata:
+        - sources used
+        - freshness achieved
+        - performance metrics
+        - degradation warnings
+```
+
+## Summary
+
+This Context Recipe Book provides:
+
+1. **30+ Context Recipes** covering all clinical scenarios
+2. **Hybrid Data Strategy** optimizing for freshness vs performance
+3. **Clear Source Selection** rules based on data characteristics
+4. **Performance Patterns** for sub-100ms execution
+5. **Governance Framework** for recipe lifecycle
+6. **Integration Patterns** with Clinical Logic Recipes
+
+Together with the Clinical Logic Recipe Book, this creates a complete, performant, and maintainable clinical decision support system that can adapt to any healthcare organization's needs while maintaining safety and efficiency.

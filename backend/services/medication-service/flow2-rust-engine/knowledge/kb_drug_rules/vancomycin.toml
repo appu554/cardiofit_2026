@@ -1,0 +1,195 @@
+# Vancomycin - AUC-Targeted Dosing
+
+# Top-level monitoring requirements (required by schema)
+monitoring_requirements = []
+
+[meta]
+drug_id = "vancomycin"
+generic_name = "Vancomycin"
+brand_names = ["Vancocin", "Firvanq"]
+drug_class = "Glycopeptide Antibiotic"
+indication = "MRSA infections, serious gram-positive infections"
+route = "IV"
+calculation_type = "compiled_model"
+version = "1.0.0"
+last_updated = "2024-01-15"
+clinical_reviewer = "Dr. Clinical Pharmacist"
+evidence_sources = ["IDSA-2020", "Vancomycin-Guidelines"]
+
+[dose_calculation]
+
+[dose_calculation.base_dose]
+default_mg = 1000.0
+calculation_method = "weight_based"
+weight_factor_mg_per_kg = 15.0
+bsa_factor_mg_per_m2 = 750.0
+
+[dose_calculation.dose_limits]
+absolute_min_mg = 500.0
+absolute_max_mg = 4000.0
+max_mg_per_kg = 60.0
+max_mg_per_day = 4000.0
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 0.0
+max_kg = 40.0
+factor = 1.2
+action = "multiply"
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 40.1
+max_kg = 100.0
+factor = 1.0
+action = "multiply"
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 100.1
+max_kg = 200.0
+factor = 0.8
+action = "multiply"
+
+[[dose_calculation.age_adjustment.bands]]
+min_years = 0
+max_years = 18
+factor = 1.1
+action = "multiply"
+
+[[dose_calculation.age_adjustment.bands]]
+min_years = 19
+max_years = 65
+factor = 1.0
+action = "multiply"
+
+[[dose_calculation.age_adjustment.bands]]
+min_years = 66
+max_years = 120
+factor = 0.9
+action = "multiply"
+
+# Renal adjustment for vancomycin
+[dose_calculation.renal_adjustment]
+bands = [
+    { min_egfr = 0.0, max_egfr = 15.0, multiplier = 0.25, frequency_adjustment = "q48h" },
+    { min_egfr = 15.1, max_egfr = 30.0, multiplier = 0.5, frequency_adjustment = "q24h" },
+    { min_egfr = 30.1, max_egfr = 60.0, multiplier = 0.75, frequency_adjustment = "q18h" },
+    { min_egfr = 60.1, max_egfr = 999.0, multiplier = 1.0, frequency_adjustment = "q12h" }
+]
+
+# Monitoring requirements under safety_verification
+[[safety_verification.monitoring_requirements]]
+lab_test = "vancomycin_trough_level"
+frequency = "daily"
+action_on_alert = "dose_adjustment"
+reason = "Therapeutic drug monitoring"
+
+[[safety_verification.monitoring_requirements]]
+lab_test = "serum_creatinine"
+frequency = "daily"
+action_on_alert = "nephrology_consult"
+reason = "Nephrotoxicity monitoring"
+
+# Safety verification
+[safety_verification]
+[safety_verification.absolute_contraindications]
+pregnancy = false
+breastfeeding = true
+allergy_classes = ["vancomycin"]
+conditions = ["anaphylaxis_history"]
+
+
+[safety_verification.renal_safety]
+[[safety_verification.renal_safety.bands]]
+min_egfr = 0.0
+max_egfr = 15.0
+action = "dose_reduce"
+dose_multiplier = 0.25
+monitoring_required = ["renal_function_daily", "vancomycin_levels"]
+reason = "Severe renal impairment: significant dose reduction required"
+evidence = ["IDSA-2020", "Vancomycin-Guidelines"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 15.1
+max_egfr = 30.0
+action = "dose_reduce"
+dose_multiplier = 0.5
+reason = "Severe renal impairment: dose reduction required"
+evidence = ["IDSA-2020", "Vancomycin-Guidelines"]
+
+[[safety_verification.dialysis_safety.bands]]
+on_dialysis = true
+action = "hold_or_adjust"
+monitoring_required = ["vancomycin_levels_post_dialysis"]
+reason = "Dialysis alters clearance; adjust/redose after session"
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 30.1
+max_egfr = 60.0
+action = "monitor"
+monitoring_required = ["renal_function_q72h", "vancomycin_levels"]
+reason = "Mild renal impairment: close monitoring required"
+evidence = ["IDSA-2020", "Vancomycin-Guidelines"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 60.1
+max_egfr = 999.0
+action = "proceed"
+monitoring_required = ["vancomycin_levels"]
+reason = "Normal renal function"
+evidence = ["IDSA-2020", "Vancomycin-Guidelines"]
+
+# Drug interactions
+[[safety_verification.interactions.major]]
+interacting_drug_classes = ["aminoglycosides", "amphotericin_b"]
+action = "contraindicated"
+reason = "High risk of nephrotoxicity and ototoxicity"
+
+[[safety_verification.interactions.moderate]]
+interacting_drug_classes = ["cisplatin", "cyclosporine"]
+action = "monitor_closely"
+monitoring_required = ["renal_function", "hearing_assessment"]
+reason = "Increased nephrotoxicity risk"
+
+# Contraindications
+[safety_verification.contraindications]
+absolute = [
+    "vancomycin_allergy",
+    "red_man_syndrome_history"
+]
+relative = [
+    "hearing_impairment",
+    "severe_renal_impairment"
+]
+
+# Monitoring requirements
+[safety_verification.monitoring]
+required = [
+    "Vancomycin trough levels before 4th dose",
+    "Renal function q48-72h",
+    "Hearing assessment if prolonged use",
+    "CBC with differential"
+]
+target_levels = [
+    "Trough: 15-20 mg/L for serious infections",
+    "AUC/MIC: 400-600 for MRSA"
+]
+
+# Clinical notes
+[clinical_notes]
+notes = [
+    "AUC-targeted dosing preferred over trough-based",
+    "Red man syndrome: slow infusion rate",
+    "TDM required for optimal dosing",
+    "Nephrotoxicity risk with prolonged use"
+]
+
+[[alternatives]]
+drug_id = "linezolid"
+name = "Linezolid"
+rationale = "MRSA alternative if vancomycin intolerant"
+relative_efficacy = 0.90
+
+[[alternatives]]
+drug_id = "daptomycin"
+name = "Daptomycin"
+rationale = "Alternative for complicated skin infections"
+relative_efficacy = 0.95

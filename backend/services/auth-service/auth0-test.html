@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 Test Page</title>
+    <script src="https://cdn.auth0.com/js/auth0-spa-js/2.0/auth0-spa-js.production.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        button { padding: 10px; margin: 5px; cursor: pointer; }
+        pre { background-color: #f0f0f0; padding: 10px; border-radius: 5px; overflow: auto; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .panel { border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
+        .header { background-color: #f8f8f8; padding: 10px; margin-bottom: 15px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Auth0 Test Page</h1>
+            <p>Use this page to test Auth0 authentication and API endpoints</p>
+        </div>
+
+        <div class="panel">
+            <h2>Authentication</h2>
+            <button id="login">Login with Auth0</button>
+            <button id="logout">Logout</button>
+            <button id="get-token">Get Token</button>
+        </div>
+
+        <div class="panel">
+            <h2>API Testing</h2>
+            <div>
+                <label for="api-url">API URL:</label>
+                <input type="text" id="api-url" value="http://localhost:8080/api/auth/me" style="width: 300px;">
+                <button id="call-api">Call API</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>User Profile:</h3>
+            <pre id="profile">Not logged in</pre>
+            <h3>Token:</h3>
+            <pre id="token-display">No token</pre>
+            <h3>API Response:</h3>
+            <pre id="api-response">No data</pre>
+        </div>
+    </div>
+
+    <script>
+        let auth0Client = null;
+        let token = null;
+
+        window.onload = async function() {
+            try {
+                auth0Client = await createAuth0Client({
+                    domain: 'dev-hfw6wda5wtf8l13c.au.auth0.com',
+                    clientId: 'me0PFrdozNvURntFrguhZ6Xumtbih3rj',
+                    authorizationParams: {
+                        audience: 'https://clinical-synthesis-hub-api',
+                        redirect_uri: window.location.href
+                    }
+                });
+
+                // Check for authentication callback
+                if (window.location.search.includes("code=")) {
+                    await auth0Client.handleRedirectCallback();
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                    updateUI();
+                }
+
+                document.getElementById('login').addEventListener('click', login);
+                document.getElementById('logout').addEventListener('click', logout);
+                document.getElementById('get-token').addEventListener('click', getToken);
+                document.getElementById('call-api').addEventListener('click', callApi);
+
+                updateUI();
+            } catch (error) {
+                console.error('Auth0 initialization error:', error);
+                document.getElementById('profile').textContent = 'Error initializing Auth0: ' + error.message;
+            }
+        };
+
+        async function updateUI() {
+            try {
+                const isAuthenticated = await auth0Client.isAuthenticated();
+                if (isAuthenticated) {
+                    const user = await auth0Client.getUser();
+                    document.getElementById('profile').textContent = JSON.stringify(user, null, 2);
+                    document.getElementById('login').disabled = true;
+                    document.getElementById('logout').disabled = false;
+                    document.getElementById('get-token').disabled = false;
+                } else {
+                    document.getElementById('profile').textContent = 'Not logged in';
+                    document.getElementById('token-display').textContent = 'No token';
+                    document.getElementById('login').disabled = false;
+                    document.getElementById('logout').disabled = true;
+                    document.getElementById('get-token').disabled = true;
+                    token = null;
+                }
+            } catch (error) {
+                console.error('Error updating UI:', error);
+                document.getElementById('profile').textContent = 'Error: ' + error.message;
+            }
+        }
+
+        async function login() {
+            try {
+                await auth0Client.loginWithRedirect();
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Login error: ' + error.message);
+            }
+        }
+
+        async function logout() {
+            try {
+                auth0Client.logout({
+                    logoutParams: {
+                        returnTo: window.location.href
+                    }
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+                alert('Logout error: ' + error.message);
+            }
+        }
+
+        async function getToken() {
+            try {
+                token = await auth0Client.getTokenSilently();
+                document.getElementById('token-display').textContent = token;
+                console.log('Token:', token);
+            } catch (error) {
+                console.error('Error getting token:', error);
+                document.getElementById('token-display').textContent = 'Error: ' + error.message;
+                alert('Error getting token: ' + error.message);
+            }
+        }
+
+        async function callApi() {
+            if (!token) {
+                alert('Please get a token first');
+                return;
+            }
+
+            try {
+                const apiUrl = document.getElementById('api-url').value;
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                document.getElementById('api-response').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API Error:', error);
+                document.getElementById('api-response').textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+# KB-17 Population Registry Service - Docker Compose
+# Self-contained setup with PostgreSQL and Redis
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose up -d --build      # Rebuild and start
+#   docker-compose logs -f            # Follow logs
+#   docker-compose down               # Stop all services
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # KB-17 Population Registry Service
+  # ============================================================
+  kb-17-population-registry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-17-population-registry
+    ports:
+      - "8017:8017"
+    environment:
+      # Server Configuration
+      - PORT=8017
+      - ENVIRONMENT=development
+      - LOG_LEVEL=info
+
+      # Database Configuration (required)
+      - DATABASE_URL=postgres://kb17user:kb17password@kb-17-postgres:5432/kb_population_registry?sslmode=disable
+
+      # Redis Configuration
+      - REDIS_URL=redis://kb-17-redis:6379/0
+
+      # Kafka Configuration (disabled by default for standalone)
+      - KAFKA_ENABLED=false
+      - KAFKA_BROKERS=kafka:9092
+
+      # KB Service URLs (optional - graceful degradation if not available)
+      - KB2_URL=http://kb-2-clinical-context:8082
+      - KB8_URL=http://kb-8-calculator-service:8080
+      - KB9_URL=http://kb-9-care-gaps:8089
+      - KB14_URL=http://kb-14-care-navigator:8091
+      - KB2_ENABLED=false
+      - KB8_ENABLED=false
+      - KB9_ENABLED=false
+      - KB14_ENABLED=false
+    depends_on:
+      kb-17-postgres:
+        condition: service_healthy
+      kb-17-redis:
+        condition: service_healthy
+    networks:
+      - kb-17-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8017/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # PostgreSQL Database (Required)
+  # ============================================================
+  kb-17-postgres:
+    image: postgres:15-alpine
+    container_name: kb-17-postgres
+    ports:
+      - "5439:5432"
+    environment:
+      POSTGRES_USER: kb17user
+      POSTGRES_PASSWORD: kb17password
+      POSTGRES_DB: kb_population_registry
+    volumes:
+      - kb17-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb17user -d kb_population_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-17-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Redis Cache
+  # ============================================================
+  kb-17-redis:
+    image: redis:7-alpine
+    container_name: kb-17-redis
+    ports:
+      - "6397:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - kb17-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-17-network
+    restart: unless-stopped
+
+  # ============================================================
+  # Adminer - Database Admin UI (optional, for development)
+  # ============================================================
+  kb-17-adminer:
+    image: adminer:4
+    container_name: kb-17-adminer
+    ports:
+      - "8117:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=kb-17-postgres
+    depends_on:
+      - kb-17-postgres
+    networks:
+      - kb-17-network
+    profiles:
+      - dev
+    restart: unless-stopped
+
+volumes:
+  kb17-postgres-data:
+    name: kb17-postgres-data
+  kb17-redis-data:
+    name: kb17-redis-data
+
+networks:
+  kb-17-network:
+    driver: bridge
+    name: kb-17-network

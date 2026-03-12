@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # Simple GraphDB instance for testing
+  graphdb-simple:
+    image: ontotext/graphdb:10.7.3
+    container_name: kb7-graphdb-simple
+    ports:
+      - "7200:7200"
+    environment:
+      - GDB_HEAP_SIZE=2g
+      - GDB_JAVA_OPTS=-Xmx2g -Xms1g
+    volumes:
+      - ./semantic/ontologies:/import:ro
+    networks:
+      - kb7-simple
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/repositories"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Redis for caching
+  redis-simple:
+    image: redis:7.2-alpine
+    container_name: kb7-redis-simple
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - kb7-simple
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  kb7-simple:
+    driver: bridge

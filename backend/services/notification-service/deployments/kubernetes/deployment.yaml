@@ -1,0 +1,210 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cardiofit
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-service-config
+  namespace: cardiofit
+data:
+  config.yaml: |
+    server:
+      http_port: 8050
+      grpc_port: 9050
+      env: production
+    database:
+      host: postgres-service
+      port: 5432
+      dbname: notification_service
+      sslmode: require
+      max_connections: 50
+    redis:
+      host: redis-service
+      port: 6379
+    kafka:
+      brokers:
+        - kafka-broker-1:9092
+        - kafka-broker-2:9092
+      group_id: notification-service
+      topic: clinical-alerts
+    routing:
+      default_channel: email
+      retry_attempts: 3
+    escalation:
+      enabled: true
+      max_escalation_level: 3
+    fatigue:
+      enabled: true
+      window_duration: 1h
+      max_notifications: 10
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: notification-service-secrets
+  namespace: cardiofit
+type: Opaque
+stringData:
+  DATABASE_PASSWORD: "your-db-password"
+  REDIS_PASSWORD: "your-redis-password"
+  SENDGRID_API_KEY: "your-sendgrid-key"
+  TWILIO_ACCOUNT_SID: "your-twilio-sid"
+  TWILIO_AUTH_TOKEN: "your-twilio-token"
+  TWILIO_FROM_NUMBER: "+1234567890"
+  FIREBASE_PROJECT_ID: "your-firebase-project"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: cardiofit
+  labels:
+    app: notification-service
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+        version: v1
+    spec:
+      containers:
+      - name: notification-service
+        image: cardiofit/notification-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8050
+          name: http
+          protocol: TCP
+        - containerPort: 9050
+          name: grpc
+          protocol: TCP
+        env:
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: DATABASE_PASSWORD
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: REDIS_PASSWORD
+        - name: SENDGRID_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: SENDGRID_API_KEY
+        - name: TWILIO_ACCOUNT_SID
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: TWILIO_ACCOUNT_SID
+        - name: TWILIO_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: TWILIO_AUTH_TOKEN
+        - name: TWILIO_FROM_NUMBER
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: TWILIO_FROM_NUMBER
+        - name: FIREBASE_PROJECT_ID
+          valueFrom:
+            secretKeyRef:
+              name: notification-service-secrets
+              key: FIREBASE_PROJECT_ID
+        volumeMounts:
+        - name: config
+          mountPath: /app/configs
+          readOnly: true
+        - name: credentials
+          mountPath: /app/credentials
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8050
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8050
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+      volumes:
+      - name: config
+        configMap:
+          name: notification-service-config
+      - name: credentials
+        secret:
+          secretName: firebase-credentials
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: cardiofit
+  labels:
+    app: notification-service
+spec:
+  type: ClusterIP
+  selector:
+    app: notification-service
+  ports:
+  - name: http
+    port: 8050
+    targetPort: 8050
+    protocol: TCP
+  - name: grpc
+    port: 9050
+    targetPort: 9050
+    protocol: TCP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: notification-service-hpa
+  namespace: cardiofit
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: notification-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

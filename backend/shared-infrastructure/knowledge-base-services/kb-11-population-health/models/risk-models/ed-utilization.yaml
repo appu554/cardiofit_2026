@@ -1,0 +1,194 @@
+# KB-11 Risk Model: ED High Utilization Risk
+# ══════════════════════════════════════════════════════════════════════════════
+# This model predicts the probability of high emergency department utilization
+# (4+ visits in 12 months). Targets patients who may benefit from care management.
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: ed-utilization
+type: ED_UTILIZATION
+version: "1.0.0"
+description: "Emergency department high utilization risk prediction"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GOVERNANCE METADATA (KB-18 Integration)
+# ──────────────────────────────────────────────────────────────────────────────
+governance:
+  owner: "Population Health Team"
+  clinical_reviewer: "CMO Office"
+  last_approved: "2025-01-01"
+  approval_id: "GOV-2025-003"
+  requires_validation: true
+  review_cycle_days: 90
+  clinical_evidence:
+    - "ED Super-Utilizer identification studies"
+    - "Complex care management program effectiveness"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RISK FACTORS
+# ──────────────────────────────────────────────────────────────────────────────
+factors:
+  - name: prior_ed_visits
+    description: "ED visits in past 12 months"
+    weight: 0.30
+    source: encounters
+    lookback_days: 365
+    thresholds:
+      - range: [0, 0]
+        score: 0.0
+      - range: [1, 2]
+        score: 0.2
+      - range: [3, 4]
+        score: 0.5
+      - range: [5, 7]
+        score: 0.8
+      - range: [8, 999]
+        score: 1.0
+
+  - name: mental_health_conditions
+    description: "Behavioral health diagnoses"
+    weight: 0.20
+    source: diagnosis
+    conditions:
+      - code: "F32.*"
+        system: "ICD-10"
+        description: "Major depressive disorder"
+        score: 0.5
+      - code: "F41.*"
+        system: "ICD-10"
+        description: "Anxiety disorders"
+        score: 0.4
+      - code: "F10.*"
+        system: "ICD-10"
+        description: "Alcohol use disorder"
+        score: 0.7
+      - code: "F11.*"
+        system: "ICD-10"
+        description: "Opioid use disorder"
+        score: 0.9
+      - code: "F20.*"
+        system: "ICD-10"
+        description: "Schizophrenia"
+        score: 0.8
+
+  - name: chronic_pain
+    description: "Chronic pain conditions"
+    weight: 0.15
+    source: diagnosis
+    conditions:
+      - code: "G89.2*"
+        system: "ICD-10"
+        description: "Chronic pain"
+        score: 0.6
+      - code: "M54.*"
+        system: "ICD-10"
+        description: "Back pain"
+        score: 0.4
+      - code: "G43.*"
+        system: "ICD-10"
+        description: "Migraine"
+        score: 0.5
+      - code: "R51"
+        system: "ICD-10"
+        description: "Headache"
+        score: 0.3
+
+  - name: pcp_access
+    description: "Primary care engagement"
+    weight: 0.15
+    source: encounters
+    lookback_days: 365
+    categories:
+      - type: "established_with_visits"
+        description: "Has PCP with 2+ visits in year"
+        score: 0.1
+      - type: "established_no_visits"
+        description: "Has PCP but no recent visits"
+        score: 0.4
+      - type: "no_pcp"
+        description: "No attributed PCP"
+        score: 0.8
+
+  - name: social_complexity
+    description: "Social determinants impact"
+    weight: 0.15
+    source: sdoh
+    sdoh_factors:
+      - name: homelessness
+        z_code: "Z59.0"
+        score: 0.9
+      - name: food_insecurity
+        z_code: "Z59.4"
+        score: 0.4
+      - name: unemployment
+        z_code: "Z56.0"
+        score: 0.3
+      - name: lack_of_transportation
+        z_code: "Z59.82"
+        score: 0.5
+
+  - name: insurance_type
+    description: "Insurance coverage type"
+    weight: 0.05
+    source: coverage
+    categories:
+      - type: "commercial"
+        score: 0.1
+      - type: "medicare"
+        score: 0.3
+      - type: "medicaid"
+        score: 0.5
+      - type: "dual_eligible"
+        score: 0.7
+      - type: "uninsured"
+        score: 0.9
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RISK TIERS
+# ──────────────────────────────────────────────────────────────────────────────
+tiers:
+  LOW:
+    range: [0, 0.25]
+    intervention: "standard_care"
+    description: "Standard primary care engagement"
+    recommended_actions:
+      - "Ensure PCP attribution"
+      - "Standard preventive care reminders"
+
+  MODERATE:
+    range: [0.25, 0.50]
+    intervention: "access_enhancement"
+    description: "Enhanced access to primary care"
+    recommended_actions:
+      - "Same-day appointment availability"
+      - "Nurse advice line education"
+      - "After-hours clinic information"
+
+  HIGH:
+    range: [0.50, 0.75]
+    intervention: "care_coordination"
+    description: "Care coordination program enrollment"
+    recommended_actions:
+      - "Care coordinator assignment"
+      - "Care plan development"
+      - "Behavioral health integration"
+      - "Community resource connection"
+
+  VERY_HIGH:
+    range: [0.75, 1.00]
+    intervention: "complex_care"
+    description: "Complex care management program"
+    recommended_actions:
+      - "Intensive case management"
+      - "Multidisciplinary care team"
+      - "Housing/social services referral"
+      - "Frequent touchpoints"
+      - "ED navigation program"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MODEL CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+configuration:
+  cache_ttl_minutes: 120
+  recalculation_interval_days: 14
+  minimum_data_completeness: 0.6
+  confidence_threshold: 0.55

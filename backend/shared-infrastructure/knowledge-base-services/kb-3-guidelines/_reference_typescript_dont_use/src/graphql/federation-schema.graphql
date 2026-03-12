@@ -1,0 +1,604 @@
+# KB-3 Apollo Federation Subgraph Schema
+# Clinical guideline evidence service integrated with Apollo Federation
+
+extend schema @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key", "@external", "@requires", "@provides", "@shareable", "@tag"])
+
+scalar DateTime
+scalar JSON
+
+# =============================================================================
+# FEDERATED ENTITIES (extend existing entities from other services)
+# =============================================================================
+
+type Patient @key(fields: "id") {
+  id: ID! @external
+  
+  # KB-3 specific fields for patient
+  guidelines(conditions: [String!]!, region: Region!): [Guideline!]!
+  clinicalPathway(
+    conditions: [String!]!
+    contraindications: [String!]
+    region: Region
+  ): ClinicalPathway!
+  safetyOverrides: [SafetyOverride!]!
+  conflictResolutions: [ConflictResolution!]!
+}
+
+type Medication @key(fields: "id") {
+  id: ID! @external
+  
+  # KB-3 relationships
+  relatedGuidelines: [Guideline!]!
+  conflictingGuidelines: [GuidelineConflict!]!
+  safetyOverrides: [SafetyOverride!]!
+}
+
+type Observation @key(fields: "id") {
+  id: ID! @external
+  
+  # KB-3 lab value integration
+  triggeredSafetyOverrides: [SafetyOverride!]!
+  impactedGuidelines: [Guideline!]!
+}
+
+# =============================================================================
+# KB-3 NATIVE ENTITIES
+# =============================================================================
+
+type Guideline @key(fields: "guideline_id") {
+  guideline_id: String!
+  organization: String!
+  title: String!
+  region: Region!
+  version: String!
+  condition_primary: String!
+  icd10_codes: [String!]!
+  effective_date: DateTime!
+  superseded_date: DateTime
+  status: GuidelineStatus!
+  approval_status: ApprovalStatus!
+  
+  # Content
+  recommendations: [Recommendation!]!
+  evidence_summary: EvidenceSummary!
+  quality_metrics: QualityMetrics!
+  
+  # Relationships
+  conflicts: [ConflictRelationship!]!
+  safety_overrides: [SafetyOverride!]!
+  version_history: [GuidelineVersion!]!
+  
+  # Federation fields
+  patients: [Patient!]!
+  relatedMedications: [Medication!]!
+}
+
+type ClinicalPathway @key(fields: "pathway_id") {
+  pathway_id: String!
+  primary_guideline: Guideline!
+  recommendations: [PrioritizedRecommendation!]!
+  decision_points: [DecisionPoint!]!
+  conflicts_resolved: [ConflictResolution!]!
+  safety_overrides_applied: [SafetyOverride!]!
+  monitoring_requirements: [MonitoringRequirement!]!
+  
+  # Quality metrics
+  confidence_score: Int!
+  evidence_strength: EvidenceStrength!
+  clinical_complexity: ComplexityLevel!
+  
+  # Federation fields
+  patient: Patient! @provides(fields: "id")
+  applicableMedications: [Medication!]!
+}
+
+type SafetyOverride @key(fields: "override_id") {
+  override_id: String!
+  priority: Int!
+  condition: String!
+  description: String!
+  trigger_conditions: TriggerConditions!
+  override_action: OverrideAction!
+  affected_guidelines: [String!]!
+  active: Boolean!
+  
+  # Statistics
+  application_count: Int!
+  last_applied: DateTime
+  
+  # Federation relationships
+  affectedMedications: [Medication!]!
+  triggeredByObservations: [Observation!]!
+}
+
+# =============================================================================
+# QUERY EXTENSIONS
+# =============================================================================
+
+extend type Query {
+  # KB-3 specific queries
+  kb3Guidelines(
+    query: GuidelineSearchInput!
+    pagination: PaginationInput
+  ): GuidelineSearchResult!
+  
+  kb3ClinicalPathway(
+    patient_id: ID!
+    conditions: [String!]!
+    region: Region!
+  ): ClinicalPathway!
+  
+  kb3CompareGuidelines(
+    guideline_ids: [String!]!
+    domain: String
+  ): GuidelineComparison!
+  
+  kb3SafetyOverrides(
+    active_only: Boolean = true
+  ): SafetyOverrideResult!
+  
+  kb3ConflictResolutions(
+    filters: ConflictFiltersInput
+  ): ConflictResolutionResult!
+  
+  kb3Metrics(
+    timeframe: String = "7d"
+    metric_types: [MetricType!]
+  ): ClinicalMetricsResult!
+}
+
+# =============================================================================
+# MUTATION EXTENSIONS
+# =============================================================================
+
+extend type Mutation {
+  # KB-3 specific mutations
+  kb3CreateGuidelineVersion(
+    guideline_id: String!
+    changes: [ChangeRecordInput!]!
+    change_type: ChangeType!
+  ): VersionCreationResult!
+  
+  kb3ManageSafetyOverride(
+    override_data: SafetyOverrideInput!
+    action: OverrideActionInput!
+  ): SafetyOverrideResult!
+  
+  kb3ResolveConflict(
+    conflict_id: String!
+    resolution_data: ConflictResolutionInput!
+    patient_id: ID
+  ): ConflictResolutionResult!
+  
+  kb3ValidateKBLinkages(
+    linkage_ids: [String!]
+  ): LinkageValidationResult!
+}
+
+# =============================================================================
+# CORE TYPES (KB-3 Specific)
+# =============================================================================
+
+type Recommendation @key(fields: "rec_id") {
+  rec_id: String!
+  statement: String!
+  domain: RecommendationDomain!
+  evidence: Evidence!
+  population_criteria: PopulationCriteria
+  safety_considerations: [SafetyConsideration!]!
+  linked_kb_refs: KBReferences
+  
+  # Federation relationships
+  guideline: Guideline!
+  applicablePatients: [Patient!]!
+  relatedMedications: [Medication!]!
+}
+
+type GuidelineConflict @key(fields: "conflict_id") {
+  conflict_id: String!
+  conflict_type: ConflictType!
+  severity: ConflictSeverity!
+  description: String!
+  affected_recommendations: [Recommendation!]!
+  resolution_strategy: String
+  clinical_impact: ImpactLevel!
+  
+  # Federation fields
+  affectedPatients: [Patient!]!
+  involvedMedications: [Medication!]!
+}
+
+type ConflictResolution @key(fields: "resolution_id") {
+  resolution_id: String!
+  conflict: GuidelineConflict!
+  resolution_rule: String!
+  winning_guideline: String
+  rationale: String!
+  safety_override: Boolean!
+  timestamp: DateTime!
+  
+  # Federation context
+  patient: Patient @provides(fields: "id")
+  clinical_context: JSON
+}
+
+# =============================================================================
+# SUPPORTING TYPES
+# =============================================================================
+
+type Evidence {
+  grade: EvidenceGrade!
+  quality_score: Int!
+  supporting_studies: [Study!]!
+  grade_rationale: String
+  limitations: [String!]!
+}
+
+type Study {
+  study_type: StudyType!
+  sample_size: Int!
+  pmid: String
+  quality_assessment: String
+  publication_year: Int
+}
+
+type PrioritizedRecommendation {
+  recommendation: Recommendation!
+  priority: Int!
+  rationale: String!
+  alternatives: [Recommendation!]!
+  confidence_score: Int!
+  monitoring_required: Boolean!
+}
+
+type DecisionPoint {
+  decision_id: String!
+  question: String!
+  options: [PathwayOption!]!
+  default_choice: String!
+  clinical_context: String
+}
+
+type PathwayOption {
+  option_id: String!
+  description: String!
+  prerequisites: [String!]!
+  contraindications: [String!]!
+  expected_outcomes: [String!]!
+}
+
+type GuidelineComparison {
+  comparison_id: String!
+  guidelines: [Guideline!]!
+  conflicts: [GuidelineConflict!]!
+  consensus_areas: [String!]!
+  divergent_areas: [String!]!
+  overall_agreement: Int!
+}
+
+type TriggerConditions {
+  lab_thresholds: JSON
+  conditions: [String!]
+  medications: [String!]
+  age_criteria: AgeRange
+}
+
+type OverrideAction {
+  action_type: String!
+  description: String!
+  alternatives: [String!]
+}
+
+type EvidenceSummary {
+  total_studies: Int!
+  rct_count: Int!
+  overall_quality: EvidenceStrength!
+}
+
+type QualityMetrics {
+  evidence_strength_score: Int!
+  completeness_score: Int!
+  overall_quality_score: Int!
+}
+
+type PopulationCriteria {
+  age_range: AgeRange
+  conditions: [String!]!
+  exclusion_criteria: [String!]!
+}
+
+type AgeRange {
+  min_age: Int
+  max_age: Int
+}
+
+type SafetyConsideration {
+  consideration: String!
+  severity: ConflictSeverity!
+  monitoring_required: Boolean!
+}
+
+type KBReferences {
+  kb1_dosing: [String!]
+  kb2_interactions: [String!]
+  kb4_monitoring: [String!]
+}
+
+type MonitoringRequirement {
+  parameter: String!
+  frequency: String!
+  target_range: String
+  clinical_significance: String!
+}
+
+type ConflictRelationship {
+  conflict_with: String!
+  conflict_type: ConflictType!
+  resolution_status: ResolutionStatus!
+}
+
+type GuidelineVersion {
+  version_id: String!
+  guideline_id: String!
+  version: String!
+  change_type: ChangeType!
+  status: VersionStatus!
+  created_at: DateTime!
+}
+
+# =============================================================================
+# RESULT TYPES
+# =============================================================================
+
+type GuidelineSearchResult {
+  total_count: Int!
+  guidelines: [Guideline!]!
+  pagination: PaginationInfo!
+}
+
+type SafetyOverrideResult {
+  overrides: [SafetyOverride!]!
+  statistics: SafetyOverrideStatistics
+}
+
+type SafetyOverrideStatistics {
+  total_active: Int!
+  applications_24h: Int!
+  emergency_activations_24h: Int!
+}
+
+type ConflictResolutionResult {
+  resolutions: [ConflictResolution!]!
+  statistics: ConflictStatistics!
+}
+
+type ConflictStatistics {
+  total_conflicts: Int!
+  resolved_conflicts: Int!
+  resolution_rate: Float!
+}
+
+type ClinicalMetricsResult {
+  timeframe: String!
+  metrics: [ClinicalMetric!]!
+  summary: MetricsSummary!
+}
+
+type ClinicalMetric {
+  metric_name: String!
+  metric_value: Float!
+  timestamp: DateTime!
+  trend_direction: TrendDirection!
+}
+
+type MetricsSummary {
+  total_guidelines: Int!
+  active_guidelines: Int!
+  overall_health_score: Int!
+}
+
+type VersionCreationResult {
+  success: Boolean!
+  version: GuidelineVersion
+  errors: [String!]!
+}
+
+type LinkageValidationResult {
+  validated_count: Int!
+  errors: [String!]!
+}
+
+type PaginationInfo {
+  total_count: Int!
+  offset: Int!
+  limit: Int!
+  has_next_page: Boolean!
+  has_previous_page: Boolean!
+}
+
+# =============================================================================
+# INPUT TYPES
+# =============================================================================
+
+input GuidelineSearchInput {
+  query: String
+  conditions: [String!]
+  organizations: [String!]
+  regions: [Region!]
+  evidence_grades: [EvidenceGrade!]
+  status: [GuidelineStatus!]
+}
+
+input ConflictFiltersInput {
+  conflict_types: [ConflictType!]
+  severities: [ConflictSeverity!]
+  guideline_ids: [String!]
+  resolution_status: [ResolutionStatus!]
+}
+
+input ChangeRecordInput {
+  field: String!
+  old_value: JSON
+  new_value: JSON!
+  change_reason: String!
+  clinical_justification: String!
+}
+
+input SafetyOverrideInput {
+  override_id: String!
+  priority: Int!
+  condition: String!
+  description: String!
+  trigger_conditions: JSON!
+  override_action: JSON!
+  affected_guidelines: [String!]!
+}
+
+input ConflictResolutionInput {
+  resolution_rule: String!
+  winning_guideline: String
+  rationale: String!
+  patient_context: JSON
+}
+
+input OverrideActionInput {
+  action_type: String!
+  description: String!
+  alternatives: [String!]
+}
+
+input PaginationInput {
+  offset: Int = 0
+  limit: Int = 20
+  sort_by: String
+  sort_direction: SortDirection = ASC
+}
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
+enum Region {
+  US
+  EU
+  UK
+  AU
+  CA
+  Global
+  WHO
+}
+
+enum EvidenceGrade {
+  A
+  B
+  C
+  D
+  EXPERT_OPINION
+}
+
+enum StudyType {
+  RCT
+  META_ANALYSIS
+  COHORT
+  CASE_CONTROL
+  CASE_SERIES
+}
+
+enum RecommendationDomain {
+  DIAGNOSIS
+  TREATMENT
+  MONITORING
+  PREVENTION
+  PROGNOSIS
+}
+
+enum GuidelineStatus {
+  DRAFT
+  PENDING
+  ACTIVE
+  SUPERSEDED
+  WITHDRAWN
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CONDITIONAL
+}
+
+enum ChangeType {
+  MAJOR
+  MINOR
+  PATCH
+  EMERGENCY
+}
+
+enum ConflictType {
+  DIRECT_CONTRADICTION
+  EVIDENCE_DISAGREEMENT
+  POPULATION_OVERLAP
+  TARGET_DIFFERENCE
+}
+
+enum ConflictSeverity {
+  CRITICAL
+  MAJOR
+  MINOR
+}
+
+enum ResolutionStatus {
+  PENDING
+  RESOLVED
+  ESCALATED
+}
+
+enum EvidenceStrength {
+  VERY_HIGH
+  HIGH
+  MODERATE
+  LOW
+  VERY_LOW
+}
+
+enum ComplexityLevel {
+  SIMPLE
+  MODERATE
+  COMPLEX
+  VERY_COMPLEX
+}
+
+enum VersionStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  DEPLOYED
+  SUPERSEDED
+}
+
+enum MetricType {
+  GUIDELINE_CURRENCY
+  EVIDENCE_QUALITY
+  CONFLICT_RESOLUTION
+  SAFETY_OVERRIDES
+  PERFORMANCE
+}
+
+enum TrendDirection {
+  UP
+  DOWN
+  STABLE
+  VOLATILE
+}
+
+enum ImpactLevel {
+  CRITICAL
+  MAJOR
+  MINOR
+  COSMETIC
+}
+
+enum SortDirection {
+  ASC
+  DESC
+}

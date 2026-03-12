@@ -1,0 +1,256 @@
+# Enhanced Makefile for KB Services with Analytics and Governance
+# This extends the original Makefile with enhanced architecture support
+
+# Include original Makefile variables and targets
+include Makefile
+
+# Enhanced Docker Compose configurations
+ENHANCED_COMPOSE_FILE := docker-compose.enhanced.yml
+BASIC_COMPOSE_FILE := docker-compose.kb-only.yml
+
+# Enhanced service configurations
+ENHANCED_SERVICES := kb-api-gateway kb-drug-rules-enhanced kb-clinical-pathways kb-postgres-enhanced kb-redis-enhanced kb-clickhouse kb-kafka kb-zookeeper kb-prometheus kb-grafana kb-mlflow kb-elasticsearch kb-jaeger kb-adminer-enhanced kb-nginx
+ANALYTICS_SERVICES := kb-clickhouse kb-prometheus kb-grafana kb-elasticsearch
+ML_SERVICES := kb-mlflow
+MONITORING_SERVICES := kb-prometheus kb-grafana kb-jaeger
+
+# Color codes for output
+RED := \033[31m
+GREEN := \033[32m
+YELLOW := \033[33m
+BLUE := \033[34m
+MAGENTA := \033[35m
+CYAN := \033[36m
+RESET := \033[0m
+
+.PHONY: help-enhanced run-enhanced stop-enhanced logs-enhanced health-enhanced test-enhanced build-enhanced clean-enhanced setup-analytics setup-ml setup-monitoring migrate-enhanced
+
+help-enhanced: ## Show enhanced KB services help
+	@echo ""
+	@echo "$(CYAN)===============================================$(RESET)"
+	@echo "$(CYAN)    Enhanced KB Services - Management Commands$(RESET)"
+	@echo "$(CYAN)===============================================$(RESET)"
+	@echo ""
+	@echo "$(GREEN)Enhanced Architecture Commands:$(RESET)"
+	@echo "  $(YELLOW)run-enhanced$(RESET)         - Start complete enhanced architecture"
+	@echo "  $(YELLOW)stop-enhanced$(RESET)        - Stop all enhanced services"
+	@echo "  $(YELLOW)restart-enhanced$(RESET)     - Restart all enhanced services"
+	@echo "  $(YELLOW)logs-enhanced$(RESET)        - View logs from enhanced services"
+	@echo "  $(YELLOW)health-enhanced$(RESET)      - Check health of enhanced services"
+	@echo "  $(YELLOW)test-enhanced$(RESET)        - Run comprehensive tests for enhanced architecture"
+	@echo ""
+	@echo "$(GREEN)Component-Specific Commands:$(RESET)"
+	@echo "  $(YELLOW)setup-analytics$(RESET)      - Set up analytics components (ClickHouse, etc.)"
+	@echo "  $(YELLOW)setup-ml$(RESET)             - Set up ML components (MLFlow, model registry)"
+	@echo "  $(YELLOW)setup-monitoring$(RESET)     - Set up monitoring stack (Prometheus, Grafana)"
+	@echo "  $(YELLOW)migrate-enhanced$(RESET)     - Run enhanced database migrations"
+	@echo ""
+	@echo "$(GREEN)Management Commands:$(RESET)"
+	@echo "  $(YELLOW)build-enhanced$(RESET)       - Build enhanced Docker images"
+	@echo "  $(YELLOW)clean-enhanced$(RESET)       - Clean enhanced volumes and containers"
+	@echo "  $(YELLOW)backup-enhanced$(RESET)      - Backup enhanced data volumes"
+	@echo "  $(YELLOW)restore-enhanced$(RESET)     - Restore enhanced data volumes"
+	@echo ""
+	@echo "$(GREEN)Development Commands:$(RESET)"
+	@echo "  $(YELLOW)dev-enhanced$(RESET)         - Start enhanced development environment"
+	@echo "  $(YELLOW)debug-enhanced$(RESET)       - Debug enhanced services with verbose logging"
+	@echo ""
+
+run-enhanced: ## Start complete enhanced architecture
+	@echo "$(CYAN)Starting Enhanced KB Architecture...$(RESET)"
+	@echo "$(YELLOW)This will start all enhanced services including:$(RESET)"
+	@echo "  - API Gateway (GraphQL Federation)"
+	@echo "  - TimescaleDB with PostgreSQL"
+	@echo "  - ClickHouse Analytics"
+	@echo "  - Kafka Event Streaming"
+	@echo "  - ML Model Registry (MLFlow)"
+	@echo "  - Monitoring Stack (Prometheus + Grafana)"
+	@echo "  - Distributed Tracing (Jaeger)"
+	@echo "  - Search Engine (Elasticsearch)"
+	@echo ""
+	@read -p "Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		docker-compose -f $(ENHANCED_COMPOSE_FILE) up -d; \
+		echo "$(GREEN)✓ Enhanced architecture started successfully$(RESET)"; \
+		echo ""; \
+		echo "$(CYAN)Service URLs:$(RESET)"; \
+		echo "  API Gateway:     $(YELLOW)http://localhost:4000/graphql$(RESET)"; \
+		echo "  ClickHouse:      $(YELLOW)http://localhost:8123$(RESET)"; \
+		echo "  Grafana:         $(YELLOW)http://localhost:3000$(RESET) (admin/kb_grafana_admin)"; \
+		echo "  Prometheus:      $(YELLOW)http://localhost:9090$(RESET)"; \
+		echo "  MLFlow:          $(YELLOW)http://localhost:5000$(RESET)"; \
+		echo "  Elasticsearch:   $(YELLOW)http://localhost:9200$(RESET)"; \
+		echo "  Jaeger:          $(YELLOW)http://localhost:16686$(RESET)"; \
+		echo "  Adminer:         $(YELLOW)http://localhost:8082$(RESET)"; \
+		echo "  Redis Insight:   $(YELLOW)http://localhost:8001$(RESET)"; \
+		echo ""; \
+		make health-enhanced; \
+	else \
+		echo "$(RED)Cancelled$(RESET)"; \
+	fi
+
+stop-enhanced: ## Stop all enhanced services
+	@echo "$(YELLOW)Stopping Enhanced KB Architecture...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) down
+	@echo "$(GREEN)✓ Enhanced architecture stopped$(RESET)"
+
+restart-enhanced: stop-enhanced run-enhanced ## Restart all enhanced services
+
+logs-enhanced: ## View logs from enhanced services
+	@echo "$(CYAN)Enhanced Services Logs (Ctrl+C to exit):$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) logs -f --tail=100
+
+logs-enhanced-service: ## View logs for specific enhanced service (usage: make logs-enhanced-service SERVICE=kb-api-gateway)
+	@if [ -z "$(SERVICE)" ]; then \
+		echo "$(RED)Error: Please specify SERVICE parameter$(RESET)"; \
+		echo "$(YELLOW)Usage: make logs-enhanced-service SERVICE=kb-api-gateway$(RESET)"; \
+		echo "$(YELLOW)Available services: $(ENHANCED_SERVICES)$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(CYAN)Logs for $(SERVICE):$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) logs -f --tail=100 $(SERVICE)
+
+health-enhanced: ## Check health of enhanced services
+	@echo "$(CYAN)Enhanced Services Health Check:$(RESET)"
+	@echo ""
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) ps --format "table {{.Name}}\t{{.State}}\t{{.Status}}\t{{.Ports}}"
+	@echo ""
+	@echo "$(CYAN)Testing Service Endpoints:$(RESET)"
+	@echo -n "  API Gateway (GraphQL):     "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/health && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  KB Drug Rules:             "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/health && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  KB Clinical Pathways:      "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:8084/health && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  ClickHouse:                "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:8123/ping && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  Prometheus:                "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/-/healthy && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  Grafana:                   "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  MLFlow:                    "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/health && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  Elasticsearch:             "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:9200/_cluster/health && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+	@echo -n "  Jaeger:                    "
+	@curl -s -o /dev/null -w "%{http_code}" http://localhost:16686/ && echo " $(GREEN)✓$(RESET)" || echo " $(RED)✗$(RESET)"
+
+test-enhanced: ## Run comprehensive tests for enhanced architecture
+	@echo "$(CYAN)Running Enhanced Architecture Tests...$(RESET)"
+	@echo ""
+	@echo "$(YELLOW)1. Testing Database Migrations...$(RESET)"
+	@make migrate-enhanced
+	@echo ""
+	@echo "$(YELLOW)2. Testing GraphQL Federation...$(RESET)"
+	@curl -X POST http://localhost:4000/graphql \
+		-H "Content-Type: application/json" \
+		-d '{"query": "query { __schema { types { name } } }"}'
+	@echo ""
+	@echo "$(YELLOW)3. Testing Analytics Pipeline...$(RESET)"
+	@echo "SELECT 1 as test" | curl -X POST 'http://localhost:8123/' --data-binary @-
+	@echo ""
+	@echo "$(YELLOW)4. Testing ML Model Registry...$(RESET)"
+	@curl -X GET http://localhost:5000/api/2.0/mlflow/experiments/list
+	@echo ""
+	@echo "$(GREEN)✓ Enhanced architecture tests completed$(RESET)"
+
+build-enhanced: ## Build enhanced Docker images
+	@echo "$(CYAN)Building Enhanced Docker Images...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) build --parallel
+	@echo "$(GREEN)✓ Enhanced images built successfully$(RESET)"
+
+setup-analytics: ## Set up analytics components
+	@echo "$(CYAN)Setting up Analytics Components...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) up -d $(ANALYTICS_SERVICES)
+	@echo "$(YELLOW)Waiting for ClickHouse to be ready...$(RESET)"
+	@sleep 30
+	@echo "$(YELLOW)Initializing ClickHouse schemas...$(RESET)"
+	@docker exec -it kb-clickhouse clickhouse-client --query "SHOW DATABASES"
+	@echo "$(GREEN)✓ Analytics components ready$(RESET)"
+
+setup-ml: ## Set up ML components
+	@echo "$(CYAN)Setting up ML Components...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) up -d $(ML_SERVICES)
+	@echo "$(YELLOW)Waiting for MLFlow to be ready...$(RESET)"
+	@sleep 45
+	@echo "$(GREEN)✓ ML components ready$(RESET)"
+	@echo "$(YELLOW)MLFlow UI: http://localhost:5000$(RESET)"
+
+setup-monitoring: ## Set up monitoring stack
+	@echo "$(CYAN)Setting up Monitoring Stack...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) up -d $(MONITORING_SERVICES)
+	@echo "$(YELLOW)Waiting for monitoring services to be ready...$(RESET)"
+	@sleep 60
+	@echo "$(GREEN)✓ Monitoring stack ready$(RESET)"
+	@echo "$(YELLOW)Prometheus: http://localhost:9090$(RESET)"
+	@echo "$(YELLOW)Grafana:    http://localhost:3000 (admin/kb_grafana_admin)$(RESET)"
+	@echo "$(YELLOW)Jaeger:     http://localhost:16686$(RESET)"
+
+migrate-enhanced: ## Run enhanced database migrations
+	@echo "$(CYAN)Running Enhanced Database Migrations...$(RESET)"
+	@echo "$(YELLOW)Applying enhanced schema migrations...$(RESET)"
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/013_version_management.sql || true
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/014_enhanced_evidence_envelope.sql || true
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/015_safety_signals_unified.sql || true
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/016_kb_conflict_detection.sql || true
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/017_kb_dependency_tracking.sql || true
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/018_ml_audit_framework.sql || true
+	@docker exec -i kb-postgres-enhanced psql -U postgres -d postgres -f /docker-entrypoint-initdb.d/migrations/019_automated_governance_workflows.sql || true
+	@echo "$(GREEN)✓ Enhanced migrations completed$(RESET)"
+
+clean-enhanced: ## Clean enhanced volumes and containers
+	@echo "$(YELLOW)Cleaning Enhanced KB Architecture...$(RESET)"
+	@read -p "This will remove all data volumes. Continue? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		docker-compose -f $(ENHANCED_COMPOSE_FILE) down -v --remove-orphans; \
+		docker system prune -f; \
+		echo "$(GREEN)✓ Enhanced architecture cleaned$(RESET)"; \
+	else \
+		echo "$(RED)Cancelled$(RESET)"; \
+	fi
+
+backup-enhanced: ## Backup enhanced data volumes
+	@echo "$(CYAN)Backing up Enhanced Data Volumes...$(RESET)"
+	@mkdir -p backups/$(shell date +%Y%m%d_%H%M%S)
+	@docker run --rm -v kb_postgres_enhanced_data:/data -v $(PWD)/backups:/backup alpine tar czf /backup/$(shell date +%Y%m%d_%H%M%S)/postgres_enhanced_data.tar.gz -C /data .
+	@docker run --rm -v kb_clickhouse_data:/data -v $(PWD)/backups:/backup alpine tar czf /backup/$(shell date +%Y%m%d_%H%M%S)/clickhouse_data.tar.gz -C /data .
+	@docker run --rm -v kb_mlflow_artifacts:/data -v $(PWD)/backups:/backup alpine tar czf /backup/$(shell date +%Y%m%d_%H%M%S)/mlflow_artifacts.tar.gz -C /data .
+	@echo "$(GREEN)✓ Enhanced data backed up to backups/$(shell date +%Y%m%d_%H%M%S)$(RESET)"
+
+restore-enhanced: ## Restore enhanced data volumes (usage: make restore-enhanced BACKUP_DIR=20240115_143000)
+	@if [ -z "$(BACKUP_DIR)" ]; then \
+		echo "$(RED)Error: Please specify BACKUP_DIR parameter$(RESET)"; \
+		echo "$(YELLOW)Usage: make restore-enhanced BACKUP_DIR=20240115_143000$(RESET)"; \
+		exit 1; \
+	fi
+	@echo "$(YELLOW)Restoring Enhanced Data from backups/$(BACKUP_DIR)...$(RESET)"
+	@docker run --rm -v kb_postgres_enhanced_data:/data -v $(PWD)/backups:/backup alpine tar xzf /backup/$(BACKUP_DIR)/postgres_enhanced_data.tar.gz -C /data
+	@docker run --rm -v kb_clickhouse_data:/data -v $(PWD)/backups:/backup alpine tar xzf /backup/$(BACKUP_DIR)/clickhouse_data.tar.gz -C /data
+	@docker run --rm -v kb_mlflow_artifacts:/data -v $(PWD)/backups:/backup alpine tar xzf /backup/$(BACKUP_DIR)/mlflow_artifacts.tar.gz -C /data
+	@echo "$(GREEN)✓ Enhanced data restored from backups/$(BACKUP_DIR)$(RESET)"
+
+dev-enhanced: ## Start enhanced development environment
+	@echo "$(CYAN)Starting Enhanced Development Environment...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) -f docker-compose.dev.yml up -d
+	@echo "$(GREEN)✓ Enhanced development environment started$(RESET)"
+	@make health-enhanced
+
+debug-enhanced: ## Debug enhanced services with verbose logging
+	@echo "$(CYAN)Starting Enhanced Services in Debug Mode...$(RESET)"
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) up --build
+
+status-enhanced: ## Show detailed status of enhanced services
+	@echo "$(CYAN)Enhanced Services Status:$(RESET)"
+	@echo ""
+	@docker-compose -f $(ENHANCED_COMPOSE_FILE) ps
+	@echo ""
+	@echo "$(CYAN)Resource Usage:$(RESET)"
+	@docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
+
+# Integration with original Makefile
+enhanced: run-enhanced ## Alias for run-enhanced
+
+# Make enhanced commands available in help
+help: help-enhanced

@@ -1,0 +1,210 @@
+# P06 HTN Visual Disturbance - HPI Node Definition
+# Bayesian differential for visual disturbance in hypertensive patients.
+# Triggered by: patient self-report OR cross-node trigger from P05_HTN_HEADACHE.
+# Output: posterior probability of hypertensive retinopathy -> feeds KB-23 decision cards.
+
+node_id: P06_HTN_VISUAL
+version: "1.0"
+description: "Visual disturbance differential in hypertensive cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Safety classification
+safety_criticality: HIGH
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_HTN_2023_RETINOPATHY; AAO_DIABETIC_RETINOPATHY_2020"
+
+# Differentials with per-stratum priors (F-05)
+# Visual + severe headache = urgency until proven otherwise.
+differentials:
+  - id: HYPERTENSIVE_RETINOPATHY
+    label: "Hypertensive Retinopathy"
+    population_reference: "Wong TY, NEJM 2004; ESC HTN Guidelines 2023"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.30
+      DM_HTN_CKD: 0.35
+    conditional_priors:
+      - condition: "bp_status == SEVERE"
+        override: 0.40
+      - condition: "bp_status == AT_TARGET"
+        override: 0.10
+
+  - id: HYPOGLYCAEMIC_VISUAL
+    label: "Hypoglycaemic Visual Change"
+    population_reference: "ADA Standards of Care 2024; Cryer PE, JCEM 2009"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.20
+
+  - id: DIABETIC_RETINOPATHY
+    label: "Diabetic Retinopathy"
+    population_reference: "AAO Diabetic Retinopathy PPP 2020; NICE NG28"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.20
+      DM_HTN_CKD: 0.25
+
+  - id: MIGRAINE_AURA
+    label: "Migraine Aura (Visual)"
+    population_reference: "IHS ICHD-3 Classification 2018"
+    priors:
+      DM_ONLY: 0.20
+      DM_HTN: 0.15
+      DM_HTN_CKD: 0.10
+
+# Enrichment fields pulled from KB-20 patient profile
+enrichment_fields:
+  - bp_status
+  - hba1c_latest
+  - last_fundoscopy_date
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Is your vision blurred (like looking through fog) or do you see flashing lights / floaters?"
+    text_hi: "क्या आपकी दृष्टि धुंधली है (जैसे कोहरे में देखना) या आपको चमकती रोशनी / तैरते हुए धब्बे दिखते हैं?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "BLURRED"
+        label_en: "Blurred / hazy vision"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 2.5
+          HYPOGLYCAEMIC_VISUAL: 2.0
+          DIABETIC_RETINOPATHY: 2.2
+          MIGRAINE_AURA: 0.5
+      - value: "FLASHING_FLOATERS"
+        label_en: "Flashing lights or floaters"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 1.5
+          HYPOGLYCAEMIC_VISUAL: 0.4
+          DIABETIC_RETINOPATHY: 1.8
+          MIGRAINE_AURA: 3.5
+      - value: "BOTH"
+        label_en: "Both blurred and flashing"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 3.0
+          HYPOGLYCAEMIC_VISUAL: 0.8
+          DIABETIC_RETINOPATHY: 2.0
+          MIGRAINE_AURA: 2.0
+
+  - question_id: Q02
+    text_en: "Did the visual change come on suddenly (within minutes) or gradually (over days/weeks)?"
+    text_hi: "क्या दृष्टि में बदलाव अचानक (मिनटों में) आया या धीरे-धीरे (दिनों/हफ्तों में) आया?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "SUDDEN"
+        label_en: "Sudden onset (minutes)"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 3.0
+          HYPOGLYCAEMIC_VISUAL: 3.5
+          DIABETIC_RETINOPATHY: 0.4
+          MIGRAINE_AURA: 2.5
+      - value: "GRADUAL"
+        label_en: "Gradual onset (days to weeks)"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 0.8
+          HYPOGLYCAEMIC_VISUAL: 0.3
+          DIABETIC_RETINOPATHY: 3.0
+          MIGRAINE_AURA: 0.5
+
+  - question_id: Q03
+    text_en: "Is the visual change in both eyes or only one eye?"
+    text_hi: "क्या दृष्टि में बदलाव दोनों आंखों में है या सिर्फ एक आंख में?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "BILATERAL"
+        label_en: "Both eyes"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 2.0
+          HYPOGLYCAEMIC_VISUAL: 2.5
+          DIABETIC_RETINOPATHY: 1.5
+          MIGRAINE_AURA: 1.8
+      - value: "UNILATERAL"
+        label_en: "One eye only"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 1.2
+          HYPOGLYCAEMIC_VISUAL: 0.3
+          DIABETIC_RETINOPATHY: 1.5
+          MIGRAINE_AURA: 1.5
+
+  - question_id: Q04
+    text_en: "Do you have a headache along with the visual change?"
+    text_hi: "क्या दृष्टि में बदलाव के साथ सिरदर्द भी है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_SEVERE_HEADACHE"
+        label_en: "Yes, severe headache"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 4.0
+          HYPOGLYCAEMIC_VISUAL: 0.8
+          DIABETIC_RETINOPATHY: 0.5
+          MIGRAINE_AURA: 3.0
+      - value: "YES_MILD_HEADACHE"
+        label_en: "Yes, mild headache"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 1.5
+          HYPOGLYCAEMIC_VISUAL: 1.0
+          DIABETIC_RETINOPATHY: 0.8
+          MIGRAINE_AURA: 2.0
+      - value: "NO_HEADACHE"
+        label_en: "No headache"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 0.5
+          HYPOGLYCAEMIC_VISUAL: 1.2
+          DIABETIC_RETINOPATHY: 1.5
+          MIGRAINE_AURA: 0.4
+
+  - question_id: Q05
+    text_en: "Was your blood pressure checked during or around the time of the visual disturbance? If so, was it elevated?"
+    text_hi: "क्या दृष्टि में बदलाव के दौरान या उसके आसपास आपका रक्तचाप जांचा गया? यदि हां, तो क्या यह बढ़ा हुआ था?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_ELEVATED"
+        label_en: "Yes, BP was elevated (>180/120)"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 5.0
+          HYPOGLYCAEMIC_VISUAL: 0.5
+          DIABETIC_RETINOPATHY: 0.8
+          MIGRAINE_AURA: 0.6
+      - value: "YES_NORMAL"
+        label_en: "Yes, BP was normal"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 0.2
+          HYPOGLYCAEMIC_VISUAL: 1.5
+          DIABETIC_RETINOPATHY: 1.2
+          MIGRAINE_AURA: 1.5
+      - value: "NOT_CHECKED"
+        label_en: "BP was not checked"
+        likelihood_ratios:
+          HYPERTENSIVE_RETINOPATHY: 1.0
+          HYPOGLYCAEMIC_VISUAL: 1.0
+          DIABETIC_RETINOPATHY: 1.0
+          MIGRAINE_AURA: 1.0
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_RETINOPATHY_URGENCY_ALERT"
+    description: "Posterior > 0.70 for hypertensive retinopathy -> urgent BP control required. Generate emergency decision card via KB-23. Refer for fundoscopy within 24 hours."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Obtain BP reading. Schedule ophthalmology review. Check HbA1c if diabetic retinopathy suspected."
+  - threshold: 0.30
+    action: "INVESTIGATE_ALTERNATIVES"
+    description: "Low retinopathy probability. Investigate hypoglycaemia (capillary glucose), diabetic retinopathy (fundoscopy due date), or migraine aura (history, triggers)."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "HYPERTENSIVE_RETINOPATHY posterior > 0.50 AND headache_present == YES"
+    trigger_node: "P05_HTN_HEADACHE"
+    rationale: "Hypertensive retinopathy with headache warrants HTN urgency headache assessment."
+  - condition: "HYPOGLYCAEMIC_VISUAL posterior > 0.40"
+    trigger_node: "P08_HTN_ORTHOSTATIC"
+    rationale: "Hypoglycaemic visual change may co-present with orthostatic symptoms; check dizziness pathway."

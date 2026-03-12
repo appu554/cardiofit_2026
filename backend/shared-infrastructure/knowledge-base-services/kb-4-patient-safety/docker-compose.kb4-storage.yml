@@ -1,0 +1,171 @@
+version: '3.8'
+
+services:
+  # TimescaleDB for KB-4 Patient Safety (PostgreSQL with time-series extensions)
+  kb4-timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: kb4-patient-safety-timescaledb
+    environment:
+      - POSTGRES_USER=kb4_safety_user
+      - POSTGRES_PASSWORD=kb4_safety_password
+      - POSTGRES_DB=kb4_patient_safety
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5434:5432"  # Different port to avoid conflicts
+    volumes:
+      - kb4_timescaledb_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb4_safety_user -d kb4_patient_safety"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - kb4-safety-network
+    command: >
+      postgres
+      -c shared_preload_libraries=timescaledb
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=32MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=16MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+
+  # Redis for KB-4 caching and real-time alerts
+  kb4-redis:
+    image: redis:7-alpine
+    container_name: kb4-patient-safety-redis
+    command: redis-server --appendonly yes --maxmemory 1GB --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"  # Different port for KB-4
+    volumes:
+      - kb4_redis_data:/data
+    networks:
+      - kb4-safety-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # InfluxDB for time-series metrics and monitoring
+  kb4-influxdb:
+    image: influxdb:2.7-alpine
+    container_name: kb4-patient-safety-influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=kb4admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=kb4_influx_password
+      - DOCKER_INFLUXDB_INIT_ORG=clinical-safety
+      - DOCKER_INFLUXDB_INIT_BUCKET=safety-metrics
+      - DOCKER_INFLUXDB_INIT_RETENTION=30d
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=kb4-safety-monitoring-token-2025
+    ports:
+      - "8086:8086"
+    volumes:
+      - kb4_influxdb_data:/var/lib/influxdb2
+      - kb4_influxdb_config:/etc/influxdb2
+    networks:
+      - kb4-safety-network
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Grafana for safety monitoring dashboards
+  kb4-grafana:
+    image: grafana/grafana:latest
+    container_name: kb4-patient-safety-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=kb4_grafana_admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+    ports:
+      - "3001:3000"  # Different port to avoid conflicts
+    volumes:
+      - kb4_grafana_data:/var/lib/grafana
+      - kb4_grafana_config:/etc/grafana
+    networks:
+      - kb4-safety-network
+    depends_on:
+      - kb4-influxdb
+    restart: unless-stopped
+
+  # Kafka for real-time safety event streaming
+  kb4-kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kb4-patient-safety-kafka
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: kb4-zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093,PLAINTEXT_INTERNAL://kb4-kafka:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    ports:
+      - "9093:9093"
+    volumes:
+      - kb4_kafka_data:/var/lib/kafka/data
+    networks:
+      - kb4-safety-network
+    depends_on:
+      - kb4-zookeeper
+    restart: unless-stopped
+
+  # Zookeeper for Kafka coordination
+  kb4-zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: kb4-patient-safety-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2182:2181"  # Different port to avoid conflicts
+    volumes:
+      - kb4_zookeeper_data:/var/lib/zookeeper/data
+      - kb4_zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - kb4-safety-network
+    restart: unless-stopped
+
+volumes:
+  kb4_timescaledb_data:
+    driver: local
+  kb4_redis_data:
+    driver: local
+  kb4_influxdb_data:
+    driver: local
+  kb4_influxdb_config:
+    driver: local
+  kb4_grafana_data:
+    driver: local
+  kb4_grafana_config:
+    driver: local
+  kb4_kafka_data:
+    driver: local
+  kb4_zookeeper_data:
+    driver: local
+  kb4_zookeeper_logs:
+    driver: local
+
+networks:
+  kb4-safety-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.26.0.0/16

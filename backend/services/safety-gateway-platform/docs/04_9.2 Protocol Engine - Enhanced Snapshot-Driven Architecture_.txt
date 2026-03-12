@@ -1,0 +1,498 @@
+﻿Excellent observation! While I included snapshot references in the Protocol Engine design, I should strengthen the integration to match the rigorous snapshot-driven architecture from the CAE. Let me provide the enhanced snapshot-aware design for the Protocol Engine:
+
+
+# Protocol Engine - Enhanced Snapshot-Driven Architecture
+
+
+## 1. Core Snapshot Integration (Matching CAE Pattern)
+
+
+### 1.1 Snapshot-First Evaluation Pipeline
+
+
+```typescript
+class ProtocolEngine {
+  private snapshotManager: SnapshotManager;  // Shared with CAE
+  private contextGateway: ContextGatewayClient;
+  
+  async evaluate(
+    proposedAction: ClinicalAction,
+    patientContext: PatientContext,
+    snapshotId: string  // PRIMARY input - not optional
+  ): Promise<ProtocolResult> {
+    
+    // Step 1: Validate and retrieve snapshot (EXACTLY like CAE)
+    const snapshot = await this.snapshotManager.getSnapshot(snapshotId);
+    if (!snapshot.isValid()) {
+      throw new InvalidSnapshotError(snapshot.validationErrors);
+    }
+    
+    // Step 2: Resolve BOTH KB versions AND Protocol versions from snapshot
+    const versions = await this.contextGateway.resolveVersions(snapshotId);
+    const protocolVersions = versions.protocols; // NEW: protocols in snapshot
+    const kbVersions = versions.kbs;
+    
+    // Step 3: Create evaluation context with locked versions
+    const evalContext = new ProtocolEvaluationContext({
+      snapshot,
+      kbVersions,
+      protocolVersions,  // Protocols are versioned in snapshot
+      proposedAction,
+      patientContext
+    });
+    
+    // Step 4: Load protocols from snapshot-pinned versions
+    const applicableProtocols = await this.loadProtocolsForSnapshot(
+      evalContext.protocolVersions,
+      evalContext
+    );
+    
+    // Step 5: Run protocols with deterministic context
+    const protocolResults = await this.runProtocols(
+      applicableProtocols,
+      evalContext
+    );
+    
+    // Step 6: Generate explanations with snapshot provenance
+    return this.aggregateResults(protocolResults, evalContext);
+  }
+}
+```
+
+
+### 1.2 Enhanced Snapshot Manifest (Including Protocols)
+
+
+```typescript
+interface EnhancedSnapshotManifest {
+  snapshot_id: string;
+  created_at: Date;
+  
+  // KB versions (same as CAE)
+  kb_versions: {
+    kb1_dosing: VersionInfo;
+    kb3_guidelines: VersionInfo;
+    kb4_safety: VersionInfo;
+    kb5_ddi: VersionInfo;
+    kb7_terminology: VersionInfo;
+    kbGraphInsights?: VersionInfo;
+  };
+  
+  // NEW: Protocol versions included in snapshot
+  protocol_versions: {
+    'sepsis-bundle': VersionInfo;
+    'vte-prophylaxis': VersionInfo;
+    'formulary-compliance': VersionInfo;
+    'high-alert-medication': VersionInfo;
+    // ... all active protocols
+  };
+  
+  // NEW: Protocol state snapshots for active pathways
+  protocol_states?: {
+    [patientId: string]: {
+      [protocolId: string]: {
+        state: string;
+        version: string;
+        lastTransition: Date;
+        checksum: string;
+      }
+    }
+  };
+  
+  checksum: string;
+  signature: DigitalSignature;
+}
+```
+
+
+## 2. Snapshot-Aware Protocol Components
+
+
+### 2.1 Protocol Repository with Snapshot Support
+
+
+```typescript
+class SnapshotAwareProtocolRepository {
+  private cache: SnapshotAwareCache;
+  
+  async getProtocol(
+    protocolId: string,
+    version: string,
+    snapshotId: string  // Always required
+  ): Promise<Protocol> {
+    // Cache key includes snapshot
+    const cacheKey = `${snapshotId}:${protocolId}:${version}`;
+    
+    const cached = await this.cache.get(cacheKey);
+    if (cached) return cached;
+    
+    // Load specific version as defined in snapshot
+    const protocol = await this.loadProtocolVersion(protocolId, version);
+    
+    // Validate protocol integrity
+    if (!this.validateChecksum(protocol, version)) {
+      throw new ProtocolIntegrityError(protocolId, version, snapshotId);
+    }
+    
+    // Cache with snapshot-aware TTL
+    await this.cache.set(cacheKey, protocol, {
+      ttl: this.getSnapshotAwareTTL(snapshotId)
+    });
+    
+    return protocol;
+  }
+  
+  async loadProtocolsForSnapshot(
+    protocolVersions: Map<string, string>,
+    context: ProtocolEvaluationContext
+  ): Promise<Protocol[]> {
+    const protocols = [];
+    
+    for (const [protocolId, version] of protocolVersions) {
+      // Check if protocol applies to this context
+      if (await this.isApplicable(protocolId, context)) {
+        const protocol = await this.getProtocol(
+          protocolId,
+          version,
+          context.snapshot.id
+        );
+        protocols.push(protocol);
+      }
+    }
+    
+    return protocols;
+  }
+}
+```
+
+
+### 2.2 Snapshot-Aware Rule Engine
+
+
+```typescript
+class SnapshotAwareClinicalRuleEngine {
+  private kbGateway: KBAccessGateway;
+  
+  async evaluateRule(
+    rule: ProtocolRule,
+    context: ProtocolEvaluationContext
+  ): Promise<RuleResult> {
+    // All KB queries include snapshot context
+    const facts = await this.prepareFacts(rule, context);
+    
+    // Rule evaluation bound to snapshot
+    const result = await this.executeRule(rule, facts);
+    
+    // Add snapshot provenance to result
+    result.provenance = {
+      snapshotId: context.snapshot.id,
+      ruleVersion: rule.version,
+      kbVersions: context.kbVersions,
+      protocolVersion: context.protocolVersions[rule.protocolId],
+      evaluatedAt: new Date()
+    };
+    
+    return result;
+  }
+  
+  private async prepareFacts(
+    rule: ProtocolRule,
+    context: ProtocolEvaluationContext
+  ): Promise<FactBase> {
+    const facts: FactBase = {
+      // Patient data from snapshot
+      patient: context.snapshot.data.patient,
+      
+      // Current medications from snapshot
+      medications: context.snapshot.data.current_medications,
+      
+      // Lab values from snapshot
+      labs: context.snapshot.data.lab_values,
+      
+      // Problems from snapshot
+      problems: context.snapshot.data.active_problems
+    };
+    
+    // Enhance with KB lookups (snapshot-aware)
+    if (rule.requiresKBLookup) {
+      for (const kbRequirement of rule.kbRequirements) {
+        const kbData = await this.kbGateway.query(
+          kbRequirement.kb,
+          kbRequirement.operation,
+          kbRequirement.params,
+          context.snapshot.id  // Always pass snapshot
+        );
+        facts.kbData[kbRequirement.name] = kbData;
+      }
+    }
+    
+    return facts;
+  }
+}
+```
+
+
+## 3. Stateful Protocols with Snapshot Continuity
+
+
+### 3.1 Snapshot-Aware State Management
+
+
+```typescript
+class SnapshotAwareProtocolStateManager {
+  private stateStore: StateStore;
+  private snapshotManager: SnapshotManager;
+  
+  async getProtocolState(
+    patientId: string,
+    protocolId: string,
+    snapshotId: string
+  ): Promise<ProtocolState> {
+    // State retrieval is snapshot-aware
+    const snapshot = await this.snapshotManager.getSnapshot(snapshotId);
+    
+    // Check if state exists in this snapshot
+    if (snapshot.protocol_states?.[patientId]?.[protocolId]) {
+      // Use snapshot's view of state
+      return this.hydrateState(
+        snapshot.protocol_states[patientId][protocolId],
+        snapshotId
+      );
+    }
+    
+    // Load latest state and validate against snapshot
+    const currentState = await this.stateStore.load(patientId, protocolId);
+    
+    if (currentState) {
+      // Validate state is compatible with snapshot
+      await this.validateStateSnapshot(currentState, snapshot);
+    }
+    
+    return currentState || this.initializeState(patientId, protocolId, snapshotId);
+  }
+  
+  async transitionState(
+    state: ProtocolState,
+    event: ProtocolEvent,
+    context: ProtocolEvaluationContext
+  ): Promise<ProtocolState> {
+    // State transitions must preserve snapshot lineage
+    const newState = {
+      ...state,
+      previousSnapshotId: state.snapshotId,
+      snapshotId: context.snapshot.id,
+      transitions: [
+        ...state.transitions,
+        {
+          from: state.currentState,
+          to: event.targetState,
+          event: event.type,
+          snapshotId: context.snapshot.id,
+          timestamp: new Date(),
+          evidence: this.captureTransitionEvidence(context)
+        }
+      ]
+    };
+    
+    // Validate transition is legal in this snapshot's protocol version
+    const protocol = await this.getProtocol(
+      state.protocolId,
+      context.protocolVersions[state.protocolId],
+      context.snapshot.id
+    );
+    
+    if (!this.isValidTransition(state, newState, protocol)) {
+      throw new InvalidStateTransitionError(state, newState, context.snapshot.id);
+    }
+    
+    // Persist with snapshot reference
+    await this.stateStore.save(newState);
+    
+    return newState;
+  }
+}
+```
+
+
+### 3.2 Temporal Constraints with Snapshot Time
+
+
+```typescript
+class SnapshotAwareTemporalEngine {
+  async evaluateTemporalConstraint(
+    constraint: TemporalConstraint,
+    context: ProtocolEvaluationContext
+  ): Promise<TemporalResult> {
+    // Use snapshot creation time as reference point
+    const referenceTime = context.snapshot.createdAt;
+    
+    // Get relevant temporal data from snapshot
+    const temporalFacts = {
+      medicationHistory: context.snapshot.data.medication_history,
+      procedureSchedule: context.snapshot.data.scheduled_procedures,
+      protocolStartTimes: context.snapshot.data.protocol_start_times
+    };
+    
+    // Evaluate constraint relative to snapshot time
+    const result = await this.evaluate(constraint, temporalFacts, referenceTime);
+    
+    // Add temporal provenance
+    result.temporalContext = {
+      snapshotTime: referenceTime,
+      evaluationTime: new Date(),
+      timeDrift: Date.now() - referenceTime.getTime(),
+      snapshotAge: this.calculateSnapshotAge(context.snapshot)
+    };
+    
+    // Warn if snapshot is too old for temporal constraint
+    if (this.isSnapshotTooOld(context.snapshot, constraint)) {
+      result.warnings.push({
+        type: 'STALE_SNAPSHOT',
+        message: `Snapshot age (${result.temporalContext.snapshotAge}ms) exceeds constraint window`,
+        recommendation: 'Request fresh snapshot for temporal-critical decisions'
+      });
+    }
+    
+    return result;
+  }
+}
+```
+
+
+## 4. Integration with Snapshot-Driven CAE
+
+
+### 4.1 Coordinated Evaluation with Same Snapshot
+
+
+```typescript
+class CoordinatedSafetyEvaluation {
+  async evaluate(
+    proposal: MedicationProposal,
+    snapshotId: string  // Single snapshot for both engines
+  ): Promise<CombinedSafetyResult> {
+    // Both engines use SAME snapshot
+    const [caeResult, protocolResult] = await Promise.all([
+      this.cae.evaluate(
+        proposal.action,
+        proposal.patientContext,
+        snapshotId  // Same snapshot
+      ),
+      this.protocolEngine.evaluate(
+        proposal.action,
+        proposal.patientContext,
+        snapshotId  // Same snapshot
+      )
+    ]);
+    
+    // Results are directly comparable - same snapshot context
+    return this.mergeResults(caeResult, protocolResult, snapshotId);
+  }
+}
+```
+
+
+## 5. Testing with Snapshot Fixtures
+
+
+### 5.1 Protocol Test Cases with Required Snapshot
+
+
+```yaml
+test_suite: "protocol-snapshot-validation"
+# Snapshot is REQUIRED, not optional
+snapshot_id: "test-snapshot-2025-09-03T10:00:00Z"
+
+
+# Snapshot must contain these protocol versions
+required_protocol_versions:
+  sepsis-bundle: "2.1.0"
+  formulary-compliance: "1.5.0"
+
+
+test_cases:
+  - id: "protocol-version-enforcement"
+    description: "Ensure protocol evaluation uses snapshot-pinned version"
+    given:
+      snapshot_overrides:
+        protocol_versions:
+          sepsis-bundle: "2.0.0"  # Older version in snapshot
+    when:
+      evaluate_protocol: "sepsis-bundle"
+    then:
+      # Should use 2.0.0 logic, not latest
+      protocol_version_used: "2.0.0"
+      provenance:
+        snapshotId: "{{snapshot_id}}"
+        protocol_version: "2.0.0"
+```
+
+
+### 5.2 Snapshot Continuity Testing
+
+
+```typescript
+@Test
+async testProtocolStateSnapshotContinuity() {
+  // Create initial snapshot
+  const snapshot1 = await createTestSnapshot('snap-1');
+  
+  // Start protocol with snapshot1
+  const initialState = await protocolEngine.initializeProtocol(
+    'sepsis-bundle',
+    patientId,
+    snapshot1.id
+  );
+  
+  expect(initialState.snapshotId).toBe(snapshot1.id);
+  
+  // Create new snapshot (simulating time passage)
+  const snapshot2 = await createTestSnapshot('snap-2');
+  
+  // Transition state with new snapshot
+  const transitionedState = await protocolEngine.transitionState(
+    initialState,
+    { type: 'ANTIBIOTICS_GIVEN' },
+    snapshot2.id
+  );
+  
+  // Verify snapshot lineage preserved
+  expect(transitionedState.previousSnapshotId).toBe(snapshot1.id);
+  expect(transitionedState.snapshotId).toBe(snapshot2.id);
+  expect(transitionedState.transitions[0].snapshotId).toBe(snapshot2.id);
+}
+```
+
+
+## 6. Key Differences from Original Design
+
+
+### 6.1 What's Enhanced
+
+
+1. **Protocols in Snapshots**: Protocol versions are part of snapshot manifest
+2. **State Snapshot Continuity**: Protocol states track snapshot lineage
+3. **Temporal Reference**: All time calculations relative to snapshot time
+4. **Deterministic Protocol Loading**: Protocols loaded by snapshot-defined versions
+5. **Cache Keys**: All cache keys include snapshotId
+6. **Test Requirements**: Tests MUST specify snapshot_id
+
+
+### 6.2 Operational Impact
+
+
+```typescript
+// Before: Protocol version could change mid-evaluation
+const protocol = await loadProtocol('sepsis-bundle'); // Latest version
+
+
+// After: Protocol version locked by snapshot
+const protocol = await loadProtocol(
+  'sepsis-bundle',
+  context.protocolVersions['sepsis-bundle'],  // Snapshot-pinned version
+  context.snapshot.id
+);
+```
+
+
+This ensures the Protocol Engine has the same level of determinism and reproducibility as the CAE, with every decision traceable to a specific snapshot state.

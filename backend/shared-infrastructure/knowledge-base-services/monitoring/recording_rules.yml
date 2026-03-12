@@ -1,0 +1,308 @@
+# Recording Rules for Efficient KB Services Monitoring
+groups:
+  # Service Level Indicators (SLIs)
+  - name: kb_sli_rules
+    interval: 30s
+    rules:
+      # Request rates per service
+      - record: kb:request_rate_5m
+        expr: |
+          sum(rate(http_requests_total{job=~"kb-.*"}[5m])) by (job)
+
+      - record: kb:request_rate_1h
+        expr: |
+          sum(rate(http_requests_total{job=~"kb-.*"}[1h])) by (job)
+
+      # Error rates per service
+      - record: kb:error_rate_5m
+        expr: |
+          sum(rate(http_requests_total{job=~"kb-.*", status=~"5.."}[5m])) by (job) /
+          sum(rate(http_requests_total{job=~"kb-.*"}[5m])) by (job)
+
+      - record: kb:error_rate_1h
+        expr: |
+          sum(rate(http_requests_total{job=~"kb-.*", status=~"5.."}[1h])) by (job) /
+          sum(rate(http_requests_total{job=~"kb-.*"}[1h])) by (job)
+
+      # Response time percentiles
+      - record: kb:response_time_p50_5m
+        expr: |
+          histogram_quantile(0.50, 
+            sum(rate(http_request_duration_seconds_bucket{job=~"kb-.*"}[5m])) by (job, le)
+          )
+
+      - record: kb:response_time_p95_5m
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket{job=~"kb-.*"}[5m])) by (job, le)
+          )
+
+      - record: kb:response_time_p99_5m
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(http_request_duration_seconds_bucket{job=~"kb-.*"}[5m])) by (job, le)
+          )
+
+  # Business Metrics Aggregations
+  - name: kb_business_rules
+    interval: 1m
+    rules:
+      # Drug-related operations
+      - record: kb:drug_calculations_rate_5m
+        expr: |
+          sum(rate(drug_calculations_total{job="kb-drug-rules"}[5m]))
+
+      - record: kb:drug_interactions_rate_5m
+        expr: |
+          sum(rate(drug_interaction_checks_total{job="kb-drug-interactions"}[5m]))
+
+      # Clinical operations
+      - record: kb:clinical_contexts_rate_5m
+        expr: |
+          sum(rate(phenotype_matches_total{job="kb-clinical-context"}[5m]))
+
+      - record: kb:safety_checks_rate_5m
+        expr: |
+          sum(rate(safety_checks_total{job="kb-patient-safety"}[5m]))
+
+      # Terminology operations
+      - record: kb:terminology_validations_rate_5m
+        expr: |
+          sum(rate(terminology_validations_total{job="kb-terminology"}[5m]))
+
+      - record: kb:code_lookups_rate_5m
+        expr: |
+          sum(rate(terminology_lookups_total{job="kb-terminology"}[5m]))
+
+      # Guideline operations
+      - record: kb:guideline_searches_rate_5m
+        expr: |
+          sum(rate(guideline_searches_total{job="kb-guideline-evidence"}[5m]))
+
+      # Formulary operations
+      - record: kb:formulary_searches_rate_5m
+        expr: |
+          sum(rate(formulary_searches_total{job="kb-formulary"}[5m]))
+
+  # Database Performance Rules
+  - name: kb_database_rules
+    interval: 30s
+    rules:
+      # PostgreSQL metrics
+      - record: kb:postgres_connection_usage
+        expr: |
+          (db_connections_active / db_connections_max) * 100
+
+      - record: kb:postgres_query_time_avg_5m
+        expr: |
+          rate(db_query_duration_seconds_sum[5m]) /
+          rate(db_query_duration_seconds_count[5m])
+
+      # MongoDB metrics
+      - record: kb:mongodb_operation_rate_5m
+        expr: |
+          sum(rate(mongodb_operations_total[5m])) by (operation)
+
+      - record: kb:mongodb_connection_usage
+        expr: |
+          (mongodb_connections_current / mongodb_connections_available) * 100
+
+      # Neo4j metrics
+      - record: kb:neo4j_transaction_rate_5m
+        expr: |
+          sum(rate(neo4j_transactions_total[5m])) by (database)
+
+      - record: kb:neo4j_memory_usage
+        expr: |
+          (neo4j_memory_heap_used / neo4j_memory_heap_max) * 100
+
+      # Elasticsearch metrics
+      - record: kb:elasticsearch_search_rate_5m
+        expr: |
+          sum(rate(elasticsearch_indices_search_query_total[5m]))
+
+      - record: kb:elasticsearch_indexing_rate_5m
+        expr: |
+          sum(rate(elasticsearch_indices_indexing_index_total[5m]))
+
+  # Cache Performance Rules
+  - name: kb_cache_rules
+    interval: 30s
+    rules:
+      # L1 Cache (In-memory)
+      - record: kb:l1_cache_hit_rate_5m
+        expr: |
+          avg(cache_hit_rate{cache_level="L1"}) by (service)
+
+      - record: kb:l1_cache_miss_rate_5m
+        expr: |
+          1 - avg(cache_hit_rate{cache_level="L1"}) by (service)
+
+      # L2 Cache (Redis Primary)
+      - record: kb:l2_cache_hit_rate_5m
+        expr: |
+          avg(cache_hit_rate{cache_level="L2"}) by (service)
+
+      # L3 Cache (Redis Cluster)
+      - record: kb:l3_cache_hit_rate_5m
+        expr: |
+          avg(cache_hit_rate{cache_level="L3"}) by (service)
+
+      # Combined cache effectiveness
+      - record: kb:cache_effectiveness_5m
+        expr: |
+          (
+            avg(cache_hit_rate{cache_level="L1"}) by (service) * 0.5 +
+            avg(cache_hit_rate{cache_level="L2"}) by (service) * 0.3 +
+            avg(cache_hit_rate{cache_level="L3"}) by (service) * 0.2
+          )
+
+      # Redis memory usage
+      - record: kb:redis_memory_usage
+        expr: |
+          (redis_memory_used_bytes / redis_memory_max_bytes) * 100
+
+  # Security Metrics Rules
+  - name: kb_security_rules
+    interval: 1m
+    rules:
+      # Authentication metrics
+      - record: kb:auth_success_rate_5m
+        expr: |
+          sum(rate(authentication_attempts_total{result="success"}[5m])) by (service) /
+          sum(rate(authentication_attempts_total[5m])) by (service)
+
+      - record: kb:auth_failure_rate_5m
+        expr: |
+          sum(rate(authentication_attempts_total{result="failure"}[5m])) by (service)
+
+      # Authorization metrics  
+      - record: kb:authz_failure_rate_5m
+        expr: |
+          sum(rate(authorization_failures_total[5m])) by (service)
+
+      # Rate limiting
+      - record: kb:rate_limit_violations_5m
+        expr: |
+          sum(rate(rate_limit_exceeded_total[5m])) by (service, endpoint)
+
+      # License compliance
+      - record: kb:license_usage_rate_5m
+        expr: |
+          sum(rate(license_validations_total{result="success"}[5m])) by (service) /
+          sum(rate(license_validations_total[5m])) by (service)
+
+  # Data Quality Rules
+  - name: kb_data_quality_rules
+    interval: 5m
+    rules:
+      # Data freshness
+      - record: kb:data_age_hours
+        expr: |
+          (time() - terminology_last_update_timestamp) / 3600
+
+      - record: kb:data_completeness_score
+        expr: |
+          (total_records - missing_records) / total_records * 100
+
+      # Cross-service consistency
+      - record: kb:data_consistency_score
+        expr: |
+          1 - abs(drug_count_kb1 - drug_count_kb7) / max(drug_count_kb1, drug_count_kb7)
+
+      # Validation accuracy
+      - record: kb:validation_accuracy_5m
+        expr: |
+          sum(rate(validations_successful_total[5m])) by (service) /
+          sum(rate(validations_total[5m])) by (service)
+
+  # Resource Utilization Rules
+  - name: kb_resource_rules
+    interval: 30s
+    rules:
+      # CPU utilization
+      - record: kb:cpu_usage_percent
+        expr: |
+          rate(process_cpu_seconds_total{job=~"kb-.*"}[5m]) * 100
+
+      # Memory utilization
+      - record: kb:memory_usage_mb
+        expr: |
+          process_resident_memory_bytes{job=~"kb-.*"} / 1024 / 1024
+
+      - record: kb:memory_usage_percent
+        expr: |
+          (process_resident_memory_bytes{job=~"kb-.*"} / 
+           node_memory_MemTotal_bytes) * 100
+
+      # File descriptors
+      - record: kb:fd_usage_percent
+        expr: |
+          (process_open_fds{job=~"kb-.*"} / process_max_fds{job=~"kb-.*"}) * 100
+
+      # Disk usage
+      - record: kb:disk_usage_percent
+        expr: |
+          (1 - node_filesystem_avail_bytes{mountpoint="/"} / 
+           node_filesystem_size_bytes{mountpoint="/"}) * 100
+
+  # Service Level Objectives (SLOs)
+  - name: kb_slo_rules
+    interval: 1m
+    rules:
+      # Availability SLO (99.9%)
+      - record: kb:availability_slo_compliance
+        expr: |
+          avg_over_time(up{job=~"kb-.*"}[1h]) >= 0.999
+
+      # Latency SLO (95% < 100ms)
+      - record: kb:latency_slo_compliance
+        expr: |
+          kb:response_time_p95_5m < 0.1
+
+      # Error rate SLO (< 0.1%)
+      - record: kb:error_rate_slo_compliance
+        expr: |
+          kb:error_rate_5m < 0.001
+
+      # Combined SLO score
+      - record: kb:slo_compliance_score
+        expr: |
+          (
+            (kb:availability_slo_compliance) +
+            (kb:latency_slo_compliance) +
+            (kb:error_rate_slo_compliance)
+          ) / 3
+
+  # Capacity Planning Rules
+  - name: kb_capacity_rules
+    interval: 5m
+    rules:
+      # Request volume trends
+      - record: kb:request_volume_growth_24h
+        expr: |
+          (
+            kb:request_rate_1h -
+            kb:request_rate_1h offset 24h
+          ) / kb:request_rate_1h offset 24h * 100
+
+      # Resource utilization trends
+      - record: kb:memory_growth_24h
+        expr: |
+          (
+            kb:memory_usage_mb -
+            kb:memory_usage_mb offset 24h
+          ) / kb:memory_usage_mb offset 24h * 100
+
+      # Database growth trends
+      - record: kb:db_size_growth_7d
+        expr: |
+          (
+            pg_database_size_bytes -
+            pg_database_size_bytes offset 7d
+          ) / pg_database_size_bytes offset 7d * 100
+
+      # Capacity utilization forecast (simple linear)
+      - record: kb:capacity_forecast_7d
+        expr: |
+          predict_linear(kb:memory_usage_percent[2h], 7*24*3600)

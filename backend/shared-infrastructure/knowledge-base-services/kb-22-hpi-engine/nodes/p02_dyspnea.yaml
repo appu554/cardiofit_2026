@@ -1,0 +1,611 @@
+# P02 Dyspnea - HPI Node Definition V2
+# Bayesian differential for dyspnea presentations in CardioFit strata
+# V2: 10 differentials, RF01-RF06, AC01-AC06, SM01-SM03, CM01-CM10, safety floors
+# Priors sum to 0.85 per stratum (G15 Other bucket reserves 0.15)
+# A01 compliant: DM_HTN_CKD_HF stratum added (Q1-Q4 all YES per Wang JAMA 2005 + ARIC)
+
+node_id: P02_DYSPNEA
+version: "2.0.0"
+title_en: "Dyspnea Differential Diagnosis"
+title_hi: "Saans ki Taklif Vibhedak Nidaan"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.82
+posterior_gap_threshold: 0.20
+convergence_logic: BOTH
+max_questions: 25
+
+# Supported strata — multi-column per A01 (all 4 questions = YES for these strata)
+# DM_HTN_CKD_HF: G4 stratum, evidence from Wang JAMA 2005 (ADHF 3x in HF+CKD)
+strata_supported:
+  - DM_ONLY
+  - DM_HTN
+  - DM_HTN_CKD
+  - DM_HTN_CKD_HF
+
+# G15: Other bucket — open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.15
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_HF_2023"
+
+# ═══════════════════════════════════════════════════════════════
+# Differentials with per-stratum priors (F-05)
+# V2: 10 differentials. Base 8 sum to 0.833 per stratum.
+# DX09+DX10 conditional diffs add 0.017 → total 0.85 (G15 reserves 0.15).
+# DX09 (EUGLYCEMIC_DKA_RESP) = medication-conditional (G3).
+# DX10 (LACTIC_ACIDOSIS_RESP) = medication-conditional (G3).
+# ═══════════════════════════════════════════════════════════════
+differentials:
+  - id: CHF
+    label: "Congestive Heart Failure / ADHF"
+    population_reference: "ESC Heart Failure Guidelines 2023; Wang JAMA 2005; ARIC CKD substudy"
+    priors:
+      DM_ONLY: 0.1002    # base8 scaled so base8+conditional(0.017)=0.85
+      DM_HTN: 0.2331
+      DM_HTN_CKD: 0.2918
+      DM_HTN_CKD_HF: 0.3749  # HF history dramatically raises ADHF prior
+
+  - id: COPD_EXAC
+    label: "COPD Exacerbation"
+    population_reference: "GOLD 2024 Report"
+    priors:
+      DM_ONLY: 0.1249
+      DM_HTN: 0.1000
+      DM_HTN_CKD: 0.0833
+      DM_HTN_CKD_HF: 0.0666  # suppressed in HF patients
+
+  - id: ASTHMA
+    label: "Asthma Exacerbation"
+    population_reference: "GINA 2024 Report"
+    priors:
+      DM_ONLY: 0.1499
+      DM_HTN: 0.0833
+      DM_HTN_CKD: 0.0416
+      DM_HTN_CKD_HF: 0.0250  # very low in CKD+HF
+
+  - id: PNEUMONIA
+    label: "Pneumonia"
+    population_reference: "ATS/IDSA CAP Guidelines 2019"
+    priors:
+      DM_ONLY: 0.1249
+      DM_HTN: 0.1250
+      DM_HTN_CKD: 0.1499
+      DM_HTN_CKD_HF: 0.1249
+
+  - id: PE_DYSPNEA
+    label: "Pulmonary Embolism"
+    population_reference: "ESC PE Guidelines 2019"
+    priors:
+      DM_ONLY: 0.0416
+      DM_HTN: 0.0500
+      DM_HTN_CKD: 0.0666
+      DM_HTN_CKD_HF: 0.0833  # HF increases VTE risk
+
+  - id: METABOLIC_ACIDOSIS
+    label: "Metabolic Acidosis (CKD/DKA)"
+    population_reference: "KDIGO CKD Guidelines 2024"
+    priors:
+      DM_ONLY: 0.0833
+      DM_HTN: 0.0666
+      DM_HTN_CKD: 0.1249
+      DM_HTN_CKD_HF: 0.1083
+
+  - id: ANXIETY_DYSPNEA
+    label: "Anxiety / Hyperventilation"
+    population_reference: "Huffman et al. Circulation 2021"
+    priors:
+      DM_ONLY: 0.1249
+      DM_HTN: 0.1000
+      DM_HTN_CKD: 0.0333
+      DM_HTN_CKD_HF: 0.0167  # anxiety rare in severe cardio-renal
+
+  - id: ANEMIA
+    label: "Anemia-related Dyspnea"
+    population_reference: "KDIGO Anemia in CKD 2012"
+    priors:
+      DM_ONLY: 0.0833
+      DM_HTN: 0.0750
+      DM_HTN_CKD: 0.0416
+      DM_HTN_CKD_HF: 0.0333
+
+  # DX09: Medication-conditional — only active when SGLT2i is prescribed (G3)
+  - id: EUGLYCEMIC_DKA_RESP
+    label: "Euglycemic DKA (respiratory compensation)"
+    activation_condition: "med_class == SGLT2i"
+    priors:
+      DM_ONLY: 0.0085
+      DM_HTN: 0.0085
+      DM_HTN_CKD: 0.0085
+      DM_HTN_CKD_HF: 0.0085
+
+  # DX10: Medication-conditional — only active when Metformin + eGFR<30 (G3)
+  - id: LACTIC_ACIDOSIS_RESP
+    label: "Lactic Acidosis (respiratory compensation)"
+    activation_condition: "med_class == Metformin AND eGFR < 30"
+    priors:
+      DM_ONLY: 0.0085
+      DM_HTN: 0.0085
+      DM_HTN_CKD: 0.0085
+      DM_HTN_CKD_HF: 0.0085
+
+# Safety floors (G1) — per A03, multi-stratum nodes use stratum-specific floors
+safety_floors:
+  CHF: 0.05
+  PE_DYSPNEA: 0.05
+
+safety_floors_by_stratum:
+  DM_HTN_CKD:
+    CHF: 0.08
+    PE_DYSPNEA: 0.05
+    METABOLIC_ACIDOSIS: 0.04
+  DM_HTN_CKD_HF:
+    CHF: 0.10
+    PE_DYSPNEA: 0.06
+    METABOLIC_ACIDOSIS: 0.04
+
+# ═══════════════════════════════════════════════════════════════
+# Sex Modifiers (G2) — OR-based log-odds deltas, applied once at session init
+# ═══════════════════════════════════════════════════════════════
+sex_modifiers:
+  - id: SM01
+    condition: "sex == Female"
+    source: "ESC PE Guidelines 2019; OCP-associated VTE risk"
+    adjustments:
+      PE_DYSPNEA: 0.47    # OR 1.6, log(1.6) = +0.47
+
+  - id: SM02
+    condition: "sex == Female AND age >= 50"
+    source: "ARIC study; postmenopausal HF incidence"
+    adjustments:
+      CHF: 0.34            # OR 1.4, log(1.4) = +0.34
+
+  - id: SM03
+    condition: "sex == Male"
+    source: "GOLD 2024; higher COPD prevalence in males (Indian cohort)"
+    adjustments:
+      COPD_EXAC: 0.53      # OR 1.7, log(1.7) = +0.53
+
+# ═══════════════════════════════════════════════════════════════
+# Context Modifiers (CM01-CM10) — probability deltas via logit (G14)
+# ═══════════════════════════════════════════════════════════════
+context_modifiers:
+  - id: CM01
+    name: "Loop diuretic active (furosemide, torsemide)"
+    description: "CHF odds x1.8 — diuretic use is a strong marker for pre-existing CHF."
+    source: "ESC HF 2023; clinical reasoning"
+    adjustments:
+      CHF: 0.15
+
+  - id: CM02
+    name: "Beta-blocker active"
+    description: "Beta-blocker masks tachycardia in PE and ADHF. Asthma contraindicated."
+    source: "ESC PE 2019; GINA 2024"
+    adjustments:
+      PE_DYSPNEA: 0.08
+      ASTHMA: 0.10
+
+  - id: CM03
+    name: "Inhaled corticosteroid / bronchodilator active"
+    description: "Known airway disease — raises COPD/Asthma baseline."
+    source: "GOLD 2024; GINA 2024"
+    adjustments:
+      COPD_EXAC: 0.15
+      ASTHMA: 0.12
+
+  - id: CM04
+    name: "ACEi active"
+    description: "ACE-inhibitor cough mimics respiratory pathology; raises COPD_EXAC differential."
+    source: "SPL Enalapril; Cochrane ACEi-cough review 2012"
+    adjustments:
+      COPD_EXAC: 0.08
+
+  - id: CM05
+    name: "SGLT2i active"
+    description: "Activate DX09 (euglycemic DKA respiratory compensation)."
+    source: "ADA 2024 DKA in SGLT2i"
+    adjustments:
+      EUGLYCEMIC_DKA_RESP: 0.25
+
+  - id: CM06
+    name: "Oral anticoagulant active (warfarin, DOAC)"
+    description: "Reduced PE risk when therapeutic. Shifts PE_DYSPNEA downward."
+    source: "ESC PE 2019"
+    adjustments:
+      PE_DYSPNEA: 0.05
+
+  - id: CM07
+    name: "Metformin + eGFR<30"
+    description: "Activate DX10 (lactic acidosis respiratory compensation). SAFETY: Order lactate."
+    source: "KDIGO 2024; StatPearls Metformin"
+    adjustments:
+      LACTIC_ACIDOSIS_RESP: 0.20
+
+  - id: CM08
+    name: "EPO/ESA not prescribed despite CKD anemia"
+    description: "Untreated anemia raises dyspnea-from-anemia odds."
+    source: "KDIGO Anemia in CKD 2012"
+    adjustments:
+      ANEMIA: 0.15
+
+  - id: CM09
+    name: "Recent immobilisation or surgery"
+    description: "Major VTE risk factor. PE odds x3.0 (+1.10)."
+    source: "ESC PE Guidelines 2019; Wells score"
+    adjustments:
+      PE_DYSPNEA: 0.30
+
+  - id: CM10
+    name: "Current smoker or quit < 1 year"
+    description: "COPD/pneumonia risk factor. Smoking doubles COPD exacerbation risk."
+    source: "GOLD 2024; INTERHEART 2004"
+    adjustments:
+      COPD_EXAC: 0.20
+      PNEUMONIA: 0.10
+
+# ═══════════════════════════════════════════════════════════════
+# Red Flag Sweep (RF01-RF06) — evaluated FIRST before any questions
+# SNOMED-coded, all severity=IMMEDIATE
+# ═══════════════════════════════════════════════════════════════
+safety_triggers:
+  - id: RF01
+    condition: "Q_RF01=YES"
+    severity: IMMEDIATE
+    recommended_action: "Acute respiratory distress — SpO2 < 90%. Immediate oxygen, ABG, CXR. SNOMED: 271825005"
+
+  - id: RF02
+    condition: "Q_RF02=YES"
+    severity: IMMEDIATE
+    recommended_action: "Unable to speak in full sentences. Severe dyspnea — bronchodilator + IV access. SNOMED: 267036007"
+
+  - id: RF03
+    condition: "Q_RF03=YES"
+    severity: IMMEDIATE
+    recommended_action: "Cyanosis detected. Immediate oxygenation + pulse oximetry. SNOMED: 3415004"
+
+  - id: RF04
+    condition: "Q_RF04=YES"
+    severity: IMMEDIATE
+    recommended_action: "Stridor present — upper airway obstruction. Immediate ENT/airway assessment. SNOMED: 70407001"
+
+  - id: RF05
+    condition: "Q_RF05=YES"
+    severity: IMMEDIATE
+    recommended_action: "Hemoptysis with dyspnea — consider PE, TB, malignancy. Urgent imaging. SNOMED: 66857006"
+
+  - id: RF06
+    condition: "Q_RF06=YES"
+    severity: IMMEDIATE
+    recommended_action: "Acute onset pleuritic chest pain with dyspnea — high PE suspicion. D-dimer + CTPA. SNOMED: 2237002"
+
+  # Legacy compound safety triggers (retained from V1)
+  - id: ST001
+    type: BOOLEAN
+    condition: "Q001=YES AND Q002=YES AND Q003=YES"
+    severity: IMMEDIATE
+    recommended_action: "Acute decompensated heart failure likely. Urgent BNP/NT-proBNP, chest X-ray, and IV diuretic protocol."
+
+  - id: ST002
+    type: BOOLEAN
+    condition: "Q007=YES AND Q008=YES"
+    severity: URGENT
+    recommended_action: "Consider pulmonary embolism. Order D-dimer; if high clinical suspicion, proceed to CTPA."
+
+  - id: ST003
+    type: BOOLEAN
+    condition: "Q010=YES AND Q013=YES"
+    severity: URGENT
+    recommended_action: "Possible metabolic acidosis in CKD patient. Check ABG, serum bicarbonate, and renal function urgently."
+
+# ═══════════════════════════════════════════════════════════════
+# Questions: RF (mandatory, safety_role: RED_FLAG) + DQ (existing) + AC (safety_role: ACUITY)
+# ═══════════════════════════════════════════════════════════════
+questions:
+  # Red Flag Questions (RF01-RF06) — asked FIRST, mandatory
+  - id: Q_RF01
+    text_en: "Is the patient's oxygen saturation below 90%?"
+    text_hi: "Kya mariz ka oxygen saturation 90% se neeche hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_positive:
+      CHF: 3.50
+      PNEUMONIA: 2.80
+      PE_DYSPNEA: 2.50
+      COPD_EXAC: 2.40
+    lr_negative:
+      CHF: 0.75
+      PNEUMONIA: 0.80
+
+  - id: Q_RF02
+    text_en: "Is the patient unable to speak in full sentences due to breathlessness?"
+    text_hi: "Kya mariz saans ki taklif ke kaaran poore vaakya nahi bol pa raha?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_positive:
+      CHF: 3.00
+      ASTHMA: 4.20
+      COPD_EXAC: 3.80
+    lr_negative:
+      ASTHMA: 0.55
+      COPD_EXAC: 0.60
+
+  - id: Q_RF03
+    text_en: "Is there visible bluish discoloration of the lips or fingertips (cyanosis)?"
+    text_hi: "Kya hothon ya ungliyon ke siron par neeli rang ki sujan dikhai de rahi hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_positive:
+      CHF: 4.00
+      PE_DYSPNEA: 3.20
+      PNEUMONIA: 2.50
+    lr_negative:
+      CHF: 0.80
+
+  - id: Q_RF04
+    text_en: "Is there a high-pitched breathing sound (stridor) when inhaling?"
+    text_hi: "Kya saans lete samay tez awaaz (stridor) aa rahi hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_positive:
+      ASTHMA: 2.00
+    lr_negative:
+      ASTHMA: 0.90
+
+  - id: Q_RF05
+    text_en: "Have you coughed up blood (hemoptysis)?"
+    text_hi: "Kya aapne khoon ki khaansi ki hai?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_positive:
+      PE_DYSPNEA: 4.50
+      PNEUMONIA: 2.80
+    lr_negative:
+      PE_DYSPNEA: 0.70
+
+  - id: Q_RF06
+    text_en: "Did the breathlessness start suddenly with sharp chest pain on one side?"
+    text_hi: "Kya saans ki taklif achaanak ek taraf tez chhati dard ke saath shuru hui?"
+    mandatory: true
+    safety_role: RED_FLAG
+    lr_positive:
+      PE_DYSPNEA: 5.20
+      CHF: 1.20
+    lr_negative:
+      PE_DYSPNEA: 0.55
+
+  # Diagnostic Questions (DQ01-DQ13) — existing V1 questions
+  - id: Q001
+    text_en: "Is the breathlessness worse when lying flat?"
+    text_hi: "Kya saans ki taklif lete waqt badh jaati hai?"
+    cluster: POSITION
+    mandatory: true
+    lr_source: "Wang et al. JAMA 2005"
+    lr_positive:
+      CHF: 2.20
+    lr_negative:
+      CHF: 0.65
+      COPD_EXAC: 1.10
+
+  - id: Q002
+    text_en: "Do you wake up at night gasping for breath?"
+    text_hi: "Kya aap raat ko saans ke liye haafti hui uthte hain?"
+    cluster: POSITION
+    cluster_dampening: 0.80
+    mandatory: true
+    lr_source: "Wang et al. JAMA 2005"
+    lr_positive:
+      CHF: 2.60
+    lr_negative:
+      CHF: 0.70
+
+  - id: Q003
+    text_en: "Do you have swelling in both ankles or legs?"
+    text_hi: "Kya aapke dono takhno ya pairo mein sujan hai?"
+    cluster: FLUID
+    mandatory: true
+    lr_source: "ESC Heart Failure Guidelines 2023"
+    lr_positive:
+      CHF: 2.10
+    lr_negative:
+      CHF: 0.64
+
+  - id: Q004
+    text_en: "Do you have a cough with coloured sputum?"
+    text_hi: "Kya aapko rangin balgam ke saath khaansi hai?"
+    cluster: RESPIRATORY
+    mandatory: false
+    lr_source: "ATS/IDSA CAP Guidelines 2019"
+    lr_positive:
+      PNEUMONIA: 3.20
+      COPD_EXAC: 2.40
+    lr_negative:
+      PNEUMONIA: 0.55
+      COPD_EXAC: 0.70
+
+  - id: Q005
+    text_en: "Do you have a fever or chills?"
+    text_hi: "Kya aapko bukhar ya thandi lag rahi hai?"
+    cluster: SYSTEMIC
+    mandatory: false
+    lr_source: "ATS/IDSA CAP Guidelines 2019"
+    lr_positive:
+      PNEUMONIA: 2.80
+    lr_negative:
+      PNEUMONIA: 0.60
+      CHF: 1.10
+
+  - id: Q006
+    text_en: "Do you hear wheezing when you breathe?"
+    text_hi: "Kya aapko saans lete samay seeti ki awaaz sunai deti hai?"
+    cluster: RESPIRATORY
+    cluster_dampening: 0.85
+    mandatory: false
+    lr_source: "GINA 2024 Report"
+    lr_positive:
+      ASTHMA: 3.50
+      COPD_EXAC: 2.60
+    lr_negative:
+      ASTHMA: 0.50
+      COPD_EXAC: 0.65
+
+  - id: Q007
+    text_en: "Has the breathlessness started suddenly?"
+    text_hi: "Kya saans ki taklif achaanak shuru hui?"
+    cluster: ONSET
+    mandatory: false
+    lr_source: "ESC PE Guidelines 2019"
+    lr_positive:
+      PE_DYSPNEA: 2.40
+      PNEUMONIA: 1.60
+    lr_negative:
+      PE_DYSPNEA: 0.62
+      CHF: 1.15
+
+  - id: Q008
+    text_en: "Do you have chest pain along with the breathlessness?"
+    text_hi: "Kya saans ki taklif ke saath chhati mein dard hai?"
+    cluster: ASSOCIATED
+    mandatory: false
+    lr_source: "ESC PE Guidelines 2019"
+    lr_positive:
+      PE_DYSPNEA: 2.10
+      CHF: 1.40
+    lr_negative:
+      PE_DYSPNEA: 0.70
+
+  - id: Q009
+    text_en: "Have you recently gained weight rapidly (2-3 kg in a week)?"
+    text_hi: "Kya aapka wajan haal mein tezi se badha hai (1 hafte mein 2-3 kg)?"
+    cluster: FLUID
+    cluster_dampening: 0.80
+    mandatory: false
+    lr_source: "ESC Heart Failure Guidelines 2023"
+    lr_positive:
+      CHF: 3.40
+    lr_negative:
+      CHF: 0.58
+
+  - id: Q010
+    text_en: "Do you feel the need to breathe deeply and rapidly?"
+    text_hi: "Kya aapko gehri aur tez saans lene ki zaroorat mehsoos hoti hai?"
+    cluster: PATTERN
+    mandatory: false
+    lr_source: "KDIGO CKD Guidelines 2024"
+    lr_positive:
+      METABOLIC_ACIDOSIS: 3.10
+      ANXIETY_DYSPNEA: 2.20
+    lr_negative:
+      METABOLIC_ACIDOSIS: 0.55
+
+  - id: Q011
+    text_en: "Do you feel unusually tired or weak along with the breathlessness?"
+    text_hi: "Kya aap saans ki taklif ke saath asaamaanya thakaan ya kamzori mehsoos karte hain?"
+    cluster: SYSTEMIC
+    cluster_dampening: 0.85
+    mandatory: false
+    lr_source: "KDIGO Anemia in CKD 2012"
+    lr_positive:
+      ANEMIA: 2.50
+      CHF: 1.30
+    lr_negative:
+      ANEMIA: 0.60
+
+  - id: Q012
+    text_en: "Do you have tingling in your hands or around your mouth?"
+    text_hi: "Kya aapke haathon mein ya munh ke aaspaas jhanajhanahat hai?"
+    cluster: NEURO
+    mandatory: false
+    lr_source: "Huffman et al. Circulation 2021"
+    lr_positive:
+      ANXIETY_DYSPNEA: 4.20
+    lr_negative:
+      ANXIETY_DYSPNEA: 0.55
+
+  - id: Q013
+    text_en: "Have you been told your kidney function is reduced?"
+    text_hi: "Kya aapko bataya gaya hai ki aapke gurdey ka kaam kam ho gaya hai?"
+    cluster: COMORBID
+    mandatory: false
+    lr_source: "KDIGO CKD Guidelines 2024"
+    lr_positive:
+      METABOLIC_ACIDOSIS: 2.80
+      ANEMIA: 2.10
+      CHF: 1.30
+    lr_negative:
+      METABOLIC_ACIDOSIS: 0.50
+
+  # Acuity Questions (AC01-AC06) — asked after DQ, safety_role: ACUITY
+  - id: Q_AC01
+    text_en: "How many pillows do you need to sleep comfortably?"
+    text_hi: "Aaram se sone ke liye aapko kitne takiyon ki zaroorat hai?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "NYHA functional classification"
+    lr_positive:
+      CHF: 2.80
+    lr_negative:
+      CHF: 0.70
+
+  - id: Q_AC02
+    text_en: "Can you walk up one flight of stairs without stopping?"
+    text_hi: "Kya aap bina ruke ek manjil ki seedhi chadh sakte hain?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "6MWT correlation; NYHA class"
+    lr_positive:
+      CHF: 0.60
+      COPD_EXAC: 0.65
+    lr_negative:
+      CHF: 2.20
+      COPD_EXAC: 1.80
+
+  - id: Q_AC03
+    text_en: "Has the breathlessness been getting progressively worse over the past week?"
+    text_hi: "Kya saans ki taklif pichle hafte mein dheere dheere badh rahi hai?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "ESC HF 2023"
+    lr_positive:
+      CHF: 2.40
+      COPD_EXAC: 2.10
+    lr_negative:
+      PE_DYSPNEA: 1.30
+
+  - id: Q_AC04
+    text_en: "Do you experience breathlessness at rest (not just during activity)?"
+    text_hi: "Kya aapko aaram ke samay bhi saans ki taklif hoti hai (sirf kaam karte waqt nahi)?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "NYHA class IV; ESC HF 2023"
+    lr_positive:
+      CHF: 3.60
+      PNEUMONIA: 2.00
+    lr_negative:
+      CHF: 0.55
+      ANXIETY_DYSPNEA: 1.40
+
+  - id: Q_AC05
+    text_en: "Have you noticed a decrease in urine output in the past 24 hours?"
+    text_hi: "Kya pichle 24 ghanton mein aapke peshab ki matra kam hui hai?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "KDIGO AKI staging; Cardiorenal syndrome"
+    lr_positive:
+      CHF: 2.80
+      METABOLIC_ACIDOSIS: 2.40
+    lr_negative:
+      ANXIETY_DYSPNEA: 1.50
+
+  - id: Q_AC06
+    text_en: "Have you been unable to perform your daily activities due to breathlessness?"
+    text_hi: "Kya saans ki taklif ke kaaran aap apne rozana ke kaam nahi kar pa rahe?"
+    mandatory: false
+    safety_role: ACUITY
+    lr_source: "mMRC dyspnea scale"
+    lr_positive:
+      CHF: 2.00
+      COPD_EXAC: 1.80
+      ANEMIA: 1.60
+    lr_negative:
+      ANXIETY_DYSPNEA: 1.80

@@ -1,0 +1,647 @@
+﻿# KB-1 — Final Design & Implementation Guide (production-ready)
+
+
+Nicely done on your draft — below is a hardened, implementable, audited, SaMD-grade specification for **KB-1: Drug Dosing Rules**. It’s focused on determinism, testability, provenance, low latency for the Rust dose engine, and safety. You can drop these files into your repo, wire the CI gates, and start ingesting TOML rulepacks.
+
+
+---
+
+
+## Executive summary (one line)
+
+
+KB-1 is the canonical, versioned, auditable repository of *dosing rulepacks* (TOML → compiled JSONB) consumed only by the Rust Dose Calculation Engine via gRPC. KB-1 supplies base dose, limits, renal/hepatic adjustments, formulation variants, titration schedules, and population exceptions — never final clinical rationale or absolute safety vetoes (those live in KB-3 / KB-4).
+
+
+---
+
+
+## Table of contents
+
+
+1. Data model & storage
+2. Authoring format (TOML) and compilation
+3. gRPC API (proto + contract)
+4. Materialized view & cache strategy (Redis)
+5. Example TOML seed rules (Lisinopril, Vancomycin, Pediatric Acetaminophen)
+6. CI/CD / governance / approval gates
+7. Testing strategy (unit, property, mutation, boundary)
+8. Metrics & observability
+9. Failure modes & operational runbook
+10. Security & supply-chain controls
+11. Deployment checklist & rollout plan
+
+
+---
+
+
+## 1) Data model & storage (Postgres + JSONB)
+
+
+Use Postgres 15+ (JSONB) with immutable versioning. All changes create new versions. Provide DDL below.
+
+
+```sql
+-- KB1: dosing_rules main table
+CREATE TABLE dosing_rules (
+  rule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  drug_code TEXT NOT NULL,                 -- canonical code, e.g. "rxnorm:8610"
+  drug_name TEXT NOT NULL,
+  semantic_version TEXT NOT NULL,          -- e.g. "1.0.0"
+  source_file TEXT NOT NULL,               -- original TOML filename
+  compiled_json jsonb NOT NULL,            -- compiled, normalized rule bundle
+  active BOOLEAN DEFAULT FALSE,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  checksum TEXT NOT NULL,                  -- sha256 of compiled_json
+  provenance jsonb NOT NULL,               -- {authors, approvals, kb3_refs, kb4_refs}
+  notes TEXT
+);
+
+
+CREATE UNIQUE INDEX ux_dosing_rules_code_version ON dosing_rules(drug_code, semantic_version);
+
+
+-- adjustments and titrations can be embedded inside compiled_json, but also normalized for queries:
+CREATE TABLE dose_adjustments (
+  adj_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  rule_id UUID REFERENCES dosing_rules(rule_id) ON DELETE CASCADE,
+  adjust_type TEXT NOT NULL,               -- "renal", "hepatic", "age", "weight"
+  condition_json jsonb NOT NULL,           -- predicate compiled AST
+  formula_json jsonb NOT NULL,             -- normalized formula
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+
+-- materialized view for active rules used by Rust engine
+CREATE MATERIALIZED VIEW active_dosing_rules AS
+SELECT rule_id, drug_code, drug_name, semantic_version, compiled_json, checksum
+FROM dosing_rules WHERE active = true;
+
+
+CREATE INDEX idx_active_rules_code ON active_dosing_rules (drug_code);
+```
+
+
+**Notes**
+
+
+* `compiled_json` contains an exact machine-consumable structure (AST for predicates, numeric constants with units in UCUM, titration schedules normalized).
+* Always maintain `checksum` and `provenance` for traceability.
+
+
+---
+
+
+## 2) Authoring format (TOML) and compilation
+
+
+### 2.1 High-level rules:
+
+
+* Author human-readable TOML files in `kb1/rules/authoring/`.
+* Each TOML file must include a `meta` block (authors, version, approvals, kb3\_refs, kb4\_refs).
+* CI will `compile` TOML → validated JSON bundle (`compiled_json`), compute `sha256` and push to DB as a new `dosing_rules` row (inactive by default).
+* Publishing requires P\&T approval that triggers `active=true` and materialized view refresh + cache invalidation.
+
+
+### 2.2 TOML example structure (canonical keys)
+
+
+```toml
+# meta
+meta.name = "lisinopril.2025"
+meta.semantic_version = "1.0.0"
+meta.authors = ["PharmD: Alice"]
+meta.approvals = []
+meta.kb3_refs = ["ACC-AHA-HTN-2017:init-first-line"]
+meta.kb4_refs = ["SAF-HTN-001"]
+meta.effective_from = "2025-09-01"
+
+
+[base_dose]
+unit = "mg"
+starting = 10
+max_daily = 40
+note = "Adult oral starting dose"
+
+
+[[formulations]]
+form = "tablet"
+strengths = [2.5, 5, 10, 20]
+
+
+[[adjustments.renal]]
+egfr_max = 59
+egfr_min = 30
+action = "reduce_max"
+factor = 0.5  # multiply maximum dose by 0.5
+
+
+[[titration]]
+step = 1
+after_days = 7
+action = "increase_by"
+amount = 5
+
+
+[population.pediatric]
+age_min = 0
+age_max = 17
+formula = "0.02 * weight_kg * 1000"  # mg/kg expressed as string; compiled to numeric AST
+```
+
+
+### 2.3 Compilation requirements
+
+
+* Normalize units to UCUM (units stored in a single field). Use a deterministic unit normalization library during compile.
+* Parse formulas into AST; reject non-deterministic constructs; no network I/O allowed in compile.
+* Generate `used_fields` manifest (what patient context fields are read by the rules) and store in `provenance` (used to minimize patient data transmitted).
+* Validate against JSON Schema: ensure `base_dose`, `adjustments`, and `titration` present if applicable.
+
+
+---
+
+
+## 3) gRPC API (Protobuf + contract)
+
+
+KB-1 serves the Rust engine over high-performance gRPC.
+
+
+### 3.1 Proto (canonical)
+
+
+```proto
+syntax = "proto3";
+package kb1;
+
+
+message PatientContext {
+  double weight_kg = 1;
+  double egfr = 2;
+  double alt = 3;
+  double ast = 4;
+  int32 age_years = 5;
+  string sex = 6;
+  bool pregnant = 7;
+  // Only include fields in 'used_fields' per compiled bundle
+  map<string,double> extra_numeric = 8;
+}
+
+
+message DosingRuleRequest {
+  string transaction_id = 1;
+  string drug_code = 2;  // canonical e.g. "rxnorm:8610"
+  PatientContext patient_context = 3;
+  string version_pin = 4; // optional — specific semantic_version
+}
+
+
+message DosingRuleResponse {
+  string transaction_id = 1;
+  string drug_code = 2;
+  string semantic_version = 3;
+  bytes compiled_json = 4;   // optional: the full compiled bundle if requested
+  repeated DoseAdjustment adjustments = 5;
+  TitrationSchedule schedule = 6;
+  PopulationDosing population = 7;
+  string checksum = 8;
+  repeated string warnings = 9;
+  string provenance_json = 10;
+}
+
+
+message DoseAdjustment {
+  string adj_id = 1;
+  string adjust_type = 2;
+  string description = 3;
+  string formula_json = 4; // formula AST as JSON string
+}
+
+
+message TitrationSchedule {
+  bytes schedule_json = 1;
+}
+
+
+message PopulationDosing {
+  bytes population_json = 1;
+}
+
+
+service DosingService {
+  rpc GetDosingRuleset(DosingRuleRequest) returns (DosingRuleResponse);
+}
+```
+
+
+### 3.2 SLOs & semantics
+
+
+* p95 latency < 60ms (from Rust client request → response).
+* If `version_pin` is given, return that version or fail with `NOT_FOUND`.
+* If no active rule found for `drug_code`, return gRPC `NOT_FOUND` error (Rust must not assume default dosing).
+
+
+---
+
+
+## 4) Materialized view & cache strategy
+
+
+### 4.1 Materialized view
+
+
+* `active_dosing_rules` (see DDL) pre-joined for fast reads. Refresh on rule `active` flips and at deploy.
+
+
+```sql
+REFRESH MATERIALIZED VIEW CONCURRENTLY active_dosing_rules;
+```
+
+
+### 4.2 Redis cache
+
+
+* **Key pattern**
+
+
+  ```
+  dose:v2:{drug_code}:{context_hash}
+  ```
+
+
+  * `drug_code` canonical (lowercase).
+  * `context_hash` = sha256 of normalized `(used_fields subset of PatientContext sorted)`. This ensures only relevant context variance creates cache keys.
+* **TTL:** 1 hour default; but when a rule for `drug_code` is activated/updated, invalidate immediately.
+* **Write-through:** Rust engine first checks Redis; on miss, calls KB-1 gRPC → response written into Redis by KB-1.
+
+
+### 4.3 Cache invalidation hooks
+
+
+* When `dosing_rules` `active` flips or compiled bundle checksum changes:
+
+
+  * Publish `topic: dosing.rule.update` with payload `{drug_code, semantic_version, checksum}` on internal Kafka.
+  * KB-1 cache worker listens and deletes keys matching `dose:v2:{drug_code}:*`.
+  * Also trigger materialized view refresh (concurrent) as part of publish process.
+
+
+---
+
+
+## 5) Example seed TOML rules (ready to ingest)
+
+
+### 5.1 Lisinopril (adult ACE-i) — `lisinopril.toml`
+
+
+```toml
+meta.name = "lisinopril"
+meta.semantic_version = "1.0.0"
+meta.authors = ["PharmD: Alice"]
+meta.kb3_refs = ["ACC-AHA-HTN-2017:first-line"]
+meta.kb4_refs = ["SAF-HTN-ACEI-2025"]
+meta.effective_from = "2025-09-01"
+
+
+[base_dose]
+unit = "mg"
+starting = 10
+max_daily = 40
+frequency = "once_daily"
+
+
+[[formulations]]
+form = "tablet"
+strengths = [2.5, 5, 10, 20]
+
+
+[[adjustments.renal]]
+# eGFR based max reductions
+egfr_min = 30
+egfr_max = 59
+action = "cap_max"
+cap_max = 20
+
+
+[[adjustments.renal]]
+egfr_min = 0
+egfr_max = 29
+action = "contraindicated"
+note = "Refer KB-4 check; ACEI contraindicated in severe renal impairment per institution policy."
+
+
+[[titration]]
+step = 1
+after_days = 7
+increase_by = 5
+max_step = 3
+```
+
+
+### 5.2 Vancomycin (renal dosing, trough-guided) — `vancomycin.toml`
+
+
+```toml
+meta.name = "vancomycin"
+meta.semantic_version = "1.0.0"
+meta.authors = ["ID PharmD: Raj"]
+meta.kb3_refs = ["ID-Guidelines-2022"]
+meta.kb4_refs = ["SAF-ID-VANC"]
+meta.effective_from = "2025-09-01"
+
+
+[base_dose]
+unit = "mg"
+loading = "15 mg/kg IBW"
+maintenance = "15 mg/kg IBW q12h"
+max_single = 2000
+
+
+[renally_adjusted]
+type = "crcl_cg" # creatinine clearance method specified
+formula = "if crcl < 50 then extend_interval else normal" # compiled to AST
+
+
+[monitoring]
+trough_target = "10-20 mg/L"
+trough_when = "steady_state"
+```
+
+
+### 5.3 Pediatric acetaminophen (weight based) — `acetaminophen_ped.toml`
+
+
+```toml
+meta.name = "acetaminophen.pediatric"
+meta.semantic_version = "1.0.0"
+meta.authors = ["Peds Pharm: Claire"]
+meta.kb3_refs = ["Peds-Pain-2024"]
+meta.effective_from = "2025-09-01"
+
+
+[base_dose]
+unit = "mg"
+dose_per_kg = 15       # mg/kg
+max_single = 1000
+max_daily = 60         # mg/kg/day
+
+
+[population]
+age_max = 12
+weight_required = true
+```
+
+
+**Important:** these are *seed* rules for testing only. Every TOML must include `meta.approvals` and signed commit before production `active=true`.
+
+
+---
+
+
+## 6) CI/CD / governance / approval gates
+
+
+### 6.1 Pipeline (GitHub Actions / GitLab CI example)
+
+
+* on: `kb1/rules/**.toml` PR
+* jobs:
+
+
+  1. `lint`: toml-lint
+  2. `compile`: run compiler → JSON Schema validate (use `ajv` or equivalent)
+  3. `unit-tests`: run rule-level tests (fixtures)
+  4. `property-tests`: run property-based tests for math monotonicity (Hypothesis/fast-check)
+  5. `mutation-tests`: run mutation suite against test harness
+  6. `approval-gate`: require `CODEOWNERS` review and digital signature (GPG or GitHub Signed Commits)
+  7. `publish-to-staging`: inserts into DB as inactive
+  8. `smoke-tests`: run Rust engine integration tests in staging
+  9. `clinical-signoff`: change request to P\&T UI and record decision
+  10. `publish-active`: sets `active=true`, refreshes materialized view, publishes Kafka update, invalidates Redis.
+
+
+### 6.2 Governance
+
+
+* P\&T Committee approval required for `major` (>patch) semantic changes; *minor* (patch) changes require PharmD owner + 1 reviewer.
+* All approvals recorded in `provenance` JSON (signed by approver identity).
+* Rollback: mark new row `active=false` and set prior version `active=true`. Keep both rows (immutable).
+
+
+---
+
+
+## 7) Testing strategy
+
+
+### 7.1 Unit tests
+
+
+* Each rule has a test matrix: normal, lower-bound, upper-bound, nulls, missing fields.
+* Use table-driven tests; assert expected adjustments or errors.
+
+
+### 7.2 Integration tests (Rust engine + KB-1 gRPC)
+
+
+* Run full request/response flows with sample `PatientContext` fixtures and assert numeric AST evaluation results.
+
+
+### 7.3 Property-based tests
+
+
+* For arithmetic formulas, assert monotonicity where expected (e.g., increasing weight should never reduce weight-based dose).
+
+
+### 7.4 Mutation testing
+
+
+* Tool: `stryker`/mutmut-like for your language. Mutate comparison ops and arithmetic; tests must detect.
+
+
+### 7.5 Boundary testing
+
+
+* eGFR 29 vs 30, weight 0.1kg, age 17.999 vs 18.0 — ensure proper branch behaviors.
+
+
+### 7.6 Golden replay tests
+
+
+* Persist expected dosing outputs (with evidence envelope) for a set of canonical fixtures; ensure bit-for-bit reproducibility after engine or DB upgrades.
+
+
+---
+
+
+## 8) Metrics & observability
+
+
+**Internal metrics to emit**
+
+
+* gRPC: request\_count, errors, latency\_p50/p95/p99.
+* Cache: hit\_ratio, miss\_count, invalidation\_count.
+* DB: query\_time, active\_rules\_count.
+* Usage: `timeseries.dosing_requests_per_drug` and `adjustment_trigger_rate_by_rule`.
+* Governance: approvals\_pending, approvals\_time\_to\_sign.
+
+
+**Dashboards & Alerts**
+
+
+* SLO violations: p95 > 60ms alert on-call.
+* Surge alerts: >2× baseline QPS for any drug code.
+* High invalidations: >100 invalidations/hour could indicate churn.
+
+
+---
+
+
+## 9) Failure modes & runbook
+
+
+### 9.1 Fail-fast semantics
+
+
+* If KB-1 is unavailable or returns `NOT_FOUND`, **Rust must abort calculation** and return `NO_RULE_FOUND` to GO Orchestrator (which blocks medication recommendation). No implicit defaults.
+
+
+### 9.2 Circuit breaker
+
+
+* Client-side circuit breaker: open if 5 failures in 1 minute; half-open after 30s. On open, fail fast with `SERVICE_UNAVAILABLE`.
+
+
+### 9.3 Cache fallback
+
+
+* If Redis unavailable, Rust calls KB-1 gRPC directly. If KB-1 gRPC unavailable, fail as above.
+
+
+### 9.4 Restore flows
+
+
+* Show step-by-step in playbook: check Kafka publishing, DB health, materialized view, Redis, gRPC logs, and certificate expiry.
+
+
+---
+
+
+## 10) Security & supply-chain
+
+
+* mTLS between Rust Engine ↔ KB-1; mutual auth; only Rust client identity allowed.
+* Secrets in Vault; database credentials rotated.
+* CI generates SBOM per build; use cosign to sign images and artifacts.
+* Rulepack artifacts (TOML) must be signed by author; approvals must be signed.
+* Maintain SLSA provenance for built artifacts.
+
+
+---
+
+
+## 11) Deployment checklist & rollout plan
+
+
+1. Implement KB-1 service (gRPC), TOML compiler, DB migrations, Redis + Kafka hooks.
+2. Load seed TOML bundles in `staging` as `active=false`.
+3. Run Rust integration tests (smoke + golden fixtures).
+4. Enable **shadow mode** for production (mirror requests; do not enforce). Collect deltas for 2 weeks.
+5. Review deltas and fix rules / tests.
+6. Canary enable `active=true` for small subset (1–5%); monitor SLOs & clinical overrides.
+7. Full rollout when error/delta < acceptance threshold and clinical signoff given.
+
+
+---
+
+
+## 12) Developer utilities & examples
+
+
+### 12.1 Compile command (CI)
+
+
+```bash
+# from repo root
+kb1-compiler compile --input kb1/rules/authoring/lisinopril.toml \
+  --schema schemas/dosing_bundle.schema.json \
+  --output compiled/lisinopril.1.0.0.json \
+  --checksum-out compiled/lisinopril.1.0.0.sha256
+```
+
+
+### 12.2 Redis invalidation (script)
+
+
+```bash
+#!/bin/bash
+DRUG="$1"
+for key in $(redis-cli --scan --pattern "dose:v2:${DRUG}:*"); do
+  redis-cli del "$key"
+done
+# Publish notification
+echo "{\"drug_code\":\"$DRUG\"}" | kafka-console-producer --broker-list kafka:9092 --topic dosing.rule.update
+```
+
+
+### 12.3 Example unit test fixture (YAML)
+
+
+```yaml
+name: "Lisinopril renal cap"
+input:
+  drug_code: "rxnorm:lisinopril"
+  patient_context:
+    egfr: 45
+    weight_kg: 80
+expected:
+  semantic_version: "1.0.0"
+  adjustments:
+    - adj_id: "renal-59-30"
+      description: "cap_max to 20 mg daily"
+```
+
+
+---
+
+
+## 13) Deliverables (repo layout suggestion)
+
+
+```
+/kb1
+  /authoring/*.toml
+  /compiled/*.json
+  /schemas/dosing_bundle.schema.json
+  /db/migrations/001_create_tables.sql
+  /grpc/kb1.proto
+  /cmd/compiler (rust/go)
+  /service/src (gRPC server)
+  /ci/workflows/kb1-validate.yaml
+  /tests/unit/*, /tests/integration/*
+  /docs/README.md
+```
+
+
+---
+
+
+## Closing notes & next steps
+
+
+* I kept your original operational rules (no fallback doses, strict approvals) and added deterministic compile, cache invalidation, golden tests, mutation testing, and SBOM/signing requirements.
+* Next I can: (choose one)
+
+
+  1. Produce `dosing_bundle.schema.json` (JSON Schema) and TOML → JSON compiler stub (Rust/Node).
+  2. Generate full `kb1.proto` and a minimal reference gRPC server client in Rust.
+  3. Create the CI `kb1-validate.yaml` pipeline file ready for GitHub Actions.
+
+
+Which should I deliver first?

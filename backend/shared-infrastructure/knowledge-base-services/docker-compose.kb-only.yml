@@ -1,0 +1,259 @@
+version: '3.8'
+
+services:
+  # ==================== KB-DRUG-RULES POSTGRESQL ====================
+  
+  kb-postgres:
+    image: postgres:15-alpine
+    container_name: kb-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=kb_postgres_password
+      - POSTGRES_DB=postgres
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5433:5432"  # Use port 5433 to avoid conflict with your PostgreSQL 17.6
+    volumes:
+      - kb_postgres_data:/var/lib/postgresql/data
+      - ./scripts/setup-local-postgres.sql:/docker-entrypoint-initdb.d/01-setup.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - kb-network
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=100
+      -c shared_buffers=128MB
+      -c effective_cache_size=512MB
+      -c maintenance_work_mem=32MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=8MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c log_statement=all
+      -c log_min_duration_statement=1000
+
+  # ==================== KB-DRUG-RULES SERVICE ====================
+  
+  kb-drug-rules:
+    build: 
+      context: ./kb-drug-rules
+      dockerfile: Dockerfile
+    container_name: kb-drug-rules
+    ports:
+      - "8081:8081"
+    environment:
+      - PORT=8081
+      - DEBUG=true
+      - DATABASE_URL=postgresql://kb_drug_rules_user:kb_password@kb-postgres:5432/kb_drug_rules
+      - REDIS_URL=redis://kb-redis:6379/0
+      - SIGNING_KEY_PATH=/app/keys/signing.key
+      - JWT_SECRET=kb-jwt-secret-key-for-development
+      - SUPPORTED_REGIONS=US,EU,CA,AU
+      - DEFAULT_REGION=US
+      - REQUIRE_APPROVAL=false
+      - REQUIRE_SIGNATURE=false
+      - METRICS_ENABLED=true
+      - TRACING_ENABLED=false
+    depends_on:
+      kb-postgres:
+        condition: service_healthy
+      kb-redis:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+  # ==================== REDIS FOR KB SERVICE ====================
+  
+  kb-redis:
+    image: redis:7-alpine
+    container_name: kb-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"  # Use port 6380 to avoid conflicts
+    volumes:
+      - kb_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+  # ==================== KB-7-TERMINOLOGY SERVICE ====================
+  
+  kb-7-terminology:
+    build: 
+      context: ./kb-7-terminology
+      dockerfile: Dockerfile
+    container_name: kb-7-terminology
+    ports:
+      - "8087:8087"
+    environment:
+      - PORT=8087
+      - ENVIRONMENT=development
+      - LOG_LEVEL=4  # Info level
+      - DATABASE_URL=postgresql://kb_user:kb_password@kb-postgres:5432/clinical_governance
+      - REDIS_URL=redis://kb-redis:6379/7
+      - SUPPORTED_REGIONS=US,EU,CA,AU
+      - TERMINOLOGY_DB=clinical_governance
+      - GRAPHQL_ENDPOINT=/graphql
+      - GRAPHQL_INTROSPECT=true
+      - GRAPHQL_PLAYGROUND=true
+      - FEDERATION_ENABLED=true
+      - GATEWAY_URL=http://localhost:4000/graphql
+      - METRICS_ENABLED=true
+      - EVIDENCE_ENVELOPE_ENABLED=true
+    depends_on:
+      kb-postgres:
+        condition: service_healthy
+      kb-redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8087/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+  # ==================== KB-9 CARE GAPS SERVICE ====================
+
+  kb-9-care-gaps:
+    build:
+      context: ./kb-9-care-gaps
+      dockerfile: Dockerfile
+    container_name: kb-9-care-gaps
+    ports:
+      - "8089:8089"
+    environment:
+      - PORT=8089
+      - ENVIRONMENT=development
+      - LOG_LEVEL=info
+      # Google Cloud Healthcare API (FHIR)
+      - GOOGLE_CLOUD_PROJECT_ID=${GOOGLE_CLOUD_PROJECT_ID:-cardiofit-905a8}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-asia-south1}
+      - GOOGLE_CLOUD_DATASET_ID=${GOOGLE_CLOUD_DATASET_ID:-clinical-synthesis-hub}
+      - GOOGLE_CLOUD_FHIR_STORE_ID=${GOOGLE_CLOUD_FHIR_STORE_ID:-fhir-store}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/google-credentials.json
+      # KB-7 Terminology integration
+      - TERMINOLOGY_URL=http://kb-7-terminology:8087
+      # CQL Libraries path (vaidshala)
+      - CQL_LIBRARY_PATH=/app/cql-libraries
+      # Redis caching
+      - REDIS_URL=redis://kb-redis:6379/9
+      # GraphQL
+      - ENABLE_PLAYGROUND=true
+      - FEDERATION_ENABLED=true
+      # Metrics
+      - METRICS_ENABLED=true
+    depends_on:
+      kb-redis:
+        condition: service_healthy
+      kb-7-terminology:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./credentials:/app/credentials:ro
+      - ../../vaidshala/clinical-knowledge-core:/app/cql-libraries:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8089/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+  # ==================== KB-10 RULES ENGINE SERVICE ====================
+
+  kb-10-rules-engine:
+    build:
+      context: ./kb-10-rules-engine
+      dockerfile: Dockerfile
+    container_name: kb-10-rules-engine
+    ports:
+      - "8100:8100"
+    environment:
+      - KB10_PORT=8100
+      - KB10_RULES_PATH=/app/rules
+      - KB10_LOG_LEVEL=info
+      - KB10_DB_HOST=kb-postgres
+      - KB10_DB_PORT=5432
+      - KB10_DB_NAME=kb10_rules
+      - KB10_DB_USER=kb10_user
+      - KB10_DB_PASSWORD=kb_password
+      - KB10_REDIS_HOST=kb-redis
+      - KB10_REDIS_PORT=6379
+      - KB10_ENABLE_CACHING=true
+      - KB10_CACHE_TTL=5m
+      - VAIDSHALA_URL=http://vaidshala:8096
+    volumes:
+      - ./kb-10-rules-engine/rules:/app/rules:ro
+      - ./logs:/app/logs
+    depends_on:
+      kb-postgres:
+        condition: service_healthy
+      kb-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+  # ==================== ADMINER FOR DATABASE MANAGEMENT ====================
+
+  kb-adminer:
+    image: adminer:latest
+    container_name: kb-adminer
+    ports:
+      - "8082:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=kb-postgres
+      - ADMINER_DESIGN=pepa-linha
+    depends_on:
+      - kb-postgres
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+volumes:
+  kb_postgres_data:
+    driver: local
+  kb_redis_data:
+    driver: local
+
+networks:
+  kb-network:
+    external: true
+    name: kb-network

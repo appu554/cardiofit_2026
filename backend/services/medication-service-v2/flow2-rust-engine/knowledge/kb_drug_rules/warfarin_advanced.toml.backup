@@ -1,0 +1,280 @@
+[meta]
+drug_id = "warfarin"
+generic_name = "Warfarin"
+drug_name = "warfarin"
+version = "2.0.0"
+last_updated = "2024-01-15"
+evidence_level = "A"
+calculation_strategy = "expression_based"
+evidence_sources = ["IWPC-2009", "Gage-2008", "FDA-2017"]
+clinical_reviewer = "Dr. Clinical Expert"
+
+[dose_calculation]
+[dose_calculation.base_dose]
+# Complex mathematical expression for warfarin dosing
+default_mg = "(5.6044 - 0.2614 * age + 0.0087 * height + 0.0128 * weight - 0.8677 * (is_male == 0 ? 1 : 0) - 0.4854 * (age >= 65 ? 1 : 0) + 0.0443 * (egfr < 60 ? 1 : 0))^2"
+calculation_method = "expression"
+expression = """
+# Warfarin dosing algorithm based on clinical factors
+base_dose = 5.6044 - 0.2614 * age + 0.0087 * height + 0.0128 * weight
+gender_adjustment = is_male == 0 ? -0.8677 : 0
+elderly_adjustment = age >= 65 ? -0.4854 : 0
+renal_adjustment = egfr < 60 ? 0.0443 : 0
+final_dose = max(1.0, min(10.0, (base_dose + gender_adjustment + elderly_adjustment + renal_adjustment)^2))
+final_dose
+"""
+
+# Weight adjustment bands
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 40.0
+max_kg = 60.0
+factor = 0.8
+action = "multiply"
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 60.1
+max_kg = 100.0
+factor = 1.0
+action = "multiply"
+
+[[dose_calculation.weight_adjustment.bands]]
+min_kg = 100.1
+max_kg = 150.0
+factor = 1.2
+action = "multiply"
+
+# Age adjustment bands
+[[dose_calculation.age_adjustment.bands]]
+min_years = 18
+max_years = 65
+factor = 1.0
+action = "multiply"
+
+[[dose_calculation.age_adjustment.bands]]
+min_years = 66
+max_years = 80
+factor = 0.8
+action = "multiply"
+
+[[dose_calculation.age_adjustment.bands]]
+min_years = 81
+max_years = 120
+factor = 0.6
+action = "multiply"
+
+[dose_calculation.dose_limits]
+absolute_min_mg = 0.5
+absolute_max_mg = 15.0
+min_dose_mg = "max(0.5, weight * 0.01)"
+max_dose_mg = "min(15.0, weight * 0.2 + (age < 65 ? 5 : 0))"
+max_mg_per_kg = 0.2
+max_mg_per_day = 15.0
+
+# Safety verification with expression-based rules
+[safety_verification]
+
+# Required by schema
+[[safety_verification.monitoring_requirements]]
+lab_test = "INR"
+frequency = "every_3_days"
+action_on_alert = "dose_adjustment"
+reason = "Tight INR monitoring with advanced algorithm"
+
+
+[safety_verification.renal_safety]
+[[safety_verification.renal_safety.bands]]
+min_egfr = 0.0
+max_egfr = 30.0
+action = "reduce_dose"
+reason = "Severe renal impairment increases bleeding risk"
+evidence = ["Warfarin clearance reduced by 50% when eGFR < 30"]
+max_dose_mg_per_day = 5.0
+monitoring_required = ["INR every 3-5 days", "Renal function weekly"]
+
+[[safety_verification.renal_safety.bands]]
+min_egfr = 30.0
+max_egfr = 60.0
+action = "monitor_closely"
+reason = "Moderate renal impairment may affect warfarin metabolism"
+evidence = ["Increased bleeding risk with eGFR 30-60"]
+max_dose_mg_per_day = 7.5
+monitoring_required = ["INR every week", "Renal function biweekly"]
+
+[safety_verification.hepatic_safety]
+[[safety_verification.hepatic_safety.child_pugh_restrictions]]
+class = "C"
+action = "dose_reduction"
+dose_reduction_factor = 0.5
+reason = "Severe hepatic impairment increases bleeding risk"
+
+[[safety_verification.hepatic_safety.bands]]
+min_value = 0.0
+max_value = 40.0
+parameter = "alt"
+action = "proceed"
+reason = "Normal liver function"
+evidence = ["Standard warfarin metabolism expected"]
+
+[[safety_verification.hepatic_safety.bands]]
+min_value = 40.0
+max_value = 120.0
+parameter = "alt"
+action = "reduce_dose"
+reason = "Mild hepatic impairment may increase warfarin sensitivity"
+evidence = ["Reduced warfarin clearance with elevated ALT"]
+max_dose_mg_per_day = "max(2.0, min(6.0, weight * 0.06 - (alt - 40) * 0.02))"
+pregnancy = true
+breastfeeding = false
+allergy_classes = ["warfarin", "coumarins"]
+conditions = ["active_bleeding", "recent_surgery"]
+
+
+[safety_verification.absolute_contraindications]
+pregnancy = true
+breastfeeding = false
+allergy_classes = ["warfarin", "coumarin"]
+conditions = ["active_bleeding", "severe_liver_disease", "recent_major_surgery"]
+
+expressions = [
+    "is_pregnant == 1",
+    "alt > 200 || bilirubin > 3.0",
+    "age < 18 && weight < 40"
+]
+
+# Unified interactions format requires arrays of tables for major/moderate
+[[safety_verification.interactions.major]]
+interacting_drug_classes = ["aspirin"]
+action = "monitor_closely"
+reason = "Additive anticoagulant effect"
+
+[[safety_verification.interactions.major]]
+interacting_drug_classes = ["amiodarone"]
+action = "dose_reduction"
+reason = "CYP2C9 inhibition increases INR"
+
+[[safety_verification.interactions.moderate]]
+interacting_drug_classes = ["simvastatin"]
+action = "monitor_closely"
+monitoring_required = ["INR_more_frequent"]
+reason = "Potential CYP interaction"
+evidence = ["Case reports of increased INR"]
+
+# Monitoring requirements with expression-based frequency
+[[monitoring_requirements]]
+parameter = "INR"
+frequency = "age > 75 || egfr < 30 ? 'every 3-5 days' : 'weekly'"  # Risk-based frequency
+lab_test = "PT/INR"
+target_range = "2.0-3.0"
+critical_values = "INR > 4.0 or INR < 1.5"
+action_on_alert = "dose_adjustment"
+action_on_critical = "Hold dose and recheck in 24-48 hours"
+
+[[monitoring_requirements]]
+parameter = "CBC"
+frequency = "monthly"
+lab_test = "Complete Blood Count"
+target_range = "Normal"
+critical_values = "Hgb < 8.0 or Platelets < 50,000"
+action_on_alert = "monitor_closely"
+action_on_critical = "Evaluate for bleeding, consider dose reduction"
+
+[[monitoring_requirements]]
+parameter = "liver_function"
+frequency = "age > 70 || alt > 40 ? 'monthly' : 'quarterly'"  # Risk-based monitoring
+lab_test = "ALT, AST, Bilirubin"
+target_range = "Normal"
+critical_values = "ALT > 3x ULN"
+action_on_alert = "monitor_closely"
+action_on_critical = "Consider dose reduction or discontinuation"
+
+# Advanced dosing scenarios with complex expressions
+[advanced_scenarios]
+
+[advanced_scenarios.atrial_fibrillation]
+indication = "atrial_fibrillation"
+target_inr = "2.0-3.0"
+dose_expression = """
+# CHADS2-VASc score influenced dosing
+chads_score = (age >= 75 ? 2 : (age >= 65 ? 1 : 0)) +
+              (is_female ? 1 : 0) +
+              (egfr < 60 ? 1 : 0)
+base_dose = 5.0
+risk_adjustment = chads_score >= 4 ? 0.8 : (chads_score >= 2 ? 0.9 : 1.0)
+final_dose = base_dose * risk_adjustment * (weight / 70.0)
+clamp(final_dose, 1.0, 10.0)
+"""
+
+[advanced_scenarios.mechanical_valve]
+indication = "mechanical_valve"
+target_inr = "2.5-3.5"
+dose_expression = """
+# Higher target INR requires higher dosing
+base_dose = 6.0
+valve_adjustment = 1.2  # 20% higher for mechanical valves
+age_factor = age > 70 ? 0.85 : 1.0
+weight_factor = weight / 70.0
+final_dose = base_dose * valve_adjustment * age_factor * weight_factor
+clamp(final_dose, 2.0, 12.0)
+"""
+
+[advanced_scenarios.bridge_therapy]
+indication = "bridge_therapy"
+target_inr = "2.0-3.0"
+dose_expression = """
+# Rapid anticoagulation for bridge therapy
+loading_dose = weight > 80 ? 10.0 : (weight > 60 ? 7.5 : 5.0)
+maintenance_factor = 0.8  # Reduce after loading
+days_on_therapy = 1  # This would come from external data
+current_dose = days_on_therapy <= 3 ? loading_dose : loading_dose * maintenance_factor
+clamp(current_dose, 2.0, 15.0)
+"""
+
+# Quality assurance expressions
+[quality_assurance]
+dose_reasonableness_check = "final_dose >= 0.5 && final_dose <= 20.0"
+clinical_appropriateness = "!(is_pregnant == 1 && final_dose > 0)"
+age_weight_consistency = "!(age < 18 && weight > 100)"
+renal_dose_consistency = "!(egfr < 30 && final_dose > 7.5)"
+
+# Expression validation rules
+[expression_validation]
+max_complexity = 150
+max_execution_time_ms = 100
+allowed_variables = [
+    "age", "weight", "height", "bmi", "bsa", "egfr", "creatinine",
+    "is_male", "is_female", "is_pregnant", "is_pediatric", "is_elderly",
+    "alt", "ast", "bilirubin", "inr", "chads_score"
+]
+allowed_functions = [
+    "min", "max", "abs", "sqrt", "round", "floor", "ceil", "clamp"
+]
+
+# Clinical decision support expressions
+[clinical_decision_support]
+bleeding_risk_score = """
+# HAS-BLED score calculation
+hypertension = 0  # Would come from patient data
+abnormal_renal = egfr < 60 ? 1 : 0
+abnormal_liver = alt > 40 || bilirubin > 1.5 ? 1 : 0
+stroke_history = 0  # Would come from patient data
+bleeding_history = 0  # Would come from patient data
+labile_inr = 0  # Would come from INR history
+elderly = age >= 65 ? 1 : 0
+drugs_alcohol = 0  # Would come from patient data
+
+has_bled = hypertension + abnormal_renal + abnormal_liver + stroke_history +
+           bleeding_history + labile_inr + elderly + drugs_alcohol
+has_bled
+"""
+
+dose_recommendation_confidence = """
+# Confidence score for dose recommendation
+base_confidence = 0.8
+age_penalty = age > 80 ? -0.1 : 0
+weight_penalty = weight < 50 || weight > 120 ? -0.1 : 0
+renal_penalty = egfr < 30 ? -0.2 : (egfr < 60 ? -0.1 : 0)
+interaction_penalty = 0  # Would be calculated based on drug interactions
+
+final_confidence = base_confidence + age_penalty + weight_penalty + renal_penalty + interaction_penalty
+clamp(final_confidence, 0.0, 1.0)
+"""

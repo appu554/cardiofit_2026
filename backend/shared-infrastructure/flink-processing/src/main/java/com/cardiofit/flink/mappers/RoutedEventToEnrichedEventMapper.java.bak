@@ -1,0 +1,288 @@
+package com.cardiofit.flink.mappers;
+
+import com.cardiofit.stream.models.EnrichedPatientEvent;
+import com.cardiofit.flink.models.EnrichedClinicalEvent;
+import com.cardiofit.flink.models.DrugInteraction;
+import com.cardiofit.flink.models.VitalSigns;
+import com.cardiofit.flink.models.AllergyAlert;
+import com.cardiofit.flink.models.SafetyViolation;
+
+import org.apache.flink.api.common.functions.MapFunction;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.OffsetDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Maps from legacy EnrichedPatientEvent to new EnrichedClinicalEvent format
+ * for the hybrid Kafka topic architecture.
+ *
+ * This mapper bridges the gap between the existing Flink job pipeline and
+ * the new TransactionalMultiSinkRouter that requires EnrichedClinicalEvent format.
+ */
+public class RoutedEventToEnrichedEventMapper implements MapFunction<EnrichedPatientEvent, EnrichedClinicalEvent> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RoutedEventToEnrichedEventMapper.class);
+
+    @Override
+    public EnrichedClinicalEvent map(EnrichedPatientEvent enrichedPatientEvent) throws Exception {
+        try {
+            // Build EnrichedClinicalEvent from EnrichedPatientEvent
+            EnrichedClinicalEvent.Builder builder = EnrichedClinicalEvent.builder()
+                .eventId(enrichedPatientEvent.getOriginalEvent().getEventId())
+                .patientId(enrichedPatientEvent.getOriginalEvent().getPatientId())
+                .sourceEventType(enrichedPatientEvent.getOriginalEvent().getEventType())
+                .timestamp(enrichedPatientEvent.getOriginalEvent().getTimestamp())
+                .routingTime(OffsetDateTime.now())
+                .priority(mapPriority(enrichedPatientEvent))
+                .originalPayload(enrichedPatientEvent.getOriginalEvent().getPayload());
+
+            // Map drug interactions if present
+            if (enrichedPatientEvent.getDrugInteractions() != null &&
+                !enrichedPatientEvent.getDrugInteractions().isEmpty()) {
+
+                List<DrugInteraction> drugInteractions = enrichedPatientEvent.getDrugInteractions()
+                    .stream()
+                    .map(this::mapDrugInteraction)
+                    .collect(Collectors.toList());
+                builder.drugInteractions(drugInteractions);
+            }
+
+            // Map vital signs if present
+            if (enrichedPatientEvent.getVitalSigns() != null) {
+                builder.vitalSigns(mapVitalSigns(enrichedPatientEvent.getVitalSigns()));
+            }
+
+            // Map allergy alerts if present
+            if (enrichedPatientEvent.getAllergyAlerts() != null &&
+                !enrichedPatientEvent.getAllergyAlerts().isEmpty()) {
+
+                List<AllergyAlert> allergyAlerts = enrichedPatientEvent.getAllergyAlerts()
+                    .stream()
+                    .map(this::mapAllergyAlert)
+                    .collect(Collectors.toList());
+                builder.allergyAlerts(allergyAlerts);
+            }
+
+            // Map safety violations if present
+            if (enrichedPatientEvent.getSafetyViolations() != null &&
+                !enrichedPatientEvent.getSafetyViolations().isEmpty()) {
+
+                List<SafetyViolation> safetyViolations = enrichedPatientEvent.getSafetyViolations()
+                    .stream()
+                    .map(this::mapSafetyViolation)
+                    .collect(Collectors.toList());
+                builder.safetyViolations(safetyViolations);
+            }
+
+            // Map clinical patterns and confidence
+            if (enrichedPatientEvent.getClinicalPatterns() != null) {
+                builder.clinicalPatterns(new HashMap<>(enrichedPatientEvent.getClinicalPatterns()));
+            }
+
+            if (enrichedPatientEvent.getConfidenceScore() != null) {
+                builder.confidenceScore(enrichedPatientEvent.getConfidenceScore());
+            }
+
+            // Map semantic enrichment data
+            if (enrichedPatientEvent.getSemanticMeshData() != null) {
+                builder.semanticMeshData(new HashMap<>(enrichedPatientEvent.getSemanticMeshData()));
+            }
+
+            // Map context snapshot if available
+            if (enrichedPatientEvent.getPatientContextSnapshot() != null) {
+                builder.patientContextSnapshot(new HashMap<>(enrichedPatientEvent.getPatientContextSnapshot()));
+            }
+
+            // Set routing destinations based on event characteristics
+            Set<String> destinations = determineDestinations(enrichedPatientEvent);
+            builder.destinations(destinations);
+
+            EnrichedClinicalEvent result = builder.build();
+
+            LOG.debug("Mapped EnrichedPatientEvent {} to EnrichedClinicalEvent with destinations: {}",
+                     enrichedPatientEvent.getOriginalEvent().getEventId(), destinations);
+
+            return result;
+
+        } catch (Exception e) {
+            LOG.error("Failed to map EnrichedPatientEvent to EnrichedClinicalEvent: {}",
+                     enrichedPatientEvent.getOriginalEvent().getEventId(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Map priority from legacy enum to new enum
+     */
+    private String mapPriority(EnrichedPatientEvent event) {
+        if (event.getOriginalEvent().isCritical()) {
+            return "CRITICAL";
+        } else if (event.requiresPushNotification()) {
+            return "HIGH";
+        } else if (event.getClinicalPatterns() != null && !event.getClinicalPatterns().isEmpty()) {
+            return "MEDIUM";
+        } else {
+            return "LOW";
+        }
+    }
+
+    /**
+     * Map drug interaction from legacy format
+     */
+    private DrugInteraction mapDrugInteraction(com.cardiofit.stream.models.DrugInteraction legacy) {
+        return DrugInteraction.builder()
+            .drugs(legacy.getDrugs() != null ? new ArrayList<>(legacy.getDrugs()) : new ArrayList<>())
+            .severity(legacy.getSeverity() != null ? legacy.getSeverity() : "UNKNOWN")
+            .riskType(legacy.getRiskType() != null ? legacy.getRiskType() : "INTERACTION")
+            .description(legacy.getDescription())
+            .recommendation(legacy.getRecommendation())
+            .build();
+    }
+
+    /**
+     * Map vital signs from legacy format
+     */
+    private VitalSigns mapVitalSigns(com.cardiofit.stream.models.VitalSigns legacy) {
+        return VitalSigns.builder()
+            .heartRate(legacy.getHeartRate())
+            .bloodPressureSystemic(legacy.getBloodPressureSystemic())
+            .bloodPressureDiastolic(legacy.getBloodPressureDiastolic())
+            .temperature(legacy.getTemperature())
+            .oxygenSaturation(legacy.getOxygenSaturation())
+            .respiratoryRate(legacy.getRespiratoryRate())
+            .isAbnormal(legacy.isAbnormal())
+            .riskScore(legacy.getRiskScore() != null ? legacy.getRiskScore() : 0.0)
+            .build();
+    }
+
+    /**
+     * Map allergy alert from legacy format
+     */
+    private AllergyAlert mapAllergyAlert(com.cardiofit.stream.models.AllergyAlert legacy) {
+        return AllergyAlert.builder()
+            .allergen(legacy.getAllergen())
+            .severity(legacy.getSeverity() != null ? legacy.getSeverity() : "UNKNOWN")
+            .reaction(legacy.getReaction())
+            .exposureRisk(legacy.getExposureRisk() != null ? legacy.getExposureRisk() : 0.0)
+            .build();
+    }
+
+    /**
+     * Map safety violation from legacy format
+     */
+    private SafetyViolation mapSafetyViolation(com.cardiofit.stream.models.SafetyViolation legacy) {
+        return SafetyViolation.builder()
+            .violationType(legacy.getViolationType())
+            .description(legacy.getDescription())
+            .severity(legacy.getSeverity() != null ? legacy.getSeverity() : "MEDIUM")
+            .recommendation(legacy.getRecommendation())
+            .build();
+    }
+
+    /**
+     * Determine routing destinations based on event characteristics
+     */
+    private Set<String> determineDestinations(EnrichedPatientEvent event) {
+        Set<String> destinations = new HashSet<>();
+
+        // Always route to central system of record
+        destinations.add("central");
+        destinations.add("enriched");
+
+        // Route to FHIR if this updates patient state
+        if (isPatientStateUpdate(event)) {
+            destinations.add("fhir");
+            destinations.add("fhir_store");
+            destinations.add("state_update");
+        }
+
+        // Route to alerts if critical or requires notification
+        if (event.getOriginalEvent().isCritical() || event.requiresPushNotification()) {
+            destinations.add("alerts");
+            destinations.add("critical");
+            destinations.add("notifications");
+        }
+
+        // Route to analytics if has metrics or patterns
+        if (hasAnalyticsValue(event)) {
+            destinations.add("analytics");
+            destinations.add("olap");
+            destinations.add("reporting");
+            destinations.add("metrics");
+        }
+
+        // Route to graph if has relationships
+        if (hasGraphRelationships(event)) {
+            destinations.add("graph");
+            destinations.add("neo4j");
+            destinations.add("relationships");
+            destinations.add("care-pathway");
+        }
+
+        // Route to audit for compliance
+        if (requiresAudit(event)) {
+            destinations.add("audit");
+            destinations.add("compliance");
+        }
+
+        // Route to cache if high-priority
+        if (event.getOriginalEvent().isCritical() || event.requiresPushNotification()) {
+            destinations.add("cache");
+            destinations.add("redis");
+            destinations.add("real-time");
+        }
+
+        return destinations;
+    }
+
+    /**
+     * Check if event represents a patient state update requiring FHIR persistence
+     */
+    private boolean isPatientStateUpdate(EnrichedPatientEvent event) {
+        String eventType = event.getOriginalEvent().getEventType();
+        return eventType != null && (
+            eventType.contains("medication") ||
+            eventType.contains("vital") ||
+            eventType.contains("lab") ||
+            eventType.contains("observation") ||
+            eventType.contains("diagnosis") ||
+            eventType.contains("procedure") ||
+            eventType.contains("encounter")
+        );
+    }
+
+    /**
+     * Check if event has analytics value
+     */
+    private boolean hasAnalyticsValue(EnrichedPatientEvent event) {
+        return event.getClinicalPatterns() != null && !event.getClinicalPatterns().isEmpty() ||
+               event.getConfidenceScore() != null ||
+               event.getOriginalEvent().getPayload() != null;
+    }
+
+    /**
+     * Check if event creates graph relationships
+     */
+    private boolean hasGraphRelationships(EnrichedPatientEvent event) {
+        String eventType = event.getOriginalEvent().getEventType();
+        return eventType != null && (
+            eventType.contains("encounter") ||
+            eventType.contains("care_team") ||
+            eventType.contains("provider") ||
+            eventType.contains("relationship") ||
+            event.getDrugInteractions() != null && !event.getDrugInteractions().isEmpty()
+        );
+    }
+
+    /**
+     * Check if event requires audit logging
+     */
+    private boolean requiresAudit(EnrichedPatientEvent event) {
+        return event.getOriginalEvent().isCritical() ||
+               event.getSafetyViolations() != null && !event.getSafetyViolations().isEmpty() ||
+               event.getDrugInteractions() != null && !event.getDrugInteractions().isEmpty();
+    }
+}

@@ -1,0 +1,510 @@
+openapi: 3.0.0
+info:
+  title: KB-2 Clinical Context Service API
+  description: Enhanced clinical phenotyping, risk assessment, and treatment preference service
+  version: 2.0.0
+  contact:
+    name: Clinical Platform Team
+    email: clinical-platform@clinicalsynthesishub.com
+  license:
+    name: Proprietary
+    
+servers:
+  - description: Development server
+    url: http://localhost:8081
+  - description: Staging server
+    url: https://staging-kb2.clinicalsynthesishub.com
+  - description: Production server
+    url: https://kb2.clinicalsynthesishub.com
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for service authentication
+
+  schemas:
+    PatientContext:
+      type: object
+      description: Patient clinical context for phenotype evaluation
+      required: ["patient_id"]
+      properties:
+        patient_id:
+          type: string
+          description: Unique patient identifier
+        demographics:
+          type: object
+          properties:
+            age: { type: integer, minimum: 0, maximum: 150 }
+            sex: { type: string, enum: ["male", "female"] }
+            race: { type: string }
+            ethnicity: { type: string }
+        conditions:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              system: { type: string, enum: ["ICD-10", "SNOMED-CT"] }
+              display: { type: string }
+              onset_date: { type: string, format: date }
+        medications:
+          type: array
+          items:
+            type: object
+            properties:
+              rxnorm_code: { type: string }
+              name: { type: string }
+              start_date: { type: string, format: date }
+              dosage: { type: string }
+        lab_results:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              value: { type: number }
+              unit: { type: string }
+              reference_range: { type: string }
+              date: { type: string, format: date-time }
+        vital_signs:
+          type: object
+          properties:
+            blood_pressure:
+              type: object
+              properties:
+                systolic: { type: integer }
+                diastolic: { type: integer }
+                date: { type: string, format: date-time }
+            heart_rate: { type: integer }
+            temperature: { type: number }
+            respiratory_rate: { type: integer }
+            oxygen_saturation: { type: number }
+
+    MatchedPhenotype:
+      type: object
+      description: A phenotype that matches the patient
+      required: ["id", "name", "domain", "priority", "confidence"]
+      properties:
+        id:
+          type: string
+          pattern: "^PHE-[A-Z0-9]{8}$"
+        name:
+          type: string
+        domain:
+          type: string
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        outputs:
+          type: object
+          properties:
+            risk_category: { type: string }
+            treatment_intensity: { type: string }
+            monitoring_level: { type: string }
+            care_setting: { type: string }
+        clinical_implications:
+          type: array
+          items:
+            type: object
+            properties:
+              implication: { type: string }
+              severity: { type: string }
+              action_required: { type: boolean }
+              timeframe: { type: string }
+        evidence_links:
+          type: object
+          properties:
+            kb3_guidelines: { type: array, items: { type: string } }
+            kb4_safety_rules: { type: array, items: { type: string } }
+
+    RiskAssessment:
+      type: object
+      description: Risk assessment results
+      required: ["model_id", "risk_score", "category"]
+      properties:
+        model_id:
+          type: string
+          pattern: "^RISK-[A-Z0-9]{3,6}$"
+        model_name:
+          type: string
+        risk_score:
+          type: number
+          minimum: 0
+          maximum: 100
+        category:
+          type: string
+          enum: ["low", "moderate", "high", "very_high", "extreme"]
+        color:
+          type: string
+          enum: ["green", "yellow", "orange", "red", "purple"]
+        recommendations:
+          type: array
+          items: { type: string }
+        confidence_interval:
+          type: object
+          properties:
+            lower: { type: number }
+            upper: { type: number }
+            level: { type: number }
+
+    TreatmentPreference:
+      type: object
+      description: Treatment preference recommendation
+      required: ["preference_id", "condition", "phenotype"]
+      properties:
+        preference_id:
+          type: string
+          pattern: "^PREF-[A-Z]{2,4}-[0-9]{3}$"
+        condition:
+          type: string
+        phenotype:
+          type: string
+        first_line:
+          type: array
+          items:
+            type: object
+            properties:
+              class: { type: string }
+              specific_agent: { type: string }
+              rationale: { type: string }
+              evidence_level: { type: string }
+              dosing: { type: object }
+        alternatives:
+          type: array
+          items:
+            type: object
+            properties:
+              class: { type: string }
+              when: { type: string }
+              rationale: { type: string }
+        avoid:
+          type: array
+          items:
+            type: object
+            properties:
+              class: { type: string }
+              reason: { type: string }
+              severity: { type: string }
+
+    PhenotypeEvaluationResponse:
+      type: object
+      description: Complete phenotype evaluation response
+      properties:
+        patient_id: { type: string }
+        evaluation_timestamp: { type: string, format: date-time }
+        matched_phenotypes:
+          type: array
+          items: { $ref: "#/components/schemas/MatchedPhenotype" }
+        risk_assessments:
+          type: array
+          items: { $ref: "#/components/schemas/RiskAssessment" }
+        treatment_preferences:
+          type: array
+          items: { $ref: "#/components/schemas/TreatmentPreference" }
+        clinical_alerts:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              message: { type: string }
+              severity: { type: string }
+        reasoning_chain:
+          type: array
+          items:
+            type: object
+            properties:
+              step: { type: string }
+              result: { type: string }
+              data_used: { type: array }
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
+            timestamp: { type: string, format: date-time }
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Check service health and availability
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "healthy" }
+                  timestamp: { type: string, format: date-time }
+                  version: { type: string }
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: Service metrics for monitoring
+      responses:
+        '200':
+          description: Prometheus format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/phenotypes:
+    get:
+      summary: List available phenotypes
+      description: Get list of all available clinical phenotypes
+      parameters:
+        - name: domain
+          in: query
+          schema:
+            type: string
+          description: Filter by clinical domain
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: ["draft", "active", "deprecated"]
+          description: Filter by phenotype status
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: List of phenotypes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  phenotypes:
+                    type: array
+                    items: { $ref: "#/components/schemas/MatchedPhenotype" }
+                  total_count: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+
+  /v1/phenotypes/evaluate:
+    post:
+      summary: Evaluate patient phenotypes
+      description: Batch evaluation of patient contexts against all phenotypes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["patients"]
+              properties:
+                patients:
+                  type: array
+                  items: { $ref: "#/components/schemas/PatientContext" }
+                  maxItems: 1000
+                domains:
+                  type: array
+                  items: { type: string }
+                  description: "Optional: limit evaluation to specific domains"
+                include_rationale:
+                  type: boolean
+                  default: false
+                include_alternatives:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Phenotype evaluation results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/PhenotypeEvaluationResponse" }
+                  evaluation_metadata:
+                    type: object
+                    properties:
+                      total_patients: { type: integer }
+                      evaluation_time_ms: { type: integer }
+                      cache_hit_rate: { type: number }
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /v1/phenotypes/{phenotype_id}/explain:
+    post:
+      summary: Explain phenotype matching
+      description: Get detailed explanation of why a phenotype matched or didn't match
+      parameters:
+        - name: phenotype_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^PHE-[A-Z0-9]{8}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatientContext" }
+      responses:
+        '200':
+          description: Phenotype explanation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  phenotype_id: { type: string }
+                  matched: { type: boolean }
+                  criteria_evaluated:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        criterion: { type: string }
+                        result: { type: boolean }
+                        value_used: { type: string }
+                  data_used:
+                    type: array
+                    items: { type: string }
+                  missing_data:
+                    type: array
+                    items: { type: string }
+                  confidence_score: { type: number }
+
+  /v1/risk/assess:
+    post:
+      summary: Assess clinical risk
+      description: Calculate risk scores using specified models
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["patient_context"]
+              properties:
+                patient_context: { $ref: "#/components/schemas/PatientContext" }
+                risk_models:
+                  type: array
+                  items: { type: string }
+                  description: "Specific risk models to use (optional)"
+      responses:
+        '200':
+          description: Risk assessment results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patient_id: { type: string }
+                  risk_assessments:
+                    type: array
+                    items: { $ref: "#/components/schemas/RiskAssessment" }
+                  composite_risk:
+                    type: object
+                    properties:
+                      overall_category: { type: string }
+                      contributing_factors: { type: array, items: { type: string } }
+
+  /v1/treatment/preferences:
+    post:
+      summary: Get treatment preferences
+      description: Get treatment recommendations based on patient phenotypes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["patient_context", "condition"]
+              properties:
+                patient_context: { $ref: "#/components/schemas/PatientContext" }
+                condition: { type: string }
+                phenotype_ids:
+                  type: array
+                  items: { type: string }
+                  description: "Specific phenotypes to base preferences on"
+      responses:
+        '200':
+          description: Treatment preferences
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patient_id: { type: string }
+                  condition: { type: string }
+                  treatment_preferences:
+                    type: array
+                    items: { $ref: "#/components/schemas/TreatmentPreference" }
+
+  /v1/context/assemble:
+    post:
+      summary: Complete clinical context assembly
+      description: Comprehensive evaluation including phenotypes, risk, and treatment preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: ["patient_context"]
+              properties:
+                patient_context: { $ref: "#/components/schemas/PatientContext" }
+                domains:
+                  type: array
+                  items: { type: string }
+                include_explanations:
+                  type: boolean
+                  default: false
+                risk_models:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Complete clinical context
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PhenotypeEvaluationResponse" }
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }

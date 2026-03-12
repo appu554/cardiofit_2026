@@ -1,0 +1,215 @@
+# Diabetes Phenotypes Library
+# Comprehensive diabetes mellitus phenotyping and management algorithms
+
+metadata:
+  kb_name: "kb_clinical_context"
+  version: "2.0.0"
+  institution: "Clinical Synthesis Hub"
+  effective_date: "2025-09-01"
+  expires_date: "2026-09-01"
+  clinical_domains: ["diabetes", "endocrine"]
+
+phenotypes:
+  
+  # ========== TYPE 2 DIABETES PHENOTYPES ==========
+  
+  - id: "PHE-DM000001"
+    name: "T2DM with Cardiovascular Disease"
+    domain: "diabetes"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Type 2 diabetes mellitus with established cardiovascular disease"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.has_t2dm && 
+        (patient.has_ascvd || patient.has_heart_failure || patient.has_pad)
+      data_requirements:
+        - field: "patient.has_t2dm"
+          type: "boolean"
+          required: true
+          source: "context_gateway"
+        - field: "patient.has_ascvd"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.has_heart_failure"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "patient.has_pad"
+          type: "boolean"
+          required: false
+          source: "context_gateway"
+        - field: "labs.hba1c"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "%"
+          time_window: "3m"
+    
+    priority: 600
+    
+    outputs:
+      risk_category: "very_high"
+      treatment_intensity: "aggressive"
+      monitoring_level: "enhanced"
+      care_setting: "primary"
+      clinical_urgency: "routine"
+    
+    clinical_implications:
+      - implication: "SGLT2 inhibitor or GLP-1 agonist strongly recommended"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "medication_change"
+      - implication: "Intensify cardiovascular risk factor management"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "follow_up"
+      - implication: "Consider cardio-oncology consultation if applicable"
+        severity: "info"
+        action_required: false
+        timeframe: "routine"
+        action_type: "referral"
+    
+    evidence_links:
+      kb3_guidelines: ["ADA-DM-2025-004", "ESC-DM-CVD-2023"]
+      kb4_safety_rules: ["SAF-SGLT2-001", "SAF-GLP1-001"]
+      literature_refs:
+        - pmid: "30415957"
+          citation: "SGLT2 inhibitors in diabetes with CVD"
+          evidence_level: "1A"
+
+  - id: "PHE-DM000002"
+    name: "T2DM Poor Glycemic Control"
+    domain: "diabetes"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Type 2 diabetes with persistently poor glycemic control"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.has_t2dm &&
+        labs.hba1c > 9.0 &&
+        size(patient.diabetes_medications) >= 2
+      data_requirements:
+        - field: "patient.has_t2dm"
+          type: "boolean"
+          required: true
+          source: "context_gateway"
+        - field: "labs.hba1c"
+          type: "float"
+          required: true
+          source: "context_gateway"
+          units: "%"
+          time_window: "3m"
+          validation_rules:
+            min_value: 4.0
+            max_value: 20.0
+        - field: "patient.diabetes_medications"
+          type: "array"
+          required: false
+          source: "context_gateway"
+          time_window: "3m"
+    
+    priority: 550
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "aggressive"
+      monitoring_level: "intensive"
+      care_setting: "specialty"
+    
+    clinical_implications:
+      - implication: "Diabetes therapy intensification required"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "medication_change"
+      - implication: "Endocrinology consultation recommended"
+        severity: "info"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "referral"
+      - implication: "Assess for medication adherence and barriers"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "education"
+    
+    evidence_links:
+      kb3_guidelines: ["ADA-DM-2025-001", "AACE-DM-ALGORITHM-2024"]
+      kb4_safety_rules: ["SAF-INSULIN-001", "SAF-HYPO-001"]
+
+  # ========== DIABETIC COMPLICATIONS ==========
+  
+  - id: "PHE-DM000003"
+    name: "Diabetic Nephropathy"
+    domain: "diabetes"
+    version: "1.0.0"
+    status: "active"
+    effective_date: "2025-09-01"
+    description: "Diabetes with evidence of diabetic kidney disease"
+    
+    criteria:
+      logic_engine: "cel"
+      expression: |
+        patient.has_diabetes &&
+        (labs.uacr >= 30 || labs.egfr < 60) &&
+        !patient.has_other_kidney_disease
+      data_requirements:
+        - field: "patient.has_diabetes"
+          type: "boolean"
+          required: true
+          source: "context_gateway"
+        - field: "labs.uacr"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "mg/g"
+          time_window: "6m"
+        - field: "labs.egfr"
+          type: "float"
+          required: false
+          source: "context_gateway"
+          units: "mL/min/1.73m2"
+          time_window: "3m"
+        - field: "patient.has_other_kidney_disease"
+          type: "boolean"
+          required: false
+          source: "ehr"
+    
+    priority: 650
+    
+    outputs:
+      risk_category: "high"
+      treatment_intensity: "standard"
+      monitoring_level: "enhanced"
+      care_setting: "primary"
+    
+    clinical_implications:
+      - implication: "ACE inhibitor or ARB therapy recommended"
+        severity: "warning"
+        action_required: true
+        timeframe: "within_week"
+        action_type: "medication_change"
+      - implication: "Nephrology referral if eGFR < 30 or rapid decline"
+        severity: "warning"
+        action_required: false
+        timeframe: "within_week"
+        action_type: "referral"
+      - implication: "Annual diabetic nephropathy monitoring"
+        severity: "info"
+        action_required: true
+        timeframe: "routine"
+        action_type: "lab_order"
+    
+    evidence_links:
+      kb3_guidelines: ["KDIGO-DKD-2022", "ADA-NEPHROPATHY-2025"]
+      kb4_safety_rules: ["SAF-ACE-CKD-001", "SAF-CONTRAST-001"]

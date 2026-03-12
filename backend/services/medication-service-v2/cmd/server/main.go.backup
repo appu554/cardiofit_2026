@@ -1,0 +1,149 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"medication-service-v2/internal/config"
+	"medication-service-v2/internal/infrastructure/database"
+	"medication-service-v2/internal/infrastructure/redis"
+	"medication-service-v2/internal/infrastructure/monitoring"
+	"medication-service-v2/internal/interfaces/http/server"
+	grpcserver "medication-service-v2/internal/interfaces/grpc"
+	"medication-service-v2/internal/application/services"
+	"medication-service-v2/internal/infrastructure/clients"
+
+	"go.uber.org/zap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+)
+
+func main() {
+	// Initialize logger
+	logger, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("Failed to create logger: %v", err)
+	}
+	defer logger.Sync()
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Fatal("Failed to load configuration", zap.Error(err))
+	}
+
+	// Initialize OpenTelemetry
+	tracer, err := monitoring.InitTracing(cfg.Service.Name, cfg.Service.Version)
+	if err != nil {
+		logger.Fatal("Failed to initialize tracing", zap.Error(err))
+	}
+	defer func() {
+		if err := tracer.Shutdown(context.Background()); err != nil {
+			logger.Error("Failed to shutdown tracer", zap.Error(err))
+		}
+	}()
+
+	// Initialize Prometheus metrics
+	metrics := monitoring.NewMetrics()
+
+	// Create application context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize infrastructure
+	db, err := database.NewPostgreSQL(cfg.Database.URL)
+	if err != nil {
+		logger.Fatal("Failed to connect to database", zap.Error(err))
+	}
+	defer db.Close()
+
+	redisClient, err := redis.NewClient(cfg.Redis.URL)
+	if err != nil {
+		logger.Fatal("Failed to connect to Redis", zap.Error(err))
+	}
+	defer redisClient.Close()
+
+	// Initialize external clients
+	contextGatewayClient := clients.NewContextGatewayClient(cfg.ExternalServices.ContextGateway.URL, logger)
+	apolloFederationClient := clients.NewApolloFederationClient(cfg.ExternalServices.ApolloFederation.URL, logger)
+	rustEngineClient := clients.NewRustEngineClient(cfg.ExternalServices.RustEngine.URL, logger)
+
+	// Initialize application services
+	appServices := services.NewServices(
+		db,
+		redisClient,
+		contextGatewayClient,
+		apolloFederationClient,
+		rustEngineClient,
+		logger,
+		metrics,
+	)
+
+	// Initialize HTTP server
+	httpServer := server.NewHTTPServer(cfg, appServices, logger, metrics)
+	
+	// Initialize gRPC server
+	grpcServer := grpcserver.NewServer(logger, appServices, grpcserver.DefaultServerConfig())
+
+	// Start servers
+	go func() {
+		logger.Info("Starting HTTP server", zap.String("port", cfg.Server.HTTP.Port))
+		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {
+			logger.Fatal("HTTP server failed", zap.Error(err))
+		}
+	}()
+
+	go func() {
+		logger.Info("Starting gRPC server", zap.String("port", cfg.Server.GRPC.Port))
+		if err := grpcServer.Start(); err != nil {
+			logger.Fatal("gRPC server failed", zap.Error(err))
+		}
+	}()
+
+	// Wait for interrupt signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	logger.Info("Shutting down servers...")
+
+	// Create shutdown context with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	// Shutdown HTTP server gracefully
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("Failed to shutdown HTTP server", zap.Error(err))
+	}
+
+	// Shutdown gRPC server gracefully
+	grpcServer.GracefulStop()
+
+	logger.Info("Server shutdown complete")
+}
+
+// healthCheck performs basic health checks for the service
+func healthCheck(ctx context.Context, db *database.PostgreSQL, redis *redis.Client) error {
+	// Check database connection
+	if err := db.Ping(ctx); err != nil {
+		return fmt.Errorf("database health check failed: %w", err)
+	}
+
+	// Check Redis connection
+	if err := redis.Ping(ctx); err != nil {
+		return fmt.Errorf("redis health check failed: %w", err)
+	}
+
+	return nil
+}
+
+// getTracer returns the global tracer instance
+func getTracer() trace.Tracer {
+	return otel.Tracer("medication-service-v2")
+}

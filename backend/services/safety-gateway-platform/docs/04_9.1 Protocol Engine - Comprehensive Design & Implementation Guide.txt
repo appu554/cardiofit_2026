@@ -1,0 +1,1490 @@
+﻿# Protocol Engine - Comprehensive Design & Implementation Guide
+
+
+## Executive Summary
+
+
+The Protocol Engine serves as the second critical component of the Safety Gateway, complementing the Clinical Assertion Engine (CAE) by enforcing formal clinical protocols, care pathways, and institutional policies. While CAE focuses on medication-specific safety checks (DDIs, dosing, contraindications), the Protocol Engine ensures compliance with broader clinical workflows, regulatory requirements, and institution-specific safety policies.
+
+
+## 1. Strategic Position & Core Responsibilities
+
+
+### 1.1 Architectural Context
+
+
+```typescript
+interface SafetyGatewayArchitecture {
+  // Two complementary engines
+  engines: {
+    cae: ClinicalAssertionEngine;        // Drug safety, DDI, dosing
+    protocol: ProtocolEngine;             // Pathways, policies, governance
+  };
+  
+  // Shared infrastructure
+  shared: {
+    snapshotManager: SnapshotManager;
+    contextGateway: ContextGatewayClient;
+    auditLedger: AuditLedgerClient;
+    approvalOrchestrator: ApprovalOrchestrator;
+  };
+  
+  // Integration points
+  workflow: {
+    apolloFederation: GraphQLGateway;
+    medicationService: MedicationProposalService;
+    outboxPattern: KafkaPublisher;
+  };
+}
+```
+
+
+### 1.2 Core Responsibilities
+
+
+The Protocol Engine enforces:
+
+
+1. **Clinical Pathways**: Multi-step treatment protocols (sepsis bundles, VTE prophylaxis, perioperative protocols)
+2. **Institutional Policies**: Site-specific rules beyond standard drug safety
+3. **Regulatory Compliance**: JCAHO, CMS quality measures, local regulations
+4. **Resource Constraints**: Formulary restrictions, prior authorization requirements
+5. **Temporal Constraints**: Time-sensitive medication administration windows
+6. **Role-Based Restrictions**: Prescriber scope limitations, specialty-specific protocols
+
+
+### 1.3 Differentiation from CAE
+
+
+| Aspect | CAE | Protocol Engine |
+|--------|-----|-----------------|
+| **Focus** | Drug-specific safety | Workflow & policy compliance |
+| **Scope** | Single medication decision | Multi-step protocols & pathways |
+| **Rules** | Universal clinical rules | Institution-specific policies |
+| **State** | Stateless per evaluation | Stateful protocol tracking |
+| **Complexity** | Graph-based reasoning | Rule chains & state machines |
+| **Override** | Clinical judgment override | Policy exception workflow |
+
+
+## 2. Core Architecture
+
+
+### 2.1 Component Architecture
+
+
+```typescript
+class ProtocolEngine {
+  // Core components
+  private protocolRepository: ProtocolRepository;
+  private stateManager: ProtocolStateManager;
+  private ruleEngine: ClinicalRuleEngine;
+  private temporalEngine: TemporalConstraintEngine;
+  private formularyEngine: FormularyComplianceEngine;
+  private approvalEngine: PolicyApprovalEngine;
+  
+  // Shared services
+  private snapshotManager: SnapshotManager;
+  private contextGateway: ContextGatewayClient;
+  private auditService: AuditService;
+  private notificationService: NotificationService;
+  
+  // Integration points
+  private workflowIntegration: WorkflowPlatformClient;
+  private caeIntegration: CAEIntegrationClient;
+}
+```
+
+
+### 2.2 Data Flow Architecture
+
+
+```mermaid
+graph TB
+    subgraph Workflow Platform
+        WF[Apollo Federation]
+        MS[Medication Service]
+    end
+    
+    subgraph Safety Gateway
+        PE[Protocol Engine]
+        CAE[CAE Engine]
+        SM[Snapshot Manager]
+        AO[Approval Orchestrator]
+    end
+    
+    subgraph Storage
+        PS[Protocol Store]
+        AS[Audit Store]
+        PST[Protocol State]
+    end
+    
+    WF -->|Calculate| MS
+    MS -->|Proposal| PE
+    PE <--> SM
+    PE <--> CAE
+    PE --> AO
+    PE --> PS
+    PE --> AS
+    PE --> PST
+    PE -->|Validate Result| MS
+    MS -->|Commit/Reject| WF
+```
+
+
+## 3. Protocol Definition Framework
+
+
+### 3.1 Protocol Metamodel
+
+
+```typescript
+interface ClinicalProtocol {
+  // Identity
+  id: string;
+  version: string;
+  name: string;
+  category: ProtocolCategory;
+  
+  // Clinical metadata
+  clinicalDomain: ClinicalDomain;
+  evidenceLevel: EvidenceLevel;
+  guidelines: GuidelineReference[];
+  
+  // Applicability
+  scope: ProtocolScope;
+  prerequisites: Prerequisite[];
+  exclusions: Exclusion[];
+  
+  // Execution model
+  executionType: 'stateless' | 'stateful' | 'temporal';
+  rules: ProtocolRule[];
+  states?: ProtocolState[];
+  transitions?: StateTransition[];
+  
+  // Constraints
+  constraints: {
+    hard: HardConstraint[];    // Must not violate
+    soft: SoftConstraint[];    // Recommendations
+    temporal: TemporalConstraint[];  // Time-based rules
+  };
+  
+  // Governance
+  authority: {
+    owner: string;
+    approvers: string[];
+    effectiveDate: Date;
+    expirationDate?: Date;
+    jurisdiction: Jurisdiction;
+  };
+  
+  // Override policy
+  overridePolicy: {
+    allowedRoles: Role[];
+    requiredJustification: JustificationType;
+    approvalRequired: boolean;
+    auditLevel: AuditLevel;
+  };
+}
+```
+
+
+### 3.2 Protocol Categories
+
+
+```typescript
+enum ProtocolCategory {
+  // Clinical pathways
+  SEPSIS_BUNDLE = 'sepsis_bundle',
+  VTE_PROPHYLAXIS = 'vte_prophylaxis',
+  ANTIBIOTIC_STEWARDSHIP = 'antibiotic_stewardship',
+  PAIN_MANAGEMENT = 'pain_management',
+  
+  // Regulatory compliance
+  CMS_QUALITY_MEASURE = 'cms_quality',
+  JCAHO_REQUIREMENT = 'jcaho',
+  STATE_REGULATION = 'state_reg',
+  
+  // Institutional policies
+  FORMULARY_COMPLIANCE = 'formulary',
+  PRIOR_AUTH = 'prior_authorization',
+  SPECIALTY_RESTRICTION = 'specialty_restriction',
+  
+  // Safety protocols
+  HIGH_ALERT_MEDICATION = 'high_alert',
+  PEDIATRIC_SAFETY = 'pediatric',
+  GERIATRIC_SAFETY = 'geriatric',
+  PREGNANCY_LACTATION = 'pregnancy_lactation',
+  
+  // Resource management
+  DRUG_SHORTAGE = 'shortage_management',
+  COST_CONTAINMENT = 'cost_control'
+}
+```
+
+
+## 4. Protocol Implementation Patterns
+
+
+### 4.1 Stateless Protocol (Simple Rules)
+
+
+```typescript
+class FormularyComplianceProtocol implements StatelessProtocol {
+  async evaluate(context: EvaluationContext): Promise<ProtocolResult> {
+    const medication = context.proposedAction.medication;
+    const formulary = await this.getFormulary(context.snapshotId);
+    
+    // Check formulary status
+    const formularyItem = formulary.find(medication.rxnorm);
+    
+    if (!formularyItem) {
+      return {
+        decision: 'REJECT',
+        constraint: 'HARD',
+        reason: 'Non-formulary medication',
+        alternatives: await this.findAlternatives(medication, formulary),
+        overrideable: true,
+        requiredRole: 'PHARMACY_DIRECTOR'
+      };
+    }
+    
+    if (formularyItem.restricted) {
+      return {
+        decision: 'REQUIRE_APPROVAL',
+        constraint: 'SOFT',
+        reason: formularyItem.restrictionReason,
+        approvalCriteria: formularyItem.criteria,
+        approvers: ['PHARMACY', 'ATTENDING']
+      };
+    }
+    
+    return { decision: 'ACCEPT' };
+  }
+}
+```
+
+
+### 4.2 Stateful Protocol (Multi-step Pathway)
+
+
+```typescript
+class SepsisBundleProtocol implements StatefulProtocol {
+  private stateManager: ProtocolStateManager;
+  
+  async evaluate(context: EvaluationContext): Promise<ProtocolResult> {
+    // Retrieve or initialize protocol state
+    const state = await this.stateManager.getOrCreateState(
+      context.patientId,
+      'sepsis_bundle'
+    );
+    
+    // Determine current phase
+    const currentPhase = this.determinePhase(state, context);
+    
+    switch (currentPhase) {
+      case 'RECOGNITION':
+        return this.evaluateRecognitionPhase(state, context);
+        
+      case 'INITIAL_RESUSCITATION':
+        return this.evaluateResuscitationPhase(state, context);
+        
+      case 'ANTIBIOTIC_ADMINISTRATION':
+        return this.evaluateAntibioticPhase(state, context);
+        
+      case 'SOURCE_CONTROL':
+        return this.evaluateSourceControlPhase(state, context);
+        
+      default:
+        return this.evaluateMaintenancePhase(state, context);
+    }
+  }
+  
+  private async evaluateAntibioticPhase(
+    state: ProtocolState,
+    context: EvaluationContext
+  ): Promise<ProtocolResult> {
+    const proposedAntibiotic = context.proposedAction.medication;
+    const timeFromRecognition = Date.now() - state.recognitionTime;
+    
+    // Check 1-hour window for antibiotic administration
+    if (timeFromRecognition > 60 * 60 * 1000) {
+      return {
+        decision: 'WARNING',
+        constraint: 'TEMPORAL',
+        reason: 'Antibiotic administration delayed beyond 1-hour window',
+        qualityMetric: 'SEP-1',
+        recommendations: [{
+          action: 'Administer broad-spectrum antibiotic immediately',
+          urgency: 'STAT',
+          evidence: 'Surviving Sepsis Campaign Guidelines 2021'
+        }]
+      };
+    }
+    
+    // Validate antibiotic choice
+    const appropriateness = await this.validateAntibioticChoice(
+      proposedAntibiotic,
+      state.suspectedSource,
+      context
+    );
+    
+    if (!appropriateness.isAppropriate) {
+      return {
+        decision: 'RECOMMEND_ALTERNATIVE',
+        alternatives: appropriateness.preferredAntibiotics,
+        reason: appropriateness.reason
+      };
+    }
+    
+    // Update state
+    await this.stateManager.updateState(state.id, {
+      antibioticAdministered: true,
+      antibioticTime: Date.now(),
+      antibiotic: proposedAntibiotic
+    });
+    
+    return { decision: 'ACCEPT' };
+  }
+}
+```
+
+
+### 4.3 Temporal Protocol (Time Windows)
+
+
+```typescript
+class PerioperativeAnticoagulationProtocol implements TemporalProtocol {
+  async evaluate(context: EvaluationContext): Promise<ProtocolResult> {
+    const surgery = await this.getSurgerySchedule(context.patientId);
+    const medication = context.proposedAction.medication;
+    
+    if (!this.isAnticoagulant(medication)) {
+      return { decision: 'NOT_APPLICABLE' };
+    }
+    
+    const timeToSurgery = surgery.scheduledTime - Date.now();
+    const daysToSurgery = timeToSurgery / (24 * 60 * 60 * 1000);
+    
+    // Pre-operative holding rules
+    if (daysToSurgery <= 7 && daysToSurgery > 0) {
+      const holdingRules = await this.getHoldingRules(
+        medication,
+        surgery.type,
+        context
+      );
+      
+      if (holdingRules.shouldHold) {
+        return {
+          decision: 'REJECT',
+          constraint: 'TEMPORAL_HARD',
+          reason: `Anticoagulation must be held ${holdingRules.days} days before ${surgery.type}`,
+          protocol: 'PERIOP_ANTICOAG_2024',
+          bridgingRequired: holdingRules.bridging,
+          bridgingProtocol: holdingRules.bridgingRegimen
+        };
+      }
+    }
+    
+    // Post-operative resumption rules
+    if (surgery.completed && daysFromSurgery < 30) {
+      const resumptionRules = await this.getResumptionRules(
+        medication,
+        surgery,
+        context
+      );
+      
+      if (!resumptionRules.canResume) {
+        return {
+          decision: 'DELAY',
+          constraint: 'TEMPORAL_SOFT',
+          reason: resumptionRules.reason,
+          resumeDate: resumptionRules.earliestResumption,
+          monitoringRequired: resumptionRules.monitoring
+        };
+      }
+    }
+    
+    return { decision: 'ACCEPT' };
+  }
+}
+```
+
+
+## 5. Rule Engine Integration
+
+
+### 5.1 Rule Definition DSL
+
+
+```yaml
+# Protocol rule definition in YAML
+protocol:
+  id: "high-risk-medication-elderly"
+  name: "High-Risk Medication in Elderly Protocol"
+  version: "2.1.0"
+  
+  rules:
+    - id: "beers-criteria-check"
+      description: "Check Beers Criteria for potentially inappropriate medications"
+      when:
+        all:
+          - patient.age >= 65
+          - medication.rxnorm in $beers_list_2023
+      then:
+        decision: "WARNING"
+        severity: "MODERATE"
+        message: "Medication on Beers Criteria list for elderly patients"
+        recommendations:
+          - "Consider alternative: ${medication.alternatives}"
+          - "If continuing, use lowest effective dose"
+          - "Monitor for: ${medication.adverse_effects}"
+        evidence:
+          - source: "AGS Beers Criteria 2023"
+            level: "STRONG"
+            
+    - id: "dose-adjustment-elderly"
+      when:
+        all:
+          - patient.age >= 75
+          - medication.requires_geriatric_adjustment
+          - proposed_dose > medication.geriatric_max_dose
+      then:
+        decision: "REJECT"
+        severity: "HIGH"
+        message: "Dose exceeds geriatric maximum"
+        required_action: "Reduce dose to ${medication.geriatric_max_dose}"
+```
+
+
+### 5.2 Complex Rule Composition
+
+
+```typescript
+class ClinicalRuleEngine {
+  private drools: DroolsEngine;
+  private opa: OpenPolicyAgent;
+  
+  async evaluateRules(
+    protocol: Protocol,
+    context: EvaluationContext
+  ): Promise<RuleEvaluationResult[]> {
+    const results: RuleEvaluationResult[] = [];
+    
+    // Prepare fact base
+    const facts = await this.prepareFacts(context);
+    
+    // Evaluate each rule group
+    for (const ruleGroup of protocol.ruleGroups) {
+      const groupResult = await this.evaluateRuleGroup(
+        ruleGroup,
+        facts,
+        context.snapshotId
+      );
+      results.push(groupResult);
+      
+      // Short-circuit on critical failures
+      if (groupResult.decision === 'CRITICAL_REJECT') {
+        break;
+      }
+    }
+    
+    return results;
+  }
+  
+  private async prepareFacts(context: EvaluationContext): Promise<FactBase> {
+    return {
+      patient: {
+        ...context.patient,
+        // Enhance with calculated fields
+        ageGroup: this.categorizeAge(context.patient.age),
+        renalFunction: await this.calculateCrCl(context),
+        hepaticFunction: await this.assessHepaticFunction(context)
+      },
+      medication: {
+        ...context.proposedAction.medication,
+        // Add drug class and properties
+        drugClass: await this.getDrugClass(context.proposedAction.medication),
+        properties: await this.getDrugProperties(context.proposedAction.medication)
+      },
+      setting: {
+        location: context.careLocation,
+        timeOfDay: new Date().getHours(),
+        isEmergency: context.urgency === 'STAT'
+      },
+      history: {
+        recentMedications: await this.getRecentMedications(context),
+        recentLabs: await this.getRecentLabs(context),
+        activeProblems: await this.getActiveProblems(context)
+      }
+    };
+  }
+}
+```
+
+
+## 6. Integration with CAE
+
+
+### 6.1 Bidirectional Communication
+
+
+```typescript
+class ProtocolCAEIntegration {
+  async coordinatedEvaluation(
+    proposal: MedicationProposal,
+    context: EvaluationContext
+  ): Promise<CombinedSafetyResult> {
+    // Run both engines in parallel
+    const [caeResult, protocolResult] = await Promise.all([
+      this.cae.evaluate(proposal, context),
+      this.protocolEngine.evaluate(proposal, context)
+    ]);
+    
+    // Merge results with conflict resolution
+    const merged = this.mergeResults(caeResult, protocolResult);
+    
+    // Apply precedence rules
+    if (caeResult.hasCriticalDDI && protocolResult.decision === 'ACCEPT') {
+      // CAE safety concerns override protocol acceptance
+      merged.decision = 'REJECT';
+      merged.reason = 'Critical drug interaction detected';
+      merged.source = 'CAE_OVERRIDE';
+    }
+    
+    if (protocolResult.hasHardConstraint && caeResult.decision === 'ACCEPT') {
+      // Protocol hard constraints override CAE acceptance
+      merged.decision = protocolResult.decision;
+      merged.reason = protocolResult.reason;
+      merged.source = 'PROTOCOL_OVERRIDE';
+    }
+    
+    return merged;
+  }
+}
+```
+
+
+## 7. Approval & Override Workflows
+
+
+### 7.1 Approval Orchestration
+
+
+```typescript
+class PolicyApprovalEngine {
+  private approvalQueue: ApprovalQueue;
+  private notificationService: NotificationService;
+  
+  async initiateApproval(
+    protocolResult: ProtocolResult,
+    context: EvaluationContext
+  ): Promise<ApprovalRequest> {
+    const request: ApprovalRequest = {
+      id: generateId(),
+      type: this.determineApprovalType(protocolResult),
+      requestor: context.requestor,
+      patient: context.patientId,
+      
+      // What needs approval
+      subject: {
+        action: context.proposedAction,
+        protocol: protocolResult.triggeredProtocol,
+        constraint: protocolResult.constraint,
+        severity: protocolResult.severity
+      },
+      
+      // Who can approve
+      approvers: await this.identifyApprovers(protocolResult, context),
+      
+      // Approval requirements
+      requirements: {
+        minimumApprovers: protocolResult.minimumApprovers || 1,
+        mustIncludeRole: protocolResult.requiredApproverRole,
+        timeLimit: this.calculateTimeLimit(protocolResult.urgency),
+        justificationRequired: true
+      },
+      
+      // Context for decision making
+      evidence: {
+        protocolEvidence: protocolResult.evidence,
+        patientContext: context.relevantClinicalData,
+        alternatives: protocolResult.alternatives
+      },
+      
+      status: 'PENDING',
+      createdAt: new Date()
+    };
+    
+    // Queue for processing
+    await this.approvalQueue.enqueue(request);
+    
+    // Notify approvers
+    await this.notifyApprovers(request);
+    
+    // Set up timeout handler
+    this.scheduleTimeout(request);
+    
+    return request;
+  }
+  
+  async processApproval(
+    requestId: string,
+    approval: ApprovalDecision
+  ): Promise<ApprovalResult> {
+    const request = await this.approvalQueue.get(requestId);
+    
+    // Validate approver
+    if (!this.isValidApprover(approval.approver, request)) {
+      throw new InvalidApproverError();
+    }
+    
+    // Record decision
+    request.decisions.push({
+      approver: approval.approver,
+      decision: approval.decision,
+      justification: approval.justification,
+      timestamp: new Date()
+    });
+    
+    // Check if requirements met
+    if (this.areRequirementsMet(request)) {
+      return await this.finalizeApproval(request);
+    }
+    
+    // Wait for more approvals
+    return { status: 'PENDING_ADDITIONAL_APPROVAL' };
+  }
+}
+```
+
+
+### 7.2 Override Patterns
+
+
+```typescript
+interface OverrideCapability {
+  // Standard override with justification
+  clinicalJudgmentOverride: {
+    allowedFor: ['ATTENDING', 'CONSULTANT'];
+    requiresJustification: true;
+    auditLevel: 'DETAILED';
+    retrospectiveReview: true;
+  };
+  
+  // Emergency override
+  emergencyOverride: {
+    allowedFor: ['EMERGENCY_PHYSICIAN', 'CRITICAL_CARE'];
+    scenario: ['CODE_BLUE', 'RAPID_RESPONSE'];
+    bypassesAllProtocols: true;
+    immediateNotification: ['PHARMACY_DIRECTOR', 'CMO'];
+    mandatoryReview: '24_HOURS';
+  };
+  
+  // Regulatory override
+  regulatoryException: {
+    allowedFor: ['CMO', 'MEDICAL_DIRECTOR'];
+    requiresDocumentation: true;
+    reportsTo: ['REGULATORY_BODY', 'QUALITY_COMMITTEE'];
+    expiresAfter: '30_DAYS';
+  };
+}
+```
+
+
+## 8. State Management & Persistence
+
+
+### 8.1 Protocol State Model
+
+
+```typescript
+class ProtocolStateManager {
+  private stateStore: StateStore;
+  private cache: DistributedCache;
+  
+  async getProtocolState(
+    patientId: string,
+    protocolId: string
+  ): Promise<ProtocolState> {
+    const key = `${patientId}:${protocolId}`;
+    
+    // Check cache
+    let state = await this.cache.get(key);
+    if (state) return state;
+    
+    // Load from store
+    state = await this.stateStore.load(key);
+    if (!state) {
+      // Initialize new state
+      state = this.initializeState(patientId, protocolId);
+    }
+    
+    // Cache with TTL
+    await this.cache.set(key, state, { ttl: 3600 });
+    
+    return state;
+  }
+  
+  async updateState(
+    state: ProtocolState,
+    event: ProtocolEvent
+  ): Promise<void> {
+    // Apply state transition
+    const newState = this.applyTransition(state, event);
+    
+    // Validate transition
+    if (!this.isValidTransition(state, newState)) {
+      throw new InvalidStateTransitionError();
+    }
+    
+    // Persist with audit trail
+    await this.stateStore.save(newState, {
+      previousState: state,
+      event: event,
+      timestamp: new Date()
+    });
+    
+    // Update cache
+    await this.cache.set(
+      `${newState.patientId}:${newState.protocolId}`,
+      newState
+    );
+    
+    // Emit state change event
+    await this.emitStateChange(state, newState, event);
+  }
+}
+```
+
+
+## 9. API Contracts
+
+
+### 9.1 GraphQL Schema (Apollo Federation)
+
+
+```graphql
+type ProtocolEvaluation @key(fields: "id") {
+  id: ID!
+  requestId: String!
+  snapshotId: String!
+  timestamp: DateTime!
+  
+  # Evaluation results
+  decision: ProtocolDecision!
+  triggeredProtocols: [TriggeredProtocol!]!
+  
+  # Constraints
+  hardConstraints: [Constraint!]!
+  softConstraints: [Constraint!]!
+  temporalConstraints: [TemporalConstraint!]!
+  
+  # Recommendations
+  recommendations: [Recommendation!]!
+  alternatives: [MedicationAlternative!]!
+  
+  # Approval workflow
+  approvalRequired: Boolean!
+  approvalRequest: ApprovalRequest
+  
+  # Audit
+  signature: DigitalSignature!
+  auditTrail: AuditTrail!
+}
+
+
+type TriggeredProtocol {
+  id: String!
+  name: String!
+  version: String!
+  category: ProtocolCategory!
+  severity: Severity!
+  decision: ProtocolDecision!
+  reason: String!
+  evidence: [Evidence!]!
+  overrideable: Boolean!
+  requiredRole: String
+}
+
+
+enum ProtocolDecision {
+  ACCEPT
+  REJECT
+  WARNING
+  REQUIRE_APPROVAL
+  RECOMMEND_ALTERNATIVE
+  DELAY
+}
+
+
+# Federation extension
+extend type MedicationProposal @key(fields: "id") {
+  id: ID! @external
+  protocolEvaluation: ProtocolEvaluation
+}
+```
+
+
+### 9.2 REST API Endpoints
+
+
+```typescript
+interface ProtocolEngineAPI {
+  // Primary evaluation endpoint
+  POST: '/v1/protocol/evaluate' 
+  Request: {
+    proposalId: string;
+    snapshotId: string;
+    action: ClinicalAction;
+    patientContext: PatientContext;
+    urgency?: 'ROUTINE' | 'URGENT' | 'STAT';
+    requestor: {
+      userId: string;
+      role: string;
+      location: string;
+    };
+  }
+  Response: ProtocolEvaluationResult;
+  
+  // Protocol state management
+  GET: '/v1/protocol/state/{patientId}/{protocolId}'
+  Response: ProtocolState;
+  
+  POST: '/v1/protocol/state/{patientId}/{protocolId}/transition'
+  Request: StateTransitionRequest;
+  Response: UpdatedProtocolState;
+  
+  // Approval workflows
+  POST: '/v1/protocol/approval/{requestId}/submit'
+  Request: ApprovalSubmission;
+  Response: ApprovalResult;
+  
+  GET: '/v1/protocol/approval/{requestId}/status'
+  Response: ApprovalStatus;
+  
+  // Override endpoints
+  POST: '/v1/protocol/override'
+  Request: OverrideRequest;
+  Response: OverrideToken;
+  
+  // Protocol management
+  GET: '/v1/protocol/definitions'
+  Response: Protocol[];
+  
+  POST: '/v1/protocol/definitions/validate'
+  Request: ProtocolDefinition;
+  Response: ValidationResult;
+}
+```
+
+
+## 10. Event-Driven Integration
+
+
+### 10.1 Kafka Event Schema
+
+
+```typescript
+// Protocol evaluation completed event
+interface ProtocolEvaluatedEvent {
+  eventType: 'PROTOCOL_EVALUATED';
+  eventId: string;
+  timestamp: Date;
+  
+  payload: {
+    proposalId: string;
+    patientId: string;
+    snapshotId: string;
+    decision: ProtocolDecision;
+    triggeredProtocols: string[];
+    requiresApproval: boolean;
+    approvalRequestId?: string;
+  };
+  
+  metadata: {
+    source: 'protocol-engine';
+    version: string;
+    correlationId: string;
+    causationId: string;
+  };
+}
+
+
+// Protocol state change event
+interface ProtocolStateChangedEvent {
+  eventType: 'PROTOCOL_STATE_CHANGED';
+  
+  payload: {
+    patientId: string;
+    protocolId: string;
+    previousState: string;
+    newState: string;
+    transition: string;
+    timestamp: Date;
+  };
+}
+
+
+// Approval decision event
+interface ApprovalDecisionEvent {
+  eventType: 'APPROVAL_DECISION';
+  
+  payload: {
+    requestId: string;
+    decision: 'APPROVED' | 'REJECTED';
+    approver: string;
+    justification: string;
+    timestamp: Date;
+  };
+}
+```
+
+
+### 10.2 Outbox Pattern Implementation
+
+
+```typescript
+class ProtocolEventPublisher {
+  private outboxStore: OutboxStore;
+  private kafkaProducer: KafkaProducer;
+  
+  async publishEvaluationResult(
+    result: ProtocolEvaluationResult,
+    context: EvaluationContext
+  ): Promise<void> {
+    const event: ProtocolEvaluatedEvent = {
+      eventType: 'PROTOCOL_EVALUATED',
+      eventId: generateEventId(),
+      timestamp: new Date(),
+      payload: {
+        proposalId: context.proposalId,
+        patientId: context.patientId,
+        snapshotId: context.snapshotId,
+        decision: result.decision,
+        triggeredProtocols: result.triggeredProtocols.map(p => p.id),
+        requiresApproval: result.requiresApproval,
+        approvalRequestId: result.approvalRequest?.id
+      },
+      metadata: {
+        source: 'protocol-engine',
+        version: '1.0.0',
+        correlationId: context.correlationId,
+        causationId: context.requestId
+      }
+    };
+    
+    // Write to outbox table in same transaction as result storage
+    await this.outboxStore.writeEvent(event);
+    
+    // Async publish from outbox
+    this.scheduleOutboxProcessing();
+  }
+  
+  private async processOutbox(): Promise<void> {
+    const unpublishedEvents = await this.outboxStore.getUnpublished();
+    
+    for (const event of unpublishedEvents) {
+      try {
+        await this.kafkaProducer.send({
+          topic: this.getTopicForEvent(event),
+          messages: [{
+            key: event.eventId,
+            value: JSON.stringify(event),
+            headers: {
+              'event-type': event.eventType,
+              'correlation-id': event.metadata.correlationId
+            }
+          }]
+        });
+        
+        await this.outboxStore.markPublished(event.eventId);
+      } catch (error) {
+        await this.handlePublishError(event, error);
+      }
+    }
+  }
+}
+```
+
+
+## 11. Observability & Monitoring
+
+
+### 11.1 Metrics
+
+
+```typescript
+const protocolMetrics = {
+  // Evaluation metrics
+  evaluationCounter: new Counter({
+    name: 'protocol_evaluations_total',
+    help: 'Total protocol evaluations',
+    labelNames: ['decision', 'protocol_category', 'snapshot_id']
+  }),
+  
+  evaluationDuration: new Histogram({
+    name: 'protocol_evaluation_duration_seconds',
+    help: 'Protocol evaluation duration',
+    labelNames: ['protocol_id', 'complexity', 'cache_hit'],
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+  }),
+  
+  // Constraint metrics
+  constraintViolations: new Counter({
+    name: 'protocol_constraint_violations_total',
+    help: 'Protocol constraint violations',
+    labelNames: ['constraint_type', 'severity', 'protocol_id']
+  }),
+  
+  // State metrics
+  activeProtocolStates: new Gauge({
+    name: 'protocol_active_states',
+    help: 'Number of active protocol states',
+    labelNames: ['protocol_id', 'state']
+  }),
+  
+  stateTransitions: new Counter({
+    name: 'protocol_state_transitions_total',
+    help: 'Protocol state transitions',
+    labelNames: ['protocol_id', 'from_state', 'to_state']
+  }),
+  
+  // Approval metrics
+  approvalRequests: new Counter({
+    name: 'protocol_approval_requests_total',
+    help: 'Approval requests initiated',
+    labelNames: ['protocol_id', 'urgency']
+  }),
+  
+  approvalLatency: new Histogram({
+    name: 'protocol_approval_latency_seconds',
+    help: 'Time to get approval',
+    labelNames: ['protocol_id', 'decision'],
+    buckets: [60, 300, 600, 1800, 3600, 7200]
+  }),
+  
+  // Override metrics
+  overrides: new Counter({
+    name: 'protocol_overrides_total',
+    help: 'Protocol overrides',
+    labelNames: ['override_type', 'protocol_id', 'role']
+  })
+};
+```
+
+
+### 11.2 Distributed Tracing
+
+
+```typescript
+class ProtocolTracing {
+  private tracer: Tracer;
+  
+  async traceEvaluation(
+    context: EvaluationContext,
+    fn: () => Promise<ProtocolResult>
+  ): Promise<ProtocolResult> {
+    const span = this.tracer.startSpan('protocol.evaluate', {
+      attributes: {
+        'protocol.snapshot_id': context.snapshotId,
+        'protocol.patient_id': context.patientId,
+        'protocol.action_type': context.proposedAction.type,
+        'protocol.urgency': context.urgency
+      }
+    });
+    
+    try {
+      // Add context propagation
+      const ctx = trace.setSpan(context.traceContext, span);
+      
+      // Create child spans for sub-operations
+      const stateSpan = this.tracer.startSpan('protocol.load_state', { parent: span });
+      const state = await this.loadState(context);
+      stateSpan.end();
+      
+      const rulesSpan = this.tracer.startSpan('protocol.evaluate_rules', { parent: span });
+      const result = await fn();
+      rulesSpan.setAttribute('protocol.decision', result.decision);
+      rulesSpan.end();
+      
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+      
+    } catch (error) {
+      span.recordException(error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw error;
+      
+    } finally {
+      span.end();
+    }
+  }
+}
+```
+
+
+## 12. Testing Framework
+
+
+### 12.1 Protocol Test Harness
+
+
+```yaml
+# Test case definition
+test_suite: "sepsis-bundle-compliance"
+snapshot_id: "test-snapshot-2025-09-03"
+
+
+test_cases:
+  - id: "sepsis-recognition"
+    description: "Validate sepsis recognition triggers protocol"
+    given:
+      patient:
+        temperature: 38.5
+        heart_rate: 110
+        respiratory_rate: 22
+        wbc: 14000
+        lactate: 2.5
+      proposed_action:
+        type: "order_labs"
+        labs: ["blood_culture", "lactate"]
+    when:
+      protocol_id: "sepsis-bundle"
+      snapshot_id: "{{snapshot_id}}"
+    then:
+      decision: "ACCEPT"
+      state_transition: "RECOGNITION -> INITIAL_RESUSCITATION"
+      recommendations:
+        - "Administer broad-spectrum antibiotics within 1 hour"
+        - "Begin fluid resuscitation"
+      
+  - id: "antibiotic-timing-violation"
+    description: "Flag delayed antibiotic administration"
+    given:
+      patient:
+        sepsis_recognition_time: "{{now - 90 minutes}}"
+      proposed_action:
+        type: "medication_order"
+        medication:
+          rxnorm: "197361"  # Vancomycin
+    when:
+      protocol_id: "sepsis-bundle"
+    then:
+      decision: "WARNING"
+      constraint: "TEMPORAL"
+      severity: "HIGH"
+      message: "Antibiotic delayed beyond 1-hour window"
+      quality_metric_impact: "SEP-1 FAILURE"
+```
+
+
+### 12.2 Integration Testing
+
+
+```typescript
+class ProtocolIntegrationTests {
+  @Test
+  async testEndToEndWorkflow() {
+    // Setup
+    const mockSnapshot = await createTestSnapshot();
+    const mockProposal = createMedicationProposal();
+    
+    // Execute through workflow
+    const calculationResult = await workflowPlatform.calculate(mockProposal);
+    
+    // Validate - Protocol Engine called
+    const validationResult = await safetyGateway.validate({
+      proposal: calculationResult,
+      snapshotId: mockSnapshot.id
+    });
+    
+    expect(validationResult.protocolEngine).toBeDefined();
+    expect(validationResult.caeEngine).toBeDefined();
+    
+    // Test approval workflow if required
+    if (validationResult.requiresApproval) {
+      const approvalToken = await submitApproval({
+        requestId: validationResult.approvalRequestId,
+        approver: 'test-attending',
+        decision: 'APPROVE',
+        justification: 'Clinical necessity'
+      });
+      
+      expect(approvalToken).toBeDefined();
+    }
+    
+    // Commit if safe
+    if (validationResult.decision === 'SAFE') {
+      const commitResult = await medicationService.commit(
+        validationResult.proposalId
+      );
+      
+      // Verify outbox event published
+      const events = await getOutboxEvents(validationResult.proposalId);
+      expect(events).toContain(
+        expect.objectContaining({
+          eventType: 'PROTOCOL_EVALUATED'
+        })
+      );
+    }
+  }
+}
+```
+
+
+## 13. Deployment & Operations
+
+
+### 13.1 Kubernetes Deployment
+
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: protocol-engine
+  namespace: safety-gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: protocol-engine
+  template:
+    metadata:
+      labels:
+        app: protocol-engine
+        version: v1.0.0
+    spec:
+      containers:
+      - name: protocol-engine
+        image: safety-gateway/protocol-engine:1.0.0
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8081
+          name: metrics
+        env:
+        - name: SNAPSHOT_MANAGER_URL
+          value: "http://snapshot-manager:8080"
+        - name: CONTEXT_GATEWAY_URL
+          value: "http://context-gateway:8080"
+        - name: KAFKA_BROKERS
+          value: "kafka:9092"
+        - name: PROTOCOL_STORE_PATH
+          value: "/protocols"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: protocol-store
+        configMap:
+          name: protocol-definitions
+```
+
+
+### 13.2 Performance Optimization
+
+
+```typescript
+class ProtocolPerformanceOptimizer {
+  private cache: MultiLevelCache;
+  private precompiler: ProtocolPrecompiler;
+  
+  async optimize(): Promise<void> {
+    // Precompile frequently used protocols
+    await this.precompileCommonProtocols();
+    
+    // Warm cache with common patterns
+    await this.warmCache();
+    
+    // Setup predictive prefetching
+    this.enablePredictivePrefetch();
+  }
+  
+  private async precompileCommonProtocols(): Promise<void> {
+    const commonProtocols = [
+      'sepsis-bundle',
+      'vte-prophylaxis',
+      'formulary-compliance',
+      'high-alert-medication'
+    ];
+    
+    for (const protocolId of commonProtocols) {
+      const protocol = await this.loadProtocol(protocolId);
+      const compiled = await this.precompiler.compile(protocol);
+      await this.cache.set(`compiled:${protocolId}`, compiled, { ttl: 3600 });
+    }
+  }
+  
+  private async warmCache(): Promise<void> {
+    // Cache common drug-protocol mappings
+    const drugProtocolMap = await this.buildDrugProtocolMap();
+    await this.cache.set('drug-protocol-map', drugProtocolMap);
+    
+    // Cache institutional policies
+    const policies = await this.loadInstitutionalPolicies();
+    await this.cache.set('institutional-policies', policies);
+  }
+}
+```
+
+
+## 14. Migration Strategy
+
+
+### 14.1 Phased Rollout
+
+
+```typescript
+class ProtocolEngineMigration {
+  async phase1_ShadowMode(): Promise<void> {
+    // Run in parallel with existing system
+    // Log decisions but don't enforce
+    configureMode('SHADOW');
+    enableComparisonLogging();
+    
+    // Compare decisions
+    onEvaluation((proposal, context) => {
+      const legacyDecision = await legacySystem.evaluate(proposal);
+      const protocolDecision = await protocolEngine.evaluate(proposal, context);
+      
+      if (decisionsConflict(legacyDecision, protocolDecision)) {
+        logConflict({
+          proposal,
+          legacy: legacyDecision,
+          protocol: protocolDecision,
+          context
+        });
+      }
+    });
+  }
+  
+  async phase2_SoftEnforcement(): Promise<void> {
+    // Enforce soft constraints only
+    configureMode('SOFT_ENFORCEMENT');
+    
+    // Allow overrides for all decisions
+    enableUniversalOverride();
+  }
+  
+  async phase3_SelectiveHardEnforcement(): Promise<void> {
+    // Enable hard constraints for specific protocols
+    const criticalProtocols = ['high-alert-medication', 'allergy-contraindication'];
+    enableHardConstraints(criticalProtocols);
+  }
+  
+  async phase4_FullEnforcement(): Promise<void> {
+    // Full protocol enforcement
+    configureMode('FULL_ENFORCEMENT');
+    
+    // Restrict overrides to authorized roles
+    configureOverridePolicy(standardOverridePolicy);
+  }
+}
+```
+
+
+## 15. Clinical Decision Support Integration
+
+
+### 15.1 Evidence Linking
+
+
+```typescript
+class EvidenceLinker {
+  async linkEvidence(
+    protocol: Protocol,
+    decision: ProtocolDecision
+  ): Promise<LinkedEvidence> {
+    const evidence: LinkedEvidence = {
+      guidelines: [],
+      literature: [],
+      institutionalPolicies: [],
+      qualityMetrics: []
+    };
+    
+    // Link to clinical guidelines
+    for (const guidelineRef of protocol.guidelines) {
+      const guideline = await this.guidelineService.fetch(guidelineRef);
+      evidence.guidelines.push({
+        source: guideline.source,
+        recommendation: guideline.getRecommendation(decision.context),
+        strength: guideline.evidenceLevel,
+        url: guideline.url
+      });
+    }
+    
+    // Link to quality metrics
+    if (protocol.qualityMetrics) {
+      for (const metric of protocol.qualityMetrics) {
+        evidence.qualityMetrics.push({
+          measure: metric.id,
+          impact: this.assessMetricImpact(decision, metric),
+          reporting: metric.reportingRequirements
+        });
+      }
+    }
+    
+    return evidence;
+  }
+}
+```
+
+
+## 16. Summary & Next Steps
+
+
+The Protocol Engine provides comprehensive clinical workflow and policy enforcement that complements the CAE's medication-specific safety checks. Key capabilities include:
+
+
+1. **Stateful Protocol Management**: Track multi-step clinical pathways
+2. **Temporal Constraints**: Enforce time-sensitive medication rules
+3. **Institutional Policy**: Site-specific formulary and practice requirements
+4. **Flexible Override Model**: Balance safety with clinical judgment
+5. **Comprehensive Audit Trail**: Digital signatures and immutable records
+
+
+### Implementation Priorities
+
+
+**Phase 1 (Weeks 1-2)**:
+- Core protocol evaluation engine
+- Integration with snapshot manager
+- Basic hard/soft constraint evaluation
+
+
+**Phase 2 (Weeks 3-4)**:
+- Stateful protocol tracking
+- Temporal constraint engine
+- Approval workflow foundation
+
+
+**Phase 3 (Weeks 5-6)**:
+- CAE bidirectional integration
+- Event publishing (Outbox pattern)
+- GraphQL federation setup
+
+
+**Phase 4 (Weeks 7-8)**:
+- Comprehensive testing harness
+- Performance optimization
+- Shadow mode deployment
+
+
+This architecture ensures the Protocol Engine seamlessly integrates with your existing Calculate → Validate → Commit workflow while providing deterministic, auditable, and clinically-sound protocol enforcement.

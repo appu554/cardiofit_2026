@@ -1,0 +1,175 @@
+version: '3.8'
+
+services:
+  # Existing Python Medication Service
+  medication-service:
+    build: .
+    ports:
+      - "8009:8009"
+    environment:
+      - FLOW2_GO_ENGINE_URL=http://flow2-go-engine:8080
+      - RUST_RECIPE_ENGINE_URL=http://rust-recipe-engine:50051
+      - CONTEXT_SERVICE_URL=http://context-service:8080
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/medication_db
+    depends_on:
+      - flow2-go-engine
+      - rust-recipe-engine
+      - redis
+      - postgres
+    networks:
+      - flow2-network
+
+  # NEW: Go Flow 2 Engine (Service 1)
+  flow2-go-engine:
+    build:
+      context: ./flow2-go-engine
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_ENGINE_ADDRESS=rust-recipe-engine:50051
+      - CONTEXT_SERVICE_URL=http://context-service:8080
+      - MEDICATION_API_URL=http://medication-service:8009
+      - REDIS_URL=redis://redis:6379
+      - SERVER_PORT=8080
+      - SERVER_ENVIRONMENT=development
+      - LOG_LEVEL=info
+    depends_on:
+      - rust-recipe-engine
+      - redis
+    networks:
+      - flow2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # NEW: Rust Recipe Engine (Service 2)
+  rust-recipe-engine:
+    build:
+      context: ./rust-recipe-engine
+      dockerfile: Dockerfile
+    ports:
+      - "50051:50051"  # gRPC port
+      - "8081:8080"    # HTTP metrics port
+    environment:
+      - RUST_LOG=info
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/medication_db
+      - SERVER_ADDRESS=0.0.0.0:50051
+      - METRICS_ADDRESS=0.0.0.0:8080
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - flow2-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Supporting Services
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - flow2-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=medication_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - flow2-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Context Service (Real service - must be implemented)
+  # context-service:
+  #   build: ../context-service
+  #   ports:
+  #     - "8082:8080"
+  #   environment:
+  #     - DATABASE_URL=postgresql://postgres:password@postgres:5432/medication_db
+  #   depends_on:
+  #     - postgres
+  #   networks:
+  #     - flow2-network
+  #   # NOTE: Uncomment when Context Service is implemented
+
+  # Monitoring Services
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - flow2-network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - flow2-network
+    depends_on:
+      - prometheus
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Jaeger collector
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - flow2-network
+
+networks:
+  flow2-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package clinical_hub.cae.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Clinical Assertion Engine gRPC Service
+service ClinicalReasoningService {
+  // Generate comprehensive clinical assertions for a patient context
+  rpc GenerateAssertions(ClinicalAssertionRequest) returns (ClinicalAssertionResponse);
+  
+  // Check medication interactions
+  rpc CheckMedicationInteractions(MedicationInteractionRequest) returns (MedicationInteractionResponse);
+  
+  // Calculate medication dosing
+  rpc CalculateDosing(DosingCalculationRequest) returns (DosingCalculationResponse);
+  
+  // Check contraindications
+  rpc CheckContraindications(ContraindicationRequest) returns (ContraindicationResponse);
+  
+  // Health check for service monitoring
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Stream real-time assertions (for complex reasoning)
+  rpc StreamAssertions(ClinicalAssertionRequest) returns (stream ClinicalAssertionUpdate);
+}
+
+// Clinical assertion request
+message ClinicalAssertionRequest {
+  string patient_id = 1;
+  string correlation_id = 2;
+  repeated string medication_ids = 3;
+  repeated string condition_ids = 4;
+  google.protobuf.Struct patient_context = 5;
+  AssertionPriority priority = 6;
+  repeated string reasoner_types = 7; // ["interaction", "dosing", "contraindication"]
+}
+
+// Clinical assertion response
+message ClinicalAssertionResponse {
+  string request_id = 1;
+  string correlation_id = 2;
+  repeated ClinicalAssertion assertions = 3;
+  AssertionMetadata metadata = 4;
+  google.protobuf.Timestamp generated_at = 5;
+}
+
+// Individual clinical assertion
+message ClinicalAssertion {
+  string id = 1;
+  string type = 2; // "interaction", "dosing", "contraindication"
+  AssertionSeverity severity = 3;
+  string title = 4;
+  string description = 5;
+  string explanation = 6;
+  repeated string evidence_sources = 7;
+  float confidence_score = 8;
+  google.protobuf.Struct metadata = 9;
+  repeated ClinicalRecommendation recommendations = 10;
+}
+
+// Clinical recommendation
+message ClinicalRecommendation {
+  string id = 1;
+  string type = 2; // "modify_dose", "discontinue", "monitor", "alternative"
+  string description = 3;
+  string rationale = 4;
+  RecommendationPriority priority = 5;
+}
+
+// Enums
+enum AssertionSeverity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_LOW = 2;
+  SEVERITY_MODERATE = 3;
+  SEVERITY_HIGH = 4;
+  SEVERITY_CRITICAL = 5;
+}
+
+enum AssertionPriority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_BATCH = 1;
+  PRIORITY_STANDARD = 2;
+  PRIORITY_URGENT = 3;
+  PRIORITY_CRITICAL = 4;
+}
+
+enum RecommendationPriority {
+  RECOMMENDATION_PRIORITY_UNSPECIFIED = 0;
+  RECOMMENDATION_PRIORITY_OPTIONAL = 1;
+  RECOMMENDATION_PRIORITY_RECOMMENDED = 2;
+  RECOMMENDATION_PRIORITY_REQUIRED = 3;
+}
+
+// Metadata
+message AssertionMetadata {
+  string reasoner_version = 1;
+  string knowledge_version = 2;
+  int32 processing_time_ms = 3;
+  repeated string warnings = 4;
+}
+
+// Health check messages
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+}
+
+// Streaming update
+message ClinicalAssertionUpdate {
+  string request_id = 1;
+  UpdateType type = 2;
+  ClinicalAssertion assertion = 3;
+  string status = 4;
+  
+  enum UpdateType {
+    UPDATE_TYPE_UNSPECIFIED = 0;
+    UPDATE_TYPE_PARTIAL = 1;
+    UPDATE_TYPE_COMPLETE = 2;
+    UPDATE_TYPE_ERROR = 3;
+  }
+}
+
+// Medication interaction specific messages
+message MedicationInteractionRequest {
+  string patient_id = 1;
+  repeated string medication_ids = 2;
+  string new_medication_id = 3;
+  google.protobuf.Struct patient_context = 4;
+}
+
+message MedicationInteractionResponse {
+  repeated DrugInteraction interactions = 1;
+  AssertionMetadata metadata = 2;
+}
+
+message DrugInteraction {
+  string interaction_id = 1;
+  string medication_a = 2;
+  string medication_b = 3;
+  AssertionSeverity severity = 4;
+  string description = 5;
+  string mechanism = 6;
+  string clinical_effect = 7;
+  repeated string evidence_sources = 8;
+  float confidence_score = 9;
+}
+
+// Dosing calculation specific messages
+message DosingCalculationRequest {
+  string patient_id = 1;
+  string medication_id = 2;
+  google.protobuf.Struct patient_parameters = 3; // weight, age, renal function, etc.
+  string indication = 4;
+}
+
+message DosingCalculationResponse {
+  DosingRecommendation dosing = 1;
+  repeated DosingAdjustment adjustments = 2;
+  AssertionMetadata metadata = 3;
+}
+
+message DosingRecommendation {
+  string medication_id = 1;
+  string dose = 2;
+  string frequency = 3;
+  string route = 4;
+  string duration = 5;
+  string rationale = 6;
+  repeated string warnings = 7;
+}
+
+message DosingAdjustment {
+  string type = 1; // "renal", "hepatic", "age", "weight"
+  string adjustment = 2;
+  string rationale = 3;
+  bool required = 4;
+}
+
+// Contraindication specific messages
+message ContraindicationRequest {
+  string patient_id = 1;
+  repeated string medication_ids = 2;
+  repeated string condition_ids = 3;
+  repeated string allergy_ids = 4;
+  google.protobuf.Struct patient_context = 5;
+}
+
+message ContraindicationResponse {
+  repeated Contraindication contraindications = 1;
+  AssertionMetadata metadata = 2;
+}
+
+message Contraindication {
+  string contraindication_id = 1;
+  string medication_id = 2;
+  string condition_id = 3;
+  AssertionSeverity severity = 4;
+  string type = 5; // "absolute", "relative", "allergy"
+  string description = 6;
+  string rationale = 7;
+  repeated string evidence_sources = 8;
+  bool override_possible = 9;
+  string override_rationale = 10;
+}

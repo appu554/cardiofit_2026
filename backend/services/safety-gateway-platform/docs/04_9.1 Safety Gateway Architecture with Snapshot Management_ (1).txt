@@ -1,0 +1,445 @@
+﻿# Final Proposal: Safety Gateway Architecture with Snapshot Management
+
+
+## Executive Summary
+
+
+The Safety Gateway requires fundamental architectural changes to operate within the new snapshot-based paradigm. The gateway no longer fetches data directly but instead validates using immutable snapshots created during the Calculate phase. This ensures complete data consistency and auditability across all safety checks.
+
+
+## 1. Core Architectural Transformation
+
+
+### 1.1 Key Changes
+
+
+```typescript
+interface SafetyGatewayArchitecture {
+  // REMOVED: Direct context fetching
+  // contextService: ContextService;  // NO LONGER USED
+  
+  // NEW: Snapshot validation and retrieval
+  contextGateway: ContextGatewayClient;
+  
+  // NEW: Snapshot integrity verification
+  snapshotValidator: SnapshotValidator;
+  
+  // EXISTING: Safety engines remain unchanged
+  engines: SafetyEngine[];
+  aggregator: DecisionAggregator;
+  
+  // ENHANCED: Override service with snapshot awareness
+  overrideTokenGenerator: SnapshotAwareTokenGenerator;
+}
+```
+
+
+### 1.2 Fundamental Shift
+
+
+The Safety Gateway transforms from a **data fetcher** to a **snapshot consumer**:
+- **Before**: Gateway fetched fresh data for each validation
+- **Now**: Gateway uses pre-created, immutable snapshots
+- **Result**: Perfect consistency between Calculate and Validate phases
+
+
+## 2. Revised Three-Path Architecture
+
+
+### Path 1: Synchronous Safety Path (TRANSFORMED)
+
+
+```typescript
+class SafetyGateway {
+  async validateWithSnapshot(
+    proposal: MedicationProposal,
+    patientId: string
+  ): Promise<SafetyDecision> {
+    // Step 1: Validate snapshot integrity
+    if (!this.snapshotValidator.verifyIntegrity(proposal.snapshotReference)) {
+      throw new SnapshotIntegrityError('Invalid or tampered snapshot');
+    }
+    
+    // Step 2: Retrieve snapshot (from cache or Context Gateway)
+    const snapshot = await this.contextGateway.getSnapshot(
+      proposal.snapshotReference.snapshotId
+    );
+    
+    // Step 3: Verify snapshot matches proposal
+    if (snapshot.checksum !== proposal.snapshotReference.checksum) {
+      throw new SnapshotMismatchError('Snapshot checksum mismatch');
+    }
+    
+    // Step 4: Check snapshot expiry
+    if (new Date() > snapshot.expiresAt) {
+      throw new SnapshotExpiredError('Snapshot has expired');
+    }
+    
+    // Step 5: Validate using snapshot data
+    const engineResults = await this.orchestrateEngines(
+      proposal,
+      snapshot.data  // All engines use same immutable data
+    );
+    
+    // Step 6: Aggregate with snapshot reference
+    return this.aggregateWithSnapshot(engineResults, snapshot);
+  }
+}
+```
+
+
+### Path 2: Override Path (SNAPSHOT-AWARE)
+
+
+```typescript
+interface EnhancedOverrideToken {
+  // Existing fields...
+  decision_summary: DecisionSummary;
+  required_override_level: string;
+  
+  // NEW: Snapshot reference for reproducibility
+  snapshot_reference: {
+    snapshot_id: string;
+    checksum: string;
+    created_at: string;
+    data_completeness: number;  // Percentage of required fields present
+  };
+  
+  // NEW: Enables exact reproduction of decision
+  reproducibility_package: {
+    proposal_id: string;
+    engine_versions: Map<string, string>;
+    rule_versions: Map<string, string>;
+  };
+}
+```
+
+
+```typescript
+class OverrideService {
+  async processOverride(
+    token: EnhancedOverrideToken,
+    justification: string,
+    clinicianId: string
+  ): Promise<OverrideRecord> {
+    // Validate token and authority
+    await this.validateOverrideAuthority(token, clinicianId);
+    
+    // Create immutable override record
+    const override: OverrideRecord = {
+      override_id: generateULID(),
+      original_token: token,
+      snapshot_id: token.snapshot_reference.snapshot_id,
+      justification,
+      clinician_id: clinicianId,
+      timestamp: new Date(),
+      
+      // For learning loop
+      outcome_tracking_id: generateTrackingId()
+    };
+    
+    // Persist with snapshot reference for future analysis
+    await this.persistOverride(override);
+    
+    // Emit event for learning gateway
+    await this.emitOverrideEvent(override);
+    
+    return override;
+  }
+}
+```
+
+
+### Path 3: Learning Path (SNAPSHOT-BASED REPRODUCIBILITY)
+
+
+```typescript
+class LearningGateway {
+  async analyzeOverride(overrideEvent: OverrideEvent): Promise<void> {
+    // NEW: Can replay exact decision using snapshot
+    const snapshot = await this.contextGateway.getSnapshot(
+      overrideEvent.snapshot_id
+    );
+    
+    // Reproduce the original safety check
+    const reproducedDecision = await this.reproduceDecision(
+      overrideEvent.original_proposal,
+      snapshot
+    );
+    
+    // Track outcomes
+    const outcomes = await this.trackPatientOutcomes(
+      overrideEvent.patient_id,
+      overrideEvent.outcome_tracking_id
+    );
+    
+    // Analyze if override was beneficial
+    const analysis = this.analyzeOverrideOutcome(
+      reproducedDecision,
+      overrideEvent.justification,
+      outcomes
+    );
+    
+    // Feed insights back to rule tuning
+    await this.submitLearningInsight(analysis);
+  }
+}
+```
+
+
+## 3. Live Fetch Handling (Exceptional Cases)
+
+
+### 3.1 Controlled Live Fetch for Missing Fields
+
+
+```typescript
+class SafetyGateway {
+  async handleMissingFields(
+    snapshot: ClinicalSnapshot,
+    requiredFields: string[],
+    patientId: string
+  ): Promise<EnrichedValidationData> {
+    // Check if live fetch is allowed
+    if (!snapshot.allowLiveFetch) {
+      throw new InsufficientDataError(
+        'Required fields missing and live fetch not permitted'
+      );
+    }
+    
+    // Identify missing fields that can be fetched
+    const fetchableFields = requiredFields.filter(
+      field => snapshot.allowedLiveFields?.includes(field)
+    );
+    
+    if (fetchableFields.length === 0) {
+      throw new UnauthorizedFieldsError(
+        'Required fields not authorized for live fetch'
+      );
+    }
+    
+    // Fetch with strict governance
+    const liveData = await this.contextGateway.fetchLiveFields(
+      snapshot,
+      fetchableFields,
+      patientId,
+      'safety-gateway'  // Requesting service
+    );
+    
+    // Merge with snapshot data
+    return {
+      ...snapshot.data,
+      ...liveData,
+      _metadata: {
+        live_fetched_fields: fetchableFields,
+        fetch_timestamp: new Date()
+      }
+    };
+  }
+}
+```
+
+
+## 4. Integration Architecture
+
+
+### 4.1 Complete Data Flow
+
+
+```mermaid
+sequenceDiagram
+    participant WE as Workflow Engine
+    participant SG as Safety Gateway
+    participant CG as Context Gateway
+    participant SE as Safety Engines
+    participant OS as Override Service
+    participant LG as Learning Gateway
+    
+    WE->>SG: validate(proposal, patientId)
+    Note over SG: Proposal contains snapshot reference
+    
+    rect rgb(240, 240, 255)
+        Note over SG,CG: Snapshot Retrieval
+        SG->>SG: Verify snapshot integrity
+        SG->>CG: getSnapshot(snapshotId)
+        CG-->>SG: ClinicalSnapshot
+        SG->>SG: Verify checksum matches
+    end
+    
+    rect rgb(240, 255, 240)
+        Note over SG,SE: Safety Validation
+        SG->>SE: Parallel validation with snapshot.data
+        SE-->>SG: Engine results
+        SG->>SG: Aggregate decisions
+    end
+    
+    alt UNSAFE
+        SG->>SG: Generate override token with snapshot ref
+        SG-->>WE: UNSAFE + Token
+        WE->>OS: Override with token
+        OS->>LG: Override event with snapshot
+    else SAFE
+        SG-->>WE: SAFE verdict
+    end
+```
+
+
+## 5. Enhanced Engine Integration
+
+
+### 5.1 Engine Contract Update
+
+
+```typescript
+interface SafetyEngine {
+  // Engines now receive snapshot data, not live data
+  validate(
+    proposal: MedicationProposal,
+    snapshotData: SnapshotData,  // Changed from PatientContext
+    engineConfig: EngineConfig
+  ): Promise<EngineResult>;
+  
+  // Engines can request specific data fields
+  getRequiredFields(): string[];
+  
+  // Engines declare if they need live data
+  requiresLiveData(): boolean;
+}
+```
+
+
+## 6. Performance Optimizations
+
+
+### 6.1 Snapshot Caching Strategy
+
+
+```typescript
+class SnapshotCache {
+  private cache: LRUCache<string, ClinicalSnapshot>;
+  
+  constructor() {
+    this.cache = new LRUCache({
+      max: 1000,  // Maximum snapshots
+      ttl: 300000,  // 5 minutes
+      updateAgeOnGet: true
+    });
+  }
+  
+  async getSnapshot(snapshotId: string): Promise<ClinicalSnapshot | null> {
+    const cached = this.cache.get(snapshotId);
+    if (cached && new Date() < cached.expiresAt) {
+      return cached;
+    }
+    return null;
+  }
+}
+```
+
+
+### 6.2 Performance Targets
+
+
+```typescript
+interface PerformanceMetrics {
+  snapshotRetrieval: '<20ms',     // From cache
+  integrityCheck: '<5ms',         // Checksum verification
+  engineOrchestration: '<150ms',  // Parallel execution
+  aggregation: '<25ms',           // Decision compilation
+  totalLatency: '<200ms'          // End-to-end
+}
+```
+
+
+## 7. Error Handling
+
+
+### 7.1 Snapshot-Specific Errors
+
+
+```typescript
+class SafetyGatewayErrorHandler {
+  handleSnapshotErrors(error: Error): SafetyDecision {
+    if (error instanceof SnapshotExpiredError) {
+      // Cannot proceed with expired data
+      return {
+        status: 'ERROR',
+        reason: 'Snapshot expired - restart workflow',
+        requiresNewSnapshot: true
+      };
+    }
+    
+    if (error instanceof SnapshotIntegrityError) {
+      // Critical security issue
+      this.alertSecurity(error);
+      return {
+        status: 'ERROR',
+        reason: 'Data integrity violation',
+        requiresInvestigation: true
+      };
+    }
+    
+    if (error instanceof SnapshotNotFoundError) {
+      // Snapshot might be archived
+      return {
+        status: 'ERROR',
+        reason: 'Snapshot not available',
+        requiresRetrieval: true
+      };
+    }
+  }
+}
+```
+
+
+## 8. Audit & Compliance
+
+
+### 8.1 Enhanced Audit Trail
+
+
+```typescript
+interface SafetyAuditRecord {
+  validation_id: string;
+  timestamp: Date;
+  
+  // Snapshot reference for reproducibility
+  snapshot: {
+    id: string;
+    checksum: string;
+    created_at: Date;
+    completeness: number;
+  };
+  
+  // Complete decision trail
+  decision: {
+    status: SafetyStatus;
+    engines_consulted: string[];
+    violations: Violation[];
+    override_token?: string;
+  };
+  
+  // Evidence for regulatory compliance
+  evidence: {
+    kb_versions: Map<string, string>;
+    rule_versions: Map<string, string>;
+    engine_versions: Map<string, string>;
+  };
+}
+```
+
+
+## Summary
+
+
+The Safety Gateway architecture has evolved to embrace immutable snapshots, providing:
+
+
+1. **Perfect Consistency** - Uses same snapshot as Calculate phase
+2. **Complete Auditability** - Every decision tied to specific snapshot
+3. **Reproducible Decisions** - Can replay exact validation scenario
+4. **Learning Enablement** - Override analysis uses original snapshot
+5. **Performance Optimization** - Snapshot caching reduces latency
+
+
+The key transformation is that the Safety Gateway no longer orchestrates data fetching but instead validates using pre-created, signed, immutable snapshots. This ensures that safety validation always uses exactly the same data that was used for calculation, eliminating any possibility of inconsistency while maintaining sub-200ms performance.

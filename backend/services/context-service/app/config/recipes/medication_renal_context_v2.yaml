@@ -1,0 +1,247 @@
+# Clinical Context Recipe: Renal Function Context (PRODUCTION)
+# Implements production-ready renal function assessment data gathering
+# Based on ContextRecipeBook.txt specifications
+
+recipe_id: "medication_renal_context_v2"
+recipe_name: "Renal Function Assessment Data - Production"
+version: "2.0"
+clinical_scenario: "medication_ordering"
+workflow_category: "command_initiated"
+execution_pattern: "pessimistic"
+
+# Performance requirements (Production SLA)
+sla_ms: 180  # Context gathering budget
+cache_duration_seconds: 600
+real_data_only: true
+mock_data_detection: true
+mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Clinical recipe references
+clinical_recipe_refs:
+  - "medication-safety-renal-v3.0"
+
+# Triggers
+triggers:
+  - domain: "medication"
+  - action: "prescribe"
+  - drug_properties: ["renally_cleared", "nephrotoxic"]
+  - workflow_type: "command_initiated"
+
+# Required data points for renal function assessment
+required_data_points:
+  - name: "latest_renal_labs"
+    source_type: "lab_service"
+    endpoint: "http://localhost:8000/api/labs/latest-results"
+    fields: ["creatinine", "egfr", "bun", "result_timestamp"]
+    required: true
+    max_age_hours: 2
+    quality_threshold: 0.95
+    timeout_ms: 60
+    retry_count: 2
+    fallback_sources: ["fhir_store"]
+    protocol: "http"
+    critical: true
+    fallback: "Use most recent if <24hr"
+
+  - name: "renal_trends"
+    source_type: "lab_service"
+    endpoint: "http://localhost:8000/api/labs/trends"
+    fields: ["creatinine_trend", "egfr_trend", "delta_values", "trend_direction"]
+    required: false
+    max_age_hours: 1
+    quality_threshold: 0.80
+    timeout_ms: 80
+    retry_count: 2
+    fallback_sources: []
+    protocol: "http"
+    fallback: "skip_trends"
+
+  - name: "patient_renal_context"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["age", "weight", "race", "gender", "renal_problems", "contrast_procedures"]
+    required: true
+    max_age_hours: 4
+    quality_threshold: 0.90
+    timeout_ms: 100
+    retry_count: 2
+    fallback_sources: ["patient_service", "fhir_store"]
+    cache_strategy: "l1_l2_l3"
+
+  - name: "renal_problems"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["icd_code", "description", "stage", "onset_date", "last_updated"]
+    required: false
+    max_age_hours: 4
+    quality_threshold: 0.85
+    timeout_ms: 100
+    retry_count: 2
+    fallback_sources: ["condition_service"]
+    cache_strategy: "l1_l2_l3"
+
+  - name: "contrast_procedures"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["procedure_date", "procedure_type", "contrast_agent", "contrast_volume"]
+    required: false
+    max_age_hours: 168  # 7 days
+    quality_threshold: 0.80
+    timeout_ms: 100
+    retry_count: 2
+    fallback_sources: ["encounter_service"]
+    cache_strategy: "l1_l2_l3"
+
+# Optional analytical data
+optional_data_points:
+  - name: "renal_analytics"
+    source_type: "elasticsearch"
+    endpoint: "http://localhost:9200"
+    index: "lab-results"
+    fields: ["renal_trend_analysis", "avg_creatinine", "egfr_progression"]
+    required: false
+    max_age_hours: 12
+    quality_threshold: 0.70
+    timeout_ms: 250
+    retry_count: 1
+    fallback_sources: []
+    fallback: "skip_analytics"
+
+# Conditional rules for additional data requirements
+conditional_rules:
+  - condition: "patient.ckd_diagnosis == true"
+    description: "CKD patient requires enhanced monitoring"
+    additional_data_points:
+      - name: "ckd_staging"
+        source_type: "condition_service"
+        endpoint: "http://localhost:8010/api/conditions/ckd-staging"
+        fields: ["ckd_stage", "progression_rate", "monitoring_frequency"]
+        required: true
+        max_age_hours: 72
+        quality_threshold: 0.90
+        timeout_ms: 60
+        retry_count: 2
+
+  - condition: "medication.nephrotoxic == true"
+    description: "Nephrotoxic medication requires enhanced renal monitoring"
+    additional_data_points:
+      - name: "nephrotoxic_monitoring"
+        source_type: "lab_service"
+        endpoint: "http://localhost:8000/api/labs/nephrotoxic-monitoring"
+        fields: ["baseline_creatinine", "monitoring_schedule", "dose_adjustments"]
+        required: true
+        max_age_hours: 24
+        quality_threshold: 0.95
+        timeout_ms: 60
+        retry_count: 2
+
+# Quality constraints
+quality_constraints:
+  minimum_completeness: 0.80
+  maximum_age_hours: 72
+  required_fields: ["latest_renal_labs", "patient_renal_context"]
+  accuracy_threshold: 0.85
+
+# Safety requirements (Production)
+safety_requirements:
+  minimum_completeness_score: 0.80
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "FAIL_WORKFLOW"
+  stale_data_action: "FLAG_FOR_REVIEW"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Production performance strategy
+performance_strategy:
+  parallelization: true
+  sla_budget_ms: 180
+  circuit_breaker: true
+  retry_policy: "exponential_backoff"
+  prefetch_patterns:
+    - "If CKD diagnosis exists, pre-cache renal labs"
+    - "Pre-warm cache for nephrotoxic drug prescriptions"
+
+# Cache strategy (Production L1/L2/L3)
+cache_strategy:
+  l1_ttl_seconds: 600    # 10 minutes for recent labs
+  l2_ttl_seconds: 3600   # 1 hour for problems
+  l3_ttl_seconds: 86400  # 24 hours for demographics
+  cache_key_pattern: "context:renal_function:{patient_id}:{medication_id}"
+  invalidation_events:
+    - "clinical-data-changes.patient.lab.updated"
+    - "clinical-data-changes.patient.condition.updated"
+    - "clinical-data-changes.patient.procedure.added"
+
+# Assembly rules (Production)
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 150  # 150ms of the 180ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: true
+  enforce_quality_constraints: true
+  fail_fast: false
+
+# QoS Tier
+qos_tier: "gold"
+max_latency: 180
+availability: "99.9%"
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2025-07-31T10:00:00Z"
+  version: "2.0"
+  effective_date: "2025-07-31T00:00:00Z"
+  expiry_date: "2026-07-31T00:00:00Z"
+  clinical_board_approval_id: "CGB-RENAL-CONTEXT-20250731"
+  tags: ["approved", "production", "medication", "renal", "nephrotoxic"]
+  change_log:
+    - "v2.0: Production implementation with enhanced renal monitoring"
+    - "v1.0: Initial approved version for renal function assessment"
+
+# Data source endpoints (Production)
+data_sources:
+  - service: "lab_service"
+    endpoint: "http://localhost:8000"
+    timeout_ms: 80
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    timeout_ms: 100
+    health_check: "/health"
+    protocol: "graphql"
+
+  - service: "condition_service"
+    endpoint: "http://localhost:8010"
+    timeout_ms: 60
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "encounter_service"
+    endpoint: "http://localhost:8020"
+    timeout_ms: 60
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "elasticsearch"
+    endpoint: "http://localhost:9200"
+    timeout_ms: 250
+    protocol: "http"
+
+# Clinical decision support integration
+clinical_decision_support:
+  renal_dosing_adjustment: true
+  nephrotoxicity_screening: true
+  ckd_progression_monitoring: true
+  contrast_safety_checking: true
+
+# Audit and compliance
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true

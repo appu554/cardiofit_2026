@@ -1,0 +1,217 @@
+# P05 HTN Headache - HPI Node Definition
+# Bayesian differential for occipital headache (morning, on waking) in hypertensive patients.
+# Triggered by: patient self-report of headache OR clinician symptom query.
+# Output: posterior probability of HTN-related headache urgency -> feeds KB-23 decision cards.
+
+node_id: P05_HTN_HEADACHE
+version: "1.0"
+description: "Occipital headache differential in hypertensive cardio-renal-metabolic patients (morning, on waking)"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Safety classification
+safety_criticality: HIGH
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_HTN_2023_HEADACHE_DIFFERENTIAL"
+
+# Differentials with per-stratum priors (F-05)
+# HTN urgency headache: occipital, morning predominance, correlates with uncontrolled BP.
+# Priors shift significantly based on bp_status from KB-20.
+differentials:
+  - id: HTN_URGENCY
+    label: "Hypertensive Urgency Headache"
+    population_reference: "Zampaglione B, Hypertension 1996; ESC HTN Guidelines 2023"
+    priors:
+      DM_ONLY: 0.15
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.30
+    conditional_priors:
+      - condition: "bp_status == SEVERE"
+        override: 0.35
+      - condition: "bp_status == AT_TARGET"
+        override: 0.08
+
+  - id: MIGRAINE
+    label: "Migraine"
+    population_reference: "IHS ICHD-3 Classification 2018"
+    priors:
+      DM_ONLY: 0.35
+      DM_HTN: 0.30
+      DM_HTN_CKD: 0.25
+
+  - id: TENSION_HEADACHE
+    label: "Tension-Type Headache"
+    population_reference: "IHS ICHD-3 Classification 2018"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.25
+      DM_HTN_CKD: 0.22
+
+  - id: MEDICATION_SIDE_EFFECT
+    label: "Medication Side Effect (CCB, nitrate, hydralazine)"
+    population_reference: "BNF Adverse Effects Database; NICE HTN 2022"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.10
+      DM_HTN_CKD: 0.10
+
+# Enrichment fields pulled from KB-20 patient profile
+enrichment_fields:
+  - bp_status
+  - current_antihypertensives
+
+# Likelihood ratios for key discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Is the headache at the back of your head (occipital region)?"
+    text_hi: "क्या सिरदर्द आपके सिर के पीछे (ऑक्सीपिटल क्षेत्र) में है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_OCCIPITAL"
+        label_en: "Yes, pain is at the back of the head"
+        likelihood_ratios:
+          HTN_URGENCY: 2.5
+          MIGRAINE: 0.6
+          TENSION_HEADACHE: 0.8
+          MEDICATION_SIDE_EFFECT: 0.7
+      - value: "FRONTAL_TEMPORAL"
+        label_en: "No, pain is frontal or at the temples"
+        likelihood_ratios:
+          HTN_URGENCY: 0.5
+          MIGRAINE: 1.8
+          TENSION_HEADACHE: 1.5
+          MEDICATION_SIDE_EFFECT: 1.2
+      - value: "DIFFUSE"
+        label_en: "Pain is all over / diffuse"
+        likelihood_ratios:
+          HTN_URGENCY: 0.8
+          MIGRAINE: 0.7
+          TENSION_HEADACHE: 1.3
+          MEDICATION_SIDE_EFFECT: 1.0
+
+  - question_id: Q02
+    text_en: "Does the headache occur mainly when you wake up in the morning?"
+    text_hi: "क्या सिरदर्द मुख्य रूप से सुबह उठने पर होता है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_MORNING"
+        label_en: "Yes, predominantly on waking"
+        likelihood_ratios:
+          HTN_URGENCY: 3.0
+          MIGRAINE: 1.2
+          TENSION_HEADACHE: 0.5
+          MEDICATION_SIDE_EFFECT: 0.6
+      - value: "EVENING"
+        label_en: "No, mainly in the evening"
+        likelihood_ratios:
+          HTN_URGENCY: 0.6
+          MIGRAINE: 0.8
+          TENSION_HEADACHE: 2.0
+          MEDICATION_SIDE_EFFECT: 1.0
+      - value: "NO_PATTERN"
+        label_en: "No specific time pattern"
+        likelihood_ratios:
+          HTN_URGENCY: 0.7
+          MIGRAINE: 1.0
+          TENSION_HEADACHE: 1.2
+          MEDICATION_SIDE_EFFECT: 1.0
+
+  - question_id: Q03
+    text_en: "Is it the worst headache you have ever had?"
+    text_hi: "क्या यह अब तक का सबसे तेज़ सिरदर्द है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_THUNDERCLAP"
+        label_en: "Yes, worst headache of my life (thunderclap onset)"
+        likelihood_ratios:
+          HTN_URGENCY: 5.0
+          MIGRAINE: 0.8
+          TENSION_HEADACHE: 0.1
+          MEDICATION_SIDE_EFFECT: 0.2
+      - value: "SEVERE_NOT_WORST"
+        label_en: "Severe but not the worst ever"
+        likelihood_ratios:
+          HTN_URGENCY: 2.0
+          MIGRAINE: 1.5
+          TENSION_HEADACHE: 0.5
+          MEDICATION_SIDE_EFFECT: 0.8
+      - value: "MILD_MODERATE"
+        label_en: "Mild to moderate"
+        likelihood_ratios:
+          HTN_URGENCY: 0.4
+          MIGRAINE: 0.7
+          TENSION_HEADACHE: 2.0
+          MEDICATION_SIDE_EFFECT: 1.5
+
+  - question_id: Q04
+    text_en: "Do you also have blurred vision or see flashing lights?"
+    text_hi: "क्या आपको धुंधला दिखाई देता है या चमकती रोशनी दिखती है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_VISUAL"
+        label_en: "Yes, blurred vision or flashing lights present"
+        likelihood_ratios:
+          HTN_URGENCY: 4.0
+          MIGRAINE: 2.5
+          TENSION_HEADACHE: 0.2
+          MEDICATION_SIDE_EFFECT: 0.5
+      - value: "NO"
+        label_en: "No visual disturbance"
+        likelihood_ratios:
+          HTN_URGENCY: 0.6
+          MIGRAINE: 0.7
+          TENSION_HEADACHE: 1.3
+          MEDICATION_SIDE_EFFECT: 1.0
+
+  - question_id: Q05
+    text_en: "How long does the headache typically last?"
+    text_hi: "सिरदर्द आमतौर पर कितनी देर तक रहता है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "SHORT_UNDER_1H"
+        label_en: "Less than 1 hour"
+        likelihood_ratios:
+          HTN_URGENCY: 0.5
+          MIGRAINE: 0.4
+          TENSION_HEADACHE: 2.5
+          MEDICATION_SIDE_EFFECT: 1.5
+      - value: "MODERATE_1_4H"
+        label_en: "1 to 4 hours"
+        likelihood_ratios:
+          HTN_URGENCY: 1.0
+          MIGRAINE: 2.0
+          TENSION_HEADACHE: 1.2
+          MEDICATION_SIDE_EFFECT: 1.0
+      - value: "LONG_ALL_DAY"
+        label_en: "All day / persistent"
+        likelihood_ratios:
+          HTN_URGENCY: 2.5
+          MIGRAINE: 0.8
+          TENSION_HEADACHE: 0.6
+          MEDICATION_SIDE_EFFECT: 0.8
+
+# Clinical actions by posterior threshold
+actions:
+  - threshold: 0.70
+    action: "GENERATE_HTN_URGENCY_ALERT"
+    description: "Posterior > 0.70 for HTN urgency headache -> immediate BP verification. Generate urgency decision card via KB-23. Consider referral if thunderclap onset."
+  - threshold: 0.50
+    action: "CONTINUE_INVESTIGATION"
+    description: "Moderate probability. Continue questioning. Obtain BP reading and correlate with headache timing."
+  - threshold: 0.30
+    action: "INVESTIGATE_ALTERNATIVES"
+    description: "Low HTN urgency probability. Investigate migraine (aura history), tension (stress triggers), or medication-related cause (recent drug change)."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "HTN_URGENCY posterior > 0.50 AND visual_disturbance == YES"
+    trigger_node: "P06_HTN_VISUAL"
+    rationale: "HTN headache with visual disturbance warrants hypertensive retinopathy assessment."
+  - condition: "MEDICATION_SIDE_EFFECT posterior > 0.40"
+    trigger_node: "P03_ACEI_COUGH"
+    rationale: "Medication side effect headache may indicate broader medication intolerance requiring review."

@@ -1,0 +1,110 @@
+# Tier-1 HTN Safety Questions
+# These are standalone screening questions triggered by V-MCU gate signals
+# or card events. They are NOT part of the Bayesian differential engine.
+#
+# Each question maps to a V-MCU context field that safety rules consume:
+#   - T1_HTN_01 → oliguria_reported → PG-14 RAAS tolerance override
+#   - T1_HTN_02 → antihypertensive_adherence_self_report → adherence gating
+#   - T1_HTN_03 → acei_cough_symptom → ACEi cough detection (Wave 2 PG-15)
+#   - T1_HTN_04 → orthostatic_symptoms → postural hypotension screening
+#   - T1_HTN_05 → irregular_hr_symptom → AF investigation trigger (Wave 2 B-16)
+
+node_id: TIER1_HTN_SCREENING
+version: "1.0.0"
+description: "HTN co-management screening questions triggered by V-MCU safety events"
+type: TIER1_SCREENING  # distinguishes from Bayesian differential nodes
+
+questions:
+  - id: T1_HTN_01
+    text_en: "Have you noticed reduced urine output in the last 24 hours?"
+    text_hi: "Kya aapne pichle 24 ghanton mein peshab kam aana dekha hai?"
+    maps_to: oliguria_reported
+    trigger: "RAAS_MONITORING active"
+    response_type: BOOLEAN
+    mandatory: true
+    clinical_context: |
+      Oliguria during RAAS monitoring window overrides creatinine tolerance.
+      If oliguria_reported=true, PG-14 RAAS suppression is disabled and
+      B-03 fires HALT as genuine AKI.
+    safety_criticality: HIGH
+
+  - id: T1_HTN_02
+    text_en: "Have you been taking your blood pressure tablets regularly?"
+    text_hi: "Kya aap apni blood pressure ki goliyan niyamit roop se le rahe hain?"
+    maps_to: antihypertensive_adherence_self_report
+    trigger: "HYPERTENSION_REVIEW pending"
+    response_type: LIKERT_5  # Always / Usually / Sometimes / Rarely / Never
+    mandatory: true
+    clinical_context: |
+      Self-reported adherence feeds KB-21 adherence scoring.
+      Low adherence (Sometimes/Rarely/Never) → KB-23 card builder leads
+      with adherence finding instead of dose escalation.
+    safety_criticality: MODERATE
+    likert_labels:
+      - value: 5
+        text_en: "Always"
+        text_hi: "Hamesha"
+      - value: 4
+        text_en: "Usually"
+        text_hi: "Aksar"
+      - value: 3
+        text_en: "Sometimes"
+        text_hi: "Kabhi kabhi"
+      - value: 2
+        text_en: "Rarely"
+        text_hi: "Bahut kam"
+      - value: 1
+        text_en: "Never"
+        text_hi: "Kabhi nahi"
+
+  - id: T1_HTN_03
+    text_en: "Have you noticed any dry cough that started after your BP medication?"
+    text_hi: "Kya aapko BP ki dawai shuru karne ke baad sookhi khansi shuru hui hai?"
+    maps_to: acei_cough_symptom
+    trigger: "ACEi active"
+    response_type: BOOLEAN
+    mandatory: false
+    clinical_context: |
+      ACEi-induced cough occurs in ~10-15% of patients (higher in South Asian
+      populations). Positive response triggers p_acei_cough differential node
+      (Wave 2) and may lead to ARB switch recommendation.
+    safety_criticality: MODERATE
+
+  - id: T1_HTN_04
+    text_en: "Do you feel dizzy when you stand up from sitting or lying down?"
+    text_hi: "Kya aapko baithne ya lete hue uthne par chakkar aata hai?"
+    maps_to: orthostatic_symptoms
+    trigger: "antihypertensive_count >= 2"
+    response_type: FREQUENCY  # Never / Occasionally / Often / Always
+    mandatory: false
+    clinical_context: |
+      Orthostatic hypotension is common with multi-drug antihypertensive
+      regimens, especially in elderly CKD patients. Positive response
+      triggers standing BP measurement request and may adjust BP targets.
+    safety_criticality: MODERATE
+    frequency_labels:
+      - value: 0
+        text_en: "Never"
+        text_hi: "Kabhi nahi"
+      - value: 1
+        text_en: "Occasionally"
+        text_hi: "Kabhi kabhi"
+      - value: 2
+        text_en: "Often"
+        text_hi: "Aksar"
+      - value: 3
+        text_en: "Always"
+        text_hi: "Hamesha"
+
+  - id: T1_HTN_05
+    text_en: "Have you experienced any palpitations or irregular heartbeat?"
+    text_hi: "Kya aapko dhadkan tez ya aniyamit lagti hai?"
+    maps_to: irregular_hr_symptom
+    trigger: "BP_VARIABILITY_ALERT OR HR_IRREGULAR"
+    response_type: BOOLEAN
+    mandatory: false
+    clinical_context: |
+      Irregular HR symptom combined with B-16 (HR irregularity) triggers
+      AF differential investigation via p_irregular_hr node (Wave 2).
+      AF confirmation → anticoagulation assessment (CHA2DS2-VASc).
+    safety_criticality: HIGH

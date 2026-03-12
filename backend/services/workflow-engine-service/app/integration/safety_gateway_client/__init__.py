@@ -1,0 +1,3 @@
+"""
+Safety Gateway Client module
+"""

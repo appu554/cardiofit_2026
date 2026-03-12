@@ -1,0 +1,298 @@
+package api
+
+import (
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"kb-drug-rules/internal/conversion"
+	"kb-drug-rules/internal/models"
+	"kb-drug-rules/internal/validation"
+)
+
+// TOMLWorkflowRequest represents a complete TOML processing request
+type TOMLWorkflowRequest struct {
+	DrugID           string   `json:"drug_id" binding:"required"`
+	Version          string   `json:"version" binding:"required"`
+	TOMLContent      string   `json:"toml_content" binding:"required"`
+	ClinicalReviewer string   `json:"clinical_reviewer" binding:"required"`
+	SignedBy         string   `json:"signed_by" binding:"required"`
+	Regions          []string `json:"regions"`
+	Tags             []string `json:"tags"`
+	Notes            string   `json:"notes"`
+}
+
+// TOMLWorkflowResponse represents the response from TOML processing
+type TOMLWorkflowResponse struct {
+	Success          bool                    `json:"success"`
+	DrugID           string                  `json:"drug_id"`
+	Version          string                  `json:"version"`
+	ValidationResult *models.TOMLValidationResponse `json:"validation_result"`
+	ConvertedJSON    string                  `json:"converted_json"`
+	StorageResult    *models.DrugRulePack    `json:"storage_result"`
+	ProcessingTime   string                  `json:"processing_time"`
+	Message          string                  `json:"message"`
+}
+
+// ProcessTOMLWorkflow handles the complete TOML workflow:
+// TOML parsing/validation → Format conversion → Database storage
+func (s *Server) ProcessTOMLWorkflow(c *gin.Context) {
+	startTime := time.Now()
+	
+	var request TOMLWorkflowRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid request format",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	s.logger.Infof("Starting TOML workflow for drug %s version %s", request.DrugID, request.Version)
+
+	// Step 1: TOML Parsing and Validation
+	s.logger.Info("Step 1: TOML Parsing and Validation")
+	validator := validation.NewEnhancedTOMLValidator()
+	validationResult := validator.ValidateComprehensive(request.TOMLContent)
+
+	if !validationResult.IsValid {
+		s.logger.Warnf("TOML validation failed for drug %s: %v", request.DrugID, validationResult.Errors)
+		c.JSON(http.StatusBadRequest, TOMLWorkflowResponse{
+			Success:          false,
+			DrugID:           request.DrugID,
+			Version:          request.Version,
+			ValidationResult: &validationResult,
+			ProcessingTime:   time.Since(startTime).String(),
+			Message:          "TOML validation failed",
+		})
+		return
+	}
+
+	s.logger.Infof("TOML validation successful with score: %.1f/100", validationResult.Score)
+
+	// Step 2: Format Conversion (TOML → JSON)
+	s.logger.Info("Step 2: Format Conversion (TOML → JSON)")
+	converter := conversion.NewFormatConverter()
+	jsonContent, err := converter.TOMLToJSON(request.TOMLContent)
+	if err != nil {
+		s.logger.Errorf("TOML to JSON conversion failed: %v", err)
+		c.JSON(http.StatusInternalServerError, TOMLWorkflowResponse{
+			Success:          false,
+			DrugID:           request.DrugID,
+			Version:          request.Version,
+			ValidationResult: &validationResult,
+			ProcessingTime:   time.Since(startTime).String(),
+			Message:          fmt.Sprintf("Format conversion failed: %v", err),
+		})
+		return
+	}
+
+	s.logger.Info("TOML to JSON conversion successful")
+
+	// Step 3: Verify Round-trip Conversion
+	s.logger.Info("Step 3: Verifying Round-trip Conversion")
+	if err := converter.ValidateRoundTrip(request.TOMLContent); err != nil {
+		s.logger.Warnf("Round-trip validation failed: %v", err)
+		// Continue with warning but don't fail the request
+	}
+
+	// Step 4: Database Storage
+	s.logger.Info("Step 4: Database Storage")
+	
+	// Use distributed lock to prevent concurrent updates
+	ctx := c.Request.Context()
+	err = s.lockManager.WithDrugRuleLock(ctx, request.DrugID, 30*time.Second, func() error {
+		return s.storeTOMLRule(request, jsonContent, validationResult)
+	})
+
+	if err != nil {
+		s.logger.Errorf("Database storage failed: %v", err)
+		c.JSON(http.StatusInternalServerError, TOMLWorkflowResponse{
+			Success:          false,
+			DrugID:           request.DrugID,
+			Version:          request.Version,
+			ValidationResult: &validationResult,
+			ConvertedJSON:    jsonContent,
+			ProcessingTime:   time.Since(startTime).String(),
+			Message:          fmt.Sprintf("Database storage failed: %v", err),
+		})
+		return
+	}
+
+	// Step 5: Retrieve stored result for response
+	storedRule, err := s.getStoredRule(request.DrugID, request.Version)
+	if err != nil {
+		s.logger.Warnf("Failed to retrieve stored rule: %v", err)
+	}
+
+	processingTime := time.Since(startTime)
+	s.logger.Infof("TOML workflow completed successfully in %v", processingTime)
+
+	// Success response
+	c.JSON(http.StatusOK, TOMLWorkflowResponse{
+		Success:          true,
+		DrugID:           request.DrugID,
+		Version:          request.Version,
+		ValidationResult: &validationResult,
+		ConvertedJSON:    jsonContent,
+		StorageResult:    storedRule,
+		ProcessingTime:   processingTime.String(),
+		Message:          "TOML workflow completed successfully",
+	})
+}
+
+// storeTOMLRule stores the TOML rule in the database
+func (s *Server) storeTOMLRule(request TOMLWorkflowRequest, jsonContent string, validationResult models.TOMLValidationResponse) error {
+	// Create DrugRulePack with TOML support
+	rulePack := &models.DrugRulePack{
+		DrugID:           request.DrugID,
+		Version:          request.Version,
+		OriginalFormat:   "toml",
+		TOMLContent:      &request.TOMLContent,
+		JSONContent:      []byte(jsonContent),
+		Content:          []byte(jsonContent), // For backward compatibility
+		ClinicalReviewer: request.ClinicalReviewer,
+		SignedBy:         request.SignedBy,
+		Regions:          request.Regions,
+		Tags:             request.Tags,
+		CreatedBy:        request.SignedBy,
+		LastModifiedBy:   request.SignedBy,
+		DeploymentStatus: map[string]interface{}{
+			"staging":    "pending",
+			"production": "pending",
+		},
+		VersionHistory: []interface{}{
+			map[string]interface{}{
+				"version":     request.Version,
+				"created_at":  time.Now(),
+				"created_by":  request.SignedBy,
+				"notes":       request.Notes,
+				"validation_score": validationResult.Score,
+			},
+		},
+	}
+
+	// Save to database using GORM
+	if err := s.db.Create(rulePack).Error; err != nil {
+		return fmt.Errorf("failed to save rule pack: %w", err)
+	}
+
+	s.logger.Infof("Successfully stored TOML rule for drug %s version %s", request.DrugID, request.Version)
+	return nil
+}
+
+// getStoredRule retrieves a stored rule from the database
+func (s *Server) getStoredRule(drugID, version string) (*models.DrugRulePack, error) {
+	var rulePack models.DrugRulePack
+	err := s.db.Where("drug_id = ? AND version = ?", drugID, version).First(&rulePack).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve stored rule: %w", err)
+	}
+	return &rulePack, nil
+}
+
+// ValidateTOMLOnly handles TOML validation without storage
+func (s *Server) ValidateTOMLOnly(c *gin.Context) {
+	var request struct {
+		Content string `json:"content" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid request format",
+		})
+		return
+	}
+
+	validator := validation.NewEnhancedTOMLValidator()
+	result := validator.ValidateComprehensive(request.Content)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":           result.IsValid,
+		"validation_result": result,
+	})
+}
+
+// ConvertTOMLToJSON handles format conversion without storage
+func (s *Server) ConvertTOMLToJSON(c *gin.Context) {
+	var request struct {
+		TOMLContent string `json:"toml_content" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "Invalid request format",
+		})
+		return
+	}
+
+	converter := conversion.NewFormatConverter()
+	jsonContent, err := converter.TOMLToJSON(request.TOMLContent)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Conversion failed: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"json_content": jsonContent,
+	})
+}
+
+// GetTOMLRule retrieves a rule and returns it in TOML format
+func (s *Server) GetTOMLRule(c *gin.Context) {
+	drugID := c.Param("drug_id")
+	version := c.Query("version")
+
+	var rulePack models.DrugRulePack
+	query := s.db.Where("drug_id = ?", drugID)
+	
+	if version != "" {
+		query = query.Where("version = ?", version)
+	} else {
+		// Get latest version
+		query = query.Order("updated_at DESC")
+	}
+
+	if err := query.First(&rulePack).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "Drug rule not found",
+		})
+		return
+	}
+
+	response := gin.H{
+		"success":         true,
+		"drug_id":         rulePack.DrugID,
+		"version":         rulePack.Version,
+		"original_format": rulePack.OriginalFormat,
+	}
+
+	// Return TOML content if available, otherwise convert from JSON
+	if rulePack.TOMLContent != nil && *rulePack.TOMLContent != "" {
+		response["toml_content"] = *rulePack.TOMLContent
+	} else {
+		// Convert JSON to TOML
+		converter := conversion.NewFormatConverter()
+		tomlContent, err := converter.JSONToTOML(string(rulePack.JSONContent))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"error":   fmt.Sprintf("Failed to convert to TOML: %v", err),
+			})
+			return
+		}
+		response["toml_content"] = tomlContent
+		response["converted_from"] = "json"
+	}
+
+	c.JSON(http.StatusOK, response)
+}

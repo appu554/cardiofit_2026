@@ -1,0 +1,128 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
+
+	"kb-drug-rules/internal/api"
+	"kb-drug-rules/internal/cache"
+	"kb-drug-rules/internal/config"
+	"kb-drug-rules/internal/database"
+	"kb-drug-rules/internal/governance"
+	"kb-drug-rules/internal/metrics"
+)
+
+func main() {
+	// Initialize configuration
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Initialize logger
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.JSONFormatter{})
+	logger.SetLevel(logrus.InfoLevel)
+	if cfg.Debug {
+		logger.SetLevel(logrus.DebugLevel)
+	}
+
+	// Initialize database connection
+	db, err := database.NewConnection(cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	// Auto-migrate database schema
+	if err := database.AutoMigrate(db); err != nil {
+		logger.Warnf("Auto-migration failed (this is OK if database is already set up): %v", err)
+	} else {
+		logger.Info("Auto-migration completed successfully")
+	}
+
+	// Initialize Redis cache
+	cacheClient, err := cache.NewRedisClient(cfg.RedisURL)
+	if err != nil {
+		logger.Fatalf("Failed to connect to Redis: %v", err)
+	}
+
+	// Initialize governance engine (temporarily disabled)
+	var governanceEngine governance.Engine
+	logger.Info("Governance engine temporarily disabled for initial setup")
+
+	// Initialize metrics
+	metricsCollector := metrics.NewCollector()
+
+	// Initialize API server
+	apiServer := api.NewServer(&api.ServerConfig{
+		DB:         db,
+		Cache:      cacheClient,
+		Governance: governanceEngine,
+		Metrics:    metricsCollector,
+		Logger:     logger,
+	})
+
+	// Setup Gin router
+	if !cfg.Debug {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(api.LoggingMiddleware(logger))
+	router.Use(api.MetricsMiddleware(metricsCollector))
+	router.Use(api.CORSMiddleware())
+
+	// Register routes
+	apiServer.RegisterRoutes(router)
+
+	// Create HTTP server
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Port),
+		Handler:      router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Start server in goroutine
+	go func() {
+		logger.Infof("KB-Drug-Rules service starting on port %d", cfg.Port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("Shutting down server...")
+
+	// Graceful shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	// Close database connection
+	sqlDB, _ := db.DB()
+	sqlDB.Close()
+
+	// Close cache connection
+	cacheClient.Close()
+
+	logger.Info("Server exited")
+}

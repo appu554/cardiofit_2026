@@ -1,0 +1,3 @@
+"""
+Compensation Service module
+"""

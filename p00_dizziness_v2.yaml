@@ -1,0 +1,1312 @@
+# =============================================================================
+# VAIDSHALA HPI NODE: DIZZINESS_V2
+# P00 Prototype Node — Harvest-First, Build-Second Methodology
+# =============================================================================
+#
+# Source:              Dizziness Evidence Harvest V2 (February 2026)
+# Architectural Home:  KB-22 HPI Engine | Port 8132
+# Downstream:          KB-23 Decision Cards → KB-19 Protocol Orchestrator → KB-24 Audit
+# Status:              YAML-READY (evidence harvest complete, Go changes G14/G15/G16 required)
+#
+# Go Changes Required Before Loading:
+#   G14 — CM composition in log-odds space (CMApplicator)
+#   G15 — 'Other' bucket differential (BayesianEngine)
+#   G16 — Pata-nahi cascade protocol (BayesianEngine + YAML alt_prompt field)
+#   G17 — Contradiction detection (Week 4 — contradiction_pairs field pre-declared here)
+#
+# YAML Schema Notes:
+#   - CMs: authors write delta_p in probability space; engine converts via logit-shift (G14)
+#   - Priors sum to 0.85 — 0.15 reserved for implicit 'Other' bucket (G15)
+#   - alt_prompt fields are active from Day 1 even before G16 ships (no-op until G16 loads)
+#   - Acuity questions tagged type: ACUITY; processed as informational until G7 ships (Week 4)
+#   - cross_node_triggers are declared in cross_node_triggers.yaml (separate file)
+#     RF04 dual-node activation must be mirrored there
+#
+# Clinical Insight (from harvest):
+#   In Indian DM+HTN, the top 3 dizziness differentials (OH, hypoglycemia, drug-induced)
+#   are ALL medication-related. The CM layer carries disproportionate diagnostic weight
+#   compared to the general population — making G14 (log-odds CM composition) clinically
+#   essential for this node. A patient on ARB + SU + age>=65 + 2 antihypertensives
+#   can have 4 CMs fire simultaneously; naive probability-space addition breaks here.
+# =============================================================================
+
+node_id: DIZZINESS_V2
+version: "2.0.0"
+title: "Dizziness / Chakkar Aana"
+title_hi: "Chakkar Aana"
+scope: "Enrolled adults with DM and/or HTN, age 30-80"
+status: PILOT_READY
+pilot_node: true
+
+structural_reference: "AAFP 2023 TiTrATE (Timing / Triggers / Targeted Exam)"
+bayesian_framework: "Log-odds accumulation with stratum-conditional LR weighting"
+
+primary_sources:
+  - "McGee JAMA 1999 — postural pulse rise, dry axilla (OH LRs)"
+  - "Kattah NEJM 2009 — HINTS exam (LR+ 25 for central nystagmus pattern)"
+  - "AAFP 2023 — TiTrATE dizziness framework"
+  - "India OH community study PMC 2022 — polypharmacy OH prevalence"
+  - "AASK Trial — CKD + HTN anaemia and OH subgroup data"
+  - "Whipple 1938 — hypoglycemia triad (used in DQ02)"
+  - "ADA Standards 2024 — SU/Insulin hypoglycemia; Level 3 definition"
+  - "NKF 2022 + CANVAS Trial — SGLT2i + diuretic volume depletion"
+  - "StatPearls ARB / SGLT2i / Beta-blocker / Sulfonylurea monographs"
+
+guideline_prior_source: "India_OH_PMC_2022,ICMR-INDIAB,ADA_2024,AASK_Trial,Bhattacharyya_AAO_HNS_2017"
+
+# =============================================================================
+# CONVERGENCE AND COMPLETION CRITERIA
+# =============================================================================
+# Lower threshold than P1 (0.65) — 8 differentials with meaningful overlap,
+# especially between OH / hypoglycemia / drug-induced in the DM+HTN cohort.
+
+convergence_threshold: 0.60
+posterior_gap_threshold: 0.85      # Top-2 differential sum. EITHER condition closes.
+convergence_logic: EITHER
+max_questions: 12                  # 6 RF + 2 acuity minimum + 4 discriminating maximum
+cluster_dampening: 0.50            # Repeat-question penalty within same cluster
+
+completion_criteria:
+  red_flags_required: 6
+  acuity_minimum: 4                # >= 4 of 6 TiTrATE questions answered
+  discriminating_minimum: 4        # >= 4 of 8 discriminating questions answered
+  closure_guard_trigger: 0.45      # If top_p < 0.45 after question budget → YELLOW alert
+  closure_guard_text_en: >
+    Atypical dizziness presentation. Available symptom history is insufficient for
+    confident remote differential. Recommend in-person evaluation with orthostatic BP
+    measurement, capillary glucose check, and targeted vestibular exam.
+  closure_guard_text_hi: >
+    Chakkar ka kaaran door se poori tarah samajh nahin aaya. Kripya daaktar se milein.
+    Khade hone par BP maapna, sugar check karna, aur kaan-naak-gala jaanch zaroori hai.
+
+# =============================================================================
+# SAFETY FLOORS
+# (Go Change G1 — already built)
+# Posterior NEVER drops below floor value regardless of negative findings.
+# =============================================================================
+safety_floors:
+  TIA: 0.04
+  # Rationale: Remote assessment cannot rule out posterior fossa TIA. Equals base prior —
+  # engine cannot go lower than prior for a CATASTROPHIC acuity differential.
+  # Only in-person HINTS exam + DWI MRI can reduce below this.
+
+  ARRHYTHMIA: 0.03
+  # Rationale: DM+HTN carries 2-3x AF risk. Arrhythmia as dizziness cause is catastrophic
+  # if missed. Continuous monitoring (Holter) required to truly exclude.
+
+# =============================================================================
+# DIFFERENTIALS — 8-DIAGNOSIS CLOSED SET
+# =============================================================================
+# Source: Dizziness Evidence Harvest V2 (Feb 2026)
+# Priors: Indian DM+HTN cohort. Sum = 0.85 (0.15 reserved for 'Other' bucket via G15).
+# Derivation: midpoint of harvest ranges, normalised to 0.85.
+# Sorted by base prevalence descending.
+#
+# PRE-G15 NOTE: Until G15 ships, NodeLoader will see priors summing to 0.85 and
+# may emit a warning. This is expected — G15 adds the implicit Other(0.15) bucket.
+# Do NOT pad priors to 1.00 to silence the warning.
+# =============================================================================
+
+differentials:
+
+  - id: OH
+    label: "Orthostatic Hypotension"
+    label_hi: "Khade Hone Par BP Girna"
+    acuity: COMMON
+    population_reference: "India OH community study PMC 2022; AASK Trial"
+    priors:
+      DM_HTN_base: 0.24
+    evidence_note: >
+      PMC 2022 Indian community study: OH in DM+HTN adults on 2+ antihypertensives = 28%.
+      AASK Trial CKD+HTN subgroup OH rate 22%. Harvest range 20-30%; midpoint 25%
+      normalised to 0.85 base → 0.24. Top differential in this cohort because
+      polypharmacy antihypertensives are near-universal.
+
+  - id: HYPOGLYCEMIA
+    label: "Hypoglycemia"
+    label_hi: "Blood Sugar Gir Jana"
+    acuity: URGENT
+    population_reference: "ADA Standards 2024; DCCT; UKPDS"
+    priors:
+      DM_HTN_base: 0.17
+    evidence_note: >
+      ADA 2024: SU-treated DM has ~20% annual symptomatic hypoglycemia incidence.
+      Insulin-treated: higher. In dizziness presentations specifically, hypoglycemia is
+      the 2nd most common cause in DM cohort. Harvest range 15-20%; midpoint 17.5%
+      normalised → 0.17.
+
+  - id: DRUG_INDUCED
+    label: "Drug-Induced Dizziness"
+    label_hi: "Dawai Ki Wajah Se Chakkar"
+    acuity: COMMON
+    population_reference: "StatPearls ARB/CCB/Thiazide; NKF/CANVAS 2017"
+    priors:
+      DM_HTN_base: 0.12
+    evidence_note: >
+      Dizziness via vestibular toxicity (aminoglycosides, loop diuretics at high dose),
+      CNS sedation (centrally acting antihypertensives), or electrolyte derangement
+      (thiazide hyponatraemia). Distinct from OH (postural mechanism) and hypoglycemia.
+      Harvest range 10-15%; midpoint 12.5% normalised → 0.12.
+
+  - id: BPPV
+    label: "Benign Paroxysmal Positional Vertigo"
+    label_hi: "Kaan Ke Kaaran Chakkar (BPPV)"
+    acuity: COMMON
+    population_reference: "Bhattacharyya AAO-HNS 2017; AAFP 2023 TiTrATE"
+    priors:
+      DM_HTN_base: 0.12
+    evidence_note: >
+      Lifetime prevalence 2.4% general population. DM autonomic neuropathy may affect
+      otolith function. Hallmark: brief (<60s) rotational vertigo from head movement.
+      The TiTrATE framework identifies this via Timing (seconds) + Triggers (positional).
+      Harvest range 10-15%; midpoint 12.5% normalised → 0.12.
+
+  - id: VOLUME_DEPLETION
+    label: "Volume Depletion / Dehydration"
+    label_hi: "Paani Ki Kami / Dehydration"
+    acuity: COMMON
+    population_reference: "CANVAS Trial 2017; StatPearls SGLT2i; ADA 2024"
+    priors:
+      DM_HTN_base: 0.06
+    evidence_note: >
+      SGLT2i osmotic diuresis + loop diuretic natriuresis in Indian summer climate.
+      Mechanistically overlaps with OH (volume depletion causes postural drop) but
+      separated here because severe volume depletion can present non-posturally.
+      Harvest: "variable"; estimated 6% based on CANVAS volume depletion AE rate.
+
+  - id: ANEMIA
+    label: "Anaemia (as Dizziness Cause)"
+    label_hi: "Khoon Ki Kami Se Chakkar"
+    acuity: COMMON
+    population_reference: "NFHS-5 2021 (India); AASK Trial; WHO Hb thresholds"
+    priors:
+      DM_HTN_base: 0.06
+    evidence_note: >
+      NFHS-5: anaemia in 57% Indian women, 25% Indian men. CKD+DM cohort: EPO
+      deficiency accelerates anaemia (AASK trial: CKD+HTN anaemia prevalence 42%).
+      Gradual-onset dizziness associated with pallor + fatigue + exertional dyspnoea.
+      Harvest range 5-8%; midpoint 6.5% normalised → 0.06.
+
+  - id: TIA
+    label: "Transient Ischaemic Attack / Central Vertigo"
+    label_hi: "Brain Ka Chota Daura (TIA)"
+    acuity: CATASTROPHIC
+    population_reference: "Kattah NEJM 2009; ACC/AHA 2021 TIA/Stroke"
+    priors:
+      DM_HTN_base: 0.04
+    evidence_note: >
+      DM+HTN: significant cerebrovascular risk. Isolated dizziness as TIA: ~8% of
+      posterior fossa TIAs. HINTS exam (LR+ 25) is the physical exam finding — not
+      accessible remotely. DQ07 (continuous >24h) is the TRIAGE question pointing to
+      HINTS pathway. Harvest range 3-5%; midpoint 4% normalised → 0.04.
+
+  - id: ARRHYTHMIA
+    label: "Cardiac Arrhythmia (AF / SVT)"
+    label_hi: "Dil Ki Dhadkan Biguad Jaana"
+    acuity: CATASTROPHIC
+    population_reference: "ACC/AHA 2021; DM-CKD AF incidence data"
+    priors:
+      DM_HTN_base: 0.04
+    evidence_note: >
+      DM+HTN: 2-3x AF risk vs general population. CKD worsens electrolyte imbalance →
+      arrhythmia risk. Dizziness from arrhythmia: typically episodic with palpitations,
+      near-syncope. SVT can present with dizziness alone. Harvest range 3-5%;
+      midpoint 4% normalised → 0.04.
+
+# Sum: 0.24 + 0.17 + 0.12 + 0.12 + 0.06 + 0.06 + 0.04 + 0.04 = 0.85 ✓
+
+# =============================================================================
+# SEX MODIFIERS
+# (Go Change G2 — already built)
+# =============================================================================
+# NOTE: No sex-specific dizziness modifiers documented in Evidence Harvest V2.
+# OH, hypoglycemia, and drug-induced risk are epidemiologically equivalent
+# across sexes in the DM+HTN cohort. ANEMIA has higher female prevalence
+# (NFHS-5: 57% women vs 25% men) but this is a population-level prior
+# correction, not a sex modifier applied at the individual level.
+#
+# DEFERRED: Anaemia sex modifier (OR ~2.0 for women in Indian DM+HTN cohort)
+# pending Phase 2 evidence harvest. Placeholder added for completeness.
+# =============================================================================
+sex_modifiers:
+  - id: SM01_ANAEMIA_FEMALE
+    condition: "sex == Female"
+    target_differential: ANEMIA
+    delta_p: +0.06           # Doubles anaemia prior for women (NFHS-5 data)
+    confidence: CALIBRATE
+    source: "NFHS-5 2021 (India anaemia: 57% women vs 25% men)"
+    status: DEFERRED          # Pending Phase 2 harvest — do not activate at launch
+    activation_note: >
+      Remove DEFERRED status and activate after Phase 2 evidence harvest verifies
+      the delta_p value against DM+HTN-specific anaemia prevalence by sex.
+
+# =============================================================================
+# RED FLAG SWEEP — 6 RED FLAGS
+# All 6 must be screened before acuity or discriminating questions.
+# (SafetyEngine + NodeLoader.validate() — already built)
+# =============================================================================
+
+safety_triggers:
+
+  - id: RF01
+    type: BOOLEAN
+    condition: "Q_RF01_FOCAL_NEURO=YES"
+    severity: IMMEDIATE
+    recommended_action: >
+      Focal neurological deficit with dizziness. TIA / stroke protocol.
+      STAT neurological assessment. Do not defer. SNOMED: 373606000.
+    source: "NICE Stroke Guidelines; ACC/AHA 2021 TIA; Kattah NEJM 2009"
+
+  - id: RF02
+    type: BOOLEAN
+    condition: "Q_RF02_SYNCOPE=YES"
+    severity: IMMEDIATE
+    recommended_action: >
+      Syncope with dizziness. Cardiac syncope / arrhythmia / severe OH protocol.
+      ECG immediately. Rule out structural cardiac cause. SNOMED: 271594007.
+    source: "ACC/AHA 2021 Syncope Guideline"
+
+  - id: RF03
+    type: BOOLEAN
+    condition: "Q_RF03_THUNDERCLAP=YES"
+    severity: IMMEDIATE
+    recommended_action: >
+      Thunderclap headache with dizziness. Subarachnoid haemorrhage protocol.
+      STAT CT head without contrast. SNOMED: 230690007.
+    source: "NICE Head Injury Guidelines; AHA SAH Guidelines"
+
+  - id: RF04
+    type: BOOLEAN
+    condition: "Q_RF04_CHEST_PAIN_COMBO=YES"
+    severity: IMMEDIATE
+    recommended_action: >
+      Chest pain + dizziness co-presentation. Dual-node activation.
+      CHEST_PAIN_V2 must run concurrently. ACS + arrhythmia + aortic dissection
+      triple pathway. SNOMED: 29857009 + 404640003.
+    cross_node_action: "ACTIVATE_CONCURRENT: CHEST_PAIN_V2; escalate ACS safety floor to 0.10 in both nodes"
+    source: "ACC/AHA 2021; INTERHEART 2004 SA substudy"
+    # NOTE: Mirror this trigger in cross_node_triggers.yaml (separate file).
+    # The cross_node_action field is consumed by CrossNodeSafety.Load() at runtime.
+
+  - id: RF05
+    type: BOOLEAN
+    condition: "Q_RF05_PALPITATIONS_SEVERE=YES"
+    severity: IMMEDIATE
+    recommended_action: >
+      Severe palpitations with dizziness. Arrhythmia protocol. ECG immediately.
+      Consider Holter if ECG is normal but symptoms are recurrent. SNOMED: 80313002.
+    source: "ACC/AHA 2021 Arrhythmia; ESC 2019 SVT"
+
+  - id: RF06
+    type: BOOLEAN
+    condition: "Q_RF06_GLUCOSE_SEVERE=YES"
+    severity: IMMEDIATE
+    recommended_action: >
+      Severe hypoglycemia reported (glucose < 54 mg/dL or prior loss of consciousness
+      from low sugar). ADA Level 3 hypoglycemia protocol. Glucagon if available;
+      IV dextrose if unresponsive. SNOMED: 302866003.
+    source: "ADA Standards 2024 — Level 3 Hypoglycemia definition"
+
+# =============================================================================
+# QUESTIONS
+# =============================================================================
+# Processing order:  RF01-RF06 → AC01-AC06 (TiTrATE acuity) → DQ01-DQ08 (discriminating)
+# G16 alt_prompt:    Pre-declared on every question. No-op until G16 ships (Week 1).
+# G17 contradiction: contradiction_pairs declared at node level below.
+# G7 acuity layer:   ACUITY questions processed as informational until G7 ships (Week 4).
+#                    Engine must NOT apply LR from ACUITY questions before G7 is active.
+# =============================================================================
+
+questions:
+
+  # ============================================================
+  # RED FLAG QUESTIONS (RF01-RF06)
+  # ============================================================
+
+  - id: Q_RF01_FOCAL_NEURO
+    type: RED_FLAG
+    safety_trigger_id: RF01
+    text_en: >
+      Are you having any weakness in one arm or leg, difficulty speaking or
+      finding words, or numbness on one side of your face or body right now?
+    text_hi: >
+      Kya abhi aapke ek haath ya paer mein kamzori aa gayi hai, baat karne mein
+      takleef ho rahi hai, ya chehra ya sharir ke ek taraf sunn ho gayi hai?
+    alt_prompt_hi: >
+      Kya ek taraf ka haath ya paer nahi uth raha? Ya zabaan lad rahi hai ya
+      seedha baat nahin nikal rahi?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: RF_NEUROLOGICAL
+    lr_source: "NICE Stroke; Kattah NEJM 2009 (HINTS)"
+    lr_evidence_class: HIGH_CONF
+
+  - id: Q_RF02_SYNCOPE
+    type: RED_FLAG
+    safety_trigger_id: RF02
+    text_en: >
+      During the dizziness episode, did you lose consciousness completely —
+      fall to the ground and lose all awareness, even briefly?
+    text_hi: >
+      Chakkar ke waqt kya aap poori tarah behosh ho gaye — gir gaye aur kuch
+      samajh nahin aaya, chahe thodi der ke liye?
+    alt_prompt_hi: >
+      Kya aap gir gaye aur thodi der ke liye hosh nahin raha?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: RF_CARDIAC
+    lr_source: "ACC/AHA 2021 Syncope Guideline"
+    lr_evidence_class: HIGH_CONF
+
+  - id: Q_RF03_THUNDERCLAP
+    type: RED_FLAG
+    safety_trigger_id: RF03
+    text_en: >
+      Did you get a sudden very severe headache at the same time as or just
+      before the dizziness — the worst headache you have ever felt, like a
+      thunder clap?
+    text_hi: >
+      Kya chakkar ke saath ya thoda pehle, achanak bahut tez sar dard hua —
+      aisa jo aapne pehle kabhi anubhav na kiya ho, bijli girne jaisa?
+    alt_prompt_hi: >
+      Sar mein achanak bahut bura dard hua — ab tak ka sabse bura — sath mein
+      chakkar aaya?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: RF_NEUROLOGICAL
+    lr_source: "NICE Head Injury; AHA SAH Guidelines"
+    lr_evidence_class: HIGH_CONF
+
+  - id: Q_RF04_CHEST_PAIN_COMBO
+    type: RED_FLAG
+    safety_trigger_id: RF04
+    text_en: >
+      Along with the dizziness, do you also have any chest pain, chest tightness,
+      pressure, or heaviness in the chest?
+    text_hi: >
+      Chakkar ke saath kya seene mein dard, kasav, dabaav, ya bhaari-pann bhi
+      ho raha hai?
+    alt_prompt_hi: >
+      Seene mein kuch lag raha hai — dabaav ya kasav — sath mein chakkar?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: RF_CARDIAC
+    lr_source: "ACC/AHA 2021; INTERHEART 2004"
+    lr_evidence_class: HIGH_CONF
+
+  - id: Q_RF05_PALPITATIONS_SEVERE
+    type: RED_FLAG
+    safety_trigger_id: RF05
+    text_en: >
+      Are you feeling your heart beating very fast, very hard, or irregularly —
+      skipping beats or fluttering — along with the dizziness?
+    text_hi: >
+      Kya chakkar ke saath dil bahut tez, bahut zor se, ya ajeeb tarike se
+      dhadak raha hai — beech beech mein ruk jaata hai ya utha-patkha karta hai?
+    alt_prompt_hi: >
+      Dil ki dhadkan theek nahin lag rahi — tez hai ya ulta-pulta dhadak rahi
+      hai sath mein chakkar ke?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: RF_CARDIAC
+    lr_source: "ACC/AHA 2021 Arrhythmia; ESC 2019 SVT"
+    lr_evidence_class: HIGH_CONF
+
+  - id: Q_RF06_GLUCOSE_SEVERE
+    type: RED_FLAG
+    safety_trigger_id: RF06
+    text_en: >
+      Have you measured your blood sugar during this dizziness episode? Was it
+      below 54 mg/dL? Or have you ever lost consciousness due to low blood sugar?
+    text_hi: >
+      Kya chakkar ke waqt sugar check ki thi? Kya woh 54 se neeche thi? Ya kabhi
+      pehle sugar girne se hosh kho diya tha?
+    alt_prompt_hi: >
+      Kya sugar bahut neeche gayi thi — 54 se kam — ya kabhi behoshi aayi thi
+      sugar girne se?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: RF_METABOLIC
+    lr_source: "ADA Standards 2024 — Level 3 Hypoglycemia"
+    lr_evidence_class: HIGH_CONF
+
+  # ============================================================
+  # ACUITY QUESTIONS: TiTrATE FRAMEWORK (AC01-AC06)
+  # AAFP 2023 TiTrATE: Timing axis (AC01-AC02, AC05),
+  #                    Triggers axis (AC03-AC04),
+  #                    Targeted Exam axis (AC06)
+  # G7 (AcuityEngine) deferred to Week 4.
+  # Until G7: type: ACUITY questions are asked but NO LR is applied.
+  # The variable values feed clinician output template and branch conditions.
+  # ============================================================
+
+  - id: AC01
+    type: ACUITY
+    titrATE_axis: TIMING
+    text_en: >
+      How long does each episode of dizziness last when it comes on?
+      Seconds, minutes, hours, or is it constant?
+    text_hi: >
+      Ek baar chakkar aane par woh kitni der rehta hai? Kuch second, kuch minute,
+      ghante, ya lagaataar bana rehta hai?
+    alt_prompt_hi: >
+      Chakkar kab tak rehta hai — jaldi theek ho jaata hai ya der tak bana rehta hai?
+    answer_type: CATEGORICAL
+    variable: episode_duration
+    options:
+      - value: SECONDS_UNDER_60
+        text_hi: "Kuch second — ek minute se kam"
+        clinical_flag: "BPPV pattern — pursue DQ03/DQ04"
+      - value: MINUTES_5_TO_60
+        text_hi: "Kuch minute — 5 se 60 minute"
+        clinical_flag: "Hypoglycemia / arrhythmia / OH pattern"
+      - value: HOURS_1_TO_24
+        text_hi: "Ghante — 1 se 24 ghante"
+        clinical_flag: "Drug-induced / volume depletion — or early central"
+      - value: CONTINUOUS_OVER_24H
+        text_hi: "24 ghante se zyada lagaataar bana hua hai"
+        clinical_flag: "HINTS pathway flag — pursue DQ07; TIA prior elevated"
+    source: "AAFP 2023 TiTrATE — Timing axis"
+
+  - id: AC02
+    type: ACUITY
+    titrATE_axis: TIMING
+    text_en: >
+      Is the dizziness happening right now, continuously? Or does it come and
+      go in separate episodes?
+    text_hi: >
+      Chakkar abhi bhi lagaataar ho raha hai? Ya bar bar aata aur jaata hai?
+    alt_prompt_hi: >
+      Abhi bhi chakkar hai? Ya thoda theek hota hai beech mein?
+    answer_type: CATEGORICAL
+    variable: continuity_pattern
+    options:
+      - value: CONTINUOUS_NOW
+        text_hi: "Haan, abhi bhi lagaataar bana hua hai"
+        clinical_flag: "Continuous — TIA / central vertigo risk if >24h"
+      - value: EPISODIC_TRIGGERED
+        text_hi: "Bar bar aata hai — kuch karne se"
+        clinical_flag: "Episodic triggered — OH / BPPV / hypoglycemia"
+      - value: EPISODIC_SPONTANEOUS
+        text_hi: "Bar bar aata hai — bina kisi cheez ke"
+        clinical_flag: "Episodic spontaneous — arrhythmia / hypoglycemia"
+      - value: RESOLVED_NOW
+        text_hi: "Abhi theek hai, pehle tha"
+        clinical_flag: "Resolved — TIA still possible if recent"
+    source: "AAFP 2023 TiTrATE — Timing axis"
+
+  - id: AC03
+    type: ACUITY
+    titrATE_axis: TRIGGERS
+    text_en: >
+      What were you doing when the dizziness started? What brings it on?
+    text_hi: >
+      Jab chakkar aaya, aap kya kar rahe the? Kya cheez se chakkar shuru hota hai?
+    alt_prompt_hi: >
+      Chakkar kab aata hai — uthte waqt? Sar hilane se? Ya khud se aa jaata hai?
+    answer_type: CATEGORICAL
+    variable: trigger_type
+    options:
+      - value: STANDING_UP
+        text_hi: "Uthte waqt ya baith ke khade hote waqt"
+        clinical_flag: "OH / volume depletion — pursue DQ01"
+      - value: HEAD_MOVEMENT_TURNING
+        text_hi: "Sar ghoomane ya hilane par — bistar mein palat na, upar dekhna"
+        clinical_flag: "BPPV — pursue DQ03/DQ04"
+      - value: MISSED_MEAL_EXERCISE
+        text_hi: "Khaana na khaane ke baad, ya mehnat karne ke baad"
+        clinical_flag: "Hypoglycemia — pursue DQ02/DQ05"
+      - value: NO_CLEAR_TRIGGER
+        text_hi: "Koi khaas wajah nahin — aaram mein bhi aata hai"
+        clinical_flag: "Arrhythmia / drug-induced / anaemia"
+    source: "AAFP 2023 TiTrATE — Triggers axis"
+
+  - id: AC04
+    type: ACUITY
+    titrATE_axis: TRIGGERS
+    text_en: >
+      What does the dizziness feel like? Is the room spinning around you? Or
+      does your head feel light and empty like you might faint? Or do you
+      feel unsteady when walking?
+    text_hi: >
+      Chakkar kaisa lagta hai? Kamra ghoom raha lagta hai? Ya sar halka aur
+      khali lagta hai girne jaisa? Ya chalte waqt balance bigda hua lagta hai?
+    alt_prompt_hi: >
+      Kamra ghumta hai — ya sar mein ghum lagta hai — ya girne ka darr lagta hai?
+    answer_type: CATEGORICAL
+    variable: symptom_quality
+    options:
+      - value: VERTIGO_ROOM_SPINNING
+        text_hi: "Kamra ghoom raha lagta hai (asli chakkar)"
+        clinical_flag: "Vestibular cause — BPPV or central vertigo"
+      - value: PRESYNCOPE_FAINT_LIKE
+        text_hi: "Sar halka, ankhen andheri, girne jaisa"
+        clinical_flag: "OH / hypoglycemia / arrhythmia / volume depletion"
+      - value: DISEQUILIBRIUM_UNSTEADY
+        text_hi: "Balance bigda hua, chalte waqt lad-khad rahe hain"
+        clinical_flag: "Central cause / anaemia / drug-induced ataxia"
+    source: "AAFP 2023 TiTrATE — Targeted Exam (symptom quality classification)"
+
+  - id: AC05
+    type: ACUITY
+    titrATE_axis: TIMING
+    text_en: >
+      Did this dizziness start suddenly in the last 1-2 days, or has it been
+      building up gradually over days to weeks?
+    text_hi: >
+      Yeh chakkar pichhle 1-2 din mein achanak shuru hua, ya dheere dheere
+      kai dinon ya hafton se badh raha hai?
+    alt_prompt_hi: >
+      Chakkar naya hai — ek do din ka — ya pehle se chal raha tha?
+    answer_type: CATEGORICAL
+    variable: onset_acuity
+    options:
+      - value: SUDDEN_48H
+        text_hi: "Achanak — pichhle 1-2 din mein shuru hua"
+        clinical_flag: "Acute — TIA / arrhythmia / severe OH / acute hypoglycemia"
+      - value: SUBACUTE_DAYS_WEEK
+        text_hi: "Dheere dheere — pichhle kuch din ya hafte mein"
+        clinical_flag: "Subacute — drug-induced / BPPV / volume depletion"
+      - value: GRADUAL_WEEKS_MONTHS
+        text_hi: "Bahut dheere dheere — kai hafte ya mahine se"
+        clinical_flag: "Gradual — anaemia / chronic drug side effect"
+    source: "AAFP 2023 TiTrATE — Timing (acuity axis)"
+
+  - id: AC06
+    type: ACUITY
+    titrATE_axis: TARGETED
+    text_en: >
+      During the dizziness, did you notice any change in hearing, ringing in
+      the ears, or difficulty walking in a straight line?
+    text_hi: >
+      Chakkar ke waqt kya kaan mein koi badlaav aaya — sunai kam diya ya kaan
+      mein seeti aayi? Ya seedha chalna mushkil hua?
+    alt_prompt_hi: >
+      Kaan mein kuch hua chakkar ke waqt? Ya chalte waqt lad-khad rahe the?
+    answer_type: CATEGORICAL
+    variable: associated_vestibular
+    options:
+      - value: HEARING_CHANGE_OR_TINNITUS
+        text_hi: "Haan, kaan mein seeti thi ya sunai thoda kam hua"
+        clinical_flag: "Peripheral vestibular (Meniere's/labyrinthitis) — reduces TIA probability"
+      - value: GAIT_UNSTEADY_ATAXIC
+        text_hi: "Haan, seedha chalna mushkil tha"
+        clinical_flag: "Central cause risk — gait ataxia is HINTS-positive feature; HINTS pathway"
+      - value: NEITHER
+        text_hi: "Nahi, kaan ya chalane ki koi problem nahin"
+        clinical_flag: "Non-specific — proceed to discriminating questions per current posteriors"
+    source: "Kattah NEJM 2009 HINTS; AAFP 2023 TiTrATE — Targeted Exam"
+
+  # ============================================================
+  # DISCRIMINATING QUESTIONS (DQ01-DQ08)
+  # LR evidence grades:
+  #   HIGH_CONF = published LR with named population reference
+  #   CALIBRATE = consensus estimate; first Tier A panel review after 30+ sessions
+  # ============================================================
+
+  - id: DQ01
+    type: DISCRIMINATING
+    cluster: CLUSTER_OH_AUTONOMIC
+    text_en: >
+      When you stand up from sitting or lying down, do you feel dizzy or
+      feel like your head is emptying out within a few seconds to a minute?
+    text_hi: >
+      Jab aap baith ke ya lete hue uthte hain, kya kuch second ya ek minute
+      ke andar chakkar ya sar mein khaalipan aata hai?
+    alt_prompt_hi: >
+      Khade hote hi chakkar? Uthte waqt ankhen andheri hoti hain?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_OH_AUTONOMIC
+    lr_positive:
+      OH: 4.0
+      VOLUME_DEPLETION: 2.5
+    lr_negative:
+      OH: 0.25
+      VOLUME_DEPLETION: 0.40
+    lr_source: >
+      McGee JAMA 1999: postural pulse rise >=30 bpm LR+ 6.0 for OH.
+      Postural symptom (presyncope on standing) LR+ ~4.0 (HIGH_CONF from AASK/PMC 2022).
+      LR- 0.25: absence of postural trigger substantially reduces OH probability,
+      UNLESS patient is on BB (CM04 active — tachycardia masked).
+    lr_evidence_class: HIGH_CONF
+    population_reference: "McGee JAMA 1999; India OH community study PMC 2022; AASK Trial"
+    pertinent_negative_note: >
+      RELIABILITY MODIFIER: Less reliable in DM with autonomic neuropathy — postural
+      compensatory tachycardia is blunted. If CM04 (BB) is active: adrenergic response
+      additionally suppressed. A negative answer on DQ01 in a BB patient should be
+      weighted with caution; DQ02 (glucose relief) and CM assessment become primary.
+
+  - id: DQ02
+    type: DISCRIMINATING
+    cluster: CLUSTER_HYPOGLYCEMIA
+    text_en: >
+      When you felt dizzy, did eating something sweet — sugar, glucose tablet,
+      fruit juice, or biscuit — make the dizziness go away within 10-15 minutes?
+    text_hi: >
+      Jab chakkar aaya tha, kya meetha khaane se — cheeni, glucose tablet, juice,
+      ya biscuit — 10-15 minute mein chakkar theek hua?
+    alt_prompt_hi: >
+      Cheeni ya meetha khaaya aur chakkar gaya? Khaane se aaram aaya?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_HYPOGLYCEMIA
+    lr_positive:
+      HYPOGLYCEMIA: 6.0
+    lr_negative:
+      HYPOGLYCEMIA: 0.20
+    lr_source: >
+      Whipple Triad Part 3: symptom relief with glucose administration. This is the
+      most specific question for hypoglycemia available via remote assessment.
+      LR+ ~6.0 (CALIBRATE — formal Indian DM+HTN cohort LR unavailable; estimated from
+      Whipple triad specificity literature). LR- 0.20: important caveat — only valid if
+      patient actually tried glucose. If not tried, treat as PATA_NAHI (zero update).
+    lr_evidence_class: CALIBRATE
+    population_reference: "Whipple 1938 (triad); ADA Standards 2024"
+    pertinent_negative_note: >
+      Only clinically meaningful if glucose was actually consumed. If not: code as
+      PATA_NAHI. Ask explicitly: "Kya aapne meetha khaaya tha?" before recording NO.
+
+  - id: DQ03
+    type: DISCRIMINATING
+    cluster: CLUSTER_BPPV
+    text_en: >
+      Does the dizziness come on when you move your head — for example, turning
+      over in bed, looking up at the ceiling, or bending down to pick something up?
+    text_hi: >
+      Kya chakkar tab aata hai jab aap sar ghoomate hain — bistar mein karwat lete
+      hain, upar dekhte hain, ya kuch uthane ke liye neeche jhukate hain?
+    alt_prompt_hi: >
+      Sar hilane ya ghoomane se chakkar? Bistar mein palat ne se sar ghoomta hai?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_BPPV
+    lr_positive:
+      BPPV: 4.0
+    lr_negative:
+      BPPV: 0.30
+    lr_source: >
+      AAFP 2023 TiTrATE; Bhattacharyya AAO-HNS BPPV Guideline 2017.
+      Positional trigger is the defining feature of BPPV. LR+ ~4.0 (CALIBRATE —
+      formal LR in Indian DM+HTN cohort unavailable; BPPV population LRs from
+      Western vestibular clinics).
+    lr_evidence_class: CALIBRATE
+    population_reference: "Bhattacharyya AAO-HNS 2017; AAFP 2023"
+
+  - id: DQ04
+    type: DISCRIMINATING
+    cluster: CLUSTER_BPPV
+    text_en: >
+      When the dizziness comes from head movement, does it go away on its own
+      within about 30-60 seconds without you doing anything?
+    text_hi: >
+      Jab sar hilane se chakkar aata hai, kya woh khud 30-60 second mein theek
+      ho jaata hai bina kuch kiye?
+    alt_prompt_hi: >
+      Chakkar thodi der mein — ek minute se kam — khud chala jaata hai?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_BPPV
+    lr_positive:
+      BPPV: 4.5
+    lr_negative:
+      BPPV: 0.20
+    lr_source: >
+      AAFP 2023 TiTrATE; Dizziness Evidence Harvest V2 (Feb 2026).
+      Brief positional vertigo <60s is the hallmark of BPPV (canalith repositioning
+      mechanism). LR+ ~4.5 (CALIBRATE). LR- 0.20: BPPV lasting >60s should prompt
+      consideration of central cause or cupulolithiasis variant (less common).
+    lr_evidence_class: CALIBRATE
+    population_reference: "Bhattacharyya AAO-HNS 2017; Dizziness Harvest V2"
+    branch_condition: "DQ03=YES OR AC01=SECONDS_UNDER_60"
+    # Only asked if positional pattern is already established from DQ03 or AC01
+
+  - id: DQ05
+    type: DISCRIMINATING
+    cluster: CLUSTER_HYPOGLYCEMIA
+    text_en: >
+      During the dizziness, did you also have cold sweating, shaky or trembling
+      hands, or a sudden intense hunger — any of these together?
+    text_hi: >
+      Chakkar ke waqt kya thanda pasina aaya, haath kaanpne lage, ya achanak tez
+      bhookh lagi — in mein se koi ek ya zyada?
+    alt_prompt_hi: >
+      Chakkar ke saath pasina aaya, haath kaanpe, ya bhookh tezi se lagi?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_HYPOGLYCEMIA
+    lr_positive:
+      HYPOGLYCEMIA: 3.5
+      ARRHYTHMIA: 1.5   # Palpitation overlap — partial update; cluster prevents double-count
+    lr_negative:
+      HYPOGLYCEMIA: 0.40
+    lr_source: >
+      ADA Standards 2024: adrenergic hypoglycemia symptoms (tremor, diaphoresis, hunger).
+      LR+ ~3.5 for adrenergic cluster (CALIBRATE — no formal Indian DM+HTN cohort LR).
+      CRITICAL RELIABILITY NOTE: If CM04 (BB) is active, adrenergic symptoms are
+      suppressed — DQ05 becomes unreliable for hypoglycemia detection on BB patients.
+      Weight DQ02 (glucose relief) more heavily when BB is active. See CM04 effect_on_questions.
+    lr_evidence_class: CALIBRATE
+    population_reference: "ADA Standards 2024; DCCT"
+
+  - id: DQ06
+    type: DISCRIMINATING
+    cluster: CLUSTER_ARRHYTHMIA
+    text_en: >
+      Just before or during the dizziness, did you feel your heart beating very
+      fast, very irregularly, or skipping beats — not just nervousness, but
+      a clearly abnormal heartbeat?
+    text_hi: >
+      Chakkar se PEHLE ya DAURAAN kya dil tez dhadakne laga, ya beech beech
+      mein ruka, ya ajeeb tarike se dhadka — ye sirf ghabrahat nahin, dhadkan
+      mein kuch galat tha?
+    alt_prompt_hi: >
+      Dil ki dhadkan theek nahin lag rahi thi chakkar se pehle ya dauraan?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_ARRHYTHMIA
+    lr_positive:
+      ARRHYTHMIA: 4.0
+    lr_negative:
+      ARRHYTHMIA: 0.35
+    lr_source: >
+      ACC/AHA 2021 Arrhythmia Guideline; Dizziness Evidence Harvest V2 (Feb 2026).
+      Palpitations preceding dizziness LR+ ~4.0 (CALIBRATE — distinguishes from
+      tachycardia secondary to vasovagal response, which follows dizziness).
+      Temporal qualifier "BEFORE or DURING" (not after) is clinically essential.
+    lr_evidence_class: CALIBRATE
+    population_reference: "ACC/AHA 2021; DM-CKD AF incidence data"
+
+  - id: DQ07
+    type: DISCRIMINATING
+    cluster: CLUSTER_CENTRAL
+    text_en: >
+      Has the dizziness been present continuously, without going away at all,
+      for more than 24 hours straight?
+    text_hi: >
+      Kya chakkar 24 ghante se zyada lagaataar bana hua hai — beech mein poori
+      tarah gaya hi nahin?
+    alt_prompt_hi: >
+      Ek poora din se zyada chakkar lagaataar hai — ek baar bhi theek nahin hua?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_CENTRAL
+    lr_positive:
+      TIA: 3.0
+    lr_negative:
+      TIA: 0.50
+      BPPV: 0.10    # BPPV is almost never continuous >24h
+    lr_source: >
+      Kattah NEJM 2009: continuous dizziness >24h with any neurological feature
+      defines the HINTS pathway candidate population.
+      IMPORTANT DISAMBIGUATION: Kattah's LR+ 25 is for the PHYSICAL EXAM FINDING
+      of central nystagmus on HINTS — NOT for this question. This question's LR+ ~3.0
+      for TIA is a triage flag for HINTS referral (CALIBRATE).
+      BPPV LR- 0.10: true BPPV almost never lasts >24h continuously (extremely atypical).
+    lr_evidence_class: CALIBRATE
+    population_reference: "Kattah NEJM 2009; AAFP 2023 TiTrATE"
+    hints_pathway_flag: true
+    hints_pathway_note: >
+      If DQ07=YES: append HINTS pathway recommendation to clinician output.
+      "Continuous dizziness >24 hours — HINTS examination recommended in-person
+      (Head Impulse, Nystagmus, Test of Skew). Remote assessment cannot substitute
+      for HINTS. If neurological features present, STAT DWI MRI."
+
+  - id: DQ08
+    type: DISCRIMINATING
+    cluster: CLUSTER_ANAEMIA
+    text_en: >
+      Do you feel unusually pale, persistently tired even at rest, or do you get
+      breathless doing small activities — like climbing one flight of stairs or
+      walking 100 metres quickly?
+    text_hi: >
+      Kya aap bahut pale lag rahe hain, aaram mein bhi thakan bani rehti hai, ya
+      ek manjili seedhi chadhne ya thodi tezi se chalne par saans phool jaati hai?
+    alt_prompt_hi: >
+      Bahut thakaan rehti hai? Zara sa kaam karne par saans phool jaati hai?
+    answer_type: YES_NO_PATA_NAHI
+    cluster: CLUSTER_ANAEMIA
+    lr_positive:
+      ANEMIA: 2.5
+    lr_negative:
+      ANEMIA: 0.50
+    lr_source: >
+      Pallor + fatigue + exertional dyspnoea cluster as anaemia indicator.
+      LR+ ~2.5 (CALIBRATE — formal LR in Indian DM+HTN dizziness cohort unavailable).
+      Source: NFHS-5 clinical anaemia indicators; AASK Trial anaemia assessment.
+    lr_evidence_class: CALIBRATE
+    population_reference: "NFHS-5 2021; AASK Trial; WHO Hb thresholds"
+    pertinent_negative_note: >
+      RELIABILITY MODIFIER: Pallor assessment is less reliable via remote interaction
+      in the Indian cohort due to skin pigmentation variability. Fatigue and exertional
+      dyspnoea are more reliable remote indicators than pallor. Weight those two symptoms
+      more heavily than pallor report when scoring this question.
+
+# =============================================================================
+# CONTEXT MODIFIERS (CM01-CM08)
+# =============================================================================
+# Authors write delta_p in probability space.
+# Engine converts to log-odds shift via G14: delta_logodds = logit(0.50+delta_p) - logit(0.50)
+# All 8 CMs should be registered as the FIRST entries in shared CM registry (B01).
+#
+# B01 Registration Status:
+#   CM01-CM08 overlap substantially with P1/P2 CMs — check for existing entries
+#   before registering. CM03a/CM03b (SU/Insulin hypoglycemia) are unique to this node's
+#   framing but share the mechanism chain with P1 DQ10 / P2 drug overlay.
+#
+# Completeness grades (KB-20 ADR model):
+#   FULL    = drug+symptom + onset + mechanism + CM_rule + confidence >= 0.70
+#   PARTIAL = drug+symptom + (onset OR mechanism)
+#   STUB    = minimal — drug+symptom only
+# =============================================================================
+
+context_modifiers:
+
+  - id: CM01_DIZ
+    shared_cm_registry_id: CM_ARB_OH_V1
+    condition: "med_class == ARB"
+    target_differential: OH
+    delta_p: +0.20
+    secondary_target:
+      differential: VOLUME_DEPLETION
+      delta_p: +0.10
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      AT1 receptor blockade → peripheral vasodilation → reduced SVR → postural BP drop.
+      First-dose phenomenon: highest risk Days 1-7, persists chronically.
+      Telmisartan half-life ~24h → steady state by Day 4-6.
+    onset_window: "Days 1-14 (acute); ongoing chronically"
+    onset_category: ACUTE
+    source: "StatPearls ARB (Angiotensin II Receptor Blockers); India OH PMC 2022"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+
+  - id: CM02_DIZ
+    shared_cm_registry_id: CM_SGLT2I_DIURETIC_VOL_V1
+    condition: "med_class == SGLT2i AND med_class == LOOP_DIURETIC"
+    target_differential: VOLUME_DEPLETION
+    delta_p: +0.25
+    secondary_target:
+      differential: OH
+      delta_p: +0.15
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      Dual volume depletion: SGLT2i osmotic diuresis (glucosuria + natriuresis) combined
+      with loop diuretic sodium excretion. Synergistic — CANVAS trial showed volume
+      depletion AE rate 2.1x higher with SGLT2i + diuretic vs SGLT2i alone.
+    onset_window: "Days 1-7 (acute initiation); chronic with ongoing dual use"
+    onset_category: ACUTE
+    source: "NKF 2022 SGLT2i Advisory; CANVAS Trial 2017; StatPearls SGLT2i"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+
+  - id: CM03a_DIZ
+    shared_cm_registry_id: CM_SU_HYPO_V1
+    condition: "med_class == SULFONYLUREA"
+    target_differential: HYPOGLYCEMIA
+    delta_p: +0.30
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      ATP-sensitive K+ channel closure → insulin secretion independent of glucose level.
+      Hypoglycemia risk amplified by: missed meals, exercise, alcohol, drug interactions
+      (fluconazole, trimethoprim), renal impairment (reduced SU clearance).
+    onset_window: "Hours 2-8 (glimepiride Tmax ~2.5h); glibenclamide longer acting"
+    onset_category: IMMEDIATE
+    source: "ADA Standards 2024; UKPDS; StatPearls Sulfonylurea"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+    safety_flag: >
+      FLAG: SU + skipped meal = high hypoglycemia risk. Ask about timing of last meal
+      relative to SU dose. Glibenclamide highest hypoglycemia risk of all SUs.
+
+  - id: CM03b_DIZ
+    shared_cm_registry_id: CM_INSULIN_HYPO_V1
+    condition: "med_class == INSULIN"
+    target_differential: HYPOGLYCEMIA
+    delta_p: +0.35
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      Direct glucose lowering — dose, timing, and meal irregularity drive risk.
+      Causes: dose errors, injection technique variation, unexpected exercise,
+      illness with reduced oral intake, drug interactions.
+    onset_window: "Variable by insulin type: rapid-acting 0-3h, intermediate 4-12h, long-acting 8-24h"
+    onset_category: IMMEDIATE
+    source: "ADA Standards 2024; StatPearls Insulin"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+    safety_flag: >
+      FLAG: Insulin patient with dizziness — glucose check is mandatory clinical action
+      regardless of Bayesian posterior. No exceptions.
+
+  - id: CM04_DIZ
+    shared_cm_registry_id: CM_BB_HYPO_MASKING_V1
+    condition: "med_class == BETA_BLOCKER"
+    target_differential: HYPOGLYCEMIA
+    effect_type: SYMPTOM_MODIFICATION
+    # NOTE: CM04 does NOT change the HYPOGLYCEMIA prior — it changes the reliability
+    # of DQ05 (adrenergic cluster). The engine must suppress DQ05's LR contribution
+    # when CM04 is active. This is a question-weighting effect, not a prior effect.
+    # Requires Go change G8 (CM active state in safety trigger conditions) for full
+    # implementation. Until G8 ships: add a safety flag only.
+    mechanism: >
+      Beta-1 blockade suppresses adrenergic hypoglycemia warning symptoms: tremor,
+      tachycardia, palpitations. Only cholinergic symptom preserved: diaphoresis.
+      On BB, dizziness may be the SOLE symptom of hypoglycemia — no tremor, no racing heart.
+    onset_window: "Immediate upon therapeutic BB levels (Hours 2-4 after dose)"
+    onset_category: IMMEDIATE
+    source: "StatPearls Beta Blockers; ADA 2024 (BB masking warning)"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+    effect_on_questions: >
+      DQ05 (adrenergic cluster) is unreliable when BB is active. Adrenergic symptoms
+      (tremor, palpitations, tachycardia) are suppressed — diaphoresis (sweating) is
+      the only preserved sign. DQ02 (glucose relief) becomes the PRIMARY hypoglycemia
+      discriminator when BB is active.
+    safety_flag: >
+      FLAG: Beta-blocker active — hypoglycemia adrenergic symptoms are masked.
+      DQ05 result is less reliable. Glucose check strongly recommended.
+      Sweating (within DQ05) is the only preserved adrenergic sign on BB.
+
+  - id: CM05_DIZ
+    shared_cm_registry_id: CM_DM_CONTROL_HYPO_RISK_V1
+    condition: "hba1c > 9.0 OR dm_duration_years >= 10"
+    target_differential: HYPOGLYCEMIA
+    delta_p: +0.15
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      HbA1c >9%: likely on intensive SU/insulin regimen or irregular control.
+      DM duration >=10 years: hypoglycemia unawareness develops from autonomic neuropathy
+      — reduced adrenergic counter-regulatory response. Patient may not feel classic
+      warning signs; dizziness becomes primary hypoglycemia presentation.
+    source: "ADA Standards 2024; DCCT (hypoglycemia unawareness >10y DM)"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+
+  - id: CM06_DIZ
+    shared_cm_registry_id: CM_CKD_ANAEMIA_DIZ_V1
+    condition: "egfr < 45"
+    target_differential: ANEMIA
+    delta_p: +0.15
+    secondary_target:
+      differential: VOLUME_DEPLETION
+      delta_p: +0.10
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      CKD stage 3b+ (eGFR <45): EPO deficiency → renal anaemia. AASK trial:
+      anaemia prevalence in CKD+HTN subgroup 42%. Also: impaired renal volume
+      regulation + diuretic sensitivity → volume depletion risk.
+      eGFR <45 threshold from KDIGO 2024.
+    source: "KDIGO 2024; AASK Trial; StatPearls Renal Anaemia"
+    evidence_class: HIGH_CONF
+    completeness_grade: FULL
+
+  - id: CM07_DIZ
+    shared_cm_registry_id: CM_POLY_HTN_OH_V1
+    condition: "age >= 65 AND antihypertensive_count >= 2"
+    target_differential: OH
+    delta_p: +0.20
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      Age >=65: baroreceptor reflex sensitivity blunted → impaired compensatory
+      tachycardia on standing. Two+ antihypertensives: additive vasodilation and
+      volume effects → cumulative postural drop. India-specific: polypharmacy OH
+      is the most common dizziness cause in elderly DM+HTN per PMC 2022 study.
+    source: "India OH community study PMC 2022; Consensus"
+    evidence_class: CONSENSUS
+    completeness_grade: PARTIAL   # CM rule calibrated; formal OR from Indian cohort pending
+
+  - id: CM08_DIZ
+    shared_cm_registry_id: CM_MED_CHANGE_RECENT_V1
+    condition: "recent_med_change_days <= 14"
+    target_differential: DRUG_INDUCED
+    delta_p: +0.25
+    secondary_target:
+      differential: OH
+      delta_p: +0.15
+    effect_type: INCREASE_PRIOR
+    mechanism: >
+      Any antihypertensive started or uptitrated within 14 days: first-dose/titration-phase
+      dizziness is maximal in this window. Applies to: ARB, CCB, thiazide, loop diuretic,
+      beta-blocker, alpha-blocker. The 14-day window captures the highest risk period for
+      most drug class pharmacokinetic profiles (5x half-life for steady state).
+    source: "StatPearls drug class monographs; Clinical consensus"
+    evidence_class: CONSENSUS
+    completeness_grade: PARTIAL
+    safety_flag: >
+      FLAG: Recent medication change detected. Ask which drug and exact date of change.
+      This is the highest-yield contextual question in polypharmacy dizziness assessment.
+
+# =============================================================================
+# CONTRADICTION PAIRS
+# (Go Change G17 — Week 4)
+# Pre-declared here. No-op until G17 ships.
+# When contradiction fires: (1) do not apply 2nd LR, (2) re-ask first question
+# with confirmation framing, (3) apply confirmed answer LR, (4) log contradiction_event.
+# =============================================================================
+
+contradiction_pairs:
+
+  - questions: [AC02, DQ07]
+    relationship: "Episodic pattern (AC02) contradicts continuous >24h (DQ07)"
+    auto_reject: true
+    re_ask_target: DQ07
+    confirmation_prompt_hi: >
+      Aapne pehle bataya tha ki chakkar bar bar aata jaata hai. Lekin abhi aap keh rahe
+      hain ki 24 ghante se zyada lagaataar bana hua hai. Kya sahi hai — bar bar aata hai
+      ya lagaataar bana hua hai?
+
+  - questions: [DQ03, DQ07]
+    relationship: "BPPV positional trigger (DQ03) contradicts continuous >24h (DQ07)"
+    auto_reject: true
+    re_ask_target: DQ07
+    confirmation_prompt_hi: >
+      Aapne bataya ki chakkar sar hilane se aata hai. Lekin kya woh 24 ghante se zyada
+      lagaataar bhi bana hua hai? Sachchi BPPV mein chakkar itna lamba lagaataar nahin
+      rehta. Kya ek baar confirm karein.
+    clinical_note: >
+      True BPPV lasting continuously >24h is extremely atypical. If patient confirms both:
+      consider central BPPV mimic (posterior fossa lesion) and escalate.
+
+  - questions: [DQ01, DQ03]
+    relationship: "OH postural trigger vs BPPV head-movement trigger — distinct mechanisms"
+    auto_reject: false   # Concurrent OH + BPPV is possible; log but allow both
+    clinical_note: >
+      Both YES is clinically possible (concurrent diagnoses). Do not reject. Log
+      contradiction_event for Tier A review — high rate would indicate question ambiguity.
+
+  - questions: [DQ02, DQ05]
+    relationship: "Glucose relief (DQ02) + adrenergic cluster (DQ05) — complementary not contradictory"
+    auto_reject: false
+    clinical_note: >
+      DQ02=YES + DQ05=NO on BB patient is expected and correct (BB masks DQ05 symptoms).
+      DQ02=YES + DQ05=YES is strong hypoglycemia confirmation. Not a contradiction.
+
+# =============================================================================
+# PERTINENT NEGATIVES — for clinician HPI output template
+# =============================================================================
+
+pertinent_negatives:
+
+  - finding: "No postural trigger — standing does not provoke dizziness"
+    reduces: ["OH", "VOLUME_DEPLETION"]
+    lr_negative: 0.25    # OH
+    reliability_note: >
+      Less reliable in DM with autonomic neuropathy — postural compensatory tachycardia
+      is blunted; symptoms may be absent even with true OH. Further reduced if CM04 (BB)
+      active. Remote assessment cannot measure orthostatic BP — a negative answer here
+      reduces but does not exclude OH.
+    source: "McGee JAMA 1999"
+
+  - finding: "No glucose relief — eating sweet did not resolve dizziness"
+    reduces: ["HYPOGLYCEMIA"]
+    lr_negative: 0.20
+    reliability_note: >
+      Only valid if glucose was actually consumed during the episode. If not consumed:
+      treat as PATA_NAHI, not NO. Also: if severely hypoglycemic and unable to eat,
+      patient may not have had opportunity to try glucose.
+    source: "Whipple Triad; ADA Standards 2024"
+
+  - finding: "No positional trigger — head movement does not provoke dizziness"
+    reduces: ["BPPV"]
+    lr_negative: 0.30
+    reliability_note: >
+      Reliably excludes BPPV. The positional trigger is the defining hallmark of BPPV;
+      its absence is clinically meaningful.
+    source: "Bhattacharyya AAO-HNS 2017"
+
+  - finding: "No palpitations preceding dizziness"
+    reduces: ["ARRHYTHMIA"]
+    lr_negative: 0.35
+    reliability_note: >
+      Moderately reliable. Caveat: elderly patients may have reduced arrhythmia awareness.
+      AF can be asymptomatic (especially in DM with autonomic neuropathy). A negative here
+      reduces but does not exclude arrhythmia.
+    source: "ACC/AHA 2021"
+
+  - finding: "Dizziness not continuous — fully resolves between episodes"
+    reduces: ["TIA"]
+    lr_negative: 0.50
+    reliability_note: >
+      Moderate reliability. TIA by definition resolves, but posterior fossa TIAs can be
+      prolonged. A fully episodic pattern substantially reduces central cause probability
+      but does not exclude TIA.
+    source: "Kattah NEJM 2009; AAFP 2023"
+
+  - finding: "No pallor, no persistent fatigue, no exertional dyspnoea"
+    reduces: ["ANEMIA"]
+    lr_negative: 0.50
+    reliability_note: >
+      Pallor assessment unreliable via remote interaction in Indian cohort (skin pigmentation
+      variability). Fatigue and exertional dyspnoea are more reliable remote indicators.
+      Weight fatigue + DOE over pallor when scoring.
+    source: "NFHS-5 2021; AASK Trial"
+
+  - finding: "No medication change in last 14 days"
+    reduces: ["DRUG_INDUCED", "OH"]
+    lr_negative: 0.60    # Approximate — reduces drug-induced without excluding chronic causes
+    reliability_note: >
+      Reduces drug-induced dizziness from new initiation/uptitration. Chronic drug effects
+      (e.g., loop diuretic volume depletion) are not excluded by this negative.
+    source: "Clinical consensus; StatPearls"
+
+# =============================================================================
+# CLINICIAN HPI OUTPUT TEMPLATE
+# =============================================================================
+
+hpi_output_template:
+
+  clinician_english:
+    header: "CC: Dizziness / Chakkar Aana | Onset: {{onset_acuity}} | Pattern: {{episode_pattern}}"
+    body:
+      - "Symptom Quality: {{symptom_quality}} | Trigger: {{trigger_type}} | Duration: {{episode_duration}}"
+      - "TiTrATE Summary: Timing={{episode_duration}}, Triggers={{trigger_type}}, Type={{symptom_quality}}"
+      - "HINTS Pathway: {{hints_pathway_flag}} — {{hints_recommendation}}"
+      - "Key Positives: {{pertinent_positives_list}}"
+      - "Key Negatives: {{pertinent_negatives_list}} — reliability notes: {{negative_reliability_flags}}"
+      - "Active Medications: {{active_med_list}}"
+      - "Context Modifiers Fired: {{fired_cm_ids}} — {{fired_cm_summary}}"
+      - "Safety Flags: {{safety_flags_list}}"
+      - "Ranked Differential:"
+      - "  1. {{dx_1}} — {{posterior_1}} ({{lr_chain_dx1}})"
+      - "  2. {{dx_2}} — {{posterior_2}}"
+      - "  3. {{dx_3}} — {{posterior_3}}"
+      - "Safety Floors Active: TIA >= 0.04 | ARRHYTHMIA >= 0.03"
+      - "Cross-Node: {{chest_pain_node_active}}"
+      - "Recommended Next: {{next_action}}"
+
+  patient_hindi:
+    text: >
+      Dhanyavaad. Aapne chakkar aane ki takleef batayi hai. Humne ye jaankaari
+      Doctor ko bhej di hai. Tab tak kripya ye dhyan rakhein:
+      Aaram se baith jaayein ya lete rahein. Achanak mat uthein.
+      Agar aap SU ya insulin lete hain: abhi sugar check karein agar sambhav ho.
+      Agar chakkar bahut badh jaaye, behoshi aaye, seene mein dard ho, ya
+      ek taraf kamzori aaye — toh TURANT hospital jaayein.
+      Dawai khud se band ya shuru na karein.
+      Doctor aapko jald se jald dekhenge.
+
+# =============================================================================
+# CALIBRATION GOVERNANCE
+# Per Implementation Plan Section 11.5 (Three-Tier Strategy)
+# =============================================================================
+
+calibration:
+
+  tier_a_expert_panel:
+    composition: "1 diabetologist + 1 internist + 1 general physician"
+    review_cycle: Quarterly
+    first_review_trigger: "30+ completed dizziness sessions with clinician adjudication"
+    max_adjustment_per_cycle: "±30% on any single LR value"
+    log_as: "calibration_event with source=EXPERT_PANEL, panel_members, rationale, version_bump"
+
+  tier_b_bayesian_blend:
+    activation_trigger: "N >= 30 adjudicated sessions"
+    formula: "new_lr = w * literature_lr + (1-w) * observed_lr"
+    weight_formula: "w = max(0.3, 1 - sqrt(n / 200))"
+    weight_at_n30: 0.87    # Heavily anchored to literature at small N
+    weight_at_n100: 0.71
+    weight_at_n200: 0.30   # Releases to observed data at N=200
+    log_as: "calibration_event with source=BAYESIAN_BLEND, sample_size, w_factor, prior_lr, observed_lr, blended_lr"
+
+  tier_c_data_driven:
+    activation_trigger: "N >= 200 adjudicated sessions per stratum"
+    method: "Logistic regression with hierarchical shrinkage priors for rare differentials"
+    log_as: "calibration_event with source=DATA_DRIVEN, model_version, full regression output"
+
+  kpi_targets:
+    concordance_physician_top1: ">=80% (long-term target 85-90%)"
+    red_flag_sensitivity: "100% — non-negotiable; any miss triggers immediate node freeze"
+    closure_rate: ">=85%"
+    median_questions: "8-10"
+    false_positive_escalation: "<5%"
+    pata_nahi_rate_per_question: "<25% — trigger alt_prompt reword if exceeded"
+    contradiction_rate_per_pair: "<15% — trigger question reword if exceeded (from G17 logging)"
+
+  calibrate_marked_lrs:
+    # These LRs are consensus estimates. Tier A review is the first calibration gate.
+    - question_id: DQ02
+      current_lr_positive: 6.0
+      basis: "Whipple Triad specificity — no Indian DM+HTN cohort study"
+    - question_id: DQ03
+      current_lr_positive: 4.0
+      basis: "BPPV positional trigger — Western vestibular clinic populations"
+    - question_id: DQ04
+      current_lr_positive: 4.5
+      basis: "Brief positional <60s — Bhattacharyya guideline, not DM+HTN specific"
+    - question_id: DQ05
+      current_lr_positive: 3.5
+      basis: "Adrenergic cluster — ADA symptoms list, no formal LR study"
+    - question_id: DQ06
+      current_lr_positive: 4.0
+      basis: "Palpitations preceding dizziness — ACC/AHA, no DM+HTN cohort data"
+    - question_id: DQ07
+      current_lr_positive: 3.0
+      basis: "Continuous >24h as TIA triage — derived from Kattah HINTS framework"
+    - question_id: DQ08
+      current_lr_positive: 2.5
+      basis: "Pallor+fatigue+DOE cluster — NFHS-5 indicators, no formal LR study"
+    - cm_id: CM07_DIZ
+      current_delta_p: 0.20
+      basis: "India OH PMC 2022 study — CONSENSUS grade, not randomised data"
+    - cm_id: CM08_DIZ
+      current_delta_p: 0.25
+      basis: "Clinical consensus from drug class PK data — no Indian cohort study"
+
+# =============================================================================
+# OPEN ISSUES AND DEFERRED ITEMS
+# =============================================================================
+
+open_issues:
+
+  - id: OI-01
+    title: "SM01 Anaemia Sex Modifier — Activate After Phase 2 Harvest"
+    description: >
+      Female sex modifier for anaemia (delta_p +0.06) is declared but DEFERRED.
+      Activation requires Phase 2 evidence harvest confirming the delta in the DM+HTN
+      dizziness subgroup specifically. NFHS-5 gives population-level anaemia prevalence
+      by sex; DM+HTN anaemia-as-dizziness-cause by sex requires targeted harvest.
+    action: "Remove DEFERRED flag after Phase 2 harvest completes and delta_p is verified."
+
+  - id: OI-02
+    title: "CM04 BB Effect on DQ05 — Requires Go Change G8"
+    description: >
+      CM04 currently sets a safety flag but cannot suppress DQ05's LR contribution
+      when BB is active. Full implementation requires G8 (CM active state in condition
+      evaluation context). Until G8 ships: DQ05's LR is applied even when BB is active,
+      which may over-update hypoglycemia posterior based on absent adrenergic symptoms.
+    action: "Implement G8. Connect CM04_DIZ.effect_on_questions to DQ05 LR suppression logic."
+    go_change: G8
+    priority: MEDIUM
+    workaround: >
+      The safety_flag on CM04 alerts the clinician. The Bayesian update error is small
+      because DQ05's LR- 0.40 update when negative is the relevant case (BB patient
+      with no adrenergic symptoms), and 0.40 is closer to 1.0 than a typical LR-.
+      Impact is dampened. Acceptable for pilot.
+
+  - id: OI-03
+    title: "DX09 Medication-Conditional Differential — Not Included in P00"
+    description: >
+      P1/P2 include EUGLYCEMIC_DKA and LACTIC_ACIDOSIS as medication-conditional
+      differentials (G3). P00 Dizziness does not include these because dizziness is
+      a less specific DKA/lactic acidosis presentation. However, SGLT2i DKA can
+      present with generalised malaise and dizziness. Currently handled via CM02_DIZ
+      (SGLT2i volume depletion) and cross-node flag to P02 Dyspnea.
+    action: "Review after P00 Tier A calibration. If DKA presentation via dizziness is
+      common in the DM+HTN cohort, add as conditional differential in v2.1."
+    priority: LOW
+
+  - id: OI-04
+    title: "HINTS Pathway Node Transition — G13 Deferred"
+    description: >
+      When DQ07=YES (continuous >24h), the ideal architecture hands off to a
+      HINTS-informed specialist referral pathway. G13 (Node Transition Protocol)
+      is deferred to Week 14+. Until then, the HINTS pathway is implemented as
+      a clinician output recommendation only (hints_pathway_note on DQ07).
+    action: "Implement HANDOFF transition when G13 ships."
+    go_change: G13
+    priority: LOW
+
+  - id: OI-05
+    title: "Cross-Node Triggers YAML — RF04 Mirror Required"
+    description: >
+      RF04 (chest pain + dizziness) declares cross_node_action in this file.
+      The same trigger must be mirrored in cross_node_triggers.yaml for
+      CrossNodeSafety.Load() to pick it up at runtime.
+    action: "Add RF04_CHEST_PAIN_COMBO entry to cross_node_triggers.yaml before deployment."
+    priority: HIGH
+    blocking: true
+
+# =============================================================================
+# END OF FILE
+# Vaidshala HPI Node P00: Dizziness V2 | March 2026
+# Architectural Home: KB-22 (Port 8132) → KB-23 Decision Cards →
+#                     KB-19 Protocol Orchestrator → KB-24 Audit
+# First node: harvest-first methodology, TiTrATE framework, polypharmacy CM overlay
+# =============================================================================

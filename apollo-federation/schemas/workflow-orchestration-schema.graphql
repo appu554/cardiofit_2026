@@ -1,0 +1,470 @@
+# Workflow Orchestration Schema for Calculate > Validate > Commit Flow
+
+extend type Mutation {
+  # Main workflow orchestration mutation
+  orchestrateMedicationRequest(input: MedicationOrchestrationInput!): MedicationOrchestrationResponse!
+  
+  # Individual phase mutations for granular control
+  calculateMedicationProposal(input: CalculateMedicationInput!): CalculateResponse!
+  validateMedicationProposal(input: ValidateMedicationInput!): ValidateResponse!
+  commitMedicationProposal(input: CommitMedicationInput!): CommitResponse!
+  
+  # Provider decision mutations
+  approveWithOverride(input: OverrideApprovalInput!): MedicationOrchestrationResponse!
+  selectAlternativeProposal(input: AlternativeSelectionInput!): MedicationOrchestrationResponse!
+  cancelMedicationWorkflow(correlationId: String!, reason: String): CancellationResponse!
+}
+
+extend type Query {
+  # Workflow status queries
+  workflowStatus(correlationId: String!): WorkflowStatusResponse
+  medicationProposal(proposalId: String!): ProposalDetails
+  
+  # Performance and monitoring queries
+  workflowMetrics(timeRangeHours: Int = 24): WorkflowMetrics
+  orchestrationHealth: OrchestrationHealthStatus
+}
+
+# Input Types
+
+input MedicationOrchestrationInput {
+  patientId: String!
+  medicationRequest: MedicationRequestInput!
+  clinicalIntent: ClinicalIntentInput!
+  providerContext: ProviderContextInput!
+  correlationId: String
+  urgency: WorkflowUrgency = ROUTINE
+  preferences: WorkflowPreferences
+}
+
+input MedicationRequestInput {
+  medicationCode: String!
+  medicationName: String!
+  dosage: String!
+  frequency: String!
+  route: String = "oral"
+  duration: String
+  indication: String
+  priority: String = "routine"
+}
+
+input ClinicalIntentInput {
+  primaryIndication: String!
+  targetOutcome: String
+  treatmentGoal: String
+  urgency: String
+  specialConsiderations: [String!]
+}
+
+input ProviderContextInput {
+  providerId: String!
+  specialty: String
+  experienceLevel: String
+  organizationId: String
+  encounterId: String
+}
+
+input WorkflowPreferences {
+  enableFastTrack: Boolean = false
+  skipNonCriticalValidation: Boolean = false
+  autoCommitSafe: Boolean = false
+  notificationPreferences: NotificationPreferences
+}
+
+input NotificationPreferences {
+  emailOnWarning: Boolean = true
+  smsOnUrgent: Boolean = false
+  slackChannelWebhook: String
+}
+
+input CalculateMedicationInput {
+  patientId: String!
+  medicationRequest: MedicationRequestInput!
+  clinicalIntent: ClinicalIntentInput!
+  providerContext: ProviderContextInput!
+  correlationId: String!
+  executionMode: String = "snapshot_optimized"
+}
+
+input ValidateMedicationInput {
+  proposalSetId: String!
+  snapshotId: String!
+  selectedProposals: [ProposalInput!]!
+  validationRequirements: ValidationRequirementsInput!
+  correlationId: String!
+}
+
+input ProposalInput {
+  proposalId: String!
+  medicationCode: String!
+  medicationName: String!
+  dosage: String!
+  frequency: String!
+  route: String!
+  confidenceScore: Float
+  clinicalEvidence: JSON
+}
+
+input ValidationRequirementsInput {
+  caeEngine: Boolean = true
+  protocolEngine: Boolean = true
+  comprehensiveValidation: Boolean = true
+  allergyCheck: Boolean = true
+  drugInteractionCheck: Boolean = true
+  doseValidation: Boolean = true
+}
+
+input CommitMedicationInput {
+  proposalSetId: String!
+  validationId: String!
+  selectedProposal: ProposalInput!
+  providerDecision: ProviderDecisionInput!
+  correlationId: String!
+}
+
+input ProviderDecisionInput {
+  autoSelected: Boolean = false
+  overrideReason: String
+  additionalInstructions: String
+  followUpRequired: Boolean = false
+  followUpInterval: String
+}
+
+input OverrideApprovalInput {
+  correlationId: String!
+  overrideToken: String!
+  clinicianId: String!
+  overrideReason: String!
+  selectedProposalId: String!
+  acknowledgement: String!
+}
+
+input AlternativeSelectionInput {
+  correlationId: String!
+  selectedAlternative: AlternativeProposalInput!
+  selectionReason: String
+}
+
+input AlternativeProposalInput {
+  medicationCode: String!
+  medicationName: String!
+  rationale: String!
+  dosage: String
+  frequency: String
+  route: String = "oral"
+}
+
+# Response Types
+
+type MedicationOrchestrationResponse {
+  status: OrchestrationStatus!
+  correlationId: String!
+  
+  # Success path
+  medicationOrderId: String
+  calculation: CalculationResult
+  validation: ValidationResult
+  commitment: CommitmentResult
+  performance: PerformanceMetrics
+  
+  # Warning/Override path
+  validationFindings: [ValidationFinding!]
+  overrideTokens: [String!]
+  proposals: [ProposalDetails!]
+  snapshotId: String
+  
+  # Unsafe/Blocked path
+  blockingFindings: [ValidationFinding!]
+  alternativeApproaches: [AlternativeProposal!]
+  
+  # Error handling
+  errorCode: String
+  errorMessage: String
+  timestamp: DateTime!
+}
+
+type CalculateResponse {
+  proposalSetId: String!
+  snapshotId: String!
+  rankedProposals: [ProposalDetails!]!
+  clinicalEvidence: JSON!
+  monitoringPlan: MonitoringPlan!
+  kbVersions: JSON!
+  executionTimeMs: Float!
+  result: OrchestrationResult!
+}
+
+type ValidateResponse {
+  validationId: String!
+  verdict: ValidationVerdict!
+  findings: [ValidationFinding!]!
+  overrideTokens: [String!]
+  overrideRequirements: JSON
+  processingTimeMs: Float!
+  engineResults: [EngineResult!]!
+  riskScore: Float!
+  result: OrchestrationResult!
+}
+
+type CommitResponse {
+  medicationOrderId: String!
+  persistenceStatus: String!
+  eventPublicationStatus: String!
+  auditTrailId: String!
+  result: OrchestrationResult!
+  processingTimeMs: Float
+}
+
+type CancellationResponse {
+  success: Boolean!
+  correlationId: String!
+  cancellationReason: String
+  timestamp: DateTime!
+}
+
+type WorkflowStatusResponse {
+  correlationId: String!
+  currentPhase: WorkflowPhase!
+  status: OrchestrationStatus!
+  progress: WorkflowProgress!
+  startTime: DateTime!
+  lastUpdate: DateTime!
+  estimatedCompletion: DateTime
+  metadata: JSON
+}
+
+type ProposalDetails {
+  proposalId: String!
+  proposalType: String!
+  status: ProposalStatus!
+  workflowPhase: WorkflowPhase
+  patientId: String!
+  providerId: String!
+  medicationData: MedicationData!
+  clinicalContext: JSON
+  snapshotId: String
+  validationId: String
+  validationVerdict: ValidationVerdict
+  medicationOrderId: String
+  createdAt: DateTime!
+  updatedAt: DateTime
+  processingTimeMs: Float
+}
+
+type MedicationData {
+  code: String!
+  name: String!
+  dosage: String!
+  frequency: String!
+  route: String!
+  duration: String
+  indication: String
+  confidenceScore: Float
+  clinicalEvidence: JSON
+}
+
+type ValidationFinding {
+  findingId: String!
+  severity: FindingSeverity!
+  category: FindingCategory!
+  description: String!
+  clinicalSignificance: String!
+  recommendation: String!
+  confidenceScore: Float!
+  engineSource: String!
+}
+
+type EngineResult {
+  engineId: String!
+  engineName: String!
+  status: String!
+  riskScore: Float!
+  violations: [String!]!
+  warnings: [String!]!
+  confidence: Float!
+  durationMs: Float!
+  tier: Int!
+  error: String
+}
+
+type AlternativeProposal {
+  medicationCode: String!
+  medicationName: String!
+  rationale: String!
+  dosage: String
+  frequency: String
+  route: String
+  confidenceScore: Float
+  clinicalEvidence: JSON
+}
+
+type MonitoringPlan {
+  initialFollowup: String
+  monitoringParameters: [String!]!
+  targetResponse: String
+  alertThresholds: JSON
+}
+
+type CalculationResult {
+  proposalSetId: String!
+  snapshotId: String!
+  executionTimeMs: Float!
+  proposalCount: Int!
+}
+
+type ValidationResult {
+  validationId: String!
+  verdict: ValidationVerdict!
+  riskScore: Float!
+  findingsCount: Int!
+  processingTimeMs: Float!
+}
+
+type CommitmentResult {
+  orderId: String!
+  auditTrailId: String!
+  persistenceStatus: String!
+  eventStatus: String!
+}
+
+type PerformanceMetrics {
+  totalTimeMs: Float!
+  meetsTarget: Boolean!
+  calculateTimeMs: Float
+  validateTimeMs: Float
+  commitTimeMs: Float
+}
+
+type WorkflowProgress {
+  completedPhases: [WorkflowPhase!]!
+  currentPhase: WorkflowPhase
+  nextPhase: WorkflowPhase
+  progressPercentage: Float!
+  estimatedRemainingMs: Float
+}
+
+type WorkflowMetrics {
+  totalRequests: Int!
+  successfulWorkflows: Int!
+  warningWorkflows: Int!
+  failedWorkflows: Int!
+  averageProcessingTimeMs: Float!
+  performanceTargetsMet: Float!
+  timestamp: DateTime!
+  phaseMetrics: PhaseMetrics!
+}
+
+type PhaseMetrics {
+  calculatePhase: PhasePerformance!
+  validatePhase: PhasePerformance!
+  commitPhase: PhasePerformance!
+}
+
+type PhasePerformance {
+  averageTimeMs: Float!
+  successRate: Float!
+  errorRate: Float!
+  performanceTarget: Float!
+  meetsTarget: Boolean!
+}
+
+type OrchestrationHealthStatus {
+  overall: HealthStatus!
+  services: ServiceHealthMap!
+  timestamp: DateTime!
+  version: String!
+}
+
+type ServiceHealthMap {
+  flow2GoEngine: ServiceHealth!
+  safetyGateway: ServiceHealth!
+  medicationService: ServiceHealth!
+  contextGateway: ServiceHealth!
+}
+
+type ServiceHealth {
+  status: HealthStatus!
+  responseTimeMs: Float
+  errorRate: Float
+  lastCheck: DateTime!
+  version: String
+}
+
+# Enums
+
+enum OrchestrationStatus {
+  SUCCESS
+  REQUIRES_PROVIDER_DECISION
+  BLOCKED_UNSAFE
+  ERROR
+  IN_PROGRESS
+  CANCELLED
+}
+
+enum OrchestrationResult {
+  SUCCESS
+  WARNING
+  FAILURE
+  BLOCKED
+}
+
+enum ValidationVerdict {
+  SAFE
+  WARNING
+  UNSAFE
+  MANUAL_REVIEW
+  ERROR
+}
+
+enum WorkflowPhase {
+  CALCULATE
+  VALIDATE
+  COMMIT
+  COMPLETED
+  CANCELLED
+}
+
+enum ProposalStatus {
+  PROPOSED
+  VALIDATED
+  COMMITTED
+  CANCELLED
+  EXPIRED
+  FAILED
+}
+
+enum WorkflowUrgency {
+  ROUTINE
+  URGENT
+  EMERGENT
+  STAT
+}
+
+enum FindingSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum FindingCategory {
+  DRUG_INTERACTION
+  CONTRAINDICATION
+  ALLERGY_ALERT
+  DOSING_CONCERN
+  PROTOCOL_VIOLATION
+  SAFETY_WARNING
+  SYSTEM_ERROR
+}
+
+enum HealthStatus {
+  HEALTHY
+  DEGRADED
+  UNHEALTHY
+  UNKNOWN
+}
+
+# Scalar Types
+
+scalar JSON
+scalar DateTime

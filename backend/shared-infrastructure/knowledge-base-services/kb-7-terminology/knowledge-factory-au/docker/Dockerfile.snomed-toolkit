@@ -1,0 +1,49 @@
+# Dockerfile for SNOMED-OWL-Toolkit
+# Purpose: Convert SNOMED-CT RF2 snapshots to OWL ontologies with IRI sanitization
+# Base: Java 17 (required for SNOMED-OWL-Toolkit v5.3.0)
+# Region: Australia (SNOMED CT-AU + AMT)
+
+FROM eclipse-temurin:17-jdk-jammy
+
+LABEL maintainer="kb7-team@cardiofit.ai"
+LABEL description="SNOMED-OWL-Toolkit for RF2 to OWL conversion - AU Edition"
+LABEL version="5.3.0"
+LABEL region="au"
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    file \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download SNOMED-OWL-Toolkit v5.3.0 (latest stable)
+WORKDIR /app
+RUN curl -fsSL -o snomed-owl-toolkit.jar \
+    https://github.com/IHTSDO/snomed-owl-toolkit/releases/download/5.3.0/snomed-owl-toolkit-5.3.0-executable.jar \
+    && echo "Verifying JAR file..." \
+    && file snomed-owl-toolkit.jar \
+    && test -s snomed-owl-toolkit.jar \
+    && jar tf snomed-owl-toolkit.jar > /dev/null \
+    && echo "JAR file valid"
+
+# Verify download and create checksum
+RUN sha256sum snomed-owl-toolkit.jar > toolkit-checksum.txt \
+    && cat toolkit-checksum.txt
+
+# Copy scripts
+COPY scripts/transform-snomed.sh /app/scripts/
+COPY scripts/sanitize-snomed-owl.py /app/scripts/
+RUN chmod +x /app/scripts/transform-snomed.sh \
+    && chmod +x /app/scripts/sanitize-snomed-owl.py
+
+# Create workspace directories
+RUN mkdir -p /input /output /workspace
+
+# Set JVM options for large RF2 files
+# AU SNOMED + AMT ~400MB compressed, needs sufficient memory
+ENV JAVA_TOOL_OPTIONS="-Xmx8G -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/app/scripts/transform-snomed.sh"]

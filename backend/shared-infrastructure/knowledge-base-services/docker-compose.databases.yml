@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # ==================== MongoDB for KB-2 Clinical Context ====================
+  mongodb:
+    image: mongo:7.0
+    container_name: kb-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: mongodb_admin_password
+      MONGO_INITDB_DATABASE: kb_clinical_context
+    volumes:
+      - mongodb_data:/data/db
+      - ./init-scripts/mongodb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - kb-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/kb_clinical_context --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB Express - Web UI for MongoDB
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: kb-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8090:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
+      ME_CONFIG_MONGODB_ADMINPASSWORD: mongodb_admin_password
+      ME_CONFIG_MONGODB_URL: mongodb://admin:mongodb_admin_password@mongodb:27017/
+      ME_CONFIG_BASICAUTH: false
+    depends_on:
+      - mongodb
+    networks:
+      - kb-network
+
+  # ==================== Neo4j for KB-3 Guidelines ====================
+  neo4j:
+    image: neo4j:5.15-enterprise
+    container_name: kb-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_password
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+      NEO4J_dbms_memory_pagecache_size: "1G"
+      NEO4J_dbms_memory_heap_initial__size: "1G"
+      NEO4J_dbms_memory_heap_max__size: "2G"
+      NEO4J_dbms_connector_bolt_enabled: "true"
+      NEO4J_dbms_connector_http_enabled: "true"
+      NEO4J_dbms_security_procedures_unrestricted: "gds.*,apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "gds.*,apoc.*"
+      NEO4JLABS_PLUGINS: '["apoc", "graph-data-science"]'
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_import:/var/lib/neo4j/import
+      - neo4j_plugins:/plugins
+      - ./init-scripts/neo4j:/var/lib/neo4j/import/init:ro
+    networks:
+      - kb-network
+    healthcheck:
+      test: wget -q --spider http://localhost:7474 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==================== TimescaleDB for KB-4 Patient Safety ====================
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: kb-timescaledb
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: timescale
+      POSTGRES_PASSWORD: timescale_password
+      POSTGRES_DB: kb_patient_safety
+      TS_TUNE_MAX_CONNS: 100
+      TS_TUNE_MAX_BG_WORKERS: 8
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./init-scripts/timescaledb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - kb-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timescale -d kb_patient_safety"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c shared_preload_libraries=timescaledb
+      -c max_connections=100
+      -c shared_buffers=1GB
+      -c effective_cache_size=3GB
+      -c maintenance_work_mem=256MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=10MB
+      -c timescaledb.max_background_workers=8
+
+  # ==================== Elasticsearch for KB-6 Formulary ====================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: kb-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - cluster.name=kb-formulary-cluster
+      - node.name=kb-es-node1
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./init-scripts/elasticsearch:/usr/share/elasticsearch/init:ro
+    networks:
+      - kb-network
+    healthcheck:
+      test: curl -s http://localhost:9200 >/dev/null || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana - Elasticsearch UI
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: kb-kibana
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: kibana_password
+      xpack.security.enabled: "false"
+    depends_on:
+      - elasticsearch
+    networks:
+      - kb-network
+    healthcheck:
+      test: curl -s http://localhost:5601/api/status || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  kb-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_import:
+  neo4j_plugins:
+  timescaledb_data:
+  elasticsearch_data:

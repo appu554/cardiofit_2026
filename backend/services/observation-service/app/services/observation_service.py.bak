@@ -1,0 +1,519 @@
+import logging
+from typing import List, Optional, Dict, Any, Union
+from datetime import datetime
+import uuid
+import json
+from app.core.config import settings
+from app.shared.google_healthcare.client import GoogleHealthcareClient
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Singleton instance
+_observation_service_instance = None
+
+def get_observation_service():
+    """Get or create a singleton instance of the Observation service."""
+    global _observation_service_instance
+    if _observation_service_instance is None:
+        _observation_service_instance = ObservationService()
+    return _observation_service_instance
+
+class ObservationService:
+    """Service for managing FHIR Observation resources using Google Healthcare API."""
+    
+    def __init__(self):
+        """Initialize the Google Healthcare API client."""
+        self.client = GoogleHealthcareClient(
+            project_id=settings.GOOGLE_CLOUD_PROJECT,
+            location=settings.HEALTHCARE_LOCATION,
+            dataset_id=settings.HEALTHCARE_DATASET,
+            fhir_store_id=settings.FHIR_STORE,
+            credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS or None
+        )
+        self.client.initialize()
+    
+    @staticmethod
+    def _format_observation(observation: Dict[str, Any]) -> Dict[str, Any]:
+        """Format observation data for the API response."""
+        # Extract the ID from the FHIR resource URL if present
+        if 'id' in observation and observation['id'].startswith('Observation/'):
+            observation['id'] = observation['id'].split('/')[-1]
+        return observation
+    
+    async def create_observation(self, observation_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create a new FHIR Observation resource.
+        
+        Args:
+            observation_data: Dictionary containing observation data in FHIR format
+            
+        Returns:
+            Dict containing the created observation
+        """
+        try:
+            logger.info("Creating new observation in FHIR store")
+            
+            # Ensure resource type is set
+            observation_data['resourceType'] = 'Observation'
+            
+            # Generate ID if not provided
+            if 'id' not in observation_data:
+                observation_data['id'] = f"obs-{uuid.uuid4()}"
+            
+            # Create the observation in FHIR store
+            created_obs = await self.client.create_resource(
+                resource_type='Observation',
+                resource_id=observation_data['id'],
+                resource=observation_data
+            )
+            
+            logger.info(f"Successfully created observation with ID: {created_obs.get('id')}")
+            return self._format_observation(created_obs)
+            
+        except Exception as e:
+            logger.error(f"Error creating observation: {str(e)}")
+            raise
+    
+    async def get_observation(self, observation_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a FHIR Observation resource by ID.
+        
+        Args:
+            observation_id: The ID of the observation to retrieve
+            
+        Returns:
+            Dict containing the observation data, or None if not found
+        """
+        try:
+            logger.info(f"Fetching observation with ID: {observation_id}")
+            
+            # Get the observation from FHIR store
+            observation = await self.client.get_resource(
+                resource_type='Observation',
+                resource_id=observation_id
+            )
+            
+            if not observation:
+                logger.warning(f"Observation with ID {observation_id} not found")
+                return None
+                
+            return self._format_observation(observation)
+            
+        except Exception as e:
+            logger.error(f"Error getting observation {observation_id}: {str(e)}")
+            return None
+    
+    async def update_observation(self, observation_id: str, observation_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Update an existing FHIR Observation resource.
+        
+        Args:
+            observation_id: The ID of the observation to update
+            observation_data: Dictionary containing the updated observation data
+            
+        Returns:
+            Dict containing the updated observation, or None if update failed
+        """
+        try:
+            logger.info(f"Updating observation with ID: {observation_id}")
+            
+            # Get the current observation to ensure it exists
+            current_obs = await self.get_observation(observation_id)
+            if not current_obs:
+                logger.warning(f"Cannot update: Observation with ID {observation_id} not found")
+                return None
+            
+            # Ensure resource type and ID are set correctly
+            observation_data['resourceType'] = 'Observation'
+            observation_data['id'] = observation_id
+            
+            # Update the observation in FHIR store
+            updated_obs = await self.client.update_resource(
+                resource_type='Observation',
+                resource_id=observation_id,
+                resource=observation_data
+            )
+            
+            logger.info(f"Successfully updated observation with ID: {observation_id}")
+            return self._format_observation(updated_obs)
+            
+        except Exception as e:
+            logger.error(f"Error updating observation {observation_id}: {str(e)}")
+            return None
+    
+    async def delete_observation(self, observation_id: str) -> bool:
+        """
+        Delete a FHIR Observation resource (soft delete by marking as 'entered-in-error').
+        
+        Args:
+            observation_id: The ID of the observation to delete
+            
+        Returns:
+            bool: True if deletion was successful, False otherwise
+        """
+        try:
+            logger.info(f"Deleting observation with ID: {observation_id}")
+            
+            # Get the current observation
+            current_obs = await self.get_observation(observation_id)
+            if not current_obs:
+                logger.warning(f"Cannot delete: Observation with ID {observation_id} not found")
+                return False
+            
+            # Mark as entered-in-error (soft delete)
+            current_obs['status'] = 'entered-in-error'
+            
+            # Update the observation with the new status
+            await self.client.update_resource(
+                resource_type='Observation',
+                resource_id=observation_id,
+                resource=current_obs
+            )
+            
+            logger.info(f"Successfully marked observation {observation_id} as entered-in-error")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting observation {observation_id}: {str(e)}")
+            return False
+    
+    async def search_observations(
+        self,
+        patient_id: Optional[str] = None,
+        category: Optional[str] = None,
+        code: Optional[str] = None,
+        date: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        count: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Search for FHIR Observation resources with filtering and pagination.
+        
+        Args:
+            patient_id: Filter by patient ID
+            category: Filter by observation category
+            code: Filter by observation code
+            date: Filter by date (YYYY-MM-DD format)
+            status: Filter by status
+            page: Page number (1-based)
+            count: Number of items per page
+            
+        Returns:
+            Dict containing the search results and pagination info
+        """
+        try:
+            logger.info("Searching for observations with filters")
+            
+            # Build search parameters
+            params = {}
+            
+            if patient_id:
+                params['patient'] = f"Patient/{patient_id}"
+                
+            if category:
+                params['category'] = category
+                
+            if code:
+                params['code'] = code
+                
+            if date:
+                params['date'] = f"eq{date}"
+                
+            if status:
+                params['status'] = status
+            
+            # Add pagination parameters
+            params['_count'] = count
+            if page > 1:
+                params['_page'] = page
+            
+            # Search for observations in FHIR store
+            search_result = await self.client.search(
+                resource_type='Observation',
+                parameters=params
+            )
+            
+            # Format the response
+            observations = []
+            if 'entry' in search_result:
+                observations = [self._format_observation(entry['resource']) 
+                             for entry in search_result['entry']]
+            
+            # Get total count for pagination
+            total = search_result.get('total', 0) if 'total' in search_result else len(observations)
+            
+            return {
+                "observations": observations,
+                "total": total,
+                "page": page,
+                "count": len(observations),
+                "has_more": (page * count) < total
+            }
+            
+        except Exception as e:
+            logger.error(f"Error searching observations: {str(e)}")
+            return {
+                "observations": [],
+                "total": 0,
+                "page": page,
+                "count": 0,
+                "has_more": False
+            }
+        return observations
+    
+    async def get_patient_observations(
+        self, 
+        patient_id: str, 
+        category: Optional[str] = None,
+        code: Optional[str] = None,
+        date: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        count: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Get observations for a specific patient with optional filters.
+        
+        Args:
+            patient_id: ID of the patient
+            category: Filter by observation category
+            code: Filter by observation code
+            date: Filter by date (YYYY-MM-DD format)
+            status: Filter by status
+            page: Page number (1-based)
+            count: Number of items per page
+            
+        Returns:
+            Dict containing the search results and pagination info
+        """
+        return await self.search_observations(
+            patient_id=patient_id,
+            category=category,
+            code=code,
+            date=date,
+            status=status,
+            page=page,
+            count=count
+        )
+    
+    async def get_observations_by_category(
+        self, 
+        category: str, 
+        patient_id: Optional[str] = None,
+        code: Optional[str] = None,
+        date: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        count: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Get observations by category with optional filters.
+        
+        Args:
+            category: The observation category to filter by
+            patient_id: Optional patient ID to filter by
+            code: Filter by observation code
+            date: Filter by date (YYYY-MM-DD format)
+            status: Filter by status
+            page: Page number (1-based)
+            count: Number of items per page
+            
+        Returns:
+            Dict containing the search results and pagination info
+        """
+        return await self.search_observations(
+            patient_id=patient_id,
+            category=category,
+            code=code,
+            date=date,
+            status=status,
+            page=page,
+            count=count
+        )
+    
+    async def get_observations_by_code(
+        self, 
+        code: str, 
+        patient_id: Optional[str] = None,
+        category: Optional[str] = None,
+        date: Optional[str] = None,
+        status: Optional[str] = None,
+        page: int = 1,
+        count: int = 10
+    ) -> Dict[str, Any]:
+        """
+        
+    except Exception as e:
+        logger.error(f"Error deleting observation {observation_id} from FHIR server: {str(e)}")
+        return False
+    
+    async def get_observation_from_fhir_server(self, observation_id: str, auth_header: str) -> Optional[Dict[str, Any]]:
+        """
+        Get an observation from the FHIR server using Google Healthcare API.
+        
+        Args:
+            observation_id: The ID of the observation to retrieve
+            auth_header: Authorization header (not used directly as we use service account)
+            
+        Returns:
+            Dict containing the observation data, or None if not found
+        """
+        return await self.get_observation(observation_id)
+    
+    async def search_observations_in_fhir_server(self, params: Dict[str, Any], auth_header: str) -> Dict[str, Any]:
+        """
+        Search for observations in the FHIR server using Google Healthcare API.
+        
+        Args:
+            params: Dictionary of search parameters
+            auth_header: Authorization header (not used directly as we use service account)
+            
+        Returns:
+            Dict containing the search results
+        """
+        return await self.search_observations(
+            patient_id=params.get('patient', '').replace('Patient/', ''),
+            category=params.get('category'),
+            code=params.get('code'),
+            date=params.get('date'),
+            status=params.get('status'),
+            page=int(params.get('_page', 1)),
+            count=int(params.get('_count', 10))
+        )
+    
+    def to_fhir_observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert an observation to FHIR format."""
+        fhir_observation = {
+            "resourceType": "Observation",
+            "id": observation.get("id"),
+            "status": observation.get("status", "final"),
+            "code": observation.get("code"),
+            "subject": observation.get("subject"),
+            "effectiveDateTime": observation.get("effective_datetime")
+        }
+        
+        # Add optional fields if present
+        if "encounter" in observation:
+            fhir_observation["encounter"] = observation["encounter"]
+        if "issued" in observation:
+            fhir_observation["issued"] = observation["issued"]
+        if "performer" in observation:
+            fhir_observation["performer"] = observation["performer"]
+        
+        # Add value based on type
+        if "value_quantity" in observation:
+            fhir_observation["valueQuantity"] = observation["value_quantity"]
+        elif "value_string" in observation:
+            fhir_observation["valueString"] = observation["value_string"]
+        elif "value_boolean" in observation:
+            fhir_observation["valueBoolean"] = observation["value_boolean"]
+        elif "value_integer" in observation:
+            fhir_observation["valueInteger"] = observation["value_integer"]
+        elif "value_range" in observation:
+            fhir_observation["valueRange"] = observation["value_range"]
+        elif "value_ratio" in observation:
+            fhir_observation["valueRatio"] = observation["value_ratio"]
+        elif "value_time" in observation:
+            fhir_observation["valueTime"] = observation["value_time"]
+        elif "value_datetime" in observation:
+            fhir_observation["valueDateTime"] = observation["value_datetime"]
+        elif "value_period" in observation:
+            fhir_observation["valuePeriod"] = observation["value_period"]
+        
+        # Add other optional fields
+        if "data_absent_reason" in observation:
+            fhir_observation["dataAbsentReason"] = observation["data_absent_reason"]
+        if "interpretation" in observation:
+            fhir_observation["interpretation"] = observation["interpretation"]
+        if "note" in observation:
+            fhir_observation["note"] = observation["note"]
+        if "body_site" in observation:
+            fhir_observation["bodySite"] = observation["body_site"]
+        if "method" in observation:
+            fhir_observation["method"] = observation["method"]
+        if "specimen" in observation:
+            fhir_observation["specimen"] = observation["specimen"]
+        if "device" in observation:
+            fhir_observation["device"] = observation["device"]
+        if "reference_range" in observation:
+            fhir_observation["referenceRange"] = observation["reference_range"]
+        if "has_member" in observation:
+            fhir_observation["hasMember"] = observation["has_member"]
+        if "derived_from" in observation:
+            fhir_observation["derivedFrom"] = observation["derived_from"]
+        if "component" in observation:
+            fhir_observation["component"] = observation["component"]
+        
+        return fhir_observation
+    
+    def from_fhir_observation(self, fhir_observation: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a FHIR observation to our format."""
+        observation = {
+            "id": fhir_observation.get("id"),
+            "status": fhir_observation.get("status", "final"),
+            "code": fhir_observation.get("code"),
+            "subject": fhir_observation.get("subject"),
+            "effective_datetime": fhir_observation.get("effectiveDateTime")
+        }
+        
+        # Extract category
+        if "category" in fhir_observation and len(fhir_observation["category"]) > 0:
+            if "coding" in fhir_observation["category"][0] and len(fhir_observation["category"][0]["coding"]) > 0:
+                observation["category"] = fhir_observation["category"][0]["coding"][0].get("code", "unknown")
+        
+        # Add optional fields if present
+        if "encounter" in fhir_observation:
+            observation["encounter"] = fhir_observation["encounter"]
+        if "issued" in fhir_observation:
+            observation["issued"] = fhir_observation["issued"]
+        if "performer" in fhir_observation:
+            observation["performer"] = fhir_observation["performer"]
+        
+        # Add value based on type
+        if "valueQuantity" in fhir_observation:
+            observation["value_quantity"] = fhir_observation["valueQuantity"]
+        elif "valueString" in fhir_observation:
+            observation["value_string"] = fhir_observation["valueString"]
+        elif "valueBoolean" in fhir_observation:
+            observation["value_boolean"] = fhir_observation["valueBoolean"]
+        elif "valueInteger" in fhir_observation:
+            observation["value_integer"] = fhir_observation["valueInteger"]
+        elif "valueRange" in fhir_observation:
+            observation["value_range"] = fhir_observation["valueRange"]
+        elif "valueRatio" in fhir_observation:
+            observation["value_ratio"] = fhir_observation["valueRatio"]
+        elif "valueTime" in fhir_observation:
+            observation["value_time"] = fhir_observation["valueTime"]
+        elif "valueDateTime" in fhir_observation:
+            observation["value_datetime"] = fhir_observation["valueDateTime"]
+        elif "valuePeriod" in fhir_observation:
+            observation["value_period"] = fhir_observation["valuePeriod"]
+        
+        # Add other optional fields
+        if "dataAbsentReason" in fhir_observation:
+            observation["data_absent_reason"] = fhir_observation["dataAbsentReason"]
+        if "interpretation" in fhir_observation:
+            observation["interpretation"] = fhir_observation["interpretation"]
+        if "note" in fhir_observation:
+            observation["note"] = fhir_observation["note"]
+        if "bodySite" in fhir_observation:
+            observation["body_site"] = fhir_observation["bodySite"]
+        if "method" in fhir_observation:
+            observation["method"] = fhir_observation["method"]
+        if "specimen" in fhir_observation:
+            observation["specimen"] = fhir_observation["specimen"]
+        if "device" in fhir_observation:
+            observation["device"] = fhir_observation["device"]
+        if "referenceRange" in fhir_observation:
+            observation["reference_range"] = fhir_observation["referenceRange"]
+        if "hasMember" in fhir_observation:
+            observation["has_member"] = fhir_observation["hasMember"]
+        if "derivedFrom" in fhir_observation:
+            observation["derived_from"] = fhir_observation["derivedFrom"]
+        if "component" in fhir_observation:
+            observation["component"] = fhir_observation["component"]
+        
+        return observation

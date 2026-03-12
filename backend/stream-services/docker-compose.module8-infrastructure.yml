@@ -1,0 +1,210 @@
+services:
+  # MongoDB for document storage and clinical data projections
+  mongodb:
+    image: mongo:7
+    container_name: module8-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      # Development mode - no authentication
+      MONGO_INITDB_DATABASE: module8_clinical
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - module8-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Elasticsearch for search and analytics
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    container_name: module8-elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      # Single node development mode
+      - discovery.type=single-node
+      - cluster.name=module8-clinical-cluster
+      - node.name=module8-node-1
+      # Disable security for development
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      # Memory settings
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      # Performance settings
+      - bootstrap.memory_lock=true
+      - indices.query.bool.max_clause_count=4096
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - elasticsearch_logs:/usr/share/elasticsearch/logs
+    networks:
+      - module8-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ClickHouse for analytics and time-series data
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.11
+    container_name: module8-clickhouse
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"  # Native client
+    environment:
+      # Default credentials for development
+      CLICKHOUSE_DB: module8_analytics
+      CLICKHOUSE_USER: module8_user
+      CLICKHOUSE_PASSWORD: module8_password
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    networks:
+      - module8-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 3G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Redis for caching and real-time data
+  redis:
+    image: redis:7-alpine
+    container_name: module8-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --loglevel notice
+    volumes:
+      - redis_data:/data
+    networks:
+      - module8-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  module8-network:
+    name: module8-network
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  # MongoDB volumes
+  mongodb_data:
+    name: module8-mongodb-data
+    driver: local
+  mongodb_config:
+    name: module8-mongodb-config
+    driver: local
+
+  # Elasticsearch volumes
+  elasticsearch_data:
+    name: module8-elasticsearch-data
+    driver: local
+  elasticsearch_logs:
+    name: module8-elasticsearch-logs
+    driver: local
+
+  # ClickHouse volumes
+  clickhouse_data:
+    name: module8-clickhouse-data
+    driver: local
+  clickhouse_logs:
+    name: module8-clickhouse-logs
+    driver: local
+
+  # Redis volumes
+  redis_data:
+    name: module8-redis-data
+    driver: local

@@ -1,0 +1,87 @@
+# KB-7 Terminology Service - Local Development Setup
+# Simple self-contained setup with PostgreSQL and Redis
+# Start: docker-compose -f docker-compose.local.yml up -d
+# Stop:  docker-compose -f docker-compose.local.yml down
+
+services:
+  # PostgreSQL Database for KB-7
+  kb7-postgres:
+    image: postgres:15-alpine
+    container_name: kb7-postgres
+    environment:
+      POSTGRES_DB: kb_terminology
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5437:5432"
+    volumes:
+      - kb7-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kb_terminology"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb7-network
+
+  # Redis Cache for KB-7
+  kb7-redis:
+    image: redis:7-alpine
+    container_name: kb7-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6387:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb7-network
+
+  # KB-7 Terminology Service
+  kb7-terminology:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb7-terminology
+    environment:
+      # Server Configuration
+      PORT: 8092
+      ENVIRONMENT: development
+      LOG_LEVEL: 4
+
+      # Database Configuration
+      DATABASE_URL: postgresql://postgres:password@kb7-postgres:5432/kb_terminology?sslmode=disable
+
+      # Redis Configuration
+      REDIS_URL: redis://kb7-redis:6379/0
+
+      # Disable external dependencies for local dev
+      GRAPHDB_ENABLED: "false"
+      NEO4J_MULTI_REGION_ENABLED: "false"
+      NEO4J_AU_ENABLED: "false"
+      NEO4J_US_ENABLED: "false"
+    ports:
+      - "8092:8092"
+    depends_on:
+      kb7-postgres:
+        condition: service_healthy
+      kb7-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8092/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kb7-network
+    restart: unless-stopped
+
+networks:
+  kb7-network:
+    driver: bridge
+
+volumes:
+  kb7-postgres-data:

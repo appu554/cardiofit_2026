@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphQL Query Builder</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        body {
+            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1400px;
+        }
+        .card {
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .card-header {
+            background-color: #f1f5f9;
+            font-weight: 600;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .query-editor {
+            height: 300px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: monospace;
+            margin-bottom: 20px;
+            resize: vertical;
+            background-color: #f8f9fa;
+        }
+        .response-container {
+            height: 300px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: monospace;
+            background-color: #f8f9fa;
+            overflow: auto;
+        }
+        .token-container {
+            margin-bottom: 20px;
+        }
+        #token-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            transition: border-color 0.2s ease;
+        }
+        #token-input:focus {
+            border-color: #0d6efd;
+            outline: none;
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+        .field-checkbox {
+            margin-right: 10px;
+        }
+        .nested-fields {
+            margin-left: 20px;
+            border-left: 2px solid #ddd;
+            padding-left: 10px;
+        }
+        .btn-primary {
+            background-color: #0d6efd;
+            border-color: #0d6efd;
+            transition: all 0.2s ease;
+        }
+        .btn-primary:hover {
+            background-color: #0b5ed7;
+            border-color: #0a58ca;
+            transform: translateY(-2px);
+        }
+        .btn-outline-secondary {
+            color: #6c757d;
+            border-color: #6c757d;
+            transition: all 0.2s ease;
+        }
+        .btn-outline-secondary:hover {
+            color: #fff;
+            background-color: #6c757d;
+            border-color: #6c757d;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col">
+                <h1 class="display-5 fw-bold">GraphQL Query Builder</h1>
+                <p class="lead">Build and execute GraphQL queries interactively</p>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="token-container">
+                    <label for="token-input" class="form-label fw-bold">JWT Token:</label>
+                    <div class="input-group">
+                        <input type="text" id="token-input" class="form-control" placeholder="Enter JWT token" />
+                        <button class="btn btn-outline-secondary" type="button" id="refresh-schema-btn">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh Schema
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-5">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-gear"></i> Build Your Query
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="operation-type" class="form-label">Operation Type:</label>
+                            <select id="operation-type" class="form-select">
+                                <option value="query">Query</option>
+                                <option value="mutation">Mutation</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="operation-name" class="form-label">Operation Name:</label>
+                            <input type="text" id="operation-name" class="form-control" placeholder="MyQuery">
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="root-field" class="form-label">Root Field:</label>
+                            <select id="root-field" class="form-select">
+                                <option value="">Select a root field...</option>
+                            </select>
+                        </div>
+
+                        <div id="field-arguments" class="mb-3 d-none">
+                            <label class="form-label">Arguments:</label>
+                            <div id="arguments-container">
+                                <!-- Arguments will be added here dynamically -->
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Select Fields:</label>
+                            <div id="fields-container" class="border rounded p-3" style="max-height: 400px; overflow-y: auto;">
+                                <!-- Fields will be added here dynamically -->
+                                <p class="text-muted">Select a root field first</p>
+                            </div>
+                        </div>
+
+                        <button id="generate-query-btn" class="btn btn-primary">
+                            <i class="bi bi-code-slash"></i> Generate Query
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-7">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-code"></i> Generated Query
+                    </div>
+                    <div class="card-body">
+                        <textarea id="generated-query" class="query-editor" readonly></textarea>
+
+                        <div class="mb-3">
+                            <label for="generated-variables" class="form-label">Variables:</label>
+                            <textarea id="generated-variables" class="query-editor" style="height: 150px;"></textarea>
+                        </div>
+
+                        <div class="d-flex justify-content-between">
+                            <button id="copy-query-btn" class="btn btn-outline-secondary">
+                                <i class="bi bi-clipboard"></i> Copy Query
+                            </button>
+                            <button id="execute-query-btn" class="btn btn-primary">
+                                <i class="bi bi-play-fill"></i> Execute Query
+                            </button>
+                        </div>
+
+                        <div class="mt-4">
+                            <label class="form-label">Response:</label>
+                            <div id="response" class="response-container">
+                                <p class="text-muted">Execute a query to see the response.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner Modal -->
+    <div class="modal fade" id="loadingModal" tabindex="-1" aria-labelledby="loadingModalLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-body text-center p-5">
+                    <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem;">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <h5 id="loading-message">Loading schema...</h5>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // GraphQL endpoint
+        const graphqlEndpoint = '/graphql';
+
+        // Global variables
+        let schemaData = null;
+        let queryTypeFields = [];
+        let mutationTypeFields = [];
+        let loadingModal;
+
+        // Initialize when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM content loaded');
+
+            // Initialize Bootstrap components
+            loadingModal = new bootstrap.Modal(document.getElementById('loadingModal'));
+
+            // Set up event listeners
+            setupEventListeners();
+
+            // Load token from localStorage if available
+            const savedToken = localStorage.getItem('graphql_token');
+            if (savedToken) {
+                document.getElementById('token-input').value = savedToken;
+            }
+
+            // Fetch schema
+            fetchSchema();
+        });
+
+        // Set up event listeners
+        function setupEventListeners() {
+            // Token input change
+            document.getElementById('token-input').addEventListener('change', () => {
+                localStorage.setItem('graphql_token', document.getElementById('token-input').value);
+            });
+
+            // Refresh schema button
+            document.getElementById('refresh-schema-btn').addEventListener('click', fetchSchema);
+
+            // Operation type change
+            document.getElementById('operation-type').addEventListener('change', updateRootFields);
+
+            // Root field change
+            document.getElementById('root-field').addEventListener('change', handleRootFieldSelection);
+
+            // Generate query button
+            document.getElementById('generate-query-btn').addEventListener('click', generateQuery);
+
+            // Execute query button
+            document.getElementById('execute-query-btn').addEventListener('click', executeQuery);
+
+            // Copy query button
+            document.getElementById('copy-query-btn').addEventListener('click', copyQuery);
+        }
+
+        // Fetch schema
+        async function fetchSchema() {
+            const token = document.getElementById('token-input').value;
+
+            // Show loading modal
+            document.getElementById('loading-message').textContent = 'Loading schema...';
+            loadingModal.show();
+
+            console.log('Fetching schema...');
+            console.log('Token available:', !!token);
+
+            try {
+                console.log('Making fetch request to:', graphqlEndpoint);
+
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+
+                if (token) {
+                    // Check if token already has 'Bearer ' prefix
+                    if (token.startsWith('Bearer ')) {
+                        headers['Authorization'] = token;
+                    } else {
+                        headers['Authorization'] = `Bearer ${token}`;
+                    }
+                    console.log('Authorization header set');
+                }
+
+                console.log('Request headers:', headers);
+
+                const response = await fetch(graphqlEndpoint, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        query: `
+                            query IntrospectionQuery {
+                                __schema {
+                                    types {
+                                        name
+                                        kind
+                                        description
+                                        fields {
+                                            name
+                                            description
+                                            type {
+                                                name
+                                                kind
+                                                ofType {
+                                                    name
+                                                    kind
+                                                    ofType {
+                                                        name
+                                                        kind
+                                                        ofType {
+                                                            name
+                                                            kind
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            args {
+                                                name
+                                                description
+                                                type {
+                                                    name
+                                                    kind
+                                                    ofType {
+                                                        name
+                                                        kind
+                                                        ofType {
+                                                            name
+                                                            kind
+                                                            ofType {
+                                                                name
+                                                                kind
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                defaultValue
+                                            }
+                                        }
+                                    }
+                                    queryType {
+                                        name
+                                    }
+                                    mutationType {
+                                        name
+                                    }
+                                }
+                            }
+                        `
+                    })
+                });
+
+                console.log('Response status:', response.status);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Error response:', errorText);
+                    document.getElementById('loading-message').textContent = `Error: ${response.status} ${response.statusText}`;
+                    setTimeout(() => loadingModal.hide(), 3000);
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('Response data:', data);
+
+                if (data.errors) {
+                    console.error('GraphQL errors:', data.errors);
+                    const errorMessage = data.errors.map(e => e.message).join(', ');
+                    document.getElementById('loading-message').textContent = `GraphQL Error: ${errorMessage}`;
+                    setTimeout(() => loadingModal.hide(), 3000);
+                    return;
+                }
+
+                if (!data.data || !data.data.__schema) {
+                    console.error('Invalid schema data:', data);
+                    document.getElementById('loading-message').textContent = 'Invalid schema data returned';
+                    setTimeout(() => loadingModal.hide(), 3000);
+                    return;
+                }
+
+                try {
+                    // Store schema data
+                    schemaData = data.data.__schema;
+                    console.log('Schema loaded successfully');
+
+                    // Get query type name
+                    const queryTypeName = schemaData.queryType ? schemaData.queryType.name : null;
+                    console.log('Query type name:', queryTypeName);
+
+                    if (!queryTypeName) {
+                        throw new Error('Query type name not found in schema');
+                    }
+
+                    // Get query fields
+                    const queryType = schemaData.types.find(t => t.name === queryTypeName);
+                    if (!queryType) {
+                        throw new Error(`Query type "${queryTypeName}" not found in schema types`);
+                    }
+
+                    queryTypeFields = queryType.fields || [];
+                    console.log('Query fields:', queryTypeFields.length);
+
+                    // Get mutation type name
+                    const mutationTypeName = schemaData.mutationType ? schemaData.mutationType.name : null;
+                    console.log('Mutation type name:', mutationTypeName);
+
+                    // Get mutation fields
+                    if (mutationTypeName) {
+                        const mutationType = schemaData.types.find(t => t.name === mutationTypeName);
+                        mutationTypeFields = mutationType ? mutationType.fields || [] : [];
+                    } else {
+                        mutationTypeFields = [];
+                    }
+                    console.log('Mutation fields:', mutationTypeFields.length);
+
+                    // Directly populate the root field select
+                    const operationType = document.getElementById('operation-type').value;
+                    const rootFieldSelect = document.getElementById('root-field');
+
+                    // Clear previous options
+                    rootFieldSelect.innerHTML = '';
+
+                    // Add default option
+                    const defaultOption = document.createElement('option');
+                    defaultOption.value = '';
+                    defaultOption.textContent = 'Select a root field...';
+                    rootFieldSelect.appendChild(defaultOption);
+
+                    // Get fields based on operation type
+                    const fields = operationType === 'query' ? queryTypeFields : mutationTypeFields;
+                    console.log('Fields for select:', fields.length);
+
+                    // Add options for each field
+                    for (const field of fields) {
+                        console.log('Adding field to select:', field.name);
+                        const option = document.createElement('option');
+                        option.value = field.name;
+                        option.textContent = field.name;
+                        rootFieldSelect.appendChild(option);
+                    }
+
+                    // Hide loading modal
+                    document.getElementById('loading-message').textContent = 'Schema loaded successfully!';
+                    setTimeout(() => loadingModal.hide(), 1000);
+                } catch (error) {
+                    console.error('Error processing schema data:', error);
+                    document.getElementById('loading-message').textContent = `Error processing schema: ${error.message}`;
+                    setTimeout(() => loadingModal.hide(), 3000);
+                }
+            } catch (error) {
+                console.error('Error fetching schema:', error);
+                document.getElementById('loading-message').textContent = `Error: ${error.message}`;
+                setTimeout(() => loadingModal.hide(), 3000);
+            }
+        }
+
+        // Update root fields based on operation type
+        function updateRootFields() {
+            try {
+                const operationType = document.getElementById('operation-type').value;
+                const rootFieldSelect = document.getElementById('root-field');
+
+                // Clear previous options
+                rootFieldSelect.innerHTML = '';
+
+                // Add default option
+                const defaultOption = document.createElement('option');
+                defaultOption.value = '';
+                defaultOption.textContent = 'Select a root field...';
+                rootFieldSelect.appendChild(defaultOption);
+
+                // Get fields based on operation type
+                const fields = operationType === 'query' ? queryTypeFields : mutationTypeFields;
+
+                // Add options for each field
+                for (const field of fields) {
+                    const option = document.createElement('option');
+                    option.value = field.name;
+                    option.textContent = field.name;
+                    rootFieldSelect.appendChild(option);
+                }
+
+                // Clear fields container
+                document.getElementById('fields-container').innerHTML = '<p class="text-muted">Select a root field first</p>';
+
+                // Hide arguments container
+                document.getElementById('field-arguments').classList.add('d-none');
+            } catch (error) {
+                console.error('Error updating root fields:', error);
+            }
+        }
+
+        // Handle root field selection
+        function handleRootFieldSelection() {
+            try {
+                console.log('Handling root field selection');
+                const operationType = document.getElementById('operation-type').value;
+                const rootFieldSelect = document.getElementById('root-field');
+                const rootFieldName = rootFieldSelect.value;
+
+                console.log('Operation type:', operationType);
+                console.log('Root field name:', rootFieldName);
+
+                if (!rootFieldName) {
+                    console.log('No root field selected');
+                    // Clear fields container
+                    document.getElementById('fields-container').innerHTML = '<p class="text-muted">Select a root field first</p>';
+
+                    // Hide arguments container
+                    document.getElementById('field-arguments').classList.add('d-none');
+                    return;
+                }
+
+                // Get fields based on operation type
+                const fields = operationType === 'query' ? queryTypeFields : mutationTypeFields;
+                console.log('Available fields:', fields.length);
+
+                // Find the selected field
+                const selectedField = fields.find(f => f.name === rootFieldName);
+                if (!selectedField) return;
+
+                // Show arguments if any
+                if (selectedField.args && selectedField.args.length > 0) {
+                    const argsContainer = document.getElementById('arguments-container');
+                    argsContainer.innerHTML = '';
+
+                    for (const arg of selectedField.args) {
+                        const argType = getFieldTypeName(arg.type);
+                        const isRequired = argType.endsWith('!');
+
+                        const argDiv = document.createElement('div');
+                        argDiv.className = 'mb-3';
+
+                        const argLabel = document.createElement('label');
+                        argLabel.className = 'form-label';
+                        argLabel.textContent = `${arg.name}${isRequired ? ' (required)' : ''}`;
+
+                        const argInput = document.createElement('input');
+                        argInput.type = 'text';
+                        argInput.className = 'form-control';
+                        argInput.id = `arg-${arg.name}`;
+                        argInput.placeholder = argType;
+
+                        if (arg.description) {
+                            const argHelp = document.createElement('div');
+                            argHelp.className = 'form-text';
+                            argHelp.textContent = arg.description;
+                            argDiv.appendChild(argHelp);
+                        }
+
+                        argDiv.appendChild(argLabel);
+                        argDiv.appendChild(argInput);
+
+                        argsContainer.appendChild(argDiv);
+                    }
+
+                    document.getElementById('field-arguments').classList.remove('d-none');
+                } else {
+                    document.getElementById('field-arguments').classList.add('d-none');
+                }
+
+                // Get the return type
+                const returnType = getReturnType(selectedField.type);
+                if (!returnType) return;
+
+                // Find the type in the schema
+                const returnTypeObj = schemaData.types.find(t => t.name === returnType);
+                if (!returnTypeObj || !returnTypeObj.fields) return;
+
+                // Populate fields container
+                populateFieldsContainer(returnTypeObj);
+            } catch (error) {
+                console.error('Error handling root field selection:', error);
+            }
+        }
+
+        // Get the return type of a field
+        function getReturnType(type) {
+            if (type.kind === 'NON_NULL') {
+                return getReturnType(type.ofType);
+            } else if (type.kind === 'LIST') {
+                return getReturnType(type.ofType);
+            } else if (type.name) {
+                return type.name;
+            } else if (type.ofType) {
+                return getReturnType(type.ofType);
+            }
+            return null;
+        }
+
+        // Helper function to get field type name
+        function getFieldTypeName(type) {
+            if (type.kind === 'NON_NULL') {
+                return `${getFieldTypeName(type.ofType)}!`;
+            } else if (type.kind === 'LIST') {
+                return `[${getFieldTypeName(type.ofType)}]`;
+            } else {
+                return type.name;
+            }
+        }
+
+        // Populate fields container
+        function populateFieldsContainer(typeObj) {
+            try {
+                console.log('Populating fields container for type:', typeObj.name);
+                const container = document.getElementById('fields-container');
+
+                if (!container) {
+                    console.error('Fields container element not found');
+                    return;
+                }
+
+                container.innerHTML = '';
+
+                if (!typeObj.fields || typeObj.fields.length === 0) {
+                    console.log('No fields available for type:', typeObj.name);
+                    container.innerHTML = '<p class="text-muted">No fields available</p>';
+                    return;
+                }
+
+                console.log('Fields count:', typeObj.fields.length);
+
+                for (const field of typeObj.fields) {
+                    console.log('Processing field:', field.name);
+                    const fieldType = getFieldTypeName(field.type);
+                    const fieldId = `field-${field.name}`;
+
+                    const fieldDiv = document.createElement('div');
+                    fieldDiv.className = 'form-check mb-2';
+
+                    const fieldInput = document.createElement('input');
+                    fieldInput.type = 'checkbox';
+                    fieldInput.className = 'form-check-input field-checkbox';
+                    fieldInput.id = fieldId;
+                    fieldInput.dataset.field = field.name;
+                    fieldInput.dataset.path = field.name;
+
+                    const fieldLabel = document.createElement('label');
+                    fieldLabel.className = 'form-check-label';
+                    fieldLabel.htmlFor = fieldId;
+                    fieldLabel.textContent = `${field.name}: ${fieldType}`;
+
+                    if (field.description) {
+                        const fieldDesc = document.createElement('div');
+                        fieldDesc.className = 'form-text small';
+                        fieldDesc.textContent = field.description;
+                        fieldLabel.appendChild(fieldDesc);
+                    }
+
+                    fieldDiv.appendChild(fieldInput);
+                    fieldDiv.appendChild(fieldLabel);
+
+                    // Check if this field has nested fields
+                    const returnType = getReturnType(field.type);
+                    if (returnType) {
+                        const nestedType = schemaData.types.find(t => t.name === returnType);
+                        if (nestedType && nestedType.fields && nestedType.fields.length > 0 &&
+                            !returnType.startsWith('__') && returnType !== 'String' &&
+                            returnType !== 'Int' && returnType !== 'Float' &&
+                            returnType !== 'Boolean' && returnType !== 'ID') {
+
+                            const expandBtn = document.createElement('button');
+                            expandBtn.type = 'button';
+                            expandBtn.className = 'btn btn-sm btn-outline-secondary ms-2';
+                            expandBtn.textContent = 'Expand';
+                            expandBtn.dataset.field = field.name;
+                            expandBtn.dataset.type = returnType;
+
+                            expandBtn.addEventListener('click', (e) => {
+                                const fieldName = e.target.dataset.field;
+                                const typeName = e.target.dataset.type;
+                                const typeObj = schemaData.types.find(t => t.name === typeName);
+
+                                // Check if already expanded
+                                const nestedContainer = document.querySelector(`[data-parent="${fieldName}"]`);
+                                if (nestedContainer) {
+                                    nestedContainer.remove();
+                                    e.target.textContent = 'Expand';
+                                } else {
+                                    // Create nested container
+                                    const nestedDiv = document.createElement('div');
+                                    nestedDiv.className = 'nested-fields mt-2';
+                                    nestedDiv.dataset.parent = fieldName;
+
+                                    // Add nested fields
+                                    if (typeObj && typeObj.fields) {
+                                        for (const nestedField of typeObj.fields) {
+                                            const nestedFieldType = getFieldTypeName(nestedField.type);
+                                            const nestedFieldId = `field-${fieldName}-${nestedField.name}`;
+
+                                            const nestedFieldDiv = document.createElement('div');
+                                            nestedFieldDiv.className = 'form-check mb-2';
+
+                                            const nestedFieldInput = document.createElement('input');
+                                            nestedFieldInput.type = 'checkbox';
+                                            nestedFieldInput.className = 'form-check-input field-checkbox';
+                                            nestedFieldInput.id = nestedFieldId;
+                                            nestedFieldInput.dataset.field = nestedField.name;
+                                            nestedFieldInput.dataset.path = `${fieldName}.${nestedField.name}`;
+
+                                            const nestedFieldLabel = document.createElement('label');
+                                            nestedFieldLabel.className = 'form-check-label';
+                                            nestedFieldLabel.htmlFor = nestedFieldId;
+                                            nestedFieldLabel.textContent = `${nestedField.name}: ${nestedFieldType}`;
+
+                                            nestedFieldDiv.appendChild(nestedFieldInput);
+                                            nestedFieldDiv.appendChild(nestedFieldLabel);
+
+                                            nestedDiv.appendChild(nestedFieldDiv);
+                                        }
+                                    }
+
+                                    // Insert after the current field
+                                    fieldDiv.parentNode.insertBefore(nestedDiv, fieldDiv.nextSibling);
+                                    e.target.textContent = 'Collapse';
+                                }
+                            });
+
+                            fieldLabel.appendChild(expandBtn);
+                        }
+                    }
+
+                    container.appendChild(fieldDiv);
+                }
+            } catch (error) {
+                console.error('Error populating fields container:', error);
+            }
+        }
+
+        // Generate query
+        function generateQuery() {
+            try {
+                const operationType = document.getElementById('operation-type').value;
+                const operationName = document.getElementById('operation-name').value || 'MyQuery';
+                const rootField = document.getElementById('root-field').value;
+
+                if (!rootField) {
+                    alert('Please select a root field');
+                    return;
+                }
+
+                // Get selected fields
+                const selectedFields = [];
+                document.querySelectorAll('.field-checkbox:checked').forEach(checkbox => {
+                    selectedFields.push(checkbox.dataset.path);
+                });
+
+                if (selectedFields.length === 0) {
+                    alert('Please select at least one field');
+                    return;
+                }
+
+                // Build field structure
+                const fieldStructure = buildFieldStructure(selectedFields);
+
+                // Get arguments
+                const args = [];
+                const variables = {};
+
+                document.querySelectorAll('#arguments-container input').forEach(input => {
+                    const argName = input.id.replace('arg-', '');
+                    const argValue = input.value.trim();
+
+                    if (argValue) {
+                        // Check if it's a variable
+                        if (argValue.startsWith('$')) {
+                            const varName = argValue.substring(1);
+                            args.push(`${argName}: $${varName}`);
+
+                            // Get the type from the schema
+                            const field = operationType === 'query' ?
+                                queryTypeFields.find(f => f.name === rootField) :
+                                mutationTypeFields.find(f => f.name === rootField);
+
+                            if (field) {
+                                const argDef = field.args.find(a => a.name === argName);
+                                if (argDef) {
+                                    // Add to variables
+                                    variables[varName] = null;
+                                }
+                            }
+                        } else {
+                            // Try to parse as JSON
+                            try {
+                                const jsonValue = JSON.parse(argValue);
+                                args.push(`${argName}: ${JSON.stringify(jsonValue)}`);
+                            } catch (e) {
+                                // Not valid JSON, treat as string
+                                args.push(`${argName}: "${argValue}"`);
+                            }
+                        }
+                    }
+                });
+
+                // Build the query
+                let query = `${operationType} ${operationName}`;
+
+                // Add variables if any
+                if (Object.keys(variables).length > 0) {
+                    const varDefs = [];
+
+                    // Get the field definition
+                    const field = operationType === 'query' ?
+                        queryTypeFields.find(f => f.name === rootField) :
+                        mutationTypeFields.find(f => f.name === rootField);
+
+                    if (field) {
+                        for (const varName in variables) {
+                            // Find the argument definition
+                            for (const arg of field.args) {
+                                if (args.find(a => a.includes(`${arg.name}: $${varName}`))) {
+                                    const argType = getFieldTypeName(arg.type);
+                                    varDefs.push(`$${varName}: ${argType}`);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (varDefs.length > 0) {
+                        query += `(${varDefs.join(', ')})`;
+                    }
+                }
+
+                query += ` {\n  ${rootField}`;
+
+                // Add arguments if any
+                if (args.length > 0) {
+                    query += `(${args.join(', ')})`;
+                }
+
+                // Add fields
+                query += ` {\n${fieldStructureToString(fieldStructure, 4)}\n  }\n}`;
+
+                // Set the generated query
+                document.getElementById('generated-query').value = query;
+
+                // Set the variables
+                const variablesObj = {};
+                for (const varName in variables) {
+                    variablesObj[varName] = null;
+                }
+
+                document.getElementById('generated-variables').value = JSON.stringify(variablesObj, null, 2);
+            } catch (error) {
+                console.error('Error generating query:', error);
+                alert('Error generating query: ' + error.message);
+            }
+        }
+
+        // Build field structure from selected fields
+        function buildFieldStructure(selectedFields) {
+            const structure = {};
+
+            for (const field of selectedFields) {
+                const parts = field.split('.');
+                let current = structure;
+
+                for (let i = 0; i < parts.length; i++) {
+                    const part = parts[i];
+
+                    if (i === parts.length - 1) {
+                        current[part] = true;
+                    } else {
+                        if (!current[part]) {
+                            current[part] = {};
+                        }
+                        current = current[part];
+                    }
+                }
+            }
+
+            return structure;
+        }
+
+        // Convert field structure to string
+        function fieldStructureToString(structure, indent = 0) {
+            let result = '';
+            const indentStr = ' '.repeat(indent);
+
+            // Common fields for complex types
+            const complexTypeFields = {
+                'name': ['family', 'given', 'use', 'prefix', 'suffix', 'text'],
+                'identifier': ['system', 'value', 'use'],
+                'telecom': ['system', 'value', 'use', 'rank'],
+                'address': ['line', 'city', 'state', 'postalCode', 'country', 'use'],
+                'coding': ['system', 'code', 'display'],
+                'codeableConcept': ['text'],
+                'reference': ['reference', 'type', 'display'],
+                'quantity': ['value', 'unit', 'system', 'code'],
+                'period': ['start', 'end']
+            };
+
+            for (const key in structure) {
+                // Check if this is a complex type that needs subfields
+                if (structure[key] === true && complexTypeFields[key]) {
+                    // This is a complex type with no subfields selected, add default subfields
+                    result += `${indentStr}${key} {\n`;
+
+                    for (const subfield of complexTypeFields[key]) {
+                        // Special case for nested complex types
+                        if (subfield === 'coding' && key === 'codeableConcept') {
+                            // Add coding with its subfields
+                            result += `${indentStr}  coding {\n`;
+                            for (const codingField of complexTypeFields['coding']) {
+                                result += `${indentStr}    ${codingField}\n`;
+                            }
+                            result += `${indentStr}  }\n`;
+                        } else {
+                            result += `${indentStr}  ${subfield}\n`;
+                        }
+                    }
+
+                    result += `${indentStr}}\n`;
+                } else if (structure[key] === true) {
+                    // This is a simple field
+                    result += `${indentStr}${key}\n`;
+                } else {
+                    // This is a complex field with subfields
+                    result += `${indentStr}${key} {\n${fieldStructureToString(structure[key], indent + 2)}${indentStr}}\n`;
+                }
+            }
+
+            return result;
+        }
+
+        // Execute query
+        async function executeQuery() {
+            try {
+                const token = document.getElementById('token-input').value;
+                const query = document.getElementById('generated-query').value;
+                const variablesStr = document.getElementById('generated-variables').value;
+
+                if (!query.trim()) {
+                    alert('Please generate a query first');
+                    return;
+                }
+
+                // Show loading message
+                document.getElementById('response').innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div><p class="mt-2">Executing query...</p></div>';
+
+                let variables = {};
+                try {
+                    if (variablesStr.trim()) {
+                        variables = JSON.parse(variablesStr);
+                    }
+                } catch (error) {
+                    document.getElementById('response').innerHTML = `<p class="text-danger">Error parsing variables: ${error.message}</p>`;
+                    return;
+                }
+
+                const response = await fetch(graphqlEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': token ? `Bearer ${token}` : ''
+                    },
+                    body: JSON.stringify({
+                        query,
+                        variables
+                    })
+                });
+
+                const data = await response.json();
+
+                // Format the response
+                const formattedResponse = JSON.stringify(data, null, 2);
+                document.getElementById('response').innerHTML = `<pre>${formattedResponse}</pre>`;
+
+                // Highlight errors if any
+                if (data.errors) {
+                    document.getElementById('response').classList.add('border-danger');
+                } else {
+                    document.getElementById('response').classList.remove('border-danger');
+                }
+            } catch (error) {
+                console.error('Error executing query:', error);
+                document.getElementById('response').innerHTML = `<p class="text-danger">Error executing query: ${error.message}</p>`;
+            }
+        }
+
+        // Copy query
+        function copyQuery() {
+            const query = document.getElementById('generated-query').value;
+            navigator.clipboard.writeText(query);
+
+            // Show copied feedback
+            const btn = document.getElementById('copy-query-btn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="bi bi-check"></i> Copied!';
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+            }, 1500);
+        }
+    </script>

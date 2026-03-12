@@ -1,0 +1,119 @@
+# KB-23 Decision Cards — Prometheus Alerting Rules
+groups:
+  - name: kb23_safety_alerts
+    rules:
+      - alert: KB23_HypoglycaemiaAlertSurge
+        expr: rate(kb23_hypoglycaemia_alerts_total[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Hypoglycaemia alert rate exceeding 0.5/s"
+          description: "KB-23 is receiving >30 hypo alerts/min. Possible CGM/VMCU cascade."
+
+      - alert: KB23_SafetyAlertLatencyBreach
+        expr: histogram_quantile(0.99, rate(kb23_safety_alert_latency_ms_bucket[5m])) > 2000
+        for: 3m
+        labels:
+          severity: critical
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Safety alert P99 latency exceeds 2s SLA"
+          description: "Safety fast-path latency P99 at {{ $value }}ms, SLA is 2000ms."
+
+      - alert: KB23_GateQueryLatencyHigh
+        expr: histogram_quantile(0.95, rate(kb23_gate_query_latency_ms_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "MCU gate query P95 latency exceeds 5ms target"
+          description: "Redis gate lookups P95 at {{ $value }}ms. Cache may be degraded."
+
+  - name: kb23_latency_alerts
+    rules:
+      - alert: KB23_CardGenerationLatencyP95
+        expr: histogram_quantile(0.95, rate(kb23_card_generation_latency_ms_bucket[5m])) > 200
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Card generation P95 latency exceeds 200ms"
+          description: "Decision card assembly P95 at {{ $value }}ms."
+
+      - alert: KB23_CardGenerationLatencyP99Critical
+        expr: histogram_quantile(0.99, rate(kb23_card_generation_latency_ms_bucket[5m])) > 500
+        for: 3m
+        labels:
+          severity: critical
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Card generation P99 latency exceeds 500ms"
+          description: "Decision card assembly P99 at {{ $value }}ms. Upstream KB-20/21 may be slow."
+
+      - alert: KB23_PerturbationQueryLatencyHigh
+        expr: histogram_quantile(0.95, rate(kb23_perturbation_query_latency_ms_bucket[5m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Perturbation query P95 latency exceeds 3ms target"
+          description: "Active perturbation lookups P95 at {{ $value }}ms."
+
+  - name: kb23_upstream_alerts
+    rules:
+      - alert: KB23_KB19PublishErrors
+        expr: rate(kb23_kb19_publish_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "KB-19 event publish errors detected"
+          description: "KB-23 failing to publish events to KB-19 at {{ $value }}/s."
+
+      - alert: KB23_KB20FetchSlow
+        expr: histogram_quantile(0.95, rate(kb23_kb20_fetch_latency_ms_bucket[5m])) > 200
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "KB-20 patient context fetch P95 exceeds 200ms"
+          description: "KB-20 upstream latency P95 at {{ $value }}ms."
+
+      - alert: KB23_KB21FetchSlow
+        expr: histogram_quantile(0.95, rate(kb23_kb21_fetch_latency_ms_bucket[5m])) > 200
+        for: 5m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "KB-21 adherence fetch P95 exceeds 200ms"
+          description: "KB-21 upstream latency P95 at {{ $value }}ms."
+
+  - name: kb23_clinical_quality
+    rules:
+      - alert: KB23_HysteresisBlockRateHigh
+        expr: rate(kb23_hysteresis_blocked_total[1h]) / (rate(kb23_hysteresis_blocked_total[1h]) + rate(kb23_hysteresis_allowed_total[1h]) + 0.001) > 0.5
+        for: 30m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Hysteresis blocking >50% of gate transitions"
+          description: "N-01 hysteresis is suppressing {{ $value | humanizePercentage }} of gate changes. May indicate oscillating patient state."
+
+      - alert: KB23_UrgencyUpgradeRate
+        expr: rate(kb23_urgency_upgrades_total[1h]) > 0.05
+        for: 30m
+        labels:
+          severity: warning
+          service: kb-23-decision-cards
+        annotations:
+          summary: "Composite card urgency upgrade rate elevated"
+          description: "Urgency upgrades at {{ $value }}/s — multiple concurrent cards triggering recurrence logic."

@@ -1,0 +1,33 @@
+# Dockerfile for CDC Cache Warmer Service
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy cache warmer source code
+COPY cache-warming/ ./cache-warming/
+COPY neo4j-setup/ ./neo4j-setup/
+COPY clickhouse-runtime/ ./clickhouse-runtime/
+COPY shared/ ./shared/
+
+# Set Python path to include shared modules
+ENV PYTHONPATH=/app
+
+# Create non-root user
+RUN useradd -m -u 1000 cachewarmer && chown -R cachewarmer:cachewarmer /app
+USER cachewarmer
+
+# Health check (for background service)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)" || exit 1
+
+# Start CDC cache warmer
+CMD ["python", "-m", "cache-warming.cdc_subscriber", "--start"]

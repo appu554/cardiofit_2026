@@ -1,0 +1,131 @@
+# KB-11 Population Health Engine - Docker Compose Configuration
+#
+# Architecture Note:
+# KB-11 is a "Population Intelligence Layer" that CONSUMES patient data
+# from FHIR Store and KB-17, calculates risk scores (governed by KB-18),
+# and provides population-level analytics.
+#
+# North Star: "KB-11 answers population-level questions, NOT patient-level decisions."
+
+version: '3.8'
+
+services:
+  # KB-11 Population Health API
+  kb-11-population-health:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-11-population-health
+    ports:
+      - "8111:8111"
+    environment:
+      # Server Configuration
+      KB11_PORT: 8111
+      KB11_ENVIRONMENT: development
+      KB11_LOG_LEVEL: info
+      KB11_LOG_FORMAT: json
+
+      # Database Configuration (PostgreSQL)
+      KB11_DB_HOST: kb11-postgres
+      KB11_DB_PORT: 5432
+      KB11_DB_NAME: kb11_population
+      KB11_DB_USER: postgres
+      KB11_DB_PASSWORD: password
+      KB11_DB_SSLMODE: disable
+      KB11_DB_MAX_CONNS: 50
+      KB11_DB_MAX_IDLE_CONNS: 10
+
+      # Cache Configuration (Redis)
+      KB11_CACHE_ENABLED: "true"
+      KB11_REDIS_URL: redis://kb11-redis:6379
+
+      # External Services (READ-ONLY sources)
+      FHIR_STORE_URL: ${FHIR_STORE_URL:-http://localhost:8014}
+      KB7_URL: ${KB7_URL:-http://localhost:8092}
+      KB13_URL: ${KB13_URL:-http://localhost:8113}
+      KB17_URL: ${KB17_URL:-http://localhost:8117}
+      KB18_URL: ${KB18_URL:-http://localhost:8118}
+
+      # Metrics
+      KB11_METRICS_ENABLED: "true"
+      KB11_METRICS_PATH: /metrics
+    depends_on:
+      kb11-postgres:
+        condition: service_healthy
+      kb11-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8111/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - kb11-network
+    restart: unless-stopped
+
+  # PostgreSQL Database for KB-11
+  kb11-postgres:
+    image: postgres:15-alpine
+    container_name: kb11-postgres
+    ports:
+      - "5442:5432"  # Use 5442 to avoid conflict with KB-3 (5433)
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: kb11_population
+    volumes:
+      - kb11-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kb11_population"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb11-network
+    restart: unless-stopped
+
+  # Redis Cache for KB-11
+  kb11-redis:
+    image: redis:7-alpine
+    container_name: kb11-redis
+    ports:
+      - "6392:6379"  # Use 6392 to avoid conflict with KB-4 (6381)
+    command: redis-server --appendonly yes
+    volumes:
+      - kb11-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb11-network
+    restart: unless-stopped
+
+  # Adminer for database management (development only)
+  kb11-adminer:
+    image: adminer:latest
+    container_name: kb11-adminer
+    ports:
+      - "8112:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: kb11-postgres
+    depends_on:
+      - kb11-postgres
+    networks:
+      - kb11-network
+    profiles:
+      - dev
+
+volumes:
+  kb11-postgres-data:
+    name: kb11-postgres-data
+  kb11-redis-data:
+    name: kb11-redis-data
+
+networks:
+  kb11-network:
+    name: kb11-network
+    driver: bridge

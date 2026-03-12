@@ -1,0 +1,198 @@
+syntax = "proto3";
+
+package clinical_context;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Clinical Context Service Definition
+service ClinicalContextService {
+  // Get clinical context using recipe-based approach
+  rpc GetContextByRecipe(GetContextByRecipeRequest) returns (ClinicalContextResponse);
+  
+  // Get specific context fields for domain services
+  rpc GetContextFields(GetContextFieldsRequest) returns (ContextFieldsResponse);
+  
+  // Validate context availability before workflow execution
+  rpc ValidateContextAvailability(ValidateContextAvailabilityRequest) returns (ContextAvailabilityResponse);
+  
+  // Invalidate context cache for real-time updates
+  rpc InvalidateContextCache(InvalidateContextCacheRequest) returns (InvalidateContextCacheResponse);
+  
+  // Get context service health and data source connectivity
+  rpc GetServiceHealth(GetServiceHealthRequest) returns (ServiceHealthResponse);
+  
+  // Stream context updates for real-time workflows
+  rpc StreamContextUpdates(StreamContextUpdatesRequest) returns (stream ContextUpdateEvent);
+}
+
+// Request Messages
+message GetContextByRecipeRequest {
+  string patient_id = 1;
+  string recipe_id = 2;
+  optional string provider_id = 3;
+  optional string encounter_id = 4;
+  bool force_refresh = 5;
+}
+
+message GetContextFieldsRequest {
+  string patient_id = 1;
+  repeated string fields = 2;
+  optional string provider_id = 3;
+}
+
+message ValidateContextAvailabilityRequest {
+  string patient_id = 1;
+  string recipe_id = 2;
+}
+
+message InvalidateContextCacheRequest {
+  string patient_id = 1;
+  optional string recipe_id = 2;
+}
+
+message GetServiceHealthRequest {
+  bool include_data_sources = 1;
+}
+
+message StreamContextUpdatesRequest {
+  string patient_id = 1;
+  repeated string recipe_ids = 2;
+}
+
+// Response Messages
+message ClinicalContextResponse {
+  string context_id = 1;
+  string patient_id = 2;
+  optional string provider_id = 3;
+  optional string encounter_id = 4;
+  string recipe_used = 5;
+  google.protobuf.Struct assembled_data = 6;
+  double completeness_score = 7;
+  google.protobuf.Struct data_freshness = 8;
+  google.protobuf.Struct source_metadata = 9;
+  repeated SafetyFlag safety_flags = 10;
+  repeated string governance_tags = 11;
+  repeated ConnectionError connection_errors = 12;
+  google.protobuf.Timestamp assembled_at = 13;
+  ContextStatus status = 14;
+}
+
+message ContextFieldsResponse {
+  google.protobuf.Struct data = 1;
+  double completeness = 2;
+  google.protobuf.Struct metadata = 3;
+  ContextStatus status = 4;
+}
+
+message ContextAvailabilityResponse {
+  bool available = 1;
+  string patient_id = 2;
+  string recipe_id = 3;
+  map<string, DataSourceAvailability> data_sources = 4;
+  repeated string required_data = 5;
+  optional string error = 6;
+  google.protobuf.Timestamp checked_at = 7;
+}
+
+message InvalidateContextCacheResponse {
+  bool success = 1;
+  int32 invalidated_entries = 2;
+  optional string error = 3;
+}
+
+message ServiceHealthResponse {
+  ServiceStatus status = 1;
+  string version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  map<string, DataSourceHealth> data_sources = 4;
+  CacheStats cache_stats = 5;
+}
+
+message ContextUpdateEvent {
+  string patient_id = 1;
+  string recipe_id = 2;
+  ContextUpdateType update_type = 3;
+  google.protobuf.Struct updated_data = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// Supporting Messages
+message SafetyFlag {
+  SafetyFlagType flag_type = 1;
+  SafetySeverity severity = 2;
+  string message = 3;
+  google.protobuf.Struct details = 4;
+}
+
+message ConnectionError {
+  string data_point = 1;
+  string source = 2;
+  string error = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message DataSourceAvailability {
+  bool available = 1;
+  string endpoint = 2;
+  optional string error = 3;
+  int32 response_time_ms = 4;
+}
+
+message DataSourceHealth {
+  ServiceStatus status = 1;
+  string endpoint = 2;
+  int32 response_time_ms = 3;
+  google.protobuf.Timestamp last_check = 4;
+  optional string error = 5;
+}
+
+message CacheStats {
+  int32 total_entries = 1;
+  double hit_ratio = 2;
+  int32 l1_entries = 3;
+  int32 l2_entries = 4;
+  google.protobuf.Timestamp last_updated = 5;
+}
+
+// Enums
+enum ContextStatus {
+  CONTEXT_STATUS_UNKNOWN = 0;
+  CONTEXT_STATUS_SUCCESS = 1;
+  CONTEXT_STATUS_PARTIAL = 2;
+  CONTEXT_STATUS_FAILED = 3;
+  CONTEXT_STATUS_UNAVAILABLE = 4;
+}
+
+enum ServiceStatus {
+  SERVICE_STATUS_UNKNOWN = 0;
+  SERVICE_STATUS_HEALTHY = 1;
+  SERVICE_STATUS_DEGRADED = 2;
+  SERVICE_STATUS_UNHEALTHY = 3;
+}
+
+enum SafetyFlagType {
+  SAFETY_FLAG_TYPE_UNKNOWN = 0;
+  SAFETY_FLAG_TYPE_DRUG_INTERACTION = 1;
+  SAFETY_FLAG_TYPE_ALLERGY_ALERT = 2;
+  SAFETY_FLAG_TYPE_DOSAGE_WARNING = 3;
+  SAFETY_FLAG_TYPE_CONTRAINDICATION = 4;
+  SAFETY_FLAG_TYPE_DATA_QUALITY = 5;
+  SAFETY_FLAG_TYPE_STALE_DATA = 6;
+}
+
+enum SafetySeverity {
+  SAFETY_SEVERITY_UNKNOWN = 0;
+  SAFETY_SEVERITY_INFO = 1;
+  SAFETY_SEVERITY_WARNING = 2;
+  SAFETY_SEVERITY_CRITICAL = 3;
+  SAFETY_SEVERITY_FATAL = 4;
+}
+
+enum ContextUpdateType {
+  CONTEXT_UPDATE_TYPE_UNKNOWN = 0;
+  CONTEXT_UPDATE_TYPE_DATA_CHANGED = 1;
+  CONTEXT_UPDATE_TYPE_CACHE_INVALIDATED = 2;
+  CONTEXT_UPDATE_TYPE_RECIPE_UPDATED = 3;
+  CONTEXT_UPDATE_TYPE_SAFETY_FLAG_ADDED = 4;
+}

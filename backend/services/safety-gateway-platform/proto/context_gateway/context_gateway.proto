@@ -1,0 +1,228 @@
+syntax = "proto3";
+
+package context_gateway;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "safety-gateway-platform/proto/context_gateway";
+
+// Context Gateway Service for snapshot management
+service ContextGatewayService {
+  // Get a clinical snapshot by ID
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  
+  // Get multiple snapshots by IDs
+  rpc GetSnapshots(GetSnapshotsRequest) returns (GetSnapshotsResponse);
+  
+  // Validate a snapshot exists and is accessible
+  rpc ValidateSnapshot(ValidateSnapshotRequest) returns (ValidateSnapshotResponse);
+  
+  // Get snapshot metadata without full data
+  rpc GetSnapshotMetadata(GetSnapshotMetadataRequest) returns (GetSnapshotMetadataResponse);
+  
+  // Health check for Context Gateway
+  rpc GetHealth(HealthRequest) returns (HealthResponse);
+}
+
+// Request messages
+message GetSnapshotRequest {
+  string snapshot_id = 1;
+  string requesting_service = 2;
+  bool include_metadata = 3;
+}
+
+message GetSnapshotsRequest {
+  repeated string snapshot_ids = 1;
+  string requesting_service = 2;
+  bool include_metadata = 3;
+  int32 max_concurrent = 4;  // Maximum concurrent retrieval requests
+}
+
+message ValidateSnapshotRequest {
+  string snapshot_id = 1;
+  string requesting_service = 2;
+}
+
+message GetSnapshotMetadataRequest {
+  string snapshot_id = 1;
+  string requesting_service = 2;
+}
+
+message HealthRequest {
+  bool detailed = 1;
+}
+
+// Response messages
+message GetSnapshotResponse {
+  ClinicalSnapshot snapshot = 1;
+  string status = 2;
+  string message = 3;
+  map<string, string> metadata = 4;
+}
+
+message GetSnapshotsResponse {
+  repeated ClinicalSnapshot snapshots = 1;
+  repeated SnapshotError errors = 2;  // Errors for individual snapshots
+  string status = 3;
+  map<string, string> metadata = 4;
+}
+
+message ValidateSnapshotResponse {
+  bool exists = 1;
+  bool accessible = 2;
+  bool expired = 3;
+  string status = 4;
+  string message = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message GetSnapshotMetadataResponse {
+  SnapshotMetadata metadata = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message HealthResponse {
+  HealthStatus status = 1;
+  string message = 2;
+  map<string, string> details = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+// Data models
+message ClinicalSnapshot {
+  string snapshot_id = 1;
+  string patient_id = 2;
+  ClinicalContext data = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  string checksum = 6;
+  double data_completeness = 7;
+  bool allow_live_fetch = 8;
+  repeated string allowed_live_fields = 9;
+  string signature = 10;
+  string version = 11;
+  map<string, string> metadata = 12;
+}
+
+message SnapshotMetadata {
+  string snapshot_id = 1;
+  string patient_id = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string checksum = 5;
+  double data_completeness = 6;
+  bool allow_live_fetch = 7;
+  repeated string allowed_live_fields = 8;
+  string version = 9;
+  int64 data_size_bytes = 10;
+  repeated string data_sources = 11;
+  map<string, string> metadata = 12;
+}
+
+message ClinicalContext {
+  string patient_id = 1;
+  PatientDemographics demographics = 2;
+  repeated Medication active_medications = 3;
+  repeated Allergy allergies = 4;
+  repeated Condition conditions = 5;
+  repeated VitalSign recent_vitals = 6;
+  repeated LabResult lab_results = 7;
+  repeated Encounter recent_encounters = 8;
+  string context_version = 9;
+  google.protobuf.Timestamp assembly_time = 10;
+  repeated string data_sources = 11;
+  map<string, google.protobuf.Value> metadata = 12;
+}
+
+message PatientDemographics {
+  int32 age = 1;
+  string gender = 2;
+  double weight_kg = 3;
+  double height_cm = 4;
+  double bmi = 5;
+  string pregnancy_status = 6;
+}
+
+message Medication {
+  string id = 1;
+  string name = 2;
+  string generic_name = 3;
+  string dosage = 4;
+  string route = 5;
+  string frequency = 6;
+  google.protobuf.Timestamp start_date = 7;
+  google.protobuf.Timestamp end_date = 8;
+  string status = 9;
+  string prescriber = 10;
+}
+
+message Allergy {
+  string id = 1;
+  string allergen = 2;
+  string reaction = 3;
+  string severity = 4;
+  google.protobuf.Timestamp onset_date = 5;
+  string status = 6;
+  string verified_by = 7;
+}
+
+message Condition {
+  string id = 1;
+  string code = 2;
+  string display = 3;
+  string severity = 4;
+  google.protobuf.Timestamp onset_date = 5;
+  string status = 6;
+  string diagnosed_by = 7;
+}
+
+message VitalSign {
+  string id = 1;
+  string type = 2;
+  double value = 3;
+  string unit = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  string status = 6;
+}
+
+message LabResult {
+  string id = 1;
+  string test_name = 2;
+  string test_code = 3;
+  string value = 4;
+  string unit = 5;
+  string reference_range = 6;
+  string status = 7;
+  google.protobuf.Timestamp timestamp = 8;
+  bool abnormal = 9;
+}
+
+message Encounter {
+  string id = 1;
+  string type = 2;
+  string status = 3;
+  google.protobuf.Timestamp start_time = 4;
+  google.protobuf.Timestamp end_time = 5;
+  string provider = 6;
+  string location = 7;
+  string reason_code = 8;
+  string reason_text = 9;
+}
+
+message SnapshotError {
+  string snapshot_id = 1;
+  string error_type = 2;
+  string message = 3;
+  bool recoverable = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// Enums
+enum HealthStatus {
+  HEALTH_STATUS_UNSPECIFIED = 0;
+  HEALTH_STATUS_HEALTHY = 1;
+  HEALTH_STATUS_DEGRADED = 2;
+  HEALTH_STATUS_UNHEALTHY = 3;
+}

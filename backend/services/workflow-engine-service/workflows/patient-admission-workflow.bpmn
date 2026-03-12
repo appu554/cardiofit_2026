@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_1" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Camunda Modeler" exporterVersion="5.15.0" modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.3.0">
+  <bpmn:process id="patient-admission-workflow" name="Patient Admission Workflow" isExecutable="true">
+    <bpmn:startEvent id="StartEvent_1" name="Patient Admission Request">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="validate-patient-data" name="Validate Patient Data" zeebe:modelerTemplate="io.camunda.connectors.HttpJson.v2" zeebe:modelerTemplateVersion="8">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="validate-data" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=patientData" target="data" />
+          <zeebe:input source="=[{&#34;type&#34;: &#34;required&#34;, &#34;field&#34;: &#34;name&#34;, &#34;message&#34;: &#34;Patient name is required&#34;}, {&#34;type&#34;: &#34;required&#34;, &#34;field&#34;: &#34;dateOfBirth&#34;, &#34;message&#34;: &#34;Date of birth is required&#34;}]" target="validationRules" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="Gateway_1" name="Data Valid?">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_3</bpmn:outgoing>
+      <bpmn:outgoing>Flow_4</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="review-patient-data" name="Review Patient Data">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="create-human-task" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;Review Patient Data&#34;" target="taskName" />
+          <zeebe:input source="=&#34;Please review and correct the patient data&#34;" target="taskDescription" />
+          <zeebe:input source="=assignee" target="assignee" />
+          <zeebe:input source="=50" target="priority" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_4</bpmn:incoming>
+      <bpmn:outgoing>Flow_5</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:serviceTask id="create-patient-record" name="Create Patient Record">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="execute-service-task" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;patient-service&#34;" target="serviceName" />
+          <zeebe:input source="=&#34;create-patient&#34;" target="operation" />
+          <zeebe:input source="=patientData" target="parameters" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_3</bpmn:incoming>
+      <bpmn:incoming>Flow_5</bpmn:incoming>
+      <bpmn:outgoing>Flow_6</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:userTask id="assign-room" name="Assign Room">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="create-human-task" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;Assign Room&#34;" target="taskName" />
+          <zeebe:input source="=&#34;Assign a room to the patient&#34;" target="taskDescription" />
+          <zeebe:input source="=assignee" target="assignee" />
+          <zeebe:input source="=75" target="priority" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_6</bpmn:incoming>
+      <bpmn:outgoing>Flow_7</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:serviceTask id="create-encounter" name="Create Encounter">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="execute-service-task" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;encounter-service&#34;" target="serviceName" />
+          <zeebe:input source="=&#34;create-encounter&#34;" target="operation" />
+          <zeebe:input source="={&#34;patientId&#34;: patientId, &#34;roomNumber&#34;: roomNumber, &#34;status&#34;: &#34;in-progress&#34;}" target="parameters" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_7</bpmn:incoming>
+      <bpmn:outgoing>Flow_8</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="EndEvent_1" name="Patient Admitted">
+      <bpmn:incoming>Flow_8</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="validate-patient-data" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="validate-patient-data" targetRef="Gateway_1" />
+    <bpmn:sequenceFlow id="Flow_3" name="Yes" sourceRef="Gateway_1" targetRef="create-patient-record">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">=validationPassed = true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_4" name="No" sourceRef="Gateway_1" targetRef="review-patient-data">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">=validationPassed = false</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="review-patient-data" targetRef="create-patient-record" />
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="create-patient-record" targetRef="assign-room" />
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="assign-room" targetRef="create-encounter" />
+    <bpmn:sequenceFlow id="Flow_8" sourceRef="create-encounter" targetRef="EndEvent_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="patient-admission-workflow">
+      <bpmndi:BPMNShape id="_BPMNShape_StartEvent_2" bpmnElement="StartEvent_1">
+        <dc:Bounds x="179" y="99" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="158" y="142" width="78" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_1" bpmnElement="validate-patient-data">
+        <dc:Bounds x="270" y="77" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Gateway_1_di" bpmnElement="Gateway_1" isMarkerVisible="true">
+        <dc:Bounds x="425" y="92" width="50" height="50" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="425" y="68" width="50" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_2" bpmnElement="review-patient-data">
+        <dc:Bounds x="400" y="200" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_3" bpmnElement="create-patient-record">
+        <dc:Bounds x="550" y="77" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_4" bpmnElement="assign-room">
+        <dc:Bounds x="700" y="77" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Activity_5" bpmnElement="create-encounter">
+        <dc:Bounds x="850" y="77" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Event_1" bpmnElement="EndEvent_1">
+        <dc:Bounds x="1002" y="99" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="987" y="142" width="66" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <di:waypoint x="215" y="117" />
+        <di:waypoint x="270" y="117" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="370" y="117" />
+        <di:waypoint x="425" y="117" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_3_di" bpmnElement="Flow_3">
+        <di:waypoint x="475" y="117" />
+        <di:waypoint x="550" y="117" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="504" y="99" width="18" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4">
+        <di:waypoint x="450" y="142" />
+        <di:waypoint x="450" y="200" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="459" y="168" width="15" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_5_di" bpmnElement="Flow_5">
+        <di:waypoint x="500" y="240" />
+        <di:waypoint x="600" y="240" />
+        <di:waypoint x="600" y="157" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_6_di" bpmnElement="Flow_6">
+        <di:waypoint x="650" y="117" />
+        <di:waypoint x="700" y="117" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_7_di" bpmnElement="Flow_7">
+        <di:waypoint x="800" y="117" />
+        <di:waypoint x="850" y="117" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_8_di" bpmnElement="Flow_8">
+        <di:waypoint x="950" y="117" />
+        <di:waypoint x="1002" y="117" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

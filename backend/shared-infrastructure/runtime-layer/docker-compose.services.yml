@@ -1,0 +1,189 @@
+# Runtime Layer Services
+# Flink, Cache Prefetcher, Evidence Envelope, Query Router
+version: '3.8'
+
+services:
+  # Apache Flink JobManager for stream processing
+  flink-jobmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: runtime-flink-jobmanager
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.memory.process.size: 1600m
+        taskmanager.numberOfTaskSlots: 4
+        parallelism.default: 2
+
+        # State management and checkpointing
+        state.backend: rocksdb
+        state.checkpoints.dir: file:///checkpoints
+        state.backend.rocksdb.localdir: /tmp/rocksdb
+        execution.checkpointing.interval: 30s
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.max-concurrent-checkpoints: 1
+        execution.checkpointing.min-pause: 1s
+
+        # Kafka integration
+        kafka.bootstrap.servers: kafka:9092
+
+        # Metrics
+        metrics.reporter.prom.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+        metrics.reporter.prom.port: 9249
+    ports:
+      - "8081:8081"
+      - "9249:9249"
+    volumes:
+      - flink-checkpoints:/checkpoints
+      - ./flink-jobs/target:/opt/flink/jobs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/config"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-layer
+    external_links:
+      - runtime-kafka:kafka
+
+  # Flink TaskManager for job execution
+  flink-taskmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: runtime-flink-taskmanager
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.memory.process.size: 2048m
+        taskmanager.numberOfTaskSlots: 4
+        state.backend: rocksdb
+        state.backend.rocksdb.localdir: /tmp/rocksdb
+        kafka.bootstrap.servers: kafka:9092
+    volumes:
+      - /tmp:/tmp
+    depends_on:
+      - flink-jobmanager
+    networks:
+      - runtime-layer
+    external_links:
+      - runtime-kafka:kafka
+
+  # L1 Cache Prefetcher Service
+  l1-cache-prefetcher:
+    build:
+      context: ./l1-cache-prefetcher-service
+      dockerfile: Dockerfile
+    container_name: runtime-l1-cache-prefetcher
+    ports:
+      - "8055:8055"
+    environment:
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379/0
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-runtime_password}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8055/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-layer
+    external_links:
+      - runtime-redis:redis
+      - runtime-neo4j:neo4j
+      - runtime-kafka:kafka
+      - runtime-clickhouse:clickhouse
+
+  # Evidence Envelope Service
+  evidence-envelope:
+    build:
+      context: ./evidence-envelope-service
+      dockerfile: Dockerfile
+    container_name: runtime-evidence-envelope
+    ports:
+      - "8060:8060"
+    environment:
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=INFO
+      - MONGODB_URL=mongodb://mongodb-evidence:27017
+      - MONGODB_DATABASE=cardiofit_evidence_envelopes
+      - REDIS_URL=redis://redis:6379/1
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-runtime_password}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8060/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - mongodb-evidence
+    networks:
+      - runtime-layer
+    external_links:
+      - runtime-redis:redis
+      - runtime-neo4j:neo4j
+
+  # MongoDB for Evidence Envelopes
+  mongodb-evidence:
+    image: mongo:7.0
+    container_name: runtime-mongodb-evidence
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-admin_password}
+      MONGO_INITDB_DATABASE: cardiofit_evidence_envelopes
+    volumes:
+      - mongodb-evidence-data:/data/db
+    ports:
+      - "27018:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-layer
+
+  # Query Router Service
+  query-router:
+    build:
+      context: ./query-router
+      dockerfile: Dockerfile
+    container_name: runtime-query-router
+    ports:
+      - "8070:8070"
+    environment:
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=INFO
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-runtime_password}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - GRAPHDB_URL=http://graphdb:7200
+      - REDIS_URL=redis://redis:6379/2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8070/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-layer
+    external_links:
+      - runtime-neo4j:neo4j
+      - runtime-clickhouse:clickhouse
+      - runtime-graphdb:graphdb
+      - runtime-redis:redis
+
+networks:
+  runtime-layer:
+    external: true
+
+volumes:
+  flink-checkpoints:
+  mongodb-evidence-data:

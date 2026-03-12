@@ -1,0 +1,980 @@
+Of course. This is an excellent question that highlights a key detail about the orchestrator's efficiency. You are correct to question the flow, and your intuition about parallel calls is accurate from an optimization perspective.
+Let's clarify the workflow with a more detailed, verified flow that incorporates parallelism. The key is to distinguish between the logical dependency and the execution order.
+
+Verified Orchestration Flow: Parallel Fetch, Sequential Logic
+
+While there is a logical sequence (you need raw data before you can interpret it), a smart orchestrator will fetch independent data in parallel to save time.
+Here is the verified, more accurate flow:
+Step 1: Event Trigger & Recipe Identification
+An event triggers the orchestrator (e.g., a clinician opening a patient's chart). The orchestrator determines it needs to perform a hypertension assessment. It identifies two independent things it needs to start:
+The raw patient data required for the assessment (defined by a "Clinical Recipe ID" for the Context Gateway).
+The
+clinical rules needed to interpret that data (from KB-2)1.
+
+
+Step 2: Parallel Data and Logic Acquisition
+This is the key step. The GO Orchestrator initiates two network calls simultaneously:
+Call A (to Context Gateway): Requests the raw patient data (e.g., latest blood pressure readings, lab results like eGFR and potassium, current medication list, and known diagnoses like CKD or diabetes).
+Call B (to KB-2): Requests the relevant clinical logic, such as the definitions for all hypertension-related phenotypes (e.g., htn_stage1_high_risk, resistant_htn)2.
+
+
+The orchestrator then waits for both of these independent calls to complete.
+
+Code snippet
+
+
+sequenceDiagram
+    participant O as GO Orchestrator
+    participant CG as Context Gateway
+    participant KB2 as KB-2 Clinical Context
+    
+    O->>CG: (Parallel Call A) Fetch Raw Patient Data (Recipe: HTN_Assessment)
+    O->>KB2: (Parallel Call B) Fetch HTN Phenotype Rules
+    
+    CG-->>O: Raw Data (Vitals, Labs, Meds)
+    KB2-->>O: Phenotype Rules (e.g., definition of 'htn_stage1_high_risk')
+
+
+
+Step 3: In-Memory Interpretation (This is the "Passing" Step)
+This is the clarification you're looking for. Once both parallel calls have returned, the orchestrator has two sets of information in its memory:
+The patient's raw data.
+The rules for interpreting that data.
+Now, the orchestrator internally applies the logic from KB-2 to the raw data from the Context Gateway. This is when the "passing" happens—it's an in-memory operation, not another network call.
+Example:
+The orchestrator takes the raw data: {"bp.category": "stage1", "ascvd_10yr": 12}.
+It evaluates this against the rule it got from KB-2:
+{"criteria": ["bp.category == 'stage1'", "ascvd_10yr >= 10 OR diabetes OR ckd"]}3.
+
+
+The condition is met, so the orchestrator determines the patient's phenotype is
+htn_stage1_high_risk4.
+
+
+Step 4: Subsequent, Dependent Calls
+Only after the phenotype is determined in Step 3 can the orchestrator proceed with the next logical steps. It will now use this new context (htn_stage1_high_risk) to make subsequent calls to other KBs, which may also be parallelized if they are independent of each other.
+For example, it might now make parallel calls to:
+KB-4 (Patient Safety): To check for contraindications for first-line hypertension agents5.
+
+
+KB-6 (Formulary): To see which of those first-line agents are preferred on the patient's plan6.
+
+
+
+Summary
+
+So, to clarify your question: The GO Orchestrator "passes" the raw data to the KB-2 logic after it has fetched both the data and the logic in parallel. The "passing" is an internal, in-memory evaluation step that happens within the orchestrator itself. Your understanding of parallel calls is correct and is a key feature of an efficient orchestration engine.
+Deep Dive: Clinical Workflow Engine Implementation
+State Management Strategy
+1. Workflow State Model - Enhanced Clinical Design
+Comprehensive State Architecture
+Core State Components:
+Clinical Workflow State:
+  Identity:
+    workflow_instance_id: UUID (immutable)
+    workflow_definition_id: UUID + Version
+    parent_workflow_id: UUID (for sub-workflows)
+    correlation_id: UUID (for distributed tracing)
+    
+  Clinical Context:
+    patient:
+      id: Encrypted UUID
+      current_location: Unit/Bed
+      isolation_status: Standard|Contact|Droplet|Airborne
+      code_status: Full|DNR|DNI|Comfort
+      weight: For dosing calculations
+      allergies_hash: For quick comparison
+      
+    encounter:
+      id: UUID
+      type: Inpatient|Outpatient|Emergency|Telehealth
+      admission_datetime: Timestamp
+      attending_provider: UUID
+      treatment_team: Array<Provider>
+      
+    temporal_context:
+      clinical_day: Integer (day of admission)
+      shift: Day|Evening|Night
+      is_weekend: Boolean
+      is_holiday: Boolean
+      
+  Workflow Metadata:
+    classification:
+      urgency: Routine|Urgent|Stat|Now
+      risk_level: Low|Medium|High|Critical
+      regulatory_flags: Array<HIPAA|CMS|JointCommission>
+      
+    ownership:
+      initiating_provider: UUID
+      current_owner: UUID
+      delegates: Array<UUID>
+      watchers: Array<UUID> (consultants, supervisors)
+      
+  Execution State:
+    lifecycle:
+      status: Draft|Active|Suspended|Completed|Cancelled|Failed
+      substatus: WaitingForApproval|ProcessingActivity|HumanTaskPending
+      
+    progress:
+      total_activities: Integer
+      completed_activities: Integer
+      current_activity:
+        id: String
+        type: System|Human|External
+        started_at: Timestamp
+        deadline: Timestamp
+        attempts: Integer
+        
+    suspension_data:
+      reason: UserRequested|SystemError|SafetyHold|PolicyViolation
+      suspended_by: UUID
+      can_resume_after: Timestamp
+      auto_resume: Boolean
+      
+  Clinical Decisions:
+    safety_assessments:
+      - timestamp: Timestamp
+        check_type: DrugInteraction|Allergy|Dosing|Contraindication
+        result: Pass|Warning|Failed
+        override_reason: String?
+        override_by: UUID?
+        
+    clinical_modifications:
+      - timestamp: Timestamp
+        field: String
+        old_value: Encrypted
+        new_value: Encrypted
+        reason: String
+        modified_by: UUID
+        
+  Compensation State:
+    compensation_required: Boolean
+    compensation_strategy: Full|Partial|Forward
+    compensated_activities: Array<ActivityID>
+    compensation_audit: Array<CompensationEvent>
+    
+  Versioning:
+    workflow_version: SemVer
+    state_version: Integer (for optimistic locking)
+    schema_version: String
+    migration_history: Array<Migration>
+
+State Transition Rules
+Valid State Transitions:
+Draft → Active (when all required fields completed)
+Active → Suspended (user request or safety hold)
+Suspended → Active (when suspension criteria resolved)
+Active → Completed (all activities successful)
+Active → Failed (unrecoverable error)
+Any State → Cancelled (with proper authorization)
+Transition Guards:
+Each transition must pass clinical safety checks
+Audit entry required for every transition
+Notifications triggered based on transition type
+2. State Persistence Patterns - Production-Grade Implementation
+Event Sourcing with Clinical Context
+Event Store Design:
+Clinical Event Structure:
+  Event Metadata:
+    event_id: UUID
+    aggregate_id: Workflow Instance ID
+    event_type: WorkflowStarted|ActivityCompleted|SafetyCheckFailed
+    event_version: Integer
+    timestamp: Microsecond precision
+    correlation_id: For distributed tracing
+    causation_id: Previous event that caused this
+    
+  Clinical Metadata:
+    patient_id: Encrypted
+    encounter_id: UUID
+    provider_id: UUID
+    facility_id: UUID
+    department: String
+    
+  Event Payload:
+    data: JSON (encrypted for PHI)
+    schema_version: String
+    compression: None|Gzip|Snappy
+    
+  Audit Information:
+    source_system: String
+    source_ip: String
+    user_agent: String
+    session_id: UUID
+
+Snapshot Strategy with Clinical Considerations:
+Snapshot Triggers:
+  Activity-Based:
+    - After high-risk activities (medication administration)
+    - Before external system calls
+    - After safety check completions
+    
+  Time-Based:
+    - Every 10 activities
+    - Every 30 minutes for long-running workflows
+    - At shift changes (7am, 3pm, 11pm)
+    
+  State-Based:
+    - Before entering suspended state
+    - After major clinical decisions
+    - When ownership transfers
+    
+Snapshot Retention:
+  Active Workflows: All snapshots
+  Completed Workflows:
+    - Last snapshot: 7 years (legal requirement)
+    - Intermediate snapshots: 1 year
+    - Failed workflows: All snapshots for 2 years
+
+State Storage Architecture
+Multi-Tier Storage Strategy:
+Hot Storage (Redis/Hazelcast):
+  - Active workflow states
+  - Recent snapshots (last 24 hours)
+  - Workflow definition cache
+  - TTL: 48 hours after last access
+  
+Warm Storage (PostgreSQL):
+  - All workflow events
+  - Completed workflow snapshots
+  - Audit trails
+  - Indexed for fast retrieval
+  
+Cold Storage (S3/Glacier):
+  - Archived workflows (>1 year)
+  - Compressed event streams
+  - Legal hold data
+  - Lifecycle policies for compliance
+
+Activity Implementation Patterns
+1. Activity Boundaries - Clinical Safety Design
+Activity Isolation Principles
+Clinical Activity Contract:
+Activity Interface:
+  Input Validation:
+    - Schema validation (JSON Schema/Protobuf)
+    - Clinical range validation
+    - Required field verification
+    - PHI encryption verification
+    
+  Execution Guarantees:
+    - Idempotency token required
+    - Maximum execution time declared
+    - Resource requirements specified
+    - Compensation handler provided
+    
+  Output Contract:
+    - Success/failure indication
+    - Clinical warnings/alerts
+    - Audit trail entries
+    - Next activity hints
+
+Activity Timeout Strategy:
+Timeout Hierarchy:
+  Global Maximum: 5 minutes
+  
+  Activity-Specific:
+    Harmonization: 500ms
+    Drug Interaction Check: 3 seconds
+    Insurance Verification: 30 seconds
+    Human Review: 24 hours (configurable)
+    
+  Timeout Actions:
+    Technical Timeout: Retry with backoff
+    Clinical Timeout: Escalate to supervisor
+    Human Timeout: Send reminders, then escalate
+
+2. Clinical Activity Types - Detailed Patterns
+System Activities (Automated)
+Drug Interaction Checking:
+Activity: CheckDrugInteractions
+  Inputs:
+    - Proposed medication
+    - Current medications
+    - Patient allergies
+    - Genetic markers (if available)
+    
+  Processing:
+    - Level 1: Drug-drug interactions
+    - Level 2: Drug-allergy cross-reactivity
+    - Level 3: Drug-condition contraindications
+    - Level 4: Pharmacogenomic considerations
+    
+  Outputs:
+    - Severity: None|Mild|Moderate|Severe|Contraindicated
+    - Clinical detail: Specific interaction description
+    - Alternatives: Suggested safe alternatives
+    - Override capability: Based on severity
+
+Clinical Decision Support:
+Activity: ClinicalGuidanceCheck
+  Inputs:
+    - Diagnosis codes
+    - Proposed treatment
+    - Patient characteristics
+    
+  Processing:
+    - Guideline matching (local + national)
+    - Quality measure alignment
+    - Cost-effectiveness analysis
+    - Prior authorization requirements
+    
+  Outputs:
+    - Compliance status
+    - Deviation reasons
+    - Alternative recommendations
+    - Documentation requirements
+
+Human Activities (Provider Tasks)
+Clinical Review Task:
+Activity: ClinicalReviewRequired
+  Task Creation:
+    - Priority calculation based on urgency
+    - Assignment rules (attending, on-call, specialist)
+    - Escalation timeline defined
+    
+  Task Interface:
+    - Mobile-optimized review screen
+    - All context pre-loaded
+    - One-click approve/modify/reject
+    - Voice-to-text for rejection reasons
+    
+  Completion Handling:
+    - Digital signature capture
+    - Timestamp with timezone
+    - Delegation tracking
+    - Notification to workflow
+
+Multi-Signature Requirements:
+Activity: DualSignatureRequired
+  Scenarios:
+    - High-risk medications (chemotherapy)
+    - Blood product administration
+    - Restraint orders
+    
+  Implementation:
+    - Independent reviews (no visibility to first signature)
+    - Time window enforcement
+    - Both-or-none commitment
+    - Audit trail for both reviews
+
+External Activities (Integration Points)
+Laboratory Order Submission:
+Activity: SubmitLabOrder
+  Pre-Processing:
+    - Specimen requirements verification
+    - Collection time optimization
+    - Duplicate order checking
+    
+  Integration:
+    - HL7/FHIR message construction
+    - Acknowledgment handling
+    - Result subscription setup
+    
+  Error Handling:
+    - Lab system downtime: Queue locally
+    - Invalid test codes: Map to valid alternatives
+    - After-hours orders: Route appropriately
+
+Error Handling & Compensation
+1. Clinical Error Categories - Comprehensive Taxonomy
+Safety-Critical Errors (Immediate Stop)
+Allergy Violations:
+  Detection:
+    - Direct allergen match
+    - Cross-reactivity check
+    - Excipient allergies
+    
+  Response:
+    - Immediate workflow termination
+    - Alert all providers in treatment team
+    - Document in allergy history
+    - Prevent future attempts
+    
+Dosing Errors:
+  Categories:
+    - 10x overdose (decimal point errors)
+    - Pediatric/geriatric limits exceeded
+    - Renal/hepatic adjustment missing
+    - Weight-based calculation errors
+    
+  Response:
+    - Block order completely
+    - Mandatory pharmacist review
+    - Education module triggered
+    - Near-miss reporting
+
+Clinical Warnings (Override Possible)
+Non-Formulary Medications:
+  Handling:
+    - Display formulary alternatives
+    - Show cost differential
+    - Require justification
+    - Track for formulary committee
+    
+Drug Interactions (Moderate):
+  Handling:
+    - Display interaction details
+    - Suggest monitoring parameters
+    - Require acknowledgment
+    - Set follow-up reminders
+
+Operational Errors (Retry/Fallback)
+System Integration Failures:
+  Insurance Verification Down:
+    - Proceed with clinical workflow
+    - Flag for retrospective verification
+    - Create financial counseling task
+    
+  Lab System Unavailable:
+    - Queue orders locally
+    - Print requisitions as backup
+    - Auto-retry with backoff
+    - Alert IT after threshold
+
+2. Compensation Strategies - Clinical Scenarios
+Full Compensation Patterns
+Medication Order Reversal:
+Scenario: Wrong patient selected after order placed
+  
+Compensation Steps:
+  1. Cancel pharmacy order (if not dispensed)
+  2. Retrieve medication (if dispensed)
+  3. Document near-miss event
+  4. Alert original provider
+  5. Notify patient safety committee
+  6. Correct patient's record
+  
+Audit Requirements:
+  - Full timeline documentation
+  - Root cause analysis triggered
+  - Education assigned if pattern detected
+
+Admission Reversal:
+Scenario: Patient admitted to wrong service
+  
+Compensation Steps:
+  1. Cancel bed assignment
+  2. Reverse admission orders
+  3. Transfer active orders to correct service
+  4. Update attending assignment
+  5. Notify all ancillary services
+  6. Correct billing information
+
+Partial Compensation Patterns
+Lab Order Modification:
+Scenario: Additional tests needed after collection
+  
+Partial Compensation:
+  - Keep completed activities (draw, transport)
+  - Add new tests to existing specimen
+  - Update billing for additional tests
+  - Maintain original collection timestamp
+
+Forward Recovery Patterns
+Telehealth Connection Failure:
+Recovery Strategy:
+  1. Attempt reconnection (3 times)
+  2. Switch to phone visit
+  3. Maintain session state
+  4. Resume at last completed step
+  5. Document technical issues
+  6. No charge if incomplete
+
+Integration Patterns
+1. Service Integration - Clinical Systems
+Integration Architecture
+Harmonization Service:
+Integration Pattern:
+  Connection:
+    - Circuit breaker per terminology type
+    - Connection pooling (min: 10, max: 100)
+    - Health checks every 30 seconds
+    
+  Caching Strategy:
+    - L1 Cache: In-memory LRU (1000 entries)
+    - L2 Cache: Redis (100k entries)
+    - L3 Cache: PostgreSQL (full mapping)
+    - Cache warming on startup
+    
+  Fallback Behavior:
+    - Use cached mappings if available
+    - Accept unmapped codes with warning
+    - Queue for later harmonization
+    - Never block clinical workflow
+
+Context Service:
+Integration Pattern:
+  Data Aggregation:
+    - Parallel fetch from multiple sources
+    - Timeout per source (not cumulative)
+    - Partial context acceptable
+    - Priority-based data fetching
+    
+  Context Recipes:
+    MedicationPrescribing:
+      Required: [allergies, current_meds, weight]
+      Optional: [recent_labs, genetics, insurance]
+      Timeout: 2 seconds for required, 5 seconds total
+    
+    Discharge:
+      Required: [admission_dx, medications, follow_up]
+      Optional: [pending_results, social_factors]
+      Timeout: 3 seconds for required, 8 seconds total
+
+Safety Gateway:
+Integration Pattern:
+  Rule Execution:
+    - Stateless rule evaluation
+    - Rule versioning support
+    - A/B testing capability
+    - Performance tracking per rule
+    
+  Response Contract:
+    Decision: SAFE|WARNING|UNSAFE
+    Confidence: 0.0-1.0
+    Rules_Applied: Array<RuleID>
+    Execution_Time: Milliseconds
+    Explanations: Human-readable reasons
+
+2. Event Publishing - Clinical Event Bus
+Outbox Pattern Implementation
+Transactional Outbox Design:
+Outbox Table Structure:
+  event_id: UUID (Primary Key)
+  aggregate_id: UUID (Workflow ID)
+  event_type: String
+  payload: JSONB (Encrypted)
+  headers: JSONB
+  created_at: Timestamp
+  published: Boolean
+  published_at: Timestamp
+  retry_count: Integer
+  next_retry: Timestamp
+  
+Publishing Process:
+  1. Business transaction + outbox insert (same TX)
+  2. Event relay polls outbox (every 100ms)
+  3. Publish to Kafka
+  4. Mark as published (separate TX)
+  5. Archive after 24 hours
+  
+Reliability Features:
+  - Ordered publishing per aggregate
+  - Exponential backoff on failures
+  - Dead letter queue after 5 retries
+  - Monitoring on publishing lag
+
+Clinical Event Schema:
+Event Envelope:
+  metadata:
+    event_id: UUID
+    timestamp: ISO-8601 with timezone
+    version: Schema version
+    source: Service name
+    correlation_id: Workflow ID
+    
+  clinical_context:
+    patient_id: Encrypted
+    encounter_id: UUID
+    provider_id: UUID
+    facility: String
+    department: String
+    
+  event_data:
+    type: MedicationOrdered|AdmissionCompleted
+    payload: Event-specific data
+    
+  privacy:
+    contains_phi: Boolean
+    encryption: AES-256-GCM
+    retention_days: Integer
+
+Performance Optimization
+1. Workflow Execution Optimization
+Parallel Activity Execution
+Parallelization Strategy:
+Parallel Execution Groups:
+  Independent Activities:
+    - Insurance verification
+    - Drug pricing lookup
+    - Formulary checking
+    - Prior authorization check
+    
+  Sequential Requirements:
+    - Safety checks → Clinical approval
+    - Approval → Order submission
+    - Submission → Confirmation
+    
+Fork-Join Patterns:
+  Admission Orders:
+    Fork:
+      - Nursing orders
+      - Diet orders
+      - Activity orders
+      - Medication reconciliation
+    Join: When all complete or timeout
+    
+  Discharge Process:
+    Fork:
+      - Discharge summary
+      - Medication list
+      - Follow-up appointments
+      - Patient education
+    Join: Required items only
+
+Activity Priority Execution:
+Priority Calculation:
+  Base Priority:
+    - STAT orders: 1000
+    - URGENT orders: 500
+    - ROUTINE orders: 100
+    
+  Modifiers:
+    - ICU patient: +200
+    - Pediatric: +150
+    - Known allergy: +100
+    - Off-hours: +50
+    
+  Queue Management:
+    - Separate queues per priority band
+    - Starvation prevention for routine
+    - Dynamic reprioritization allowed
+
+Caching Strategy
+Multi-Level Cache Architecture:
+L1 - Application Memory:
+  Content:
+    - Workflow definitions
+    - Common medication dosages
+    - Provider preferences
+    - Terminology mappings
+  Policy:
+    - LRU eviction
+    - 15-minute TTL
+    - Max 1GB per node
+    
+L2 - Redis Cluster:
+  Content:
+    - Session data
+    - Recent lab results
+    - Active workflows
+    - Calculation results
+  Policy:
+    - 24-hour TTL
+    - Encryption at rest
+    - AOF persistence
+    
+L3 - CDN/Edge:
+  Content:
+    - Order sets
+    - Clinical protocols
+    - Education materials
+    - Drug monographs
+  Policy:
+    - Geographic distribution
+    - 1-hour TTL
+    - Invalidation on update
+
+Resource Pooling
+Connection Pool Management:
+Database Connections:
+  Write Pool:
+    - Min: 20, Max: 100
+    - Timeout: 30 seconds
+    - Validation query on checkout
+    
+  Read Pool:
+    - Min: 50, Max: 200
+    - Multiple read replicas
+    - Automatic failover
+    
+Service Connections:
+  HTTP Pools:
+    - Per-service pools
+    - Connection reuse
+    - Keep-alive enabled
+    - Circuit breaker per pool
+    
+Thread Pools:
+  Workflow Execution:
+    - Core: 50, Max: 200
+    - Queue: 1000
+    - Rejection: Caller runs
+    
+  Activity Execution:
+    - Core: 100, Max: 500
+    - Separate pools by priority
+    - Monitoring on queue depth
+
+2. Scalability Patterns
+Horizontal Scaling
+Cluster Architecture:
+Workflow Nodes:
+  Deployment:
+    - Kubernetes StatefulSet
+    - Anti-affinity rules
+    - Pod disruption budgets
+    
+  Scaling Triggers:
+    - CPU > 70%
+    - Queue depth > 1000
+    - Response time > 500ms p95
+    
+  Node Specialization:
+    - High-priority nodes (STAT orders)
+    - Bulk processing nodes
+    - Human task nodes
+
+Data Partitioning:
+Partition Strategy:
+  By Facility:
+    - Each hospital = logical partition
+    - Allows facility-specific deployments
+    - Simplifies compliance boundaries
+    
+  By Workflow Type:
+    - Medication workflows
+    - Admission/discharge workflows
+    - Diagnostic workflows
+    
+  By Time:
+    - Active workflows in hot storage
+    - Completed < 30 days in warm
+    - Older in cold storage
+
+Load Distribution
+Smart Load Balancing:
+Request Routing:
+  Algorithm:
+    - Weighted round-robin base
+    - Least connections override
+    - Session affinity for workflows
+    
+  Health Scoring:
+    - Response time weight: 40%
+    - Error rate weight: 30%
+    - Resource usage weight: 30%
+    
+  Routing Rules:
+    - STAT to dedicated pool
+    - Bulk to batch nodes
+    - Interactive to low-latency nodes
+
+Monitoring & Observability
+1. Clinical Metrics
+Clinical Quality Indicators:
+Safety Metrics:
+  Medication Safety:
+    - Override rate by drug class
+    - Near-miss detection rate
+    - Time to allergy check
+    - Formulary compliance rate
+    
+  Clinical Decision Support:
+    - Alert fatigue indicators
+    - Guideline adherence rates
+    - Best practice compliance
+    - Clinical pathway completion
+    
+Efficiency Metrics:
+  Workflow Timing:
+    - Order to administration time
+    - Admission to bed assignment
+    - Discharge order to departure
+    - Turnaround by priority
+    
+  Provider Efficiency:
+    - Orders per session
+    - Rework/correction rate
+    - Batch vs individual orders
+    - Template utilization
+
+Patient Safety Dashboards:
+Real-Time Monitoring:
+  Critical Delays:
+    - STAT orders > 15 minutes
+    - Critical results not acknowledged
+    - Medication overdue
+    
+  Safety Patterns:
+    - Repeated override behavior
+    - High-risk medication patterns
+    - Off-hours error rates
+    
+  Automated Alerts:
+    - Patient safety officer
+    - Department chief
+    - Risk management
+
+2. Technical Metrics
+System Performance Metrics:
+Latency Tracking:
+  Percentiles: p50, p75, p90, p95, p99
+  
+  Breakdown:
+    - GraphQL parsing
+    - Workflow initiation
+    - Activity execution
+    - Database operations
+    - External service calls
+    
+  SLO Targets:
+    - User-facing: < 200ms p95
+    - Background: < 5 seconds p95
+    - Batch: < 1 minute p95
+
+Resource Utilization:
+Compute Metrics:
+  - CPU usage by workflow type
+  - Memory usage patterns
+  - Thread pool utilization
+  - GC pause frequency/duration
+  
+Storage Metrics:
+  - Event store growth rate
+  - Snapshot storage usage
+  - Cache hit ratios
+  - Database connection pool usage
+  
+Network Metrics:
+  - Service call latencies
+  - Retry rates by service
+  - Circuit breaker trips
+  - Message queue depths
+
+Security Considerations
+1. Authentication & Authorization
+Provider Context Management
+Multi-Factor Authentication:
+Authentication Flows:
+  Initial Login:
+    - Username/password
+    - SMS/TOTP second factor
+    - Biometric on mobile
+    
+  Workflow Authentication:
+    - Session token validation
+    - Proximity card tap for high-risk
+    - Biometric for controlled substances
+    
+  Delegation Handling:
+    - Verbal order workflows
+    - Covering provider chains
+    - Audit of delegated actions
+
+Session Management:
+Provider Sessions:
+  Active Session:
+    - 12-hour maximum
+    - Activity-based extension
+    - Secure token rotation
+    
+  Workflow Sessions:
+    - Inherit from provider session
+    - Additional workflow-specific claims
+    - Automatic cleanup on completion
+    
+  Break-Glass Sessions:
+    - Emergency override capability
+    - Intensive audit logging
+    - Automatic review triggering
+
+Workflow-Level Security
+Role-Based Access Control:
+Workflow Permissions:
+  Define:
+    - Who can initiate
+    - Who can approve
+    - Who can cancel
+    - Who can view
+    
+  Role Examples:
+    Attending Physician:
+      - All workflows for their patients
+      - Override most warnings
+      - Delegate to residents
+      
+    Resident:
+      - Limited formulary
+      - Requires co-signature
+      - Cannot override critical warnings
+      
+    Nurse:
+      - Nursing orders only
+      - Cannot modify med orders
+      - Can document administration
+
+Attribute-Based Access Control:
+Dynamic Permissions:
+  Context-Aware:
+    - Time of day restrictions
+    - Location-based permissions
+    - Patient relationship required
+    
+  Examples:
+    - Residents can't order narcotics overnight
+    - Remote access limited to non-controlled
+    - Consultants only for their service
+
+2. Data Protection
+PHI Handling
+Encryption Strategy:
+Data at Rest:
+  Database:
+    - Transparent Data Encryption (TDE)
+    - Column-level for sensitive fields
+    - Key rotation quarterly
+    
+  File Storage:
+    - AES-256-GCM
+    - Separate keys per patient
+    - Hardware security module (HSM)
+    
+Data in Transit:
+  Internal:
+    - mTLS between services
+    - Certificate pinning
+    - Perfect forward secrecy
+    
+  External:
+    - TLS 1.3 minimum
+    - Strong cipher suites only
+    - Certificate transparency
+
+Audit Logging:
+Audit Requirements:
+  Every PHI Access:
+    - Who accessed
+    - What was accessed
+    - When accessed
+    - Why (workflow context)
+    - From where (IP, device)
+    
+  Retention:
+    - 7 years minimum
+    - Immutable storage
+    - Legal hold capability
+    - Rapid search/retrieval
+    
+  Analysis:
+    - Unusual access patterns
+    - After-hours access
+    - Large data exports
+    - Failed access attempts
+
+Privacy Controls:
+De-identification:
+  Research Exports:
+    - Safe Harbor method
+    - Expert determination option
+    - Synthetic data generation
+    
+  VIP/Sensitive Patients:
+    - Additional access controls
+    - Enhanced audit trails
+    - Restricted provider list
+    - Break-glass tracking
+
+This comprehensive design provides a robust foundation for implementing a clinical workflow engine that balances safety, performance, and usability while maintaining the highest standards of healthcare IT security and compliance.
+

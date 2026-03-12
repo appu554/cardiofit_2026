@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth0 Lock Test</title>
+    <script src="https://cdn.auth0.com/js/lock/12.0.2/lock.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        button { padding: 10px; margin: 5px; cursor: pointer; }
+        pre { background-color: #f0f0f0; padding: 10px; border-radius: 5px; overflow: auto; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .panel { border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 5px; }
+        .header { background-color: #f8f8f8; padding: 10px; margin-bottom: 15px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Auth0 Lock Test</h1>
+            <p>Use this page to test Auth0 authentication with the Lock widget</p>
+        </div>
+
+        <div class="panel">
+            <h2>Authentication</h2>
+            <button id="login">Login with Auth0 Lock</button>
+            <button id="logout">Logout</button>
+        </div>
+
+        <div class="panel">
+            <h2>API Testing</h2>
+            <div>
+                <label for="api-url">API URL:</label>
+                <input type="text" id="api-url" value="http://localhost:8080/api/auth/me" style="width: 300px;">
+                <button id="call-api">Call API</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h3>User Profile:</h3>
+            <pre id="profile">Not logged in</pre>
+            <h3>Access Token:</h3>
+            <pre id="access-token">No token</pre>
+            <h3>ID Token:</h3>
+            <pre id="id-token">No token</pre>
+            <h3>API Response:</h3>
+            <pre id="api-response">No data</pre>
+        </div>
+    </div>
+
+    <script>
+        // Auth0 configuration
+        const auth0Domain = 'dev-hfw6wda5wtf8l13c.au.auth0.com';
+        const auth0ClientId = 'me0PFrdozNvURntFrguhZ6Xumtbih3rj';
+        const auth0Audience = 'https://clinical-synthesis-hub-api';
+        
+        // Initialize Auth0 Lock
+        const lock = new Auth0Lock(auth0ClientId, auth0Domain, {
+            auth: {
+                redirectUrl: window.location.href,
+                responseType: 'token id_token',
+                audience: auth0Audience,
+                params: {
+                    scope: 'openid profile email'
+                }
+            },
+            languageDictionary: {
+                title: 'Clinical Synthesis Hub'
+            },
+            theme: {
+                logo: 'https://cdn.auth0.com/blog/auth0-brand/assets/img/auth0-shield.svg',
+                primaryColor: '#31324F'
+            }
+        });
+
+        // Store tokens and user info
+        let accessToken = '';
+        let idToken = '';
+        let userProfile = null;
+
+        // Event listeners
+        document.getElementById('login').addEventListener('click', login);
+        document.getElementById('logout').addEventListener('click', logout);
+        document.getElementById('call-api').addEventListener('click', callApi);
+
+        // Check if user is authenticated on page load
+        window.addEventListener('load', function() {
+            // Parse the URL hash
+            lock.checkSession({}, function(err, authResult) {
+                if (err || !authResult) {
+                    console.log('Not authenticated or session expired');
+                    return;
+                }
+                
+                // Save tokens
+                accessToken = authResult.accessToken;
+                idToken = authResult.idToken;
+                
+                // Update UI
+                document.getElementById('access-token').textContent = accessToken;
+                document.getElementById('id-token').textContent = idToken;
+                
+                // Get user profile
+                lock.getUserInfo(accessToken, function(error, profile) {
+                    if (error) {
+                        console.error('Error getting user profile:', error);
+                        return;
+                    }
+                    
+                    userProfile = profile;
+                    document.getElementById('profile').textContent = JSON.stringify(profile, null, 2);
+                });
+            });
+            
+            // Handle authentication result from redirect
+            lock.on('authenticated', function(authResult) {
+                // Save tokens
+                accessToken = authResult.accessToken;
+                idToken = authResult.idToken;
+                
+                // Update UI
+                document.getElementById('access-token').textContent = accessToken;
+                document.getElementById('id-token').textContent = idToken;
+                
+                // Get user profile
+                lock.getUserInfo(authResult.accessToken, function(error, profile) {
+                    if (error) {
+                        console.error('Error getting user profile:', error);
+                        return;
+                    }
+                    
+                    userProfile = profile;
+                    document.getElementById('profile').textContent = JSON.stringify(profile, null, 2);
+                    
+                    // Remove hash from URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                });
+            });
+        });
+
+        // Login function
+        function login() {
+            lock.show();
+        }
+
+        // Logout function
+        function logout() {
+            // Clear tokens
+            accessToken = '';
+            idToken = '';
+            userProfile = null;
+            
+            // Update UI
+            document.getElementById('profile').textContent = 'Not logged in';
+            document.getElementById('access-token').textContent = 'No token';
+            document.getElementById('id-token').textContent = 'No token';
+            document.getElementById('api-response').textContent = 'No data';
+            
+            // Redirect to Auth0 logout
+            window.location.href = `https://${auth0Domain}/v2/logout?client_id=${auth0ClientId}&returnTo=${encodeURIComponent(window.location.href)}`;
+        }
+
+        // Call API function
+        async function callApi() {
+            if (!accessToken) {
+                alert('Please login first');
+                return;
+            }
+            
+            try {
+                const apiUrl = document.getElementById('api-url').value;
+                const response = await fetch(apiUrl, {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                document.getElementById('api-response').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                console.error('API Error:', error);
+                document.getElementById('api-response').textContent = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

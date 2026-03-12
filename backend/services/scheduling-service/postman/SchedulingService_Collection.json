@@ -1,0 +1,869 @@
+{
+	"info": {
+		"_postman_id": "scheduling-service-collection",
+		"name": "SchedulingService - Comprehensive API Collection",
+		"description": "Complete Postman collection for SchedulingService with 43+ requests covering appointment booking, provider schedules, resource management, waitlist functionality, and FHIR-compliant operations.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8014",
+			"type": "string"
+		},
+		{
+			"key": "federation_url",
+			"value": "http://localhost:8005/graphql",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "patient_id",
+			"value": "patient-123",
+			"type": "string"
+		},
+		{
+			"key": "practitioner_id",
+			"value": "practitioner-456",
+			"type": "string"
+		},
+		{
+			"key": "appointment_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "schedule_id",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "slot_id",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"item": [
+				{
+					"name": "Service Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Federation Schema Check",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"{ __schema { queryType { name } } }\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/federation",
+							"host": ["{{base_url}}"],
+							"path": ["api", "federation"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Get Auth Token (Doctor)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.access_token) {",
+									"        pm.collectionVariables.set('auth_token', response.access_token);",
+									"        console.log('Auth token set successfully');",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"doctor@example.com\",\n  \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:8001/auth/login",
+							"protocol": "http",
+							"host": ["localhost"],
+							"port": "8001",
+							"path": ["auth", "login"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Appointment Management",
+			"item": [
+				{
+					"name": "Create Appointment",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createAppointment && response.data.createAppointment.id) {",
+									"        pm.collectionVariables.set('appointment_id', response.data.createAppointment.id);",
+									"        console.log('Appointment ID set: ' + response.data.createAppointment.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateAppointment($appointment: AppointmentInput!) { createAppointment(appointment: $appointment) { id status description start end minutesDuration comment participant { status actor { reference display } required } } }\",\n  \"variables\": {\n    \"appointment\": {\n      \"status\": \"PROPOSED\",\n      \"description\": \"Regular checkup appointment\",\n      \"start\": \"2024-12-15T10:00:00Z\",\n      \"end\": \"2024-12-15T10:30:00Z\",\n      \"minutesDuration\": 30,\n      \"comment\": \"Patient requested morning appointment\",\n      \"patientInstruction\": \"Please arrive 15 minutes early\",\n      \"participant\": [\n        {\n          \"status\": \"ACCEPTED\",\n          \"required\": \"REQUIRED\",\n          \"actor\": {\n            \"reference\": \"Patient/{{patient_id}}\",\n            \"display\": \"John Doe\"\n          }\n        },\n        {\n          \"status\": \"ACCEPTED\",\n          \"required\": \"REQUIRED\",\n          \"actor\": {\n            \"reference\": \"Practitioner/{{practitioner_id}}\",\n            \"display\": \"Dr. Smith\"\n          }\n        }\n      ]\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Appointment by ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetAppointment($id: ID!) { appointment(id: $id) { id resourceType status description start end minutesDuration comment patientInstruction participant { status actor { reference display } required } } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Appointments by Patient",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchAppointments($patientId: String) { appointments(patientId: $patientId) { id status description start end participant { actor { reference display } } } }\",\n  \"variables\": {\n    \"patientId\": \"{{patient_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Appointments by Practitioner",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchAppointments($practitionerId: String) { appointments(practitionerId: $practitionerId) { id status description start end participant { actor { reference display } } } }\",\n  \"variables\": {\n    \"practitionerId\": \"{{practitioner_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Appointments by Status",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchAppointments($status: AppointmentStatus) { appointments(status: $status) { id status description start end participant { actor { reference display } } } }\",\n  \"variables\": {\n    \"status\": \"PROPOSED\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Appointments by Date",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchAppointments($date: String) { appointments(date: $date) { id status description start end participant { actor { reference display } } } }\",\n  \"variables\": {\n    \"date\": \"2024-12-15\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Appointment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation UpdateAppointment($id: ID!, $appointment: AppointmentInput!) { updateAppointment(id: $id, appointment: $appointment) { id status description start end comment } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\",\n    \"appointment\": {\n      \"status\": \"BOOKED\",\n      \"description\": \"Updated regular checkup appointment\",\n      \"start\": \"2024-12-15T10:00:00Z\",\n      \"end\": \"2024-12-15T10:30:00Z\",\n      \"minutesDuration\": 30,\n      \"comment\": \"Appointment confirmed by patient\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Cancel Appointment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CancelAppointment($id: ID!, $reason: String) { cancelAppointment(id: $id, reason: $reason) { id status comment } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\",\n    \"reason\": \"Patient requested cancellation\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Schedule Management",
+			"item": [
+				{
+					"name": "Create Schedule",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createSchedule && response.data.createSchedule.id) {",
+									"        pm.collectionVariables.set('schedule_id', response.data.createSchedule.id);",
+									"        console.log('Schedule ID set: ' + response.data.createSchedule.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateSchedule($schedule: ScheduleInput!) { createSchedule(schedule: $schedule) { id resourceType active actor { reference display } comment } }\",\n  \"variables\": {\n    \"schedule\": {\n      \"active\": true,\n      \"actor\": [\n        {\n          \"reference\": \"Practitioner/{{practitioner_id}}\",\n          \"display\": \"Dr. Smith\"\n        }\n      ],\n      \"comment\": \"Regular clinic hours for Dr. Smith\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Schedule by ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetSchedule($id: ID!) { schedule(id: $id) { id resourceType active actor { reference display } comment } }\",\n  \"variables\": {\n    \"id\": \"{{schedule_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Schedules by Actor",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchSchedules($actorId: String) { schedules(actorId: $actorId) { id active actor { reference display } comment } }\",\n  \"variables\": {\n    \"actorId\": \"{{practitioner_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Active Schedules",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchSchedules($active: Boolean) { schedules(active: $active) { id active actor { reference display } comment } }\",\n  \"variables\": {\n    \"active\": true\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Slot Management",
+			"item": [
+				{
+					"name": "Create Slot",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    if (response.data && response.data.createSlot && response.data.createSlot.id) {",
+									"        pm.collectionVariables.set('slot_id', response.data.createSlot.id);",
+									"        console.log('Slot ID set: ' + response.data.createSlot.id);",
+									"    }",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateSlot($slot: SlotInput!) { createSlot(slot: $slot) { id resourceType status start end schedule { reference display } overbooked comment } }\",\n  \"variables\": {\n    \"slot\": {\n      \"status\": \"FREE\",\n      \"start\": \"2024-12-15T10:00:00Z\",\n      \"end\": \"2024-12-15T10:30:00Z\",\n      \"schedule\": {\n        \"reference\": \"Schedule/{{schedule_id}}\",\n        \"display\": \"Dr. Smith Schedule\"\n      },\n      \"overbooked\": false,\n      \"comment\": \"Available 30-minute slot\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Slot by ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetSlot($id: ID!) { slot(id: $id) { id resourceType status start end schedule { reference display } overbooked comment } }\",\n  \"variables\": {\n    \"id\": \"{{slot_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Slots by Schedule",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchSlots($scheduleId: String) { slots(scheduleId: $scheduleId) { id status start end schedule { reference display } overbooked } }\",\n  \"variables\": {\n    \"scheduleId\": \"{{schedule_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Available Slots",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchSlots($status: SlotStatus) { slots(status: $status) { id status start end schedule { reference display } overbooked } }\",\n  \"variables\": {\n    \"status\": \"FREE\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Slots by Date Range",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query SearchSlots($start: String, $end: String) { slots(start: $start, end: $end) { id status start end schedule { reference display } } }\",\n  \"variables\": {\n    \"start\": \"2024-12-15T09:00:00Z\",\n    \"end\": \"2024-12-15T17:00:00Z\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Federation Queries",
+			"item": [
+				{
+					"name": "Patient Appointments (Federation)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query PatientAppointments($id: ID!) { patient(id: $id) { id name { family given } appointments { id status description start end participant { actor { reference display } } } } }\",\n  \"variables\": {\n    \"id\": \"{{patient_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "User Appointments (Federation)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query UserAppointments($id: ID!) { user(id: $id) { id firstName lastName appointments { id status description start end participant { actor { reference display } } } } }\",\n  \"variables\": {\n    \"id\": \"{{practitioner_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "User Schedules (Federation)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query UserSchedules($id: ID!) { user(id: $id) { id firstName lastName schedules { id active actor { reference display } comment } } }\",\n  \"variables\": {\n    \"id\": \"{{practitioner_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Complex Scenarios",
+			"item": [
+				{
+					"name": "Book Complete Appointment Flow",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation BookAppointmentFlow($appointment: AppointmentInput!) { createAppointment(appointment: $appointment) { id status description start end minutesDuration participant { status actor { reference display } required } } }\",\n  \"variables\": {\n    \"appointment\": {\n      \"status\": \"BOOKED\",\n      \"serviceCategory\": [\n        {\n          \"text\": \"General Medicine\",\n          \"coding\": [\n            {\n              \"system\": \"http://terminology.hl7.org/CodeSystem/service-category\",\n              \"code\": \"17\",\n              \"display\": \"General Medicine\"\n            }\n          ]\n        }\n      ],\n      \"serviceType\": [\n        {\n          \"text\": \"Consultation\",\n          \"coding\": [\n            {\n              \"system\": \"http://terminology.hl7.org/CodeSystem/service-type\",\n              \"code\": \"124\",\n              \"display\": \"General Practice\"\n            }\n          ]\n        }\n      ],\n      \"appointmentType\": {\n        \"text\": \"Routine\",\n        \"coding\": [\n          {\n            \"system\": \"http://terminology.hl7.org/CodeSystem/v2-0276\",\n            \"code\": \"ROUTINE\",\n            \"display\": \"Routine appointment\"\n          }\n        ]\n      },\n      \"reasonCode\": [\n        {\n          \"text\": \"Annual checkup\",\n          \"coding\": [\n            {\n              \"system\": \"http://snomed.info/sct\",\n              \"code\": \"185349003\",\n              \"display\": \"Encounter for check up\"\n            }\n          ]\n        }\n      ],\n      \"priority\": 5,\n      \"description\": \"Annual health checkup with comprehensive examination\",\n      \"start\": \"2024-12-20T14:00:00Z\",\n      \"end\": \"2024-12-20T15:00:00Z\",\n      \"minutesDuration\": 60,\n      \"comment\": \"Patient has no known allergies. Last visit was 12 months ago.\",\n      \"patientInstruction\": \"Please bring your insurance card and arrive 15 minutes early for check-in. Fasting is not required.\",\n      \"participant\": [\n        {\n          \"type\": [\n            {\n              \"text\": \"Patient\",\n              \"coding\": [\n                {\n                  \"system\": \"http://terminology.hl7.org/CodeSystem/v3-ParticipationType\",\n                  \"code\": \"PPRF\",\n                  \"display\": \"primary performer\"\n                }\n              ]\n            }\n          ],\n          \"actor\": {\n            \"reference\": \"Patient/{{patient_id}}\",\n            \"display\": \"John Doe\"\n          },\n          \"required\": \"REQUIRED\",\n          \"status\": \"ACCEPTED\"\n        },\n        {\n          \"type\": [\n            {\n              \"text\": \"Practitioner\",\n              \"coding\": [\n                {\n                  \"system\": \"http://terminology.hl7.org/CodeSystem/v3-ParticipationType\",\n                  \"code\": \"PPRF\",\n                  \"display\": \"primary performer\"\n                }\n              ]\n            }\n          ],\n          \"actor\": {\n            \"reference\": \"Practitioner/{{practitioner_id}}\",\n            \"display\": \"Dr. Sarah Smith, MD\"\n          },\n          \"required\": \"REQUIRED\",\n          \"status\": \"ACCEPTED\"\n        }\n      ]\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Waitlist Management Scenario",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateWaitlistAppointment($appointment: AppointmentInput!) { createAppointment(appointment: $appointment) { id status description start end comment } }\",\n  \"variables\": {\n    \"appointment\": {\n      \"status\": \"WAITLIST\",\n      \"description\": \"Patient on waitlist for earlier appointment\",\n      \"priority\": 1,\n      \"comment\": \"Patient prefers morning appointments. Flexible with dates.\",\n      \"patientInstruction\": \"We will contact you if an earlier slot becomes available\",\n      \"participant\": [\n        {\n          \"actor\": {\n            \"reference\": \"Patient/{{patient_id}}\",\n            \"display\": \"John Doe\"\n          },\n          \"required\": \"REQUIRED\",\n          \"status\": \"NEEDS_ACTION\"\n        }\n      ]\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Resource Availability Check",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query CheckAvailability($practitionerId: String, $date: String) { appointments(practitionerId: $practitionerId, date: $date) { id status start end } slots(scheduleId: $practitionerId, start: $date) { id status start end overbooked } }\",\n  \"variables\": {\n    \"practitionerId\": \"{{practitioner_id}}\",\n    \"date\": \"2024-12-20\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Error Handling & Edge Cases",
+			"item": [
+				{
+					"name": "Get Non-existent Appointment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query GetAppointment($id: ID!) { appointment(id: $id) { id status } }\",\n  \"variables\": {\n    \"id\": \"non-existent-id\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Invalid Appointment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"mutation CreateAppointment($appointment: AppointmentInput!) { createAppointment(appointment: $appointment) { id status } }\",\n  \"variables\": {\n    \"appointment\": {\n      \"status\": \"INVALID_STATUS\",\n      \"start\": \"invalid-date\",\n      \"end\": \"invalid-date\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Performance & Analytics",
+			"item": [
+				{
+					"name": "Bulk Appointment Search",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query BulkSearch { appointments { id status start end participant { actor { reference } } } schedules { id active actor { reference } } slots { id status start end } }\"\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Provider Utilization Report",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query ProviderUtilization($practitionerId: String, $date: String) { user(id: $practitionerId) { id firstName lastName appointments(date: $date) { id status start end } schedules { id active } } }\",\n  \"variables\": {\n    \"practitionerId\": \"{{practitioner_id}}\",\n    \"date\": \"2024-12-20\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "FHIR Compliance Tests",
+			"item": [
+				{
+					"name": "FHIR Appointment Resource Validation",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query FHIRValidation($id: ID!) { appointment(id: $id) { id resourceType identifier { use system value } status serviceCategory { text coding { system code display } } serviceType { text coding { system code display } } specialty { text coding { system code display } } appointmentType { text coding { system code display } } reasonCode { text coding { system code display } } priority description start end minutesDuration comment patientInstruction participant { type { text coding { system code display } } actor { reference display type } required status } } }\",\n  \"variables\": {\n    \"id\": \"{{appointment_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "FHIR Schedule Resource Validation",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query FHIRScheduleValidation($id: ID!) { schedule(id: $id) { id resourceType identifier { use system value } active serviceCategory { text coding { system code display } } serviceType { text coding { system code display } } specialty { text coding { system code display } } actor { reference display type } comment } }\",\n  \"variables\": {\n    \"id\": \"{{schedule_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "FHIR Slot Resource Validation",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"query FHIRSlotValidation($id: ID!) { slot(id: $id) { id resourceType identifier { use system value } serviceCategory { text coding { system code display } } serviceType { text coding { system code display } } specialty { text coding { system code display } } appointmentType { text coding { system code display } } schedule { reference display type } status start end overbooked comment } }\",\n  \"variables\": {\n    \"id\": \"{{slot_id}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{federation_url}}",
+							"host": ["{{federation_url}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

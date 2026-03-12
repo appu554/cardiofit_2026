@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth Code Flow Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px 0;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow: auto;
+        }
+        .step {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        h3 {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Auth Code Flow Test</h1>
+        <p>This page tests the Authorization Code flow with the Auth Service.</p>
+
+        <div class="step">
+            <h3>Step 1: Get Authorization URL</h3>
+            <button id="getAuthUrl">Get Authorization URL</button>
+            <pre id="authUrlResult">Results will appear here...</pre>
+        </div>
+
+        <div class="step">
+            <h3>Step 2: Exchange Code for Tokens</h3>
+            <p>After authentication, the code will be exchanged automatically.</p>
+            <pre id="tokenResult">Results will appear here...</pre>
+        </div>
+
+        <div class="step">
+            <h3>Step 3: Get User Information</h3>
+            <button id="getUserInfo" disabled>Get User Info</button>
+            <pre id="userInfoResult">Results will appear here...</pre>
+        </div>
+
+        <div class="step">
+            <h3>Step 4: Verify Token</h3>
+            <button id="verifyToken" disabled>Verify Token</button>
+            <pre id="verifyResult">Results will appear here...</pre>
+        </div>
+
+        <div class="step">
+            <h3>Step 5: Refresh Token</h3>
+            <button id="refreshToken" disabled>Refresh Token</button>
+            <pre id="refreshResult">Results will appear here...</pre>
+        </div>
+
+        <div class="step">
+            <h3>Step 6: Logout</h3>
+            <button id="logout" disabled>Logout</button>
+            <pre id="logoutResult">Results will appear here...</pre>
+        </div>
+    </div>
+
+    <script>
+        // Store tokens and state
+        let accessToken = '';
+        let refreshToken = '';
+        let state = '';
+        let redirectUri = window.location.href.split('?')[0]; // Remove any query parameters
+
+        // DOM elements
+        const getAuthUrlBtn = document.getElementById('getAuthUrl');
+        const getUserInfoBtn = document.getElementById('getUserInfo');
+        const verifyTokenBtn = document.getElementById('verifyToken');
+        const refreshTokenBtn = document.getElementById('refreshToken');
+        const logoutBtn = document.getElementById('logout');
+        
+        const authUrlResult = document.getElementById('authUrlResult');
+        const tokenResult = document.getElementById('tokenResult');
+        const userInfoResult = document.getElementById('userInfoResult');
+        const verifyResult = document.getElementById('verifyResult');
+        const refreshResult = document.getElementById('refreshResult');
+        const logoutResult = document.getElementById('logoutResult');
+
+        // Check for code in URL
+        window.addEventListener('load', async function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const returnedState = urlParams.get('state');
+            
+            if (code) {
+                // Clear URL parameters
+                window.history.replaceState({}, document.title, redirectUri);
+                
+                // Verify state if available
+                if (returnedState && localStorage.getItem('auth_state') !== returnedState) {
+                    tokenResult.textContent = 'Error: State mismatch. Possible CSRF attack.';
+                    return;
+                }
+                
+                // Exchange code for tokens
+                try {
+                    tokenResult.textContent = 'Exchanging code for tokens...';
+                    
+                    const response = await fetch('http://localhost:8000/api/auth/callback', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            code: code,
+                            redirect_uri: redirectUri
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    accessToken = data.access_token;
+                    refreshToken = data.refresh_token;
+                    
+                    // Enable buttons
+                    getUserInfoBtn.disabled = false;
+                    verifyTokenBtn.disabled = false;
+                    refreshTokenBtn.disabled = false;
+                    logoutBtn.disabled = false;
+                    
+                    // Display token info
+                    tokenResult.textContent = JSON.stringify(data, null, 2);
+                } catch (error) {
+                    tokenResult.textContent = `Error: ${error.message}`;
+                }
+            }
+        });
+
+        // Get authorization URL
+        getAuthUrlBtn.addEventListener('click', async function() {
+            try {
+                authUrlResult.textContent = 'Getting authorization URL...';
+                
+                // Generate a random state
+                state = Math.random().toString(36).substring(2, 15);
+                localStorage.setItem('auth_state', state);
+                
+                const response = await fetch(`http://localhost:8000/api/auth/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Display authorization URL
+                authUrlResult.textContent = JSON.stringify(data, null, 2);
+                
+                // Add a link to the authorization URL
+                const link = document.createElement('a');
+                link.href = data.authorization_url;
+                link.textContent = 'Click here to authenticate with Auth0';
+                link.style.display = 'block';
+                link.style.marginTop = '10px';
+                authUrlResult.appendChild(link);
+            } catch (error) {
+                authUrlResult.textContent = `Error: ${error.message}`;
+            }
+        });
+
+        // Get user info
+        getUserInfoBtn.addEventListener('click', async function() {
+            try {
+                userInfoResult.textContent = 'Getting user info...';
+                
+                const response = await fetch('http://localhost:8000/api/auth/me', {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                userInfoResult.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                userInfoResult.textContent = `Error: ${error.message}`;
+            }
+        });
+
+        // Verify token
+        verifyTokenBtn.addEventListener('click', async function() {
+            try {
+                verifyResult.textContent = 'Verifying token...';
+                
+                const response = await fetch('http://localhost:8000/api/auth/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                verifyResult.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                verifyResult.textContent = `Error: ${error.message}`;
+            }
+        });
+
+        // Refresh token
+        refreshTokenBtn.addEventListener('click', async function() {
+            try {
+                if (!refreshToken) {
+                    refreshResult.textContent = 'No refresh token available';
+                    return;
+                }
+                
+                refreshResult.textContent = 'Refreshing token...';
+                
+                const response = await fetch('http://localhost:8000/api/auth/refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        refresh_token: refreshToken
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                accessToken = data.access_token;
+                refreshToken = data.refresh_token || refreshToken;
+                
+                refreshResult.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                refreshResult.textContent = `Error: ${error.message}`;
+            }
+        });
+
+        // Logout
+        logoutBtn.addEventListener('click', async function() {
+            try {
+                logoutResult.textContent = 'Logging out...';
+                
+                const response = await fetch('http://localhost:8000/api/auth/logout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        refresh_token: refreshToken
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Clear tokens
+                accessToken = '';
+                refreshToken = '';
+                
+                // Disable buttons
+                getUserInfoBtn.disabled = true;
+                verifyTokenBtn.disabled = true;
+                refreshTokenBtn.disabled = true;
+                logoutBtn.disabled = true;
+                
+                logoutResult.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                logoutResult.textContent = `Error: ${error.message}`;
+            }
+        });
+    </script>
+</body>
+</html>

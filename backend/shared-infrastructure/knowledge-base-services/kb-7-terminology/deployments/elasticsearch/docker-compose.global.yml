@@ -1,0 +1,207 @@
+version: '3.8'
+
+# Global Elasticsearch Cluster for CardioFit Platform
+# Serves all services: KB7 Terminology, Patient Service, Medication Service, Clinical Reasoning
+
+services:
+  # Elasticsearch Master Node
+  elasticsearch-master:
+    image: elasticsearch:8.11.4
+    container_name: cardiofit-elasticsearch-master
+    environment:
+      - node.name=elasticsearch-master
+      - cluster.name=cardiofit-global-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms4g -Xmx4g"
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - action.destructive_requires_name=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch_master_data:/usr/share/elasticsearch/data
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./config/medical_analyzers.json:/usr/share/elasticsearch/config/analysis/medical_analyzers.json:ro
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - cardiofit-global-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Elasticsearch Data Node 1 (for high availability)
+  elasticsearch-data-1:
+    image: elasticsearch:8.11.4
+    container_name: cardiofit-elasticsearch-data-1
+    environment:
+      - node.name=elasticsearch-data-1
+      - cluster.name=cardiofit-global-cluster
+      - discovery.seed_hosts=elasticsearch-master
+      - cluster.initial_master_nodes=elasticsearch-master
+      - node.roles=data,ingest
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms4g -Xmx4g"
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch_data1:/usr/share/elasticsearch/data
+      - ./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+    ports:
+      - "9201:9200"
+    networks:
+      - cardiofit-global-network
+    depends_on:
+      elasticsearch-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Kibana for visualization and management
+  kibana:
+    image: kibana:8.11.4
+    container_name: cardiofit-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch-master:9200
+      - SERVER_NAME=cardiofit-kibana
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=5601
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=cardiofit123
+      - LOGGING_LEVEL=info
+    ports:
+      - "5601:5601"
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+      - ./config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    networks:
+      - cardiofit-global-network
+    depends_on:
+      elasticsearch-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "2"
+
+  # Elasticsearch Head for cluster monitoring
+  elasticsearch-head:
+    image: mobz/elasticsearch-head:5
+    container_name: cardiofit-elasticsearch-head
+    ports:
+      - "9100:9100"
+    networks:
+      - cardiofit-global-network
+    depends_on:
+      - elasticsearch-master
+    restart: unless-stopped
+
+  # Curator for index lifecycle management
+  elasticsearch-curator:
+    image: untergeek/curator:8.0.13
+    container_name: cardiofit-elasticsearch-curator
+    volumes:
+      - ./config/curator.yml:/etc/curator/config.yml:ro
+      - ./config/curator_actions.yml:/etc/curator/actions.yml:ro
+      - curator_logs:/var/log/curator
+    networks:
+      - cardiofit-global-network
+    depends_on:
+      elasticsearch-master:
+        condition: service_healthy
+    command: curator --config /etc/curator/config.yml /etc/curator/actions.yml
+    restart: "no"  # Run as cron job
+
+  # Prometheus Elasticsearch Exporter
+  elasticsearch-exporter:
+    image: prometheuscommunity/elasticsearch-exporter:latest
+    container_name: cardiofit-elasticsearch-exporter
+    command:
+      - '--es.uri=http://elasticsearch-master:9200'
+      - '--es.all'
+      - '--es.indices'
+      - '--es.indices_settings'
+      - '--es.cluster_settings'
+      - '--es.snapshots'
+    ports:
+      - "9114:9114"
+    networks:
+      - cardiofit-global-network
+    depends_on:
+      elasticsearch-master:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  elasticsearch_master_data:
+    driver: local
+  elasticsearch_data1:
+    driver: local
+  kibana_data:
+    driver: local
+  curator_logs:
+    driver: local
+
+networks:
+  cardiofit-global-network:
+    driver: bridge
+    name: cardiofit-global-network
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+# Global Elasticsearch Cluster Configuration
+#
+# Service Access Points:
+# - Elasticsearch API: http://localhost:9200
+# - Kibana Dashboard: http://localhost:5601
+# - Cluster Head: http://localhost:9100
+# - Metrics: http://localhost:9114/metrics
+#
+# Indices Structure:
+# - clinical_terms: Medical terminology (KB7)
+# - patient_records: Patient data (Patient Service)
+# - medication_data: Drug information (Medication Service)
+# - clinical_reasoning: AI/ML insights (Clinical Reasoning Service)
+#
+# Security: Currently disabled for development
+# Production deployment should enable xpack security with proper authentication

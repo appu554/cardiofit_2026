@@ -1,0 +1,998 @@
+# ============================================================
+# AKI MANAGEMENT PROTOCOL - ENHANCED CDS-COMPLIANT VERSION
+# ============================================================
+
+protocol_id: "AKI-MANAGEMENT-001"
+name: "Acute Kidney Injury Management Protocol"
+category: "RENAL"
+specialty: "NEPHROLOGY"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# TRIGGER CRITERIA (Enhanced with AND/OR logic)
+# ============================================================
+trigger_criteria:
+  match_logic: "ANY_OF"  # Any KDIGO AKI criterion triggers protocol
+
+  conditions:
+    - condition_id: "AKI-TRIG-001"
+      description: "Serum creatinine rise (KDIGO criteria)"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "creatinine_increase_48h"
+          operator: ">="
+          threshold: 0.3
+          unit: "mg/dL"
+          source: "lab_results"
+
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "creatinine_current"
+              operator: ">="
+              threshold: 1.5
+            - parameter: "creatinine_baseline_ratio"
+              operator: ">="
+              threshold: 1.5
+              source: "lab_results"
+
+    - condition_id: "AKI-TRIG-002"
+      description: "Oliguria (urine output criteria)"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "urine_output_6h"
+          operator: "<"
+          threshold: 0.5
+          unit: "mL/kg/hr"
+          source: "vital_signs"
+
+        - parameter: "urine_output_24h"
+          operator: "<"
+          threshold: 0.3
+          unit: "mL/kg/hr"
+          source: "vital_signs"
+
+        - parameter: "anuria_12h"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+    - condition_id: "AKI-TRIG-003"
+      description: "AKI complications (hyperkalemia, acidosis, uremia)"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "potassium"
+          operator: ">"
+          threshold: 5.5
+          unit: "mEq/L"
+          source: "lab_results"
+
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "ph"
+              operator: "<"
+              threshold: 7.30
+            - parameter: "bicarbonate"
+              operator: "<"
+              threshold: 15
+              unit: "mEq/L"
+
+        - parameter: "volume_overload"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+# ============================================================
+# CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.80
+
+  modifiers:
+    - modifier_id: "AKI-CONF-001"
+      description: "Stage 3 AKI (severe) increases confidence and urgency"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "creatinine_baseline_ratio"
+            operator: ">="
+            threshold: 3.0
+
+          - parameter: "creatinine"
+            operator: ">="
+            threshold: 4.0
+            unit: "mg/dL"
+
+          - parameter: "urine_output_24h"
+            operator: "<"
+            threshold: 0.3
+            unit: "mL/kg/hr"
+
+      adjustment: 0.15
+
+    - modifier_id: "AKI-CONF-002"
+      description: "Life-threatening complications (severe hyperkalemia, acidosis)"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "potassium"
+            operator: ">"
+            threshold: 6.5
+            unit: "mEq/L"
+
+          - parameter: "ph"
+            operator: "<"
+            threshold: 7.20
+
+      adjustment: 0.12
+
+    - modifier_id: "AKI-CONF-003"
+      description: "Oliguria present"
+      condition:
+        parameter: "urine_output_6h"
+        operator: "<"
+        threshold: 0.5
+        unit: "mL/kg/hr"
+      adjustment: 0.08
+
+    - modifier_id: "AKI-CONF-004"
+      description: "Known nephrotoxin exposure"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "nsaid_use"
+            operator: "=="
+            threshold: true
+          - parameter: "aminoglycoside_use"
+            operator: "=="
+            threshold: true
+          - parameter: "contrast_exposure_72h"
+            operator: "=="
+            threshold: true
+      adjustment: 0.05
+
+  activation_threshold: 0.70
+
+# ============================================================
+# EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "Kidney Disease: Improving Global Outcomes (KDIGO) 2024 AKI Guideline"
+  guideline_version: "KDIGO 2024"
+  publication_date: "2024-01"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "AKI-CITE-001"
+      authors: "KDIGO AKI Work Group"
+      title: "KDIGO Clinical Practice Guideline for Acute Kidney Injury"
+      journal: "Kidney International"
+      year: 2024
+      doi: "10.1016/j.kint.2024.01.001"
+
+  last_review_date: "2024-01-01"
+  next_review_date: "2027-01-01"
+
+# ============================================================
+# ACTIONS
+# ============================================================
+actions:
+  # ==========================================================
+  # DIAGNOSTIC ACTIONS
+  # ==========================================================
+  - action_id: "AKI-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "Comprehensive metabolic panel (CMP), urinalysis with microscopy"
+      urgency: "STAT"
+      instructions: "Confirm AKI stage; identify electrolyte abnormalities (hyperkalemia, acidosis); urinalysis helps determine etiology (pre-renal vs intrinsic vs post-renal)"
+
+  - action_id: "AKI-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "HIGH"
+    sequence_number: 2
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "Fractional excretion of sodium (FENa) or urea (FEUrea)"
+      urgency: "URGENT"
+      instructions: "Obtain BEFORE diuretics; FENa <1% or FEUrea <35% suggests pre-renal AKI; FENa >2% or FEUrea >50% suggests ATN"
+
+  - action_id: "AKI-ACT-003"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 3
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 240
+
+    diagnostic:
+      test_name: "Renal ultrasound (non-contrast)"
+      urgency: "STAT"
+      instructions: "Rule out obstructive uropathy (hydronephrosis); assess kidney size (acute vs chronic); no IV contrast in AKI"
+
+  # ==========================================================
+  # MEDICATION REVIEW AND NEPHROTOXIN ELIMINATION
+  # ==========================================================
+  - action_id: "AKI-ACT-004"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "CRITICAL"
+    sequence_number: 4
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    clinical_assessment:
+      assessment_type: "Medication review and nephrotoxin elimination"
+      frequency: "Immediate review and daily reassessment"
+      specific_parameters:
+        - "STOP: NSAIDs, ACE-I/ARB (temporarily), aminoglycosides, IV contrast"
+        - "ADJUST: Renally cleared medications (antibiotics, anticoagulants, metformin)"
+        - "MONITOR: Vancomycin and other nephrotoxic drugs"
+
+  # ==========================================================
+  # FLUID MANAGEMENT
+  # ==========================================================
+  - action_id: "AKI-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "HYPOVOLEMIC_PRERENAL"
+          description: "IV fluid resuscitation for pre-renal AKI"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "volume_status"
+                operator: "=="
+                threshold: "hypovolemic"
+                source: "clinical_assessment"
+
+              - match_logic: "ANY_OF"
+                conditions:
+                  - parameter: "fena"
+                    operator: "<"
+                    threshold: 1.0
+
+                  - parameter: "bun_cr_ratio"
+                    operator: ">"
+                    threshold: 20
+
+          primary_medication:
+            name: "0.9% Normal Saline OR Lactated Ringer's"
+            dose: "500-1000"
+            dose_unit: "mL"
+            route: "IV"
+            frequency: "Bolus over 1-2 hours, then reassess"
+            administration_instructions: "IV fluid bolus 500-1000 mL over 1-2 hours; reassess volume status; goal euvolemia"
+
+        - criteria_id: "EUVOLEMIC_INTRINSIC"
+          description: "Maintenance fluids for euvolemic intrinsic AKI"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "volume_status"
+                operator: "=="
+                threshold: "euvolemic"
+
+              - match_logic: "ANY_OF"
+                conditions:
+                  - parameter: "fena"
+                    operator: ">"
+                    threshold: 2.0
+
+                  - parameter: "muddy_brown_casts"
+                    operator: "=="
+                    threshold: true
+
+          primary_medication:
+            name: "Maintenance IV Fluids (0.9% NS or LR)"
+            dose: "75-100"
+            dose_unit: "mL/hour"
+            route: "IV"
+            frequency: "Continuous"
+            administration_instructions: "Maintenance rate to match insensible losses + urine output; avoid over-resuscitation"
+
+        - criteria_id: "HYPERVOLEMIC_OVERLOAD"
+          description: "IV diuretics for volume overload"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "volume_status"
+                operator: "=="
+                threshold: "hypervolemic"
+
+              - parameter: "pulmonary_edema"
+                operator: "=="
+                threshold: true
+
+              - parameter: "peripheral_edema_grade"
+                operator: ">="
+                threshold: 2
+
+          primary_medication:
+            name: "Furosemide"
+            dose: "40-80"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "Every 6-12 hours OR continuous infusion"
+            administration_instructions: "AVOID fluids; give IV diuretics (furosemide 40-80 mg IV); fluid restriction; monitor for response"
+            indication: "Volume overload with AKI"
+
+  # ==========================================================
+  # TREAT UNDERLYING CAUSE
+  # ==========================================================
+  - action_id: "AKI-ACT-006"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "CRITICAL"
+    sequence_number: 6
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 120
+
+    clinical_assessment:
+      assessment_type: "Identify and treat underlying AKI cause"
+      frequency: "Immediate assessment and targeted treatment"
+      specific_parameters:
+        - "Pre-renal: IV fluid resuscitation"
+        - "Post-renal: Foley catheter (BPH), urology consult (stones/tumors)"
+        - "Sepsis: Antibiotics, source control, fluids"
+        - "ATN: Supportive care, avoid nephrotoxins"
+        - "AIN: Stop offending drug, consider steroids"
+        - "Cardiorenal: Optimize cardiac output, diuretics"
+
+  # ==========================================================
+  # ELECTROLYTE MANAGEMENT
+  # ==========================================================
+  - action_id: "AKI-ACT-007"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 7
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "MILD_HYPERKALEMIA"
+          description: "Medical management for mild hyperkalemia"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "potassium"
+                operator: ">="
+                threshold: 5.5
+                unit: "mEq/L"
+
+              - parameter: "potassium"
+                operator: "<"
+                threshold: 6.0
+                unit: "mEq/L"
+
+          primary_medication:
+            name: "Loop Diuretic + Potassium Binder"
+            dose: "Furosemide 40 mg IV + Sodium zirconium cyclosilicate 10g PO TID OR Patiromer 8.4g PO daily"
+            dose_unit: "mg/g"
+            route: "IV/PO"
+            frequency: "Once/TID"
+            administration_instructions: "Stop K sources (ACE-I/ARB, K supplements); loop diuretic; potassium binder"
+
+        - criteria_id: "MODERATE_HYPERKALEMIA"
+          description: "Insulin/glucose + albuterol for moderate hyperkalemia"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "potassium"
+                operator: ">="
+                threshold: 6.0
+                unit: "mEq/L"
+
+              - parameter: "potassium"
+                operator: "<="
+                threshold: 6.5
+                unit: "mEq/L"
+
+          primary_medication:
+            name: "Insulin/Glucose + Albuterol + Furosemide"
+            dose: "10 units regular insulin IV + 1 amp D50 (or 25g glucose) + Albuterol 10-20 mg nebulized + Furosemide 40 mg IV"
+            dose_unit: "units/mg"
+            route: "IV/Nebulized"
+            frequency: "Once, then reassess"
+            administration_instructions: "Insulin/glucose shifts K intracellularly; albuterol also shifts K; furosemide promotes K excretion"
+
+        - criteria_id: "SEVERE_HYPERKALEMIA"
+          description: "Emergent treatment + prepare for dialysis"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "potassium"
+                operator: ">"
+                threshold: 6.5
+                unit: "mEq/L"
+
+              - parameter: "ecg_hyperkalemia_changes"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Calcium Gluconate + Insulin/Glucose + Albuterol + Prepare for Dialysis"
+            dose: "Calcium gluconate 1g IV (cardioprotection) + Insulin/glucose + Albuterol + Furosemide; STAT nephrology for dialysis"
+            dose_unit: "g/units/mg"
+            route: "IV/Nebulized"
+            frequency: "STAT"
+            administration_instructions: "STAT calcium gluconate for cardioprotection; insulin/glucose + albuterol; prepare for emergent dialysis if refractory"
+            indication: "Severe hyperkalemia with ECG changes - emergent treatment needed"
+
+        - criteria_id: "SEVERE_METABOLIC_ACIDOSIS"
+          description: "Sodium bicarbonate for severe acidosis"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "ph"
+                operator: "<"
+                threshold: 7.20
+
+              - parameter: "bicarbonate"
+                operator: "<"
+                threshold: 10
+                unit: "mEq/L"
+
+          primary_medication:
+            name: "Sodium Bicarbonate"
+            dose: "50-100"
+            dose_unit: "mEq"
+            route: "IV"
+            frequency: "Over 1-2 hours, repeat as needed"
+            administration_instructions: "50-100 mEq IV over 1-2 hours; repeat to maintain pH >7.20; consider dialysis if refractory"
+
+  # ==========================================================
+  # MONITORING
+  # ==========================================================
+  - action_id: "AKI-ACT-008"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "HIGH"
+    sequence_number: 8
+
+    timing:
+      window: "IMMEDIATE"
+
+    clinical_assessment:
+      assessment_type: "Continuous monitoring and strict intake/output"
+      frequency: "Hourly urine output; daily weights; CMP daily or q6-12h if Stage 3; continuous telemetry if hyperkalemia"
+      specific_parameters:
+        - "Urine output (goal >0.5 mL/kg/hr)"
+        - "Daily weights"
+        - "Electrolytes (K, Na, Cl, HCO3) daily or q6-12h"
+        - "Creatinine and BUN daily or q6-12h"
+
+  # ==========================================================
+  # NEPHROLOGY CONSULTATION
+  # ==========================================================
+  - action_id: "AKI-ACT-009"
+    type: "CONSULTATION"
+    priority: "HIGH"
+    sequence_number: 9
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 240
+
+    consultation:
+      specialty: "NEPHROLOGY"
+      urgency: "URGENT"
+      reason: "Stage 3 AKI, life-threatening complications, or dialysis consideration"
+      specific_questions:
+        - "Need for renal replacement therapy (dialysis)?"
+        - "Kidney biopsy indicated?"
+        - "Complex AKI management guidance?"
+
+# ============================================================
+# TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "AKI-TIME-001"
+    bundle_name: "Hour-1 Initial AKI Management"
+    description: "Critical interventions within 1 hour"
+    offset_minutes: 60
+    critical: true
+
+    required_actions:
+      - action_id: "AKI-ACT-001"
+        description: "CMP and urinalysis obtained"
+      - action_id: "AKI-ACT-004"
+        description: "Nephrotoxins stopped"
+      - action_id: "AKI-ACT-005"
+        description: "Volume assessment and fluid management initiated"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 30
+      critical_alert_at_minutes: 0
+      missed_deadline_message: "Hour-1 AKI bundle not completed"
+
+  - constraint_id: "AKI-TIME-002"
+    bundle_name: "Hour-4 Renal Imaging"
+    description: "Renal ultrasound to exclude obstruction"
+    offset_minutes: 240
+    critical: false
+
+    required_actions:
+      - action_id: "AKI-ACT-003"
+        description: "Renal ultrasound completed"
+
+# ============================================================
+# CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "AKI-CONTRA-001"
+    condition_description: "Volume overload for IV fluid resuscitation"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pulmonary_edema"
+          operator: "=="
+          threshold: true
+
+        - parameter: "volume_overload"
+          operator: "=="
+          threshold: true
+
+        - parameter: "jugular_venous_distension"
+          operator: ">"
+          threshold: 8
+          unit: "cm"
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "AKI-ACT-005"
+
+    alternative_action:
+      action_id: "AKI-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "IV Diuretics (Furosemide)"
+        dose: "40-80 mg IV"
+        route: "IV"
+        frequency: "Every 6-12 hours"
+      rationale: "AVOID fluids in volume overload; give diuretics; fluid restriction"
+
+  - contraindication_id: "AKI-CONTRA-002"
+    condition_description: "Severe metabolic alkalosis for bicarbonate therapy"
+
+    trigger_condition:
+      parameter: "ph"
+      operator: ">"
+      threshold: 7.50
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "AKI-ACT-007"
+
+    alternative_action:
+      action_id: "AKI-ALT-002"
+      type: "CLINICAL_ASSESSMENT"
+      medication:
+        name: "HOLD BICARBONATE"
+      rationale: "Do not give bicarbonate if alkalotic; focus on treating AKI"
+
+# ============================================================
+# MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "AKI-MON-001"
+    parameter: "serum_creatinine"
+
+    target_range:
+      min: null
+      max: null
+      unit: "mg/dL"
+
+    frequency: "Daily (or q6-12h if Stage 3 AKI)"
+    duration_hours: 168
+
+    alert_condition:
+      parameter: "creatinine_rising"
+      operator: "=="
+      threshold: true
+
+  - monitoring_id: "AKI-MON-002"
+    parameter: "potassium"
+
+    target_range:
+      min: 3.5
+      max: 5.0
+      unit: "mEq/L"
+
+    frequency: "Daily (or q6-12h if hyperkalemia or severe acidosis)"
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "potassium"
+          operator: ">"
+          threshold: 6.0
+        - parameter: "potassium"
+          operator: "<"
+          threshold: 3.5
+
+  - monitoring_id: "AKI-MON-003"
+    parameter: "urine_output"
+
+    target_range:
+      min: 0.5
+      max: null
+      unit: "mL/kg/hr"
+
+    frequency: "Hourly (use foley catheter for accuracy)"
+
+    alert_condition:
+      parameter: "urine_output"
+      operator: "<"
+      threshold: 0.5
+      unit: "mL/kg/hr"
+
+  - monitoring_id: "AKI-MON-004"
+    parameter: "daily_weights"
+
+    target_range:
+      min: null
+      max: null
+      unit: "kg"
+
+    frequency: "Daily (same time, same scale)"
+
+  - monitoring_id: "AKI-MON-005"
+    parameter: "ecg"
+
+    target_range:
+      min: null
+      max: null
+      unit: null
+
+    frequency: "STAT if K >6.0, then PRN for hyperkalemia"
+
+    alert_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "peaked_t_waves"
+          operator: "=="
+          threshold: true
+        - parameter: "widened_qrs"
+          operator: "=="
+          threshold: true
+
+# ============================================================
+# SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "ELDERLY"
+    description: "Patients ≥65 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "AKI-ACT-005"
+        modification_type: "CAUTION"
+        rationale: "Elderly have reduced renal reserve and higher risk of volume overload"
+
+        new_parameters:
+          dose: "Smaller fluid boluses (250-500 mL); frequent reassessment; lower threshold for diuretics"
+          monitoring: "Close monitoring for volume overload; lung exam after each bolus"
+
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients with AKI"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "AKI-ACT-004"
+        modification_type: "CONTRAINDICATION"
+        rationale: "ACE-I/ARB contraindicated in pregnancy; avoid nephrotoxic medications"
+
+        contraindications:
+          - "ACE inhibitors (teratogenic)"
+          - "ARBs (teratogenic)"
+          - "NSAIDs in third trimester (premature ductus arteriosus closure)"
+
+        new_parameters:
+          monitoring: "Obstetrics consultation; fetal monitoring; avoid teratogenic medications"
+
+  - population_id: "ESRD_ON_DIALYSIS"
+    description: "End-stage renal disease already on chronic dialysis"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "esrd_on_dialysis"
+          operator: "=="
+          threshold: true
+
+        - parameter: "egfr"
+          operator: "<"
+          threshold: 15
+          unit: "mL/min/1.73m2"
+
+    modifications:
+      - action_id: "AKI-ACT-005"
+        modification_type: "CAUTION"
+        rationale: "ESRD patients have minimal residual renal function; avoid aggressive fluids"
+
+        new_parameters:
+          fluid_management: "Minimal IV fluids; dialysis for volume removal; strict fluid restriction"
+          monitoring: "Nephrology consultation for dialysis adjustment"
+
+  - population_id: "HEART_FAILURE"
+    description: "Concurrent decompensated heart failure (cardiorenal syndrome)"
+
+    inclusion_criteria:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "ejection_fraction"
+          operator: "<"
+          threshold: 40
+
+        - parameter: "heart_failure_decompensation"
+          operator: "=="
+          threshold: true
+
+    modifications:
+      - action_id: "AKI-ACT-005"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Cardiorenal syndrome requires careful volume management"
+
+        new_parameters:
+          fluid_management: "Small boluses (250-500 mL) if hypovolemic; early diuretics if hypervolemic; optimize cardiac output"
+          monitoring: "BNP/NT-proBNP; cardiology consultation; may need inotropes or ultrafiltration"
+
+# ============================================================
+# ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "AKI-ESC-001"
+    description: "Nephrology consultation for Stage 3 AKI or complications"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "aki_stage"
+          operator: ">="
+          threshold: 3
+
+        - parameter: "potassium"
+          operator: ">"
+          threshold: 6.5
+          unit: "mEq/L"
+
+        - parameter: "ph"
+          operator: "<"
+          threshold: 7.10
+
+        - parameter: "volume_overload_unresponsive"
+          operator: "=="
+          threshold: true
+
+        - parameter: "uremic_complications"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Stage 3 AKI or life-threatening complications require nephrology expertise"
+
+      specialist_consultation:
+        - specialty: "NEPHROLOGY"
+          urgency: "URGENT"
+          specific_question: "Need for renal replacement therapy (dialysis)? Kidney biopsy indicated?"
+
+  - rule_id: "AKI-ESC-002"
+    description: "Emergent dialysis for life-threatening complications"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "potassium"
+              operator: ">"
+              threshold: 7.0
+              unit: "mEq/L"
+            - parameter: "refractory_to_medical_management"
+              operator: "=="
+              threshold: true
+
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "ph"
+              operator: "<"
+              threshold: 7.10
+            - parameter: "unresponsive_to_bicarbonate"
+              operator: "=="
+              threshold: true
+
+        - parameter: "pulmonary_edema_unresponsive_to_diuretics"
+          operator: "=="
+          threshold: true
+
+        - parameter: "uremic_pericarditis"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "IMMEDIATE_TRANSFER"
+      urgency: "STAT"
+      rationale: "Life-threatening complication requiring emergent dialysis"
+
+      required_interventions:
+        - "STAT nephrology consultation"
+        - "ICU transfer"
+        - "Emergent hemodialysis preparation"
+        - "Continuous cardiac monitoring"
+
+      specialist_consultation:
+        - specialty: "NEPHROLOGY"
+          urgency: "STAT"
+          specific_question: "Emergent dialysis for life-threatening AKI complication"
+
+  - rule_id: "AKI-ESC-003"
+    description: "Urology consultation for obstructive uropathy"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "hydronephrosis_bilateral"
+          operator: "=="
+          threshold: true
+
+        - parameter: "urinary_retention"
+          operator: "=="
+          threshold: true
+
+        - parameter: "post_renal_obstruction"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Obstructive uropathy requires urgent relief"
+
+      required_interventions:
+        - "Foley catheter (if bladder outlet obstruction)"
+        - "Urology consultation for ureteral stent or nephrostomy tube"
+
+      specialist_consultation:
+        - specialty: "UROLOGY"
+          urgency: "URGENT"
+          specific_question: "Relief of urinary obstruction (catheter, stent, nephrostomy)"
+
+# ============================================================
+# DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "AKI-DE-ESC-001"
+    description: "AKI recovery - restart ACE-I/ARB"
+
+    conditions:
+      - parameter: "creatinine_at_baseline"
+        operator: "=="
+        threshold: true
+
+      - parameter: "volume_status"
+        operator: "=="
+        threshold: "euvolemic"
+
+      - parameter: "stable_renal_function_48h"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Restart ACE-I/ARB at low dose (e.g., lisinopril 2.5-5 mg daily, losartan 25 mg daily); monitor renal function in 3-5 days"
+      rationale: "AKI resolved; safe to restart GDMT"
+
+# ============================================================
+# OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "AKI-OUT-001"
+      metric: "renal_recovery"
+      target: "Creatinine return to baseline or stabilized within 7-14 days"
+      benchmark_source: "KDIGO 2024"
+
+    - outcome_id: "AKI-OUT-002"
+      metric: "dialysis_avoidance"
+      target: ">70% avoid dialysis for Stage 1-2 AKI"
+      benchmark_source: "KDIGO 2024"
+
+  process_measures:
+    - measure_id: "AKI-PROC-001"
+      description: "Time to nephrotoxin discontinuation"
+      target: "<30 minutes from AKI recognition"
+
+    - measure_id: "AKI-PROC-002"
+      description: "Renal imaging completion"
+      target: "<4 hours for suspected obstruction"
+
+  balancing_measures:
+    - measure_id: "AKI-BAL-001"
+      description: "Progression to Stage 3 AKI"
+      target: "<30% of Stage 1-2 progress to Stage 3"
+
+# ============================================================
+# METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: false
+  estimated_implementation_time_minutes: 60
+  review_cycle_months: 12
+
+  tags:
+    - "renal-emergency"
+    - "electrolyte-management"
+    - "nephrotoxin-avoidance"
+    - "dialysis-consideration"
+
+  related_protocols:
+    - protocol_id: "CKD-MANAGEMENT-001"
+      relationship: "COMPLEMENTS"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Enhanced to CDS-compliant format"
+        - "Added confidence scoring and medication_selection"
+        - "Added special populations (elderly, pregnancy, ESRD, heart failure)"
+        - "Added escalation rules and time constraints"
+        - "Added dialysis indications and emergent escalation"
+
+# ============================================================
+# END OF AKI MANAGEMENT PROTOCOL
+# ============================================================

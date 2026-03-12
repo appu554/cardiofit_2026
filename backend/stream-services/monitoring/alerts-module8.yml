@@ -1,0 +1,309 @@
+# Prometheus Alerting Rules for Module 8 Storage Projectors
+# Define alerts for health, performance, and error conditions
+
+groups:
+  - name: module8_projector_alerts
+    interval: 30s
+    rules:
+      # ==========================================
+      # Consumer Lag Alerts
+      # ==========================================
+      - alert: HighConsumerLag
+        expr: projector_consumer_lag > 1000
+        for: 5m
+        labels:
+          severity: warning
+          component: projector
+        annotations:
+          summary: "High consumer lag on {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} has consumer lag of {{ $value }} messages (>1000) for more than 5 minutes"
+
+      - alert: CriticalConsumerLag
+        expr: projector_consumer_lag > 10000
+        for: 5m
+        labels:
+          severity: critical
+          component: projector
+        annotations:
+          summary: "Critical consumer lag on {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} has consumer lag of {{ $value }} messages (>10000) for more than 5 minutes"
+
+      # ==========================================
+      # Error Rate Alerts
+      # ==========================================
+      - alert: HighErrorRate
+        expr: |
+          rate(projector_messages_failed_total[5m]) /
+          rate(projector_messages_consumed_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: projector
+        annotations:
+          summary: "High error rate on {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} has error rate >5% for more than 5 minutes"
+
+      - alert: CriticalErrorRate
+        expr: |
+          rate(projector_messages_failed_total[5m]) /
+          rate(projector_messages_consumed_total[5m]) > 0.20
+        for: 2m
+        labels:
+          severity: critical
+          component: projector
+        annotations:
+          summary: "Critical error rate on {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} has error rate >20% for more than 2 minutes"
+
+      # ==========================================
+      # Service Health Alerts
+      # ==========================================
+      - alert: ServiceDown
+        expr: up{job="module8-projectors"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: projector
+        annotations:
+          summary: "Projector service down: {{ $labels.instance }}"
+          description: "Projector {{ $labels.instance }} has been down for more than 2 minutes"
+
+      - alert: HealthCheckFailing
+        expr: projector_health_check == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: projector
+        annotations:
+          summary: "Health check failing for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} health check has been failing for more than 2 minutes"
+
+      # ==========================================
+      # Performance Alerts
+      # ==========================================
+      - alert: SlowBatchProcessing
+        expr: |
+          histogram_quantile(0.95,
+            rate(projector_batch_processing_seconds_bucket[5m])
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: projector
+        annotations:
+          summary: "Slow batch processing on {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} p95 batch processing time is {{ $value }}s (>5s) for more than 5 minutes"
+
+      - alert: LowThroughput
+        expr: rate(projector_messages_processed_total[5m]) < 10
+        for: 10m
+        labels:
+          severity: warning
+          component: projector
+        annotations:
+          summary: "Low throughput on {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} processing <10 messages/sec for more than 10 minutes"
+
+      # ==========================================
+      # Database Connection Alerts
+      # ==========================================
+      - alert: DatabaseConnectionPoolExhaustion
+        expr: |
+          (database_connection_pool_active / database_connection_pool_max) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database connection pool exhaustion for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} database connection pool is >80% utilized for more than 5 minutes"
+
+      - alert: DatabaseConnectionErrors
+        expr: rate(database_connection_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database connection errors for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} experiencing database connection errors ({{ $value }}/sec) for more than 5 minutes"
+
+      # ==========================================
+      # Query Performance Alerts
+      # ==========================================
+      - alert: SlowDatabaseQueries
+        expr: |
+          histogram_quantile(0.95,
+            rate(database_query_duration_seconds_bucket[5m])
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Slow database queries for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} p95 query duration is {{ $value }}s (>1s) for more than 5 minutes"
+
+      - alert: CriticalSlowQueries
+        expr: |
+          histogram_quantile(0.95,
+            rate(database_query_duration_seconds_bucket[5m])
+          ) > 5
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Critical slow database queries for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} p95 query duration is {{ $value }}s (>5s) for more than 2 minutes"
+
+      # ==========================================
+      # Resource Usage Alerts
+      # ==========================================
+      - alert: HighMemoryUsage
+        expr: |
+          (process_memory_bytes{job="module8-projectors"} /
+           node_memory_MemTotal_bytes) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High memory usage for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} using >80% of system memory for more than 10 minutes"
+
+      - alert: HighCPUUsage
+        expr: |
+          rate(process_cpu_seconds_total{job="module8-projectors"}[5m]) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High CPU usage for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} using >80% CPU for more than 10 minutes"
+
+      # ==========================================
+      # DLQ Alerts
+      # ==========================================
+      - alert: HighDLQRate
+        expr: rate(projector_dlq_messages_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: dlq
+        annotations:
+          summary: "High DLQ rate for {{ $labels.projector }}"
+          description: "Projector {{ $labels.projector }} sending >10 messages/sec to DLQ for more than 5 minutes"
+
+      - alert: DLQBacklog
+        expr: |
+          kafka_topic_partition_current_offset{topic=~".*dlq.*"} -
+          kafka_consumergroup_current_offset{topic=~".*dlq.*"} > 1000
+        for: 30m
+        labels:
+          severity: warning
+          component: dlq
+        annotations:
+          summary: "DLQ backlog growing"
+          description: "DLQ topic has >1000 unprocessed messages for more than 30 minutes"
+
+      # ==========================================
+      # Data Quality Alerts
+      # ==========================================
+      - alert: DataInconsistency
+        expr: |
+          abs(
+            projector_events_stored_total{projector="postgresql"} -
+            projector_events_stored_total{projector="ups"}
+          ) > 100
+        for: 15m
+        labels:
+          severity: warning
+          component: data_quality
+        annotations:
+          summary: "Data inconsistency detected between PostgreSQL and UPS"
+          description: "PostgreSQL and UPS event counts differ by >100 for more than 15 minutes"
+
+  # ==========================================
+  # Database-Specific Alerts
+  # ==========================================
+  - name: database_alerts
+    interval: 30s
+    rules:
+      - alert: PostgreSQLDown
+        expr: up{job="postgresql"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL has been down for more than 2 minutes"
+
+      - alert: MongoDBDown
+        expr: up{job="mongodb"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "MongoDB database is down"
+          description: "MongoDB has been down for more than 2 minutes"
+
+      - alert: ElasticsearchDown
+        expr: up{job="elasticsearch"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Elasticsearch is down"
+          description: "Elasticsearch has been down for more than 2 minutes"
+
+      - alert: ClickHouseDown
+        expr: up{job="clickhouse"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "ClickHouse is down"
+          description: "ClickHouse has been down for more than 2 minutes"
+
+      - alert: Neo4jDown
+        expr: up{job="neo4j"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Neo4j is down"
+          description: "Neo4j has been down for more than 2 minutes"
+
+  # ==========================================
+  # Kafka Alerts
+  # ==========================================
+  - name: kafka_alerts
+    interval: 30s
+    rules:
+      - alert: KafkaTopicLag
+        expr: |
+          sum by (topic) (kafka_consumergroup_lag) > 50000
+        for: 10m
+        labels:
+          severity: warning
+          component: kafka
+        annotations:
+          summary: "High lag on Kafka topic {{ $labels.topic }}"
+          description: "Topic {{ $labels.topic }} has lag of {{ $value }} messages for more than 10 minutes"
+
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: kafka
+        annotations:
+          summary: "Kafka broker is down"
+          description: "Kafka broker has been down for more than 2 minutes"

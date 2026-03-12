@@ -1,0 +1,233 @@
+# P_OSA_SCREENING - HPI Node Definition
+# Bayesian differential for obstructive sleep apnoea screening in patients
+# with confirmed resistant hypertension. STOP-BANG inspired question set.
+# Triggered by: RESISTANT_HTN_DETECTED event from KB-20.
+# Output: posterior probability of OSA → feeds KB-23 sleep study referral.
+
+node_id: P_OSA_SCREENING
+version: "1.0.0"
+description: "Obstructive sleep apnoea differential in resistant hypertension patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "AASM_OSA_2017"
+
+# Trigger event — this node activates on resistant HTN detection
+trigger_event: "RESISTANT_HTN_DETECTED"
+
+# Differentials with per-stratum priors (F-05)
+# OSA prevalence in resistant HTN: 60-83% (Logan et al., J Hypertens 2001).
+# Priors calibrated for DM+HTN+CKD strata where OSA is highly prevalent.
+differentials:
+  - id: OBSTRUCTIVE_SLEEP_APNOEA
+    label: "Obstructive Sleep Apnoea"
+    population_reference: "Logan AG, J Hypertens 2001; Pedrosa RP, Chest 2011"
+    priors:
+      DM_ONLY: 0.35
+      DM_HTN: 0.55
+      DM_HTN_CKD: 0.60
+
+  - id: SIMPLE_SNORING
+    label: "Simple (Primary) Snoring without Apnoea"
+    population_reference: "AASM Clinical Practice Guideline 2017"
+    priors:
+      DM_ONLY: 0.30
+      DM_HTN: 0.20
+      DM_HTN_CKD: 0.15
+
+  - id: NOCTURNAL_HYPOXIA_OTHER
+    label: "Nocturnal Hypoxia from Other Cause (obesity hypoventilation, COPD overlap)"
+    population_reference: "ATS Clinical Practice Guideline 2019"
+    priors:
+      DM_ONLY: 0.10
+      DM_HTN: 0.10
+      DM_HTN_CKD: 0.12
+
+  - id: OTHER
+    label: "Other (central sleep apnoea, no sleep-disordered breathing)"
+    population_reference: "ESH Position Paper on OSA and HTN 2022"
+    priors:
+      DM_ONLY: 0.25
+      DM_HTN: 0.15
+      DM_HTN_CKD: 0.13
+
+# STOP-BANG inspired likelihood ratios for discriminating features
+questions:
+  - question_id: Q01
+    text_en: "Does the patient's bed partner report loud snoring (audible through closed door)?"
+    text_hi: "क्या रोगी के साथी ने तेज खर्राटों की शिकायत की है (बंद दरवाजे से भी सुनाई दे)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, loud snoring reported"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 3.5
+          SIMPLE_SNORING: 2.5
+          NOCTURNAL_HYPOXIA_OTHER: 1.2
+          OTHER: 0.3
+      - value: "NO"
+        label_en: "No loud snoring"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 0.4
+          SIMPLE_SNORING: 0.5
+          NOCTURNAL_HYPOXIA_OTHER: 0.8
+          OTHER: 1.8
+      - value: "UNKNOWN"
+        label_en: "Patient sleeps alone / unknown"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 1.0
+          SIMPLE_SNORING: 1.0
+          NOCTURNAL_HYPOXIA_OTHER: 1.0
+          OTHER: 1.0
+
+  - question_id: Q02
+    text_en: "Have apnoea episodes (breathing stops during sleep) been observed by anyone?"
+    text_hi: "क्या किसी ने नींद के दौरान सांस रुकने (एपनोइया) के प्रकरण देखे हैं?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_OBSERVED"
+        label_en: "Yes, witnessed apnoea episodes"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 5.0
+          SIMPLE_SNORING: 0.3
+          NOCTURNAL_HYPOXIA_OTHER: 1.5
+          OTHER: 0.4
+      - value: "NO"
+        label_en: "No observed apnoea"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 0.5
+          SIMPLE_SNORING: 1.5
+          NOCTURNAL_HYPOXIA_OTHER: 0.8
+          OTHER: 1.3
+
+  - question_id: Q03
+    text_en: "Does the patient experience excessive daytime sleepiness (falling asleep during conversations, driving, or at work)?"
+    text_hi: "क्या रोगी को दिन में अत्यधिक नींद आती है (बातचीत, गाड़ी चलाते, या काम के दौरान सो जाना)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_SEVERE"
+        label_en: "Yes, severe daytime sleepiness (Epworth > 10 equivalent)"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 3.8
+          SIMPLE_SNORING: 0.5
+          NOCTURNAL_HYPOXIA_OTHER: 2.5
+          OTHER: 0.4
+      - value: "YES_MILD"
+        label_en: "Mild daytime tiredness"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 1.5
+          SIMPLE_SNORING: 1.0
+          NOCTURNAL_HYPOXIA_OTHER: 1.5
+          OTHER: 0.8
+      - value: "NO"
+        label_en: "No daytime sleepiness"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 0.5
+          SIMPLE_SNORING: 1.2
+          NOCTURNAL_HYPOXIA_OTHER: 0.6
+          OTHER: 1.5
+
+  - question_id: Q04
+    text_en: "Does the patient complain of morning headaches?"
+    text_hi: "क्या रोगी को सुबह उठने पर सिरदर्द की शिकायत है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES"
+        label_en: "Yes, frequent morning headaches"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 2.5
+          SIMPLE_SNORING: 0.8
+          NOCTURNAL_HYPOXIA_OTHER: 2.0
+          OTHER: 0.6
+      - value: "NO"
+        label_en: "No morning headaches"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 0.7
+          SIMPLE_SNORING: 1.1
+          NOCTURNAL_HYPOXIA_OTHER: 0.7
+          OTHER: 1.2
+
+  - question_id: Q05
+    text_en: "Is the patient's BMI greater than 35 kg/m2?"
+    text_hi: "क्या रोगी का BMI 35 kg/m2 से अधिक है?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_BMI_GT_35"
+        label_en: "Yes, BMI > 35"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 3.0
+          SIMPLE_SNORING: 1.5
+          NOCTURNAL_HYPOXIA_OTHER: 2.5
+          OTHER: 0.4
+      - value: "BMI_30_35"
+        label_en: "BMI 30-35"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 1.8
+          SIMPLE_SNORING: 1.2
+          NOCTURNAL_HYPOXIA_OTHER: 1.5
+          OTHER: 0.7
+      - value: "BMI_LT_30"
+        label_en: "BMI < 30"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 0.5
+          SIMPLE_SNORING: 0.9
+          NOCTURNAL_HYPOXIA_OTHER: 0.6
+          OTHER: 1.6
+      - value: "UNKNOWN"
+        label_en: "BMI not available"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 1.0
+          SIMPLE_SNORING: 1.0
+          NOCTURNAL_HYPOXIA_OTHER: 1.0
+          OTHER: 1.0
+
+  - question_id: Q06
+    text_en: "Is the patient's neck circumference greater than 40 cm (if measured)?"
+    text_hi: "क्या रोगी की गर्दन की परिधि 40 cm से अधिक है (यदि मापी गई हो)?"
+    answer_type: CATEGORICAL
+    options:
+      - value: "YES_GT_40"
+        label_en: "Yes, neck circumference > 40 cm"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 3.2
+          SIMPLE_SNORING: 1.3
+          NOCTURNAL_HYPOXIA_OTHER: 1.5
+          OTHER: 0.4
+      - value: "NO"
+        label_en: "Neck circumference <= 40 cm"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 0.5
+          SIMPLE_SNORING: 0.9
+          NOCTURNAL_HYPOXIA_OTHER: 0.7
+          OTHER: 1.5
+      - value: "NOT_MEASURED"
+        label_en: "Not measured"
+        likelihood_ratios:
+          OBSTRUCTIVE_SLEEP_APNOEA: 1.0
+          SIMPLE_SNORING: 1.0
+          NOCTURNAL_HYPOXIA_OTHER: 1.0
+          OTHER: 1.0
+
+# Clinical actions by posterior threshold
+# STOP-BANG equivalent scoring: >=5 positive = high risk, >=3 = intermediate
+actions:
+  - threshold: 0.60
+    action: "SLEEP_STUDY_REFERRAL"
+    description: "Posterior > 0.60 for OSA → Refer for polysomnography or home sleep apnoea test (HSAT). High pre-test probability — STOP-BANG >= 5 equivalent."
+  - threshold: 0.35
+    action: "WATCHFUL_WAITING"
+    description: "Moderate probability. STOP-BANG >= 3 equivalent. Consider validated questionnaire (Epworth Sleepiness Scale). Re-assess if symptoms worsen or BP remains resistant."
+  - threshold: 0.15
+    action: "CONTINUE_MONITORING"
+    description: "Low OSA probability. Continue standard resistant HTN workup. Re-evaluate if nocturnal symptoms develop."
+
+# Cross-node triggers
+cross_node_triggers:
+  - condition: "NOCTURNAL_HYPOXIA_OTHER posterior > 0.30"
+    trigger_node: "P02_DYSPNEA"
+    rationale: "Nocturnal hypoxia from non-OSA cause with moderate posterior warrants dyspnoea differential for heart failure or COPD assessment."

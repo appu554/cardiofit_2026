@@ -1,0 +1,229 @@
+syntax = "proto3";
+
+package clinical_hub.cae.v1;
+option go_package = "safety-gateway-platform/proto";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Clinical Assertion Engine gRPC Service
+service ClinicalReasoningService {
+  // Generate comprehensive clinical assertions for a patient context
+  rpc GenerateAssertions(ClinicalAssertionRequest) returns (ClinicalAssertionResponse);
+  
+  // Check medication interactions
+  rpc CheckMedicationInteractions(MedicationInteractionRequest) returns (MedicationInteractionResponse);
+  
+  // Calculate medication dosing
+  rpc CalculateDosing(DosingCalculationRequest) returns (DosingCalculationResponse);
+  
+  // Check contraindications
+  rpc CheckContraindications(ContraindicationRequest) returns (ContraindicationResponse);
+  
+  // Health check for service monitoring
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Stream real-time assertions (for complex reasoning)
+  rpc StreamAssertions(ClinicalAssertionRequest) returns (stream ClinicalAssertionUpdate);
+}
+
+// Clinical assertion request
+message ClinicalAssertionRequest {
+  string patient_id = 1;
+  string correlation_id = 2;
+  repeated string medication_ids = 3;
+  repeated string condition_ids = 4;
+  google.protobuf.Struct patient_context = 5;
+  AssertionPriority priority = 6;
+  repeated string reasoner_types = 7; // ["interaction", "dosing", "contraindication"]
+}
+
+// Clinical assertion response
+message ClinicalAssertionResponse {
+  string request_id = 1;
+  string correlation_id = 2;
+  repeated ClinicalAssertion assertions = 3;
+  AssertionMetadata metadata = 4;
+  google.protobuf.Timestamp generated_at = 5;
+}
+
+// Individual clinical assertion
+message ClinicalAssertion {
+  string assertion_id = 1;
+  string reasoner_type = 2;
+  AssertionSeverity severity = 3;
+  string message = 4;
+  string description = 5;
+  repeated string affected_medications = 6;
+  repeated string affected_conditions = 7;
+  google.protobuf.Struct evidence = 8;
+  float confidence_score = 9;
+  repeated string recommendations = 10;
+  google.protobuf.Struct metadata = 11;
+}
+
+// Assertion metadata
+message AssertionMetadata {
+  string reasoner_version = 1;
+  string knowledge_version = 2;
+  int32 processing_time_ms = 3;
+  repeated string warnings = 4;
+}
+
+// Medication interaction request
+message MedicationInteractionRequest {
+  string patient_id = 1;
+  repeated string medication_ids = 2;
+  google.protobuf.Struct patient_context = 3;
+}
+
+// Medication interaction response
+message MedicationInteractionResponse {
+  repeated MedicationInteraction interactions = 1;
+  AssertionMetadata metadata = 2;
+}
+
+// Medication interaction
+message MedicationInteraction {
+  string interaction_id = 1;
+  repeated string medication_ids = 2;
+  InteractionSeverity severity = 3;
+  string description = 4;
+  string mechanism = 5;
+  repeated string recommendations = 6;
+  google.protobuf.Struct evidence = 7;
+}
+
+// Dosing calculation request
+message DosingCalculationRequest {
+  string patient_id = 1;
+  string medication_id = 2;
+  google.protobuf.Struct patient_context = 3;
+  string indication = 4;
+}
+
+// Dosing calculation response
+message DosingCalculationResponse {
+  DosingRecommendation recommendation = 1;
+  repeated DosingAlert alerts = 2;
+  AssertionMetadata metadata = 3;
+}
+
+// Dosing recommendation
+message DosingRecommendation {
+  string medication_id = 1;
+  string recommended_dose = 2;
+  string frequency = 3;
+  string route = 4;
+  string duration = 5;
+  repeated string adjustments = 6;
+  google.protobuf.Struct rationale = 7;
+}
+
+// Dosing alert
+message DosingAlert {
+  string alert_id = 1;
+  AlertSeverity severity = 2;
+  string message = 3;
+  string recommendation = 4;
+}
+
+// Contraindication request
+message ContraindicationRequest {
+  string patient_id = 1;
+  repeated string medication_ids = 2;
+  repeated string condition_ids = 3;
+  google.protobuf.Struct patient_context = 4;
+}
+
+// Contraindication response
+message ContraindicationResponse {
+  repeated Contraindication contraindications = 1;
+  AssertionMetadata metadata = 2;
+}
+
+// Contraindication
+message Contraindication {
+  string contraindication_id = 1;
+  string medication_id = 2;
+  string condition_id = 3;
+  ContraindicationSeverity severity = 4;
+  string description = 5;
+  repeated string recommendations = 6;
+  google.protobuf.Struct evidence = 7;
+}
+
+// Health check request
+message HealthCheckRequest {
+  string service = 1;
+}
+
+// Health check response
+message HealthCheckResponse {
+  CAEHealthStatus status = 1;
+  string message = 2;
+  google.protobuf.Struct details = 3;
+}
+
+// Clinical assertion update (for streaming)
+message ClinicalAssertionUpdate {
+  string update_id = 1;
+  string correlation_id = 2;
+  UpdateType update_type = 3;
+  ClinicalAssertion assertion = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// Enums
+enum AssertionPriority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_NORMAL = 2;
+  PRIORITY_HIGH = 3;
+  PRIORITY_CRITICAL = 4;
+}
+
+enum AssertionSeverity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_LOW = 2;
+  SEVERITY_MODERATE = 3;
+  SEVERITY_HIGH = 4;
+  SEVERITY_CRITICAL = 5;
+}
+
+enum InteractionSeverity {
+  INTERACTION_SEVERITY_UNSPECIFIED = 0;
+  INTERACTION_SEVERITY_MINOR = 1;
+  INTERACTION_SEVERITY_MODERATE = 2;
+  INTERACTION_SEVERITY_MAJOR = 3;
+  INTERACTION_SEVERITY_CONTRAINDICATED = 4;
+}
+
+enum AlertSeverity {
+  ALERT_SEVERITY_UNSPECIFIED = 0;
+  ALERT_SEVERITY_INFO = 1;
+  ALERT_SEVERITY_WARNING = 2;
+  ALERT_SEVERITY_CRITICAL = 3;
+}
+
+enum ContraindicationSeverity {
+  CONTRAINDICATION_SEVERITY_UNSPECIFIED = 0;
+  CONTRAINDICATION_SEVERITY_RELATIVE = 1;
+  CONTRAINDICATION_SEVERITY_ABSOLUTE = 2;
+}
+
+enum CAEHealthStatus {
+  CAE_HEALTH_STATUS_UNSPECIFIED = 0;
+  CAE_HEALTH_STATUS_HEALTHY = 1;
+  CAE_HEALTH_STATUS_UNHEALTHY = 2;
+  CAE_HEALTH_STATUS_DEGRADED = 3;
+}
+
+enum UpdateType {
+  UPDATE_TYPE_UNSPECIFIED = 0;
+  UPDATE_TYPE_ASSERTION_ADDED = 1;
+  UPDATE_TYPE_ASSERTION_UPDATED = 2;
+  UPDATE_TYPE_ASSERTION_REMOVED = 3;
+  UPDATE_TYPE_PROCESSING_COMPLETE = 4;
+}

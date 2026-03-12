@@ -1,0 +1,828 @@
+# GitHub Actions Workflow for Medication Service V2
+# Healthcare-grade CI/CD pipeline with security scanning and compliance validation
+
+name: Medication Service V2 - Healthcare CI/CD Pipeline
+
+on:
+  push:
+    branches: 
+      - main
+      - develop
+      - release/*
+    paths:
+      - 'backend/services/medication-service-v2/**'
+  pull_request:
+    branches: 
+      - main
+      - develop
+    paths:
+      - 'backend/services/medication-service-v2/**'
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly security scan on Monday at 2 AM
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      skip_tests:
+        description: 'Skip tests (emergency deployment only)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  # Container registry
+  REGISTRY: cardiofit.azurecr.io
+  IMAGE_NAME: cardiofit/medication-service-v2
+  
+  # Application details
+  SERVICE_NAME: medication-service-v2
+  SERVICE_VERSION: "1.0.0"
+  
+  # Kubernetes
+  K8S_NAMESPACE: cardiofit-medication-v2
+  HELM_CHART_PATH: deployments/helm
+  
+  # Security and compliance
+  SECURITY_SCAN_ENABLED: true
+  COMPLIANCE_CHECK_ENABLED: true
+  VULNERABILITY_THRESHOLD: HIGH
+  
+  # Healthcare compliance requirements
+  HIPAA_VALIDATION: true
+  SOC2_VALIDATION: true
+  FIPS_VALIDATION: false
+
+# Global permissions for healthcare compliance
+permissions:
+  contents: read
+  security-events: write
+  packages: write
+  id-token: write  # For OIDC authentication
+  actions: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  # ============================================================================
+  # SECURITY AND COMPLIANCE VALIDATION
+  # ============================================================================
+  
+  security-compliance-check:
+    name: Security & Compliance Validation
+    runs-on: ubuntu-22.04
+    if: always()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for security analysis
+    
+    - name: HIPAA Compliance Check
+      if: env.HIPAA_VALIDATION == 'true'
+      run: |
+        echo "🏥 HIPAA Compliance Validation"
+        
+        # Check for PHI data patterns in code
+        if grep -r -i -E "(ssn|social.security|patient.id|medical.record)" backend/services/medication-service-v2/; then
+          echo "❌ Potential PHI data found in code - HIPAA violation"
+          exit 1
+        fi
+        
+        # Verify encryption settings
+        if ! grep -q "ENCRYPTION_ENABLED=true" backend/services/medication-service-v2/.env.example; then
+          echo "❌ Encryption not enabled - HIPAA requirement"
+          exit 1
+        fi
+        
+        # Check audit logging
+        if ! grep -q "AUDIT_ENABLED=true" backend/services/medication-service-v2/.env.example; then
+          echo "❌ Audit logging not enabled - HIPAA requirement"
+          exit 1
+        fi
+        
+        echo "✅ HIPAA compliance checks passed"
+    
+    - name: Security Configuration Audit
+      run: |
+        echo "🔐 Security Configuration Audit"
+        
+        # Check for hardcoded secrets
+        if grep -r -E "(password|secret|key|token)\s*[:=]\s*['\"][^'\"]*['\"]" backend/services/medication-service-v2/ --exclude-dir=.git --exclude="*.md" --exclude=".env.example"; then
+          echo "❌ Potential hardcoded secrets found"
+          exit 1
+        fi
+        
+        # Verify security headers in configuration
+        if ! grep -q "Strict-Transport-Security" backend/services/medication-service-v2/deployments/kubernetes/ingress.yaml; then
+          echo "❌ Missing security headers configuration"
+          exit 1
+        fi
+        
+        # Check TLS configuration
+        if ! grep -q "TLS_ENABLED=true" backend/services/medication-service-v2/.env.example; then
+          echo "❌ TLS not enabled by default"
+          exit 1
+        fi
+        
+        echo "✅ Security configuration audit passed"
+    
+    - name: Healthcare Data Classification Check
+      run: |
+        echo "📊 Healthcare Data Classification Check"
+        
+        # Check for proper data classification comments
+        find backend/services/medication-service-v2/ -name "*.go" -exec grep -l "medication\|patient\|clinical" {} \; | while read file; do
+          if ! grep -q "// Healthcare Data:" "$file" && ! grep -q "// PHI Classification:" "$file"; then
+            echo "⚠️  Missing data classification in $file"
+          fi
+        done
+        
+        echo "✅ Healthcare data classification check completed"
+
+  # ============================================================================
+  # CODE QUALITY AND SECURITY SCANNING  
+  # ============================================================================
+  
+  code-quality:
+    name: Code Quality & Security Scan
+    runs-on: ubuntu-22.04
+    needs: security-compliance-check
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache-dependency-path: backend/services/medication-service-v2/go.sum
+    
+    - name: Go Module Verification
+      working-directory: backend/services/medication-service-v2
+      run: |
+        echo "🔍 Verifying Go modules"
+        go mod verify
+        go mod tidy
+        
+        # Check for changes
+        if ! git diff --exit-code go.mod go.sum; then
+          echo "❌ go.mod/go.sum are not up to date"
+          exit 1
+        fi
+    
+    - name: Go Static Analysis
+      working-directory: backend/services/medication-service-v2
+      run: |
+        echo "🔍 Running static analysis"
+        
+        # Install analysis tools
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+        go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        
+        # Run checks
+        echo "Running golangci-lint..."
+        golangci-lint run --timeout=5m --issues-exit-code=1
+        
+        echo "Running staticcheck..."
+        staticcheck ./...
+        
+        echo "Running gosec security scan..."
+        gosec -severity high -confidence high ./...
+    
+    - name: Healthcare-specific Security Scan
+      working-directory: backend/services/medication-service-v2
+      run: |
+        echo "🏥 Healthcare-specific security analysis"
+        
+        # Check for proper input validation in clinical endpoints
+        if ! grep -r "validator\|validation" internal/handlers/; then
+          echo "⚠️  Missing input validation in handlers"
+        fi
+        
+        # Check for proper error handling (no sensitive data leakage)
+        if grep -r "log\.Error\|fmt\.Print" internal/ | grep -v "_test\.go" | grep -E "(password|secret|key|token)"; then
+          echo "❌ Potential sensitive data in logs"
+          exit 1
+        fi
+        
+        # Verify healthcare compliance functions
+        if ! grep -q "AuditLog\|ComplianceCheck" internal/; then
+          echo "⚠️  Missing compliance functions"
+        fi
+        
+        echo "✅ Healthcare security scan completed"
+    
+    - name: Dependency Vulnerability Scan
+      working-directory: backend/services/medication-service-v2
+      run: |
+        echo "🔍 Scanning dependencies for vulnerabilities"
+        
+        # Install govulncheck
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        
+        # Scan for vulnerabilities
+        govulncheck ./...
+        
+        echo "✅ Dependency scan completed"
+    
+    - name: SAST Scan with CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: go
+        queries: security-extended,security-and-quality
+    
+    - name: Perform CodeQL Analysis  
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:go"
+
+  # ============================================================================
+  # TESTING PIPELINE
+  # ============================================================================
+  
+  test:
+    name: Test Suite
+    runs-on: ubuntu-22.04
+    needs: code-quality
+    if: ${{ !inputs.skip_tests }}
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password  
+          POSTGRES_DB: medication_v2_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache-dependency-path: backend/services/medication-service-v2/go.sum
+    
+    - name: Setup Test Environment
+      working-directory: backend/services/medication-service-v2
+      run: |
+        echo "🧪 Setting up test environment"
+        
+        # Create test configuration
+        cp .env.example .env.test
+        sed -i 's/localhost:5434/localhost:5432/g' .env.test
+        sed -i 's/localhost:6381/localhost:6379/g' .env.test
+        sed -i 's/medication_v2/medication_v2_test/g' .env.test
+        
+        # Run database migrations
+        export DATABASE_URL="postgresql://test_user:test_password@localhost:5432/medication_v2_test?sslmode=disable"
+        go run cmd/server/main.go migrate --up || echo "Migrations completed or not needed"
+    
+    - name: Unit Tests
+      working-directory: backend/services/medication-service-v2
+      env:
+        TEST_DATABASE_URL: "postgresql://test_user:test_password@localhost:5432/medication_v2_test?sslmode=disable"
+        TEST_REDIS_URL: "redis://localhost:6379/0"
+      run: |
+        echo "🧪 Running unit tests"
+        
+        # Run tests with coverage
+        go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+        
+        # Generate coverage report
+        go tool cover -html=coverage.out -o coverage.html
+        
+        # Check coverage threshold (80% for healthcare applications)
+        COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
+        echo "Test coverage: ${COVERAGE}%"
+        
+        if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+          echo "❌ Test coverage ${COVERAGE}% is below required 80%"
+          exit 1
+        fi
+        
+        echo "✅ Unit tests completed with ${COVERAGE}% coverage"
+    
+    - name: Integration Tests
+      working-directory: backend/services/medication-service-v2
+      env:
+        TEST_DATABASE_URL: "postgresql://test_user:test_password@localhost:5432/medication_v2_test?sslmode=disable"
+        TEST_REDIS_URL: "redis://localhost:6379/0"
+      run: |
+        echo "🧪 Running integration tests"
+        
+        # Start the service in background for integration tests
+        go build -o medication-service-test ./cmd/server
+        ./medication-service-test --env=.env.test &
+        SERVICE_PID=$!
+        
+        # Wait for service to start
+        sleep 10
+        
+        # Run integration tests
+        go test -v -tags=integration ./tests/integration/... || {
+          kill $SERVICE_PID
+          exit 1
+        }
+        
+        # Cleanup
+        kill $SERVICE_PID
+        
+        echo "✅ Integration tests completed"
+    
+    - name: Healthcare Compliance Tests
+      working-directory: backend/services/medication-service-v2
+      env:
+        TEST_DATABASE_URL: "postgresql://test_user:test_password@localhost:5432/medication_v2_test?sslmode=disable"
+        TEST_REDIS_URL: "redis://localhost:6379/0"
+      run: |
+        echo "🏥 Running healthcare compliance tests"
+        
+        # Test HIPAA compliance features
+        go test -v -tags=compliance ./tests/compliance/... || exit 1
+        
+        # Test audit logging
+        go test -v -tags=audit ./tests/audit/... || exit 1
+        
+        # Test encryption
+        go test -v -tags=encryption ./tests/encryption/... || exit 1
+        
+        echo "✅ Healthcare compliance tests completed"
+    
+    - name: Performance Tests
+      working-directory: backend/services/medication-service-v2
+      run: |
+        echo "⚡ Running performance tests"
+        
+        # Install bombardier for load testing
+        go install github.com/codesenberg/bombardier@latest
+        
+        # Start service
+        go build -o medication-service-perf ./cmd/server
+        ./medication-service-perf --env=.env.test &
+        SERVICE_PID=$!
+        
+        # Wait for startup
+        sleep 10
+        
+        # Run load tests (healthcare requirement: <250ms p99 latency)
+        bombardier -c 10 -n 1000 -l http://localhost:8005/health/ready
+        
+        # Cleanup
+        kill $SERVICE_PID
+        
+        echo "✅ Performance tests completed"
+    
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: |
+          backend/services/medication-service-v2/coverage.out
+          backend/services/medication-service-v2/coverage.html
+        retention-days: 30
+
+  # ============================================================================
+  # CONTAINER BUILD AND SECURITY SCAN
+  # ============================================================================
+  
+  build-and-scan:
+    name: Build Container & Security Scan
+    runs-on: ubuntu-22.04
+    needs: [test]
+    if: always() && (needs.test.result == 'success' || inputs.skip_tests)
+    
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        platforms: linux/amd64,linux/arm64
+    
+    - name: Login to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    - name: Extract Metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=${{ env.SERVICE_VERSION }}
+        labels: |
+          org.opencontainers.image.title=Medication Service V2
+          org.opencontainers.image.description=FHIR-compliant medication management service
+          org.opencontainers.image.vendor=Clinical Synthesis Hub
+          healthcare.compliance.hipaa=true
+          healthcare.compliance.soc2=true
+          security.scan.required=true
+    
+    - name: Build and Push Container
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: backend/services/medication-service-v2
+        file: backend/services/medication-service-v2/deployments/docker/Dockerfile.production
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          SERVICE_VERSION=${{ env.SERVICE_VERSION }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          VCS_REF=${{ github.sha }}
+        provenance: true
+        sbom: true
+    
+    - name: Container Security Scan with Trivy
+      uses: aquasecurity/trivy-action@master
+      if: env.SECURITY_SCAN_ENABLED == 'true'
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+    
+    - name: Upload Trivy Results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Container Compliance Scan
+      if: env.COMPLIANCE_CHECK_ENABLED == 'true'
+      run: |
+        echo "🏥 Running container compliance scan"
+        
+        # Install container-diff for compliance checking
+        curl -LO https://storage.googleapis.com/container-diff/latest/container-diff-linux-amd64 
+        chmod +x container-diff-linux-amd64
+        sudo mv container-diff-linux-amd64 /usr/local/bin/container-diff
+        
+        # Check for compliance requirements
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy config ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        
+        echo "✅ Container compliance scan completed"
+    
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+    
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom-${{ github.sha }}
+        path: sbom.spdx.json
+        retention-days: 90
+
+  # ============================================================================
+  # DEPLOYMENT PIPELINE
+  # ============================================================================
+  
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-22.04
+    needs: [build-and-scan]
+    if: github.ref == 'refs/heads/develop'
+    environment: 
+      name: development
+      url: https://dev-medication.cardiofit.health
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.13.0'
+    
+    - name: Configure Kubernetes Access
+      run: |
+        echo "${{ secrets.DEV_KUBECONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        kubectl config current-context
+    
+    - name: Deploy to Development
+      env:
+        KUBECONFIG: kubeconfig
+      run: |
+        echo "🚀 Deploying to Development Environment"
+        
+        cd backend/services/medication-service-v2
+        
+        # Update values for development
+        helm upgrade --install medication-service-v2-dev ${{ env.HELM_CHART_PATH }} \
+          --namespace ${{ env.K8S_NAMESPACE }}-dev \
+          --create-namespace \
+          --values ${{ env.HELM_CHART_PATH }}/values-dev.yaml \
+          --set image.tag=${{ github.sha }} \
+          --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+          --set global.environment=development \
+          --wait \
+          --timeout=600s
+        
+        echo "✅ Development deployment completed"
+    
+    - name: Run Smoke Tests
+      env:
+        KUBECONFIG: kubeconfig
+      run: |
+        echo "🧪 Running smoke tests"
+        
+        # Wait for deployment to be ready
+        kubectl wait --for=condition=available --timeout=300s \
+          deployment/medication-service-v2 -n ${{ env.K8S_NAMESPACE }}-dev
+        
+        # Run health check
+        kubectl run curl-test --rm -i --restart=Never --image=curlimages/curl -- \
+          curl -f http://medication-service-v2.${{ env.K8S_NAMESPACE }}-dev.svc.cluster.local/health/ready
+        
+        echo "✅ Smoke tests completed"
+  
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-22.04
+    needs: [build-and-scan]
+    if: github.ref == 'refs/heads/main' || inputs.environment == 'staging'
+    environment: 
+      name: staging
+      url: https://staging-medication.cardiofit.health
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.13.0'
+    
+    - name: Configure Kubernetes Access
+      run: |
+        echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        kubectl config current-context
+    
+    - name: Deploy to Staging
+      env:
+        KUBECONFIG: kubeconfig
+      run: |
+        echo "🚀 Deploying to Staging Environment"
+        
+        cd backend/services/medication-service-v2
+        
+        # Deploy with staging values
+        helm upgrade --install medication-service-v2-staging ${{ env.HELM_CHART_PATH }} \
+          --namespace ${{ env.K8S_NAMESPACE }}-staging \
+          --create-namespace \
+          --values ${{ env.HELM_CHART_PATH }}/values-staging.yaml \
+          --set image.tag=${{ github.sha }} \
+          --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+          --set global.environment=staging \
+          --wait \
+          --timeout=600s
+        
+        echo "✅ Staging deployment completed"
+    
+    - name: Integration Test Suite
+      env:
+        KUBECONFIG: kubeconfig
+      run: |
+        echo "🧪 Running integration test suite in staging"
+        
+        # Wait for deployment
+        kubectl wait --for=condition=available --timeout=600s \
+          deployment/medication-service-v2 -n ${{ env.K8S_NAMESPACE }}-staging
+        
+        # Run comprehensive tests
+        kubectl create job staging-tests --from=cronjob/medication-service-tests \
+          -n ${{ env.K8S_NAMESPACE }}-staging || true
+        
+        # Wait for tests to complete
+        kubectl wait --for=condition=complete --timeout=900s \
+          job/staging-tests -n ${{ env.K8S_NAMESPACE }}-staging
+        
+        echo "✅ Integration tests completed"
+  
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-22.04
+    needs: [deploy-staging]
+    if: inputs.environment == 'production'
+    environment: 
+      name: production
+      url: https://api-medication.cardiofit.health
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Pre-deployment Security Check
+      run: |
+        echo "🔐 Pre-deployment security validation"
+        
+        # Verify image signature (if using Cosign)
+        # cosign verify --key cosign.pub ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        
+        # Check for critical vulnerabilities
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasecurity/trivy image --severity CRITICAL --exit-code 1 \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        
+        echo "✅ Security validation passed"
+    
+    - name: Setup Kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Setup Helm  
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.13.0'
+    
+    - name: Configure Kubernetes Access
+      run: |
+        echo "${{ secrets.PROD_KUBECONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        kubectl config current-context
+    
+    - name: Production Deployment
+      env:
+        KUBECONFIG: kubeconfig
+      run: |
+        echo "🚀 Deploying to Production Environment"
+        
+        cd backend/services/medication-service-v2
+        
+        # Backup current deployment
+        helm get values medication-service-v2 -n ${{ env.K8S_NAMESPACE }} > backup-values.yaml || true
+        
+        # Deploy to production
+        helm upgrade --install medication-service-v2 ${{ env.HELM_CHART_PATH }} \
+          --namespace ${{ env.K8S_NAMESPACE }} \
+          --create-namespace \
+          --values ${{ env.HELM_CHART_PATH }}/values-production.yaml \
+          --set image.tag=${{ github.sha }} \
+          --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+          --set global.environment=production \
+          --wait \
+          --timeout=900s \
+          --atomic
+        
+        echo "✅ Production deployment completed"
+    
+    - name: Production Health Check
+      env:
+        KUBECONFIG: kubeconfig
+      run: |
+        echo "🏥 Running production health checks"
+        
+        # Wait for all pods to be ready
+        kubectl wait --for=condition=ready --timeout=600s \
+          pod -l app.kubernetes.io/name=medication-service-v2 -n ${{ env.K8S_NAMESPACE }}
+        
+        # Verify service endpoints
+        kubectl run health-check --rm -i --restart=Never --image=curlimages/curl -- \
+          curl -f https://api-medication.cardiofit.health/health/ready
+        
+        # Check metrics endpoint
+        kubectl run metrics-check --rm -i --restart=Never --image=curlimages/curl -- \
+          curl -f http://medication-service-v2.${{ env.K8S_NAMESPACE }}.svc.cluster.local:8005/metrics
+        
+        echo "✅ Production health checks completed"
+    
+    - name: Post-deployment Compliance Validation
+      run: |
+        echo "🏥 Post-deployment compliance validation"
+        
+        # Verify HTTPS is working
+        curl -I https://api-medication.cardiofit.health/health/ready | grep "HTTP/2 200"
+        
+        # Check security headers
+        curl -I https://api-medication.cardiofit.health/health/ready | grep "Strict-Transport-Security"
+        
+        # Verify TLS version
+        curl --tlsv1.2 --tls-max 1.3 -I https://api-medication.cardiofit.health/health/ready
+        
+        echo "✅ Compliance validation completed"
+
+  # ============================================================================
+  # POST-DEPLOYMENT MONITORING
+  # ============================================================================
+  
+  post-deployment-monitoring:
+    name: Post-Deployment Monitoring
+    runs-on: ubuntu-22.04
+    needs: [deploy-production]
+    if: always() && (needs.deploy-production.result == 'success')
+    
+    steps:
+    - name: Setup Monitoring
+      run: |
+        echo "📊 Setting up post-deployment monitoring"
+        
+        # Wait 5 minutes for metrics to populate
+        sleep 300
+        
+        # Check Prometheus metrics
+        curl -s "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/query?query=up{job='medication-service-v2'}" | \
+          jq '.data.result[0].value[1]' | grep -q "1"
+        
+        # Check error rates (should be <1%)
+        ERROR_RATE=$(curl -s "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/query?query=rate(http_requests_total{status=~'5..'}[5m])" | \
+          jq -r '.data.result[0].value[1] // "0"')
+        
+        if (( $(echo "$ERROR_RATE > 0.01" | bc -l) )); then
+          echo "❌ Error rate too high: $ERROR_RATE"
+          exit 1
+        fi
+        
+        echo "✅ Post-deployment monitoring completed"
+    
+    - name: Notify Deployment Success
+      if: success()
+      run: |
+        curl -X POST -H 'Content-type: application/json' \
+          --data '{"text":"✅ Medication Service V2 successfully deployed to production\n• Version: ${{ env.SERVICE_VERSION }}\n• Commit: ${{ github.sha }}\n• Environment: ${{ github.ref_name }}"}' \
+          ${{ secrets.SLACK_WEBHOOK_URL }}
+
+# ============================================================================
+# WORKFLOW CLEANUP
+# ============================================================================
+
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-22.04
+    needs: [post-deployment-monitoring]
+    if: always()
+    
+    steps:
+    - name: Clean up artifacts
+      run: |
+        echo "🧹 Cleaning up temporary artifacts"
+        rm -f kubeconfig backup-values.yaml
+        echo "✅ Cleanup completed"

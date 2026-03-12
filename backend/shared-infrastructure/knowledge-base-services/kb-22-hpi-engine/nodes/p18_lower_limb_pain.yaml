@@ -1,0 +1,229 @@
+# P18 Lower Limb Pain - HPI Node Definition
+# Bayesian differential for leg pain in cardio-renal-metabolic patients.
+# DM+HTN patients have elevated risk for PAD, neuropathy, and gout.
+# Triggered by: patient self-report of leg/calf pain via KB-21.
+# Output: posterior probabilities -> feeds KB-23 workup card.
+
+node_id: P18_LOWER_LIMB_PAIN
+version: "1.0.0"
+description: "Lower limb pain differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Strata supported
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket -- open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ESC_PAD_2024; ADA_Neuropathy_2024; NICE_DVT_NG158; ACR_Gout_2020"
+
+# ============================================================================
+# 6 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.90 (0.10 reserved for G15 Other bucket).
+# PAD prevalence 20-30% in DM+HTN (Fowkes FGR, Lancet 2013).
+# Diabetic neuropathy 50% lifetime risk (Pop-Busui R, Diabetes Care 2017).
+# ============================================================================
+differentials:
+  - id: PERIPHERAL_ARTERIAL_DISEASE
+    label: "Peripheral Arterial Disease (intermittent claudication)"
+    population_reference: "ESC PAD 2024; Fowkes FGR, Lancet 2013; AHA/ACC PAD 2016"
+    priors:
+      DM_HTN_base: 0.28
+
+  - id: DIABETIC_NEUROPATHY
+    label: "Diabetic Peripheral Neuropathy"
+    population_reference: "ADA Standards 2025; Pop-Busui R, Diabetes Care 2017"
+    priors:
+      DM_HTN_base: 0.25
+
+  - id: DVT
+    label: "Deep Vein Thrombosis"
+    population_reference: "NICE NG158 2020; Wells PS, Lancet 2003"
+    priors:
+      DM_HTN_base: 0.10
+
+  - id: MUSCULOSKELETAL
+    label: "Musculoskeletal (strain, osteoarthritis, tendinopathy)"
+    population_reference: "BMJ Best Practice Leg Pain 2024"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: GOUT
+    label: "Gout (acute or chronic tophaceous)"
+    population_reference: "ACR Gout Guidelines 2020; Bardin T, Lancet 2010"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: OTHER
+    label: "Other (spinal stenosis, Baker cyst, cellulitis)"
+    population_reference: "BMJ Best Practice Leg Pain 2024"
+    priors:
+      DM_HTN_base: 0.10
+
+# Safety floors -- posterior never drops below these values
+safety_floors:
+  DVT: 0.05
+  PERIPHERAL_ARTERIAL_DISEASE: 0.04
+
+# ============================================================================
+# Safety Triggers (F-02 parallel evaluation)
+# ============================================================================
+safety_triggers:
+  - flag_id: RF01_ACUTE_LIMB_ISCHAEMIA
+    severity: IMMEDIATE
+    trigger_expression: "PERIPHERAL_ARTERIAL_DISEASE.posterior > 0.45 AND Q006 == YES"
+    recommended_action: "Suspected acute limb ischaemia (pain + pallor/pulselessness). Urgent vascular surgery referral. 6-hour window for revascularisation. SNOMED: 233938001"
+
+  - flag_id: RF02_DVT_RISK
+    severity: URGENT
+    trigger_expression: "DVT.posterior > 0.35"
+    recommended_action: "Elevated DVT probability. Apply Wells criteria formally. If score >= 2, arrange urgent D-dimer and compression ultrasound. Start anticoagulation if confirmed. SNOMED: 128053003"
+
+# ============================================================================
+# 8 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# ============================================================================
+questions:
+  - id: Q001
+    text_en: "Does the leg pain come on when walking a certain distance and stop when you rest?"
+    text_hi: "Kya pair mein dard kuch doori chalne par aata hai aur rukne par theek ho jaata hai?"
+    mandatory: true
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 5.50
+      DIABETIC_NEUROPATHY: 0.60
+      DVT: 0.50
+      MUSCULOSKELETAL: 1.30
+      GOUT: 0.40
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.30
+      DIABETIC_NEUROPATHY: 1.20
+      DVT: 1.15
+      MUSCULOSKELETAL: 0.90
+      GOUT: 1.10
+
+  - id: Q002
+    text_en: "Do you feel burning, tingling, or numbness in your feet, especially at night?"
+    text_hi: "Kya aapke pairon mein jalan, jhunjhunahat, ya sunn hona mehsoos hota hai, khaaskar raat mein?"
+    mandatory: true
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.80
+      DIABETIC_NEUROPATHY: 5.00
+      DVT: 0.40
+      MUSCULOSKELETAL: 0.50
+      GOUT: 0.50
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 1.10
+      DIABETIC_NEUROPATHY: 0.30
+      DVT: 1.15
+      MUSCULOSKELETAL: 1.15
+      GOUT: 1.10
+
+  - id: Q003
+    text_en: "Is one leg swollen, warm, or red compared to the other?"
+    text_hi: "Kya ek pair doosre ki tulna mein sooja hua, garam, ya laal hai?"
+    mandatory: true
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.50
+      DIABETIC_NEUROPATHY: 0.40
+      DVT: 6.00
+      MUSCULOSKELETAL: 0.80
+      GOUT: 2.00
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 1.10
+      DIABETIC_NEUROPATHY: 1.10
+      DVT: 0.25
+      MUSCULOSKELETAL: 1.05
+      GOUT: 0.70
+
+  - id: Q004
+    text_en: "Did the pain start suddenly in a single joint, especially the big toe, ankle, or knee?"
+    text_hi: "Kya dard achanak ek joint mein shuru hua, khaaskar angoothe, takhne, ya ghutne mein?"
+    mandatory: false
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.40
+      DIABETIC_NEUROPATHY: 0.50
+      DVT: 0.60
+      MUSCULOSKELETAL: 1.20
+      GOUT: 5.50
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 1.10
+      DIABETIC_NEUROPATHY: 1.10
+      DVT: 1.10
+      MUSCULOSKELETAL: 0.95
+      GOUT: 0.30
+
+  - id: Q005
+    text_en: "Is the pain worse when standing or after prolonged sitting, and relieved by movement?"
+    text_hi: "Kya dard khade rehne ya der tak baithne par badhta hai aur hilne-dulne se kam hota hai?"
+    mandatory: false
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.60
+      DIABETIC_NEUROPATHY: 0.70
+      DVT: 1.30
+      MUSCULOSKELETAL: 3.50
+      GOUT: 0.80
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 1.10
+      DIABETIC_NEUROPATHY: 1.10
+      DVT: 0.85
+      MUSCULOSKELETAL: 0.40
+      GOUT: 1.05
+
+  - id: Q006
+    text_en: "Have you noticed your foot becoming pale, cold, or losing sensation?"
+    text_hi: "Kya aapne dekha hai ki pair peela, thanda, ya sunn ho raha hai?"
+    mandatory: true
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 4.50
+      DIABETIC_NEUROPATHY: 2.00
+      DVT: 0.60
+      MUSCULOSKELETAL: 0.30
+      GOUT: 0.40
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.40
+      DIABETIC_NEUROPATHY: 0.60
+      DVT: 1.10
+      MUSCULOSKELETAL: 1.15
+      GOUT: 1.10
+
+  - id: Q007
+    text_en: "Have you been immobile recently (bed rest, long travel, surgery in the past 4 weeks)?"
+    text_hi: "Kya aap haal mein lamba samay tak hilne-dulne se roke gaye the (bed rest, lamba safar, surgery)?"
+    mandatory: false
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.80
+      DIABETIC_NEUROPATHY: 0.60
+      DVT: 4.50
+      MUSCULOSKELETAL: 1.20
+      GOUT: 0.90
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 1.05
+      DIABETIC_NEUROPATHY: 1.10
+      DVT: 0.40
+      MUSCULOSKELETAL: 0.95
+      GOUT: 1.05
+
+  - id: Q008
+    text_en: "Are you taking a diuretic (like hydrochlorothiazide or furosemide)?"
+    text_hi: "Kya aap diuretic dawai le rahe hain (jaise hydrochlorothiazide ya furosemide)?"
+    mandatory: false
+    lr_positive:
+      PERIPHERAL_ARTERIAL_DISEASE: 0.90
+      DIABETIC_NEUROPATHY: 0.80
+      DVT: 0.90
+      MUSCULOSKELETAL: 0.80
+      GOUT: 3.50
+    lr_negative:
+      PERIPHERAL_ARTERIAL_DISEASE: 1.05
+      DIABETIC_NEUROPATHY: 1.05
+      DVT: 1.05
+      MUSCULOSKELETAL: 1.05
+      GOUT: 0.50

@@ -1,0 +1,211 @@
+# P19 Skin Changes - HPI Node Definition
+# Bayesian differential for dermatological changes in CRM patients.
+# DM patients have 30-70% lifetime risk of skin complications (Duff M, J Diabetes 2015).
+# CKD pruritus affects 40-70% of dialysis patients (Rayner HC, NDT 2017).
+# Triggered by: patient self-report of skin changes via KB-21.
+# Output: posterior probabilities -> feeds KB-23 workup card.
+
+node_id: P19_SKIN_CHANGES
+version: "1.0.0"
+description: "Dermatological changes differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Strata supported
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket -- open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "ADA_Standards_2025; KDIGO_CKD_2024; BAD_Drug_Eruption_2022"
+
+# ============================================================================
+# 6 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.90 (0.10 reserved for G15 Other bucket).
+# ============================================================================
+differentials:
+  - id: DIABETIC_DERMOPATHY
+    label: "Diabetic Dermopathy (shin spots, necrobiosis lipoidica)"
+    population_reference: "Duff M, J Diabetes Metab Disord 2015; ADA Standards 2025"
+    priors:
+      DM_HTN_base: 0.25
+
+  - id: CKD_PRURITUS
+    label: "CKD-Associated Pruritus (uraemic itch)"
+    population_reference: "KDIGO CKD 2024; Rayner HC, NDT 2017; Mettang T, Kidney Int 2015"
+    priors:
+      DM_HTN_base: 0.20
+
+  - id: DRUG_REACTION
+    label: "Drug Reaction (rash, urticaria, photosensitivity)"
+    population_reference: "BAD Drug Eruption Guidelines 2022; Bigby M, JAMA 2001"
+    priors:
+      DM_HTN_base: 0.18
+
+  - id: PERIPHERAL_CYANOSIS
+    label: "Peripheral Cyanosis / Livedo (vascular insufficiency)"
+    population_reference: "ESC PAD 2024; Creager MA, NEJM 2012"
+    priors:
+      DM_HTN_base: 0.10
+
+  - id: FUNGAL_INFECTION
+    label: "Fungal Infection (tinea, candidiasis)"
+    population_reference: "ADA Standards 2025; Gupta AK, JAAD 2017"
+    priors:
+      DM_HTN_base: 0.17
+
+  - id: OTHER
+    label: "Other (eczema, psoriasis, contact dermatitis)"
+    population_reference: "BMJ Best Practice Skin Lesions 2024"
+    priors:
+      DM_HTN_base: 0.10
+
+# Safety floors -- posterior never drops below these values
+safety_floors:
+  DRUG_REACTION: 0.05
+  PERIPHERAL_CYANOSIS: 0.03
+
+# ============================================================================
+# Safety Triggers (F-02 parallel evaluation)
+# ============================================================================
+safety_triggers:
+  - flag_id: RF01_SEVERE_DRUG_REACTION
+    severity: IMMEDIATE
+    trigger_expression: "DRUG_REACTION.posterior > 0.40 AND Q004 == YES"
+    recommended_action: "Possible severe drug reaction (SJS/TEN prodrome or DRESS). Stop suspected drug immediately. Assess for mucosal involvement, fever, systemic signs. Urgent dermatology referral. SNOMED: 403195005"
+
+  - flag_id: RF02_CRITICAL_LIMB_ISCHAEMIA_SKIN
+    severity: URGENT
+    trigger_expression: "PERIPHERAL_CYANOSIS.posterior > 0.35"
+    recommended_action: "Peripheral cyanosis may indicate critical limb ischaemia or severe PAD. Check ABI, distal pulses, and capillary refill. Vascular surgery consult if signs of tissue loss. SNOMED: 233938001"
+
+# ============================================================================
+# 7 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# ============================================================================
+questions:
+  - id: Q001
+    text_en: "Are the skin changes mainly on your shins or lower legs as dark, round, scaly patches?"
+    text_hi: "Kya chamdi mein badlaav zyaadatar pindiyon ya neeche ke pair par kaale, gol, papdi-daar dhabbe hain?"
+    mandatory: true
+    lr_positive:
+      DIABETIC_DERMOPATHY: 5.50
+      CKD_PRURITUS: 0.60
+      DRUG_REACTION: 0.40
+      PERIPHERAL_CYANOSIS: 1.20
+      FUNGAL_INFECTION: 0.50
+    lr_negative:
+      DIABETIC_DERMOPATHY: 0.30
+      CKD_PRURITUS: 1.10
+      DRUG_REACTION: 1.15
+      PERIPHERAL_CYANOSIS: 0.95
+      FUNGAL_INFECTION: 1.10
+
+  - id: Q002
+    text_en: "Is there generalised itching all over the body without a visible rash?"
+    text_hi: "Kya poore sharir mein khujli hoti hai bina kisi dikhai dene wale daane ke?"
+    mandatory: true
+    lr_positive:
+      DIABETIC_DERMOPATHY: 0.50
+      CKD_PRURITUS: 5.00
+      DRUG_REACTION: 1.20
+      PERIPHERAL_CYANOSIS: 0.40
+      FUNGAL_INFECTION: 0.50
+    lr_negative:
+      DIABETIC_DERMOPATHY: 1.10
+      CKD_PRURITUS: 0.25
+      DRUG_REACTION: 0.90
+      PERIPHERAL_CYANOSIS: 1.15
+      FUNGAL_INFECTION: 1.10
+
+  - id: Q003
+    text_en: "Did the skin changes start within a few weeks of starting a new medication?"
+    text_hi: "Kya chamdi mein badlaav nayi dawai shuru karne ke kuch hafton mein aaye?"
+    mandatory: true
+    lr_positive:
+      DIABETIC_DERMOPATHY: 0.40
+      CKD_PRURITUS: 0.60
+      DRUG_REACTION: 5.50
+      PERIPHERAL_CYANOSIS: 0.50
+      FUNGAL_INFECTION: 0.40
+    lr_negative:
+      DIABETIC_DERMOPATHY: 1.10
+      CKD_PRURITUS: 1.10
+      DRUG_REACTION: 0.25
+      PERIPHERAL_CYANOSIS: 1.10
+      FUNGAL_INFECTION: 1.10
+
+  - id: Q004
+    text_en: "Do you have fever, mouth sores, or painful skin with the rash?"
+    text_hi: "Kya daane ke saath bukhar, muh mein chhaale, ya chamdi mein dard hai?"
+    mandatory: true
+    lr_positive:
+      DIABETIC_DERMOPATHY: 0.30
+      CKD_PRURITUS: 0.40
+      DRUG_REACTION: 4.50
+      PERIPHERAL_CYANOSIS: 0.40
+      FUNGAL_INFECTION: 1.30
+    lr_negative:
+      DIABETIC_DERMOPATHY: 1.10
+      CKD_PRURITUS: 1.10
+      DRUG_REACTION: 0.50
+      PERIPHERAL_CYANOSIS: 1.10
+      FUNGAL_INFECTION: 0.95
+
+  - id: Q005
+    text_en: "Are the skin changes in warm, moist areas like between toes, groin, or skin folds?"
+    text_hi: "Kya chamdi mein badlaav garam, nami wali jagah jaise unglion ke beech, jaangh, ya chamdi ki talton mein hain?"
+    mandatory: false
+    lr_positive:
+      DIABETIC_DERMOPATHY: 0.50
+      CKD_PRURITUS: 0.40
+      DRUG_REACTION: 0.50
+      PERIPHERAL_CYANOSIS: 0.30
+      FUNGAL_INFECTION: 5.50
+    lr_negative:
+      DIABETIC_DERMOPATHY: 1.10
+      CKD_PRURITUS: 1.10
+      DRUG_REACTION: 1.10
+      PERIPHERAL_CYANOSIS: 1.15
+      FUNGAL_INFECTION: 0.30
+
+  - id: Q006
+    text_en: "Have you noticed your toes or fingers turning blue or purple, especially in cold weather?"
+    text_hi: "Kya aapne dekha hai ki ungliyaan ya pairon ki ungliyaan neeli ya baingani ho jaati hain, khaaskar thand mein?"
+    mandatory: false
+    lr_positive:
+      DIABETIC_DERMOPATHY: 0.40
+      CKD_PRURITUS: 0.30
+      DRUG_REACTION: 0.50
+      PERIPHERAL_CYANOSIS: 6.00
+      FUNGAL_INFECTION: 0.30
+    lr_negative:
+      DIABETIC_DERMOPATHY: 1.10
+      CKD_PRURITUS: 1.10
+      DRUG_REACTION: 1.10
+      PERIPHERAL_CYANOSIS: 0.25
+      FUNGAL_INFECTION: 1.10
+
+  - id: Q007
+    text_en: "Does the itching get worse at night or after dialysis (if applicable)?"
+    text_hi: "Kya khujli raat mein ya dialysis ke baad zyada hoti hai (agar lagoo ho)?"
+    mandatory: false
+    lr_positive:
+      DIABETIC_DERMOPATHY: 0.60
+      CKD_PRURITUS: 4.00
+      DRUG_REACTION: 0.80
+      PERIPHERAL_CYANOSIS: 0.50
+      FUNGAL_INFECTION: 0.80
+    lr_negative:
+      DIABETIC_DERMOPATHY: 1.10
+      CKD_PRURITUS: 0.40
+      DRUG_REACTION: 1.05
+      PERIPHERAL_CYANOSIS: 1.10
+      FUNGAL_INFECTION: 1.05

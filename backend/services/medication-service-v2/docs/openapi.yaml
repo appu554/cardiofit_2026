@@ -1,0 +1,1715 @@
+openapi: 3.0.3
+info:
+  title: Medication Service V2 API
+  description: |
+    Comprehensive HTTP/gRPC API for the Clinical Synthesis Hub Medication Service V2.
+    
+    This service provides:
+    - **Medication Proposal Management**: Create, manage, and validate medication proposals with clinical intelligence
+    - **Recipe Resolver**: Advanced recipe resolution with context integration and rule-based processing
+    - **Clinical Engine**: Dosage calculations, risk assessments, and safety checks powered by Rust engine
+    - **Context Gateway**: Snapshot management and clinical context operations
+    - **Workflow Orchestration**: 4-phase workflow management with state tracking
+    - **Knowledge Base Integration**: Apollo Federation client for knowledge queries
+    - **FHIR R4 Compliance**: Full FHIR R4 compliant endpoints for interoperability
+    
+    ## Authentication
+    All API endpoints require JWT bearer token authentication except for health checks.
+    
+    ## Rate Limiting
+    API requests are rate limited to 1000 requests per second globally, with per-client limits.
+    
+    ## HIPAA Compliance
+    All API operations are logged for HIPAA audit compliance with comprehensive audit trails.
+    
+    ## Performance
+    Target response times: <250ms end-to-end for 95% of requests.
+  version: 2.0.0
+  contact:
+    name: Clinical Synthesis Hub Team
+    email: support@clinicalsynthesis.com
+  license:
+    name: Proprietary
+    url: https://clinicalsynthesis.com/license
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api-dev.clinicalsynthesis.com
+    description: Development environment
+  - url: https://api.clinicalsynthesis.com
+    description: Production environment
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: health
+    description: Health check and monitoring endpoints
+  - name: medication-proposals
+    description: Medication proposal management operations
+  - name: recipes
+    description: Recipe resolver and template operations
+  - name: snapshots
+    description: Clinical context snapshot management
+  - name: workflows
+    description: Workflow orchestration operations
+  - name: clinical
+    description: Clinical engine operations (dosage, risk, safety)
+  - name: knowledge
+    description: Knowledge base and evidence operations
+  - name: fhir
+    description: FHIR R4 compliant resource operations
+  - name: admin
+    description: Administrative operations
+  - name: cache
+    description: Cache management operations
+
+paths:
+  # Health Endpoints
+  /health:
+    get:
+      tags: [health]
+      summary: Basic health check
+      description: Returns basic health status of the service
+      parameters:
+        - name: deep
+          in: query
+          description: Perform deep health check including dependencies
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+      security: []
+
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Readiness check
+      description: Returns whether the service is ready to accept traffic
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+      security: []
+
+  /health/live:
+    get:
+      tags: [health]
+      summary: Liveness check
+      description: Returns whether the service is alive
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+      security: []
+
+  # Medication Proposal Endpoints
+  /api/v1/medication-proposals:
+    post:
+      tags: [medication-proposals]
+      summary: Create medication proposal
+      description: Creates a new medication proposal with clinical context and medication details
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProposalRequest'
+      responses:
+        '201':
+          description: Proposal created successfully
+          headers:
+            X-Request-ID:
+              description: Unique request identifier
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    get:
+      tags: [medication-proposals]
+      summary: List medication proposals
+      description: Lists medication proposals with pagination and filtering options
+      parameters:
+        - name: patient_id
+          in: query
+          description: Filter by patient ID
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          description: Filter by proposal status
+          schema:
+            $ref: '#/components/schemas/ProposalStatus'
+        - name: page
+          in: query
+          description: Page number (1-based)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: Number of items per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sort_by
+          in: query
+          description: Field to sort by
+          schema:
+            type: string
+            enum: [created_at, updated_at, status]
+            default: created_at
+        - name: sort_order
+          in: query
+          description: Sort order
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: List of proposals
+          headers:
+            X-Total-Count:
+              description: Total number of proposals
+              schema:
+                type: integer
+            X-Page:
+              description: Current page number
+              schema:
+                type: integer
+            X-Page-Size:
+              description: Page size
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProposalsResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/medication-proposals/{id}:
+    get:
+      tags: [medication-proposals]
+      summary: Get medication proposal
+      description: Retrieves a specific medication proposal by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Proposal ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Proposal found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalResponse'
+        '404':
+          description: Proposal not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    put:
+      tags: [medication-proposals]
+      summary: Update medication proposal
+      description: Updates an existing medication proposal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Proposal ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProposalRequest'
+      responses:
+        '200':
+          description: Proposal updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalResponse'
+        '404':
+          description: Proposal not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    
+    delete:
+      tags: [medication-proposals]
+      summary: Delete medication proposal
+      description: Deletes a medication proposal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Proposal ID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Proposal deleted successfully
+        '404':
+          description: Proposal not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/medication-proposals/{id}/validate:
+    post:
+      tags: [medication-proposals]
+      summary: Validate medication proposal
+      description: Validates a medication proposal and marks it as validated
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Proposal ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateProposalRequest'
+      responses:
+        '200':
+          description: Proposal validated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateProposalResponse'
+        '404':
+          description: Proposal not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # Recipe Resolver Endpoints
+  /api/v1/recipes/resolve:
+    post:
+      tags: [recipes]
+      summary: Resolve recipe
+      description: Resolves a recipe based on protocol and clinical context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveRecipeRequest'
+      responses:
+        '200':
+          description: Recipe resolved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveRecipeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # Clinical Engine Endpoints
+  /api/v1/clinical/dosage/calculate:
+    post:
+      tags: [clinical]
+      summary: Calculate dosage
+      description: Calculates medication dosage based on clinical context
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CalculateDosageRequest'
+      responses:
+        '200':
+          description: Dosage calculated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CalculateDosageResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/clinical/risk/assess:
+    post:
+      tags: [clinical]
+      summary: Assess risk
+      description: Assesses clinical risk for a medication proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssessRiskRequest'
+      responses:
+        '200':
+          description: Risk assessment completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssessRiskResponse'
+
+  /api/v1/clinical/safety/check:
+    post:
+      tags: [clinical]
+      summary: Perform safety checks
+      description: Performs comprehensive safety checks for medication proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PerformSafetyChecksRequest'
+      responses:
+        '200':
+          description: Safety checks completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformSafetyChecksResponse'
+
+  # FHIR R4 Endpoints
+  /fhir/r4/MedicationRequest:
+    post:
+      tags: [fhir]
+      summary: Create FHIR MedicationRequest
+      description: Creates a new FHIR MedicationRequest resource
+      requestBody:
+        required: true
+        content:
+          application/fhir+json:
+            schema:
+              $ref: '#/components/schemas/FHIRMedicationRequest'
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FHIRMedicationRequest'
+      responses:
+        '201':
+          description: MedicationRequest created successfully
+          headers:
+            Location:
+              description: Location of created resource
+              schema:
+                type: string
+            ETag:
+              description: Resource version
+              schema:
+                type: string
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIRMedicationRequest'
+        '400':
+          description: Invalid FHIR resource
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIROperationOutcome'
+        '422':
+          description: Unprocessable entity
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIROperationOutcome'
+    
+    get:
+      tags: [fhir]
+      summary: Search FHIR MedicationRequest
+      description: Searches for FHIR MedicationRequest resources
+      parameters:
+        - name: patient
+          in: query
+          description: Patient reference
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Request status
+          schema:
+            type: string
+        - name: _count
+          in: query
+          description: Number of results per page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: _offset
+          in: query
+          description: Starting offset for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Search results bundle
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIRBundle'
+
+  /fhir/r4/MedicationRequest/{id}:
+    get:
+      tags: [fhir]
+      summary: Get FHIR MedicationRequest
+      description: Retrieves a FHIR MedicationRequest resource by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Resource found
+          headers:
+            ETag:
+              description: Resource version
+              schema:
+                type: string
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIRMedicationRequest'
+        '404':
+          description: Resource not found
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIROperationOutcome'
+    
+    delete:
+      tags: [fhir]
+      summary: Delete FHIR MedicationRequest
+      description: Deletes a FHIR MedicationRequest resource
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource ID
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Resource deleted successfully
+        '404':
+          description: Resource not found
+          content:
+            application/fhir+json:
+              schema:
+                $ref: '#/components/schemas/FHIROperationOutcome'
+
+  /fhir/r4/metadata:
+    get:
+      tags: [fhir]
+      summary: Get FHIR Capability Statement
+      description: Returns the FHIR Capability Statement for this server
+      responses:
+        '200':
+          description: Capability statement
+          content:
+            application/fhir+json:
+              schema:
+                type: object
+                description: FHIR CapabilityStatement resource
+      security: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT Bearer token authentication. 
+        Include the token in the Authorization header as: `Bearer <token>`
+
+  schemas:
+    # Health Schemas
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy, degraded]
+        timestamp:
+          type: string
+          format: date-time
+        services:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ServiceHealth'
+        version:
+          type: string
+        uptime:
+          type: string
+
+    ServiceHealth:
+      type: object
+      required:
+        - name
+        - status
+        - last_check
+        - response_time_ms
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [healthy, unhealthy, degraded]
+        message:
+          type: string
+        last_check:
+          type: string
+          format: date-time
+        response_time_ms:
+          type: integer
+          format: int64
+
+    # Medication Proposal Schemas
+    CreateProposalRequest:
+      type: object
+      required:
+        - patient_id
+        - protocol_id
+        - indication
+        - clinical_context
+        - medication_details
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+          description: Patient identifier
+        protocol_id:
+          type: string
+          description: Protocol identifier
+        indication:
+          type: string
+          description: Medical indication for the medication
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        medication_details:
+          $ref: '#/components/schemas/MedicationDetails'
+
+    UpdateProposalRequest:
+      type: object
+      properties:
+        indication:
+          type: string
+          description: Medical indication for the medication
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        medication_details:
+          $ref: '#/components/schemas/MedicationDetails'
+        status:
+          $ref: '#/components/schemas/ProposalStatus'
+
+    ProposalResponse:
+      type: object
+      required:
+        - id
+        - patient_id
+        - protocol_id
+        - indication
+        - status
+        - created_at
+        - updated_at
+        - created_by
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        protocol_id:
+          type: string
+        indication:
+          type: string
+        status:
+          $ref: '#/components/schemas/ProposalStatus'
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        medication_details:
+          $ref: '#/components/schemas/MedicationDetails'
+        dosage_recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/DosageRecommendation'
+        safety_constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyConstraint'
+        snapshot_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        validated_by:
+          type: string
+          nullable: true
+        validation_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+
+    ListProposalsResponse:
+      type: object
+      required:
+        - proposals
+        - total_count
+        - page
+        - page_size
+        - total_pages
+        - has_next
+        - has_previous
+      properties:
+        proposals:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProposalResponse'
+        total_count:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_pages:
+          type: integer
+        has_next:
+          type: boolean
+        has_previous:
+          type: boolean
+
+    ProposalStatus:
+      type: string
+      enum:
+        - draft
+        - proposed
+        - validated
+        - rejected
+        - committed
+        - expired
+      description: |
+        * `draft` - Initial draft state
+        * `proposed` - Proposal submitted for review
+        * `validated` - Proposal validated by clinician
+        * `rejected` - Proposal rejected
+        * `committed` - Proposal committed for execution
+        * `expired` - Proposal expired due to time limits
+
+    ValidateProposalRequest:
+      type: object
+      required:
+        - validated_by
+      properties:
+        validated_by:
+          type: string
+          description: ID of the user performing validation
+
+    ValidateProposalResponse:
+      type: object
+      required:
+        - proposal
+        - validation_results
+        - is_valid
+      properties:
+        proposal:
+          $ref: '#/components/schemas/ProposalResponse'
+        validation_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationResult'
+        is_valid:
+          type: boolean
+
+    ValidationResult:
+      type: object
+      required:
+        - field
+        - message
+        - severity
+        - code
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, error, critical]
+        code:
+          type: string
+
+    # Clinical Context Schemas
+    ClinicalContext:
+      type: object
+      required:
+        - patient_id
+        - age_years
+        - gender
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        weight_kg:
+          type: number
+          format: double
+          nullable: true
+        height_cm:
+          type: number
+          format: double
+          nullable: true
+        age_years:
+          type: integer
+        gender:
+          type: string
+        bsa_m2:
+          type: number
+          format: double
+          nullable: true
+          description: Body Surface Area in m²
+        creatinine_mg_dl:
+          type: number
+          format: double
+          nullable: true
+          description: Creatinine level in mg/dL
+        egfr:
+          type: number
+          format: double
+          nullable: true
+          description: Estimated Glomerular Filtration Rate
+        allergies:
+          type: array
+          items:
+            type: string
+        conditions:
+          type: array
+          items:
+            type: string
+        current_medications:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentMedication'
+        lab_values:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/LabValue'
+
+    CurrentMedication:
+      type: object
+      required:
+        - medication_name
+        - dose_mg
+        - frequency
+        - start_date
+        - route
+      properties:
+        medication_name:
+          type: string
+        dose_mg:
+          type: number
+          format: double
+        frequency:
+          type: string
+        start_date:
+          type: string
+          format: date-time
+        route:
+          type: string
+
+    LabValue:
+      type: object
+      required:
+        - value
+        - unit
+        - timestamp
+        - reference_range
+      properties:
+        value:
+          type: number
+          format: double
+        unit:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        reference_range:
+          type: string
+
+    # Medication Details Schemas
+    MedicationDetails:
+      type: object
+      required:
+        - drug_name
+        - generic_name
+        - drug_class
+        - mechanism
+        - indication
+      properties:
+        drug_name:
+          type: string
+        generic_name:
+          type: string
+        brand_name:
+          type: string
+        drug_class:
+          type: string
+        mechanism:
+          type: string
+        indication:
+          type: string
+        contraindications:
+          type: array
+          items:
+            type: string
+        interactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DrugInteraction'
+        formulation_types:
+          type: array
+          items:
+            $ref: '#/components/schemas/FormulationType'
+        therapeutic_class:
+          type: string
+        pharmacology_profile:
+          $ref: '#/components/schemas/PharmacologyProfile'
+
+    DrugInteraction:
+      type: object
+      required:
+        - interacting_drug
+        - severity
+        - description
+        - management
+      properties:
+        interacting_drug:
+          type: string
+        severity:
+          type: string
+          enum: [minor, moderate, major, contraindicated]
+        description:
+          type: string
+        management:
+          type: string
+
+    FormulationType:
+      type: object
+      required:
+        - form
+        - strengths
+        - route
+        - availability
+      properties:
+        form:
+          type: string
+          description: tablet, capsule, injection, etc.
+        strengths:
+          type: array
+          items:
+            type: string
+        route:
+          type: string
+          description: oral, IV, IM, etc.
+        availability:
+          type: string
+          description: generic, brand-only, etc.
+
+    PharmacologyProfile:
+      type: object
+      properties:
+        half_life_hours:
+          type: number
+          format: double
+          nullable: true
+        onset_minutes:
+          type: integer
+          nullable: true
+        peak_hours:
+          type: number
+          format: double
+          nullable: true
+        duration_hours:
+          type: number
+          format: double
+          nullable: true
+        bioavailability:
+          type: number
+          format: double
+          nullable: true
+        protein_binding:
+          type: number
+          format: double
+          nullable: true
+        metabolism:
+          type: string
+        excretion:
+          type: string
+        renal_adjustment:
+          type: boolean
+        hepatic_adjustment:
+          type: boolean
+
+    # Dosage Recommendation Schemas
+    DosageRecommendation:
+      type: object
+      required:
+        - id
+        - recommendation_type
+        - dose_mg
+        - frequency_per_day
+        - route
+        - calculation_method
+        - confidence_score
+      properties:
+        id:
+          type: string
+          format: uuid
+        recommendation_type:
+          type: string
+          enum: [starting, maintenance, loading, adjustment, taper]
+        dose_mg:
+          type: number
+          format: double
+        frequency_per_day:
+          type: integer
+        route:
+          type: string
+        duration_days:
+          type: integer
+          nullable: true
+        max_dose_mg:
+          type: number
+          format: double
+          nullable: true
+        min_dose_mg:
+          type: number
+          format: double
+          nullable: true
+        adjustment_reason:
+          type: string
+        calculation_method:
+          type: string
+          enum: [weight_based, bsa_based, auc_based, fixed, renal_adjusted, age_adjusted, custom]
+        confidence_score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        clinical_notes:
+          type: string
+        monitoring_required:
+          type: array
+          items:
+            $ref: '#/components/schemas/MonitoringRequirement'
+
+    MonitoringRequirement:
+      type: object
+      required:
+        - parameter
+        - frequency
+      properties:
+        parameter:
+          type: string
+        frequency:
+          type: string
+          enum: [daily, weekly, biweekly, monthly, prn]
+        target_range:
+          type: string
+          nullable: true
+        alert_threshold:
+          type: number
+          format: double
+          nullable: true
+        notes:
+          type: string
+
+    # Safety Constraint Schemas
+    SafetyConstraint:
+      type: object
+      required:
+        - id
+        - constraint_type
+        - severity
+        - parameter
+        - operator
+        - threshold_value
+        - unit
+        - message
+        - action
+        - source
+      properties:
+        id:
+          type: string
+          format: uuid
+        constraint_type:
+          type: string
+          enum: [dosage, frequency, duration, lab_value, age, weight, renal_function, hepatic_function, drug_interaction, allergy]
+        severity:
+          type: string
+          enum: [info, warning, error, critical]
+        parameter:
+          type: string
+        operator:
+          type: string
+          enum: ['>', '<', '>=', '<=', '=', '!=']
+        threshold_value:
+          type: number
+          format: double
+        unit:
+          type: string
+        message:
+          type: string
+        action:
+          type: string
+          enum: [warn, block, adjust]
+        source:
+          type: string
+
+    # Clinical Engine Request/Response Schemas
+    CalculateDosageRequest:
+      type: object
+      required:
+        - clinical_context
+        - medication_details
+        - calculation_method
+      properties:
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        medication_details:
+          $ref: '#/components/schemas/MedicationDetails'
+        calculation_method:
+          type: string
+          enum: [weight_based, bsa_based, auc_based, fixed, renal_adjusted, age_adjusted, custom]
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+
+    CalculateDosageResponse:
+      type: object
+      required:
+        - recommendations
+        - constraints
+        - confidence_score
+      properties:
+        recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/DosageRecommendation'
+        constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyConstraint'
+        confidence_score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    AssessRiskRequest:
+      type: object
+      required:
+        - patient_id
+        - clinical_context
+        - medication_details
+        - proposed_dosages
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        medication_details:
+          $ref: '#/components/schemas/MedicationDetails'
+        proposed_dosages:
+          type: array
+          items:
+            $ref: '#/components/schemas/DosageRecommendation'
+
+    AssessRiskResponse:
+      type: object
+      required:
+        - risk_assessment
+        - safety_alerts
+      properties:
+        risk_assessment:
+          $ref: '#/components/schemas/RiskAssessment'
+        safety_alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyAlert'
+
+    RiskAssessment:
+      type: object
+      required:
+        - assessment_id
+        - overall_risk_level
+        - risk_score
+        - risk_factors
+        - mitigation_strategies
+        - assessed_at
+      properties:
+        assessment_id:
+          type: string
+          format: uuid
+        overall_risk_level:
+          type: string
+          enum: [low, moderate, high, critical]
+        risk_score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        risk_factors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiskFactor'
+        mitigation_strategies:
+          type: array
+          items:
+            type: string
+        assessed_at:
+          type: string
+          format: date-time
+
+    RiskFactor:
+      type: object
+      required:
+        - factor_type
+        - severity
+        - description
+        - impact_score
+        - probability
+      properties:
+        factor_type:
+          type: string
+        severity:
+          type: string
+          enum: [low, moderate, high, critical]
+        description:
+          type: string
+        impact_score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+        probability:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    SafetyAlert:
+      type: object
+      required:
+        - alert_id
+        - alert_type
+        - severity
+        - message
+        - source
+        - timestamp
+        - acknowledged
+      properties:
+        alert_id:
+          type: string
+          format: uuid
+        alert_type:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, error, critical]
+        message:
+          type: string
+        source:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        acknowledged:
+          type: boolean
+
+    PerformSafetyChecksRequest:
+      type: object
+      required:
+        - patient_id
+        - clinical_context
+        - medication_details
+        - proposed_dosages
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        medication_details:
+          $ref: '#/components/schemas/MedicationDetails'
+        proposed_dosages:
+          type: array
+          items:
+            $ref: '#/components/schemas/DosageRecommendation'
+
+    PerformSafetyChecksResponse:
+      type: object
+      required:
+        - safety_results
+        - overall_safe
+      properties:
+        safety_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyCheckResult'
+        overall_safe:
+          type: boolean
+
+    SafetyCheckResult:
+      type: object
+      required:
+        - check_type
+        - status
+        - message
+        - recommendations
+        - confidence
+      properties:
+        check_type:
+          type: string
+        status:
+          type: string
+          enum: [pass, warning, fail, critical]
+        message:
+          type: string
+        recommendations:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    # Recipe Resolver Schemas
+    ResolveRecipeRequest:
+      type: object
+      required:
+        - protocol_id
+        - clinical_context
+      properties:
+        protocol_id:
+          type: string
+        clinical_context:
+          $ref: '#/components/schemas/ClinicalContext'
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+
+    ResolveRecipeResponse:
+      type: object
+      required:
+        - recipe
+        - dosage_recommendations
+        - safety_constraints
+      properties:
+        recipe:
+          $ref: '#/components/schemas/Recipe'
+        dosage_recommendations:
+          type: array
+          items:
+            $ref: '#/components/schemas/DosageRecommendation'
+        safety_constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyConstraint'
+
+    Recipe:
+      type: object
+      required:
+        - id
+        - protocol_id
+        - name
+        - description
+        - indication
+        - steps
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        protocol_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        indication:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecipeStep'
+        parameters:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RecipeStep:
+      type: object
+      required:
+        - order
+        - action
+        - description
+      properties:
+        order:
+          type: integer
+        action:
+          type: string
+        parameters:
+          type: object
+          additionalProperties: true
+        description:
+          type: string
+
+    # FHIR Schemas (simplified)
+    FHIRMedicationRequest:
+      type: object
+      required:
+        - resourceType
+        - status
+        - intent
+        - subject
+      properties:
+        resourceType:
+          type: string
+          enum: [MedicationRequest]
+        id:
+          type: string
+        meta:
+          $ref: '#/components/schemas/FHIRMeta'
+        status:
+          type: string
+          enum: [draft, active, completed, cancelled, entered-in-error, unknown]
+        intent:
+          type: string
+          enum: [proposal, plan, order, original-order, reflex-order, filler-order, instance-order, option]
+        priority:
+          type: string
+          enum: [routine, urgent, asap, stat]
+        subject:
+          $ref: '#/components/schemas/FHIRReference'
+        encounter:
+          $ref: '#/components/schemas/FHIRReference'
+        authoredOn:
+          type: string
+          format: date-time
+        requester:
+          $ref: '#/components/schemas/FHIRReference'
+        reasonCode:
+          type: array
+          items:
+            $ref: '#/components/schemas/FHIRCodeableConcept'
+        medicationCodeableConcept:
+          $ref: '#/components/schemas/FHIRCodeableConcept'
+        medicationReference:
+          $ref: '#/components/schemas/FHIRReference'
+        dosageInstruction:
+          type: array
+          items:
+            $ref: '#/components/schemas/FHIRDosage'
+
+    FHIRMeta:
+      type: object
+      properties:
+        versionId:
+          type: string
+        lastUpdated:
+          type: string
+          format: date-time
+        source:
+          type: string
+        profile:
+          type: array
+          items:
+            type: string
+
+    FHIRReference:
+      type: object
+      properties:
+        reference:
+          type: string
+        type:
+          type: string
+        display:
+          type: string
+
+    FHIRCodeableConcept:
+      type: object
+      properties:
+        coding:
+          type: array
+          items:
+            $ref: '#/components/schemas/FHIRCoding'
+        text:
+          type: string
+
+    FHIRCoding:
+      type: object
+      properties:
+        system:
+          type: string
+        version:
+          type: string
+        code:
+          type: string
+        display:
+          type: string
+
+    FHIRDosage:
+      type: object
+      properties:
+        sequence:
+          type: integer
+        text:
+          type: string
+        timing:
+          $ref: '#/components/schemas/FHIRTiming'
+        route:
+          $ref: '#/components/schemas/FHIRCodeableConcept'
+        doseAndRate:
+          type: array
+          items:
+            $ref: '#/components/schemas/FHIRDoseAndRate'
+
+    FHIRTiming:
+      type: object
+      properties:
+        repeat:
+          $ref: '#/components/schemas/FHIRTimingRepeat'
+        code:
+          $ref: '#/components/schemas/FHIRCodeableConcept'
+
+    FHIRTimingRepeat:
+      type: object
+      properties:
+        frequency:
+          type: integer
+        period:
+          type: number
+          format: double
+        periodUnit:
+          type: string
+
+    FHIRDoseAndRate:
+      type: object
+      properties:
+        doseQuantity:
+          $ref: '#/components/schemas/FHIRQuantity'
+
+    FHIRQuantity:
+      type: object
+      properties:
+        value:
+          type: number
+          format: double
+        unit:
+          type: string
+        system:
+          type: string
+        code:
+          type: string
+
+    FHIRBundle:
+      type: object
+      required:
+        - resourceType
+        - type
+      properties:
+        resourceType:
+          type: string
+          enum: [Bundle]
+        id:
+          type: string
+        type:
+          type: string
+          enum: [searchset, collection, transaction, batch, document]
+        total:
+          type: integer
+        entry:
+          type: array
+          items:
+            $ref: '#/components/schemas/FHIREntry'
+
+    FHIREntry:
+      type: object
+      properties:
+        resource:
+          type: object
+          description: FHIR Resource (varies by type)
+        search:
+          $ref: '#/components/schemas/FHIRSearchMode'
+
+    FHIRSearchMode:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [match, include, outcome]
+
+    FHIROperationOutcome:
+      type: object
+      required:
+        - resourceType
+        - issue
+      properties:
+        resourceType:
+          type: string
+          enum: [OperationOutcome]
+        issue:
+          type: array
+          items:
+            $ref: '#/components/schemas/FHIRIssue'
+
+    FHIRIssue:
+      type: object
+      required:
+        - severity
+        - code
+      properties:
+        severity:
+          type: string
+          enum: [fatal, error, warning, information]
+        code:
+          type: string
+        details:
+          $ref: '#/components/schemas/FHIRCodeableConcept'
+        diagnostics:
+          type: string
+
+    # Error Response Schema
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - code
+      properties:
+        error:
+          type: string
+          description: Error type identifier
+        message:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: HTTP status code as string
+        details:
+          description: Additional error details
+          oneOf:
+            - type: string
+            - type: object
+            - type: array

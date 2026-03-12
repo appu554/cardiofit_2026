@@ -1,0 +1,464 @@
+# CardioFit Runtime Layer - Complete Stack
+# Unified deployment for all runtime services
+version: '3.8'
+
+services:
+  # ============================================
+  # CORE INFRASTRUCTURE SERVICES
+  # ============================================
+
+  # Neo4j - Dual Stream Graph Database
+  neo4j:
+    image: neo4j:5.12-enterprise
+    container_name: runtime-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-runtime_password}
+      NEO4J_dbms_memory_heap_max__size: ${NEO4J_HEAP_SIZE:-4G}
+      NEO4J_dbms_memory_pagecache_size: ${NEO4J_PAGECACHE_SIZE:-4G}
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+      NEO4J_dbms_default_database: patient_data
+      NEO4J_dbms_security_auth__enabled: "true"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-conf:/conf
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "${NEO4J_USER:-neo4j}", "-p", "${NEO4J_PASSWORD:-runtime_password}", "RETURN 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-network
+
+  # GraphDB - Semantic Reasoning Engine
+  graphdb:
+    image: ontotext/graphdb:11.1.1
+    container_name: runtime-graphdb
+    environment:
+      GDB_HEAP_SIZE: ${GRAPHDB_HEAP_SIZE:-4G}
+      GDB_MIN_MEM: ${GRAPHDB_MIN_MEM:-2G}
+      GDB_MAX_MEM: ${GRAPHDB_MAX_MEM:-4G}
+      GDB_JAVA_OPTS: "-Xmx${GRAPHDB_MAX_MEM:-4g} -Xms${GRAPHDB_MIN_MEM:-2g}"
+    volumes:
+      - graphdb-data:/opt/graphdb/home
+      - graphdb-import:/opt/graphdb/import
+    ports:
+      - "${GRAPHDB_PORT:-7200}:7200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7200/rest/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-network
+
+  # Zookeeper - Kafka Coordination
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: runtime-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+    networks:
+      - runtime-network
+
+  # Kafka - Event Streaming Platform
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: runtime-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:${KAFKA_EXTERNAL_PORT:-29092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: ${KAFKA_NUM_PARTITIONS:-3}
+      KAFKA_LOG_RETENTION_HOURS: ${KAFKA_RETENTION_HOURS:-168}
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-29092}:29092"
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-network
+
+  # Redis - Multi-Layer Caching
+  redis:
+    image: redis:7.0-alpine
+    container_name: runtime-redis
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-2gb} --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # ClickHouse - Analytics Database
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: runtime-clickhouse
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse_password}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # ============================================
+  # STREAM PROCESSING SERVICES
+  # ============================================
+
+  # Flink JobManager
+  flink-jobmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: runtime-flink-jobmanager
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.memory.process.size: ${FLINK_JM_MEMORY:-1600m}
+        taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-4}
+        parallelism.default: ${FLINK_PARALLELISM:-2}
+        state.backend: rocksdb
+        state.checkpoints.dir: file:///checkpoints
+        state.backend.rocksdb.localdir: /tmp/rocksdb
+        execution.checkpointing.interval: 30s
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.max-concurrent-checkpoints: 1
+        execution.checkpointing.min-pause: 1s
+        kafka.bootstrap.servers: kafka:9092
+        metrics.reporter.prom.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+        metrics.reporter.prom.port: 9249
+    ports:
+      - "${FLINK_UI_PORT:-8081}:8081"
+      - "${FLINK_METRICS_PORT:-9249}:9249"
+    volumes:
+      - flink-checkpoints:/checkpoints
+      - ./flink-jobs/target:/opt/flink/jobs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/config"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-network
+
+  # Flink TaskManager
+  flink-taskmanager:
+    image: flink:1.18.0-scala_2.12-java11
+    container_name: runtime-flink-taskmanager
+    command: taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.memory.process.size: ${FLINK_TM_MEMORY:-2048m}
+        taskmanager.numberOfTaskSlots: ${FLINK_TASK_SLOTS:-4}
+        state.backend: rocksdb
+        state.backend.rocksdb.localdir: /tmp/rocksdb
+        kafka.bootstrap.servers: kafka:9092
+    volumes:
+      - /tmp:/tmp
+    networks:
+      - runtime-network
+
+  # ============================================
+  # APPLICATION SERVICES
+  # ============================================
+
+  # Query Router - Intelligent Data Source Routing
+  query-router:
+    build:
+      context: ./query-router
+      dockerfile: ${QUERY_ROUTER_DOCKERFILE:-Dockerfile}
+    container_name: runtime-query-router
+    ports:
+      - "${QUERY_ROUTER_PORT:-8070}:8070"
+    environment:
+      PYTHONPATH: /app/src
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-runtime_password}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse_password}
+      GRAPHDB_URL: http://graphdb:7200
+      REDIS_URL: redis://redis:6379/2
+    depends_on:
+      - neo4j
+      - clickhouse
+      - graphdb
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8070/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # L1 Cache Prefetcher - Event-Driven Cache Warming
+  cache-prefetcher:
+    build:
+      context: ./l1-cache-prefetcher-service
+      dockerfile: ${CACHE_PREFETCHER_DOCKERFILE:-Dockerfile}
+    container_name: runtime-cache-prefetcher
+    ports:
+      - "${CACHE_PREFETCHER_PORT:-8055}:8055"
+    environment:
+      PYTHONPATH: /app/src
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REDIS_URL: redis://redis:6379/0
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-runtime_password}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-clickhouse_password}
+    depends_on:
+      - redis
+      - neo4j
+      - kafka
+      - clickhouse
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8055/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # Evidence Envelope Service - Clinical Decision Auditing
+  evidence-envelope:
+    build:
+      context: ./evidence-envelope-service
+      dockerfile: ${EVIDENCE_ENVELOPE_DOCKERFILE:-Dockerfile}
+    container_name: runtime-evidence-envelope
+    ports:
+      - "${EVIDENCE_ENVELOPE_PORT:-8060}:8060"
+    environment:
+      PYTHONPATH: /app/src
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MONGODB_URL: mongodb://${MONGODB_ROOT_USER:-admin}:${MONGODB_ROOT_PASSWORD:-admin_password}@mongodb-evidence:27017
+      MONGODB_DATABASE: cardiofit_evidence_envelopes
+      REDIS_URL: redis://redis:6379/1
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-runtime_password}
+    depends_on:
+      - mongodb-evidence
+      - redis
+      - neo4j
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8060/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # MongoDB for Evidence Envelopes
+  mongodb-evidence:
+    image: mongo:7.0
+    container_name: runtime-mongodb-evidence
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-admin_password}
+      MONGO_INITDB_DATABASE: cardiofit_evidence_envelopes
+    volumes:
+      - mongodb-evidence-data:/data/db
+    ports:
+      - "${MONGODB_EVIDENCE_PORT:-27018}:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-network
+
+  # ============================================
+  # MONITORING & OBSERVABILITY
+  # ============================================
+
+  # SLA Monitoring Service
+  sla-monitoring:
+    build:
+      context: ./sla-monitoring-service
+      dockerfile: ${SLA_MONITORING_DOCKERFILE:-Dockerfile}
+    container_name: runtime-sla-monitoring
+    ports:
+      - "${SLA_MONITORING_PORT:-8050}:8050"
+    environment:
+      PYTHONPATH: /app/src
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      MONGODB_URL: mongodb://${MONGODB_ROOT_USER:-admin}:${MONGODB_ROOT_PASSWORD:-admin_password}@mongodb-sla:27017
+      MONGODB_DATABASE: cardiofit_sla_monitoring
+      REDIS_URL: redis://redis:6379/3
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-runtime_password}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      FLINK_JOBMANAGER_URL: http://flink-jobmanager:8081
+    depends_on:
+      - mongodb-sla
+      - redis
+      - neo4j
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # MongoDB for SLA Metrics
+  mongodb-sla:
+    image: mongo:7.0
+    container_name: runtime-mongodb-sla
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-admin_password}
+      MONGO_INITDB_DATABASE: cardiofit_sla_monitoring
+    volumes:
+      - mongodb-sla-data:/data/db
+    ports:
+      - "${MONGODB_SLA_PORT:-27019}:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - runtime-network
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: runtime-prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+  # Grafana - Visualization
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: runtime-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_INSTALL_PLUGINS: ${GRAFANA_PLUGINS:-}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - runtime-network
+
+# ============================================
+# NETWORKS
+# ============================================
+networks:
+  runtime-network:
+    driver: bridge
+    name: runtime-network
+
+# ============================================
+# VOLUMES
+# ============================================
+volumes:
+  # Core Infrastructure
+  neo4j-data:
+  neo4j-logs:
+  neo4j-conf:
+  graphdb-data:
+  graphdb-import:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  redis-data:
+  clickhouse-data:
+  clickhouse-logs:
+
+  # Stream Processing
+  flink-checkpoints:
+
+  # Application Data
+  mongodb-evidence-data:
+  mongodb-sla-data:
+
+  # Monitoring
+  prometheus-data:
+  grafana-data:

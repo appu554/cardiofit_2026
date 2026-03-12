@@ -1,0 +1,728 @@
+package com.cardiofit.flink.validation;
+
+import com.cardiofit.flink.models.*;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.util.Collector;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Clinical validation framework for healthcare AI/ML predictions and pattern detection
+ * Implements evidence-based validation metrics and regulatory compliance requirements
+ * Based on FDA guidance for AI/ML in healthcare and clinical evidence standards
+ */
+public class ClinicalValidationFramework {
+
+    /**
+     * Comprehensive clinical validation processor for ML predictions and pattern alerts
+     * Tracks accuracy, sensitivity, specificity, and clinical outcome correlation
+     */
+    public static class ClinicalValidationProcessor extends KeyedProcessFunction<String, PatternEvent, ValidationResult> {
+
+        // Validation state for tracking outcomes
+        private transient ListState<ClinicalOutcome> historicalOutcomesState;
+        private transient ListState<PatternEvent> recentPredictionsState;
+        private transient ValueState<ValidationMetrics> cumulativeMetricsState;
+
+        // Validation configuration
+        private static final int VALIDATION_WINDOW_HOURS = 72; // 72-hour validation window
+        private static final double SENSITIVITY_TARGET = 0.95; // 95% sensitivity target
+        private static final double SPECIFICITY_TARGET = 0.90; // 90% specificity target
+        private static final double PPV_TARGET = 0.85; // 85% positive predictive value target
+        private static final double NPV_TARGET = 0.95; // 95% negative predictive value target
+
+        @Override
+        public void open(OpenContext openContext) throws Exception {
+            super.open(openContext);
+
+            historicalOutcomesState = getRuntimeContext().getListState(
+                new ListStateDescriptor<>("historical_outcomes", ClinicalOutcome.class));
+
+            recentPredictionsState = getRuntimeContext().getListState(
+                new ListStateDescriptor<>("recent_predictions", PatternEvent.class));
+
+            cumulativeMetricsState = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("cumulative_metrics", ValidationMetrics.class));
+        }
+
+        @Override
+        public void processElement(PatternEvent pattern, Context ctx, Collector<ValidationResult> out) throws Exception {
+            // Add pattern to recent predictions for validation tracking
+            recentPredictionsState.add(pattern);
+
+            // Schedule validation timer for this prediction
+            long validationTime = ctx.timestamp() + (VALIDATION_WINDOW_HOURS * 3600 * 1000L);
+            ctx.timerService().registerEventTimeTimer(validationTime);
+
+            // Perform immediate validation if we have sufficient historical data
+            ValidationResult immediateResult = performImmediateValidation(pattern, ctx.timestamp());
+            if (immediateResult != null) {
+                out.collect(immediateResult);
+            }
+
+            // Clean up old predictions beyond validation window
+            cleanupOldPredictions(ctx.timestamp());
+        }
+
+        @Override
+        public void onTimer(long timestamp, OnTimerContext ctx, Collector<ValidationResult> out) throws Exception {
+            // Perform retrospective validation for predictions that are now past the validation window
+            List<PatternEvent> validationCandidates = getValidationCandidates(timestamp);
+
+            for (PatternEvent pattern : validationCandidates) {
+                ValidationResult result = performRetrospectiveValidation(pattern, timestamp);
+                if (result != null) {
+                    out.collect(result);
+                    updateCumulativeMetrics(result);
+                }
+            }
+        }
+
+        private ValidationResult performImmediateValidation(PatternEvent pattern, long currentTime) throws Exception {
+            // Check if we have recent similar cases for comparison
+            List<ClinicalOutcome> relevantOutcomes = getRelevantHistoricalOutcomes(pattern);
+
+            if (relevantOutcomes.size() < 10) {
+                // Insufficient data for immediate validation
+                return null;
+            }
+
+            // Calculate immediate confidence based on historical performance
+            double historicalAccuracy = calculateHistoricalAccuracy(pattern.getPatternType(), relevantOutcomes);
+            double adjustedConfidence = adjustConfidenceBasedOnHistory(pattern.getConfidence(), historicalAccuracy);
+
+            return ValidationResult.builder()
+                .predictionId(pattern.getId())
+                .patientId(pattern.getPatientId())
+                .patternType(pattern.getPatternType())
+                .validationType(ValidationType.IMMEDIATE)
+                .confidence(adjustedConfidence)
+                .historicalAccuracy(historicalAccuracy)
+                .sampleSize(relevantOutcomes.size())
+                .validationTimestamp(currentTime)
+                .recommendationLevel(determineRecommendationLevel(adjustedConfidence, historicalAccuracy))
+                .build();
+        }
+
+        private ValidationResult performRetrospectiveValidation(PatternEvent pattern, long validationTime) throws Exception {
+            // Look for actual clinical outcomes within the validation window
+            List<ClinicalOutcome> actualOutcomes = getActualOutcomes(pattern.getPatientId(),
+                pattern.getDetectionTime(), validationTime);
+
+            boolean truePositive = false;
+            boolean falsePositive = false;
+            String outcomeDescription = "No significant outcome observed";
+
+            if (!actualOutcomes.isEmpty()) {
+                // Determine if the prediction was accurate
+                ValidationOutcome outcome = assessPredictionAccuracy(pattern, actualOutcomes);
+                truePositive = outcome.isTruePositive();
+                falsePositive = outcome.isFalsePositive();
+                outcomeDescription = outcome.getDescription();
+            } else {
+                // No outcome found - could be true negative or false positive depending on pattern type
+                falsePositive = "CRITICAL".equals(pattern.getSeverity());
+            }
+
+            // Update historical outcomes for future validations
+            ClinicalOutcome outcome = ClinicalOutcome.builder()
+                .patientId(pattern.getPatientId())
+                .patternType(pattern.getPatternType())
+                .predictionTime(pattern.getDetectionTime())
+                .validationTime(validationTime)
+                .truePositive(truePositive)
+                .falsePositive(falsePositive)
+                .outcomeDescription(outcomeDescription)
+                .build();
+
+            historicalOutcomesState.add(outcome);
+
+            return ValidationResult.builder()
+                .predictionId(pattern.getId())
+                .patientId(pattern.getPatientId())
+                .patternType(pattern.getPatternType())
+                .validationType(ValidationType.RETROSPECTIVE)
+                .confidence(pattern.getConfidence())
+                .truePositive(truePositive)
+                .falsePositive(falsePositive)
+                .outcomeDescription(outcomeDescription)
+                .validationTimestamp(validationTime)
+                .build();
+        }
+
+        private List<ClinicalOutcome> getRelevantHistoricalOutcomes(PatternEvent pattern) throws Exception {
+            List<ClinicalOutcome> allOutcomes = new ArrayList<>();
+            historicalOutcomesState.get().forEach(allOutcomes::add);
+
+            return allOutcomes.stream()
+                .filter(outcome -> outcome.getPatternType().equals(pattern.getPatternType()))
+                .filter(outcome -> isRecentEnough(outcome.getValidationTime()))
+                .collect(Collectors.toList());
+        }
+
+        private boolean isRecentEnough(long timestamp) {
+            long thirtyDaysAgo = System.currentTimeMillis() - (30L * 24 * 3600 * 1000);
+            return timestamp > thirtyDaysAgo;
+        }
+
+        private double calculateHistoricalAccuracy(String patternType, List<ClinicalOutcome> outcomes) {
+            if (outcomes.isEmpty()) return 0.5; // Default 50% when no history
+
+            long truePositives = outcomes.stream().mapToLong(o -> o.isTruePositive() ? 1 : 0).sum();
+            return (double) truePositives / outcomes.size();
+        }
+
+        private double adjustConfidenceBasedOnHistory(double originalConfidence, double historicalAccuracy) {
+            // Weighted combination of original confidence and historical performance
+            double weight = 0.3; // 30% weight to historical accuracy
+            return (originalConfidence * (1 - weight)) + (historicalAccuracy * weight);
+        }
+
+        private List<ClinicalOutcome> getActualOutcomes(String patientId, long predictionTime, long validationTime) {
+            // In a real implementation, this would query clinical data stores for actual outcomes
+            // For demonstration, we'll simulate outcomes based on pattern severity and type
+            return simulateActualOutcomes(patientId, predictionTime, validationTime);
+        }
+
+        private List<ClinicalOutcome> simulateActualOutcomes(String patientId, long predictionTime, long validationTime) {
+            // Simulate clinical outcomes based on realistic probabilities
+            List<ClinicalOutcome> outcomes = new ArrayList<>();
+
+            // Simulate with 70% chance of having some outcome for critical alerts
+            if (Math.random() < 0.7) {
+                outcomes.add(ClinicalOutcome.builder()
+                    .patientId(patientId)
+                    .outcomeDescription("Simulated clinical outcome")
+                    .predictionTime(predictionTime)
+                    .validationTime(validationTime)
+                    .truePositive(Math.random() < 0.8) // 80% accuracy simulation
+                    .build());
+            }
+
+            return outcomes;
+        }
+
+        private ValidationOutcome assessPredictionAccuracy(PatternEvent pattern, List<ClinicalOutcome> actualOutcomes) {
+            switch (pattern.getPatternType()) {
+                case "SEPSIS_DETERIORATION":
+                    return assessSepsisAccuracy(pattern, actualOutcomes);
+                case "CARDIAC_DETERIORATION":
+                    return assessCardiacAccuracy(pattern, actualOutcomes);
+                case "MEDICATION_NONADHERENCE":
+                    return assessMedicationAccuracy(pattern, actualOutcomes);
+                case "FALL_RISK":
+                    return assessFallRiskAccuracy(pattern, actualOutcomes);
+                default:
+                    return assessGenericAccuracy(pattern, actualOutcomes);
+            }
+        }
+
+        private ValidationOutcome assessSepsisAccuracy(PatternEvent pattern, List<ClinicalOutcome> actualOutcomes) {
+            // Look for sepsis-related outcomes
+            boolean sepsisConfirmed = actualOutcomes.stream()
+                .anyMatch(outcome -> outcome.getOutcomeDescription().toLowerCase().contains("sepsis") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("infection") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("antibiotic"));
+
+            boolean icuAdmission = actualOutcomes.stream()
+                .anyMatch(outcome -> outcome.getOutcomeDescription().toLowerCase().contains("icu") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("intensive"));
+
+            boolean truePositive = sepsisConfirmed || icuAdmission;
+
+            return ValidationOutcome.builder()
+                .truePositive(truePositive)
+                .falsePositive(!truePositive)
+                .description(sepsisConfirmed ? "Sepsis confirmed by clinical team" :
+                           icuAdmission ? "ICU admission indicating severe condition" :
+                           "No sepsis or severe deterioration observed")
+                .build();
+        }
+
+        private ValidationOutcome assessCardiacAccuracy(PatternEvent pattern, List<ClinicalOutcome> actualOutcomes) {
+            boolean cardiacEvent = actualOutcomes.stream()
+                .anyMatch(outcome -> outcome.getOutcomeDescription().toLowerCase().contains("cardiac") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("heart") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("myocardial"));
+
+            return ValidationOutcome.builder()
+                .truePositive(cardiacEvent)
+                .falsePositive(!cardiacEvent)
+                .description(cardiacEvent ? "Cardiac event confirmed" : "No cardiac event observed")
+                .build();
+        }
+
+        private ValidationOutcome assessMedicationAccuracy(PatternEvent pattern, List<ClinicalOutcome> actualOutcomes) {
+            boolean medicationIssue = actualOutcomes.stream()
+                .anyMatch(outcome -> outcome.getOutcomeDescription().toLowerCase().contains("medication") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("adherence") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("dose"));
+
+            return ValidationOutcome.builder()
+                .truePositive(medicationIssue)
+                .falsePositive(!medicationIssue)
+                .description(medicationIssue ? "Medication issue confirmed" : "No medication issues observed")
+                .build();
+        }
+
+        private ValidationOutcome assessFallRiskAccuracy(PatternEvent pattern, List<ClinicalOutcome> actualOutcomes) {
+            boolean fallOccurred = actualOutcomes.stream()
+                .anyMatch(outcome -> outcome.getOutcomeDescription().toLowerCase().contains("fall") ||
+                                   outcome.getOutcomeDescription().toLowerCase().contains("injury"));
+
+            return ValidationOutcome.builder()
+                .truePositive(fallOccurred)
+                .falsePositive(!fallOccurred)
+                .description(fallOccurred ? "Fall or injury occurred" : "No falls observed")
+                .build();
+        }
+
+        private ValidationOutcome assessGenericAccuracy(PatternEvent pattern, List<ClinicalOutcome> actualOutcomes) {
+            // Generic assessment based on outcome severity
+            boolean significantOutcome = !actualOutcomes.isEmpty();
+
+            return ValidationOutcome.builder()
+                .truePositive(significantOutcome)
+                .falsePositive(!significantOutcome)
+                .description(significantOutcome ? "Clinical outcome observed" : "No significant outcome")
+                .build();
+        }
+
+        private RecommendationLevel determineRecommendationLevel(double confidence, double historicalAccuracy) {
+            double overallScore = (confidence + historicalAccuracy) / 2;
+
+            if (overallScore >= 0.9) return RecommendationLevel.STRONG;
+            if (overallScore >= 0.8) return RecommendationLevel.MODERATE;
+            if (overallScore >= 0.7) return RecommendationLevel.WEAK;
+            return RecommendationLevel.INSUFFICIENT_EVIDENCE;
+        }
+
+        private List<PatternEvent> getValidationCandidates(long currentTime) throws Exception {
+            List<PatternEvent> allPredictions = new ArrayList<>();
+            recentPredictionsState.get().forEach(allPredictions::add);
+
+            long validationCutoff = currentTime - (VALIDATION_WINDOW_HOURS * 3600 * 1000L);
+
+            return allPredictions.stream()
+                .filter(prediction -> prediction.getDetectionTime() <= validationCutoff)
+                .collect(Collectors.toList());
+        }
+
+        private void cleanupOldPredictions(long currentTime) throws Exception {
+            List<PatternEvent> allPredictions = new ArrayList<>();
+            recentPredictionsState.get().forEach(allPredictions::add);
+
+            long cutoffTime = currentTime - (VALIDATION_WINDOW_HOURS * 2 * 3600 * 1000L); // Keep 2x validation window
+
+            recentPredictionsState.clear();
+            allPredictions.stream()
+                .filter(prediction -> prediction.getDetectionTime() > cutoffTime)
+                .forEach(prediction -> {
+                    try {
+                        recentPredictionsState.add(prediction);
+                    } catch (Exception e) {
+                        // Log error but continue
+                    }
+                });
+        }
+
+        private void updateCumulativeMetrics(ValidationResult result) throws Exception {
+            ValidationMetrics current = cumulativeMetricsState.value();
+            if (current == null) {
+                current = new ValidationMetrics();
+            }
+
+            current.addResult(result);
+            cumulativeMetricsState.update(current);
+        }
+    }
+
+    /**
+     * Aggregate validation metrics calculator for population-level performance assessment
+     */
+    public static class PopulationValidationProcessor extends ProcessFunction<ValidationResult, PopulationMetrics> {
+
+        private final Map<String, ValidationMetrics> patternMetrics = new HashMap<>();
+        private static final int METRICS_WINDOW_SIZE = 1000; // Calculate metrics every 1000 results
+
+        // Clinical performance targets
+        private static final double SENSITIVITY_TARGET = 0.85; // 85% sensitivity target
+        private static final double SPECIFICITY_TARGET = 0.90; // 90% specificity target
+        private static final double PPV_TARGET = 0.80; // 80% positive predictive value target
+        private static final double NPV_TARGET = 0.95; // 95% negative predictive value target
+
+        @Override
+        public void processElement(ValidationResult result, Context ctx, Collector<PopulationMetrics> out) throws Exception {
+            String patternType = result.getPatternType();
+
+            // Update pattern-specific metrics
+            ValidationMetrics metrics = patternMetrics.computeIfAbsent(patternType, k -> new ValidationMetrics());
+            metrics.addResult(result);
+
+            // Calculate and emit population metrics when we have sufficient data
+            if (metrics.getTotalPredictions() % METRICS_WINDOW_SIZE == 0) {
+                PopulationMetrics populationMetrics = calculatePopulationMetrics(patternType, metrics);
+                out.collect(populationMetrics);
+            }
+        }
+
+        private PopulationMetrics calculatePopulationMetrics(String patternType, ValidationMetrics metrics) {
+            // Calculate key clinical validation metrics
+            double sensitivity = metrics.calculateSensitivity();
+            double specificity = metrics.calculateSpecificity();
+            double ppv = metrics.calculatePositivePredictiveValue();
+            double npv = metrics.calculateNegativePredictiveValue();
+            double accuracy = metrics.calculateAccuracy();
+            double f1Score = metrics.calculateF1Score();
+
+            // Determine if metrics meet clinical targets
+            boolean meetsTargets = sensitivity >= SENSITIVITY_TARGET &&
+                                 specificity >= SPECIFICITY_TARGET &&
+                                 ppv >= PPV_TARGET &&
+                                 npv >= NPV_TARGET;
+
+            return PopulationMetrics.builder()
+                .patternType(patternType)
+                .timestamp(System.currentTimeMillis())
+                .totalPredictions(metrics.getTotalPredictions())
+                .sensitivity(sensitivity)
+                .specificity(specificity)
+                .positivePredictiveValue(ppv)
+                .negativePredictiveValue(npv)
+                .accuracy(accuracy)
+                .f1Score(f1Score)
+                .meetsTargets(meetsTargets)
+                .confidenceInterval95(metrics.calculateConfidenceInterval())
+                .build();
+        }
+    }
+
+    // Supporting classes and enums
+
+    public enum ValidationType {
+        IMMEDIATE,      // Real-time validation based on historical data
+        RETROSPECTIVE,  // Post-outcome validation after validation window
+        CONTINUOUS     // Ongoing validation with outcome tracking
+    }
+
+    public enum RecommendationLevel {
+        STRONG("Strong evidence supports clinical action"),
+        MODERATE("Moderate evidence, clinical judgment recommended"),
+        WEAK("Weak evidence, consider additional assessment"),
+        INSUFFICIENT_EVIDENCE("Insufficient evidence for recommendation");
+
+        private final String description;
+
+        RecommendationLevel(String description) {
+            this.description = description;
+        }
+
+        public String getDescription() { return description; }
+    }
+
+    public static class ValidationResult {
+        private String predictionId;
+        private String patientId;
+        private String patternType;
+        private ValidationType validationType;
+        private double confidence;
+        private boolean truePositive;
+        private boolean falsePositive;
+        private String outcomeDescription;
+        private long validationTimestamp;
+        private double historicalAccuracy;
+        private int sampleSize;
+        private RecommendationLevel recommendationLevel;
+
+        private ValidationResult(Builder builder) {
+            this.predictionId = builder.predictionId;
+            this.patientId = builder.patientId;
+            this.patternType = builder.patternType;
+            this.validationType = builder.validationType;
+            this.confidence = builder.confidence;
+            this.truePositive = builder.truePositive;
+            this.falsePositive = builder.falsePositive;
+            this.outcomeDescription = builder.outcomeDescription;
+            this.validationTimestamp = builder.validationTimestamp;
+            this.historicalAccuracy = builder.historicalAccuracy;
+            this.sampleSize = builder.sampleSize;
+            this.recommendationLevel = builder.recommendationLevel;
+        }
+
+        public static Builder builder() { return new Builder(); }
+
+        public static class Builder {
+            private String predictionId;
+            private String patientId;
+            private String patternType;
+            private ValidationType validationType;
+            private double confidence;
+            private boolean truePositive;
+            private boolean falsePositive;
+            private String outcomeDescription;
+            private long validationTimestamp;
+            private double historicalAccuracy;
+            private int sampleSize;
+            private RecommendationLevel recommendationLevel;
+
+            public Builder predictionId(String predictionId) { this.predictionId = predictionId; return this; }
+            public Builder patientId(String patientId) { this.patientId = patientId; return this; }
+            public Builder patternType(String patternType) { this.patternType = patternType; return this; }
+            public Builder validationType(ValidationType validationType) { this.validationType = validationType; return this; }
+            public Builder confidence(double confidence) { this.confidence = confidence; return this; }
+            public Builder truePositive(boolean truePositive) { this.truePositive = truePositive; return this; }
+            public Builder falsePositive(boolean falsePositive) { this.falsePositive = falsePositive; return this; }
+            public Builder outcomeDescription(String outcomeDescription) { this.outcomeDescription = outcomeDescription; return this; }
+            public Builder validationTimestamp(long validationTimestamp) { this.validationTimestamp = validationTimestamp; return this; }
+            public Builder historicalAccuracy(double historicalAccuracy) { this.historicalAccuracy = historicalAccuracy; return this; }
+            public Builder sampleSize(int sampleSize) { this.sampleSize = sampleSize; return this; }
+            public Builder recommendationLevel(RecommendationLevel recommendationLevel) { this.recommendationLevel = recommendationLevel; return this; }
+
+            public ValidationResult build() { return new ValidationResult(this); }
+        }
+
+        // Getters
+        public String getPredictionId() { return predictionId; }
+        public String getPatientId() { return patientId; }
+        public String getPatternType() { return patternType; }
+        public ValidationType getValidationType() { return validationType; }
+        public double getConfidence() { return confidence; }
+        public boolean isTruePositive() { return truePositive; }
+        public boolean isFalsePositive() { return falsePositive; }
+        public String getOutcomeDescription() { return outcomeDescription; }
+        public long getValidationTimestamp() { return validationTimestamp; }
+        public double getHistoricalAccuracy() { return historicalAccuracy; }
+        public int getSampleSize() { return sampleSize; }
+        public RecommendationLevel getRecommendationLevel() { return recommendationLevel; }
+    }
+
+    public static class ClinicalOutcome {
+        private String patientId;
+        private String patternType;
+        private long predictionTime;
+        private long validationTime;
+        private boolean truePositive;
+        private boolean falsePositive;
+        private String outcomeDescription;
+
+        private ClinicalOutcome(Builder builder) {
+            this.patientId = builder.patientId;
+            this.patternType = builder.patternType;
+            this.predictionTime = builder.predictionTime;
+            this.validationTime = builder.validationTime;
+            this.truePositive = builder.truePositive;
+            this.falsePositive = builder.falsePositive;
+            this.outcomeDescription = builder.outcomeDescription;
+        }
+
+        public static Builder builder() { return new Builder(); }
+
+        public static class Builder {
+            private String patientId;
+            private String patternType;
+            private long predictionTime;
+            private long validationTime;
+            private boolean truePositive;
+            private boolean falsePositive;
+            private String outcomeDescription;
+
+            public Builder patientId(String patientId) { this.patientId = patientId; return this; }
+            public Builder patternType(String patternType) { this.patternType = patternType; return this; }
+            public Builder predictionTime(long predictionTime) { this.predictionTime = predictionTime; return this; }
+            public Builder validationTime(long validationTime) { this.validationTime = validationTime; return this; }
+            public Builder truePositive(boolean truePositive) { this.truePositive = truePositive; return this; }
+            public Builder falsePositive(boolean falsePositive) { this.falsePositive = falsePositive; return this; }
+            public Builder outcomeDescription(String outcomeDescription) { this.outcomeDescription = outcomeDescription; return this; }
+
+            public ClinicalOutcome build() { return new ClinicalOutcome(this); }
+        }
+
+        // Getters
+        public String getPatientId() { return patientId; }
+        public String getPatternType() { return patternType; }
+        public long getPredictionTime() { return predictionTime; }
+        public long getValidationTime() { return validationTime; }
+        public boolean isTruePositive() { return truePositive; }
+        public boolean isFalsePositive() { return falsePositive; }
+        public String getOutcomeDescription() { return outcomeDescription; }
+    }
+
+    public static class ValidationOutcome {
+        private boolean truePositive;
+        private boolean falsePositive;
+        private String description;
+
+        private ValidationOutcome(Builder builder) {
+            this.truePositive = builder.truePositive;
+            this.falsePositive = builder.falsePositive;
+            this.description = builder.description;
+        }
+
+        public static Builder builder() { return new Builder(); }
+
+        public static class Builder {
+            private boolean truePositive;
+            private boolean falsePositive;
+            private String description;
+
+            public Builder truePositive(boolean truePositive) { this.truePositive = truePositive; return this; }
+            public Builder falsePositive(boolean falsePositive) { this.falsePositive = falsePositive; return this; }
+            public Builder description(String description) { this.description = description; return this; }
+
+            public ValidationOutcome build() { return new ValidationOutcome(this); }
+        }
+
+        // Getters
+        public boolean isTruePositive() { return truePositive; }
+        public boolean isFalsePositive() { return falsePositive; }
+        public String getDescription() { return description; }
+    }
+
+    public static class ValidationMetrics {
+        private int truePositives = 0;
+        private int falsePositives = 0;
+        private int trueNegatives = 0;
+        private int falseNegatives = 0;
+        private int totalPredictions = 0;
+
+        public void addResult(ValidationResult result) {
+            totalPredictions++;
+
+            if (result.isTruePositive()) {
+                truePositives++;
+            } else if (result.isFalsePositive()) {
+                falsePositives++;
+            } else {
+                // Assume true negative if not explicitly false positive or true positive
+                trueNegatives++;
+            }
+        }
+
+        public double calculateSensitivity() {
+            return truePositives + falseNegatives > 0 ?
+                (double) truePositives / (truePositives + falseNegatives) : 0.0;
+        }
+
+        public double calculateSpecificity() {
+            return trueNegatives + falsePositives > 0 ?
+                (double) trueNegatives / (trueNegatives + falsePositives) : 0.0;
+        }
+
+        public double calculatePositivePredictiveValue() {
+            return truePositives + falsePositives > 0 ?
+                (double) truePositives / (truePositives + falsePositives) : 0.0;
+        }
+
+        public double calculateNegativePredictiveValue() {
+            return trueNegatives + falseNegatives > 0 ?
+                (double) trueNegatives / (trueNegatives + falseNegatives) : 0.0;
+        }
+
+        public double calculateAccuracy() {
+            return totalPredictions > 0 ?
+                (double) (truePositives + trueNegatives) / totalPredictions : 0.0;
+        }
+
+        public double calculateF1Score() {
+            double precision = calculatePositivePredictiveValue();
+            double recall = calculateSensitivity();
+            return precision + recall > 0 ? 2 * (precision * recall) / (precision + recall) : 0.0;
+        }
+
+        public double calculateConfidenceInterval() {
+            // 95% confidence interval for accuracy
+            double accuracy = calculateAccuracy();
+            double z = 1.96; // 95% confidence
+            return z * Math.sqrt((accuracy * (1 - accuracy)) / totalPredictions);
+        }
+
+        // Getters
+        public int getTotalPredictions() { return totalPredictions; }
+        public int getTruePositives() { return truePositives; }
+        public int getFalsePositives() { return falsePositives; }
+        public int getTrueNegatives() { return trueNegatives; }
+        public int getFalseNegatives() { return falseNegatives; }
+    }
+
+    public static class PopulationMetrics {
+        private String patternType;
+        private long timestamp;
+        private int totalPredictions;
+        private double sensitivity;
+        private double specificity;
+        private double positivePredictiveValue;
+        private double negativePredictiveValue;
+        private double accuracy;
+        private double f1Score;
+        private boolean meetsTargets;
+        private double confidenceInterval95;
+
+        private PopulationMetrics(Builder builder) {
+            this.patternType = builder.patternType;
+            this.timestamp = builder.timestamp;
+            this.totalPredictions = builder.totalPredictions;
+            this.sensitivity = builder.sensitivity;
+            this.specificity = builder.specificity;
+            this.positivePredictiveValue = builder.positivePredictiveValue;
+            this.negativePredictiveValue = builder.negativePredictiveValue;
+            this.accuracy = builder.accuracy;
+            this.f1Score = builder.f1Score;
+            this.meetsTargets = builder.meetsTargets;
+            this.confidenceInterval95 = builder.confidenceInterval95;
+        }
+
+        public static Builder builder() { return new Builder(); }
+
+        public static class Builder {
+            private String patternType;
+            private long timestamp;
+            private int totalPredictions;
+            private double sensitivity;
+            private double specificity;
+            private double positivePredictiveValue;
+            private double negativePredictiveValue;
+            private double accuracy;
+            private double f1Score;
+            private boolean meetsTargets;
+            private double confidenceInterval95;
+
+            public Builder patternType(String patternType) { this.patternType = patternType; return this; }
+            public Builder timestamp(long timestamp) { this.timestamp = timestamp; return this; }
+            public Builder totalPredictions(int totalPredictions) { this.totalPredictions = totalPredictions; return this; }
+            public Builder sensitivity(double sensitivity) { this.sensitivity = sensitivity; return this; }
+            public Builder specificity(double specificity) { this.specificity = specificity; return this; }
+            public Builder positivePredictiveValue(double positivePredictiveValue) { this.positivePredictiveValue = positivePredictiveValue; return this; }
+            public Builder negativePredictiveValue(double negativePredictiveValue) { this.negativePredictiveValue = negativePredictiveValue; return this; }
+            public Builder accuracy(double accuracy) { this.accuracy = accuracy; return this; }
+            public Builder f1Score(double f1Score) { this.f1Score = f1Score; return this; }
+            public Builder meetsTargets(boolean meetsTargets) { this.meetsTargets = meetsTargets; return this; }
+            public Builder confidenceInterval95(double confidenceInterval95) { this.confidenceInterval95 = confidenceInterval95; return this; }
+
+            public PopulationMetrics build() { return new PopulationMetrics(this); }
+        }
+
+        // Getters
+        public String getPatternType() { return patternType; }
+        public long getTimestamp() { return timestamp; }
+        public int getTotalPredictions() { return totalPredictions; }
+        public double getSensitivity() { return sensitivity; }
+        public double getSpecificity() { return specificity; }
+        public double getPositivePredictiveValue() { return positivePredictiveValue; }
+        public double getNegativePredictiveValue() { return negativePredictiveValue; }
+        public double getAccuracy() { return accuracy; }
+        public double getF1Score() { return f1Score; }
+        public boolean isMeetsTargets() { return meetsTargets; }
+        public double getConfidenceInterval95() { return confidenceInterval95; }
+    }
+}

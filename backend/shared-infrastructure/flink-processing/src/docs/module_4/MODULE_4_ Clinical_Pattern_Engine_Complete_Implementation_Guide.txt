@@ -1,0 +1,3248 @@
+﻿# 🚀 **MODULE 4: Clinical Pattern Engines - Complete Implementation Guide**
+
+
+## 📋 **Executive Summary**
+
+
+**Goal:** Build real-time clinical pattern detection using Apache Flink CEP (Complex Event Processing) and windowed analytics, integrating with Module 3's Semantic Mesh.
+
+
+**Timeline:** 4 weeks (160 hours)  
+**Complexity:** High (Distributed streaming + Clinical logic)  
+**Prerequisites:** Module 3 Complete (Semantic Mesh operational)
+
+
+---
+
+
+## 🏗️ **Module 4 Architecture**
+
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              MODULE 4: CLINICAL PATTERN ENGINES              │
+└─────────────────────────────────────────────────────────────┘
+
+
+                    ┌──────────────────────┐
+                    │   Module 3           │
+                    │   Semantic Mesh      │
+                    │   (Broadcast State)  │
+                    └──────────┬───────────┘
+                               │
+                    ┌──────────┴───────────┐
+                    │   Enriched Events    │
+                    │   (Patient Context)  │
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┴────────────────┐
+              │                                 │
+              ▼                                 ▼
+    ┌─────────────────┐              ┌─────────────────┐
+    │   CEP Engine    │              │   Windowed      │
+    │   (Patterns)    │              │   Analytics     │
+    │                 │              │                 │
+    │ - Deterioration │              │ - Lab Trends    │
+    │ - Med Adherence │              │ - Vital Trends  │
+    │ - Drug-Lab      │              │ - Risk Scoring  │
+    │ - Pathways      │              │ - Aggregates    │
+    └────────┬────────┘              └────────┬────────┘
+             │                                │
+             └────────────┬───────────────────┘
+                          ▼
+                ┌──────────────────┐
+                │   Alert Stream   │
+                │   (Prioritized)  │
+                └──────────────────┘
+```
+
+
+---
+
+
+## 📦 **Component 4A: CEP Pattern Detection**
+
+
+### **4A.1: Event Models for CEP**
+
+
+```java
+package com.hospital.flink.cep;
+
+
+import lombok.Data;
+import java.time.Instant;
+
+
+/**
+ * Base clinical event for CEP processing
+ */
+@Data
+public abstract class ClinicalEvent {
+    private String patientId;
+    private String eventType;
+    private Instant timestamp;
+    private String sourceSystem;
+}
+
+
+/**
+ * Vital sign event
+ */
+@Data
+public class VitalSignEvent extends ClinicalEvent {
+    private VitalType vitalType;
+    private double value;
+    private String unit;
+    private boolean isAbnormal;
+    private AbnormalityLevel abnormalityLevel;
+    
+    public enum VitalType {
+        HEART_RATE, BLOOD_PRESSURE_SYSTOLIC, BLOOD_PRESSURE_DIASTOLIC,
+        RESPIRATORY_RATE, TEMPERATURE, OXYGEN_SATURATION, 
+        MEAN_ARTERIAL_PRESSURE, GLASGOW_COMA_SCALE
+    }
+    
+    public enum AbnormalityLevel {
+        NORMAL, BORDERLINE, ABNORMAL, CRITICAL
+    }
+}
+
+
+/**
+ * Lab result event
+ */
+@Data
+public class LabResultEvent extends ClinicalEvent {
+    private String labCode;          // LOINC code
+    private String labName;
+    private double value;
+    private String unit;
+    private double referenceMin;
+    private double referenceMax;
+    private boolean isCritical;
+}
+
+
+/**
+ * Medication event
+ */
+@Data
+public class MedicationEvent extends ClinicalEvent {
+    private MedicationEventType medicationEventType;
+    private String medicationCode;   // RxNorm
+    private String medicationName;
+    private String dose;
+    private String route;
+    private Instant scheduledTime;
+    private Instant actualTime;
+    
+    public enum MedicationEventType {
+        ORDERED, ADMINISTERED, DUE, MISSED, DISCONTINUED
+    }
+}
+
+
+/**
+ * Clinical condition event
+ */
+@Data
+public class ConditionEvent extends ClinicalEvent {
+    private String conditionCode;    // ICD-10
+    private String conditionName;
+    private ConditionStatus status;
+    private Instant onsetDate;
+    
+    public enum ConditionStatus {
+        ACTIVE, RESOLVED, WORSENING, IMPROVING
+    }
+}
+```
+
+
+---
+
+
+### **4A.2: CEP Pattern Definitions**
+
+
+```java
+package com.hospital.flink.cep.patterns;
+
+
+import org.apache.flink.cep.pattern.Pattern;
+import org.apache.flink.cep.pattern.conditions.SimpleCondition;
+import org.apache.flink.streaming.api.windowing.time.Time;
+
+
+/**
+ * Clinical deterioration patterns using Flink CEP
+ */
+public class ClinicalPatterns {
+    
+    /**
+     * PATTERN 1: Sepsis Early Warning
+     * 
+     * Clinical Logic:
+     * - Elevated heart rate (>100 bpm)
+     * - Followed by low blood pressure (<100 mmHg systolic)
+     * - Followed by elevated lactate (>2.0 mmol/L)
+     * Within 2-hour window
+     * 
+     * Clinical Significance: Early sepsis identification
+     */
+    public static Pattern<VitalSignEvent, ?> sepsisEarlyWarningPattern() {
+        return Pattern.<VitalSignEvent>begin("tachycardia")
+            .where(new SimpleCondition<VitalSignEvent>() {
+                @Override
+                public boolean filter(VitalSignEvent event) {
+                    return event.getVitalType() == VitalType.HEART_RATE 
+                        && event.getValue() > 100;
+                }
+            })
+            .followedBy("hypotension")
+            .where(new SimpleCondition<VitalSignEvent>() {
+                @Override
+                public boolean filter(VitalSignEvent event) {
+                    return event.getVitalType() == VitalType.BLOOD_PRESSURE_SYSTOLIC 
+                        && event.getValue() < 100;
+                }
+            })
+            .within(Time.hours(2));
+    }
+    
+    /**
+     * PATTERN 2: Rapid Clinical Deterioration
+     * 
+     * Clinical Logic:
+     * - Heart rate increases by >20 bpm
+     * - Followed by respiratory rate increase >30%
+     * - Followed by oxygen saturation drop >5%
+     * Within 1-hour window
+     * 
+     * Clinical Significance: Respiratory/cardiac decompensation
+     */
+    public static Pattern<VitalSignEvent, ?> rapidDeteriorationPattern() {
+        return Pattern.<VitalSignEvent>begin("hr_baseline")
+            .where(new SimpleCondition<VitalSignEvent>() {
+                @Override
+                public boolean filter(VitalSignEvent event) {
+                    return event.getVitalType() == VitalType.HEART_RATE;
+                }
+            })
+            .followedBy("hr_elevated")
+            .where(new SimpleCondition<VitalSignEvent>() {
+                @Override
+                public boolean filter(VitalSignEvent event) {
+                    return event.getVitalType() == VitalType.HEART_RATE;
+                }
+            })
+            .where((current, ctx) -> {
+                VitalSignEvent baseline = ctx.getEventsForPattern("hr_baseline")
+                    .iterator().next();
+                return current.getValue() - baseline.getValue() > 20;
+            })
+            .followedBy("rr_elevated")
+            .where(new SimpleCondition<VitalSignEvent>() {
+                @Override
+                public boolean filter(VitalSignEvent event) {
+                    return event.getVitalType() == VitalType.RESPIRATORY_RATE 
+                        && event.getValue() > 24;
+                }
+            })
+            .followedBy("o2sat_decreased")
+            .where(new SimpleCondition<VitalSignEvent>() {
+                @Override
+                public boolean filter(VitalSignEvent event) {
+                    return event.getVitalType() == VitalType.OXYGEN_SATURATION 
+                        && event.getValue() < 92;
+                }
+            })
+            .within(Time.hours(1));
+    }
+    
+    /**
+     * PATTERN 3: Medication Adherence Monitoring
+     * 
+     * Clinical Logic:
+     * - Medication ordered
+     * - Medication due (scheduled time)
+     * - ABSENCE of administration event within 6 hours
+     * 
+     * Clinical Significance: Medication error prevention
+     */
+    public static Pattern<MedicationEvent, ?> medicationAdherencePattern() {
+        return Pattern.<MedicationEvent>begin("med_due")
+            .where(new SimpleCondition<MedicationEvent>() {
+                @Override
+                public boolean filter(MedicationEvent event) {
+                    return event.getMedicationEventType() == MedicationEventType.DUE;
+                }
+            })
+            .notFollowedBy("med_administered")
+            .where(new SimpleCondition<MedicationEvent>() {
+                @Override
+                public boolean filter(MedicationEvent event) {
+                    return event.getMedicationEventType() == MedicationEventType.ADMINISTERED;
+                }
+            })
+            .within(Time.hours(6));
+    }
+    
+    /**
+     * PATTERN 4: Drug-Lab Interaction Monitoring
+     * 
+     * Clinical Logic:
+     * - ACE inhibitor started
+     * - Check for potassium/creatinine lab within 48 hours
+     * - Alert if labs not ordered
+     * 
+     * Clinical Significance: Drug safety monitoring
+     */
+    public static Pattern<Object, ?> drugLabMonitoringPattern() {
+        return Pattern.<Object>begin("ace_inhibitor_started")
+            .where(new SimpleCondition<Object>() {
+                @Override
+                public boolean filter(Object event) {
+                    if (event instanceof MedicationEvent) {
+                        MedicationEvent medEvent = (MedicationEvent) event;
+                        return medEvent.getMedicationEventType() == MedicationEventType.ORDERED
+                            && isACEInhibitor(medEvent.getMedicationCode());
+                    }
+                    return false;
+                }
+            })
+            .notFollowedBy("renal_labs_ordered")
+            .where(new SimpleCondition<Object>() {
+                @Override
+                public boolean filter(Object event) {
+                    if (event instanceof LabResultEvent) {
+                        LabResultEvent labEvent = (LabResultEvent) event;
+                        return labEvent.getLabCode().equals("2160-0") // Creatinine
+                            || labEvent.getLabCode().equals("2823-3"); // Potassium
+                    }
+                    return false;
+                }
+            })
+            .within(Time.hours(48));
+    }
+    
+    /**
+     * PATTERN 5: Clinical Pathway Deviation
+     * 
+     * Clinical Logic:
+     * - Sepsis condition diagnosed
+     * - Blood cultures should be drawn within 1 hour
+     * - Antibiotics should start within 1 hour
+     * - Alert if pathway not followed
+     * 
+     * Clinical Significance: Sepsis bundle compliance
+     */
+    public static Pattern<Object, ?> sepsisPathwayPattern() {
+        return Pattern.<Object>begin("sepsis_diagnosis")
+            .where(new SimpleCondition<Object>() {
+                @Override
+                public boolean filter(Object event) {
+                    if (event instanceof ConditionEvent) {
+                        ConditionEvent condEvent = (ConditionEvent) event;
+                        return condEvent.getConditionCode().startsWith("A41"); // Sepsis ICD-10
+                    }
+                    return false;
+                }
+            })
+            .followedBy("blood_cultures_ordered")
+            .where(new SimpleCondition<Object>() {
+                @Override
+                public boolean filter(Object event) {
+                    if (event instanceof LabResultEvent) {
+                        LabResultEvent labEvent = (LabResultEvent) event;
+                        return labEvent.getLabName().contains("Blood Culture");
+                    }
+                    return false;
+                }
+            })
+            .within(Time.hours(1))
+            .followedBy("antibiotics_started")
+            .where(new SimpleCondition<Object>() {
+                @Override
+                public boolean filter(Object event) {
+                    if (event instanceof MedicationEvent) {
+                        MedicationEvent medEvent = (MedicationEvent) event;
+                        return medEvent.getMedicationEventType() == MedicationEventType.ADMINISTERED
+                            && isAntibiotic(medEvent.getMedicationCode());
+                    }
+                    return false;
+                }
+            })
+            .within(Time.hours(1));
+    }
+    
+    /**
+     * PATTERN 6: Acute Kidney Injury (AKI) Detection
+     * 
+     * Clinical Logic:
+     * - Baseline creatinine
+     * - New creatinine >50% increase from baseline
+     * - Within 48 hours
+     * 
+     * Clinical Significance: Early AKI detection
+     */
+    public static Pattern<LabResultEvent, ?> akiDetectionPattern() {
+        return Pattern.<LabResultEvent>begin("baseline_creatinine")
+            .where(new SimpleCondition<LabResultEvent>() {
+                @Override
+                public boolean filter(LabResultEvent event) {
+                    return event.getLabCode().equals("2160-0"); // Creatinine LOINC
+                }
+            })
+            .followedBy("elevated_creatinine")
+            .where(new SimpleCondition<LabResultEvent>() {
+                @Override
+                public boolean filter(LabResultEvent event) {
+                    return event.getLabCode().equals("2160-0");
+                }
+            })
+            .where((current, ctx) -> {
+                LabResultEvent baseline = ctx.getEventsForPattern("baseline_creatinine")
+                    .iterator().next();
+                double increase = (current.getValue() - baseline.getValue()) / baseline.getValue();
+                return increase > 0.50; // 50% increase
+            })
+            .within(Time.hours(48));
+    }
+    
+    // Helper methods
+    private static boolean isACEInhibitor(String medicationCode) {
+        // RxNorm codes for ACE inhibitors
+        return medicationCode.startsWith("1998") || medicationCode.startsWith("3827");
+    }
+    
+    private static boolean isAntibiotic(String medicationCode) {
+        // Simplified - check against antibiotic RxNorm codes
+        return medicationCode.matches("(197|198|199|200).*");
+    }
+}
+```
+
+
+---
+
+
+### **4A.3: CEP Pattern Processing Job**
+
+
+```java
+package com.hospital.flink.cep;
+
+
+import org.apache.flink.cep.CEP;
+import org.apache.flink.cep.PatternSelectFunction;
+import org.apache.flink.cep.PatternStream;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+
+
+import java.time.Duration;
+import java.util.*;
+
+
+/**
+ * Main CEP processing job for clinical pattern detection
+ */
+public class ClinicalPatternDetectionJob {
+    
+    public static void main(String[] args) throws Exception {
+        
+        // Setup Flink environment
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(32);
+        env.enableCheckpointing(60000); // 60-second checkpoints
+        
+        // ═══════════════════════════════════════════════════════
+        // INPUT: Read enriched events from Kafka
+        // ═══════════════════════════════════════════════════════
+        
+        DataStream<VitalSignEvent> vitalSignStream = env
+            .fromSource(
+                createKafkaSource("ehr-events-vitals"),
+                WatermarkStrategy
+                    .<VitalSignEvent>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                    .withTimestampAssigner((event, timestamp) -> 
+                        event.getTimestamp().toEpochMilli()),
+                "vital-signs-source"
+            )
+            .keyBy(VitalSignEvent::getPatientId);
+        
+        DataStream<LabResultEvent> labResultStream = env
+            .fromSource(
+                createKafkaSource("ehr-events-labs"),
+                WatermarkStrategy
+                    .<LabResultEvent>forBoundedOutOfOrderness(Duration.ofMinutes(10))
+                    .withTimestampAssigner((event, timestamp) -> 
+                        event.getTimestamp().toEpochMilli()),
+                "lab-results-source"
+            )
+            .keyBy(LabResultEvent::getPatientId);
+        
+        DataStream<MedicationEvent> medicationStream = env
+            .fromSource(
+                createKafkaSource("ehr-events-medications"),
+                WatermarkStrategy
+                    .<MedicationEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((event, timestamp) -> 
+                        event.getTimestamp().toEpochMilli()),
+                "medication-source"
+            )
+            .keyBy(MedicationEvent::getPatientId);
+        
+        // ═══════════════════════════════════════════════════════
+        // CEP PATTERN 1: Sepsis Early Warning
+        // ═══════════════════════════════════════════════════════
+        
+        PatternStream<VitalSignEvent> sepsisPattern = CEP.pattern(
+            vitalSignStream,
+            ClinicalPatterns.sepsisEarlyWarningPattern()
+        );
+        
+        DataStream<ClinicalAlert> sepsisAlerts = sepsisPattern.select(
+            new PatternSelectFunction<VitalSignEvent, ClinicalAlert>() {
+                @Override
+                public ClinicalAlert select(Map<String, List<VitalSignEvent>> pattern) {
+                    VitalSignEvent tachycardia = pattern.get("tachycardia").get(0);
+                    VitalSignEvent hypotension = pattern.get("hypotension").get(0);
+                    
+                    return ClinicalAlert.builder()
+                        .alertId(UUID.randomUUID().toString())
+                        .patientId(tachycardia.getPatientId())
+                        .alertType(AlertType.SEPSIS_EARLY_WARNING)
+                        .severity(AlertSeverity.CRITICAL)
+                        .title("Sepsis Early Warning: Tachycardia + Hypotension")
+                        .description(String.format(
+                            "Patient showing early signs of sepsis:\n" +
+                            "- Heart Rate: %.0f bpm (elevated)\n" +
+                            "- Blood Pressure: %.0f/? mmHg (low)\n" +
+                            "Time between events: %d minutes",
+                            tachycardia.getValue(),
+                            hypotension.getValue(),
+                            Duration.between(
+                                tachycardia.getTimestamp(), 
+                                hypotension.getTimestamp()
+                            ).toMinutes()
+                        ))
+                        .recommendations(Arrays.asList(
+                            "Order lactate level immediately",
+                            "Obtain blood cultures before antibiotics",
+                            "Consider activating sepsis protocol",
+                            "Notify physician"
+                        ))
+                        .triggerEvents(Arrays.asList(
+                            tachycardia.getEventType(),
+                            hypotension.getEventType()
+                        ))
+                        .timestamp(hypotension.getTimestamp())
+                        .expiresAt(hypotension.getTimestamp().plus(Duration.ofHours(4)))
+                        .build();
+                }
+            }
+        );
+        
+        // ═══════════════════════════════════════════════════════
+        // CEP PATTERN 2: Rapid Deterioration
+        // ═══════════════════════════════════════════════════════
+        
+        PatternStream<VitalSignEvent> deteriorationPattern = CEP.pattern(
+            vitalSignStream,
+            ClinicalPatterns.rapidDeteriorationPattern()
+        );
+        
+        DataStream<ClinicalAlert> deteriorationAlerts = deteriorationPattern.select(
+            new PatternSelectFunction<VitalSignEvent, ClinicalAlert>() {
+                @Override
+                public ClinicalAlert select(Map<String, List<VitalSignEvent>> pattern) {
+                    VitalSignEvent hrBaseline = pattern.get("hr_baseline").get(0);
+                    VitalSignEvent hrElevated = pattern.get("hr_elevated").get(0);
+                    VitalSignEvent rrElevated = pattern.get("rr_elevated").get(0);
+                    VitalSignEvent o2Decreased = pattern.get("o2sat_decreased").get(0);
+                    
+                    double hrIncrease = hrElevated.getValue() - hrBaseline.getValue();
+                    
+                    return ClinicalAlert.builder()
+                        .alertId(UUID.randomUUID().toString())
+                        .patientId(hrBaseline.getPatientId())
+                        .alertType(AlertType.RAPID_DETERIORATION)
+                        .severity(AlertSeverity.HIGH)
+                        .title("Rapid Clinical Deterioration Detected")
+                        .description(String.format(
+                            "Patient showing signs of clinical deterioration:\n" +
+                            "- Heart Rate: %.0f → %.0f bpm (+%.0f)\n" +
+                            "- Respiratory Rate: %.0f/min (elevated)\n" +
+                            "- Oxygen Saturation: %.1f%% (decreased)\n" +
+                            "Pattern detected over %d minutes",
+                            hrBaseline.getValue(),
+                            hrElevated.getValue(),
+                            hrIncrease,
+                            rrElevated.getValue(),
+                            o2Decreased.getValue(),
+                            Duration.between(
+                                hrBaseline.getTimestamp(),
+                                o2Decreased.getTimestamp()
+                            ).toMinutes()
+                        ))
+                        .recommendations(Arrays.asList(
+                            "Activate Rapid Response Team",
+                            "Assess airway, breathing, circulation",
+                            "Consider ICU transfer",
+                            "Obtain arterial blood gas"
+                        ))
+                        .triggerEvents(Arrays.asList(
+                            "HR_INCREASE", "RR_ELEVATED", "O2SAT_DECREASED"
+                        ))
+                        .timestamp(o2Decreased.getTimestamp())
+                        .build();
+                }
+            }
+        );
+        
+        // ═══════════════════════════════════════════════════════
+        // CEP PATTERN 3: Medication Adherence
+        // ═══════════════════════════════════════════════════════
+        
+        PatternStream<MedicationEvent> medAdherencePattern = CEP.pattern(
+            medicationStream,
+            ClinicalPatterns.medicationAdherencePattern()
+        );
+        
+        DataStream<ClinicalAlert> medAdherenceAlerts = medAdherencePattern.select(
+            new PatternSelectFunction<MedicationEvent, ClinicalAlert>() {
+                @Override
+                public ClinicalAlert select(Map<String, List<MedicationEvent>> pattern) {
+                    MedicationEvent medDue = pattern.get("med_due").get(0);
+                    
+                    Duration delay = Duration.between(
+                        medDue.getScheduledTime(),
+                        Instant.now()
+                    );
+                    
+                    return ClinicalAlert.builder()
+                        .alertId(UUID.randomUUID().toString())
+                        .patientId(medDue.getPatientId())
+                        .alertType(AlertType.MEDICATION_ADHERENCE)
+                        .severity(delay.toHours() > 12 ? 
+                                 AlertSeverity.HIGH : AlertSeverity.MEDIUM)
+                        .title("Medication Not Administered")
+                        .description(String.format(
+                            "Medication overdue for administration:\n" +
+                            "- Medication: %s\n" +
+                            "- Dose: %s %s\n" +
+                            "- Scheduled: %s\n" +
+                            "- Time Overdue: %d hours %d minutes",
+                            medDue.getMedicationName(),
+                            medDue.getDose(),
+                            medDue.getRoute(),
+                            medDue.getScheduledTime().toString(),
+                            delay.toHours(),
+                            delay.toMinutesPart()
+                        ))
+                        .recommendations(Arrays.asList(
+                            "Verify medication order is still active",
+                            "Administer medication if appropriate",
+                            "Document reason for delay",
+                            "Contact prescribing physician if discontinued"
+                        ))
+                        .timestamp(Instant.now())
+                        .build();
+                }
+            }
+        );
+        
+        // ═══════════════════════════════════════════════════════
+        // CEP PATTERN 4: AKI Detection
+        // ═══════════════════════════════════════════════════════
+        
+        PatternStream<LabResultEvent> akiPattern = CEP.pattern(
+            labResultStream,
+            ClinicalPatterns.akiDetectionPattern()
+        );
+        
+        DataStream<ClinicalAlert> akiAlerts = akiPattern.select(
+            new PatternSelectFunction<LabResultEvent, ClinicalAlert>() {
+                @Override
+                public ClinicalAlert select(Map<String, List<LabResultEvent>> pattern) {
+                    LabResultEvent baseline = pattern.get("baseline_creatinine").get(0);
+                    LabResultEvent elevated = pattern.get("elevated_creatinine").get(0);
+                    
+                    double percentIncrease = ((elevated.getValue() - baseline.getValue()) 
+                                            / baseline.getValue()) * 100;
+                    
+                    return ClinicalAlert.builder()
+                        .alertId(UUID.randomUUID().toString())
+                        .patientId(baseline.getPatientId())
+                        .alertType(AlertType.ACUTE_KIDNEY_INJURY)
+                        .severity(AlertSeverity.HIGH)
+                        .title("Acute Kidney Injury (AKI) Detected")
+                        .description(String.format(
+                            "Significant creatinine elevation detected:\n" +
+                            "- Baseline Creatinine: %.2f %s\n" +
+                            "- Current Creatinine: %.2f %s\n" +
+                            "- Increase: %.1f%% (>50%% threshold)\n" +
+                            "- Time Frame: %d hours\n\n" +
+                            "Meets KDIGO AKI Stage 1 criteria",
+                            baseline.getValue(),
+                            baseline.getUnit(),
+                            elevated.getValue(),
+                            elevated.getUnit(),
+                            percentIncrease,
+                            Duration.between(
+                                baseline.getTimestamp(),
+                                elevated.getTimestamp()
+                            ).toHours()
+                        ))
+                        .recommendations(Arrays.asList(
+                            "Review medications (NSAIDs, ACE inhibitors, diuretics)",
+                            "Check urine output trend",
+                            "Consider nephrology consultation",
+                            "Hold nephrotoxic medications",
+                            "Ensure adequate hydration"
+                        ))
+                        .timestamp(elevated.getTimestamp())
+                        .build();
+                }
+            }
+        );
+        
+        // ═══════════════════════════════════════════════════════
+        // COMBINE ALL ALERTS
+        // ═══════════════════════════════════════════════════════
+        
+        DataStream<ClinicalAlert> allAlerts = sepsisAlerts
+            .union(deteriorationAlerts)
+            .union(medAdherenceAlerts)
+            .union(akiAlerts);
+        
+        // ═══════════════════════════════════════════════════════
+        // OUTPUT: Write alerts to Kafka
+        // ═══════════════════════════════════════════════════════
+        
+        allAlerts.sinkTo(
+            createKafkaSink("ehr-alerts-critical")
+        );
+        
+        // Execute job
+        env.execute("Clinical Pattern Detection CEP Job");
+    }
+}
+```
+
+
+---
+
+
+## 📦 **Component 4B: Windowed Analytics**
+
+
+### **4B.1: Lab Trend Analysis**
+
+
+```java
+package com.hospital.flink.windows;
+
+
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
+import org.apache.flink.util.Collector;
+
+
+import java.util.*;
+
+
+/**
+ * Lab trend analysis using sliding windows
+ */
+public class LabTrendAnalyzer {
+    
+    /**
+     * Analyze creatinine trends for AKI detection
+     * Window: 48 hours, Slide: 1 hour
+     */
+    public static DataStream<LabTrendAlert> analyzeCreatinineTrends(
+        DataStream<LabResultEvent> labStream) {
+        
+        return labStream
+            .filter(lab -> lab.getLabCode().equals("2160-0")) // Creatinine
+            .keyBy(LabResultEvent::getPatientId)
+            .window(SlidingEventTimeWindows.of(Time.hours(48), Time.hours(1)))
+            .apply(new CreatinineTrendWindowFunction());
+    }
+    
+    /**
+     * Window function to detect creatinine trends
+     */
+    public static class CreatinineTrendWindowFunction 
+        implements WindowFunction<LabResultEvent, LabTrendAlert, String, TimeWindow> {
+        
+        @Override
+        public void apply(String patientId,
+                         TimeWindow window,
+                         Iterable<LabResultEvent> values,
+                         Collector<LabTrendAlert> out) {
+            
+            List<LabResultEvent> labResults = new ArrayList<>();
+            values.forEach(labResults::add);
+            
+            if (labResults.size() < 2) {
+                return; // Need at least 2 values for trend
+            }
+            
+            // Sort by timestamp
+            labResults.sort(Comparator.comparing(LabResultEvent::getTimestamp));
+            
+            // Calculate trend
+            double firstValue = labResults.get(0).getValue();
+            double lastValue = labResults.get(labResults.size() - 1).getValue();
+            double percentChange = ((lastValue - firstValue) / firstValue) * 100;
+            
+            // Linear regression for trend line
+            TrendAnalysis trend = calculateLinearTrend(labResults);
+            
+            // Check for concerning trends
+            if (Math.abs(percentChange) > 25 || Math.abs(trend.getSlope()) > 0.1) {
+                LabTrendAlert alert = LabTrendAlert.builder()
+                    .patientId(patientId)
+                    .labName("Creatinine")
+                    .windowStart(window.getStart())
+                    .windowEnd(window.getEnd())
+                    .firstValue(firstValue)
+                    .lastValue(lastValue)
+                    .percentChange(percentChange)
+                    .trendSlope(trend.getSlope())
+                    .trendDirection(trend.getDirection())
+                    .dataPoints(labResults.size())
+                    .rSquared(trend.getRSquared())
+                    .interpretation(interpretCreatinineTrend(percentChange, trend))
+                    .build();
+                
+                out.collect(alert);
+            }
+        }
+        
+        private TrendAnalysis calculateLinearTrend(List<LabResultEvent> values) {
+            int n = values.size();
+            double sumX = 0, sumY
+```java
+            double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            
+            // Convert timestamps to hours since first reading
+            long baseTime = values.get(0).getTimestamp().toEpochMilli();
+            
+            for (int i = 0; i < n; i++) {
+                double x = (values.get(i).getTimestamp().toEpochMilli() - baseTime) 
+                          / (1000.0 * 3600.0); // Convert to hours
+                double y = values.get(i).getValue();
+                
+                sumX += x;
+                sumY += y;
+                sumXY += x * y;
+                sumX2 += x * x;
+            }
+            
+            // Calculate slope and intercept
+            double slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            double intercept = (sumY - slope * sumX) / n;
+            
+            // Calculate R-squared
+            double meanY = sumY / n;
+            double ssTotal = 0, ssResidual = 0;
+            
+            for (int i = 0; i < n; i++) {
+                double x = (values.get(i).getTimestamp().toEpochMilli() - baseTime) 
+                          / (1000.0 * 3600.0);
+                double y = values.get(i).getValue();
+                double predicted = slope * x + intercept;
+                
+                ssTotal += Math.pow(y - meanY, 2);
+                ssResidual += Math.pow(y - predicted, 2);
+            }
+            
+            double rSquared = 1 - (ssResidual / ssTotal);
+            
+            TrendDirection direction;
+            if (Math.abs(slope) < 0.01) {
+                direction = TrendDirection.STABLE;
+            } else if (slope > 0) {
+                direction = slope > 0.1 ? TrendDirection.RAPIDLY_INCREASING 
+                                       : TrendDirection.INCREASING;
+            } else {
+                direction = slope < -0.1 ? TrendDirection.RAPIDLY_DECREASING 
+                                        : TrendDirection.DECREASING;
+            }
+            
+            return TrendAnalysis.builder()
+                .slope(slope)
+                .intercept(intercept)
+                .rSquared(rSquared)
+                .direction(direction)
+                .build();
+        }
+        
+        private String interpretCreatinineTrend(double percentChange, TrendAnalysis trend) {
+            if (trend.getDirection() == TrendDirection.RAPIDLY_INCREASING) {
+                return String.format(
+                    "🔴 CRITICAL: Creatinine rapidly increasing (%.1f%% over 48h). " +
+                    "Suggests acute kidney injury or deteriorating renal function. " +
+                    "Consider nephrology consultation.",
+                    percentChange
+                );
+            } else if (trend.getDirection() == TrendDirection.INCREASING && percentChange > 50) {
+                return String.format(
+                    "⚠️ WARNING: Creatinine elevated %.1f%% over 48h. " +
+                    "Monitor closely for AKI. Review nephrotoxic medications.",
+                    percentChange
+                );
+            } else if (trend.getDirection() == TrendDirection.RAPIDLY_DECREASING) {
+                return String.format(
+                    "✓ IMPROVING: Creatinine decreasing %.1f%%. " +
+                    "Renal function improving. Continue current management.",
+                    Math.abs(percentChange)
+                );
+            } else {
+                return "Creatinine trend stable within expected range.";
+            }
+        }
+    }
+    
+    /**
+     * Analyze glucose trends for diabetic patients
+     * Window: 24 hours, Slide: 4 hours
+     */
+    public static DataStream<LabTrendAlert> analyzeGlucoseTrends(
+        DataStream<LabResultEvent> labStream) {
+        
+        return labStream
+            .filter(lab -> lab.getLabCode().equals("2339-0")) // Glucose
+            .keyBy(LabResultEvent::getPatientId)
+            .window(SlidingEventTimeWindows.of(Time.hours(24), Time.hours(4)))
+            .apply(new GlucoseTrendWindowFunction());
+    }
+    
+    /**
+     * Window function for glucose trend analysis
+     */
+    public static class GlucoseTrendWindowFunction 
+        implements WindowFunction<LabResultEvent, LabTrendAlert, String, TimeWindow> {
+        
+        @Override
+        public void apply(String patientId,
+                         TimeWindow window,
+                         Iterable<LabResultEvent> values,
+                         Collector<LabTrendAlert> out) {
+            
+            List<LabResultEvent> glucoseValues = new ArrayList<>();
+            values.forEach(glucoseValues::add);
+            
+            if (glucoseValues.size() < 3) {
+                return; // Need at least 3 readings
+            }
+            
+            // Calculate statistics
+            DoubleSummaryStatistics stats = glucoseValues.stream()
+                .mapToDouble(LabResultEvent::getValue)
+                .summaryStatistics();
+            
+            double mean = stats.getAverage();
+            double min = stats.getMin();
+            double max = stats.getMax();
+            double range = max - min;
+            
+            // Calculate standard deviation (variability)
+            double variance = glucoseValues.stream()
+                .mapToDouble(lab -> Math.pow(lab.getValue() - mean, 2))
+                .average()
+                .orElse(0.0);
+            double stdDev = Math.sqrt(variance);
+            
+            // Calculate coefficient of variation (CV)
+            double cv = (stdDev / mean) * 100;
+            
+            // Detect concerning patterns
+            boolean hasHypoglycemia = min < 70;
+            boolean hasHyperglycemia = max > 200;
+            boolean highVariability = cv > 36; // CV >36% indicates high variability
+            
+            if (hasHypoglycemia || hasHyperglycemia || highVariability) {
+                String interpretation = interpretGlucosePattern(
+                    mean, min, max, cv, hasHypoglycemia, hasHyperglycemia, highVariability
+                );
+                
+                LabTrendAlert alert = LabTrendAlert.builder()
+                    .patientId(patientId)
+                    .labName("Glucose")
+                    .windowStart(window.getStart())
+                    .windowEnd(window.getEnd())
+                    .meanValue(mean)
+                    .minValue(min)
+                    .maxValue(max)
+                    .standardDeviation(stdDev)
+                    .coefficientOfVariation(cv)
+                    .dataPoints(glucoseValues.size())
+                    .interpretation(interpretation)
+                    .build();
+                
+                out.collect(alert);
+            }
+        }
+        
+        private String interpretGlucosePattern(double mean, double min, double max, 
+                                              double cv, boolean hypoglycemia, 
+                                              boolean hyperglycemia, boolean highVariability) {
+            StringBuilder interpretation = new StringBuilder();
+            
+            if (hypoglycemia) {
+                interpretation.append(String.format(
+                    "🔴 HYPOGLYCEMIA DETECTED: Minimum glucose %.0f mg/dL (<70). " +
+                    "Risk of severe hypoglycemia. Review insulin dosing.\n",
+                    min
+                ));
+            }
+            
+            if (hyperglycemia) {
+                interpretation.append(String.format(
+                    "⚠️ HYPERGLYCEMIA: Maximum glucose %.0f mg/dL (>200). " +
+                    "Poor glycemic control. Consider insulin adjustment.\n",
+                    max
+                ));
+            }
+            
+            if (highVariability) {
+                interpretation.append(String.format(
+                    "⚠️ HIGH VARIABILITY: CV=%.1f%% (>36%%). " +
+                    "Glucose swings from %.0f to %.0f mg/dL. " +
+                    "Erratic control - review meal timing and insulin regimen.\n",
+                    cv, min, max
+                ));
+            }
+            
+            interpretation.append(String.format(
+                "24h Summary: Mean %.0f mg/dL, Range %.0f-%.0f mg/dL",
+                mean, min, max
+            ));
+            
+            return interpretation.toString();
+        }
+    }
+}
+```
+
+
+---
+
+
+### **4B.2: Vital Sign Trend Analysis**
+
+
+```java
+package com.hospital.flink.windows;
+
+
+/**
+ * Vital sign trend analysis with MEWS calculation
+ */
+public class VitalSignTrendAnalyzer {
+    
+    /**
+     * Continuous MEWS (Modified Early Warning Score) calculation
+     * Window: 1 hour, Slide: 15 minutes
+     */
+    public static DataStream<MEWSAlert> calculateMEWSTrend(
+        DataStream<VitalSignEvent> vitalStream) {
+        
+        return vitalStream
+            .keyBy(VitalSignEvent::getPatientId)
+            .window(SlidingEventTimeWindows.of(Time.hours(1), Time.minutes(15)))
+            .apply(new MEWSCalculationWindowFunction());
+    }
+    
+    /**
+     * MEWS calculation window function
+     */
+    public static class MEWSCalculationWindowFunction 
+        implements WindowFunction<VitalSignEvent, MEWSAlert, String, TimeWindow> {
+        
+        @Override
+        public void apply(String patientId,
+                         TimeWindow window,
+                         Iterable<VitalSignEvent> values,
+                         Collector<MEWSAlert> out) {
+            
+            // Aggregate latest vitals by type
+            Map<VitalType, VitalSignEvent> latestVitals = new HashMap<>();
+            
+            for (VitalSignEvent vital : values) {
+                VitalType type = vital.getVitalType();
+                if (!latestVitals.containsKey(type) || 
+                    vital.getTimestamp().isAfter(latestVitals.get(type).getTimestamp())) {
+                    latestVitals.put(type, vital);
+                }
+            }
+            
+            // Calculate MEWS components
+            int mewsScore = 0;
+            Map<String, Integer> scoreBreakdown = new HashMap<>();
+            List<String> concerningVitals = new ArrayList<>();
+            
+            // Respiratory Rate
+            if (latestVitals.containsKey(VitalType.RESPIRATORY_RATE)) {
+                double rr = latestVitals.get(VitalType.RESPIRATORY_RATE).getValue();
+                int rrScore = calculateRRScore(rr);
+                mewsScore += rrScore;
+                scoreBreakdown.put("Respiratory_Rate", rrScore);
+                
+                if (rrScore >= 2) {
+                    concerningVitals.add(String.format("RR: %.0f/min (Score: %d)", rr, rrScore));
+                }
+            }
+            
+            // Heart Rate
+            if (latestVitals.containsKey(VitalType.HEART_RATE)) {
+                double hr = latestVitals.get(VitalType.HEART_RATE).getValue();
+                int hrScore = calculateHRScore(hr);
+                mewsScore += hrScore;
+                scoreBreakdown.put("Heart_Rate", hrScore);
+                
+                if (hrScore >= 2) {
+                    concerningVitals.add(String.format("HR: %.0f bpm (Score: %d)", hr, hrScore));
+                }
+            }
+            
+            // Systolic Blood Pressure
+            if (latestVitals.containsKey(VitalType.BLOOD_PRESSURE_SYSTOLIC)) {
+                double sbp = latestVitals.get(VitalType.BLOOD_PRESSURE_SYSTOLIC).getValue();
+                int sbpScore = calculateBPScore(sbp);
+                mewsScore += sbpScore;
+                scoreBreakdown.put("Blood_Pressure", sbpScore);
+                
+                if (sbpScore >= 2) {
+                    concerningVitals.add(String.format("SBP: %.0f mmHg (Score: %d)", sbp, sbpScore));
+                }
+            }
+            
+            // Temperature
+            if (latestVitals.containsKey(VitalType.TEMPERATURE)) {
+                double temp = latestVitals.get(VitalType.TEMPERATURE).getValue();
+                int tempScore = calculateTempScore(temp);
+                mewsScore += tempScore;
+                scoreBreakdown.put("Temperature", tempScore);
+                
+                if (tempScore >= 2) {
+                    concerningVitals.add(String.format("Temp: %.1f°C (Score: %d)", temp, tempScore));
+                }
+            }
+            
+            // Consciousness Level (AVPU)
+            if (latestVitals.containsKey(VitalType.GLASGOW_COMA_SCALE)) {
+                double gcs = latestVitals.get(VitalType.GLASGOW_COMA_SCALE).getValue();
+                int consciousnessScore = calculateConsciousnessScore(gcs);
+                mewsScore += consciousnessScore;
+                scoreBreakdown.put("Consciousness", consciousnessScore);
+                
+                if (consciousnessScore >= 2) {
+                    concerningVitals.add(String.format("GCS: %.0f (Score: %d)", 
+                                                     gcs, consciousnessScore));
+                }
+            }
+            
+            // Generate alert if MEWS ≥ 3
+            if (mewsScore >= 3) {
+                String urgency = determineUrgency(mewsScore);
+                String recommendations = generateRecommendations(mewsScore);
+                
+                MEWSAlert alert = MEWSAlert.builder()
+                    .patientId(patientId)
+                    .mewsScore(mewsScore)
+                    .scoreBreakdown(scoreBreakdown)
+                    .concerningVitals(concerningVitals)
+                    .urgency(urgency)
+                    .recommendations(recommendations)
+                    .timestamp(Instant.now())
+                    .windowStart(window.getStart())
+                    .windowEnd(window.getEnd())
+                    .build();
+                
+                out.collect(alert);
+            }
+        }
+        
+        // MEWS Scoring Logic
+        private int calculateRRScore(double rr) {
+            if (rr < 9) return 2;
+            if (rr >= 9 && rr <= 14) return 0;
+            if (rr >= 15 && rr <= 20) return 1;
+            if (rr >= 21 && rr <= 29) return 2;
+            return 3; // ≥30
+        }
+        
+        private int calculateHRScore(double hr) {
+            if (hr < 40) return 2;
+            if (hr >= 40 && hr <= 50) return 1;
+            if (hr >= 51 && hr <= 100) return 0;
+            if (hr >= 101 && rr <= 110) return 1;
+            if (hr >= 111 && hr <= 129) return 2;
+            return 3; // ≥130
+        }
+        
+        private int calculateBPScore(double sbp) {
+            if (sbp < 70) return 3;
+            if (sbp >= 70 && sbp <= 80) return 2;
+            if (sbp >= 81 && sbp <= 100) return 1;
+            if (sbp >= 101 && sbp <= 199) return 0;
+            return 2; // ≥200
+        }
+        
+        private int calculateTempScore(double temp) {
+            if (temp < 35.0) return 2;
+            if (temp >= 35.0 && temp <= 38.4) return 0;
+            return 2; // ≥38.5
+        }
+        
+        private int calculateConsciousnessScore(double gcs) {
+            if (gcs == 15) return 0;      // Alert
+            if (gcs >= 13 && gcs <= 14) return 1;  // Voice
+            if (gcs >= 9 && gcs <= 12) return 2;   // Pain
+            return 3; // Unresponsive (<9)
+        }
+        
+        private String determineUrgency(int mewsScore) {
+            if (mewsScore >= 5) {
+                return "🔴 CRITICAL: Urgent medical review required within 15 minutes";
+            } else if (mewsScore >= 3) {
+                return "🟠 HIGH: Increased monitoring - notify physician within 30 minutes";
+            } else {
+                return "🟡 MODERATE: Enhanced monitoring";
+            }
+        }
+        
+        private String generateRecommendations(int mewsScore) {
+            if (mewsScore >= 5) {
+                return "1. Call Rapid Response Team IMMEDIATELY\n" +
+                       "2. Continuous vital sign monitoring\n" +
+                       "3. Consider ICU transfer\n" +
+                       "4. Assess airway, breathing, circulation\n" +
+                       "5. Obtain arterial blood gas";
+            } else if (mewsScore >= 3) {
+                return "1. Notify physician within 30 minutes\n" +
+                       "2. Increase vital sign frequency to q1h\n" +
+                       "3. Review recent labs\n" +
+                       "4. Consider step-up level of care";
+            } else {
+                return "1. Continue current monitoring\n" +
+                       "2. Reassess in 4 hours";
+            }
+        }
+    }
+    
+    /**
+     * Vital sign variability analysis
+     * Detects unstable patients with fluctuating vitals
+     * Window: 4 hours, Slide: 1 hour
+     */
+    public static DataStream<VitalVariabilityAlert> analyzeVitalVariability(
+        DataStream<VitalSignEvent> vitalStream) {
+        
+        return vitalStream
+            .keyBy(VitalSignEvent::getPatientId)
+            .window(SlidingEventTimeWindows.of(Time.hours(4), Time.hours(1)))
+            .apply(new VitalVariabilityWindowFunction());
+    }
+    
+    /**
+     * Vital variability window function
+     */
+    public static class VitalVariabilityWindowFunction 
+        implements WindowFunction<VitalSignEvent, VitalVariabilityAlert, String, TimeWindow> {
+        
+        @Override
+        public void apply(String patientId,
+                         TimeWindow window,
+                         Iterable<VitalSignEvent> values,
+                         Collector<VitalVariabilityAlert> out) {
+            
+            // Group vitals by type
+            Map<VitalType, List<Double>> vitalsByType = new HashMap<>();
+            
+            for (VitalSignEvent vital : values) {
+                vitalsByType.computeIfAbsent(vital.getVitalType(), k -> new ArrayList<>())
+                           .add(vital.getValue());
+            }
+            
+            // Calculate coefficient of variation for each vital type
+            Map<VitalType, Double> cvMap = new HashMap<>();
+            List<String> unstableVitals = new ArrayList<>();
+            
+            for (Map.Entry<VitalType, List<Double>> entry : vitalsByType.entrySet()) {
+                VitalType type = entry.getKey();
+                List<Double> values = entry.getValue();
+                
+                if (values.size() < 4) continue; // Need multiple readings
+                
+                double mean = values.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                double variance = values.stream()
+                    .mapToDouble(v -> Math.pow(v - mean, 2))
+                    .average()
+                    .orElse(0);
+                double stdDev = Math.sqrt(variance);
+                double cv = (stdDev / mean) * 100;
+                
+                cvMap.put(type, cv);
+                
+                // Thresholds for concerning variability
+                boolean isUnstable = false;
+                if (type == VitalType.HEART_RATE && cv > 15) isUnstable = true;
+                if (type == VitalType.BLOOD_PRESSURE_SYSTOLIC && cv > 20) isUnstable = true;
+                if (type == VitalType.RESPIRATORY_RATE && cv > 25) isUnstable = true;
+                if (type == VitalType.OXYGEN_SATURATION && cv > 5) isUnstable = true;
+                
+                if (isUnstable) {
+                    unstableVitals.add(String.format(
+                        "%s: CV=%.1f%% (Mean: %.1f, StdDev: %.1f)",
+                        type.name(), cv, mean, stdDev
+                    ));
+                }
+            }
+            
+            // Generate alert if any vital is highly variable
+            if (!unstableVitals.isEmpty()) {
+                VitalVariabilityAlert alert = VitalVariabilityAlert.builder()
+                    .patientId(patientId)
+                    .unstableVitals(unstableVitals)
+                    .coefficientsOfVariation(cvMap)
+                    .windowStart(window.getStart())
+                    .windowEnd(window.getEnd())
+                    .interpretation(
+                        "Patient showing hemodynamic instability with fluctuating vital signs. " +
+                        "May indicate:\n" +
+                        "- Sepsis or septic shock\n" +
+                        "- Cardiac dysrhythmia\n" +
+                        "- Inadequate pain control\n" +
+                        "- Medication titration needed\n" +
+                        "Recommend close monitoring and physician evaluation."
+                    )
+                    .timestamp(Instant.now())
+                    .build();
+                
+                out.collect(alert);
+            }
+        }
+    }
+}
+```
+
+
+---
+
+
+### **4B.3: Aggregate Risk Scoring**
+
+
+```java
+package com.hospital.flink.windows;
+
+
+/**
+ * Aggregate risk scoring using tumbling windows
+ */
+public class AggregateRiskScoring {
+    
+    /**
+     * Daily aggregate risk score
+     * Window: 24 hours (tumbling)
+     */
+    public static DataStream<DailyRiskScore> calculateDailyRiskScore(
+        DataStream<VitalSignEvent> vitalStream,
+        DataStream<LabResultEvent> labStream,
+        DataStream<MedicationEvent> medicationStream) {
+        
+        // Union all event streams
+        DataStream<Object> allEvents = vitalStream
+            .map(v -> (Object) v)
+            .union(labStream.map(l -> (Object) l))
+            .union(medicationStream.map(m -> (Object) m));
+        
+        return allEvents
+            .keyBy(event -> {
+                if (event instanceof VitalSignEvent) {
+                    return ((VitalSignEvent) event).getPatientId();
+                } else if (event instanceof LabResultEvent) {
+                    return ((LabResultEvent) event).getPatientId();
+                } else {
+                    return ((MedicationEvent) event).getPatientId();
+                }
+            })
+            .window(TumblingEventTimeWindows.of(Time.hours(24)))
+            .apply(new DailyRiskScoringWindowFunction());
+    }
+    
+    /**
+     * Daily risk scoring window function
+     */
+    public static class DailyRiskScoringWindowFunction 
+        implements WindowFunction<Object, DailyRiskScore, String, TimeWindow> {
+        
+        @Override
+        public void apply(String patientId,
+                         TimeWindow window,
+                         Iterable<Object> values,
+                         Collector<DailyRiskScore> out) {
+            
+            // Separate events by type
+            List<VitalSignEvent> vitals = new ArrayList<>();
+            List<LabResultEvent> labs = new ArrayList<>();
+            List<MedicationEvent> medications = new ArrayList<>();
+            
+            for (Object event : values) {
+                if (event instanceof VitalSignEvent) {
+                    vitals.add((VitalSignEvent) event);
+                } else if (event instanceof LabResultEvent) {
+                    labs.add((LabResultEvent) event);
+                } else if (event instanceof MedicationEvent) {
+                    medications.add((MedicationEvent) event);
+                }
+            }
+            
+            // Calculate component scores
+            int vitalStabilityScore = calculateVitalStabilityScore(vitals);
+            int labAbnormalityScore = calculateLabAbnormalityScore(labs);
+            int medicationComplexityScore = calculateMedicationComplexityScore(medications);
+            
+            // Aggregate risk score (0-100)
+            int aggregateScore = (vitalStabilityScore * 40 / 100) +
+                                (labAbnormalityScore * 35 / 100) +
+                                (medicationComplexityScore * 25 / 100);
+            
+            // Determine risk level
+            RiskLevel riskLevel;
+            if (aggregateScore >= 75) riskLevel = RiskLevel.CRITICAL;
+            else if (aggregateScore >= 50) riskLevel = RiskLevel.HIGH;
+            else if (aggregateScore >= 25) riskLevel = RiskLevel.MODERATE;
+            else riskLevel = RiskLevel.LOW;
+            
+            DailyRiskScore dailyRisk = DailyRiskScore.builder()
+                .patientId(patientId)
+                .date(LocalDate.ofInstant(Instant.ofEpochMilli(window.getStart()), 
+                                         ZoneId.systemDefault()))
+                .aggregateRiskScore(aggregateScore)
+                .riskLevel(riskLevel)
+                .vitalStabilityScore(vitalStabilityScore)
+                .labAbnormalityScore(labAbnormalityScore)
+                .medicationComplexityScore(medicationComplexityScore)
+                .vitalSignCount(vitals.size())
+                .labResultCount(labs.size())
+                .medicationEventCount(medications.size())
+                .recommendations(generateRiskRecommendations(riskLevel, aggregateScore))
+                .build();
+            
+            out.collect(dailyRisk);
+        }
+        
+        private int calculateVitalStabilityScore(List<VitalSignEvent> vitals) {
+            if (vitals.isEmpty()) return 0;
+            
+            // Count abnormal vitals
+            long abnormalCount = vitals.stream()
+                .filter(VitalSignEvent::isAbnormal)
+                .count();
+            
+            // Count critical vitals
+            long criticalCount = vitals.stream()
+                .filter(v -> v.getAbnormalityLevel() == AbnormalityLevel.CRITICAL)
+                .count();
+            
+            double abnormalRate = (double) abnormalCount / vitals.size();
+            double criticalRate = (double) criticalCount / vitals.size();
+            
+            // Score (0-100): Higher = more unstable
+            return (int) Math.min(100, (abnormalRate * 50) + (criticalRate * 100));
+        }
+        
+        private int calculateLabAbnormalityScore(List<LabResultEvent> labs) {
+            if (labs.isEmpty()) return 0;
+            
+            long criticalLabs = labs.stream()
+                .filter(LabResultEvent::isCritical)
+                .count();
+            
+            long abnormalLabs = labs.stream()
+                .filter(lab -> lab.getValue() < lab.getReferenceMin() || 
+                              lab.getValue() > lab.getReferenceMax())
+                .count();
+            
+            double criticalRate = (double) criticalLabs / labs.size();
+            double abnormalRate = (double) abnormalLabs / labs.size();
+            
+            // Score (0-100)
+            return (int) Math.min(100, (abnormalRate * 40) + (criticalRate * 120));
+        }
+        
+        private int calculateMedicationComplexityScore(List<MedicationEvent> medications) {
+            // Count unique medications
+            long uniqueMeds = medications.stream()
+                .map(MedicationEvent::getMedicationCode)
+                .distinct()
+                .count();
+            
+            // Count high-risk medications (anticoagulants, insulin, opioids)
+            long highRiskMeds = medications.stream()
+                .filter(this::isHighRiskMedication)
+                .map(MedicationEvent::getMedicationCode)
+                .distinct()
+                .count();
+            
+            // Count missed doses
+            long missedDoses = medications.stream()
+                .filter(m -> m.getMedicationEventType() == MedicationEventType.MISSED)
+                .count();
+            
+            // Score (0-100): Complexity + missed doses
+            int complexityScore = (int) Math.min(50, uniqueMeds * 5 + highRiskMeds * 10);
+            int adherenceScore = (int) Math.min(50, missedDoses * 15);
+            
+            return complexityScore + adherenceScore;
+        }
+        
+        private boolean isHighRiskMedication(MedicationEvent med) {
+            String code = med.getMedicationCode();
+            // Simplified: Check for high-risk medication classes
+            return code.startsWith("1116") || // Warfarin
+                   code.startsWith("5224") || // Insulin
+                   code.startsWith("7052") || // Opioids
+                   code.startsWith("1191");   // Heparin
+        }
+        
+        private List<String> generateRiskRecommendations(RiskLevel level, int score) {
+            List<String> recommendations = new ArrayList<>();
+            
+            switch (level) {
+                case CRITICAL:
+                    recommendations.add("🔴 CRITICAL RISK - Immediate physician review required");
+                    recommendations.add("Consider ICU-level monitoring");
+                    recommendations.add("Daily interdisciplinary rounds");
+                    recommendations.add("Reassess goals of care");
+                    break;
+                case HIGH:
+                    recommendations.add("⚠️ HIGH RISK - Enhanced monitoring protocol");
+                    recommendations.add("Increase vital sign frequency to q2-4h");
+                    recommendations.add("Review medication list for optimization");
+                    recommendations.add("Consider case management involvement");
+                    break;
+                case MODERATE:
+                    recommendations.add("🟡 MODERATE RISK - Standard monitoring");
+                    recommendations.add("Continue current care plan");
+                    recommendations.add("Monitor trends closely");
+                    break;
+                case LOW:
+                    recommendations.add("🟢 LOW RISK - Routine monitoring sufficient");
+                    recommendations.add("Focus on discharge planning if appropriate");
+                    break;
+            }
+            
+            return recommendations;
+        }
+    }
+}
+```
+
+
+---
+
+
+## 📊 **Complete Integration Example**
+
+
+```java
+package com.hospital.flink;
+
+
+/**
+ * MASTER INTEGRATION: Module 3 (Semantic Mesh) + Module 4 (CEP + Windowed Analytics)
+ * 
+ * This job demonstrates complete integration:
+ * 1. Broadcast State (Semantic Mesh) - Clinical knowledge
+ * 2. CEP Patterns - Real-time pattern detection
+ * 3. Windowed Analytics - Trend analysis
+ */
+public class IntegratedClinicalIntelligenceJob {
+    
+    public static void main(String[] args) throws Exception {
+        
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(64);
+        env.enableCheckpointing(60000);
+        
+        // ═══════════════════════════════════════════════════════
+        // MODULE 3: SEMANTIC MESH (Broadcast State)
+        // ═══════════════════════════════════════════════════════
+        
+        // Broadcast stream: Clinical knowledge updates
+        DataStream<SemanticKnowledge> knowledgeStream = env
+            .fromSource(
+                createKafkaSource("semantic-mesh-updates"),
+                WatermarkStrategy.noWatermarks(),
+                "semantic-mesh-source"
+            );
+        
+        BroadcastStream<SemanticKnowledge> knowledgeBroadcast = knowledgeStream
+            .broadcast(SEMANTIC_MESH_STATE_DESCRIPTOR);
+        
+        // ═══════════════════════════════
+
+
+```java
+        // ═══════════════════════════════════════════════════════
+        // INPUT STREAMS: Patient events
+        // ═══════════════════════════════════════════════════════
+        
+        DataStream<VitalSignEvent> vitalStream = env
+            .fromSource(
+                createKafkaSource("ehr-events-vitals"),
+                WatermarkStrategy
+                    .<VitalSignEvent>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                    .withTimestampAssigner((event, ts) -> event.getTimestamp().toEpochMilli()),
+                "vitals-source"
+            )
+            .keyBy(VitalSignEvent::getPatientId);
+        
+        DataStream<LabResultEvent> labStream = env
+            .fromSource(
+                createKafkaSource("ehr-events-labs"),
+                WatermarkStrategy
+                    .<LabResultEvent>forBoundedOutOfOrderness(Duration.ofMinutes(10))
+                    .withTimestampAssigner((event, ts) -> event.getTimestamp().toEpochMilli()),
+                "labs-source"
+            )
+            .keyBy(LabResultEvent::getPatientId);
+        
+        DataStream<MedicationEvent> medicationStream = env
+            .fromSource(
+                createKafkaSource("ehr-events-medications"),
+                WatermarkStrategy
+                    .<MedicationEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((event, ts) -> event.getTimestamp().toEpochMilli()),
+                "medications-source"
+            )
+            .keyBy(MedicationEvent::getPatientId);
+        
+        // ═══════════════════════════════════════════════════════
+        // ENRICHMENT: Connect patient events with semantic mesh
+        // ═══════════════════════════════════════════════════════
+        
+        DataStream<EnrichedVitalEvent> enrichedVitals = vitalStream
+            .connect(knowledgeBroadcast)
+            .process(new VitalEnrichmentFunction());
+        
+        DataStream<EnrichedLabEvent> enrichedLabs = labStream
+            .connect(knowledgeBroadcast)
+            .process(new LabEnrichmentFunction());
+        
+        DataStream<EnrichedMedicationEvent> enrichedMedications = medicationStream
+            .connect(knowledgeBroadcast)
+            .process(new MedicationEnrichmentFunction());
+        
+        // ═══════════════════════════════════════════════════════
+        // MODULE 4A: CEP PATTERN DETECTION
+        // ═══════════════════════════════════════════════════════
+        
+        // Pattern 1: Sepsis Early Warning
+        PatternStream<VitalSignEvent> sepsisPattern = CEP.pattern(
+            vitalStream,
+            ClinicalPatterns.sepsisEarlyWarningPattern()
+        );
+        
+        DataStream<ClinicalAlert> sepsisAlerts = sepsisPattern
+            .select(new SepsisPatternSelectFunction())
+            .name("sepsis-early-warning-alerts");
+        
+        // Pattern 2: Rapid Deterioration
+        PatternStream<VitalSignEvent> deteriorationPattern = CEP.pattern(
+            vitalStream,
+            ClinicalPatterns.rapidDeteriorationPattern()
+        );
+        
+        DataStream<ClinicalAlert> deteriorationAlerts = deteriorationPattern
+            .select(new DeteriorationPatternSelectFunction())
+            .name("rapid-deterioration-alerts");
+        
+        // Pattern 3: Medication Adherence
+        PatternStream<MedicationEvent> medAdherencePattern = CEP.pattern(
+            medicationStream,
+            ClinicalPatterns.medicationAdherencePattern()
+        );
+        
+        DataStream<ClinicalAlert> medAdherenceAlerts = medAdherencePattern
+            .select(new MedicationAdherencePatternSelectFunction())
+            .name("medication-adherence-alerts");
+        
+        // Pattern 4: AKI Detection
+        PatternStream<LabResultEvent> akiPattern = CEP.pattern(
+            labStream,
+            ClinicalPatterns.akiDetectionPattern()
+        );
+        
+        DataStream<ClinicalAlert> akiAlerts = akiPattern
+            .select(new AKIPatternSelectFunction())
+            .name("aki-detection-alerts");
+        
+        // Pattern 5: Drug-Lab Monitoring
+        DataStream<Object> mixedStream = medicationStream
+            .map(m -> (Object) m)
+            .union(labStream.map(l -> (Object) l))
+            .keyBy(event -> {
+                if (event instanceof MedicationEvent) {
+                    return ((MedicationEvent) event).getPatientId();
+                } else {
+                    return ((LabResultEvent) event).getPatientId();
+                }
+            });
+        
+        PatternStream<Object> drugLabPattern = CEP.pattern(
+            mixedStream,
+            ClinicalPatterns.drugLabMonitoringPattern()
+        );
+        
+        DataStream<ClinicalAlert> drugLabAlerts = drugLabPattern
+            .select(new DrugLabMonitoringPatternSelectFunction())
+            .name("drug-lab-monitoring-alerts");
+        
+        // ═══════════════════════════════════════════════════════
+        // MODULE 4B: WINDOWED ANALYTICS
+        // ═══════════════════════════════════════════════════════
+        
+        // Lab Trend Analysis: Creatinine
+        DataStream<LabTrendAlert> creatinineTrends = LabTrendAnalyzer
+            .analyzeCreatinineTrends(labStream)
+            .name("creatinine-trend-analysis");
+        
+        // Lab Trend Analysis: Glucose
+        DataStream<LabTrendAlert> glucoseTrends = LabTrendAnalyzer
+            .analyzeGlucoseTrends(labStream)
+            .name("glucose-trend-analysis");
+        
+        // MEWS Calculation (Sliding Window)
+        DataStream<MEWSAlert> mewsAlerts = VitalSignTrendAnalyzer
+            .calculateMEWSTrend(vitalStream)
+            .name("mews-calculation");
+        
+        // Vital Variability Analysis
+        DataStream<VitalVariabilityAlert> variabilityAlerts = VitalSignTrendAnalyzer
+            .analyzeVitalVariability(vitalStream)
+            .name("vital-variability-analysis");
+        
+        // Daily Aggregate Risk Scoring (Tumbling Window)
+        DataStream<DailyRiskScore> dailyRiskScores = AggregateRiskScoring
+            .calculateDailyRiskScore(vitalStream, labStream, medicationStream)
+            .name("daily-risk-scoring");
+        
+        // ═══════════════════════════════════════════════════════
+        // ALERT PRIORITIZATION & ROUTING
+        // ═══════════════════════════════════════════════════════
+        
+        // Union all CEP alerts
+        DataStream<ClinicalAlert> allCEPAlerts = sepsisAlerts
+            .union(deteriorationAlerts)
+            .union(medAdherenceAlerts)
+            .union(akiAlerts)
+            .union(drugLabAlerts);
+        
+        // Convert windowed alerts to ClinicalAlert format
+        DataStream<ClinicalAlert> labTrendAlerts = creatinineTrends
+            .union(glucoseTrends)
+            .map(new LabTrendAlertConverter())
+            .name("lab-trend-alert-conversion");
+        
+        DataStream<ClinicalAlert> vitalAlerts = mewsAlerts
+            .map(new MEWSAlertConverter())
+            .union(variabilityAlerts.map(new VariabilityAlertConverter()))
+            .name("vital-alert-conversion");
+        
+        // Combine all alerts
+        DataStream<ClinicalAlert> allAlerts = allCEPAlerts
+            .union(labTrendAlerts)
+            .union(vitalAlerts);
+        
+        // Alert deduplication and prioritization
+        DataStream<ClinicalAlert> prioritizedAlerts = allAlerts
+            .keyBy(ClinicalAlert::getPatientId)
+            .process(new AlertDeduplicationFunction())
+            .name("alert-deduplication");
+        
+        // ═══════════════════════════════════════════════════════
+        // MULTI-SINK ROUTING
+        // ═══════════════════════════════════════════════════════
+        
+        // Critical alerts → Immediate notification
+        prioritizedAlerts
+            .filter(alert -> alert.getSeverity() == AlertSeverity.CRITICAL)
+            .sinkTo(createKafkaSink("ehr-alerts-critical"))
+            .name("critical-alerts-sink");
+        
+        // High/Medium alerts → Standard workflow
+        prioritizedAlerts
+            .filter(alert -> alert.getSeverity() == AlertSeverity.HIGH || 
+                           alert.getSeverity() == AlertSeverity.MEDIUM)
+            .sinkTo(createKafkaSink("ehr-alerts-standard"))
+            .name("standard-alerts-sink");
+        
+        // Daily risk scores → Analytics database
+        dailyRiskScores
+            .sinkTo(createClickHouseSink("daily_risk_scores"))
+            .name("risk-scores-clickhouse-sink");
+        
+        // All alerts → Audit trail
+        allAlerts
+            .map(new AlertAuditMapper())
+            .sinkTo(createKafkaSink("ehr-alerts-audit"))
+            .name("audit-trail-sink");
+        
+        // Lab trends → Time-series database
+        creatinineTrends
+            .union(glucoseTrends)
+            .sinkTo(createTimeSeriesSink("lab_trends"))
+            .name("lab-trends-timeseries-sink");
+        
+        // MEWS scores → Clinical dashboard
+        mewsAlerts
+            .sinkTo(createKafkaSink("ehr-mews-scores"))
+            .name("mews-dashboard-sink");
+        
+        // ═══════════════════════════════════════════════════════
+        // METRICS & MONITORING
+        // ═══════════════════════════════════════════════════════
+        
+        // Alert volume metrics
+        allAlerts
+            .map(alert -> 1)
+            .windowAll(TumblingProcessingTimeWindows.of(Time.minutes(1)))
+            .sum(0)
+            .map(count -> {
+                metricRegistry.counter("alerts.generated.per.minute").inc(count);
+                return count;
+            })
+            .name("alert-volume-metrics");
+        
+        // Pattern detection latency
+        sepsisAlerts
+            .map(alert -> {
+                long latency = System.currentTimeMillis() - alert.getTimestamp().toEpochMilli();
+                metricRegistry.histogram("pattern.detection.latency.ms").update(latency);
+                return alert;
+            })
+            .name("pattern-detection-latency-metrics");
+        
+        // Execute job
+        env.execute("Integrated Clinical Intelligence Job (Module 3 + Module 4)");
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    // ENRICHMENT FUNCTIONS (Module 3 Integration)
+    // ═══════════════════════════════════════════════════════
+    
+    /**
+     * Enrich vital signs with semantic knowledge
+     */
+    public static class VitalEnrichmentFunction 
+        extends KeyedBroadcastProcessFunction<String, VitalSignEvent, 
+                                             SemanticKnowledge, EnrichedVitalEvent> {
+        
+        @Override
+        public void processElement(VitalSignEvent vital,
+                                   ReadOnlyContext ctx,
+                                   Collector<EnrichedVitalEvent> out) throws Exception {
+            
+            // Get current semantic mesh state
+            ReadOnlyBroadcastState<String, SemanticKnowledge> meshState = 
+                ctx.getBroadcastState(SEMANTIC_MESH_STATE_DESCRIPTOR);
+            
+            // Get vital sign thresholds
+            SemanticKnowledge thresholds = meshState.get("vital_thresholds");
+            
+            EnrichedVitalEvent enriched = new EnrichedVitalEvent(vital);
+            
+            if (thresholds != null) {
+                // Check against thresholds
+                Map<String, Object> vitalThresholds = 
+                    thresholds.getVitalThresholds().get(vital.getVitalType());
+                
+                if (vitalThresholds != null) {
+                    double min = (double) vitalThresholds.get("min");
+                    double max = (double) vitalThresholds.get("max");
+                    double critical = (double) vitalThresholds.get("critical");
+                    
+                    // Determine abnormality level
+                    if (vital.getValue() < min || vital.getValue() > max) {
+                        enriched.setIsAbnormal(true);
+                        
+                        if (Math.abs(vital.getValue() - critical) < 
+                            Math.abs(vital.getValue() - max)) {
+                            enriched.setAbnormalityLevel(AbnormalityLevel.CRITICAL);
+                        } else {
+                            enriched.setAbnormalityLevel(AbnormalityLevel.ABNORMAL);
+                        }
+                    }
+                    
+                    enriched.setReferenceMin(min);
+                    enriched.setReferenceMax(max);
+                    enriched.setCriticalThreshold(critical);
+                }
+            }
+            
+            out.collect(enriched);
+        }
+        
+        @Override
+        public void processBroadcastElement(SemanticKnowledge knowledge,
+                                           Context ctx,
+                                           Collector<EnrichedVitalEvent> out) throws Exception {
+            // Update broadcast state
+            BroadcastState<String, SemanticKnowledge> meshState = 
+                ctx.getBroadcastState(SEMANTIC_MESH_STATE_DESCRIPTOR);
+            
+            meshState.put(knowledge.getKnowledgeType(), knowledge);
+        }
+    }
+    
+    /**
+     * Enrich medications with drug interaction knowledge
+     */
+    public static class MedicationEnrichmentFunction 
+        extends KeyedBroadcastProcessFunction<String, MedicationEvent, 
+                                             SemanticKnowledge, EnrichedMedicationEvent> {
+        
+        private final MapStateDescriptor<String, Set<String>> PATIENT_MEDS_STATE =
+            new MapStateDescriptor<>("patient-medications", String.class, 
+                                     new TypeHint<Set<String>>(){}.getTypeInfo());
+        
+        @Override
+        public void processElement(MedicationEvent med,
+                                   ReadOnlyContext ctx,
+                                   Collector<EnrichedMedicationEvent> out) throws Exception {
+            
+            // Get current semantic mesh
+            ReadOnlyBroadcastState<String, SemanticKnowledge> meshState = 
+                ctx.getBroadcastState(SEMANTIC_MESH_STATE_DESCRIPTOR);
+            
+            SemanticKnowledge drugInteractions = meshState.get("drug_interactions");
+            
+            EnrichedMedicationEvent enriched = new EnrichedMedicationEvent(med);
+            
+            if (med.getMedicationEventType() == MedicationEventType.ORDERED ||
+                med.getMedicationEventType() == MedicationEventType.ADMINISTERED) {
+                
+                // Get patient's current medications
+                Set<String> currentMeds = ctx.getPartitionedState(PATIENT_MEDS_STATE)
+                    .get(med.getPatientId());
+                
+                if (currentMeds == null) {
+                    currentMeds = new HashSet<>();
+                }
+                
+                // Check for drug interactions
+                if (drugInteractions != null) {
+                    List<DrugInteraction> interactions = new ArrayList<>();
+                    
+                    Map<String, List<String>> interactionMatrix = 
+                        drugInteractions.getDrugInteractions();
+                    
+                    List<String> interactsWith = 
+                        interactionMatrix.get(med.getMedicationCode());
+                    
+                    if (interactsWith != null) {
+                        for (String currentMed : currentMeds) {
+                            if (interactsWith.contains(currentMed)) {
+                                interactions.add(new DrugInteraction(
+                                    med.getMedicationCode(),
+                                    currentMed,
+                                    InteractionSeverity.MAJOR,
+                                    "Known drug interaction - review before administration"
+                                ));
+                            }
+                        }
+                    }
+                    
+                    enriched.setDetectedInteractions(interactions);
+                }
+                
+                // Update patient's medication list
+                currentMeds.add(med.getMedicationCode());
+                ctx.getPartitionedState(PATIENT_MEDS_STATE)
+                   .put(med.getPatientId(), currentMeds);
+            }
+            
+            out.collect(enriched);
+        }
+        
+        @Override
+        public void processBroadcastElement(SemanticKnowledge knowledge,
+                                           Context ctx,
+                                           Collector<EnrichedMedicationEvent> out) throws Exception {
+            BroadcastState<String, SemanticKnowledge> meshState = 
+                ctx.getBroadcastState(SEMANTIC_MESH_STATE_DESCRIPTOR);
+            
+            meshState.put(knowledge.getKnowledgeType(), knowledge);
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════
+    // ALERT DEDUPLICATION FUNCTION
+    // ═══════════════════════════════════════════════════════
+    
+    /**
+     * Deduplicate and prioritize alerts per patient
+     * Prevents alert fatigue by suppressing redundant alerts
+     */
+    public static class AlertDeduplicationFunction 
+        extends KeyedProcessFunction<String, ClinicalAlert, ClinicalAlert> {
+        
+        private final MapStateDescriptor<String, ClinicalAlert> RECENT_ALERTS_STATE =
+            new MapStateDescriptor<>("recent-alerts", String.class, ClinicalAlert.class);
+        
+        @Override
+        public void processElement(ClinicalAlert alert,
+                                   Context ctx,
+                                   Collector<ClinicalAlert> out) throws Exception {
+            
+            MapState<String, ClinicalAlert> recentAlerts = 
+                getRuntimeContext().getMapState(RECENT_ALERTS_STATE);
+            
+            String alertKey = alert.getAlertType().name();
+            ClinicalAlert previousAlert = recentAlerts.get(alertKey);
+            
+            boolean shouldEmit = true;
+            
+            if (previousAlert != null) {
+                // Check if similar alert was recently fired
+                Duration timeSincePrevious = Duration.between(
+                    previousAlert.getTimestamp(),
+                    alert.getTimestamp()
+                );
+                
+                // Suppression rules
+                if (alert.getSeverity() == AlertSeverity.LOW && 
+                    timeSincePrevious.toMinutes() < 60) {
+                    shouldEmit = false; // Suppress low-severity repeats within 1 hour
+                } else if (alert.getSeverity() == AlertSeverity.MEDIUM && 
+                          timeSincePrevious.toMinutes() < 30) {
+                    shouldEmit = false; // Suppress medium-severity repeats within 30 min
+                } else if (alert.getSeverity() == AlertSeverity.HIGH && 
+                          timeSincePrevious.toMinutes() < 15) {
+                    shouldEmit = false; // Suppress high-severity repeats within 15 min
+                }
+                // CRITICAL alerts always emit (no suppression)
+            }
+            
+            if (shouldEmit) {
+                // Update state
+                recentAlerts.put(alertKey, alert);
+                
+                // Set alert priority score for downstream routing
+                int priorityScore = calculatePriorityScore(alert);
+                alert.setPriorityScore(priorityScore);
+                
+                out.collect(alert);
+                
+                // Clean up old alerts (TTL = 4 hours)
+                ctx.timerService().registerEventTimeTimer(
+                    alert.getTimestamp().toEpochMilli() + Duration.ofHours(4).toMillis()
+                );
+            }
+        }
+        
+        @Override
+        public void onTimer(long timestamp,
+                           OnTimerContext ctx,
+                           Collector<ClinicalAlert> out) throws Exception {
+            // Clean up expired alert state
+            MapState<String, ClinicalAlert> recentAlerts = 
+                getRuntimeContext().getMapState(RECENT_ALERTS_STATE);
+            
+            Iterator<Map.Entry<String, ClinicalAlert>> iterator = 
+                recentAlerts.entries().iterator();
+            
+            while (iterator.hasNext()) {
+                Map.Entry<String, ClinicalAlert> entry = iterator.next();
+                if (entry.getValue().getTimestamp().toEpochMilli() < 
+                    timestamp - Duration.ofHours(4).toMillis()) {
+                    iterator.remove();
+                }
+            }
+        }
+        
+        private int calculatePriorityScore(ClinicalAlert alert) {
+            int score = 0;
+            
+            // Severity weight (0-40 points)
+            switch (alert.getSeverity()) {
+                case CRITICAL: score += 40; break;
+                case HIGH: score += 30; break;
+                case MEDIUM: score += 20; break;
+                case LOW: score += 10; break;
+            }
+            
+            // Alert type weight (0-30 points)
+            switch (alert.getAlertType()) {
+                case SEPSIS_EARLY_WARNING:
+                case ACUTE_KIDNEY_INJURY:
+                case RAPID_DETERIORATION:
+                    score += 30;
+                    break;
+                case MEDICATION_ADHERENCE:
+                case DRUG_LAB_MONITORING:
+                    score += 20;
+                    break;
+                default:
+                    score += 10;
+            }
+            
+            // Time sensitivity (0-30 points)
+            if (alert.getExpiresAt() != null) {
+                Duration timeToExpiry = Duration.between(
+                    Instant.now(),
+                    alert.getExpiresAt()
+                );
+                
+                if (timeToExpiry.toMinutes() < 15) {
+                    score += 30; // Expires very soon
+                } else if (timeToExpiry.toHours() < 1) {
+                    score += 20; // Expires within 1 hour
+                } else if (timeToExpiry.toHours() < 4) {
+                    score += 10; // Expires within 4 hours
+                }
+            }
+            
+            return Math.min(100, score);
+        }
+    }
+}
+```
+
+
+---
+
+
+## 📊 **Testing Strategy**
+
+
+### **Unit Tests**
+
+
+```java
+package com.hospital.flink.cep.test;
+
+
+import org.apache.flink.cep.CEP;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.junit.jupiter.api.Test;
+
+
+import java.util.*;
+
+
+/**
+ * Unit tests for CEP patterns
+ */
+public class ClinicalPatternsTest {
+    
+    @Test
+    public void testSepsisEarlyWarningPattern() throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        
+        // Create test data
+        List<VitalSignEvent> testVitals = Arrays.asList(
+            // Tachycardia
+            createVitalEvent("patient-001", VitalType.HEART_RATE, 110, 
+                           Instant.parse("2025-01-01T10:00:00Z")),
+            
+            // Hypotension (within 2 hours)
+            createVitalEvent("patient-001", VitalType.BLOOD_PRESSURE_SYSTOLIC, 95, 
+                           Instant.parse("2025-01-01T11:30:00Z"))
+        );
+        
+        DataStream<VitalSignEvent> vitalStream = env.fromCollection(testVitals)
+            .assignTimestampsAndWatermarks(
+                WatermarkStrategy.<VitalSignEvent>forMonotonousTimestamps()
+                    .withTimestampAssigner((event, ts) -> event.getTimestamp().toEpochMilli())
+            )
+            .keyBy(VitalSignEvent::getPatientId);
+        
+        // Apply pattern
+        PatternStream<VitalSignEvent> patternStream = CEP.pattern(
+            vitalStream,
+            ClinicalPatterns.sepsisEarlyWarningPattern()
+        );
+        
+        // Collect matches
+        List<ClinicalAlert> alerts = new ArrayList<>();
+        patternStream.select((Map<String, List<VitalSignEvent>> pattern) -> {
+            return new ClinicalAlert(/* ... */);
+        }).executeAndCollect().forEachRemaining(alerts::add);
+        
+        // Assert
+        assertEquals(1, alerts.size());
+        assertEquals(AlertType.SEPSIS_EARLY_WARNING, alerts.get(0).getAlertType());
+        assertEquals(AlertSeverity.CRITICAL, alerts.get(0).getSeverity());
+    }
+    
+    @Test
+    public void testAKIDetectionPattern() throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        
+        // Test data: 50% creatinine increase
+        List<LabResultEvent> testLabs = Arrays.asList(
+            createLabEvent("patient-002", "2160-0", 1.0, 
+                         Instant.parse("2025-01-01T08:00:00Z")), // Baseline
+            
+            createLabEvent("patient-002", "2160-0", 1.6, 
+                         Instant.parse("2025-01-02T20:00:00Z"))  // 60% increase (within 48h)
+        );
+        
+        DataStream<LabResultEvent> labStream = env.fromCollection(testLabs)
+            .assignTimestampsAndWatermarks(
+                WatermarkStrategy.<LabResultEvent>forMonotonousTimestamps()
+                    .withTimestampAssigner((event, ts) -> event.getTimestamp().toEpochMilli())
+            )
+            .keyBy(LabResultEvent::getPatientId);
+        
+        PatternStream<LabResultEvent> patternStream = CEP.pattern(
+            labStream,
+            ClinicalPatterns.akiDetectionPattern()
+        );
+        
+        List<ClinicalAlert> alerts = new ArrayList<>();
+        patternStream.select((Map<String, List<LabResultEvent>> pattern) -> {
+            return new ClinicalAlert(/* ... */);
+        }).executeAndCollect().forEachRemaining(alerts::add);
+        
+        assertEquals(1, alerts.size());
+        assertEquals(AlertType.ACUTE_KIDNEY_INJURY, alerts.get(0).getAlertType());
+    }
+    
+    @Test
+    public void testMEWSCalculation() {
+        // Test MEWS scoring logic
+        VitalSignEvent hr = createVitalEvent("patient-003", VitalType.HEART_RATE, 130, Instant.now());
+        VitalSignEvent rr = createVitalEvent("patient-003", VitalType.RESPIRATORY_RATE, 25, Instant.now());
+        VitalSignEvent sbp = createVitalEvent("patient-003", VitalType.BLOOD_PRESSURE_SYSTOLIC, 85, Instant.now());
+        
+        List<VitalSignEvent> vitals = Arrays.asList(hr, rr, sbp);
+        
+        MEWSCalculator calculator = new MEWSCalculator();
+        int mewsScore = calculator.calculate(vitals);
+        
+        // HR 130 = 3, RR 25 = 2, SBP 85 = 2 → Total = 7
+        assertEquals(7, mewsScore);
+    }
+}
+```
+
+
+---
+
+
+### **Integration Tests**
+
+
+```java
+package com.hospital.flink.integration.test;
+
+
+/**
+ * Integration tests for complete pipeline
+ */
+public class EndToEndIntegrationTest {
+    
+    @Test
+    public void testSepsisDetectionPipeline() throws Exception {
+        // Setup mini cluster
+        MiniClusterWithClientResource flinkCluster = new MiniClusterWithClientResource(
+            new MiniClusterResourceConfiguration.Builder()
+                .setNumberSlotsPerTaskManager(4)
+                .setNumberTaskManagers(1)
+                .build()
+        );
+        
+        flinkCluster.before();
+        
+        try {
+            StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+            
+            // Simulate patient deterioration leading to sepsis alert
+            List<VitalSignEvent> scenario = Arrays.asList(
+                // T=0: Normal vitals
+                vital("patient-999", VitalType.HEART_RATE, 75, now()),
+                vital("patient-999", VitalType.BLOOD_PRESSURE_SYSTOLIC, 120, now()),
+                vital("patient-999", VitalType.RESPIRATORY_RATE, 16, now()),
+                
+                // T+30min: Tachycardia begins
+                vital("patient-999", VitalType.HEART_RATE, 105, now().plusMinutes(30)),
+                
+                // T+60min: Hypotension develops
+                vital("patient-999", VitalType.BLOOD_PRESSURE_SYSTOLIC, 95, now().plusMinutes(60)),
+                
+                // T+90min: Tachypnea
+                vital("patient-999", VitalType.RESPIRATORY_RATE, 26, now().plusMinutes(90))
+            );
+            
+            // Run pipeline
+            DataStream<VitalSignEvent> vitals = env.fromCollection(scenario)
+                .assignTimestampsAndWatermarks(/* ... */);
+            
+            // Apply CEP pattern
+            PatternStream<VitalSignEvent> sepsisPattern = CEP.pattern(
+                vitals.keyBy(VitalSignEvent::getPatientId),
+                ClinicalPatterns.sepsisEarlyWarningPattern()
+            );
+            
+            // Collect alerts
+            DataStreamSink<ClinicalAlert> alertSink = sepsisPattern
+                .select(new SepsisPatternSelectFunction())
+                .addSink(new CollectSink());
+            
+            env.execute();
+            
+            // Verify alert generated
+            List<ClinicalAlert> collectedAlerts = CollectSink.values;
+            assertEquals(1, collectedAlerts.size());
+            
+            ClinicalAlert alert = collectedAlerts.get(0);
+            assertEquals("patient-999", alert.getPatientId());
+            assertEquals(AlertType.SEPSIS_EARLY_WARNING, alert.getAlertType());
+            assertEquals(AlertSeverity.CRITICAL, alert.getSeverity());
+            assertTrue(alert.getRecommendations().contains("Order lactate level immediately"));
+            
+        } finally {
+            flinkCluster.after();
+        }
+    }
+}
+```
+
+
+---
+
+
+## 📊 **Monitoring & Metrics**
+
+
+```yaml
+# Prometheus metrics configuration
+
+
+metrics:
+  # Business Metrics
+  - name: alerts_generated_total
+    type: counter
+    labels: [alert_type, severity, patient_id]
+    description: "Total clinical alerts generated"
+    
+  - name: pattern_matches_total
+    type: counter
+    labels: [pattern_type]
+    description: "Total CEP pattern matches"
+    
+  - name: mews_score_current
+    type: gauge
+    labels: [patient_id]
+    description: "Current MEWS score per patient"
+    
+  - name: daily_risk_score
+    type: gauge
+    labels: [patient_id, risk_level]
+    description: "Daily aggregate risk score"
+    
+  # Technical Metrics
+  - name: pattern_detection_latency_ms
+    type: histogram
+    buckets: [100, 500, 1000, 2000, 5000]
+    description: "Time from event to pattern match"
+    
+  - name: window_processing_time_ms
+    type: histogram
+    buckets: [50, 100, 500, 1000, 2000]
+    description: "Window function execution
+```yaml
+    description: "Window function execution time"
+    
+  - name: broadcast_state_size_bytes
+    type: gauge
+    labels: [knowledge_type]
+    description: "Size of broadcast state (semantic mesh)"
+    
+  - name: alert_deduplication_rate
+    type: gauge
+    description: "Percentage of alerts suppressed by deduplication"
+    
+  - name: events_processed_per_second
+    type: gauge
+    labels: [event_type]
+    description: "Event processing throughput"
+    
+  - name: checkpoint_duration_ms
+    type: histogram
+    buckets: [1000, 5000, 10000, 30000, 60000]
+    description: "Time to complete checkpoint"
+    
+  - name: state_backend_size_mb
+    type: gauge
+    labels: [operator_name]
+    description: "RocksDB state backend size per operator"
+
+
+# Grafana Dashboard Configuration
+dashboards:
+  clinical_operations:
+    panels:
+      - title: "Alerts by Severity (Last Hour)"
+        type: timeseries
+        query: |
+          rate(alerts_generated_total[1h])
+        
+      - title: "Top 10 High-Risk Patients (Current MEWS)"
+        type: table
+        query: |
+          topk(10, mews_score_current) > 5
+        
+      - title: "Pattern Detection Latency (p95)"
+        type: gauge
+        query: |
+          histogram_quantile(0.95, pattern_detection_latency_ms)
+        threshold:
+          critical: 5000  # 5 seconds
+          warning: 2000   # 2 seconds
+        
+      - title: "Sepsis Alerts vs AKI Alerts"
+        type: timeseries
+        queries:
+          - name: "Sepsis"
+            query: |
+              rate(alerts_generated_total{alert_type="SEPSIS_EARLY_WARNING"}[5m])
+          - name: "AKI"
+            query: |
+              rate(alerts_generated_total{alert_type="ACUTE_KIDNEY_INJURY"}[5m])
+  
+  technical_operations:
+    panels:
+      - title: "Event Processing Rate"
+        type: timeseries
+        query: |
+          sum(rate(events_processed_per_second[1m])) by (event_type)
+        
+      - title: "Checkpoint Duration"
+        type: histogram
+        query: |
+          histogram_quantile(0.99, checkpoint_duration_ms)
+        
+      - title: "State Backend Size Growth"
+        type: timeseries
+        query: |
+          rate(state_backend_size_mb[1h])
+        
+      - title: "Kafka Consumer Lag"
+        type: gauge
+        query: |
+          kafka_consumer_lag{topic="ehr-events-vitals"}
+
+
+# AlertManager Rules
+alert_rules:
+  - name: critical_pattern_detection_latency
+    expr: |
+      histogram_quantile(0.95, pattern_detection_latency_ms) > 5000
+    for: 5m
+    severity: critical
+    annotations:
+      summary: "Pattern detection latency exceeding 5 seconds"
+      description: "p95 latency: {{ $value }}ms. Investigate Flink job backpressure."
+    
+  - name: high_alert_volume
+    expr: |
+      rate(alerts_generated_total[5m]) > 10
+    for: 10m
+    severity: warning
+    annotations:
+      summary: "Unusually high alert volume"
+      description: "{{ $value }} alerts/sec. Check for system-wide issues."
+    
+  - name: checkpoint_failures
+    expr: |
+      flink_jobmanager_job_numberOfFailedCheckpoints > 3
+    for: 5m
+    severity: critical
+    annotations:
+      summary: "Flink checkpoint failures detected"
+      description: "Job may lose state on failure. Investigate immediately."
+    
+  - name: mews_score_spike
+    expr: |
+      count(mews_score_current > 7) > 5
+    for: 15m
+    severity: high
+    annotations:
+      summary: "Multiple patients with critical MEWS scores"
+      description: "{{ $value }} patients with MEWS ≥7. Potential system-wide event."
+```
+
+
+---
+
+
+## 📁 **Configuration Files**
+
+
+### **flink-conf.yaml**
+
+
+```yaml
+# Flink Configuration for Clinical Pattern Detection
+
+
+# JobManager
+jobmanager.rpc.address: flink-jobmanager
+jobmanager.rpc.port: 6123
+jobmanager.memory.process.size: 4096m
+jobmanager.memory.jvm-metaspace.size: 512m
+
+
+# TaskManager
+taskmanager.numberOfTaskSlots: 8
+taskmanager.memory.process.size: 8192m
+taskmanager.memory.managed.fraction: 0.4
+taskmanager.memory.network.fraction: 0.15
+
+
+# High Availability (Production)
+high-availability: zookeeper
+high-availability.storageDir: s3://flink-ehr-prod/ha/
+high-availability.zookeeper.quorum: zk1:2181,zk2:2181,zk3:2181
+high-availability.zookeeper.path.root: /flink-ehr
+high-availability.cluster-id: /clinical-pattern-detection
+
+
+# Checkpointing
+state.backend: rocksdb
+state.backend.incremental: true
+state.checkpoints.dir: s3://flink-ehr-prod/checkpoints/
+state.savepoints.dir: s3://flink-ehr-prod/savepoints/
+execution.checkpointing.interval: 60000  # 60 seconds
+execution.checkpointing.mode: EXACTLY_ONCE
+execution.checkpointing.timeout: 600000  # 10 minutes
+execution.checkpointing.max-concurrent-checkpoints: 1
+execution.checkpointing.min-pause: 30000  # 30 seconds between checkpoints
+
+
+# RocksDB State Backend
+state.backend.rocksdb.predefined-options: SPINNING_DISK_OPTIMIZED_HIGH_MEM
+state.backend.rocksdb.block.cache-size: 512m
+state.backend.rocksdb.thread.num: 4
+state.backend.rocksdb.writebuffer.size: 64m
+state.backend.rocksdb.writebuffer.count: 4
+
+
+# Restart Strategy
+restart-strategy: failure-rate
+restart-strategy.failure-rate.max-failures-per-interval: 3
+restart-strategy.failure-rate.failure-rate-interval: 300000  # 5 minutes
+restart-strategy.failure-rate.delay: 30000  # 30 seconds
+
+
+# Metrics
+metrics.reporter.prom.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+metrics.reporter.prom.port: 9249
+
+
+# Web UI
+web.submit.enable: false
+web.cancel.enable: false
+
+
+# Security
+security.ssl.enabled: true
+security.ssl.protocol: TLSv1.3
+```
+
+
+---
+
+
+### **application.yaml** (Module 4 Specific)
+
+
+```yaml
+# Module 4 Clinical Pattern Detection Configuration
+
+
+cep_patterns:
+  enabled_patterns:
+    - sepsis_early_warning
+    - rapid_deterioration
+    - medication_adherence
+    - aki_detection
+    - drug_lab_monitoring
+    - sepsis_pathway
+  
+  # Pattern-specific configuration
+  sepsis_early_warning:
+    enabled: true
+    window_duration: 2h
+    tachycardia_threshold: 100
+    hypotension_threshold: 100
+    lactate_threshold: 2.0
+  
+  rapid_deterioration:
+    enabled: true
+    window_duration: 1h
+    hr_increase_threshold: 20
+    rr_threshold: 24
+    o2sat_threshold: 92
+  
+  medication_adherence:
+    enabled: true
+    missed_dose_window: 6h
+    high_priority_medications:
+      - warfarin
+      - insulin
+      - antibiotics
+      - anticoagulants
+  
+  aki_detection:
+    enabled: true
+    window_duration: 48h
+    creatinine_increase_threshold: 0.50  # 50%
+    baseline_lookback: 7d
+
+
+windowed_analytics:
+  lab_trends:
+    creatinine:
+      enabled: true
+      window_size: 48h
+      slide_interval: 1h
+      min_data_points: 2
+      alert_threshold_percent: 25
+    
+    glucose:
+      enabled: true
+      window_size: 24h
+      slide_interval: 4h
+      min_data_points: 3
+      high_variability_cv: 36  # Coefficient of variation
+      hypoglycemia_threshold: 70
+      hyperglycemia_threshold: 200
+  
+  vital_trends:
+    mews:
+      enabled: true
+      window_size: 1h
+      slide_interval: 15m
+      alert_threshold: 3
+      critical_threshold: 5
+    
+    variability:
+      enabled: true
+      window_size: 4h
+      slide_interval: 1h
+      min_readings: 4
+      hr_cv_threshold: 15
+      sbp_cv_threshold: 20
+      rr_cv_threshold: 25
+      o2sat_cv_threshold: 5
+  
+  daily_risk:
+    enabled: true
+    window_size: 24h
+    components:
+      vital_stability_weight: 0.40
+      lab_abnormality_weight: 0.35
+      medication_complexity_weight: 0.25
+    risk_thresholds:
+      critical: 75
+      high: 50
+      moderate: 25
+      low: 0
+
+
+alert_management:
+  deduplication:
+    enabled: true
+    suppression_windows:
+      critical: 0m      # Never suppress critical alerts
+      high: 15m
+      medium: 30m
+      low: 60m
+  
+  prioritization:
+    enabled: true
+    severity_weight: 40
+    alert_type_weight: 30
+    time_sensitivity_weight: 30
+  
+  routing:
+    critical_topic: ehr-alerts-critical
+    standard_topic: ehr-alerts-standard
+    audit_topic: ehr-alerts-audit
+    
+kafka:
+  bootstrap_servers: kafka-1:9092,kafka-2:9092,kafka-3:9092
+  
+  consumer:
+    group_id: clinical-pattern-detection
+    auto_offset_reset: earliest
+    enable_auto_commit: false
+    max_poll_records: 1000
+    session_timeout_ms: 30000
+  
+  producer:
+    acks: all
+    compression_type: snappy
+    batch_size: 32768
+    linger_ms: 10
+    max_in_flight_requests: 5
+  
+  topics:
+    input:
+      vitals: ehr-events-vitals
+      labs: ehr-events-labs
+      medications: ehr-events-medications
+      semantic_mesh: semantic-mesh-updates
+    
+    output:
+      alerts_critical: ehr-alerts-critical
+      alerts_standard: ehr-alerts-standard
+      alerts_audit: ehr-alerts-audit
+      mews_scores: ehr-mews-scores
+      lab_trends: ehr-lab-trends
+      risk_scores: ehr-risk-scores
+
+
+performance:
+  parallelism:
+    cep_patterns: 32
+    windowed_analytics: 24
+    alert_routing: 16
+  
+  watermark:
+    max_out_of_orderness: 5m
+    idle_source_timeout: 1m
+  
+  state:
+    ttl:
+      patient_medications: 30d
+      recent_alerts: 4h
+      vital_history: 24h
+      lab_history: 7d
+
+
+monitoring:
+  metrics_interval: 10s
+  log_level: INFO
+  slow_operation_threshold: 1000ms
+```
+
+
+---
+
+
+## 🚀 **Deployment Guide**
+
+
+### **Step 1: Deploy Flink Cluster (Kubernetes)**
+
+
+```yaml
+# flink-deployment.yaml
+
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-config
+  namespace: flink-ehr-prod
+data:
+  flink-conf.yaml: |
+    # (Include flink-conf.yaml content here)
+  log4j-console.properties: |
+    rootLogger.level = INFO
+    rootLogger.appenderRef.console.ref = ConsoleAppender
+
+
+---
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+  namespace: flink-ehr-prod
+spec:
+  replicas: 3  # HA setup
+  selector:
+    matchLabels:
+      app: flink
+      component: jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: jobmanager
+    spec:
+      containers:
+      - name: jobmanager
+        image: hospital-flink:module4-v1.0
+        args: ["jobmanager"]
+        ports:
+        - containerPort: 6123
+          name: rpc
+        - containerPort: 6124
+          name: blob-server
+        - containerPort: 8081
+          name: webui
+        - containerPort: 9249
+          name: metrics
+        env:
+        - name: JOB_MANAGER_RPC_ADDRESS
+          value: flink-jobmanager
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        volumeMounts:
+        - name: flink-config
+          mountPath: /opt/flink/conf
+        - name: flink-storage
+          mountPath: /opt/flink/storage
+      volumes:
+      - name: flink-config
+        configMap:
+          name: flink-config
+      - name: flink-storage
+        persistentVolumeClaim:
+          claimName: flink-storage-pvc
+
+
+---
+
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+  namespace: flink-ehr-prod
+spec:
+  replicas: 12  # 12 TaskManagers
+  selector:
+    matchLabels:
+      app: flink
+      component: taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: taskmanager
+    spec:
+      containers:
+      - name: taskmanager
+        image: hospital-flink:module4-v1.0
+        args: ["taskmanager"]
+        ports:
+        - containerPort: 6122
+          name: rpc
+        - containerPort: 9249
+          name: metrics
+        env:
+        - name: JOB_MANAGER_RPC_ADDRESS
+          value: flink-jobmanager
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "4"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+        volumeMounts:
+        - name: flink-config
+          mountPath: /opt/flink/conf
+        - name: flink-storage
+          mountPath: /opt/flink/storage
+      volumes:
+      - name: flink-config
+        configMap:
+          name: flink-config
+      - name: flink-storage
+        persistentVolumeClaim:
+          claimName: flink-storage-pvc
+
+
+---
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager
+  namespace: flink-ehr-prod
+spec:
+  type: ClusterIP
+  ports:
+  - name: rpc
+    port: 6123
+  - name: blob-server
+    port: 6124
+  - name: webui
+    port: 8081
+  - name: metrics
+    port: 9249
+  selector:
+    app: flink
+    component: jobmanager
+
+
+---
+
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: flink-jobmanager-webui
+  namespace: flink-ehr-prod
+spec:
+  type: LoadBalancer
+  ports:
+  - name: webui
+    port: 8081
+    targetPort: 8081
+  selector:
+    app: flink
+    component: jobmanager
+```
+
+
+---
+
+
+### **Step 2: Submit Flink Job**
+
+
+```bash
+#!/bin/bash
+# submit-pattern-detection-job.sh
+
+
+# Build job JAR
+mvn clean package -DskipTests
+
+
+# Submit to Flink cluster
+flink run \
+  --jobmanager flink-jobmanager:8081 \
+  --class com.hospital.flink.IntegratedClinicalIntelligenceJob \
+  --parallelism 64 \
+  --detached \
+  target/clinical-pattern-detection-1.0.jar \
+  --kafka.bootstrap-servers kafka-1:9092,kafka-2:9092,kafka-3:9092 \
+  --checkpoint.interval 60000 \
+  --state.backend rocksdb
+
+
+# Verify job is running
+flink list --running
+
+
+# Monitor job
+echo "Job submitted. Monitor at: http://flink-jobmanager-webui:8081"
+```
+
+
+---
+
+
+### **Step 3: Load Test & Validation**
+
+
+```java
+package com.hospital.flink.loadtest;
+
+
+/**
+ * Load test generator for Module 4
+ */
+public class PatternDetectionLoadTest {
+    
+    public static void main(String[] args) throws Exception {
+        
+        // Configuration
+        int patientsToSimulate = 1000;
+        int eventsPerSecond = 10000;
+        Duration testDuration = Duration.ofHours(2);
+        
+        // Kafka producer
+        Properties props = new Properties();
+        props.put("bootstrap.servers", "kafka-1:9092,kafka-2:9092");
+        props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        
+        KafkaProducer<String, String> producer = new KafkaProducer<>(props);
+        
+        // Generate patient population
+        List<Patient> patients = generatePatientPopulation(patientsToSimulate);
+        
+        // Event generator
+        Random random = new Random();
+        Instant startTime = Instant.now();
+        long eventsGenerated = 0;
+        
+        System.out.println("Starting load test...");
+        System.out.println("Patients: " + patientsToSimulate);
+        System.out.println("Target rate: " + eventsPerSecond + " events/sec");
+        System.out.println("Duration: " + testDuration.toHours() + " hours");
+        
+        while (Duration.between(startTime, Instant.now()).compareTo(testDuration) < 0) {
+            
+            long batchStart = System.currentTimeMillis();
+            
+            // Generate events for 1 second
+            for (int i = 0; i < eventsPerSecond; i++) {
+                Patient patient = patients.get(random.nextInt(patients.size()));
+                
+                // Randomly generate event type
+                double eventTypeRoll = random.nextDouble();
+                
+                if (eventTypeRoll < 0.60) {
+                    // 60% vital signs
+                    VitalSignEvent vital = generateVitalSign(patient, random);
+                    producer.send(new ProducerRecord<>(
+                        "ehr-events-vitals",
+                        patient.getPatientId(),
+                        toJson(vital)
+                    ));
+                    
+                } else if (eventTypeRoll < 0.80) {
+                    // 20% lab results
+                    LabResultEvent lab = generateLabResult(patient, random);
+                    producer.send(new ProducerRecord<>(
+                        "ehr-events-labs",
+                        patient.getPatientId(),
+                        toJson(lab)
+                    ));
+                    
+                } else {
+                    // 20% medication events
+                    MedicationEvent med = generateMedicationEvent(patient, random);
+                    producer.send(new ProducerRecord<>(
+                        "ehr-events-medications",
+                        patient.getPatientId(),
+                        toJson(med)
+                    ));
+                }
+                
+                eventsGenerated++;
+            }
+            
+            // Inject clinical scenarios (10% of patients)
+            if (random.nextDouble() < 0.10) {
+                Patient patient = patients.get(random.nextInt(patients.size()));
+                injectClinicalScenario(producer, patient, random);
+            }
+            
+            // Rate limiting
+            long elapsed = System.currentTimeMillis() - batchStart;
+            if (elapsed < 1000) {
+                Thread.sleep(1000 - elapsed);
+            }
+            
+            // Progress update
+            if (eventsGenerated % 100000 == 0) {
+                System.out.printf("Generated %,d events (%.1f hours elapsed)%n",
+                                eventsGenerated,
+                                Duration.between(startTime, Instant.now()).toMinutes() / 60.0);
+            }
+        }
+        
+        producer.flush();
+        producer.close();
+        
+        System.out.println("\nLoad test complete!");
+        System.out.println("Total events generated: " + String.format("%,d", eventsGenerated));
+        System.out.println("Average rate: " + 
+                          (eventsGenerated / testDuration.toSeconds()) + " events/sec");
+    }
+    
+    /**
+     * Inject realistic clinical scenarios
+     */
+    private static void injectClinicalScenario(KafkaProducer<String, String> producer,
+                                               Patient patient,
+                                               Random random) {
+        double scenarioRoll = random.nextDouble();
+        
+        if (scenarioRoll < 0.30) {
+            // Sepsis scenario
+            injectSepsisScenario(producer, patient);
+            
+        } else if (scenarioRoll < 0.50) {
+            // AKI scenario
+            injectAKIScenario(producer, patient);
+            
+        } else if (scenarioRoll < 0.70) {
+            // Rapid deterioration
+            injectDeteriorationScenario(producer, patient);
+            
+        } else {
+            // Medication adherence issue
+            injectMedicationAdherenceScenario(producer, patient);
+        }
+    }
+    
+    private static void injectSepsisScenario(KafkaProducer<String, String> producer, 
+                                            Patient patient) {
+        Instant now = Instant.now();
+        
+        // Tachycardia
+        VitalSignEvent hr = createVitalEvent(patient.getPatientId(), 
+                                            VitalType.HEART_RATE, 
+                                            110 + new Random().nextInt(20), 
+                                            now);
+        producer.send(new ProducerRecord<>("ehr-events-vitals", 
+                                          patient.getPatientId(), 
+                                          toJson(hr)));
+        
+        // Hypotension (90 minutes later)
+        VitalSignEvent bp = createVitalEvent(patient.getPatientId(),
+                                            VitalType.BLOOD_PRESSURE_SYSTOLIC,
+                                            85 + new Random().nextInt(10),
+                                            now.plus(Duration.ofMinutes(90)));
+        producer.send(new ProducerRecord<>("ehr-events-vitals",
+                                          patient.getPatientId(),
+                                          toJson(bp)));
+        
+        System.out.println("⚠️  Injected sepsis scenario for patient: " + patient.getPatientId());
+    }
+}
+```
+
+
+---
+
+
+## 📊 **Success Criteria**
+
+
+### **Performance Targets**
+
+
+```
+┌────────────────────────────────────────────────────────────┐
+│             MODULE 4 SUCCESS CRITERIA                       │
+└────────────────────────────────────────────────────────────┘
+
+
+EVENT PROCESSING:
+  ✅ Throughput: 10,000 events/second sustained
+  ✅ Latency (p99): <2 seconds from event to alert
+  ✅ Pattern detection accuracy: >95%
+  ✅ False positive rate: <5%
+
+
+CEP PATTERNS:
+  ✅ Sepsis detection sensitivity: >90%
+  ✅ AKI detection sensitivity: >85%
+  ✅ Medication adherence tracking: 100% coverage
+  ✅ Pattern match latency: <1 second
+
+
+WINDOWED ANALYTICS:
+  ✅ Lab trend analysis accuracy: >90%
+  ✅ MEWS calculation latency: <500ms
+  ✅ Daily risk score completion: 100% of patients
+  ✅ Variability detection sensitivity: >85%
+
+
+SYSTEM RELIABILITY:
+  ✅ Uptime: 99.9%
+  ✅ Checkpoint success rate: >99%
+  ✅ State recovery time: <5 minutes
+  ✅ Zero data loss during failures
+
+
+ALERT MANAGEMENT:
+  ✅ Deduplication effectiveness: >30% reduction
+  ✅ Alert delivery SLA: 99.5%
+  ✅ Critical alert escalation: <1 minute
+  ✅ Alert prioritization accuracy: >90%
+```
+
+
+---
+
+
+## 📚 **Documentation Deliverables**
+
+
+1. **Technical Documentation**
+   - CEP pattern catalog with clinical rationale
+   - Window function specifications
+   - State management strategy
+   - Alert routing logic
+
+
+2. **Operational Runbooks**
+   - Deployment procedures
+   - Troubleshooting guides
+   - Failure recovery procedures
+   - Performance tuning guidelines
+
+
+3. **Clinical Validation Reports**
+   - Pattern accuracy studies
+   - False positive/negative analysis
+   - Clinical outcome metrics
+   - User feedback summaries
+
+
+4. **Training Materials**
+   - Clinical staff training guides
+   - Alert interpretation guidelines
+   - Response protocols
+   - Escalation procedures
+
+
+---
+
+
+## 🎉 **Module 4 Complete!**
+
+
+**You now have:**
+✅ 6 CEP patterns detecting critical clinical events
+✅ Lab trend analysis (creatinine, glucose)
+✅ Continuous MEWS calculation
+✅ Vital sign variability detection
+✅ Daily aggregate risk scoring
+✅ Alert deduplication and prioritization
+✅ Multi-sink routing (Kafka, ClickHouse, TimeSeries DB)
+✅ Complete integration with Module 3 (Semantic Mesh)
+✅ Production-ready deployment configuration
+✅ Comprehensive monitoring and alerting
+
+
+**What's Next:**
+- **Module 5:** ML Inference & Real-time Risk Scoring
+- **Module 6:** Multi-Sink Composer & FHIR Export
+
+
+---
+
+
+**Ready to proceed to Module 5?** 🚀

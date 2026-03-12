@@ -1,0 +1,34 @@
+# Dockerfile for running tests
+FROM golang:1.25-alpine
+
+# Install test dependencies
+RUN apk add --no-cache git ca-certificates curl wget jq
+
+# Install Go test tools
+RUN go install github.com/jstemmer/go-junit-report/v2@latest
+RUN go install github.com/axw/gocov/gocov@latest
+RUN go install github.com/AlekSi/gocov-xml@latest
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Create test results directory
+RUN mkdir -p /test/results
+
+# Default command runs all tests
+CMD ["sh", "-c", "\
+  echo 'Running Go tests with coverage...' && \
+  go test -v -coverprofile=/test/results/coverage.out ./... -json | tee /test/results/test-output.json | go-junit-report -set-exit-code > /test/results/junit.xml && \
+  go tool cover -html=/test/results/coverage.out -o /test/results/coverage.html && \
+  gocov convert /test/results/coverage.out | gocov-xml > /test/results/coverage.xml && \
+  echo 'Tests completed. Results available in /test/results/' \
+"]

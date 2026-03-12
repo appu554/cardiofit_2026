@@ -1,0 +1,370 @@
+# Business Context Recipe Book for Medication Microservice
+# Version-controlled recipes defining exactly what business context is needed
+# for different types of medication proposals
+
+version: 1.0
+metadata:
+  service: "medication-service"
+  description: "Business context recipes for pharmaceutical intelligence"
+  maintainer: "medication-domain-team"
+  last_updated: "2024-01-15"
+
+recipes:
+  # Standard dose calculation for simple medications
+  - id: "standard-dose-calculation-v1"
+    description: "Basic context needed for simple weight-based dosing and formulary selection"
+    version: "1.0"
+    triggers:
+      - command_type: "PROPOSE_MEDICATION"
+      - medication.requires_bsa_calc: false
+      - medication.requires_renal_adjustment: false
+      - medication.requires_hepatic_adjustment: false
+      - medication.is_chemotherapy: false
+    contextRequirements:
+      query: |
+        patient(id: $patientId) {
+          demographics {
+            ageYears
+            weightKg
+            gender
+          }
+          insurance {
+            planId
+            formularyId
+            memberNumber
+          }
+          preferences {
+            medicationPreferences {
+              avoidGeneric
+              preferredRoute
+            }
+          }
+        }
+    validation:
+      - field: "patient.demographics.weightKg"
+        required: true
+        minValue: 0.5
+        maxValue: 300
+      - field: "patient.demographics.ageYears"
+        required: true
+        minValue: 0
+        maxValue: 120
+    cacheSettings:
+      ttl: 300  # 5 minutes
+      keyPattern: "standard-dose-{patientId}-{medicationId}"
+
+  # Complex BSA-based dosing for chemotherapy
+  - id: "chemotherapy-bsa-dose-calculation-v1.2"
+    description: "Context for complex BSA-based chemotherapy dosing with recent vitals"
+    version: "1.2"
+    triggers:
+      - command_type: "PROPOSE_MEDICATION"
+      - medication.is_chemotherapy: true
+      - medication.requires_bsa_calc: true
+    contextRequirements:
+      query: |
+        patient(id: $patientId) {
+          demographics {
+            ageYears
+            gender
+            dateOfBirth
+          }
+          vitals {
+            latest(withinHours: 24) {
+              heightCm
+              weightKg
+              recordedAt
+              source
+            }
+            history(limit: 3) {
+              heightCm
+              weightKg
+              recordedAt
+            }
+          }
+          insurance {
+            planId
+            formularyId
+          }
+          protocols {
+            active {
+              protocolId
+              currentCycle
+              startDate
+              doseModifications {
+                percentage
+                reason
+                appliedAt
+              }
+            }
+          }
+        }
+    validation:
+      - field: "patient.vitals.latest.weightKg"
+        required: true
+        maxAgeHours: 24
+        onStale: "FAIL_PROPOSAL"
+        minValue: 30
+        maxValue: 200
+      - field: "patient.vitals.latest.heightCm"
+        required: true
+        maxAgeHours: 72  # Height can be slightly older
+        minValue: 100
+        maxValue: 250
+    cacheSettings:
+      ttl: 60   # 1 minute - short cache for critical calculations
+      keyPattern: "chemo-bsa-{patientId}-{protocolId}-{cycle}"
+
+  # Renal dose adjustment context
+  - id: "renal-dose-adjustment-v1.1"
+    description: "Context for adjusting doses for patients with renal impairment"
+    version: "1.1"
+    triggers:
+      - command_type: "PROPOSE_MEDICATION"
+      - medication.requires_renal_adjustment: true
+    contextRequirements:
+      query: |
+        patient(id: $patientId) {
+          demographics {
+            ageYears
+            weightKg
+            gender
+          }
+          labs(codes: ["LOINC:33914-3", "LOINC:2160-0"]) {
+            latest {
+              code
+              value
+              unit
+              observedAt
+              referenceRange {
+                low
+                high
+              }
+            }
+            trend(days: 7) {
+              value
+              observedAt
+            }
+          }
+          conditions(categories: ["renal"]) {
+            active {
+              code
+              severity
+              onsetDate
+            }
+          }
+        }
+    validation:
+      - field: "patient.labs.latest"
+        required: true
+        maxAgeHours: 48
+        onStale: "WARN_STALE_LABS"
+      - field: "patient.demographics.weightKg"
+        required: true
+        minValue: 0.5
+        maxValue: 300
+    cacheSettings:
+      ttl: 1800  # 30 minutes
+      keyPattern: "renal-adj-{patientId}-{labDate}"
+
+  # Pediatric dosing with specialized requirements
+  - id: "pediatric-dose-calculation-v1.0"
+    description: "Specialized context for pediatric patients with growth parameters"
+    version: "1.0"
+    triggers:
+      - command_type: "PROPOSE_MEDICATION"
+      - patient.demographics.ageYears: "<18"
+    contextRequirements:
+      query: |
+        patient(id: $patientId) {
+          demographics {
+            ageYears
+            ageMonths
+            ageDays
+            weightKg
+            gender
+            gestationalAgeWeeks
+          }
+          vitals {
+            latest(withinHours: 24) {
+              weightKg
+              heightCm
+              headCircumferenceCm
+              recordedAt
+            }
+            growthChart {
+              weightPercentile
+              heightPercentile
+              bmiPercentile
+            }
+          }
+          guardian {
+            preferences {
+              medicationPreferences {
+                preferredFormulation
+                avoidDyes
+                flavorPreference
+              }
+            }
+          }
+        }
+    validation:
+      - field: "patient.vitals.latest.weightKg"
+        required: true
+        maxAgeHours: 12  # More frequent weight checks for pediatrics
+        onStale: "FAIL_PROPOSAL"
+      - field: "patient.demographics.ageMonths"
+        required: true
+        condition: "ageYears < 2"
+    cacheSettings:
+      ttl: 180   # 3 minutes - shorter cache for pediatric calculations
+      keyPattern: "pediatric-{patientId}-{ageMonths}-{weight}"
+
+  # Geriatric dosing with comorbidity considerations
+  - id: "geriatric-dose-calculation-v1.0"
+    description: "Context for elderly patients with multiple comorbidities"
+    version: "1.0"
+    triggers:
+      - command_type: "PROPOSE_MEDICATION"
+      - patient.demographics.ageYears: ">=65"
+    contextRequirements:
+      query: |
+        patient(id: $patientId) {
+          demographics {
+            ageYears
+            weightKg
+            gender
+          }
+          conditions {
+            active {
+              code
+              category
+              severity
+              onsetDate
+            }
+          }
+          medications {
+            active {
+              medicationId
+              rxNormCode
+              therapeuticClass
+              startDate
+            }
+          }
+          functionalStatus {
+            adlScore
+            cognitiveFunctionScore
+            fallRisk
+          }
+          insurance {
+            planId
+            formularyId
+            medicarePartD: true
+          }
+        }
+    validation:
+      - field: "patient.demographics.ageYears"
+        required: true
+        minValue: 65
+      - field: "patient.functionalStatus"
+        required: false
+        onMissing: "USE_DEFAULT_GERIATRIC_FACTORS"
+    cacheSettings:
+      ttl: 600   # 10 minutes
+      keyPattern: "geriatric-{patientId}-{medicationCount}"
+
+  # Protocol-based dosing for complex regimens
+  - id: "protocol-dose-calculation-v1.0"
+    description: "Context for protocol-based medication regimens"
+    version: "1.0"
+    triggers:
+      - command_type: "PROPOSE_PROTOCOL_MEDICATION"
+      - protocol.type: "multi_drug"
+    contextRequirements:
+      query: |
+        patient(id: $patientId) {
+          demographics {
+            ageYears
+            weightKg
+            gender
+          }
+          vitals {
+            latest(withinHours: 24) {
+              heightCm
+              weightKg
+              recordedAt
+            }
+          }
+          protocols {
+            active {
+              protocolId
+              protocolName
+              currentCycle
+              currentDay
+              startDate
+              plannedCycles
+              doseModifications {
+                medicationId
+                percentage
+                reason
+                appliedAt
+                appliedBy
+              }
+              toxicityGrades {
+                grade
+                category
+                assessedAt
+              }
+            }
+          }
+          labs(protocolRequired: true) {
+            latest {
+              code
+              value
+              unit
+              observedAt
+              criticalFlag
+            }
+          }
+        }
+    validation:
+      - field: "patient.protocols.active"
+        required: true
+        onMissing: "FAIL_PROPOSAL"
+      - field: "patient.vitals.latest"
+        required: true
+        maxAgeHours: 24
+        onStale: "FAIL_PROPOSAL"
+      - field: "patient.labs.latest"
+        required: true
+        maxAgeHours: 48
+        onStale: "REQUIRE_APPROVAL"
+    cacheSettings:
+      ttl: 30    # 30 seconds - very short cache for active protocols
+      keyPattern: "protocol-{patientId}-{protocolId}-{cycle}-{day}"
+
+# Recipe selection rules
+selectionRules:
+  priority:
+    - "protocol-dose-calculation-v1.0"      # Highest priority for active protocols
+    - "chemotherapy-bsa-dose-calculation-v1.2"
+    - "pediatric-dose-calculation-v1.0"
+    - "geriatric-dose-calculation-v1.0"
+    - "renal-dose-adjustment-v1.1"
+    - "standard-dose-calculation-v1"        # Default fallback
+
+  fallback:
+    recipe: "standard-dose-calculation-v1"
+    onError: "USE_MINIMAL_CONTEXT"
+
+# Global settings
+globalSettings:
+  maxContextAge: 86400  # 24 hours maximum age for any context
+  retryPolicy:
+    maxRetries: 3
+    backoffMultiplier: 2
+    initialDelay: 100
+  monitoring:
+    trackRecipeUsage: true
+    alertOnValidationFailures: true
+    logContextFetchTimes: true

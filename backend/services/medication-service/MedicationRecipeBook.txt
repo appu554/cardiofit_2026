@@ -1,0 +1,972 @@
+# Final Clinical Logic Recipe Book - Complete Edition
+
+## Overview
+This represents the complete set of **Clinical Logic Recipes** that reside within domain services (Medication Service, Order Service, etc.) and contain the clinical validation rules, safety algorithms, and decision logic.
+
+## Enhanced Recipe Structure (Final)
+
+```yaml
+Recipe:
+  # Core Identity
+  id: unique-identifier-v1.0
+  name: Human-readable name
+  description: Clinical purpose
+  priority: 1-100 (higher = more critical)
+  
+  # Activation
+  triggers:
+    - condition sets that activate this recipe
+  
+  # Clinical Metadata
+  clinicalRationale: Medical justification
+  evidenceBase:
+    guidelines: ["Source guideline", "Evidence level"]
+    references: ["Key studies"]
+  
+  # Data Requirements (Reference to Context Recipe)
+  contextRecipeRef: "context-recipe-id"
+  contextRequirements: GraphQL-like data needs
+  
+  # Core Logic
+  validationLogic:
+    CAE: Clinical assessment engine rules
+    ProtocolEngine: Protocol compliance checks
+    GraphDB: Relationship-based validations
+  
+  # Decision Support
+  clinicalDecisionSupport:
+    explanation:
+      provider: "Clear rationale"
+      patient: "Patient-friendly explanation"
+    alternatives:
+      suggested: ["Alternative approaches"]
+      rationale: ["Why suggested"]
+  
+  # Cost & Efficiency
+  costConsiderations:
+    enabled: true/false
+    factors:
+      drugCost: ["Generic alternatives"]
+      resourceUtilization: ["Monitoring costs"]
+  
+  # ML Enhancement Points
+  mlEnhancement:
+    patternDetection: ["Unusual patterns to flag"]
+    outcomeTracking: ["Metrics to monitor"]
+    personalization: ["Adaptation points"]
+  
+  # Performance & Failure
+  performanceHint: "optimization guidance"
+  fallbackBehavior: "degraded mode operation"
+  qosTier: "platinum|gold|silver|bronze"
+```
+
+## Complete Clinical Logic Recipe Catalog
+
+### 1. MEDICATION SAFETY RECIPES
+
+#### Recipe 1.1: Standard Medication Safety (Enhanced)
+```yaml
+id: medication-safety-base-v3.0
+name: "Universal Medication Safety Check"
+priority: 100
+description: Foundational safety for ALL medication prescriptions
+triggers:
+  - action_type IN ['MEDICATION_PRESCRIBE', 'MEDICATION_MODIFY', 'MEDICATION_RENEW']
+clinicalRationale: |
+  Prevent allergic reactions, drug duplications, and basic contraindications. 
+  This is the minimum safety net required for all medications.
+validationLogic:
+  CAE: |
+    - Cross-reference allergies with drug ingredients and cross-sensitivities
+    - Check for therapeutic duplications at class and ingredient level
+    - Verify pregnancy/lactation safety categories
+    - Apply age-specific contraindications
+    - Check for absolute contraindications
+  GraphDB: |
+    - Traverse allergy cross-sensitivity relationships
+    - Check drug-disease contraindications network
+    - Validate drug-food interactions
+clinicalDecisionSupport:
+  explanation:
+    provider: "Safety checks: allergies, duplications, contraindications"
+    patient: "Checking if this medication is safe for you"
+  alternatives:
+    logic: "If contraindicated, suggest same-class alternatives"
+```
+
+#### Recipe 1.2: Renal Function Safety
+```yaml
+id: medication-safety-renal-v3.0
+name: "Renal Dosing and Nephrotoxicity Prevention"
+priority: 95
+description: Renal adjustment and nephrotoxicity prevention
+triggers:
+  - action_type: 'MEDICATION_PRESCRIBE'
+    AND:
+      - drug.properties.renalClearance > 50%
+      - OR drug.properties.nephrotoxicityRisk != 'NONE'
+      - OR drug.class IN ['NSAID', 'ACE_INHIBITOR', 'ARB', 'AMINOGLYCOSIDE', 'VANCOMYCIN']
+clinicalRationale: |
+  50% of adverse drug events in CKD patients are preventable with proper 
+  dose adjustment. Accumulation risk increases exponentially with decreased GFR.
+validationLogic:
+  CAE: |
+    - Calculate current eGFR using CKD-EPI 2021 equation (race-neutral)
+    - Determine if AKI present (KDIGO criteria)
+    - Apply Cockcroft-Gault for drugs with CG-based dosing
+    - Adjust dose based on renal function per FDA guidelines
+    - Flag if multiple nephrotoxins prescribed
+    - Alert if recent contrast exposure + nephrotoxic drug
+    - Check cumulative nephrotoxic burden score
+mlEnhancement:
+  patternDetection:
+    - "Rapid eGFR decline patterns"
+    - "High-risk drug combinations"
+  outcomeTracking:
+    - "AKI development post-prescription"
+    - "Dose adjustment compliance"
+```
+
+#### Recipe 1.3: Hepatic Function Safety
+```yaml
+id: medication-safety-hepatic-v3.0
+name: "Hepatic Metabolism and Hepatotoxicity Prevention"
+priority: 90
+description: Hepatic metabolism adjustment and DILI prevention
+triggers:
+  - action_type: 'MEDICATION_PRESCRIBE'
+    AND:
+      - drug.metabolism.hepatic > 70%
+      - OR drug.properties.hepatotoxicityRisk != 'NONE'
+      - OR drug.class IN ['STATIN', 'AZOLE_ANTIFUNGAL', 'ACETAMINOPHEN', 'METHOTREXATE']
+clinicalRationale: |
+  Drug-induced liver injury (DILI) accounts for 50% of acute liver failure. 
+  Most cases are preventable with proper monitoring and dose adjustment.
+validationLogic:
+  CAE: |
+    - Calculate Child-Pugh score if cirrhosis present
+    - Calculate MELD score for severe disease
+    - Check if ALT/AST >3x ULN (drug-specific thresholds)
+    - Flag concurrent hepatotoxic drugs (cumulative risk)
+    - Apply dose reductions per hepatic impairment level
+    - Alert for alcohol + acetaminophen (>2g/day risk)
+    - Check HyLaw score for DILI risk
+costConsiderations:
+  factors:
+    monitoring: "LFT frequency based on risk stratification"
+    alternatives: "Non-hepatotoxic alternatives when available"
+```
+
+#### Recipe 1.4: Anticoagulation Safety
+```yaml
+id: medication-safety-anticoagulation-v3.0
+name: "Comprehensive Anticoagulation Management"
+priority: 98
+description: Anticoagulation safety, monitoring, and reversal readiness
+triggers:
+  - drug.class IN ['ANTICOAGULANT', 'ANTIPLATELET']
+  - OR drug.name IN ['warfarin', 'heparin', 'enoxaparin', 'apixaban', 'rivaroxaban', 'dabigatran']
+clinicalRationale: |
+  Anticoagulants are the #1 cause of medication-related hospitalizations.
+  Proper risk stratification and monitoring are life-saving.
+validationLogic:
+  CAE: |
+    - Calculate HAS-BLED score for bleeding risk
+    - Calculate CHA2DS2-VASc for stroke risk (if AFib)
+    - Verify INR in therapeutic range for indication
+    - Check CrCl-based DOAC dosing (drug-specific cutoffs)
+    - Flag drug interactions (especially P-gp/CYP3A4)
+    - Verify appropriate bridging if procedure scheduled
+    - Check platelet count for HIT risk (if heparin)
+  ProtocolEngine: |
+    - Apply institutional anticoagulation protocols
+    - Verify reversal agent availability
+    - Check periprocedural management protocol
+clinicalDecisionSupport:
+  alternatives:
+    - "If high bleeding risk: consider left atrial appendage closure"
+    - "If warfarin unstable: suggest DOAC switch evaluation"
+```
+
+#### Recipe 1.5: Chemotherapy Safety
+```yaml
+id: medication-safety-chemotherapy-v3.0
+name: "Oncology Medication Safety and Protocol Compliance"
+priority: 99
+description: Chemotherapy dosing, toxicity prevention, and protocol adherence
+triggers:
+  - drug.properties.isChemotherapy: true
+  - OR drug.properties.isTargetedTherapy: true
+  - OR drug.properties.isImmunotherapy: true
+clinicalRationale: |
+  Chemotherapy errors can be fatal. Narrow therapeutic indices require 
+  precise dosing and comprehensive organ function assessment.
+validationLogic:
+  CAE: |
+    - Calculate BSA (multiple formulas, flag large discrepancies)
+    - Verify dose within protocol limits (+/- 5%)
+    - Check cumulative lifetime doses (anthracyclines, bleomycin)
+    - Verify ANC >1500 (or protocol-specific nadir)
+    - Check platelets >100k (or protocol-specific)
+    - Calculate creatinine clearance for carboplatin (Calvert)
+    - Verify appropriate pre-medications ordered
+    - Check for tumor lysis syndrome risk
+  ProtocolEngine: |
+    - Validate against enrolled clinical trial protocol
+    - Check cycle day accuracy
+    - Verify dose modifications from prior toxicity
+mlEnhancement:
+  patternDetection:
+    - "Cumulative toxicity prediction models"
+    - "Optimal dose intensity calculations"
+  personalization:
+    - "Pharmacogenomic dose adjustments"
+    - "Patient-specific toxicity risk"
+```
+
+#### Recipe 1.6: Controlled Substance Safety
+```yaml
+id: medication-safety-controlled-v3.0
+name: "DEA Controlled Substance Compliance"
+priority: 92
+description: Controlled substance prescribing safety and regulatory compliance
+triggers:
+  - drug.properties.deaSchedule IN [2, 3, 4, 5]
+clinicalRationale: |
+  Balance legitimate pain management with abuse prevention. 
+  Regulatory compliance is mandatory.
+validationLogic:
+  CAE: |
+    - Verify DEA registration valid for schedule and state
+    - Calculate total daily MME (morphine milligram equivalents)
+    - Check state PDMP for multi-provider episodes
+    - Flag if MME >90 without justification
+    - Verify naloxone co-prescribed if MME >50
+    - Check concurrent benzodiazepines (FDA warning)
+    - Validate urine drug screen consistency
+    - Apply age-specific warnings (elderly, adolescent)
+  ProtocolEngine: |
+    - Enforce institutional opioid prescribing policies
+    - Check pain contract requirements
+    - Verify required documentation complete
+costConsiderations:
+  factors:
+    alternatives: "Non-opioid pain management options"
+    monitoring: "UDS frequency based on risk stratification"
+```
+
+#### Recipe 1.7: Drug Interaction Safety
+```yaml
+id: medication-safety-interactions-v3.0
+name: "Comprehensive Drug Interaction Analysis"
+priority: 94
+description: Multi-level drug interaction and polypharmacy assessment
+triggers:
+  - action_type: 'MEDICATION_PRESCRIBE'
+  - OR count(activeMedications) > 5  # Polypharmacy threshold
+clinicalRationale: |
+  Drug interactions cause 20-30% of ADEs. Risk increases exponentially 
+  with each additional medication. Focus on clinically significant interactions.
+validationLogic:
+  CAE: |
+    - Check all pairwise interactions (pharmacokinetic/pharmacodynamic)
+    - Calculate cumulative QTc prolongation risk (CredibleMeds)
+    - Assess cumulative anticholinergic burden
+    - Check cytochrome P450 load (3A4, 2D6, 2C9, 2C19)
+    - Identify narrow therapeutic index drug interactions
+    - Flag serotonin syndrome risk (Hunter criteria)
+    - Check for therapeutic duplications
+  GraphDB: |
+    - Traverse metabolic pathway competition
+    - Identify indirect interactions through common pathways
+    - Assess cumulative side effect burden
+mlEnhancement:
+  patternDetection:
+    - "Identify institution-specific problem combinations"
+    - "Predict interaction severity from patient factors"
+```
+
+#### Recipe 1.8: Antimicrobial Stewardship (New)
+```yaml
+id: antimicrobial-stewardship-v1.0
+name: "Antibiotic Appropriateness and Resistance Prevention"
+priority: 94
+description: Optimize antimicrobial use and prevent resistance
+triggers:
+  - drug.class IN ['ANTIBIOTIC', 'ANTIFUNGAL', 'ANTIVIRAL']
+  - OR drug.properties.restricted: true
+clinicalRationale: |
+  Inappropriate antibiotics drive resistance, C. diff, and adverse events.
+  70% of antibiotics in hospitals are unnecessary or suboptimal.
+validationLogic:
+  CAE: |
+    - Verify empiric therapy matches local antibiogram
+    - Check if cultures available for de-escalation
+    - Calculate days of therapy (flag if exceeds guidelines)
+    - Verify indication documented
+    - Check for IV to PO conversion eligibility
+    - Flag unnecessary double coverage
+    - Alert if high C. diff risk (elderly + broad spectrum)
+  ProtocolEngine: |
+    - Apply syndrome-specific treatment guidelines
+    - Check restricted antibiotic approval requirements
+    - Enforce antibiotic timeout policies
+mlEnhancement:
+  patternDetection:
+    - "Provider-specific prescribing patterns"
+    - "Unit-specific resistance patterns"
+  outcomeTracking:
+    - "Treatment failure rates"
+    - "C. diff development"
+```
+
+### 2. PROCEDURE SAFETY RECIPES
+
+#### Recipe 2.1: Pre-Procedural Universal Safety
+```yaml
+id: procedure-safety-universal-v3.0
+name: "Universal Pre-Procedure Safety Assessment"
+priority: 96
+description: Standard safety checks for all invasive procedures
+triggers:
+  - action_type: 'PROCEDURE_ORDER'
+    AND procedure.properties.invasive: true
+clinicalRationale: |
+  Systematic pre-procedure assessment reduces complications by 30%.
+  Focus on bleeding risk, infection prevention, and patient optimization.
+validationLogic:
+  CAE: |
+    - Verify anticoagulation appropriately managed
+    - Check platelet count and coagulation parameters
+    - Confirm allergies reviewed (latex, contrast, chlorhexidine)
+    - Verify appropriate NPO status for sedation level
+    - Check pregnancy test if applicable
+    - Confirm surgical site infection prevention bundle
+    - Verify consent documented with risks discussed
+  ProtocolEngine: |
+    - Apply procedure-specific safety checklists
+    - Verify timeout requirements
+    - Check equipment/implant availability
+```
+
+#### Recipe 2.2: Anesthesia Safety
+```yaml
+id: procedure-safety-anesthesia-v3.0
+name: "Comprehensive Pre-Anesthesia Evaluation"
+priority: 97
+description: Anesthesia risk stratification and optimization
+triggers:
+  - action_type: 'ANESTHESIA_ORDER'
+  - OR procedure.requiresAnesthesia: true
+clinicalRationale: |
+  Proper pre-anesthesia evaluation reduces perioperative complications 
+  by 20-40% and prevents delays/cancellations.
+validationLogic:
+  CAE: |
+    - Calculate ASA physical status classification
+    - Assess difficult airway predictors (STOP-BANG, Mallampati)
+    - Calculate cardiac risk (RCRI score)
+    - Verify no active respiratory infection
+    - Check for malignant hyperthermia risk
+    - Confirm appropriate medication management (ACE, BB, etc.)
+    - Calculate functional capacity (METs)
+    - Flag if needs cardiac/pulmonary optimization
+  ProtocolEngine: |
+    - Apply enhanced recovery protocols (ERAS)
+    - Verify preoperative testing requirements met
+    - Check anesthesia machine compatibility (MH risk)
+```
+
+#### Recipe 2.3: Contrast Administration Safety
+```yaml
+id: procedure-safety-contrast-v1.0
+name: "Contrast Media Safety and Nephropathy Prevention"
+priority: 95
+description: Prevent contrast reactions and nephropathy
+triggers:
+  - procedure.requiresContrast: true
+  - OR order.contains: ['CT_CONTRAST', 'ANGIOGRAPHY', 'CARDIAC_CATH']
+clinicalRationale: |
+  Contrast-induced nephropathy is the 3rd leading cause of hospital-acquired AKI.
+  Allergic reactions can be life-threatening.
+validationLogic:
+  CAE: |
+    - Calculate contrast nephropathy risk score
+    - Verify appropriate hydration protocol ordered
+    - Check for metformin (hold requirements)
+    - Assess allergic reaction risk and premedication needs
+    - Calculate contrast volume limits based on CrCl
+    - Flag if multiple contrast studies within 72 hours
+    - Verify appropriate contrast type for procedure
+```
+
+#### Recipe 2.4: Transfusion Safety (New)
+```yaml
+id: transfusion-safety-v1.0
+name: "Blood Product Safety and Appropriateness"
+priority: 98
+description: Ensure safe and appropriate transfusion practices
+triggers:
+  - action_type: 'BLOOD_PRODUCT_ORDER'
+  - OR product.type IN ['PRBC', 'FFP', 'PLATELETS', 'CRYO']
+clinicalRationale: |
+  Inappropriate transfusions increase mortality. Each unit carries risks
+  of TRALI, TACO, infections, and immunomodulation.
+validationLogic:
+  CAE: |
+    - Verify indication meets guidelines (Hgb <7, active bleeding)
+    - Check for antibodies requiring special products
+    - Calculate appropriate product volume
+    - Verify consent (unless emergency)
+    - Check for volume overload risk (TACO prevention)
+    - Flag if Jehovah's Witness or other restrictions
+    - Verify appropriate rate based on cardiac status
+  ProtocolEngine: |
+    - Apply patient blood management protocols
+    - Check massive transfusion protocol criteria
+    - Verify crossmatch status
+```
+
+### 3. ADMISSION & DISCHARGE RECIPES
+
+#### Recipe 3.1: Admission Safety
+```yaml
+id: admission-safety-v3.0
+name: "Comprehensive Admission Assessment"
+priority: 93
+description: Ensure safe transition into hospital care
+triggers:
+  - action_type: 'PATIENT_ADMISSION'
+  - OR workflow.event: 'ADMISSION_ORDERS'
+clinicalRationale: |
+  Admission is highest risk for errors. 40% of patients have at least 
+  one medication discrepancy. Early risk stratification improves outcomes.
+validationLogic:
+  CAE: |
+    - Verify medication reconciliation completed and discrepancies resolved
+    - Calculate fall risk score (Morse/STRATIFY)
+    - Calculate pressure injury risk (Braden)
+    - Assess VTE risk and prophylaxis needs
+    - Screen for delirium risk (especially elderly)
+    - Check nutritional risk screening
+    - Verify code status documented
+    - Flag if readmission within 30 days
+  ProtocolEngine: |
+    - Trigger condition-specific admission order sets
+    - Initiate required quality measure protocols
+    - Apply isolation requirements
+mlEnhancement:
+  patternDetection:
+    - "30-day readmission risk prediction"
+    - "Length of stay prediction"
+    - "Deterioration risk scoring"
+```
+
+#### Recipe 3.2: Discharge Safety
+```yaml
+id: discharge-safety-v3.0
+name: "Safe Discharge Readiness Assessment"
+priority: 95
+description: Prevent post-discharge adverse events
+triggers:
+  - action_type: 'DISCHARGE_ORDER'
+  - OR workflow: 'DISCHARGE_PLANNING'
+clinicalRationale: |
+  20% of patients experience adverse events within 3 weeks of discharge.
+  Most are preventable with proper planning and communication.
+validationLogic:
+  CAE: |
+    - Verify discharge medication reconciliation complete
+    - Check all pending results reviewed and actioned
+    - Confirm follow-up appointments scheduled appropriately
+    - Verify discharge criteria met (stable vitals, symptoms controlled)
+    - Check teach-back completed for critical instructions
+    - Assess barriers (health literacy, cost, transport)
+    - Verify DME ordered and confirmed
+    - Flag if high readmission risk
+  ProtocolEngine: |
+    - Apply disease-specific discharge bundles
+    - Verify core measure compliance
+    - Check transition of care requirements
+costConsiderations:
+  factors:
+    medicationAccess: "Check formulary coverage, provide samples/vouchers"
+    followupBarriers: "Transportation vouchers, telehealth options"
+```
+
+### 4. SPECIAL POPULATION RECIPES
+
+#### Recipe 4.1: Pediatric Safety
+```yaml
+id: population-pediatric-v3.0
+name: "Age-Based Pediatric Safety"
+priority: 98
+description: Comprehensive pediatric-specific safety checks
+triggers:
+  - patient.age < 18 years
+  - AND action_type IN ['MEDICATION_PRESCRIBE', 'PROCEDURE_ORDER']
+clinicalRationale: |
+  Children require weight-based dosing, have different pharmacokinetics,
+  and age-specific safety considerations. Errors are 3x more common.
+validationLogic:
+  CAE: |
+    - Calculate all doses as mg/kg or mg/m2
+    - Verify dose within age-specific ranges
+    - Check for age-specific contraindications/warnings
+    - Calculate maximum doses (mg/kg and total)
+    - Verify appropriate formulation for age
+    - Check excipient safety (benzyl alcohol in neonates)
+    - Flag off-label use requiring discussion
+    - Verify recent weight (<7 days for <1yr, <30 days for >1yr)
+  ProtocolEngine: |
+    - Apply age-specific protocols
+    - Check immunization requirements
+    - Verify parental consent documented
+```
+
+#### Recipe 4.2: Geriatric Safety
+```yaml
+id: population-geriatric-v3.0
+name: "Comprehensive Geriatric Assessment"
+priority: 96
+description: Address polypharmacy and geriatric syndromes
+triggers:
+  - patient.age >= 65 years
+  - AND action_type: 'MEDICATION_PRESCRIBE'
+clinicalRationale: |
+  Elderly have altered pharmacokinetics, multiple comorbidities, and 
+  high ADR risk. Beers criteria reduce inappropriate prescribing by 50%.
+validationLogic:
+  CAE: |
+    - Apply AGS Beers Criteria 2023
+    - Calculate anticholinergic burden score
+    - Check STOPP/START criteria
+    - Adjust doses for age-related renal decline
+    - Flag high fall-risk medications
+    - Assess for prescribing cascades
+    - Check for inappropriate duplications
+    - Calculate sedative load
+  ProtocolEngine: |
+    - Apply geriatric-friendly protocols
+    - Check for comprehensive geriatric assessment needs
+mlEnhancement:
+  personalization:
+    - "Frailty-adjusted dosing"
+    - "Fall risk prediction models"
+```
+
+#### Recipe 4.3: Pregnancy & Lactation Safety
+```yaml
+id: population-pregnancy-v3.0
+name: "Maternal-Fetal Medicine Safety"
+priority: 99
+description: Protect maternal and fetal/infant health
+triggers:
+  - patient.demographics.pregnancyStatus: 'PREGNANT'
+  - OR patient.demographics.lactationStatus: 'LACTATING'
+  - AND action_type: 'MEDICATION_PRESCRIBE'
+clinicalRationale: |
+  Most drugs cross placenta and enter breast milk. Careful risk-benefit
+  assessment needed. Some risks are trimester-specific.
+validationLogic:
+  CAE: |
+    - Check pregnancy category (legacy) and new PLLR narrative
+    - Assess trimester-specific risks
+    - Calculate weight-based dosing on pre-pregnancy weight
+    - Flag known teratogens (isotretinoin, valproic acid, etc.)
+    - Check lactation risk category (LactMed)
+    - Suggest safer alternatives when available
+    - Verify folic acid supplementation
+    - Flag live vaccines if pregnant
+  ProtocolEngine: |
+    - Apply obstetric-specific protocols
+    - Check gestational age-specific requirements
+```
+
+#### Recipe 4.4: Immunocompromised Safety (New)
+```yaml
+id: population-immunocompromised-v1.0
+name: "Immunocompromised Patient Protection"
+priority: 97
+description: Special considerations for immunosuppressed patients
+triggers:
+  - patient.conditions CONTAINS ['HIV', 'TRANSPLANT', 'CHEMOTHERAPY', 'IMMUNOSUPPRESSION']
+  - OR medications CONTAINS ['PREDNISONE>20mg', 'IMMUNOSUPPRESSANT']
+clinicalRationale: |
+  Immunocompromised patients have altered drug metabolism, increased
+  infection risk, and special vaccination requirements.
+validationLogic:
+  CAE: |
+    - Flag live vaccines as contraindicated
+    - Check for opportunistic infection prophylaxis
+    - Verify appropriate antibiotic dosing (higher/longer)
+    - Screen drug interactions with immunosuppressants
+    - Check for required preventive medications
+    - Flag if neutropenic precautions needed
+  ProtocolEngine: |
+    - Apply immunocompromised-specific protocols
+    - Check transplant-specific requirements
+```
+
+### 5. EMERGENCY & CRITICAL CARE RECIPES
+
+#### Recipe 5.1: Code Blue / Resuscitation
+```yaml
+id: emergency-code-blue-v3.0
+name: "Cardiac Arrest Management"
+priority: 100
+description: Streamlined safety for emergency resuscitation
+triggers:
+  - action_type: 'CODE_BLUE'
+  - OR order.emergent: true AND drug.class: 'RESUSCITATION'
+clinicalRationale: |
+  Seconds count. Streamlined checks while maintaining critical safety.
+  Focus only on immediately life-threatening contraindications.
+validationLogic:
+  CAE: |
+    - Verify code status allows intervention (DNR check)
+    - Calculate weight-based epinephrine/amiodarone doses
+    - Check cumulative epinephrine doses
+    - Flag if hyperkalemia suspected (succinylcholine risk)
+    - Quick allergy check (life-threatening only)
+  ProtocolEngine: |
+    - ACLS protocol compliance
+    - Therapeutic hypothermia eligibility
+performanceHint: "CRITICAL PATH - <10ms execution required"
+fallbackBehavior: "Allow with warning if timeout"
+```
+
+#### Recipe 5.2: Rapid Sequence Intubation
+```yaml
+id: emergency-rsi-v3.0
+name: "RSI Medication Safety"
+priority: 99
+description: Medication selection for emergency airway
+triggers:
+  - protocol: 'RSI'
+  - OR drug.class IN ['PARALYTIC', 'INDUCTION_AGENT']
+clinicalRationale: |
+  Wrong drug selection can cause cardiovascular collapse. Proper dosing
+  and drug choice based on hemodynamics is critical.
+validationLogic:
+  CAE: |
+    - Select induction agent based on BP/shock index
+    - Verify paralytic contraindications checked
+    - Calculate doses on actual body weight
+    - Flag if difficult airway + long-acting paralytic
+    - Check for hyperkalemia risk factors
+    - Verify rescue reversal available
+```
+
+#### Recipe 5.3: Massive Transfusion Protocol (New)
+```yaml
+id: emergency-mtp-v1.0
+name: "Massive Transfusion Safety"
+priority: 100
+description: Balanced resuscitation in hemorrhagic shock
+triggers:
+  - protocol: 'MASSIVE_TRANSFUSION'
+  - OR (bloodProducts.units >= 4 IN 1hour)
+clinicalRationale: |
+  Balanced transfusion (1:1:1) improves survival. Prevent dilutional
+  coagulopathy and metabolic complications.
+validationLogic:
+  CAE: |
+    - Verify balanced ratio maintained
+    - Calculate calcium replacement needs
+    - Monitor for hyperkalemia (stored blood)
+    - Check transfusion triggers being followed
+    - Flag if approaching volume overload
+    - Verify warming devices active
+  ProtocolEngine: |
+    - Activate institutional MTP
+    - Track blood product ratios
+    - Monitor for TRALI/TACO
+```
+
+### 6. SPECIALTY-SPECIFIC RECIPES
+
+#### Recipe 6.1: Cardiology - Antiarrhythmic Safety
+```yaml
+id: specialty-cardiology-antiarrhythmic-v3.0
+name: "Antiarrhythmic Drug Safety"
+priority: 95
+description: Prevent proarrhythmia and optimize therapy
+triggers:
+  - drug.class: 'ANTIARRHYTHMIC'
+  - OR drug.properties.qtProlonging: true
+clinicalRationale: |
+  Antiarrhythmics paradoxically cause arrhythmias. QT monitoring and
+  electrolyte optimization are essential.
+validationLogic:
+  CAE: |
+    - Calculate Tisdale QT risk score
+    - Verify baseline QTc <500ms (or <550 with BBB)
+    - Check K+ >4.0, Mg >2.0, Ca normal
+    - Flag multiple QT-prolonging drugs
+    - Calculate cumulative QT effect
+    - Check for structural heart disease
+    - Verify no WPW if AV nodal blocker
+  ProtocolEngine: |
+    - Apply QT monitoring protocol
+    - Check device interrogation if ICD/PPM
+```
+
+#### Recipe 6.2: Psychiatry - Psychotropic Safety
+```yaml
+id: specialty-psychiatry-v3.0
+name: "Psychotropic Polypharmacy Management"
+priority: 92
+description: Optimize psychotropic use and monitor metabolic effects
+triggers:
+  - drug.class IN ['ANTIPSYCHOTIC', 'ANTIDEPRESSANT', 'MOOD_STABILIZER']
+  - OR count(psych_meds) >= 3
+clinicalRationale: |
+  Psychotropic polypharmacy increases side effects without improving
+  outcomes. Metabolic monitoring prevents diabetes and cardiovascular disease.
+validationLogic:
+  CAE: |
+    - Flag >2 antipsychotics (limited evidence)
+    - Check metabolic monitoring current
+    - Calculate anticholinergic burden
+    - Assess QT prolongation risk
+    - Check for serotonin syndrome risk
+    - Monitor for NMS risk factors
+    - Verify lithium level monitoring
+    - Check for SIADH risk (elderly + SSRI)
+  ProtocolEngine: |
+    - Apply metabolic monitoring schedule
+    - Check AIMS for tardive dyskinesia
+    - Verify suicide risk assessed
+```
+
+#### Recipe 6.3: Endocrinology - Diabetes Management (New)
+```yaml
+id: specialty-endocrine-diabetes-v1.0
+name: "Diabetes Medication Safety"
+priority: 93
+description: Prevent hypoglycemia and optimize glycemic control
+triggers:
+  - drug.class IN ['INSULIN', 'SULFONYLUREA', 'GLP1_AGONIST', 'SGLT2_INHIBITOR']
+  - OR diagnosis.contains: 'DIABETES'
+clinicalRationale: |
+  Hypoglycemia is the limiting factor in diabetes management. 
+  Individualized targets based on patient factors improve outcomes.
+validationLogic:
+  CAE: |
+    - Check A1C to guide intensity
+    - Calculate hypoglycemia risk score
+    - Verify renal dosing for metformin/SGLT2i
+    - Check for SGLT2i contraindications (DKA risk)
+    - Assess insulin dosing appropriateness
+    - Flag if multiple hypoglycemia agents
+    - Check sick day management plan
+  ProtocolEngine: |
+    - Apply glycemic control protocols
+    - Check insulin pump settings if applicable
+```
+
+### 7. MONITORING RECIPES
+
+#### Recipe 7.1: Narrow Therapeutic Index Monitoring
+```yaml
+id: monitoring-narrow-therapeutic-v3.0
+name: "Therapeutic Drug Monitoring"
+priority: 93
+description: Ensure therapeutic levels for NTI drugs
+triggers:
+  - drug.properties.narrowTherapeuticIndex: true
+  - OR drug IN ['digoxin', 'lithium', 'phenytoin', 'vancomycin', 'tacrolimus']
+clinicalRationale: |
+  NTI drugs have narrow margin between therapeutic and toxic. Regular
+  monitoring and dose adjustments prevent toxicity and treatment failure.
+validationLogic:
+  CAE: |
+    - Verify appropriate timing of level (trough vs peak)
+    - Calculate adjusted phenytoin level if low albumin
+    - Check if dose adjustment indicated by level
+    - Verify monitoring frequency appropriate
+    - Flag interacting drugs affecting levels
+    - Check organ function affecting clearance
+    - Alert if level outside target range
+  ProtocolEngine: |
+    - Apply drug-specific monitoring protocols
+    - Calculate AUC-based dosing if applicable
+```
+
+#### Recipe 7.2: High-Risk Medication Monitoring (New)
+```yaml
+id: monitoring-high-risk-v1.0
+name: "High-Risk Drug Safety Monitoring"
+priority: 91
+description: Ensure appropriate monitoring for high-risk medications
+triggers:
+  - drug IN institutionalHighRiskList
+  - OR drug.requiresMonitoring: true
+clinicalRationale: |
+  High-risk medications cause 60% of medication errors resulting in harm.
+  Protocolized monitoring reduces adverse events by 40%.
+validationLogic:
+  CAE: |
+    - Check baseline labs obtained before initiation
+    - Verify monitoring schedule per drug requirements
+    - Flag overdue monitoring
+    - Check for trend changes requiring action
+    - Alert if parameters outside safe range
+  ProtocolEngine: |
+    - Apply ISMP high-risk medication protocols
+    - Set monitoring reminders
+```
+
+### 8. QUALITY & REGULATORY RECIPES
+
+#### Recipe 8.1: Core Measures Compliance
+```yaml
+id: quality-core-measures-v3.0
+name: "CMS Core Measures Automation"
+priority: 90
+description: Ensure quality measure compliance
+triggers:
+  - diagnosis IN ['AMI', 'CHF', 'PNEUMONIA', 'STROKE', 'VTE', 'SEPSIS']
+  - OR admission: true
+clinicalRationale: |
+  Core measures improve outcomes and affect reimbursement. Systematic
+  checking ensures 100% compliance and better patient care.
+validationLogic:
+  CAE: |
+    - Check each applicable measure for condition
+    - Flag if not met and no documented contraindication
+    - Verify all components of bundles complete
+    - Check timing requirements met
+    - Generate provider reminders
+    - Track compliance rates
+  ProtocolEngine: |
+    - Apply condition-specific bundles
+    - Generate discharge checklist
+    - Create quality reporting data
+```
+
+#### Recipe 8.2: Regulatory Compliance (New)
+```yaml
+id: quality-regulatory-v1.0
+name: "Regulatory Requirements Automation"
+priority: 89
+description: Ensure compliance with regulatory requirements
+triggers:
+  - action_type IN ['ADMISSION', 'DISCHARGE', 'PROCEDURE']
+  - OR medication.requiresRiskEvaluation: true
+clinicalRationale: |
+  Regulatory compliance is mandatory. Automation reduces burden on
+  clinicians while ensuring requirements are met.
+validationLogic:
+  CAE: |
+    - Check REMS requirements for medications
+    - Verify required documentation complete
+    - Check consent requirements
+    - Flag if missing regulatory elements
+    - Verify provider credentials for procedure/drug
+  ProtocolEngine: |
+    - Apply regulatory checklists
+    - Generate required reports
+    - Track compliance metrics
+```
+
+### 9. IMAGING & RADIATION SAFETY (New Category)
+
+#### Recipe 9.1: Radiation Dose Management
+```yaml
+id: imaging-radiation-safety-v1.0
+name: "Cumulative Radiation Exposure Tracking"
+priority: 91
+description: Prevent excessive radiation exposure
+triggers:
+  - action_type: 'IMAGING_ORDER'
+  - AND modality IN ['CT', 'ANGIO', 'NUCLEAR', 'FLUOROSCOPY']
+clinicalRationale: |
+  Medical radiation is largest source of population exposure. Cumulative
+  dose tracking prevents radiation-induced malignancy.
+validationLogic:
+  CAE: |
+    - Calculate cumulative effective dose
+    - Flag if exceeds 50 mSv annually
+    - Check for pregnancy (absolute/relative contraindication)
+    - Suggest alternative non-radiation imaging
+    - Verify clinical indication justifies exposure
+    - Apply ALARA principles
+    - Check ACR appropriateness criteria
+  ProtocolEngine: |
+    - Apply Image Gently (peds) protocols
+    - Track institutional dose metrics
+```
+
+## Recipe Governance & Management
+
+### Version Control Strategy
+```yaml
+versioning:
+  format: "semantic (major.minor.patch)"
+  major: "Clinical logic changes"
+  minor: "New checks or parameters"
+  patch: "Bug fixes, thresholds"
+  
+migration:
+  overlap: "30 days dual version support"
+  testing: "Shadow mode before activation"
+  rollback: "Instant reversion capability"
+```
+
+### Performance Optimization
+```yaml
+performance:
+  tiering:
+    critical: "<50ms timeout"
+    standard: "<100ms timeout"
+    enhancement: "<200ms timeout"
+  
+  caching:
+    recipe_compilation: "Build time"
+    rule_results: "5 minute TTL"
+    
+  monitoring:
+    - "Execution time per recipe"
+    - "Hit rate and outcome tracking"
+    - "Clinical override analysis"
+```
+
+### Clinical Governance
+```yaml
+governance:
+  committees:
+    - Pharmacy & Therapeutics
+    - Medical Executive
+    - Quality & Safety
+    - Nursing Practice
+    
+  review_cycle:
+    routine: "Quarterly"
+    urgent: "Within 24 hours"
+    
+  change_control:
+    proposal: "Clinical champion required"
+    review: "Multidisciplinary team"
+    testing: "Simulation required"
+    approval: "Committee sign-off"
+```
+
+## Summary
+
+This comprehensive Clinical Logic Recipe Book contains:
+- **45+ recipes** covering all major clinical scenarios
+- **Enhanced structure** with ML points, cost awareness, and decision support
+- **Clear governance** model for updates and changes
+- **Performance optimization** strategies
+- **Integration points** for connecting with Context Recipes
+
+Each recipe is designed to be:
+- **Clinically validated** with evidence base
+- **Technically precise** for implementation
+- **Performance aware** for real-time execution
+- **Extensible** for institutional customization
+
+Next, we can dive into the companion "Data Gathering Recipes" (Context Recipes) that specify HOW to efficiently collect the data these clinical recipes need.

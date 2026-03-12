@@ -1,0 +1,1890 @@
+# Medication Microservice: Implementation Guidelines & Technical Roadmap
+
+## Executive Summary
+
+This document provides comprehensive implementation guidelines for building the Medication Microservice as the **Domain Expert for Pharmaceutical Intelligence**. The implementation follows a 12-week phased approach, focusing on the Calculate → Validate → Commit pattern with clear separation between business logic and safety validation.
+
+## Technology Stack & Architecture
+
+### Core Technology Stack
+```yaml
+Runtime & Framework:
+  Language: Python 3.11+ / Java 17+ / Go 1.21+
+  Framework: 
+    - Python: FastAPI + SQLAlchemy
+    - Java: Spring Boot 3.x + Spring Data JPA
+    - Go: Gin + GORM
+  
+API Layer:
+  External: GraphQL (Apollo Federation)
+  Internal: gRPC + Protocol Buffers
+  Documentation: OpenAPI 3.0
+  
+Data Layer:
+  Primary DB: PostgreSQL 15+ (ACID compliance)
+  Cache: Redis 7.x (distributed caching)
+  Search: Elasticsearch 8.x (medication search)
+  Event Store: Apache Kafka 3.x
+  
+Integration:
+  Service Mesh: Istio / Linkerd
+  API Gateway: Kong / Envoy
+  Service Discovery: Consul / Kubernetes DNS
+  
+Observability:
+  Tracing: OpenTelemetry + Jaeger
+  Metrics: Prometheus + Grafana
+  Logging: ELK Stack / Loki
+  APM: DataDog / New Relic
+  
+Development Tools:
+  Container: Docker + Docker Compose
+  Orchestration: Kubernetes
+  CI/CD: GitLab CI / GitHub Actions
+  Testing: Pytest / JUnit 5 / Testify
+  Code Quality: SonarQube
+```
+
+### Architecture Decisions
+```yaml
+Patterns:
+  - Domain-Driven Design (DDD)
+  - Event Sourcing for audit trail
+  - CQRS for read/write separation
+  - Outbox pattern for reliable events
+  - Repository pattern for data access
+  - Two-phase operations (Propose/Commit)
+  
+Key Principles:
+  - Stateless service design
+  - Idempotent operations
+  - Eventual consistency
+  - Fail-fast validation
+  - Zero-downtime deployments
+```
+
+## Phase 1: Foundation (Weeks 1-3)
+
+### Week 1: Service Foundation & Domain Model
+
+#### 1.1 Project Setup
+```
+medication-service/
+├── cmd/
+│   └── server/
+│       └── main.go
+├── internal/
+│   ├── domain/
+│   │   ├── medication/
+│   │   ├── prescription/
+│   │   ├── protocol/
+│   │   └── formulary/
+│   ├── application/
+│   │   ├── commands/
+│   │   ├── queries/
+│   │   └── services/
+│   ├── infrastructure/
+│   │   ├── persistence/
+│   │   ├── grpc/
+│   │   ├── events/
+│   │   └── cache/
+│   └── interfaces/
+│       ├── grpc/
+│       ├── graphql/
+│       └── rest/
+├── pkg/
+│   ├── dosing/
+│   ├── formulary/
+│   └── rxnorm/
+├── migrations/
+├── configs/
+├── deployments/
+├── tests/
+└── docs/
+```
+
+#### 1.2 Domain Model Implementation
+```python
+# Domain Entities
+@dataclass
+class Medication:
+    medication_id: UUID
+    rxnorm_code: str
+    ndc_codes: List[str]
+    brand_name: Optional[str]
+    generic_name: str
+    therapeutic_class: str
+    pharmacologic_class: str
+    dea_schedule: Optional[int]
+    is_high_alert: bool
+    is_controlled: bool
+    formulations: List[Formulation]
+    clinical_properties: ClinicalProperties
+    created_at: datetime
+    updated_at: datetime
+
+@dataclass
+class Prescription:
+    prescription_id: UUID
+    patient_id: str
+    medication: Medication
+    dose: DoseSpecification
+    route: RouteOfAdministration
+    frequency: Frequency
+    duration: Optional[Duration]
+    quantity: Quantity
+    refills: int
+    indication: str
+    special_instructions: Optional[str]
+    prescriber_id: str
+    status: PrescriptionStatus
+    proposal_timestamp: datetime
+    commit_timestamp: Optional[datetime]
+
+@dataclass
+class MedicationProtocol:
+    protocol_id: UUID
+    protocol_name: str
+    protocol_type: ProtocolType
+    version: str
+    medications: List[ProtocolMedication]
+    cycles: List[ProtocolCycle]
+    monitoring_requirements: List[MonitoringRequirement]
+    dose_modifications: List[DoseModificationRule]
+    stopping_criteria: List[StoppingCriteria]
+```
+
+#### 1.3 Database Schema
+```sql
+-- Core medication tables
+CREATE TABLE medications (
+    medication_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    rxnorm_code VARCHAR(20) NOT NULL,
+    brand_name VARCHAR(255),
+    generic_name VARCHAR(255) NOT NULL,
+    therapeutic_class VARCHAR(100),
+    pharmacologic_class VARCHAR(100),
+    dea_schedule INTEGER,
+    is_high_alert BOOLEAN DEFAULT FALSE,
+    is_controlled BOOLEAN DEFAULT FALSE,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT uk_rxnorm UNIQUE (rxnorm_code)
+);
+
+CREATE INDEX idx_medications_generic_name ON medications(generic_name);
+CREATE INDEX idx_medications_therapeutic_class ON medications(therapeutic_class);
+CREATE INDEX idx_medications_search ON medications USING gin(to_tsvector('english', 
+    brand_name || ' ' || generic_name));
+
+-- Prescription tracking with two-phase support
+CREATE TABLE prescriptions (
+    prescription_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    medication_id UUID NOT NULL REFERENCES medications(medication_id),
+    dose_value DECIMAL(10,4) NOT NULL,
+    dose_unit VARCHAR(20) NOT NULL,
+    route VARCHAR(50) NOT NULL,
+    frequency JSONB NOT NULL,
+    duration_days INTEGER,
+    quantity DECIMAL(10,2),
+    quantity_unit VARCHAR(20),
+    refills INTEGER DEFAULT 0,
+    indication VARCHAR(500),
+    special_instructions TEXT,
+    prescriber_id VARCHAR(100) NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    proposal_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+    proposal_context JSONB,
+    commit_timestamp TIMESTAMP WITH TIME ZONE,
+    commit_metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT chk_status CHECK (status IN ('PROPOSED', 'COMMITTED', 'CANCELLED'))
+);
+
+CREATE INDEX idx_prescriptions_patient ON prescriptions(patient_id);
+CREATE INDEX idx_prescriptions_status ON prescriptions(status);
+CREATE INDEX idx_prescriptions_proposal_timestamp ON prescriptions(proposal_timestamp);
+
+-- Outbox pattern for reliable event publishing
+CREATE TABLE outbox_events (
+    event_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    aggregate_id UUID NOT NULL,
+    aggregate_type VARCHAR(50) NOT NULL,
+    event_type VARCHAR(100) NOT NULL,
+    event_data JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    published_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT chk_event_type CHECK (event_type IN (
+        'MedicationProposed', 'MedicationCommitted', 'MedicationModified',
+        'MedicationDiscontinued', 'ProtocolInitiated'
+    ))
+);
+
+CREATE INDEX idx_outbox_unpublished ON outbox_events(created_at) 
+    WHERE published_at IS NULL;
+```
+
+### Week 2: Core Business Logic - Dose Calculations
+
+#### 2.1 Dose Calculation Engine
+```python
+# Dose calculation service implementation
+class DoseCalculationService:
+    def __init__(self):
+        self.calculation_strategies = {
+            DosingType.WEIGHT_BASED: WeightBasedCalculator(),
+            DosingType.BSA_BASED: BSACalculator(),
+            DosingType.AUC_BASED: AUCCalculator(),
+            DosingType.FIXED: FixedDoseCalculator(),
+            DosingType.TIERED: TieredDoseCalculator()
+        }
+    
+    async def calculate_dose(
+        self,
+        medication: Medication,
+        patient_context: PatientContext,
+        indication: str
+    ) -> DoseProposal:
+        """
+        Calculate appropriate dose based on patient factors
+        NO safety validation - just mathematical calculations
+        """
+        # Determine dosing strategy
+        dosing_type = self._determine_dosing_type(medication, indication)
+        calculator = self.calculation_strategies[dosing_type]
+        
+        # Perform calculation
+        calculated_dose = await calculator.calculate(
+            medication=medication,
+            weight_kg=patient_context.weight_kg,
+            height_cm=patient_context.height_cm,
+            age_years=patient_context.age_years,
+            indication=indication
+        )
+        
+        # Apply rounding rules
+        rounded_dose = self._apply_rounding_rules(
+            calculated_dose,
+            medication.rounding_rules
+        )
+        
+        # Create proposal
+        return DoseProposal(
+            medication=medication,
+            calculated_dose=calculated_dose,
+            rounded_dose=rounded_dose,
+            calculation_method=dosing_type,
+            calculation_factors={
+                "weight_kg": patient_context.weight_kg,
+                "bsa_m2": calculator.bsa if hasattr(calculator, 'bsa') else None,
+                "age_years": patient_context.age_years
+            }
+        )
+
+class WeightBasedCalculator:
+    async def calculate(self, medication, weight_kg, **kwargs):
+        """Weight-based dosing calculations"""
+        dose_per_kg = medication.dosing_info.dose_per_kg
+        
+        # Check for ideal body weight adjustment
+        if medication.dosing_info.use_ideal_body_weight:
+            weight_kg = self._calculate_ideal_body_weight(
+                weight_kg, 
+                kwargs.get('height_cm'),
+                kwargs.get('gender')
+            )
+        
+        # Calculate base dose
+        calculated_dose = dose_per_kg * weight_kg
+        
+        # Apply maximum dose cap if exists
+        if medication.dosing_info.max_dose:
+            calculated_dose = min(calculated_dose, medication.dosing_info.max_dose)
+        
+        return calculated_dose
+
+class BSACalculator:
+    async def calculate(self, medication, weight_kg, height_cm, **kwargs):
+        """BSA-based dosing for chemotherapy and other drugs"""
+        # Calculate BSA using preferred formula
+        self.bsa = self._calculate_bsa(weight_kg, height_cm, 
+                                       medication.bsa_formula)
+        
+        # Apply dose per m²
+        dose_per_m2 = medication.dosing_info.dose_per_m2
+        calculated_dose = dose_per_m2 * self.bsa
+        
+        # Apply BSA cap if specified (e.g., cap at 2.0 m²)
+        if medication.dosing_info.bsa_cap:
+            capped_bsa = min(self.bsa, medication.dosing_info.bsa_cap)
+            calculated_dose = dose_per_m2 * capped_bsa
+        
+        return calculated_dose
+    
+    def _calculate_bsa(self, weight_kg, height_cm, formula="mosteller"):
+        """Calculate BSA using specified formula"""
+        if formula == "mosteller":
+            return math.sqrt((height_cm * weight_kg) / 3600)
+        elif formula == "dubois":
+            return 0.007184 * (weight_kg ** 0.425) * (height_cm ** 0.725)
+        # Add other formulas as needed
+```
+
+#### 2.2 Renal & Hepatic Adjustments
+```python
+class RenalDoseAdjustmentService:
+    async def adjust_for_renal_function(
+        self,
+        base_dose: float,
+        medication: Medication,
+        renal_function: RenalFunction
+    ) -> AdjustedDose:
+        """
+        Adjust dose based on renal function
+        Uses CrCl or eGFR as appropriate for the medication
+        """
+        if not medication.requires_renal_adjustment:
+            return AdjustedDose(dose=base_dose, adjusted=False)
+        
+        # Determine which measure to use
+        if medication.renal_adjustment.use_crcl:
+            clearance = renal_function.creatinine_clearance
+        else:
+            clearance = renal_function.egfr
+        
+        # Find appropriate adjustment tier
+        adjustment_factor = self._get_adjustment_factor(
+            clearance,
+            medication.renal_adjustment.tiers
+        )
+        
+        adjusted_dose = base_dose * adjustment_factor
+        
+        return AdjustedDose(
+            dose=adjusted_dose,
+            adjusted=True,
+            adjustment_reason=f"Renal adjustment for CrCl {clearance}",
+            adjustment_factor=adjustment_factor
+        )
+```
+
+### Week 3: Formulary Management & Search
+
+#### 3.1 Formulary Service Implementation
+```python
+class FormularyManagementService:
+    def __init__(self, formulary_repo, insurance_client):
+        self.formulary_repo = formulary_repo
+        self.insurance_client = insurance_client
+        self.cache = FormularyCache()
+    
+    async def check_formulary_status(
+        self,
+        medication: Medication,
+        insurance_plan_id: str,
+        pharmacy_id: Optional[str] = None
+    ) -> FormularyStatus:
+        """
+        Check medication formulary status across multiple formularies
+        """
+        # Check cache first
+        cache_key = f"{medication.rxnorm_code}:{insurance_plan_id}"
+        cached_status = await self.cache.get(cache_key)
+        if cached_status:
+            return cached_status
+        
+        # Check system formulary
+        system_status = await self.formulary_repo.get_system_status(
+            medication.rxnorm_code
+        )
+        
+        # Check insurance formulary
+        insurance_status = await self.insurance_client.check_coverage(
+            medication=medication,
+            plan_id=insurance_plan_id
+        )
+        
+        # Combine statuses
+        formulary_status = FormularyStatus(
+            medication=medication,
+            system_tier=system_status.tier,
+            insurance_tier=insurance_status.tier,
+            requires_prior_auth=insurance_status.requires_pa,
+            quantity_limits=insurance_status.quantity_limits,
+            step_therapy_required=insurance_status.step_therapy,
+            estimated_copay=insurance_status.copay,
+            preferred_alternatives=await self._get_alternatives(
+                medication, insurance_plan_id
+            )
+        )
+        
+        # Cache result
+        await self.cache.set(cache_key, formulary_status, ttl=3600)
+        
+        return formulary_status
+    
+    async def find_therapeutic_alternatives(
+        self,
+        medication: Medication,
+        reason: AlternativeReason,
+        patient_context: PatientContext
+    ) -> List[TherapeuticAlternative]:
+        """
+        Find therapeutic alternatives for a medication
+        """
+        alternatives = []
+        
+        # Get medications in same therapeutic class
+        same_class_meds = await self.formulary_repo.find_by_therapeutic_class(
+            medication.therapeutic_class
+        )
+        
+        for alt_med in same_class_meds:
+            if alt_med.medication_id == medication.medication_id:
+                continue
+            
+            # Check if alternative is appropriate
+            if reason == AlternativeReason.COST:
+                if alt_med.average_cost >= medication.average_cost:
+                    continue
+            elif reason == AlternativeReason.FORMULARY:
+                status = await self.check_formulary_status(
+                    alt_med,
+                    patient_context.insurance_plan_id
+                )
+                if status.insurance_tier > 2:  # Not preferred
+                    continue
+            
+            # Calculate equivalent dose
+            equivalent_dose = await self._calculate_equivalent_dose(
+                medication, alt_med, patient_context
+            )
+            
+            alternatives.append(TherapeuticAlternative(
+                medication=alt_med,
+                equivalent_dose=equivalent_dose,
+                conversion_ratio=equivalent_dose.ratio,
+                evidence_level=self._get_evidence_level(medication, alt_med),
+                considerations=self._get_switching_considerations(
+                    medication, alt_med
+                )
+            ))
+        
+        # Sort by preference (formulary tier, then cost)
+        return sorted(alternatives, key=lambda x: (
+            x.medication.formulary_tier,
+            x.medication.average_cost
+        ))
+```
+
+#### 3.2 Medication Search Service
+```python
+class MedicationSearchService:
+    def __init__(self, search_client: ElasticsearchClient):
+        self.search_client = search_client
+        self.search_strategies = {
+            SearchType.NAME: NameSearchStrategy(),
+            SearchType.INDICATION: IndicationSearchStrategy(),
+            SearchType.CLASS: TherapeuticClassSearchStrategy()
+        }
+    
+    async def search_medications(
+        self,
+        query: str,
+        search_type: SearchType = SearchType.NAME,
+        filters: Optional[SearchFilters] = None
+    ) -> SearchResults:
+        """
+        Intelligent medication search with fuzzy matching and ranking
+        """
+        # Clean and prepare query
+        processed_query = self._preprocess_query(query)
+        
+        # Get search strategy
+        strategy = self.search_strategies[search_type]
+        
+        # Build Elasticsearch query
+        es_query = strategy.build_query(processed_query, filters)
+        
+        # Add formulary boosting
+        if filters and filters.prefer_formulary:
+            es_query = self._add_formulary_boost(es_query)
+        
+        # Execute search
+        results = await self.search_client.search(
+            index="medications",
+            body=es_query,
+            size=filters.limit if filters else 20
+        )
+        
+        # Process results
+        medications = []
+        for hit in results['hits']['hits']:
+            med = self._map_to_medication(hit['_source'])
+            med.search_score = hit['_score']
+            med.search_highlights = hit.get('highlight', {})
+            medications.append(med)
+        
+        return SearchResults(
+            medications=medications,
+            total_count=results['hits']['total']['value'],
+            query=query,
+            filters=filters
+        )
+    
+    def _preprocess_query(self, query: str) -> str:
+        """Preprocess query for better matching"""
+        # Handle common abbreviations
+        query = self._expand_abbreviations(query)
+        
+        # Handle phonetic similarities
+        query = self._add_phonetic_variants(query)
+        
+        # Handle brand/generic synonyms
+        query = self._expand_synonyms(query)
+        
+        return query
+
+class NameSearchStrategy:
+    def build_query(self, query: str, filters: Optional[SearchFilters]):
+        """Build Elasticsearch query for name-based search"""
+        return {
+            "bool": {
+                "should": [
+                    # Exact match on brand name
+                    {"match": {"brand_name": {"query": query, "boost": 3}}},
+                    # Exact match on generic name
+                    {"match": {"generic_name": {"query": query, "boost": 3}}},
+                    # Fuzzy match on brand name
+                    {"match": {"brand_name": {
+                        "query": query,
+                        "fuzziness": "AUTO",
+                        "boost": 1.5
+                    }}},
+                    # Fuzzy match on generic name
+                    {"match": {"generic_name": {
+                        "query": query,
+                        "fuzziness": "AUTO",
+                        "boost": 1.5
+                    }}},
+                    # Phonetic match
+                    {"match": {"brand_name.phonetic": {"query": query}}},
+                    {"match": {"generic_name.phonetic": {"query": query}}}
+                ],
+                "minimum_should_match": 1,
+                "filter": self._build_filters(filters)
+            }
+        }
+```
+
+## Phase 2: Integration & Protocols (Weeks 4-6)
+
+### Week 4: Context Service Integration
+
+#### 4.1 Context Service Client
+```python
+class MedicationContextClient:
+    """
+    Client for fetching BUSINESS context from Context Service
+    Only fetches data needed for calculations, NOT safety data
+    """
+    def __init__(self, context_service_url: str):
+        self.client = GraphQLClient(context_service_url)
+        self.query_cache = {}
+    
+    async def get_dosing_context(
+        self, 
+        patient_id: str,
+        context_type: DosingContextType
+    ) -> DosingContext:
+        """Fetch context needed for dose calculations"""
+        query = self._build_dosing_context_query(context_type)
+        
+        variables = {
+            "patientId": patient_id,
+            "contextType": context_type.value
+        }
+        
+        result = await self.client.execute(query, variables)
+        
+        return DosingContext(
+            patient_id=patient_id,
+            weight_kg=result["patient"]["demographics"]["weightKg"],
+            height_cm=result["patient"]["demographics"]["heightCm"],
+            age_years=result["patient"]["demographics"]["ageYears"],
+            insurance_plan=result["patient"]["insurance"]["planId"],
+            formulary_id=result["patient"]["insurance"]["formularyId"],
+            preferences=result["patient"]["preferences"]
+        )
+    
+    def _build_dosing_context_query(self, context_type: DosingContextType):
+        """Build GraphQL query based on context type"""
+        if context_type == DosingContextType.STANDARD:
+            return """
+                query GetStandardDosingContext($patientId: ID!) {
+                    patient(id: $patientId) {
+                        demographics {
+                            ageYears
+                            weightKg
+                            heightCm
+                        }
+                        insurance {
+                            planId
+                            formularyId
+                        }
+                        preferences {
+                            medicationPreferences {
+                                avoidGeneric
+                                preferredRoute
+                            }
+                        }
+                    }
+                }
+            """
+        elif context_type == DosingContextType.PEDIATRIC:
+            return """
+                query GetPediatricDosingContext($patientId: ID!) {
+                    patient(id: $patientId) {
+                        demographics {
+                            ageYears
+                            ageMonths
+                            ageDays
+                            weightKg
+                            heightCm
+                        }
+                        vitals {
+                            currentWeight {
+                                value
+                                percentile
+                                recordedAt
+                            }
+                        }
+                    }
+                }
+            """
+        # Add other context types
+```
+
+#### 4.2 Business Context Usage
+```python
+class MedicationProposalService:
+    def __init__(
+        self,
+        dose_calc_service: DoseCalculationService,
+        formulary_service: FormularyManagementService,
+        context_client: MedicationContextClient
+    ):
+        self.dose_calc_service = dose_calc_service
+        self.formulary_service = formulary_service
+        self.context_client = context_client
+    
+    async def propose_medication(
+        self,
+        request: MedicationProposalRequest
+    ) -> MedicationProposal:
+        """
+        Generate medication proposal with all business logic
+        NO safety validation performed here
+        """
+        # Fetch business context for calculations
+        dosing_context = await self.context_client.get_dosing_context(
+            patient_id=request.patient_id,
+            context_type=self._determine_context_type(request)
+        )
+        
+        # Find medication
+        medication = await self.medication_repo.find_by_id(
+            request.medication_id
+        )
+        
+        # Calculate dose
+        dose_proposal = await self.dose_calc_service.calculate_dose(
+            medication=medication,
+            patient_context=dosing_context,
+            indication=request.indication
+        )
+        
+        # Check formulary
+        formulary_status = await self.formulary_service.check_formulary_status(
+            medication=medication,
+            insurance_plan_id=dosing_context.insurance_plan
+        )
+        
+        # Select appropriate formulation
+        formulation = self._select_formulation(
+            medication=medication,
+            route=request.route,
+            dose=dose_proposal.rounded_dose,
+            patient_preferences=dosing_context.preferences
+        )
+        
+        # Calculate quantity and day supply
+        quantity_calc = self._calculate_quantity(
+            dose=dose_proposal.rounded_dose,
+            frequency=request.frequency,
+            duration=request.duration,
+            formulation=formulation
+        )
+        
+        # Build proposal
+        proposal = MedicationProposal(
+            proposal_id=uuid.uuid4(),
+            patient_id=request.patient_id,
+            medication=medication,
+            dose=dose_proposal.rounded_dose,
+            dose_unit=formulation.dose_unit,
+            route=formulation.route,
+            frequency=request.frequency,
+            duration=request.duration,
+            quantity=quantity_calc.quantity,
+            refills=request.refills,
+            indication=request.indication,
+            formulary_status=formulary_status,
+            calculation_details=dose_proposal.calculation_factors,
+            proposed_at=datetime.utcnow(),
+            proposal_context={
+                "calculation_method": dose_proposal.calculation_method,
+                "formulary_tier": formulary_status.insurance_tier,
+                "estimated_copay": formulary_status.estimated_copay
+            }
+        )
+        
+        # Store proposal for later commit
+        await self.proposal_repo.save(proposal)
+        
+        return proposal
+```
+
+### Week 5: Protocol Management
+
+#### 5.1 Protocol Engine Implementation
+```python
+class ProtocolManagementService:
+    def __init__(self):
+        self.protocol_repo = ProtocolRepository()
+        self.cycle_calculator = CycleCalculator()
+        self.dose_modifier = DoseModificationEngine()
+    
+    async def initiate_protocol(
+        self,
+        protocol_id: str,
+        patient_id: str,
+        start_date: date
+    ) -> ProtocolEnrollment:
+        """
+        Initiate a clinical protocol for a patient
+        """
+        # Load protocol definition
+        protocol = await self.protocol_repo.get_by_id(protocol_id)
+        
+        # Create enrollment
+        enrollment = ProtocolEnrollment(
+            enrollment_id=uuid.uuid4(),
+            patient_id=patient_id,
+            protocol=protocol,
+            start_date=start_date,
+            current_cycle=1,
+            current_day=1,
+            status=ProtocolStatus.ACTIVE,
+            dose_modifications=[]
+        )
+        
+        # Calculate first cycle schedule
+        first_cycle = await self.cycle_calculator.calculate_cycle(
+            protocol=protocol,
+            cycle_number=1,
+            start_date=start_date
+        )
+        
+        enrollment.scheduled_medications = first_cycle.medications
+        
+        # Save enrollment
+        await self.enrollment_repo.save(enrollment)
+        
+        return enrollment
+    
+    async def calculate_protocol_medications(
+        self,
+        enrollment: ProtocolEnrollment,
+        cycle_day: int
+    ) -> List[ProtocolMedication]:
+        """
+        Calculate medications due for a specific protocol day
+        """
+        medications = []
+        
+        # Get medications scheduled for this day
+        day_meds = [
+            med for med in enrollment.scheduled_medications
+            if cycle_day in med.administration_days
+        ]
+        
+        for scheduled_med in day_meds:
+            # Get base medication
+            medication = await self.medication_repo.get_by_id(
+                scheduled_med.medication_id
+            )
+            
+            # Calculate base dose
+            base_dose = await self._calculate_protocol_dose(
+                medication=medication,
+                protocol_dosing=scheduled_med.dosing,
+                patient_context=await self._get_patient_context(
+                    enrollment.patient_id
+                )
+            )
+            
+            # Apply any dose modifications
+            if enrollment.dose_modifications:
+                modified_dose = await self.dose_modifier.apply_modifications(
+                    base_dose=base_dose,
+                    modifications=enrollment.dose_modifications,
+                    medication=medication
+                )
+            else:
+                modified_dose = base_dose
+            
+            medications.append(ProtocolMedication(
+                medication=medication,
+                dose=modified_dose,
+                route=scheduled_med.route,
+                infusion_time=scheduled_med.infusion_time,
+                pre_medications=scheduled_med.pre_medications,
+                administration_notes=scheduled_med.notes
+            ))
+        
+        return medications
+
+class DoseModificationEngine:
+    async def apply_modifications(
+        self,
+        base_dose: float,
+        modifications: List[DoseModification],
+        medication: Medication
+    ) -> float:
+        """
+        Apply protocol dose modifications based on toxicity or other factors
+        """
+        current_dose = base_dose
+        
+        for modification in modifications:
+            if modification.applies_to_medication(medication):
+                if modification.modification_type == ModificationType.PERCENTAGE:
+                    current_dose = current_dose * (modification.percentage / 100)
+                elif modification.modification_type == ModificationType.ABSOLUTE:
+                    current_dose = modification.absolute_dose
+                elif modification.modification_type == ModificationType.HOLD:
+                    return 0  # Medication held
+        
+        return current_dose
+```
+
+#### 5.2 Complex Protocol Examples
+```python
+# Chemotherapy protocol implementation
+class ChemotherapyProtocolService(ProtocolManagementService):
+    async def calculate_bsa_based_protocol(
+        self,
+        enrollment: ProtocolEnrollment,
+        current_bsa: float
+    ) -> List[ChemoMedication]:
+        """
+        Calculate chemotherapy doses based on BSA
+        """
+        medications = []
+        cycle_meds = await self.get_cycle_medications(
+            enrollment.current_cycle,
+            enrollment.current_day
+        )
+        
+        for med_spec in cycle_meds:
+            # Calculate BSA-based dose
+            dose_per_m2 = med_spec.dose_per_m2
+            calculated_dose = dose_per_m2 * current_bsa
+            
+            # Apply dose modifications for toxicity
+            if enrollment.has_dose_reductions:
+                calculated_dose = self._apply_dose_reduction(
+                    calculated_dose,
+                    enrollment.reduction_percentage
+                )
+            
+            # Check cumulative dose limits
+            cumulative = await self._get_cumulative_dose(
+                enrollment.patient_id,
+                med_spec.medication_id
+            )
+            
+            if med_spec.has_lifetime_max:
+                remaining = med_spec.lifetime_max - cumulative
+                if calculated_dose > remaining:
+                    calculated_dose = remaining
+                    # Flag for protocol completion
+            
+            medications.append(ChemoMedication(
+                medication_id=med_spec.medication_id,
+                calculated_dose=calculated_dose,
+                dose_per_m2=dose_per_m2,
+                actual_bsa=current_bsa,
+                cumulative_dose=cumulative + calculated_dose,
+                infusion_time=med_spec.infusion_time,
+                pre_medications=med_spec.pre_medications
+            ))
+        
+        return medications
+```
+
+### Week 6: Event Publishing & Integration
+
+#### 6.1 Outbox Pattern Implementation
+```python
+class OutboxEventPublisher:
+    def __init__(self, db_session, kafka_producer):
+        self.db_session = db_session
+        self.kafka_producer = kafka_producer
+        self.running = False
+    
+    async def publish_event(
+        self,
+        aggregate_id: UUID,
+        aggregate_type: str,
+        event_type: str,
+        event_data: dict
+    ):
+        """
+        Save event to outbox table (same transaction as business logic)
+        """
+        outbox_event = OutboxEvent(
+            event_id=uuid.uuid4(),
+            aggregate_id=aggregate_id,
+            aggregate_type=aggregate_type,
+            event_type=event_type,
+            event_data=event_data,
+            created_at=datetime.utcnow()
+        )
+        
+        self.db_session.add(outbox_event)
+        # Note: commit happens in the service layer with business logic
+    
+    async def start_publisher(self):
+        """
+        Background process to publish events from outbox to Kafka
+        """
+        self.running = True
+        while self.running:
+            try:
+                # Fetch unpublished events
+                unpublished = await self._fetch_unpublished_events(limit=100)
+                
+                for event in unpublished:
+                    # Publish to Kafka
+                    await self.kafka_producer.send(
+                        topic=self._get_topic_for_event(event.event_type),
+                        key=str(event.aggregate_id),
+                        value=json.dumps({
+                            "eventId": str(event.event_id),
+                            "aggregateId": str(event.aggregate_id),
+                            "aggregateType": event.aggregate_type,
+                            "eventType": event.event_type,
+                            "eventData": event.event_data,
+                            "timestamp": event.created_at.isoformat()
+                        })
+                    )
+                    
+                    # Mark as published
+                    event.published_at = datetime.utcnow()
+                    await self.db_session.commit()
+                
+                # Sleep if no events
+                if not unpublished:
+                    await asyncio.sleep(1)
+                    
+            except Exception as e:
+                logger.error(f"Outbox publisher error: {e}")
+                await asyncio.sleep(5)
+```
+
+#### 6.2 Event Schema Definitions
+```protobuf
+// medication_events.proto
+syntax = "proto3";
+
+package medication.v1;
+
+message MedicationProposed {
+    string proposal_id = 1;
+    string patient_id = 2;
+    string medication_id = 3;
+    string rxnorm_code = 4;
+    double dose_value = 5;
+    string dose_unit = 6;
+    string route = 7;
+    string frequency = 8;
+    int32 duration_days = 9;
+    string indication = 10;
+    string prescriber_id = 11;
+    map<string, string> calculation_context = 12;
+    string timestamp = 13;
+}
+
+message MedicationCommitted {
+    string prescription_id = 1;
+    string proposal_id = 2;
+    string patient_id = 3;
+    MedicationDetails medication = 4;
+    string committed_by = 5;
+    string timestamp = 6;
+}
+
+message ProtocolInitiated {
+    string enrollment_id = 1;
+    string patient_id = 2;
+    string protocol_id = 3;
+    string protocol_name = 4;
+    int32 total_cycles = 5;
+    string start_date = 6;
+    repeated string medication_ids = 7;
+}
+```
+
+## Phase 3: Advanced Features (Weeks 7-9)
+
+### Week 7: Medication Reconciliation
+
+#### 7.1 Reconciliation Engine
+```python
+class MedicationReconciliationService:
+    def __init__(self):
+        self.matcher = MedicationMatcher()
+        self.conflict_resolver = ConflictResolver()
+    
+    async def reconcile_medications(
+        self,
+        home_medications: List[Medication],
+        admission_medications: List[Medication],
+        reconciliation_context: ReconciliationContext
+    ) -> ReconciliationResult:
+        """
+        Perform medication reconciliation between home and admission meds
+        """
+        result = ReconciliationResult()
+        
+        # Match medications
+        matches = await self.matcher.match_medications(
+            home_medications,
+            admission_medications
+        )
+        
+        # Process matches
+        for match in matches:
+            if match.is_exact_match:
+                result.continued_medications.append(
+                    ContinuedMedication(
+                        medication=match.medication,
+                        source="home",
+                        no_changes=True
+                    )
+                )
+            elif match.is_therapeutic_match:
+                # Therapeutic substitution
+                result.substitutions.append(
+                    TherapeuticSubstitution(
+                        home_medication=match.home_medication,
+                        admission_medication=match.admission_medication,
+                        reason=match.substitution_reason
+                    )
+                )
+            elif match.has_dose_change:
+                # Dose modification
+                result.modifications.append(
+                    DoseModification(
+                        medication=match.medication,
+                        home_dose=match.home_dose,
+                        admission_dose=match.admission_dose,
+                        reason=match.modification_reason
+                    )
+                )
+        
+        # Find unmatched medications
+        result.discontinued = self._find_discontinued(
+            home_medications, matches
+        )
+        result.new_medications = self._find_new(
+            admission_medications, matches
+        )
+        
+        # Resolve conflicts
+        if result.has_conflicts():
+            result.conflicts = await self.conflict_resolver.resolve(
+                result.get_conflicts(),
+                reconciliation_context
+            )
+        
+        return result
+
+class MedicationMatcher:
+    async def match_medications(
+        self,
+        list1: List[Medication],
+        list2: List[Medication]
+    ) -> List[MedicationMatch]:
+        """
+        Match medications between two lists using various strategies
+        """
+        matches = []
+        
+        for med1 in list1:
+            best_match = None
+            best_score = 0
+            
+            for med2 in list2:
+                score = await self._calculate_match_score(med1, med2)
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = med2
+            
+            if best_score > 0.8:  # High confidence match
+                matches.append(MedicationMatch(
+                    medication1=med1,
+                    medication2=best_match,
+                    match_score=best_score,
+                    match_type=self._determine_match_type(
+                        med1, best_match, best_score
+                    )
+                ))
+        
+        return matches
+    
+    async def _calculate_match_score(
+        self,
+        med1: Medication,
+        med2: Medication
+    ) -> float:
+        """Calculate similarity score between two medications"""
+        score = 0.0
+        
+        # Exact RxNorm match
+        if med1.rxnorm_code == med2.rxnorm_code:
+            return 1.0
+        
+        # Generic name match
+        if med1.generic_name.lower() == med2.generic_name.lower():
+            score += 0.6
+        
+        # Therapeutic class match
+        if med1.therapeutic_class == med2.therapeutic_class:
+            score += 0.3
+        
+        # Similar dose form
+        if self._similar_dose_form(med1.dose_form, med2.dose_form):
+            score += 0.1
+        
+        return score
+```
+
+### Week 8: Personalized Medicine Features
+
+#### 8.1 Pharmacogenomics Integration
+```python
+class PharmacogenomicsService:
+    def __init__(self, pgx_db, dosing_guidelines):
+        self.pgx_db = pgx_db
+        self.dosing_guidelines = dosing_guidelines
+    
+    async def get_pgx_recommendations(
+        self,
+        patient_id: str,
+        medication: Medication
+    ) -> PGxRecommendation:
+        """
+        Get pharmacogenomic recommendations for medication
+        """
+        # Get patient's genetic profile
+        genetic_profile = await self.pgx_db.get_patient_profile(patient_id)
+        
+        if not genetic_profile:
+            return PGxRecommendation(
+                applicable=False,
+                reason="No genetic data available"
+            )
+        
+        # Check if medication has PGx implications
+        pgx_drugs = await self.pgx_db.get_pgx_medications()
+        if medication.rxnorm_code not in pgx_drugs:
+            return PGxRecommendation(
+                applicable=False,
+                reason="No known pharmacogenomic implications"
+            )
+        
+        # Get relevant gene-drug pairs
+        gene_drug_pairs = await self.pgx_db.get_gene_drug_pairs(
+            medication.rxnorm_code
+        )
+        
+        recommendations = []
+        for pair in gene_drug_pairs:
+            patient_genotype = genetic_profile.get_genotype(pair.gene)
+            if patient_genotype:
+                phenotype = self._translate_to_phenotype(
+                    pair.gene,
+                    patient_genotype
+                )
+                
+                guideline = await self.dosing_guidelines.get_guideline(
+                    gene=pair.gene,
+                    drug=medication.rxnorm_code,
+                    phenotype=phenotype
+                )
+                
+                if guideline:
+                    recommendations.append(PGxDosing(
+                        gene=pair.gene,
+                        genotype=patient_genotype,
+                        phenotype=phenotype,
+                        recommendation=guideline.recommendation,
+                        dose_adjustment=guideline.dose_adjustment,
+                        alternative_drug=guideline.alternative,
+                        evidence_level=guideline.evidence_level
+                    ))
+        
+        return PGxRecommendation(
+            applicable=True,
+            recommendations=recommendations,
+            clinical_impact=self._assess_clinical_impact(recommendations)
+        )
+```
+
+#### 8.2 Adherence Prediction
+```python
+class AdherencePredictionService:
+    def __init__(self, ml_model, historical_data):
+        self.ml_model = ml_model
+        self.historical_data = historical_data
+    
+    async def predict_adherence(
+        self,
+        patient_id: str,
+        medication_proposal: MedicationProposal
+    ) -> AdherencePrediction:
+        """
+        Predict medication adherence using ML model
+        """
+        # Gather features
+        features = await self._extract_features(
+            patient_id,
+            medication_proposal
+        )
+        
+        # Make prediction
+        adherence_probability = self.ml_model.predict_proba(features)[0][1]
+        
+        # Identify risk factors
+        risk_factors = self._identify_risk_factors(features)
+        
+        # Generate interventions
+        interventions = self._suggest_interventions(
+            adherence_probability,
+            risk_factors
+        )
+        
+        return AdherencePrediction(
+            probability=adherence_probability,
+            risk_level=self._categorize_risk(adherence_probability),
+            risk_factors=risk_factors,
+            suggested_interventions=interventions
+        )
+    
+    async def _extract_features(
+        self,
+        patient_id: str,
+        proposal: MedicationProposal
+    ) -> dict:
+        """Extract features for adherence prediction"""
+        features = {}
+        
+        # Medication complexity
+        features['daily_frequency'] = self._parse_frequency(
+            proposal.frequency
+        )
+        features['multiple_medications'] = await self._count_current_meds(
+            patient_id
+        )
+        
+        # Cost factors
+        features['copay_amount'] = proposal.formulary_status.estimated_copay
+        features['prior_auth_required'] = proposal.formulary_status.requires_prior_auth
+        
+        # Historical adherence
+        history = await self.historical_data.get_adherence_history(
+            patient_id
+        )
+        features['previous_adherence_rate'] = history.average_pdc
+        features['missed_refills'] = history.missed_refill_count
+        
+        # Side effect profile
+        features['common_side_effects'] = len(
+            proposal.medication.common_side_effects
+        )
+        features['severity_score'] = proposal.medication.side_effect_severity_score
+        
+        return features
+```
+
+### Week 9: Quality & Reporting
+
+#### 9.1 Clinical Quality Metrics
+```python
+class MedicationQualityService:
+    async def calculate_quality_metrics(
+        self,
+        time_period: TimePeriod
+    ) -> QualityMetrics:
+        """
+        Calculate medication-related quality metrics
+        """
+        metrics = QualityMetrics()
+        
+        # Formulary compliance
+        metrics.formulary_compliance = await self._calculate_formulary_compliance(
+            time_period
+        )
+        
+        # Generic prescribing rate
+        metrics.generic_rate = await self._calculate_generic_rate(
+            time_period
+        )
+        
+        # High-risk medication in elderly
+        metrics.beers_criteria_rate = await self._calculate_beers_rate(
+            time_period
+        )
+        
+        # Medication reconciliation completion
+        metrics.medrec_completion = await self._calculate_medrec_completion(
+            time_period
+        )
+        
+        # Protocol adherence
+        metrics.protocol_adherence = await self._calculate_protocol_adherence(
+            time_period
+        )
+        
+        # Safety metrics
+        metrics.override_rate = await self._calculate_override_rate(
+            time_period
+        )
+        
+        return metrics
+    
+    async def generate_provider_report(
+        self,
+        provider_id: str,
+        time_period: TimePeriod
+    ) -> ProviderReport:
+        """
+        Generate provider-specific prescribing report
+        """
+        report = ProviderReport(
+            provider_id=provider_id,
+            period=time_period
+        )
+        
+        # Prescribing volume
+        report.total_prescriptions = await self._count_prescriptions(
+            provider_id, time_period
+        )
+        
+        # Top medications
+        report.top_medications = await self._get_top_medications(
+            provider_id, time_period, limit=20
+        )
+        
+        # Cost analysis
+        report.average_prescription_cost = await self._calculate_avg_cost(
+            provider_id, time_period
+        )
+        
+        # Quality indicators
+        report.formulary_compliance_rate = await self._provider_formulary_rate(
+            provider_id, time_period
+        )
+        
+        report.generic_prescribing_rate = await self._provider_generic_rate(
+            provider_id, time_period
+        )
+        
+        return report
+```
+
+## Phase 4: Production Readiness (Weeks 10-12)
+
+### Week 10: Performance Optimization
+
+#### 10.1 Caching Strategy
+```python
+class MedicationCacheManager:
+    def __init__(self, redis_client):
+        self.redis = redis_client
+        self.cache_ttls = {
+            'medication': 3600,      # 1 hour
+            'formulary': 1800,       # 30 minutes
+            'calculation': 300,      # 5 minutes
+            'protocol': 7200,        # 2 hours
+            'search': 600           # 10 minutes
+        }
+    
+    async def get_or_calculate(
+        self,
+        key: str,
+        calculator: Callable,
+        ttl_type: str = 'calculation'
+    ):
+        """
+        Get from cache or calculate if missing
+        """
+        # Try cache first
+        cached = await self.redis.get(key)
+        if cached:
+            return json.loads(cached)
+        
+        # Calculate if not in cache
+        result = await calculator()
+        
+        # Cache result
+        ttl = self.cache_ttls.get(ttl_type, 300)
+        await self.redis.set(
+            key,
+            json.dumps(result, default=str),
+            ex=ttl
+        )
+        
+        return result
+    
+    async def invalidate_medication_cache(self, medication_id: str):
+        """Invalidate all caches related to a medication"""
+        patterns = [
+            f"medication:{medication_id}:*",
+            f"formulary:*:{medication_id}",
+            f"search:*"  # Invalidate search results
+        ]
+        
+        for pattern in patterns:
+            keys = await self.redis.keys(pattern)
+            if keys:
+                await self.redis.delete(*keys)
+```
+
+#### 10.2 Database Optimization
+```sql
+-- Performance indexes
+CREATE INDEX idx_prescriptions_patient_date 
+    ON prescriptions(patient_id, proposal_timestamp DESC);
+
+CREATE INDEX idx_prescriptions_medication_date 
+    ON prescriptions(medication_id, proposal_timestamp DESC);
+
+CREATE INDEX idx_medications_search_gin 
+    ON medications USING gin(
+        to_tsvector('english', 
+            coalesce(brand_name, '') || ' ' || 
+            coalesce(generic_name, '') || ' ' || 
+            coalesce(therapeutic_class, '')
+        )
+    );
+
+-- Partitioning for large tables
+CREATE TABLE prescriptions_2024 PARTITION OF prescriptions
+    FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
+
+CREATE TABLE prescriptions_2025 PARTITION OF prescriptions
+    FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
+
+-- Materialized view for formulary lookups
+CREATE MATERIALIZED VIEW formulary_preferred_medications AS
+SELECT 
+    m.medication_id,
+    m.rxnorm_code,
+    m.generic_name,
+    m.brand_name,
+    f.tier,
+    f.requires_pa,
+    f.quantity_limits
+FROM medications m
+JOIN formulary_entries f ON m.medication_id = f.medication_id
+WHERE f.status = 'ACTIVE' AND f.tier <= 2
+WITH DATA;
+
+CREATE INDEX idx_formulary_preferred_rxnorm 
+    ON formulary_preferred_medications(rxnorm_code);
+
+-- Refresh strategy
+CREATE OR REPLACE FUNCTION refresh_formulary_view()
+RETURNS void AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY formulary_preferred_medications;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+### Week 11: Monitoring & Observability
+
+#### 11.1 Metrics Collection
+```python
+from prometheus_client import Counter, Histogram, Gauge
+
+# Define metrics
+prescription_counter = Counter(
+    'medication_prescriptions_total',
+    'Total number of prescriptions',
+    ['status', 'medication_class']
+)
+
+dose_calculation_histogram = Histogram(
+    'dose_calculation_duration_seconds',
+    'Time spent calculating doses',
+    ['calculation_type']
+)
+
+formulary_cache_hit_rate = Gauge(
+    'formulary_cache_hit_rate',
+    'Cache hit rate for formulary lookups'
+)
+
+class MetricsMiddleware:
+    async def track_prescription_metrics(
+        self,
+        prescription: Prescription,
+        duration: float
+    ):
+        """Track prescription-related metrics"""
+        # Count prescriptions
+        prescription_counter.labels(
+            status=prescription.status,
+            medication_class=prescription.medication.therapeutic_class
+        ).inc()
+        
+        # Track timing
+        dose_calculation_histogram.labels(
+            calculation_type=prescription.calculation_method
+        ).observe(duration)
+        
+        # Custom business metrics
+        if prescription.is_generic:
+            generic_rate_gauge.inc()
+        
+        if prescription.formulary_status.tier == 1:
+            formulary_compliance_gauge.inc()
+```
+
+#### 11.2 Distributed Tracing
+```python
+from opentelemetry import trace
+from opentelemetry.exporter.jaeger import JaegerExporter
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+tracer = trace.get_tracer(__name__)
+
+class TracedMedicationService:
+    @tracer.start_as_current_span("propose_medication")
+    async def propose_medication(
+        self,
+        request: MedicationProposalRequest
+    ) -> MedicationProposal:
+        """Traced medication proposal"""
+        span = trace.get_current_span()
+        
+        # Add attributes
+        span.set_attribute("patient.id", request.patient_id)
+        span.set_attribute("medication.id", request.medication_id)
+        
+        try:
+            # Get context with tracing
+            with tracer.start_as_current_span("fetch_dosing_context"):
+                context = await self.context_client.get_dosing_context(
+                    request.patient_id
+                )
+            
+            # Calculate dose with tracing
+            with tracer.start_as_current_span("calculate_dose"):
+                dose = await self.dose_calculator.calculate(
+                    request, context
+                )
+                span.set_attribute("calculated.dose", dose.value)
+            
+            # Check formulary with tracing
+            with tracer.start_as_current_span("check_formulary"):
+                formulary = await self.formulary_service.check(
+                    request.medication_id,
+                    context.insurance_plan
+                )
+                span.set_attribute("formulary.tier", formulary.tier)
+            
+            return proposal
+            
+        except Exception as e:
+            span.record_exception(e)
+            span.set_status(trace.Status(trace.StatusCode.ERROR))
+            raise
+```
+
+### Week 12: Deployment & Testing
+
+#### 12.1 API Testing Suite
+```python
+import pytest
+from httpx import AsyncClient
+
+class TestMedicationAPI:
+    @pytest.mark.asyncio
+    async def test_medication_proposal_flow(self, client: AsyncClient):
+        """Test complete medication proposal flow"""
+        # Create proposal
+        proposal_request = {
+            "patientId": "test-patient-123",
+            "medicationId": "med-456",
+            "indication": "hypertension",
+            "route": "PO",
+            "frequency": "daily"
+        }
+        
+        response = await client.post(
+            "/api/v1/medications/propose",
+            json=proposal_request
+        )
+        
+        assert response.status_code == 200
+        proposal = response.json()
+        assert proposal["status"] == "PROPOSED"
+        assert "proposalId" in proposal
+        assert proposal["dose"]["value"] > 0
+        
+        # Verify proposal stored
+        proposal_id = proposal["proposalId"]
+        get_response = await client.get(
+            f"/api/v1/medications/proposals/{proposal_id}"
+        )
+        assert get_response.status_code == 200
+    
+    @pytest.mark.asyncio
+    async def test_formulary_check(self, client: AsyncClient):
+        """Test formulary checking"""
+        response = await client.get(
+            "/api/v1/formulary/check",
+            params={
+                "medicationId": "med-123",
+                "insurancePlan": "plan-456"
+            }
+        )
+        
+        assert response.status_code == 200
+        formulary = response.json()
+        assert "tier" in formulary
+        assert "requiresPriorAuth" in formulary
+        assert "estimatedCopay" in formulary
+```
+
+#### 12.2 Performance Testing
+```python
+import asyncio
+from locust import HttpUser, task, between
+
+class MedicationServiceUser(HttpUser):
+    wait_time = between(1, 3)
+    
+    @task(weight=3)
+    def search_medication(self):
+        """Test medication search performance"""
+        self.client.get(
+            "/api/v1/medications/search",
+            params={"q": "metformin", "limit": 10}
+        )
+    
+    @task(weight=2)
+    def propose_medication(self):
+        """Test medication proposal performance"""
+        self.client.post(
+            "/api/v1/medications/propose",
+            json={
+                "patientId": f"patient-{random.randint(1, 1000)}",
+                "medicationId": f"med-{random.randint(1, 100)}",
+                "indication": "test",
+                "route": "PO",
+                "frequency": "BID"
+            }
+        )
+    
+    @task(weight=1)
+    def check_formulary(self):
+        """Test formulary check performance"""
+        self.client.get(
+            f"/api/v1/formulary/check",
+            params={
+                "medicationId": f"med-{random.randint(1, 100)}",
+                "insurancePlan": "default-plan"
+            }
+        )
+```
+
+#### 12.3 Deployment Configuration
+```yaml
+# kubernetes/medication-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medication-service
+  namespace: clinical-platform
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: medication-service
+  template:
+    metadata:
+      labels:
+        app: medication-service
+    spec:
+      containers:
+      - name: medication-service
+        image: clinical-platform/medication-service:v1.0.0
+        ports:
+        - containerPort: 8080  # REST/GraphQL
+        - containerPort: 50051 # gRPC
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: medication-db-secret
+              key: connection-string
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        - name: KAFKA_BROKERS
+          value: "kafka-0:9092,kafka-1:9092,kafka-2:9092"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: medication-service
+  namespace: clinical-platform
+spec:
+  selector:
+    app: medication-service
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medication-service-hpa
+  namespace: clinical-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: medication-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+## Success Metrics & KPIs
+
+### Performance Metrics
+- **API Response Time**: P95 < 200ms for all endpoints
+- **Dose Calculation**: < 50ms for complex calculations
+- **Search Latency**: < 100ms for medication search
+- **Throughput**: > 1000 prescriptions/second
+
+### Business Metrics
+- **Formulary Compliance**: > 85%
+- **Generic Prescribing Rate**: > 80%
+- **Protocol Adherence**: > 90%
+- **Calculation Accuracy**: 100%
+
+### Quality Metrics
+- **Code Coverage**: > 80%
+- **API Availability**: > 99.9%
+- **Error Rate**: < 0.1%
+- **Data Quality**: 100% RxNorm mapping
+
+### Operational Metrics
+- **Deployment Frequency**: Weekly
+- **MTTR**: < 30 minutes
+- **Change Failure Rate**: < 5%
+- **Resource Utilization**: < 70%
+
+## Risk Mitigation
+
+### Technical Risks
+1. **Performance Degradation**
+   - Mitigation: Comprehensive caching, database optimization
+   - Monitoring: Real-time performance dashboards
+
+2. **Data Inconsistency**
+   - Mitigation: Transactional guarantees, outbox pattern
+   - Monitoring: Data quality checks, reconciliation reports
+
+3. **Integration Failures**
+   - Mitigation: Circuit breakers, retry mechanisms
+   - Monitoring: Service health checks, dependency tracking
+
+### Clinical Risks
+1. **Incorrect Calculations**
+   - Mitigation: Extensive testing, validation rules
+   - Monitoring: Calculation audit logs
+
+2. **Formulary Mismatches**
+   - Mitigation: Real-time formulary updates
+   - Monitoring: Formulary accuracy reports
+
+## Summary
+
+This implementation plan provides a comprehensive roadmap for building a production-ready Medication Microservice that:
+
+1. **Focuses on Domain Expertise**: Pure pharmaceutical business logic
+2. **Implements Two-Phase Pattern**: Clear separation of propose/commit
+3. **Integrates Seamlessly**: With Context Service, Workflow Engine
+4. **Performs at Scale**: Sub-200ms response times
+5. **Maintains Quality**: Comprehensive testing and monitoring
+
+The phased approach ensures incremental delivery of value while building toward a complete, enterprise-grade medication management system.

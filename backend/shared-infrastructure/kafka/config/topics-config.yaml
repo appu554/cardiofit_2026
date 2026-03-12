@@ -1,0 +1,628 @@
+# Global Kafka Topic Configuration for CardioFit Platform
+# This file serves as the single source of truth for all Kafka topics
+# Version: 1.0.0
+# Last Updated: 2025-01-26
+
+# Default configurations applied to all topics unless overridden
+defaults:
+  replication_factor: 3
+  min_insync_replicas: 2
+  compression_type: snappy
+  cleanup_policy: delete
+  segment_ms: 3600000  # 1 hour
+  retention_check_interval_ms: 300000  # 5 minutes
+
+# Topic categories with their configurations
+topics:
+  # Core Clinical Event Topics - Primary data flow for clinical operations
+  clinical_events:
+    - name: patient-events.v1
+      description: "All patient-related events (admissions, discharges, updates)"
+      partitions: 12
+      retention_ms: 259200000  # 3 days
+      producers: ["patient-service", "apollo-federation"]
+      consumers: ["flink-stream-processor", "evidence-envelope-service"]
+
+    - name: medication-events.v1
+      description: "Medication prescriptions, administrations, discontinuations"
+      partitions: 12
+      retention_ms: 259200000  # 3 days
+      producers: ["medication-service", "flow2-go-engine"]
+      consumers: ["flink-stream-processor", "safety-gateway"]
+
+    - name: observation-events.v1
+      description: "Vital signs, lab results, clinical observations"
+      partitions: 12
+      retention_ms: 259200000  # 3 days
+      producers: ["observation-service"]
+      consumers: ["flink-stream-processor", "clinical-reasoning-service"]
+
+    - name: safety-events.v1
+      description: "Clinical alerts, contraindications, safety violations"
+      partitions: 12
+      retention_ms: 604800000  # 7 days
+      max_message_bytes: 10485760  # 10MB for detailed safety reports
+      producers: ["safety-gateway", "rust-clinical-engine"]
+      consumers: ["flink-stream-processor", "notification-service"]
+
+    - name: vital-signs-events.v1
+      description: "Processed vital signs from devices"
+      partitions: 12
+      retention_ms: 259200000  # 3 days
+      producers: ["device-integration-service", "validated-device-data-processor"]
+      consumers: ["flink-stream-processor", "observation-service"]
+
+    - name: lab-result-events.v1
+      description: "Laboratory results from instruments"
+      partitions: 12
+      retention_ms: 604800000  # 7 days
+      producers: ["lab-integration-service", "external-lab-connector"]
+      consumers: ["flink-stream-processor", "clinical-reasoning-service"]
+
+    - name: encounter-events.v1
+      description: "Clinical encounters, appointments, consultations"
+      partitions: 8
+      retention_ms: 259200000  # 3 days
+      producers: ["encounter-service"]
+      consumers: ["flink-stream-processor", "billing-service"]
+
+    - name: diagnostic-events.v1
+      description: "Diagnoses, conditions, problem lists"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["diagnostic-service", "clinical-reasoning-service"]
+      consumers: ["flink-stream-processor", "decision-support-service"]
+
+    - name: procedure-events.v1
+      description: "Procedures, interventions, treatments"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["procedure-service"]
+      consumers: ["flink-stream-processor", "billing-service"]
+
+  # Device Data Streaming Topics - IoT and medical device integration
+  device_data:
+    - name: raw-device-data.v1
+      description: "Raw incoming data from medical devices"
+      partitions: 12
+      retention_ms: 259200000  # 3 days
+      compression_type: lz4  # Fast compression for streaming
+      producers: ["device-gateway"]
+      consumers: ["stage1-validation-service"]
+
+    - name: validated-device-data.v1
+      description: "Validated and enriched device data"
+      partitions: 12
+      retention_ms: 259200000  # 3 days
+      producers: ["stage1-validation-service"]
+      consumers: ["stage2-fhir-transform-service"]
+
+    - name: waveform-data.v1
+      description: "High-frequency waveform data (ECG, EEG)"
+      partitions: 24  # Higher partition count for throughput
+      retention_ms: 86400000  # 1 day (large volume)
+      compression_type: lz4
+      segment_bytes: 1073741824  # 1GB segments
+      producers: ["waveform-capture-service"]
+      consumers: ["waveform-analysis-service"]
+
+    - name: device-telemetry.v1
+      description: "Device status and health monitoring"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      producers: ["device-management-service"]
+      consumers: ["monitoring-service"]
+
+  # Runtime Layer Topics - Flink processing and enrichment
+  runtime_layer:
+    - name: enriched-patient-events.v1
+      description: "Semantically enriched patient events from Flink"
+      partitions: 12
+      retention_ms: 604800000  # 7 days
+      producers: ["flink-stream-processor"]
+      consumers: ["fhir-store-sink", "elasticsearch-sink", "neo4j-sink"]
+
+    - name: clinical-patterns.v1
+      description: "Detected clinical patterns and anomalies"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      producers: ["flink-pattern-detection"]
+      consumers: ["clinical-reasoning-service", "alert-service"]
+
+    - name: pathway-adherence-events.v1
+      description: "Clinical pathway compliance monitoring"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      producers: ["flink-pathway-monitor"]
+      consumers: ["quality-metrics-service", "reporting-service"]
+
+    - name: semantic-mesh-updates.v1
+      description: "Broadcast state updates for knowledge distribution"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact  # Keep latest state
+      producers: ["graphdb-semantic-service"]
+      consumers: ["flink-broadcast-state-processor"]
+
+    - name: patient-context-snapshots.v1
+      description: "Periodic patient state snapshots"
+      partitions: 12
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      segment_bytes: 536870912  # 512MB
+      producers: ["flink-snapshot-generator"]
+      consumers: ["context-recovery-service"]
+
+  # Knowledge Base CDC Topics - Change data capture for knowledge bases
+  knowledge_base_cdc:
+    - name: kb4.drug_calculations.changes
+      description: "Drug calculation rule updates from KB4"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb4-connector"]
+      consumers: ["cache-invalidation-service", "flink-broadcast-updater"]
+
+    - name: kb4.dosing_rules.changes
+      description: "Dosing rule modifications from KB4"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb4-connector"]
+      consumers: ["medication-service", "clinical-decision-support"]
+
+    - name: kb4.weight_adjustments.changes
+      description: "Weight adjustment changes from KB4"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb4-connector"]
+      consumers: ["medication-service"]
+
+    - name: kb5.drug_interactions.changes
+      description: "Drug interaction database updates from KB5"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb5-connector"]
+      consumers: ["safety-gateway", "medication-service"]
+
+    - name: kb3.clinical_protocols.changes
+      description: "Clinical protocol updates from KB3"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb3-connector"]
+      consumers: ["protocol-engine", "decision-support-service"]
+
+    - name: kb6.validation_rules.changes
+      description: "Validation rule changes from KB6"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb6-connector"]
+      consumers: ["validation-service"]
+
+    - name: kb7.terminology.changes
+      description: "Medical terminology updates from KB7"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["debezium-kb7-connector"]
+      consumers: ["terminology-service", "nlp-service"]
+
+    - name: semantic-mesh.changes
+      description: "GraphDB semantic mesh updates"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      cleanup_policy: compact
+      producers: ["graphdb-cdc-connector"]
+      consumers: ["flink-semantic-updater", "cache-warming-service"]
+
+  # Evidence Envelope Topics - Clinical evidence management
+  evidence_management:
+    - name: audit-events.v1
+      description: "All audit trail events for HIPAA/FDA compliance"
+      partitions: 6
+      retention_ms: 31536000000  # 365 days (compliance requirement)
+      compression_type: gzip  # Maximum compression for long-term storage
+      min_insync_replicas: 3  # Extra durability for audit logs
+      producers: ["all-services"]
+      consumers: ["audit-service", "compliance-reporting"]
+
+    - name: envelope-events.v1
+      description: "Evidence envelope lifecycle events"
+      partitions: 6
+      retention_ms: 7776000000  # 90 days
+      producers: ["evidence-envelope-service"]
+      consumers: ["clinical-reasoning-service", "audit-service"]
+
+    - name: evidence-requests.v1
+      description: "Evidence retrieval requests"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      producers: ["clinical-services"]
+      consumers: ["evidence-envelope-service"]
+
+    - name: evidence-validations.v1
+      description: "Evidence validation results"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      producers: ["validation-service"]
+      consumers: ["evidence-envelope-service", "quality-service"]
+
+    - name: clinical-reasoning-events.v1
+      description: "AI/ML reasoning outputs"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      producers: ["clinical-reasoning-service"]
+      consumers: ["decision-support-service", "evidence-envelope-service"]
+
+    - name: inference-results.v1
+      description: "Clinical inference chain results"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      producers: ["inference-engine"]
+      consumers: ["evidence-envelope-service", "reporting-service"]
+
+  # Workflow & Orchestration Topics
+  workflow_orchestration:
+    - name: workflow-events.v1
+      description: "Workflow state transitions and completions"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["workflow-engine"]
+      consumers: ["task-service", "notification-service"]
+
+    - name: workflow-ui-interactions.v1
+      description: "UI events requiring backend processing"
+      partitions: 8
+      retention_ms: 259200000  # 3 days
+      producers: ["ui-gateway"]
+      consumers: ["workflow-engine"]
+
+    - name: clinical-overrides.v1
+      description: "Clinical override decisions and approvals"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days (audit requirement)
+      producers: ["override-service"]
+      consumers: ["audit-service", "workflow-engine"]
+
+    - name: task-assignments.v1
+      description: "Clinical task assignments and completions"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["task-service"]
+      consumers: ["notification-service", "workflow-engine"]
+
+    - name: decision-support-events.v1
+      description: "Clinical decision support triggers"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      producers: ["decision-support-service"]
+      consumers: ["workflow-engine", "evidence-envelope-service"]
+
+    - name: orchestration-commands.v1
+      description: "Cross-service orchestration commands"
+      partitions: 4
+      retention_ms: 259200000  # 3 days
+      producers: ["orchestrator-service"]
+      consumers: ["all-services"]
+
+  # SLA & Monitoring Topics - Performance management
+  monitoring:
+    - name: sla-measurements.v1
+      description: "Real-time SLA metric measurements"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["sla-monitoring-service"]
+      consumers: ["alerting-service", "dashboard-service"]
+
+    - name: sla-violations.v1
+      description: "SLA violation events and alerts"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      producers: ["sla-monitoring-service"]
+      consumers: ["alerting-service", "incident-management"]
+
+    - name: performance-metrics.v1
+      description: "System performance indicators"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      compression_type: lz4
+      producers: ["all-services"]
+      consumers: ["metrics-aggregator", "dashboard-service"]
+
+    - name: clinical-metrics.v1
+      description: "Clinical outcome metrics"
+      partitions: 6
+      retention_ms: 7776000000  # 90 days
+      producers: ["clinical-services"]
+      consumers: ["quality-service", "reporting-service"]
+
+    - name: usage-analytics.v1
+      description: "Feature usage tracking"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      producers: ["all-services"]
+      consumers: ["analytics-service"]
+
+    - name: alert-notifications.v1
+      description: "System and clinical alerts"
+      partitions: 6
+      retention_ms: 604800000  # 7 days
+      producers: ["alerting-service"]
+      consumers: ["notification-service", "incident-management"]
+
+  # Cache & Optimization Topics - Performance layer
+  cache_optimization:
+    - name: cache-invalidation.v1
+      description: "L1/L2 cache invalidation events"
+      partitions: 8
+      retention_ms: 86400000  # 1 day
+      producers: ["cache-manager", "cdc-subscribers"]
+      consumers: ["l1-cache-service", "l2-cache-service"]
+
+    - name: prefetch-predictions.v1
+      description: "ML-based prefetch predictions"
+      partitions: 4
+      retention_ms: 259200000  # 3 days
+      producers: ["ml-prefetch-predictor"]
+      consumers: ["l1-cache-prefetcher-service"]
+
+    - name: cache-warmup.v1
+      description: "Cache warming commands"
+      partitions: 4
+      retention_ms: 86400000  # 1 day
+      producers: ["cache-warming-service"]
+      consumers: ["l1-cache-service", "l2-cache-service"]
+
+    - name: query-patterns.v1
+      description: "Query pattern analysis for optimization"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      producers: ["query-analyzer"]
+      consumers: ["ml-prefetch-predictor", "query-optimizer"]
+
+  # Vaidshala Clinical Runtime Topics - KB-19+ inter-service events
+  # These topics provide audit replay and async fanout alongside the primary
+  # HTTP POST inter-KB communication channel.
+  vaidshala_runtime:
+    - name: mcu-gate-changed.v1
+      description: "MCU gate transitions from KB-23 Decision Cards → KB-19 Protocol Orchestrator"
+      partitions: 6
+      retention_ms: 31536000000  # 365 days (10-year DISHA retention via tiered storage)
+      compression_type: gzip
+      producers: ["kb-23-decision-cards"]
+      consumers: ["kb-19-protocol-orchestrator", "safety-audit-service"]
+
+    - name: behavioral-gap.v1
+      description: "Behavioral intelligence gaps from KB-21 → KB-23 for card generation"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      producers: ["kb-21-behavioral-intelligence"]
+      consumers: ["kb-23-decision-cards", "clinical-reasoning-service"]
+
+    - name: outcome-correlation-changed.v1
+      description: "Patient outcome correlation updates from KB-20 → KB-21"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      producers: ["kb-20-patient-profile"]
+      consumers: ["kb-21-behavioral-intelligence"]
+
+    - name: lab-result-clinical.v1
+      description: "Clinical lab results from KB-20 → V-MCU/KB-23 (distinct from device pipeline lab-result-events.v1)"
+      partitions: 8
+      retention_ms: 31536000000  # 365 days (clinical audit)
+      compression_type: gzip
+      producers: ["kb-20-patient-profile"]
+      consumers: ["vmcu-engine", "kb-23-decision-cards", "kb-22-hpi-engine"]
+
+    - name: sla-breach.v1
+      description: "SLA breach alerts from KB-23 → notification/escalation systems"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      producers: ["kb-23-decision-cards"]
+      consumers: ["notification-service", "escalation-service", "safety-audit-service"]
+
+    - name: plausibility-flag.v1
+      description: "Cross-session plausibility flags from KB-20 → clinical review queue"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      producers: ["kb-20-patient-profile"]
+      consumers: ["clinical-review-queue", "kb-22-hpi-engine"]
+
+    - name: safety-trace.v1
+      description: "V-MCU SafetyTrace audit records (append-only, 10-year DISHA retention)"
+      partitions: 12
+      retention_ms: 31536000000  # 365 days (tiered to cold storage for 10-year DISHA)
+      compression_type: gzip
+      min_insync_replicas: 3  # Maximum durability for safety-critical audit trail
+      producers: ["vmcu-engine"]
+      consumers: ["safety-audit-service", "compliance-reporting"]
+
+    - name: deprescribing-events.v1
+      description: "Deprescribing plan lifecycle events (start, step-down, pause, complete, abort)"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      producers: ["vmcu-engine"]
+      consumers: ["kb-23-decision-cards", "clinical-review-queue"]
+
+  # Dead Letter Queue Topics - Error handling
+  dlq:
+    - name: failed-validation.v1
+      description: "Validation failures from Stage 1"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      producers: ["stage1-validation-service"]
+      consumers: ["error-recovery-service"]
+
+    - name: critical-data-dlq.v1
+      description: "Critical medical data that failed processing"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      min_insync_replicas: 3  # Extra durability
+      producers: ["all-critical-services"]
+      consumers: ["critical-error-handler"]
+
+    - name: poison-messages.v1
+      description: "Messages that repeatedly fail processing"
+      partitions: 2
+      retention_ms: 31536000000  # 365 days
+      producers: ["all-services"]
+      consumers: ["poison-message-handler"]
+
+    - name: sink-write-failures.v1
+      description: "Failed writes to FHIR Store, Elasticsearch, MongoDB"
+      partitions: 6
+      retention_ms: 1209600000  # 14 days
+      producers: ["stage2-sink-writer"]
+      consumers: ["sink-retry-service"]
+
+    - name: critical-sink-failures.v1
+      description: "Critical medical data sink write failures"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      min_insync_replicas: 3
+      producers: ["stage2-sink-writer"]
+      consumers: ["critical-sink-recovery"]
+
+    - name: poison-messages-stage2.v1
+      description: "Stage 2 messages that repeatedly fail sink writes"
+      partitions: 2
+      retention_ms: 31536000000  # 365 days
+      producers: ["stage2-sink-writer"]
+      consumers: ["poison-message-handler"]
+
+    - name: processing-errors.v1
+      description: "General processing errors"
+      partitions: 4
+      retention_ms: 604800000  # 7 days
+      producers: ["all-services"]
+      consumers: ["error-monitoring-service"]
+
+    - name: integration-failures.v1
+      description: "External system integration failures"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      producers: ["integration-services"]
+      consumers: ["integration-recovery-service"]
+
+    - name: flink-checkpoint-failures.v1
+      description: "Flink checkpointing issues"
+      partitions: 2
+      retention_ms: 604800000  # 7 days
+      producers: ["flink-stream-processor"]
+      consumers: ["flink-monitoring-service"]
+
+  # Real-time Collaboration Topics
+  collaboration:
+    - name: clinical-chat.v1
+      description: "Clinical team communications"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["chat-service"]
+      consumers: ["notification-service", "audit-service"]
+
+    - name: notification-push.v1
+      description: "Push notification events"
+      partitions: 8
+      retention_ms: 259200000  # 3 days
+      producers: ["notification-service"]
+      consumers: ["push-gateway"]
+
+    - name: presence-updates.v1
+      description: "User presence and availability"
+      partitions: 4
+      retention_ms: 86400000  # 1 day
+      cleanup_policy: compact  # Keep latest state
+      producers: ["presence-service"]
+      consumers: ["ui-gateway", "chat-service"]
+
+    - name: collaboration-events.v1
+      description: "Multi-user collaboration events"
+      partitions: 6
+      retention_ms: 259200000  # 3 days
+      producers: ["collaboration-service"]
+      consumers: ["audit-service", "ui-gateway"]
+
+    - name: graphql-subscriptions.v1
+      description: "GraphQL subscription updates"
+      partitions: 8
+      retention_ms: 86400000  # 1 day
+      producers: ["apollo-federation"]
+      consumers: ["subscription-manager"]
+
+  # Integration Topics - External systems
+  external_integration:
+    - name: hl7-messages.v1
+      description: "HL7 message integration"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      producers: ["hl7-adapter"]
+      consumers: ["hl7-processor", "fhir-converter"]
+
+    - name: fhir-bundles.v1
+      description: "FHIR bundle exchanges"
+      partitions: 8
+      retention_ms: 604800000  # 7 days
+      max_message_bytes: 10485760  # 10MB for bundles
+      producers: ["fhir-service"]
+      consumers: ["fhir-processor", "google-healthcare-sync"]
+
+    - name: external-lab-results.v1
+      description: "External lab system results"
+      partitions: 6
+      retention_ms: 2592000000  # 30 days
+      producers: ["lab-interface"]
+      consumers: ["lab-processor", "observation-service"]
+
+    - name: pharmacy-orders.v1
+      description: "Pharmacy system orders"
+      partitions: 6
+      retention_ms: 604800000  # 7 days
+      producers: ["pharmacy-interface"]
+      consumers: ["pharmacy-processor", "medication-service"]
+
+    - name: billing-events.v1
+      description: "Billing and claims events"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      producers: ["billing-service"]
+      consumers: ["claims-processor", "revenue-cycle"]
+
+    - name: google-healthcare-sync.v1
+      description: "Google Healthcare API synchronization"
+      partitions: 6
+      retention_ms: 259200000  # 3 days
+      producers: ["healthcare-api-sync"]
+      consumers: ["fhir-service"]
+
+# Environment-specific overrides
+environments:
+  development:
+    default_partitions: 2
+    default_replication_factor: 1
+    min_insync_replicas: 1
+
+  staging:
+    default_partitions: 4
+    default_replication_factor: 2
+    min_insync_replicas: 2
+
+  production:
+    default_partitions: 8
+    default_replication_factor: 3
+    min_insync_replicas: 2
+
+# Kafka cluster configuration
+clusters:
+  confluent_cloud:
+    bootstrap_servers: "pkc-619z3.us-east1.gcp.confluent.cloud:9092"
+    security_protocol: "SASL_SSL"
+    sasl_mechanism: "PLAIN"
+    schema_registry_url: "https://psrc-4nyjd.us-central1.gcp.confluent.cloud"
+
+  local_development:
+    bootstrap_servers: "localhost:9092"
+    security_protocol: "PLAINTEXT"

@@ -1,0 +1,845 @@
+package services
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/lib/pq"
+	"github.com/shopspring/decimal"
+
+	"kb-drug-interactions/internal/models"
+)
+
+// FoodAlcoholHerbalEngine handles detection and evaluation of food, alcohol, and herbal interactions
+type FoodAlcoholHerbalEngine struct {
+	db             *sql.DB
+	cacheManager   *models.CacheManager
+	configProvider models.ConfigProvider
+}
+
+// ModifierContext represents the patient's exposure to food, alcohol, and herbal products
+type ModifierContext struct {
+	// Food interactions
+	RecentMeals      []FoodItem    `json:"recent_meals"`
+	FastingStatus    bool          `json:"fasting_status"`
+	
+	// Alcohol consumption
+	AlcoholIntake    AlcoholHistory `json:"alcohol_intake"`
+	
+	// Herbal and supplement usage
+	HerbalProducts   []HerbalItem   `json:"herbal_products"`
+	Supplements      []Supplement   `json:"supplements"`
+	
+	// Timing considerations
+	LastMealTime     *time.Time     `json:"last_meal_time,omitempty"`
+	AlcoholLastDose  *time.Time     `json:"alcohol_last_dose,omitempty"`
+}
+
+type FoodItem struct {
+	Name         string    `json:"name"`
+	Category     string    `json:"category"`     // dairy, citrus, high_fat, tyramine_rich
+	ConsumedAt   time.Time `json:"consumed_at"`
+	Quantity     string    `json:"quantity"`
+	GrapefruitContent bool `json:"grapefruit_content"`
+}
+
+type AlcoholHistory struct {
+	CurrentUse       bool      `json:"current_use"`
+	LastConsumption  *time.Time `json:"last_consumption,omitempty"`
+	TypicalWeeklyUse float64   `json:"typical_weekly_units"`
+	AcuteIntake      bool      `json:"acute_intake"`      // Recent heavy use
+}
+
+type HerbalItem struct {
+	Name            string    `json:"name"`
+	CommonName      string    `json:"common_name"`
+	ScientificName  string    `json:"scientific_name"`
+	StartDate       time.Time `json:"start_date"`
+	Dosage          string    `json:"dosage"`
+	FrequencyDaily  int       `json:"frequency_daily"`
+}
+
+type Supplement struct {
+	Name           string    `json:"name"`
+	Type           string    `json:"type"`           // vitamin, mineral, protein
+	Dosage         string    `json:"dosage"`
+	StartDate      time.Time `json:"start_date"`
+	Interactions   []string  `json:"known_interactions"`
+}
+
+// ModifierInteractionResult represents food/alcohol/herbal interaction findings
+type ModifierInteractionResult struct {
+	InteractionType    string                 `json:"interaction_type"`    // food, alcohol, herbal
+	ModifierName       string                 `json:"modifier_name"`
+	AffectedDrugs      []string              `json:"affected_drugs"`
+	Mechanism          string                 `json:"mechanism"`
+	ClinicalEffect     string                 `json:"clinical_effect"`
+	Severity           models.DDISeverity     `json:"severity"`
+	Evidence           models.EvidenceLevel   `json:"evidence"`
+	Recommendation     string                 `json:"recommendation"`
+	TimingGuidance     string                 `json:"timing_guidance"`
+	ConfidenceScore    decimal.Decimal        `json:"confidence_score"`
+	LastUpdated        time.Time              `json:"last_updated"`
+}
+
+// NewFoodAlcoholHerbalEngine creates a new modifier interaction engine
+func NewFoodAlcoholHerbalEngine(
+	db *sql.DB,
+	cacheManager *models.CacheManager,
+	configProvider models.ConfigProvider,
+) *FoodAlcoholHerbalEngine {
+	return &FoodAlcoholHerbalEngine{
+		db:             db,
+		cacheManager:   cacheManager,
+		configProvider: configProvider,
+	}
+}
+
+// EvaluateModifierInteractions performs comprehensive food/alcohol/herbal interaction analysis
+func (fahe *FoodAlcoholHerbalEngine) EvaluateModifierInteractions(
+	ctx context.Context,
+	drugCodes []string,
+	modifierContext ModifierContext,
+	datasetVersion string,
+) ([]ModifierInteractionResult, error) {
+	if len(drugCodes) == 0 {
+		return []ModifierInteractionResult{}, nil
+	}
+
+	var allResults []ModifierInteractionResult
+	
+	// Evaluate food interactions
+	foodResults, err := fahe.evaluateFoodInteractions(ctx, drugCodes, modifierContext, datasetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("food interaction evaluation failed: %w", err)
+	}
+	allResults = append(allResults, foodResults...)
+	
+	// Evaluate alcohol interactions
+	alcoholResults, err := fahe.evaluateAlcoholInteractions(ctx, drugCodes, modifierContext, datasetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("alcohol interaction evaluation failed: %w", err)
+	}
+	allResults = append(allResults, alcoholResults...)
+	
+	// Evaluate herbal/supplement interactions
+	herbalResults, err := fahe.evaluateHerbalInteractions(ctx, drugCodes, modifierContext, datasetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("herbal interaction evaluation failed: %w", err)
+	}
+	allResults = append(allResults, herbalResults...)
+	
+	// Apply clinical significance filtering
+	filteredResults := fahe.filterClinicallySignificant(allResults)
+	
+	return filteredResults, nil
+}
+
+// evaluateFoodInteractions checks for food-drug interactions
+func (fahe *FoodAlcoholHerbalEngine) evaluateFoodInteractions(
+	ctx context.Context,
+	drugCodes []string,
+	modifierContext ModifierContext,
+	datasetVersion string,
+) ([]ModifierInteractionResult, error) {
+	
+	query := `
+		SELECT 
+			dm.drug_code,
+			dm.modifier_name,
+			dm.modifier_type,
+			dm.mechanism,
+			dm.clinical_effect,
+			dm.severity,
+			dm.evidence_level,
+			dm.recommendation,
+			dm.timing_guidance,
+			dm.confidence_score,
+			dm.last_updated
+		FROM ddi_modifiers dm
+		WHERE dm.drug_code = ANY($1)
+		AND dm.modifier_type = 'food'
+		AND dm.dataset_version = $2
+		AND dm.is_active = true
+		ORDER BY dm.severity DESC, dm.confidence_score DESC
+	`
+	
+	rows, err := fahe.db.QueryContext(ctx, query, pq.Array(drugCodes), datasetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("food interaction query failed: %w", err)
+	}
+	defer rows.Close()
+	
+	var results []ModifierInteractionResult
+	
+	for rows.Next() {
+		var result ModifierInteractionResult
+		var severityStr, evidenceStr, drugCode string
+		
+		err := rows.Scan(
+			&drugCode,
+			&result.ModifierName,
+			&result.InteractionType,
+			&result.Mechanism,
+			&result.ClinicalEffect,
+			&severityStr,
+			&evidenceStr,
+			&result.Recommendation,
+			&result.TimingGuidance,
+			&result.ConfidenceScore,
+			&result.LastUpdated,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("food interaction scan failed: %w", err)
+		}
+
+		// Parse severity and evidence
+		result.Severity = models.DDISeverity(severityStr)
+		result.Evidence = models.EvidenceLevel(evidenceStr)
+
+		result.InteractionType = "food"
+		result.AffectedDrugs = []string{drugCode}
+		
+		// Apply contextual filtering based on recent meals
+		if fahe.isRelevantFoodInteraction(result, modifierContext) {
+			results = append(results, result)
+		}
+
+	}
+	
+	// Check for specific high-risk food interactions
+	grapefruitResults := fahe.checkGrapefruitInteractions(drugCodes, modifierContext)
+	results = append(results, grapefruitResults...)
+	
+	tyramineResults := fahe.checkTyramineInteractions(drugCodes, modifierContext)
+	results = append(results, tyramineResults...)
+	
+	return results, nil
+}
+
+// evaluateAlcoholInteractions checks for alcohol-drug interactions
+func (fahe *FoodAlcoholHerbalEngine) evaluateAlcoholInteractions(
+	ctx context.Context,
+	drugCodes []string,
+	modifierContext ModifierContext,
+	datasetVersion string,
+) ([]ModifierInteractionResult, error) {
+	
+	// Only evaluate if patient has alcohol exposure
+	if !modifierContext.AlcoholIntake.CurrentUse && 
+	   (modifierContext.AlcoholIntake.LastConsumption == nil || 
+	    time.Since(*modifierContext.AlcoholIntake.LastConsumption) > 72*time.Hour) {
+		return []ModifierInteractionResult{}, nil
+	}
+	
+	query := `
+		SELECT 
+			dm.drug_code,
+			dm.modifier_name,
+			dm.mechanism,
+			dm.clinical_effect,
+			dm.severity,
+			dm.evidence_level,
+			dm.recommendation,
+			dm.timing_guidance,
+			dm.confidence_score,
+			dm.interaction_details
+		FROM ddi_modifiers dm
+		WHERE dm.drug_code = ANY($1)
+		AND dm.modifier_type = 'alcohol'
+		AND dm.dataset_version = $2
+		AND dm.is_active = true
+		ORDER BY dm.severity DESC
+	`
+	
+	rows, err := fahe.db.QueryContext(ctx, query, pq.Array(drugCodes), datasetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("alcohol interaction query failed: %w", err)
+	}
+	defer rows.Close()
+	
+	var results []ModifierInteractionResult
+	
+	for rows.Next() {
+		var result ModifierInteractionResult
+		var severityStr, evidenceStr string
+		var interactionDetails sql.NullString
+		var drugCode string
+		
+		err := rows.Scan(
+			&drugCode,
+			&result.ModifierName,
+			&result.Mechanism,
+			&result.ClinicalEffect,
+			&severityStr,
+			&evidenceStr,
+			&result.Recommendation,
+			&result.TimingGuidance,
+			&result.ConfidenceScore,
+			&interactionDetails,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("alcohol interaction scan failed: %w", err)
+		}
+
+		// Parse severity and evidence
+		result.Severity = models.DDISeverity(severityStr)
+		result.Evidence = models.EvidenceLevel(evidenceStr)
+
+		result.InteractionType = "alcohol"
+		result.AffectedDrugs = []string{drugCode}
+		
+		// Adjust severity based on alcohol consumption pattern
+		result = fahe.adjustAlcoholSeverity(result, modifierContext.AlcoholIntake)
+		
+		results = append(results, result)
+	}
+	
+	return results, nil
+}
+
+// evaluateHerbalInteractions checks for herbal and supplement interactions
+func (fahe *FoodAlcoholHerbalEngine) evaluateHerbalInteractions(
+	ctx context.Context,
+	drugCodes []string,
+	modifierContext ModifierContext,
+	datasetVersion string,
+) ([]ModifierInteractionResult, error) {
+	
+	if len(modifierContext.HerbalProducts) == 0 && len(modifierContext.Supplements) == 0 {
+		return []ModifierInteractionResult{}, nil
+	}
+	
+	// Collect all herbal/supplement names for matching
+	var modifierNames []string
+	for _, herbal := range modifierContext.HerbalProducts {
+		modifierNames = append(modifierNames, 
+			strings.ToLower(herbal.Name),
+			strings.ToLower(herbal.CommonName),
+			strings.ToLower(herbal.ScientificName),
+		)
+	}
+	for _, supplement := range modifierContext.Supplements {
+		modifierNames = append(modifierNames, strings.ToLower(supplement.Name))
+	}
+	
+	query := `
+		SELECT 
+			dm.drug_code,
+			dm.modifier_name,
+			dm.mechanism,
+			dm.clinical_effect,
+			dm.severity,
+			dm.evidence_level,
+			dm.recommendation,
+			dm.timing_guidance,
+			dm.confidence_score,
+			dm.interaction_details
+		FROM ddi_modifiers dm
+		WHERE dm.drug_code = ANY($1)
+		AND dm.modifier_type IN ('herbal', 'supplement')
+		AND (
+			LOWER(dm.modifier_name) = ANY($2) OR
+			LOWER(dm.modifier_aliases) && $2
+		)
+		AND dm.dataset_version = $3
+		AND dm.is_active = true
+		ORDER BY dm.severity DESC, dm.confidence_score DESC
+	`
+	
+	rows, err := fahe.db.QueryContext(ctx, query, 
+		pq.Array(drugCodes), 
+		pq.Array(modifierNames), 
+		datasetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("herbal interaction query failed: %w", err)
+	}
+	defer rows.Close()
+	
+	var results []ModifierInteractionResult
+	
+	for rows.Next() {
+		var result ModifierInteractionResult
+		var severityStr, evidenceStr string
+		var interactionDetails sql.NullString
+		var drugCode string
+		
+		err := rows.Scan(
+			&drugCode,
+			&result.ModifierName,
+			&result.Mechanism,
+			&result.ClinicalEffect,
+			&severityStr,
+			&evidenceStr,
+			&result.Recommendation,
+			&result.TimingGuidance,
+			&result.ConfidenceScore,
+			&interactionDetails,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("herbal interaction scan failed: %w", err)
+		}
+
+		// Parse severity and evidence
+		result.Severity = models.DDISeverity(severityStr)
+		result.Evidence = models.EvidenceLevel(evidenceStr)
+		
+
+		
+		result.InteractionType = fahe.getModifierType(result.ModifierName, modifierContext)
+		result.AffectedDrugs = []string{drugCode}
+		
+		results = append(results, result)
+	}
+	
+	// Add specific high-risk herbal interactions
+	stJohnsResults := fahe.checkStJohnsWortInteractions(drugCodes, modifierContext)
+	results = append(results, stJohnsResults...)
+	
+	ginkgoResults := fahe.checkGinkgoInteractions(drugCodes, modifierContext)
+	results = append(results, ginkgoResults...)
+	
+	return results, nil
+}
+
+// isRelevantFoodInteraction determines if a food interaction is clinically relevant given recent meals
+func (fahe *FoodAlcoholHerbalEngine) isRelevantFoodInteraction(
+	result ModifierInteractionResult,
+	context ModifierContext,
+) bool {
+	modifierName := strings.ToLower(result.ModifierName)
+	
+	// Check recent meals for relevant food items
+	for _, meal := range context.RecentMeals {
+		// Consider meals within last 24 hours for most interactions
+		if time.Since(meal.ConsumedAt) > 24*time.Hour {
+			continue
+		}
+
+		
+		mealName := strings.ToLower(meal.Name)
+		mealCategory := strings.ToLower(meal.Category)
+		
+		// Direct name matches
+		if strings.Contains(mealName, modifierName) || strings.Contains(modifierName, mealName) {
+			return true
+
+		
+		// Category-based matching
+		switch modifierName {
+		case "grapefruit", "citrus":
+			if mealCategory == "citrus" || meal.GrapefruitContent {
+				return true
+			}
+		case "dairy", "calcium":
+			if mealCategory == "dairy" {
+				return true
+			}
+		case "high_fat_meal":
+			if mealCategory == "high_fat" {
+				return true
+			}
+		case "tyramine":
+			if mealCategory == "tyramine_rich" {
+				return true
+			}
+
+	}
+	
+	// Special handling for fasting-dependent interactions
+	if strings.Contains(result.Recommendation, "take with food") && context.FastingStatus {
+		return true
+	}
+	if strings.Contains(result.Recommendation, "take on empty stomach") && !context.FastingStatus {
+		return true
+	}
+	
+	return false
+}
+
+// checkGrapefruitInteractions handles critical grapefruit-drug interactions
+func (fahe *FoodAlcoholHerbalEngine) checkGrapefruitInteractions(
+	drugCodes []string,
+	context ModifierContext,
+) []ModifierInteractionResult {
+	
+	// Check if patient consumed grapefruit recently
+	hasGrapefruit := false
+	for _, meal := range context.RecentMeals {
+		if meal.GrapefruitContent || 
+		   strings.Contains(strings.ToLower(meal.Name), "grapefruit") {
+			hasGrapefruit = true
+			break
+
+	}
+	
+	if !hasGrapefruit {
+		return []ModifierInteractionResult{}
+	}
+	
+	// High-risk grapefruit interactions (CYP3A4 substrates)
+	grapefruitSensitiveDrugs := map[string]string{
+		"atorvastatin":    "Increased statin levels → muscle toxicity risk",
+		"simvastatin":     "Increased statin levels → severe myopathy risk",
+		"amlodipine":      "Enhanced hypotension → dizziness, falls",
+		"felodipine":      "Excessive calcium channel blockade",
+		"cyclosporine":    "Increased immunosuppression → toxicity",
+		"tacrolimus":      "Nephrotoxicity and neurotoxicity risk",
+		"buspirone":       "Enhanced sedation and side effects",
+		"triazolam":       "Prolonged sedation → respiratory depression",
+		"saquinavir":      "Increased antiviral levels",
+	}
+	
+	var results []ModifierInteractionResult
+	
+	for _, drugCode := range drugCodes {
+		drugLower := strings.ToLower(drugCode)
+		if effect, exists := grapefruitSensitiveDrugs[drugLower]; exists {
+			result := ModifierInteractionResult{
+				InteractionType:   "food",
+				ModifierName:      "grapefruit",
+				AffectedDrugs:     []string{drugCode},
+				Mechanism:         "CYP3A4 inhibition → decreased drug metabolism",
+				ClinicalEffect:    effect,
+				Severity:         models.SeverityMajor,
+				Evidence:         models.EvidenceWellEstablished,
+				Recommendation:   "Avoid grapefruit products. Consider alternative agent if needed.",
+				TimingGuidance:   "Avoid grapefruit 24-72 hours before and after dosing",
+				ConfidenceScore:  decimal.NewFromFloat(0.95),
+				LastUpdated:      time.Now(),
+			}
+			results = append(results, result)
+
+	}
+	
+	return results
+}
+
+// checkTyramineInteractions handles tyramine-sensitive drug interactions
+func (fahe *FoodAlcoholHerbalEngine) checkTyramineInteractions(
+	drugCodes []string,
+	context ModifierContext,
+) []ModifierInteractionResult {
+	
+	// Check for MAOI drugs
+	maoiDrugs := []string{"phenelzine", "tranylcypromine", "isocarboxazid", "selegiline"}
+	
+	hasMaoi := false
+	for _, drugCode := range drugCodes {
+		drugLower := strings.ToLower(drugCode)
+		for _, maoi := range maoiDrugs {
+			if strings.Contains(drugLower, maoi) {
+				hasMaoi = true
+				break
+			}
+
+		if hasMaoi {
+			break
+
+	}
+	
+	if !hasMaoi {
+		return []ModifierInteractionResult{}
+	}
+	
+	// Check for tyramine-rich foods
+	hasTyramine := false
+	for _, meal := range context.RecentMeals {
+		if meal.Category == "tyramine_rich" ||
+		   strings.Contains(strings.ToLower(meal.Name), "aged") ||
+		   strings.Contains(strings.ToLower(meal.Name), "fermented") {
+			hasTyramine = true
+			break
+
+	}
+	
+	if hasTyramine {
+		return []ModifierInteractionResult{{
+			InteractionType:   "food",
+			ModifierName:      "tyramine_rich_foods",
+			AffectedDrugs:     drugCodes,
+			Mechanism:         "MAOI prevents tyramine breakdown → hypertensive crisis",
+			ClinicalEffect:    "Severe hypertension, headache, potential stroke",
+			Severity:         models.SeverityContraindicated,
+			Evidence:         models.EvidenceWellEstablished,
+			Recommendation:   "IMMEDIATE: Strict tyramine-free diet required",
+			TimingGuidance:   "Avoid tyramine foods throughout MAOI therapy + 2 weeks after",
+			ConfidenceScore:  decimal.NewFromFloat(0.98),
+			LastUpdated:      time.Now(),
+		}}
+	}
+	
+	return []ModifierInteractionResult{}
+}
+
+// adjustAlcoholSeverity modifies interaction severity based on alcohol consumption pattern
+func (fahe *FoodAlcoholHerbalEngine) adjustAlcoholSeverity(
+	result ModifierInteractionResult,
+	alcoholHistory AlcoholHistory,
+) ModifierInteractionResult {
+	
+	// Increase severity for acute/heavy alcohol use
+	if alcoholHistory.AcuteIntake || alcoholHistory.TypicalWeeklyUse > 14 {
+		switch result.Severity {
+		case models.SeverityMinor:
+			result.Severity = models.SeverityModerate
+		case models.SeverityModerate:
+			result.Severity = models.SeverityMajor
+		case models.SeverityMajor:
+			result.Severity = models.SeverityContraindicated
+
+		
+		// Add enhanced warning for heavy users
+		result.Recommendation = fmt.Sprintf("ENHANCED RISK - Heavy alcohol use detected. %s", 
+			result.Recommendation)
+	}
+	
+	return result
+}
+
+// checkStJohnsWortInteractions handles St. John's Wort drug interactions
+func (fahe *FoodAlcoholHerbalEngine) checkStJohnsWortInteractions(
+	drugCodes []string,
+	context ModifierContext,
+) []ModifierInteractionResult {
+	
+	// Check if patient is taking St. John's Wort
+	hasStJohns := false
+	for _, herbal := range context.HerbalProducts {
+		name := strings.ToLower(herbal.Name + " " + herbal.CommonName + " " + herbal.ScientificName)
+		if strings.Contains(name, "st john") || strings.Contains(name, "hypericum") {
+			hasStJohns = true
+			break
+
+	}
+	
+	if !hasStJohns {
+		return []ModifierInteractionResult{}
+	}
+	
+	// High-risk St. John's Wort interactions (CYP3A4/P-glycoprotein induction)
+	stJohnsSensitive := map[string]string{
+		"warfarin":       "Reduced anticoagulation → thrombosis risk",
+		"digoxin":        "Reduced cardiac efficacy",
+		"cyclosporine":   "Transplant rejection risk",
+		"tacrolimus":     "Transplant rejection risk",
+		"indinavir":      "Reduced antiviral efficacy",
+		"irinotecan":     "Reduced chemotherapy efficacy",
+		"theophylline":   "Reduced bronchodilation",
+		"phenytoin":      "Breakthrough seizures",
+		"sertraline":     "Reduced antidepressant efficacy",
+		"paroxetine":     "Reduced antidepressant efficacy",
+	}
+	
+	var results []ModifierInteractionResult
+	
+	for _, drugCode := range drugCodes {
+		drugLower := strings.ToLower(drugCode)
+		if effect, exists := stJohnsSensitive[drugLower]; exists {
+			result := ModifierInteractionResult{
+				InteractionType:   "herbal",
+				ModifierName:      "st_johns_wort",
+				AffectedDrugs:     []string{drugCode},
+				Mechanism:         "CYP3A4/P-glycoprotein induction → increased drug clearance",
+				ClinicalEffect:    effect,
+				Severity:         models.SeverityMajor,
+				Evidence:         models.EvidenceWellEstablished,
+				Recommendation:   "Discontinue St. John's Wort or adjust drug dosing",
+				TimingGuidance:   "Effects persist 1-2 weeks after discontinuation",
+				ConfidenceScore:  decimal.NewFromFloat(0.92),
+				LastUpdated:      time.Now(),
+			}
+			results = append(results, result)
+
+	}
+	
+	return results
+}
+
+// checkGinkgoInteractions handles Ginkgo biloba bleeding risk interactions
+func (fahe *FoodAlcoholHerbalEngine) checkGinkgoInteractions(
+	drugCodes []string,
+	context ModifierContext,
+) []ModifierInteractionResult {
+	
+	// Check if patient is taking Ginkgo biloba
+	hasGinkgo := false
+	for _, herbal := range context.HerbalProducts {
+		name := strings.ToLower(herbal.Name + " " + herbal.CommonName + " " + herbal.ScientificName)
+		if strings.Contains(name, "ginkgo") {
+			hasGinkgo = true
+			break
+
+	}
+	
+	if !hasGinkgo {
+		return []ModifierInteractionResult{}
+	}
+	
+	// Bleeding risk interactions with Ginkgo
+	bleedingRiskDrugs := map[string]string{
+		"warfarin":       "Additive bleeding risk → hemorrhage",
+		"heparin":        "Enhanced anticoagulation",
+		"aspirin":        "Increased bleeding tendency",
+		"clopidogrel":    "Platelet dysfunction synergy",
+		"rivaroxaban":    "Additive bleeding risk",
+		"apixaban":       "Enhanced anticoagulation",
+	}
+	
+	var results []ModifierInteractionResult
+	
+	for _, drugCode := range drugCodes {
+		drugLower := strings.ToLower(drugCode)
+		if effect, exists := bleedingRiskDrugs[drugLower]; exists {
+			result := ModifierInteractionResult{
+				InteractionType:   "herbal",
+				ModifierName:      "ginkgo_biloba",
+				AffectedDrugs:     []string{drugCode},
+				Mechanism:         "Platelet aggregation inhibition → bleeding risk",
+				ClinicalEffect:    effect,
+				Severity:         models.SeverityModerate,
+				Evidence:         models.EvidencePossible,
+				Recommendation:   "Monitor for bleeding signs. Consider discontinuation before surgery.",
+				TimingGuidance:   "Discontinue 1-2 weeks before surgical procedures",
+				ConfidenceScore:  decimal.NewFromFloat(0.78),
+				LastUpdated:      time.Now(),
+			}
+			results = append(results, result)
+
+	}
+	
+	return results
+}
+
+// getModifierType determines whether a modifier is herbal or supplement
+func (fahe *FoodAlcoholHerbalEngine) getModifierType(
+	modifierName string,
+	context ModifierContext,
+) string {
+	
+	// Check herbal products
+	for _, herbal := range context.HerbalProducts {
+		if strings.EqualFold(herbal.Name, modifierName) ||
+		   strings.EqualFold(herbal.CommonName, modifierName) {
+			return "herbal"
+
+	}
+	
+	// Check supplements
+	for _, supplement := range context.Supplements {
+		if strings.EqualFold(supplement.Name, modifierName) {
+			return "supplement"
+
+	}
+	
+	// Default classification based on name patterns
+	herbalKeywords := []string{"herb", "root", "leaf", "extract", "wort", "berry"}
+	nameLower := strings.ToLower(modifierName)
+	
+	for _, keyword := range herbalKeywords {
+		if strings.Contains(nameLower, keyword) {
+			return "herbal"
+
+	}
+	
+	return "supplement"
+}
+
+// filterClinicallySignificant removes low-confidence or clinically irrelevant interactions
+func (fahe *FoodAlcoholHerbalEngine) filterClinicallySignificant(
+	results []ModifierInteractionResult,
+) []ModifierInteractionResult {
+	
+	var filtered []ModifierInteractionResult
+	
+	for _, result := range results {
+		// Filter by minimum confidence threshold
+		minConfidence := decimal.NewFromFloat(0.60)
+		if result.ConfidenceScore.LessThan(minConfidence) {
+			continue
+
+		
+		// Filter by severity (exclude trivial interactions)
+		if result.Severity == "" {
+			continue
+
+		
+		// Filter by evidence quality
+		if result.Evidence == models.EvidenceHypothetical {
+			continue
+
+		
+		filtered = append(filtered, result)
+	}
+	
+	return filtered
+}
+
+// GetModifierInteractionCache provides cached lookup for frequent modifier queries
+func (fahe *FoodAlcoholHerbalEngine) GetModifierInteractionCache(
+	ctx context.Context,
+	drugCode string,
+	modifierType string,
+) ([]ModifierInteractionResult, bool) {
+	
+	cacheKey := fmt.Sprintf("modifier:%s:%s", modifierType, drugCode)
+	
+	if cached, found := fahe.cacheManager.GetModifierInteractions(cacheKey); found {
+		return cached, true
+	}
+	
+	return nil, false
+}
+
+// SetModifierInteractionCache stores results for future quick lookup
+func (fahe *FoodAlcoholHerbalEngine) SetModifierInteractionCache(
+	ctx context.Context,
+	drugCode string,
+	modifierType string,
+	results []ModifierInteractionResult,
+) {
+	
+	cacheKey := fmt.Sprintf("modifier:%s:%s", modifierType, drugCode)
+	fahe.cacheManager.SetModifierInteractions(cacheKey, results, 30*time.Minute)
+}
+
+// ValidateModifierContext ensures modifier context data quality
+func (fahe *FoodAlcoholHerbalEngine) ValidateModifierContext(
+	ctx context.Context,
+	modifierContext ModifierContext,
+) []string {
+	
+	var warnings []string
+	
+	// Validate food timing
+	for _, meal := range modifierContext.RecentMeals {
+		if time.Since(meal.ConsumedAt) > 7*24*time.Hour {
+			warnings = append(warnings, 
+				fmt.Sprintf("Food item '%s' timestamp >7 days old - may not be clinically relevant", 
+				meal.Name))
+
+	}
+	
+	// Validate alcohol data consistency
+	if modifierContext.AlcoholIntake.CurrentUse && 
+	   modifierContext.AlcoholIntake.TypicalWeeklyUse == 0 {
+		warnings = append(warnings, "Current alcohol use flagged but no weekly usage data")
+	}
+	
+	// Validate herbal product data quality
+	for _, herbal := range modifierContext.HerbalProducts {
+		if herbal.Name == "" && herbal.CommonName == "" {
+			warnings = append(warnings, "Herbal product with insufficient identification data")
+
+		if time.Since(herbal.StartDate) > 2*365*24*time.Hour {
+			warnings = append(warnings, 
+				fmt.Sprintf("Herbal product '%s' start date >2 years ago - confirm current use", 
+				herbal.Name))
+
+	}
+	
+	return warnings
+}

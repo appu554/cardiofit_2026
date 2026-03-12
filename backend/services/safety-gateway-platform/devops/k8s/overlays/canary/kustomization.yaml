@@ -1,0 +1,196 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base resources
+resources:
+- ../../base
+
+# Namespace for canary environment
+namespace: safety-canary
+
+# Common labels for canary environment
+commonLabels:
+  environment: canary
+  deployment-type: canary
+  safety-tier: enforcing
+  traffic-split: enabled
+
+# Common annotations
+commonAnnotations:
+  deployment.kubernetes.io/revision: "1"
+  safety-gateway.io/environment: "canary"
+  safety-gateway.io/traffic-mode: "live-traffic"
+  safety-gateway.io/rollout-strategy: "progressive"
+
+# Name prefix for canary resources
+namePrefix: canary-
+
+# Images - use canary tag for gradual rollout
+images:
+- name: safety-gateway-platform
+  newTag: canary-latest
+
+# ConfigMap generator for canary-specific configuration
+configMapGenerator:
+- name: safety-gateway-config
+  behavior: replace
+  literals:
+  - environment=canary
+  - log_level=info
+  - port=8030
+  - metrics_port=9090
+  - kafka_bootstrap_servers=kafka.safety-canary.svc.cluster.local:9092
+  - timescaledb_host=timescaledb.safety-canary.svc.cluster.local
+  - timescaledb_port=5432
+  - timescaledb_database=safety_canary
+  - redis_url=redis://redis.safety-canary.svc.cluster.local:6379
+  - cae_service_endpoint=clinical-reasoning-service.clinical.svc.cluster.local:8027
+  - canary_mode_enabled=true
+  - enforcement_enabled=true
+  - traffic_percentage=5
+  - auto_rollback_enabled=true
+  - rollback_error_threshold=1.0
+  - rollback_latency_threshold=200
+  - canary_analysis_duration=900  # 15 minutes
+  - success_criteria_required=true
+
+# Secret generator for canary-specific secrets
+secretGenerator:
+- name: safety-gateway-secrets
+  behavior: replace
+  literals:
+  - timescaledb-url=postgresql://safety_canary:canary_password@timescaledb.safety-canary.svc.cluster.local:5432/safety_canary?sslmode=require
+  - redis-password=canary_redis_password
+  - kafka-sasl-password=canary_kafka_password
+  - jwt-signing-key=canary_jwt_key_change_in_production
+
+# Patches for canary-specific modifications
+patches:
+# Modify deployment for canary mode
+- target:
+    kind: Deployment
+    name: safety-gateway
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 2  # Start with minimal replicas for canary
+    
+    - op: add
+      path: /spec/template/metadata/annotations/canary.safety-gateway.io~1mode
+      value: "progressive-rollout"
+    
+    - op: add
+      path: /spec/template/metadata/annotations/canary.safety-gateway.io~1traffic-percentage
+      value: "5"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: CANARY_MODE
+        value: "true"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ENFORCEMENT_ENABLED
+        value: "true"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: TRAFFIC_PERCENTAGE
+        value: "5"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: AUTO_ROLLBACK_ENABLED
+        value: "true"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ROLLBACK_ERROR_THRESHOLD
+        value: "1.0"
+    
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ROLLBACK_LATENCY_THRESHOLD_MS
+        value: "200"
+    
+    # More aggressive resource limits for canary testing
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "512Mi"
+    
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "1Gi"
+    
+    # Stricter health checks for canary
+    - op: replace
+      path: /spec/template/spec/containers/0/readinessProbe/failureThreshold
+      value: 2
+    
+    - op: replace
+      path: /spec/template/spec/containers/0/livenessProbe/failureThreshold
+      value: 2
+
+# Modify HPA for canary environment
+- target:
+    kind: HorizontalPodAutoscaler
+    name: safety-gateway-hpa
+  patch: |-
+    - op: replace
+      path: /spec/minReplicas
+      value: 2
+    
+    - op: replace
+      path: /spec/maxReplicas
+      value: 6
+    
+    - op: replace
+      path: /spec/metrics/0/resource/target/averageUtilization
+      value: 60  # More conservative scaling for canary
+    
+    # Add custom metrics for canary analysis
+    - op: add
+      path: /spec/metrics/-
+      value:
+        type: Object
+        object:
+          metric:
+            name: safety_gateway_error_rate
+          target:
+            type: Value
+            value: "1"  # Scale up if error rate exceeds 1%
+
+# Modify PDB for canary environment
+- target:
+    kind: PodDisruptionBudget
+    name: safety-gateway-pdb
+  patch: |-
+    - op: replace
+      path: /spec/minAvailable
+      value: 1  # Minimal availability for canary testing
+
+# Service modifications for canary
+- target:
+    kind: Service
+    name: safety-gateway-service
+  patch: |-
+    - op: add
+      path: /metadata/annotations/canary.safety-gateway.io~1traffic-split
+      value: "5"
+    
+    - op: add
+      path: /metadata/annotations/canary.safety-gateway.io~1analysis-template
+      value: "safety-gateway-canary-analysis"
+
+# Additional canary-specific resources
+resources:
+- canary-analysis.yaml
+- canary-ingress.yaml
+- canary-service-monitor.yaml
+- rollback-policy.yaml

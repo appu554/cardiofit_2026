@@ -1,0 +1,81 @@
+﻿Definitive System Architecture: SaMD Medication Service
+1. Executive Summary & Core Principles
+This document outlines the complete architecture for the SaMD-grade (Software as a Medical Device) Medication Service. The system is designed to transform a clinical request into a set of safe, evidence-based, and personalized medication recommendations. The architecture is built on two core principles:
+* SaMD Compliance: Every component is designed with safety, traceability, risk management, and clinical validation as primary requirements. All decisions are auditable and reproducible.
+* Knowledge-as-Code: All clinical logic—from high-level guidelines to specific dosing rules—is managed as version-controlled, human-readable artifacts in a dedicated set of knowledge bases. This separates clinical knowledge from the core software engine, enabling agility and expert governance.
+2. The 7 Foundational Knowledge Bases
+The system's intelligence is distributed across seven specialized, foundational knowledge bases (KBs). These KBs are the version-controlled sources of truth, managed by expert teams. They are organized into four logical layers:
+A. Strategic Layer (What to consider?)
+1. kb_guideline_evidence: Contains high-level, evidence-based clinical guidelines that provide the initial, broad recommendations for which classes of drugs to consider for a given indication.
+2. kb_clinical_context: Contains rules for interpreting patient data to establish a nuanced understanding of their specific disease state or phenotype (e.g., classifying heart failure as HFrEF vs. HFpEF).
+B. Safety Layer (What's safe?)
+3. kb_patient_safe_checks: Contains rules for interpreting a patient's own data (from the EHR) to identify absolute contraindications like allergies or high-risk conditions (e.g., pregnancy).
+4. kb_ddi: A specialized database of drug-drug interactions, their severity, and management advice, typically sourced from a third-party vendor.
+C. Calculation Layer (What's the precise dose?)
+5. kb_dosing_rules: Contains the precise, drug-specific, mathematical, and safety rules for calculating a dose. This is physically implemented as a collection of version-controlled .toml files.
+D. Optimization Layer (What's the best choice?)
+6. kb_formulary_stock: Contains operational data on medication availability, formulary tiering, cost, and stock levels.
+7. kb_resistance_profiles: Contains regional data on antimicrobial resistance patterns, used to adjust the efficacy score for antibiotics.
+3. The 4-Phase Workflow Architecture
+The system executes a sophisticated, four-phase workflow to process each medication request. The Orchestrator, managed by the Recipe Management module, directs this entire process.
+graph TD
+   subgraph Phase 1: Ingestion & Local Decision
+       A[Clinical Request] --> B{Orchestrator Rule Base (ORB)};
+       B -- Uses kb_guideline_evidence --> C[Intent Manifest Generated];
+   end
+   
+   C --> D[Phase 2: Context Assembly];
+   D -- Uses Context Recipe ID --> E{Context Integration Service};
+   E -- Parallel Calls to Data Sources --> F[CompleteContextPayload];
+   
+   F --> G[Phase 3: Clinical Intelligence Engine];
+   
+   subgraph Phase 3 Modules
+       G --> H[Step 3a: Candidate Generation <br><i>(Go CandidateBuilder)</i>];
+       H -- Uses kb_patient_safe_checks & kb_ddi --> I;
+       I[Safety-Vetted Candidates] --> J[Step 3b: Dose Calculation & JIT Safety <br><i>(Rust DoseCalculationEngine)</i>];
+       J -- Uses kb_dosing_rules (.toml) --> K;
+       K[Dose-Aware Proposals] --> L[Step 3c: Scoring & Ranking <br><i>(Go ScoringEngine)</i>];
+       L -- Uses kb_formulary_stock, kb_resistance_profiles, kb_clinical_context --> M;
+   end
+   
+   M[Ranked Proposals] --> N[Phase 4: Proposal & Persistence];
+   
+   subgraph Phase 4 Modules
+       N --> O{Proposal Generator};
+       O --> P[Final API Response];
+       N --> Q{Monitoring Intelligence};
+       Q --> P;
+   end
+
+Phase 1: Ingestion & Local Decision
+* Goal: To interpret the initial request and determine the high-level clinical intent.
+* Key Module: Orchestrator Rule Base (ORB). This is a set of high-level routing rules.
+* Process: The incoming request is evaluated against the ORB.
+* KB Interaction: The ORB applies knowledge from kb_guideline_evidence to map the request to a specific clinical pathway.
+* Output: An Intent Manifest, which contains the protocol_id (the clinical workflow to run) and the Context Recipe ID (the data needed to run it).
+Phase 2: Context Assembly
+* Goal: To gather all necessary patient data from various sources.
+* Key Module: Context Integration Service.
+* Process: This service uses the Context Recipe ID from Phase 1 as its "shopping list." It makes parallel calls to the EHR, lab systems, and other data sources via the Context Gateway.
+* KB Interaction: This phase does not directly use a knowledge base; it uses a recipe (a data-fetching plan) that was selected in Phase 1.
+* Output: The CompleteContextPayload, a rich data object containing all information needed for the next phase.
+Phase 3: Clinical Intelligence Engine
+* Goal: To generate a ranked list of safe, effective, and personalized medication proposals. This is where the core "compare-and-rank" logic resides.
+* Process: This phase is a sequence of steps performed by specialized worker modules.
+   * Step 3a: Candidate Generation (Broad Filtering)
+      * Module: Go CandidateBuilder (Clinical Rules Module).
+      * KB Interaction: It takes the initial list of potential therapies (from the protocol_id) and filters it. It queries kb_patient_safe_checks (for allergies, pregnancy, etc.) and kb_ddi (for contraindicated interactions) to eliminate fundamentally unsafe options.
+   * Step 3b: Dose Calculation & Just-in-Time (JIT) Safety Check
+      * Module: Rust DoseCalculationEngine.
+      * KB Interaction: For each remaining safe candidate, this engine is called. It loads the specific .toml file for that drug from kb_dosing_rules. It uses these rules to calculate a precise, patient-specific dose and performs a final, dose-aware safety verification.
+   * Step 3c: Scoring & Ranking
+      * Module: Go ScoringEngine (Recommendation Engine).
+      * KB Interaction: This engine takes the final, safe, dose-aware proposals and scores them across multiple dimensions. It queries kb_formulary_stock (for availability/cost), kb_resistance_profiles (for antibiotic efficacy), and kb_clinical_context (for phenotype-specific scoring adjustments).
+* Output: A final, ranked list of ScoredProposal objects.
+Phase 4: Proposal & Persistence
+* Goal: To assemble the final response, persist the decision for audit, and generate human-readable explanations.
+* Key Modules: Proposal Generator and Monitoring Intelligence.
+* Process: The Proposal Generator takes the ranked list and formats it into the final, comprehensive API response. The Monitoring Intelligence module generates the detailed monitoring plan. The entire transaction is then persisted to a database using a Transactional Outbox pattern.
+* KB Interaction: The Monitoring Intelligence module may reference a dedicated monitoring KB (or rules within kb_guideline_evidence) to generate its plan.
+* Output: The final API response sent to the client.

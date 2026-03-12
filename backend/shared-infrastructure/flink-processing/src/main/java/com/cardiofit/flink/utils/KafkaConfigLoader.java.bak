@@ -1,0 +1,175 @@
+package com.cardiofit.flink.utils;
+
+import java.util.Properties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Kafka Configuration Loader for local Docker-based Kafka cluster
+ * Provides configuration for both internal (container) and external (host) access
+ */
+public class KafkaConfigLoader {
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaConfigLoader.class);
+
+    // Local Kafka cluster endpoints (internal Docker network)
+    private static final String INTERNAL_BOOTSTRAP_SERVERS = "kafka1:29092,kafka2:29093,kafka3:29094";
+    // External access from host machine
+    private static final String EXTERNAL_BOOTSTRAP_SERVERS = "localhost:9092,localhost:9093,localhost:9094";
+
+    // Schema Registry URL
+    private static final String INTERNAL_SCHEMA_REGISTRY = "http://schema-registry:8081";
+    private static final String EXTERNAL_SCHEMA_REGISTRY = "http://localhost:8081";
+
+    private KafkaConfigLoader() {
+        // Utility class, prevent instantiation
+    }
+
+    /**
+     * Get consumer configuration for Flink running in Docker
+     */
+    public static Properties getConsumerConfig(String groupId) {
+        Properties props = new Properties();
+        props.setProperty("bootstrap.servers", INTERNAL_BOOTSTRAP_SERVERS);
+        props.setProperty("group.id", groupId);
+        props.setProperty("enable.auto.commit", "false");
+        props.setProperty("auto.offset.reset", "latest");
+
+        // Performance optimizations for local cluster
+        props.setProperty("fetch.min.bytes", "1048576"); // 1MB
+        props.setProperty("fetch.max.wait.ms", "500");
+        props.setProperty("max.poll.records", "5000");
+        props.setProperty("session.timeout.ms", "30000");
+        props.setProperty("heartbeat.interval.ms", "10000");
+        props.setProperty("max.partition.fetch.bytes", "10485760"); // 10MB
+
+        // Avro deserializer with local Schema Registry
+        props.setProperty("key.deserializer",
+            "org.apache.kafka.common.serialization.StringDeserializer");
+        props.setProperty("value.deserializer",
+            "io.confluent.kafka.serializers.KafkaAvroDeserializer");
+        props.setProperty("schema.registry.url", INTERNAL_SCHEMA_REGISTRY);
+        props.setProperty("specific.avro.reader", "true");
+
+        LOG.info("Created Kafka consumer config for group: {}", groupId);
+        return props;
+    }
+
+    /**
+     * Get producer configuration for Flink running in Docker
+     */
+    public static Properties getProducerConfig() {
+        Properties props = new Properties();
+        props.setProperty("bootstrap.servers", INTERNAL_BOOTSTRAP_SERVERS);
+
+        // Producer optimizations for high throughput
+        props.setProperty("compression.type", "snappy");
+        props.setProperty("batch.size", "32768"); // 32KB
+        props.setProperty("linger.ms", "100");
+        props.setProperty("buffer.memory", "33554432"); // 32MB
+        props.setProperty("acks", "all");
+        props.setProperty("enable.idempotence", "true");
+        props.setProperty("retries", "2147483647");
+        props.setProperty("max.in.flight.requests.per.connection", "5");
+        props.setProperty("delivery.timeout.ms", "120000");
+
+        // Avro serializer
+        props.setProperty("key.serializer",
+            "org.apache.kafka.common.serialization.StringSerializer");
+        props.setProperty("value.serializer",
+            "io.confluent.kafka.serializers.KafkaAvroSerializer");
+        props.setProperty("schema.registry.url", INTERNAL_SCHEMA_REGISTRY);
+
+        LOG.info("Created Kafka producer config");
+        return props;
+    }
+
+    /**
+     * Get consumer configuration for external development (running from IDE)
+     */
+    public static Properties getExternalConsumerConfig(String groupId) {
+        Properties props = getConsumerConfig(groupId);
+        props.setProperty("bootstrap.servers", EXTERNAL_BOOTSTRAP_SERVERS);
+        props.setProperty("schema.registry.url", EXTERNAL_SCHEMA_REGISTRY);
+        LOG.info("Created external Kafka consumer config for group: {}", groupId);
+        return props;
+    }
+
+    /**
+     * Get producer configuration for external development (running from IDE)
+     */
+    public static Properties getExternalProducerConfig() {
+        Properties props = getProducerConfig();
+        props.setProperty("bootstrap.servers", EXTERNAL_BOOTSTRAP_SERVERS);
+        props.setProperty("schema.registry.url", EXTERNAL_SCHEMA_REGISTRY);
+        LOG.info("Created external Kafka producer config");
+        return props;
+    }
+
+    /**
+     * Get consumer configuration with custom properties
+     */
+    public static Properties getConsumerConfig(String groupId, Properties customProps) {
+        Properties props = getConsumerConfig(groupId);
+        props.putAll(customProps);
+        return props;
+    }
+
+    /**
+     * Determine if running inside Docker container
+     */
+    public static boolean isRunningInDocker() {
+        // Check if running in container by looking for Docker-specific files
+        return new java.io.File("/.dockerenv").exists() ||
+               System.getenv("DOCKER_CONTAINER") != null;
+    }
+
+    /**
+     * Get appropriate consumer config based on environment
+     */
+    public static Properties getAutoConsumerConfig(String groupId) {
+        if (isRunningInDocker()) {
+            return getConsumerConfig(groupId);
+        } else {
+            return getExternalConsumerConfig(groupId);
+        }
+    }
+
+    /**
+     * Get appropriate producer config based on environment
+     */
+    public static Properties getAutoProducerConfig() {
+        if (isRunningInDocker()) {
+            return getProducerConfig();
+        } else {
+            return getExternalProducerConfig();
+        }
+    }
+
+    /**
+     * Get transactional producer configuration for EXACTLY_ONCE semantics
+     * Required for the Hybrid Kafka Topic Architecture
+     */
+    public static Properties getTransactionalProducerConfig(String transactionalId) {
+        Properties props = getAutoProducerConfig();
+
+        // Enable transactional producer
+        props.setProperty("enable.idempotence", "true");
+        props.setProperty("transactional.id", transactionalId);
+
+        // Transaction timeout (5 minutes)
+        props.setProperty("transaction.timeout.ms", "300000");
+
+        // Stronger consistency guarantees
+        props.setProperty("acks", "all");
+        props.setProperty("retries", "2147483647");
+        props.setProperty("max.in.flight.requests.per.connection", "5");
+
+        // Optimizations for transactional workloads
+        props.setProperty("batch.size", "65536");  // 64KB
+        props.setProperty("linger.ms", "100");
+        props.setProperty("compression.type", "snappy");
+
+        LOG.info("🔐 Configured transactional producer: {}", transactionalId);
+        return props;
+    }
+}

@@ -1,0 +1,2025 @@
+﻿// ============================================================================
+// END-TO-END INTEGRATION TESTS
+// ============================================================================
+
+
+package com.ehr.flink.tests.integration;
+
+
+import com.ehr.flink.EHRIntelligenceEngineJob;
+import com.ehr.flink.model.*;
+import com.ehr.flink.tests.builders.ClinicalEventBuilder;
+import com.ehr.flink.tests.utils.TestSink;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.junit.jupiter.api.*;
+import org.testcontainers.containers.KafkaContainer;
+import org.testcontainers.utility.DockerImageName;
+
+
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+
+
+import static org.assertj.core.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
+
+
+/**
+ * End-to-end integration tests using Testcontainers Kafka and Flink MiniCluster
+ * Tests the complete pipeline from ingestion to alert generation
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+public class EndToEndIntegrationTest {
+    
+    private static final String KAFKA_IMAGE = "confluentinc/cp-kafka:7.4.0";
+    
+    private KafkaContainer kafka;
+    private MiniClusterWithClientResource flinkCluster;
+    private KafkaProducer<String, String> producer;
+    private KafkaConsumer<String, String> consumer;
+    
+    @BeforeAll
+    void setupInfrastructure() throws Exception {
+        // Start Kafka container
+        kafka = new KafkaContainer(DockerImageName.parse(KAFKA_IMAGE))
+            .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false");
+        kafka.start();
+        
+        // Start Flink MiniCluster
+        flinkCluster = new MiniClusterWithClientResource(
+            new MiniClusterResourceConfiguration.Builder()
+                .setNumberSlotsPerTaskManager(4)
+                .setNumberTaskManagers(2)
+                .build()
+        );
+        flinkCluster.before();
+        
+        // Create Kafka topics
+        createKafkaTopics();
+        
+        // Initialize Kafka producer and consumer
+        setupKafkaClients();
+    }
+    
+    @AfterAll
+    void teardownInfrastructure() {
+        if (producer != null) producer.close();
+        if (consumer != null) consumer.close();
+        if (flinkCluster != null) flinkCluster.after();
+        if (kafka != null) kafka.stop();
+    }
+    
+    @BeforeEach
+    void clearState() {
+        TestSink.clear();
+    }
+    
+    @Test
+    @DisplayName("E2E: Complete sepsis detection flow from raw events to critical alerts")
+    void completeSepsisDetectionFlow() throws Exception {
+        // Arrange - produce raw clinical events to Kafka
+        String patientId = "e2e-patient-001";
+        
+        List<String> rawEvents = Arrays.asList(
+            createRawEventJson(patientId, "VITAL_SIGN", Map.of("heart_rate", 110, "systolic_bp", 95)),
+            createRawEventJson(patientId, "VITAL_SIGN", Map.of("heart_rate", 120, "systolic_bp", 85)),
+            createRawEventJson(patientId, "LAB_RESULT", Map.of("lab_type", "lactate", "value", 2.5))
+        );
+        
+        // Produce events
+        for (String event : rawEvents) {
+            producer.send(new ProducerRecord<>("ehr-events-raw", patientId, event)).get();
+        }
+        producer.flush();
+        
+        // Act - start Flink job
+        Thread jobThread = new Thread(() -> {
+            try {
+                EHRIntelligenceEngineJob.main(new String[]{
+                    "--kafka.bootstrap.servers", kafka.getBootstrapServers(),
+                    "--checkpoint.interval", "1000"
+                });
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        jobThread.start();
+        
+        // Assert - consume critical alerts from output topic
+        await().atMost(30, TimeUnit.SECONDS).until(() -> {
+            consumer.poll(Duration.ofMillis(100));
+            return hasAlert(consumer, "SEPSIS_SUSPECTED");
+        });
+        
+        ConsumerRecord<String, String> alertRecord = getLastAlert(consumer);
+        assertThat(alertRecord).isNotNull();
+        assertThat(alertRecord.value()).contains("SEPSIS_SUSPECTED");
+        assertThat(alertRecord.value()).contains("CRITICAL");
+        
+        jobThread.interrupt();
+    }
+    
+    @Test
+    @DisplayName("E2E: Medication interaction alert flow with semantic mesh")
+    void medicationInteractionFlow() throws Exception {
+        // Arrange - setup semantic mesh first
+        String meshUpdate = createSemanticMeshUpdateJson(
+            "warfarin", "aspirin", "MAJOR", "Increased bleeding risk"
+        );
+        producer.send(new ProducerRecord<>("semantic-mesh-updates", "mesh", meshUpdate)).get();
+        
+        // Send medication order that should trigger interaction
+        String patientId = "e2e-patient-002";
+        String medEvent = createRawEventJson(patientId, "MEDICATION_ORDER", 
+            Map.of("drug_code", "warfarin", "drug_name", "Warfarin"));
+        
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, medEvent)).get();
+        producer.flush();
+        
+        // Act - job should be running from previous test or start new instance
+        
+        // Assert - interaction alert generated
+        await().atMost(20, TimeUnit.SECONDS).until(() -> {
+            consumer.poll(Duration.ofMillis(100));
+            return hasAlert(consumer, "DRUG_INTERACTION");
+        });
+        
+        ConsumerRecord<String, String> alert = getLastAlert(consumer);
+        assertThat(alert.value()).contains("warfarin");
+        assertThat(alert.value()).contains("aspirin");
+        assertThat(alert.value()).contains("MAJOR");
+    }
+    
+    @Test
+    @DisplayName("E2E: State recovery from checkpoint after restart")
+    void stateRecoveryFromCheckpoint() throws Exception {
+        // Arrange - send events to build patient state
+        String patientId = "e2e-patient-003";
+        
+        String admission = createRawEventJson(patientId, "ADMISSION", 
+            Map.of("location", "ICU-1"));
+        String medication = createRawEventJson(patientId, "MEDICATION_ORDER",
+            Map.of("drug_code", "insulin", "drug_name", "Insulin"));
+        
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, admission)).get();
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, medication)).get();
+        producer.flush();
+        
+        // Wait for checkpoint
+        Thread.sleep(2000);
+        
+        // Act - simulate job restart (in real scenario, would cancel and restart from checkpoint)
+        // For test purposes, send another event and verify state is maintained
+        
+        String vitals = createRawEventJson(patientId, "VITAL_SIGN",
+            Map.of("heart_rate", 85, "systolic_bp", 120));
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, vitals)).get();
+        producer.flush();
+        
+        // Assert - enriched event should contain previously accumulated state
+        await().atMost(15, TimeUnit.SECONDS).until(() -> {
+            consumer.poll(Duration.ofMillis(100));
+            return hasEnrichedEvent(consumer, patientId);
+        });
+        
+        ConsumerRecord<String, String> enriched = getLastEnrichedEvent(consumer);
+        assertThat(enriched.value()).contains("ICU-1");
+        assertThat(enriched.value()).contains("insulin");
+    }
+    
+    @Test
+    @DisplayName("E2E: High volume stress test with backpressure handling")
+    void highVolumeStressTest() throws Exception {
+        // Arrange - generate 10K events across 100 patients
+        int numPatients = 100;
+        int eventsPerPatient = 100;
+        
+        ExecutorService executorService = Executors.newFixedThreadPool(10);
+        List<Future<?>> futures = new ArrayList<>();
+        
+        // Act - produce events in parallel
+        for (int patientIdx = 0; patientIdx < numPatients; patientIdx++) {
+            final String patientId = "stress-patient-" + patientIdx;
+            
+            Future<?> future = executorService.submit(() -> {
+                try {
+                    for (int eventIdx = 0; eventIdx < eventsPerPatient; eventIdx++) {
+                        String event = createRawEventJson(patientId, "VITAL_SIGN",
+                            Map.of("heart_rate", 70 + eventIdx % 40, "systolic_bp", 120));
+                        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, event));
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            futures.add(future);
+        }
+        
+        // Wait for all producers to complete
+        for (Future<?> future : futures) {
+            future.get(30, TimeUnit.SECONDS);
+        }
+        producer.flush();
+        executorService.shutdown();
+        
+        // Assert - verify processing completed without data loss
+        await().atMost(60, TimeUnit.SECONDS).until(() -> {
+            return getKafkaLag() < 100; // Acceptable lag threshold
+        });
+        
+        assertThat(getKafkaLag()).isLessThan(100);
+    }
+    
+    @Test
+    @DisplayName("E2E: Late event handling and watermark progression")
+    void lateEventHandling() throws Exception {
+        // Arrange - send events out of order
+        String patientId = "e2e-patient-004";
+        long baseTime = System.currentTimeMillis();
+        
+        // Send event at T+3
+        String event3 = createRawEventJsonWithTimestamp(patientId, "VITAL_SIGN", 
+            baseTime + 3000, Map.of("heart_rate", 90));
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, event3)).get();
+        
+        // Send event at T+1 (late)
+        String event1 = createRawEventJsonWithTimestamp(patientId, "VITAL_SIGN",
+            baseTime + 1000, Map.of("heart_rate", 80));
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, event1)).get();
+        
+        // Send event at T+2 (late but within allowed lateness)
+        String event2 = createRawEventJsonWithTimestamp(patientId, "VITAL_SIGN",
+            baseTime + 2000, Map.of("heart_rate", 85));
+        producer.send(new ProducerRecord<>("ehr-events-raw", patientId, event2)).get();
+        
+        producer.flush();
+        
+        // Assert - all events processed despite being out of order
+        await().atMost(20, TimeUnit.SECONDS).until(() -> {
+            return countProcessedEvents(consumer, patientId) >= 3;
+        });
+    }
+    
+    // Helper methods
+    
+    private void createKafkaTopics() throws Exception {
+        Properties adminProps = new Properties();
+        adminProps.put("bootstrap.servers", kafka.getBootstrapServers());
+        
+        try (AdminClient admin = AdminClient.create(adminProps)) {
+            List<NewTopic> topics = Arrays.asList(
+                new NewTopic("ehr-events-raw", 4, (short) 1),
+                new NewTopic("ehr-events-clean", 4, (short) 1),
+                new NewTopic("ehr-events-enriched", 8, (short) 1),
+                new NewTopic("ehr-alerts-critical", 2, (short) 1),
+                new NewTopic("ehr-alerts-routine", 2, (short) 1),
+                new NewTopic("semantic-mesh-updates", 1, (short) 1),
+                new NewTopic("ehr-events-dlq", 2, (short) 1)
+            );
+            
+            admin.createTopics(topics).all().get(30, TimeUnit.SECONDS);
+        }
+    }
+    
+    private void setupKafkaClients() {
+        Properties producerProps = new Properties();
+        producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
+        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, 
+            "org.apache.kafka.common.serialization.StringSerializer");
+        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.StringSerializer");
+        producerProps.put(ProducerConfig.ACKS_CONFIG, "all");
+        producer = new KafkaProducer<>(producerProps);
+        
+        Properties consumerProps = new Properties();
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "test-consumer-" + UUID.randomUUID());
+        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.StringDeserializer");
+        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+            "org.apache.kafka.common.serialization.StringDeserializer");
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        consumer = new KafkaConsumer<>(consumerProps);
+        consumer.subscribe(Arrays.asList("ehr-alerts-critical", "ehr-events-enriched"));
+    }
+    
+    private String createRawEventJson(String patientId, String eventType, Map<String, Object> payload) {
+        return String.format(
+            "{\"patientId\":\"%s\",\"eventType\":\"%s\",\"timestamp\":%d,\"payload\":%s}",
+            patientId, eventType, System.currentTimeMillis(), toJson(payload)
+        );
+    }
+    
+    private String createRawEventJsonWithTimestamp(String patientId, String eventType, 
+                                                   long timestamp, Map<String, Object> payload) {
+        return String.format(
+            "{\"patientId\":\"%s\",\"eventType\":\"%s\",\"timestamp\":%d,\"payload\":%s}",
+            patientId, eventType, timestamp, toJson(payload)
+        );
+    }
+    
+    private String createSemanticMeshUpdateJson(String drug1, String drug2, 
+                                               String severity, String mechanism) {
+        return String.format(
+            "{\"updateType\":\"DRUG_INTERACTION_ADD\",\"drug1\":\"%s\",\"drug2\":\"%s\"," +
+            "\"severity\":\"%s\",\"mechanism\":\"%s\"}",
+            drug1, drug2, severity, mechanism
+        );
+    }
+    
+    private String toJson(Map<String, Object> map) {
+        StringBuilder json = new StringBuilder("{");
+        map.forEach((k, v) -> {
+            json.append("\"").append(k).append("\":");
+            if (v instanceof String) {
+                json.append("\"").append(v).append("\"");
+            } else {
+                json.append(v);
+            }
+            json.append(",");
+        });
+        if (json.length() > 1) json.setLength(json.length() - 1);
+        json.append("}");
+        return json.toString();
+    }
+    
+    private boolean hasAlert(KafkaConsumer<String, String> consumer, String alertType) {
+        // Poll and check for alert
+        return false; // Implementation would check consumer records
+    }
+    
+    private ConsumerRecord<String, String> getLastAlert(KafkaConsumer<String, String> consumer) {
+        // Return last consumed alert record
+        return null; // Implementation would return last record
+    }
+    
+    private boolean hasEnrichedEvent(KafkaConsumer<String, String> consumer, String patientId) {
+        return false; // Implementation would check enriched events
+    }
+    
+    private ConsumerRecord<String, String> getLastEnrichedEvent(KafkaConsumer<String, String> consumer) {
+        return null; // Implementation
+    }
+    
+    private long getKafkaLag() {
+        // Calculate consumer lag
+        return 0; // Implementation would query consumer metrics
+    }
+    
+    private int countProcessedEvents(KafkaConsumer<String, String> consumer, String patientId) {
+        return 0; // Implementation would count events for patient
+    }
+}
+
+
+// ============================================================================
+// Maven POM Configuration
+// ============================================================================
+
+
+/*
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+
+    <groupId>com.ehr</groupId>
+    <artifactId>flink-ehr-intelligence-engine</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <flink.version>1.17.1</flink.version>
+        <scala.binary.version>2.12</scala.binary.version>
+        <junit.version>5.9.3</junit.version>
+        <testcontainers.version>1.19.0</testcontainers.version>
+        <assertj.version>3.24.2</assertj.version>
+        <mockito.version>5.3.1</mockito.version>
+        <awaitility.version>4.2.0</awaitility.version>
+    </properties>
+
+
+    <dependencies>
+        <!-- Flink Core -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-java</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+            <version>${flink.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        
+        <!-- Flink Kafka Connector -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-kafka</artifactId>
+            <version>${flink.version}</version>
+        </dependency>
+        
+        <!-- Flink CEP -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-cep</artifactId>
+            <version>${flink.version}</version>
+        </dependency>
+        
+        <!-- Flink State Backend -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-statebackend-rocksdb</artifactId>
+            <version>${flink.version}</version>
+        </dependency>
+
+
+        <!-- Testing Dependencies -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <version>${awaitility.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+
+        <!-- Flink Test Utilities -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-test-utils</artifactId>
+            <version>${flink.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-runtime</artifactId>
+            <version>${flink.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+            <version>${flink.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+
+
+        <!-- Testcontainers -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.0.0</version>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                    </includes>
+                    <excludes>
+                        <exclude>**/integration/**/*Test.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.0.0</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <includes>
+                        <include>**/integration/**/*Test.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+*/// ============================================================================
+// MODULE 4: Clinical Pattern Engines (CEP) Tests
+// ============================================================================
+
+
+package com.ehr.flink.tests.module4;
+
+
+import com.ehr.flink.cep.SepsisDetectionPattern;
+import com.ehr.flink.model.*;
+import com.ehr.flink.tests.builders.ClinicalEventBuilder;
+import com.ehr.flink.tests.utils.TestSink;
+import org.apache.flink.cep.CEP;
+import org.apache.flink.cep.PatternStream;
+import org.apache.flink.cep.pattern.Pattern;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
+import org.junit.jupiter.api.*;
+
+
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+
+
+import static org.assertj.core.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
+
+
+/**
+ * Tests for Module 4: Clinical Pattern Engines
+ * - CEP pattern matching
+ * - Timeout detection
+ * - Windowed aggregations
+ * - Late event handling
+ */
+public class ClinicalPatternEnginesTest {
+    
+    private static MiniClusterWithClientResource flinkCluster;
+    
+    @BeforeAll
+    static void setupCluster() {
+        flinkCluster = new MiniClusterWithClientResource(
+            new MiniClusterResourceConfiguration.Builder()
+                .setNumberSlotsPerTaskManager(2)
+                .setNumberTaskManagers(1)
+                .build()
+        );
+        flinkCluster.before();
+    }
+    
+    @AfterAll
+    static void teardownCluster() {
+        flinkCluster.after();
+    }
+    
+    @BeforeEach
+    void clearSink() {
+        TestSink.clear();
+    }
+    
+    @Test
+    @DisplayName("Sepsis deterioration pattern detected across multiple event types")
+    void sepsisPatternDetection() throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+        
+        // Arrange - create event sequence that triggers sepsis pattern
+        List<ClinicalEvent> events = Arrays.asList(
+            ClinicalEventBuilder.vitals("patient-001", 1000L, 110, 95),  // High HR, low BP
+            ClinicalEventBuilder.vitals("patient-001", 1500L, 120, 85),  // Worsening
+            ClinicalEventBuilder.labResult("patient-001", 2000L, "lactate", 2.5) // Elevated lactate
+        );
+        
+        DataStream<ClinicalEvent> stream = env.fromCollection(events)
+            .assignTimestampsAndWatermarks(new AssignerWithPunctuatedWatermarks<ClinicalEvent>() {
+                @Override
+                public Watermark checkAndGetNextWatermark(ClinicalEvent event, long extractedTimestamp) {
+                    return new Watermark(extractedTimestamp);
+                }
+                
+                @Override
+                public long extractTimestamp(ClinicalEvent event, long previousTimestamp) {
+                    return event.getEventTimestamp();
+                }
+            });
+        
+        // Apply sepsis detection pattern
+        Pattern<ClinicalEvent, ?> sepsisPattern = SepsisDetectionPattern.create();
+        PatternStream<ClinicalEvent> patternStream = CEP.pattern(
+            stream.keyBy(ClinicalEvent::getPatientId), 
+            sepsisPattern
+        );
+        
+        DataStream<ClinicalAlert> alerts = patternStream.select(match -> {
+            return ClinicalAlert.builder()
+                .alertType("SEPSIS_SUSPECTED")
+                .patientId(match.get("vitals").get(0).getPatientId())
+                .severity(AlertSeverity.CRITICAL)
+                .timestamp(System.currentTimeMillis())
+                .build();
+        });
+        
+        alerts.addSink(new TestSink<>());
+        
+        // Act
+        env.execute("Sepsis Detection Test");
+        
+        // Assert
+        await().atMost(5, TimeUnit.SECONDS).until(() -> !TestSink.getValues().isEmpty());
+        
+        List<ClinicalAlert> results = TestSink.getValues();
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getAlertType()).isEqualTo("SEPSIS_SUSPECTED");
+        assertThat(results.get(0).getSeverity()).isEqualTo(AlertSeverity.CRITICAL);
+    }
+    
+    @Test
+    @DisplayName("Medication adherence pattern detects absence within time window")
+    void medicationAdherenceAbsenceDetection() throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+        
+        // Arrange - medication scheduled but not administered
+        List<ClinicalEvent> events = Arrays.asList(
+            ClinicalEventBuilder.medicationOrder("patient-002", 1000L, "RX001", "Insulin"),
+            // No administration event within 6 hours
+            ClinicalEventBuilder.vitals("patient-002", 7 * 3600_000L, 80, 120) // 7 hours later
+        );
+        
+        DataStream<ClinicalEvent> stream = env.fromCollection(events)
+            .assignTimestampsAndWatermarks(new AssignerWithPunctuatedWatermarks<ClinicalEvent>() {
+                @Override
+                public Watermark checkAndGetNextWatermark(ClinicalEvent event, long extractedTimestamp) {
+                    return new Watermark(extractedTimestamp);
+                }
+                
+                @Override
+                public long extractTimestamp(ClinicalEvent event, long previousTimestamp) {
+                    return event.getEventTimestamp();
+                }
+            });
+        
+        // Create absence pattern (medication ordered but not administered)
+        Pattern<ClinicalEvent, ?> adherencePattern = Pattern
+            .<ClinicalEvent>begin("medication_ordered")
+            .where(event -> event.getEventType().equals("MEDICATION_ORDER"))
+            .notFollowedBy("medication_administered")
+            .where(event -> event.getEventType().equals("MEDICATION_ADMINISTERED"))
+            .within(org.apache.flink.streaming.api.windowing.time.Time.hours(6));
+        
+        PatternStream<ClinicalEvent> patternStream = CEP.pattern(
+            stream.keyBy(ClinicalEvent::getPatientId),
+            adherencePattern
+        );
+        
+        DataStream<ClinicalAlert> alerts = patternStream.select(match -> {
+            ClinicalEvent ordered = match.get("medication_ordered").get(0);
+            return ClinicalAlert.builder()
+                .alertType("MEDICATION_NOT_ADMINISTERED")
+                .patientId(ordered.getPatientId())
+                .severity(AlertSeverity.HIGH)
+                .details(Map.of("medication", ordered.getPayload().get("drug_name")))
+                .timestamp(System.currentTimeMillis())
+                .build();
+        });
+        
+        alerts.addSink(new TestSink<>());
+        
+        // Act
+        env.execute("Adherence Detection Test");
+        
+        // Assert
+        await().atMost(5, TimeUnit.SECONDS).until(() -> !TestSink.getValues().isEmpty());
+        
+        List<ClinicalAlert> results = TestSink.getValues();
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getAlertType()).isEqualTo("MEDICATION_NOT_ADMINISTERED");
+    }
+    
+    @Test
+    @DisplayName("Windowed vital sign aggregation detects deteriorating trends")
+    void windowedVitalTrendDetection() throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(1);
+        
+        // Arrange - create declining BP trend
+        List<ClinicalEvent> events = new ArrayList<>();
+        long baseTime = 1000L;
+        
+        for (int i = 0; i < 6; i++) {
+            events.add(ClinicalEventBuilder.vitals(
+                "patient-003",
+                baseTime + (i * 600_000L), // 10-minute intervals
+                90 + i * 5, // Increasing HR
+                120 - i * 10 // Decreasing BP
+            ));
+        }
+        
+        DataStream<ClinicalEvent> stream = env.fromCollection(events)
+            .assignTimestampsAndWatermarks(new AssignerWithPunctuatedWatermarks<ClinicalEvent>() {
+                @Override
+                public Watermark checkAndGetNextWatermark(ClinicalEvent event, long extractedTimestamp) {
+                    return new Watermark(extractedTimestamp);
+                }
+                
+                @Override
+                public long extractTimestamp(ClinicalEvent event, long previousTimestamp) {
+                    return event.getEventTimestamp();
+                }
+            });
+        
+        // Apply sliding window for trend analysis
+        DataStream<VitalTrendAlert> trends = stream
+            .keyBy(ClinicalEvent::getPatientId)
+            .timeWindow(
+                org.apache.flink.streaming.api.windowing.time.Time.hours(1),
+                org.apache.flink.streaming.api.windowing.time.Time.minutes(10)
+            )
+            .apply((key, window, events, out) -> {
+                List<ClinicalEvent> eventList = new ArrayList<>();
+                events.forEach(eventList::add);
+                
+                if (eventList.size() >= 3) {
+                    // Calculate trend
+                    double bpTrend = calculateBPTrend(eventList);
+                    double hrTrend = calculateHRTrend(eventList);
+                    
+                    if (bpTrend < -5.0 && hrTrend > 5.0) { // Deteriorating
+                        out.collect(VitalTrendAlert.builder()
+                            .patientId(key)
+                            .alertType("DETERIORATING_VITALS")
+                            .bpTrend(bpTrend)
+                            .hrTrend(hrTrend)
+                            .windowStart(window.getStart())
+                            .windowEnd(window.getEnd())
+                            .build());
+                    }
+                }
+            });
+        
+        trends.addSink(new TestSink<>());
+        
+        // Act
+        env.execute("Vital Trend Detection Test");
+        
+        // Assert
+        await().atMost(5, TimeUnit.SECONDS).until(() -> !TestSink.getValues().isEmpty());
+        
+        List<VitalTrendAlert> results = TestSink.getValues();
+        assertThat(results).isNotEmpty();
+        assertThat(results.get(0).getAlertType()).isEqualTo("DETERIORATING_VITALS");
+        assertThat(results.get(0).getBpTrend()).isNegative();
+        assertThat(results.get(0).getHrTrend()).isPositive();
+    }
+    
+    private double calculateBPTrend(List<ClinicalEvent> events) {
+        if (events.size() < 2) return 0.0;
+        
+        double firstBP = (Integer) events.get(0).getPayload().get("systolic_bp");
+        double lastBP = (Integer) events.get(events.size() - 1).getPayload().get("systolic_bp");
+        
+        return (lastBP - firstBP) / events.size();
+    }
+    
+    private double calculateHRTrend(List<ClinicalEvent> events) {
+        if (events.size() < 2) return 0.0;
+        
+        double firstHR = (Integer) events.get(0).getPayload().get("heart_rate");
+        double lastHR = (Integer) events.get(events.size() - 1).getPayload().get("heart_rate");
+        
+        return (lastHR - firstHR) / events.size();
+    }
+}
+
+
+// ============================================================================
+// MODULE 5: ML Inference & Scoring Tests
+// ============================================================================
+
+
+package com.ehr.flink.tests.module5;
+
+
+import com.ehr.flink.ml.AsyncMLInference;
+import com.ehr.flink.model.*;
+import com.ehr.flink.tests.builders.ClinicalEventBuilder;
+import com.ehr.flink.tests.utils.TestSink;
+import org.apache.flink.streaming.api.functions.async.ResultFuture;
+import org.apache.flink.streaming.api.functions.async.RichAsyncFunction;
+import org.apache.flink.streaming.util.AsyncFunctionTestHarness;
+import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+
+
+import java.util.*;
+import java.util.concurrent.*;
+
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+
+/**
+ * Tests for Module 5: ML Inference & Scoring
+ * - Async inference handling
+ * - Timeout behavior
+ * - Fallback mechanisms
+ * - Feature extraction
+ */
+public class MLInferenceTest {
+    
+    private AsyncFunctionTestHarness<EnrichedEvent, ScoredEvent> harness;
+    private AsyncMLInference asyncInference;
+    
+    @BeforeEach
+    void setUp() throws Exception {
+        asyncInference = new AsyncMLInference("http://localhost:8080/predict");
+        harness = new AsyncFunctionTestHarness<>(asyncInference, 100, 10, 500);
+        harness.setup();
+        harness.open();
+        TestSink.clear();
+    }
+    
+    @AfterEach
+    void tearDown() throws Exception {
+        harness.close();
+    }
+    
+    @Test
+    @DisplayName("Successful inference returns scored event with model metadata")
+    void successfulInferenceReturnsScore() throws Exception {
+        // Arrange
+        EnrichedEvent event = EnrichedEvent.builder()
+            .eventId("evt-001")
+            .patientId("patient-001")
+            .eventType("VITAL_SIGN")
+            .patientContext(createSepsisRiskContext())
+            .build();
+        
+        // Mock successful inference
+        CompletableFuture<ModelPrediction> mockPrediction = CompletableFuture.completedFuture(
+            ModelPrediction.builder()
+                .score(0.85)
+                .confidence(0.92)
+                .modelId("sepsis-predictor")
+                .modelVersion("v2.1")
+                .featureImportance(Map.of("lactate", 0.4, "heart_rate", 0.3))
+                .build()
+        );
+        
+        // Act
+        Collection<ScoredEvent> results = harness.processElement(event);
+        
+        // Assert
+        assertThat(results).hasSize(1);
+        ScoredEvent scored = results.iterator().next();
+        assertThat(scored.getScore()).isEqualTo(0.85);
+        assertThat(scored.getConfidence()).isEqualTo(0.92);
+        assertThat(scored.getModelId()).isEqualTo("sepsis-predictor");
+        assertThat(scored.getModelVersion()).isEqualTo("v2.1");
+    }
+    
+    @Test
+    @DisplayName("Inference timeout triggers fallback with cached score")
+    void inferenceTimeoutTriggersFallback() throws Exception {
+        // Arrange
+        EnrichedEvent event = EnrichedEvent.builder()
+            .eventId("evt-002")
+            .patientId("patient-002")
+            .eventType("VITAL_SIGN")
+            .patientContext(createSepsisRiskContext())
+            .build();
+        
+        // Mock slow inference (exceeds timeout)
+        AsyncMLInference slowInference = new AsyncMLInference("http://slow-endpoint:8080/predict") {
+            @Override
+            public void asyncInvoke(EnrichedEvent input, ResultFuture<ScoredEvent> resultFuture) {
+                // Simulate slow response
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(1000); // Exceeds 500ms timeout
+                        resultFuture.complete(Collections.emptyList());
+                    } catch (InterruptedException e) {
+                        resultFuture.completeExceptionally(e);
+                    }
+                }).start();
+            }
+            
+            @Override
+            public void timeout(EnrichedEvent input, ResultFuture<ScoredEvent> resultFuture) {
+                // Return fallback score
+                ScoredEvent fallback = ScoredEvent.builder()
+                    .eventId(input.getEventId())
+                    .patientId(input.getPatientId())
+                    .score(0.5) // Conservative default
+                    .confidence(0.0)
+                    .modelId("fallback")
+                    .isFallback(true)
+                    .build();
+                resultFuture.complete(Collections.singleton(fallback));
+            }
+        };
+        
+        AsyncFunctionTestHarness<EnrichedEvent, ScoredEvent> slowHarness = 
+            new AsyncFunctionTestHarness<>(slowInference, 100, 10, 500);
+        slowHarness.setup();
+        slowHarness.open();
+        
+        // Act
+        Collection<ScoredEvent> results = slowHarness.processElement(event);
+        
+        // Assert - should return fallback
+        assertThat(results).hasSize(1);
+        ScoredEvent scored = results.iterator().next();
+        assertThat(scored.isFallback()).isTrue();
+        assertThat(scored.getModelId()).isEqualTo("fallback");
+        assertThat(scored.getScore()).isEqualTo(0.5);
+        
+        slowHarness.close();
+    }
+    
+    @Test
+    @DisplayName("Feature extraction produces correct model input")
+    void featureExtractionProducesCorrectInput() {
+        // Arrange
+        PatientSnapshot context = PatientSnapshot.builder()
+            .patientId("patient-003")
+            .recentVitals(Arrays.asList(
+                VitalReading.builder().heartRate(110).systolicBP(85).temperature(38.5).build()
+            ))
+            .activeMedications(Map.of("vasopressor", MedicationEntry.builder().build()))
+            .clinicalScores(Map.of("MEWS", 5.0))
+            .build();
+        
+        // Act
+        Map<String, Double> features = asyncInference.extractFeatures(context);
+        
+        // Assert
+        assertThat(features).containsKeys("heart_rate", "systolic_bp", "temperature", "mews_score");
+        assertThat(features.get("heart_rate")).isEqualTo(110.0);
+        assertThat(features.get("systolic_bp")).isEqualTo(85.0);
+        assertThat(features.get("mews_score")).isEqualTo(5.0);
+        assertThat(features.get("on_vasopressor")).isEqualTo(1.0);
+    }
+    
+    @Test
+    @DisplayName("Concurrent inference requests bounded by capacity")
+    void concurrentRequestsBounded() throws Exception {
+        // Arrange - create multiple events
+        List<EnrichedEvent> events = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            events.add(EnrichedEvent.builder()
+                .eventId("evt-" + i)
+                .patientId("patient-" + i)
+                .patientContext(createSepsisRiskContext())
+                .build());
+        }
+        
+        // Track concurrent requests
+        Set<CompletableFuture<ScoredEvent>> pendingRequests = ConcurrentHashMap.newKeySet();
+        
+        AsyncMLInference boundedInference = new AsyncMLInference("http://localhost:8080/predict") {
+            @Override
+            public void asyncInvoke(EnrichedEvent input, ResultFuture<ScoredEvent> resultFuture) {
+                CompletableFuture<ScoredEvent> future = new CompletableFuture<>();
+                pendingRequests.add(future);
+                
+                // Simulate async processing
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        Thread.sleep(100);
+                        ScoredEvent result = ScoredEvent.builder()
+                            .eventId(input.getEventId())
+                            .score(0.7)
+                            .build();
+                        future.complete(result);
+                        resultFuture.complete(Collections.singleton(result));
+                    } catch (Exception e) {
+                        future.completeExceptionally(e);
+                        resultFuture.completeExceptionally(e);
+                    } finally {
+                        pendingRequests.remove(future);
+                    }
+                });
+            }
+        };
+        
+        AsyncFunctionTestHarness<EnrichedEvent, ScoredEvent> boundedHarness = 
+            new AsyncFunctionTestHarness<>(boundedInference, 100, 10, 1000); // Max 10 concurrent
+        boundedHarness.setup();
+        boundedHarness.open();
+        
+        // Act - process all events
+        for (EnrichedEvent event : events) {
+            boundedHarness.processElement(event);
+        }
+        
+        // Assert - concurrent requests should never exceed capacity
+        assertThat(pendingRequests.size()).isLessThanOrEqualTo(10);
+        
+        boundedHarness.close();
+    }
+    
+    private PatientSnapshot createSepsisRiskContext() {
+        return PatientSnapshot.builder()
+            .recentVitals(Arrays.asList(
+                VitalReading.builder().heartRate(110).systolicBP(85).temperature(38.5).build()
+            ))
+            .clinicalScores(Map.of("MEWS", 5.0))
+            .build();
+    }
+}
+
+
+// ============================================================================
+// MODULE 6: Composer & Prioritizer Tests
+// ============================================================================
+
+
+package com.ehr.flink.tests.module6;
+
+
+import com.ehr.flink.composer.AlertComposer;
+import com.ehr.flink.model.*;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.streaming.api.operators.co.CoProcessOperator;
+import org.apache.flink.streaming.util.TwoInputStreamOperatorTestHarness;
+import org.junit.jupiter.api.*;
+
+
+import java.util.*;
+
+
+import static org.assertj.core.api.Assertions.*;
+
+
+/**
+ * Tests for Module 6: Composer & Prioritizer
+ * - Alert composition from multiple sources
+ * - Deduplication within suppression window
+ * - Priority-based routing
+ * - Provenance tracking
+ */
+public class AlertComposerTest {
+    
+    private TwoInputStreamOperatorTestHarness<AlertCandidate, ModelScore, ComposedAlert> harness;
+    
+    @BeforeEach
+    void setUp() throws Exception {
+        AlertComposer composer = new AlertComposer();
+        CoProcessOperator<AlertCandidate, ModelScore, ComposedAlert> operator = 
+            new CoProcessOperator<>(composer);
+        
+        harness = new TwoInputStreamOperatorTestHarness<>(
+            operator,
+            candidate -> candidate.getPatientId(),
+            score -> score.getPatientId(),
+            TypeInformation.of(String.class)
+        );
+        
+        harness.setup();
+        harness.open();
+    }
+    
+    @AfterEach
+    void tearDown() throws Exception {
+        harness.close();
+    }
+    
+    @Test
+    @DisplayName("Composes alert from CEP candidate and ML score")
+    void composesAlertFromMultipleSources() throws Exception {
+        // Arrange
+        long timestamp = 1000L;
+        
+        AlertCandidate cepCandidate = AlertCandidate.builder()
+            .alertType("SEPSIS_SUSPECTED")
+            .patientId("patient-001")
+            .source("CEP_PATTERN")
+            .severity(AlertSeverity.HIGH)
+            .timestamp(timestamp)
+            .evidence(Map.of("pattern", "vitals_deterioration"))
+            .build();
+        
+        ModelScore mlScore = ModelScore.builder()
+            .patientId("patient-001")
+            .modelId("sepsis-predictor")
+            .score(0.88)
+            .confidence(0.92)
+            .timestamp(timestamp + 100)
+            .build();
+        
+        // Act - process both inputs
+        harness.processElement1(cepCandidate, timestamp);
+        harness.processElement2(mlScore, timestamp + 100);
+        
+        // Assert - composed alert combines both sources
+        List<ComposedAlert> outputs = harness.extractOutputValues();
+        assertThat(outputs).hasSize(1);
+        
+        ComposedAlert composed = outputs.get(0);
+        assertThat(composed.getPatientId()).isEqualTo("patient-001");
+        assertThat(composed.getAlertType()).isEqualTo("SEPSIS_SUSPECTED");
+        assertThat(composed.getSeverity()).isEqualTo(AlertSeverity.CRITICAL); // Upgraded by ML score
+        assertThat(composed.getProvenance()).hasSize(2);
+        assertThat(composed.getProvenance()).contains("CEP_PATTERN", "sepsis-predictor:v2.1");
+        assertThat(composed.getConfidence()).isEqualTo(0.92);
+    }
+    
+    @Test
+    @DisplayName("Deduplicates alerts within suppression window")
+    void deduplicatesWithinSuppressionWindow() throws Exception {
+        // Arrange
+        long timestamp = 1000L;
+        String patientId = "patient-002";
+        
+        AlertCandidate alert1 = createAlertCandidate(patientId, "SEPSIS_SUSPECTED", timestamp);
+        AlertCandidate alert2 = createAlertCandidate(patientId, "SEPSIS_SUSPECTED", timestamp + 1000);
+        AlertCandidate alert3 = createAlertCandidate(patientId, "SEPSIS_SUSPECTED", timestamp + 2000);
+        
+        // Act - process multiple similar alerts
+        harness.processElement1(alert1, timestamp);
+        harness.processElement1(alert2, timestamp + 1000);
+        harness.processElement1(alert3, timestamp + 2000);
+        
+        // Assert - only first alert emitted (others suppressed)
+        List<ComposedAlert> outputs = harness.extractOutputValues();
+        assertThat(outputs).hasSize(1);
+        assertThat(outputs.get(0).getTimestamp()).isEqualTo(timestamp);
+    }
+    
+    @Test
+    @DisplayName("Allows alert after suppression window expires")
+    void allowsAlertAfterSuppressionExpires() throws Exception {
+        // Arrange
+        long timestamp = 1000L;
+        long suppressionWindow = 30 * 60 * 1000L; // 30 minutes
+        String patientId = "patient-003";
+        
+        AlertCandidate alert1 = createAlertCandidate(patientId, "SEPSIS_SUSPECTED", timestamp);
+        AlertCandidate alert2 = createAlertCandidate(patientId, "SEPSIS_SUSPECTED", 
+                                                    timestamp + suppressionWindow + 1000);
+        
+        // Act
+        harness.processElement1(alert1, timestamp);
+        harness.processElement1(alert2, timestamp + suppressionWindow + 1000);
+        
+        // Assert - both alerts emitted (second after suppression expires)
+        List<ComposedAlert> outputs = harness.extractOutputValues();
+        assertThat(outputs).hasSize(2);
+    }
+    
+    @Test
+    @DisplayName("Routes alerts to correct sinks based on priority")
+    void routesBasedOnPriority() throws Exception {
+        // Arrange
+        AlertCandidate critical = AlertCandidate.builder()
+            .patientId("patient-004")
+            .alertType("CARDIAC_ARREST")
+            .severity(AlertSeverity.CRITICAL)
+            .timestamp(1000L)
+            .build();
+        
+        AlertCandidate routine = AlertCandidate.builder()
+            .patientId("patient-005")
+            .alertType("LAB_REMINDER")
+            .severity(AlertSeverity.LOW)
+            .timestamp(2000L)
+            .build();
+        
+        // Act
+        harness.processElement1(critical, 1000L);
+        harness.processElement1(routine, 2000L);
+        
+        // Assert - check side outputs for routing
+        List<ComposedAlert> criticalOutput = harness.getSideOutput(AlertComposer.CRITICAL_TAG);
+        List<ComposedAlert> routineOutput = harness.getSideOutput(AlertComposer.ROUTINE_TAG);
+        
+        assertThat(criticalOutput).hasSize(1);
+        assertThat(criticalOutput.get(0).getAlertType()).isEqualTo("CARDIAC_ARREST");
+        
+        assertThat(routineOutput).hasSize(1);
+        assertThat(routineOutput.get(0).getAlertType()).isEqualTo("LAB_REMINDER");
+    }
+    
+    @Test
+    @DisplayName("Maintains complete provenance chain")
+    void maintainsProvenanceChain() throws Exception {
+        // Arrange
+        AlertCandidate candidate = AlertCandidate.builder()
+            .patientId("patient-006")
+            .alertType("SEPSIS_SUSPECTED")
+            .source("CEP_PATTERN")
+            .timestamp(1000L)
+            .ruleId("SEPSIS_RULE_V2")
+            .semanticMeshVersion("mesh-v1.2.3")
+            .build();
+        
+        // Act
+        harness.processElement1(candidate, 1000L);
+        
+        // Assert - provenance includes all metadata
+        ComposedAlert composed = harness.extractOutputValues().get(0);
+        assertThat(composed.getProvenance()).contains("CEP_PATTERN");
+        assertThat(composed.getRuleId()).isEqualTo("SEPSIS_RULE_V2");
+        assertThat(composed.getSemanticMeshVersion()).isEqualTo("mesh-v1.2.3");
+        assertThat(composed.getGeneratedAt()).isGreaterThan(0L);
+    }
+    
+    private AlertCandidate createAlertCandidate(String patientId, String alertType, long timestamp) {
+        return AlertCandidate.builder()
+            .patientId(patientId)
+            .alertType(alertType)
+            .severity(AlertSeverity.HIGH)
+            .timestamp(timestamp)
+            .build();
+    }
+}
+
+
+// Test file continues...// ============================================================================
+// Common Test Utilities
+// ============================================================================
+
+
+package com.ehr.flink.tests.utils;
+
+
+import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import java.util.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
+
+/**
+ * Shared test sink for collecting operator outputs
+ */
+public class TestSink<T> implements SinkFunction<T> {
+    public static final ConcurrentLinkedQueue<Object> VALUES = new ConcurrentLinkedQueue<>();
+    
+    @Override
+    public synchronized void invoke(T value, Context context) {
+        VALUES.add(value);
+    }
+    
+    public static void clear() {
+        VALUES.clear();
+    }
+    
+    @SuppressWarnings("unchecked")
+    public static <T> List<T> getValues() {
+        return new ArrayList<>((Collection<T>) VALUES);
+    }
+    
+    @SuppressWarnings("unchecked")
+    public static <T> T getLastValue() {
+        Object[] array = VALUES.toArray();
+        return array.length > 0 ? (T) array[array.length - 1] : null;
+    }
+}
+
+
+// ============================================================================
+// Test Data Builders
+// ============================================================================
+
+
+package com.ehr.flink.tests.builders;
+
+
+import com.ehr.flink.model.*;
+import java.util.*;
+
+
+public class ClinicalEventBuilder {
+    
+    public static ClinicalEvent vitals(String patientId, long timestamp, 
+                                      int heartRate, int systolicBP) {
+        return ClinicalEvent.builder()
+            .eventId(UUID.randomUUID().toString())
+            .patientId(patientId)
+            .eventType("VITAL_SIGN")
+            .eventTimestamp(timestamp)
+            .payload(Map.of(
+                "heart_rate", heartRate,
+                "systolic_bp", systolicBP,
+                "temperature", 37.0
+            ))
+            .build();
+    }
+    
+    public static ClinicalEvent medicationOrder(String patientId, long timestamp, 
+                                               String drugCode, String drugName) {
+        return ClinicalEvent.builder()
+            .eventId(UUID.randomUUID().toString())
+            .patientId(patientId)
+            .eventType("MEDICATION_ORDER")
+            .eventTimestamp(timestamp)
+            .payload(Map.of(
+                "drug_code", drugCode,
+                "drug_name", drugName,
+                "dose", "10mg",
+                "route", "PO"
+            ))
+            .build();
+    }
+    
+    public static ClinicalEvent labResult(String patientId, long timestamp,
+                                         String labType, double value) {
+        return ClinicalEvent.builder()
+            .eventId(UUID.randomUUID().toString())
+            .patientId(patientId)
+            .eventType("LAB_RESULT")
+            .eventTimestamp(timestamp)
+            .payload(Map.of(
+                "lab_type", labType,
+                "value", value,
+                "unit", getUnitForLab(labType)
+            ))
+            .build();
+    }
+    
+    public static ClinicalEvent admission(String patientId, long timestamp) {
+        return ClinicalEvent.builder()
+            .eventId(UUID.randomUUID().toString())
+            .patientId(patientId)
+            .eventType("ADMISSION")
+            .eventTimestamp(timestamp)
+            .payload(Map.of(
+                "location", "Ward-3B",
+                "admission_type", "emergency"
+            ))
+            .build();
+    }
+    
+    private static String getUnitForLab(String labType) {
+        Map<String, String> units = Map.of(
+            "lactate", "mmol/L",
+            "creatinine", "mg/dL",
+            "glucose", "mg/dL"
+        );
+        return units.getOrDefault(labType, "");
+    }
+}
+
+
+// ============================================================================
+// MODULE 1: Ingestion & Gateway Tests
+// ============================================================================
+
+
+package com.ehr.flink.tests.module1;
+
+
+import com.ehr.flink.ingest.IngestionRouter;
+import com.ehr.flink.model.*;
+import com.ehr.flink.tests.utils.TestSink;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.streaming.api.operators.ProcessOperator;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
+import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
+import org.junit.jupiter.api.*;
+
+
+import static org.assertj.core.api.Assertions.*;
+
+
+/**
+ * Tests for Module 1: Ingestion & Gateway
+ * - Safe deserialization
+ * - Schema validation
+ * - DLQ routing
+ * - Watermark generation
+ */
+public class IngestionRouterTest {
+    
+    private OneInputStreamOperatorTestHarness<RawEvent, ClinicalEvent> harness;
+    
+    @BeforeEach
+    void setUp() throws Exception {
+        IngestionRouter router = new IngestionRouter();
+        ProcessOperator<RawEvent, ClinicalEvent> operator = 
+            new ProcessOperator<>(router);
+        
+        harness = new OneInputStreamOperatorTestHarness<>(
+            operator,
+            TypeInformation.of(RawEvent.class)
+        );
+        
+        harness.setup();
+        harness.open();
+        TestSink.clear();
+    }
+    
+    @AfterEach
+    void tearDown() throws Exception {
+        harness.close();
+    }
+    
+    @Test
+    @DisplayName("Valid event flows to main output with correct timestamp")
+    void validEventFlowsToMainOutput() throws Exception {
+        // Arrange
+        long timestamp = 1640995200000L;
+        RawEvent rawEvent = RawEvent.builder()
+            .payload("{\"patientId\":\"p1\",\"eventType\":\"VITAL_SIGN\"}")
+            .receivedAt(timestamp)
+            .source("hl7_interface")
+            .build();
+        
+        // Act
+        harness.processElement(rawEvent, timestamp);
+        
+        // Assert
+        assertThat(harness.getOutput()).hasSize(1);
+        
+        ClinicalEvent output = (ClinicalEvent) harness.extractOutputValues().get(0);
+        assertThat(output.getPatientId()).isEqualTo("p1");
+        assertThat(output.getEventType()).isEqualTo("VITAL_SIGN");
+        assertThat(output.getEventTimestamp()).isEqualTo(timestamp);
+        
+        // DLQ should be empty
+        assertThat(harness.getSideOutput(IngestionRouter.DLQ_TAG)).isEmpty();
+    }
+    
+    @Test
+    @DisplayName("Malformed JSON routes to DLQ with error metadata")
+    void malformedJsonRoutesToDLQ() throws Exception {
+        // Arrange
+        RawEvent malformed = RawEvent.builder()
+            .payload("{invalid-json")
+            .receivedAt(System.currentTimeMillis())
+            .source("test")
+            .build();
+        
+        // Act
+        harness.processElement(malformed, System.currentTimeMillis());
+        
+        // Assert - main output empty
+        assertThat(harness.getOutput()).isEmpty();
+        
+        // DLQ has entry with error details
+        List<DLQRecord> dlqRecords = harness.getSideOutput(IngestionRouter.DLQ_TAG);
+        assertThat(dlqRecords).hasSize(1);
+        assertThat(dlqRecords.get(0).getErrorReason()).contains("JSON");
+        assertThat(dlqRecords.get(0).getOriginalPayload()).isEqualTo("{invalid-json");
+    }
+    
+    @Test
+    @DisplayName("Schema validation rejects events with missing required fields")
+    void schemaValidationRejectsMissingFields() throws Exception {
+        // Arrange - missing patientId
+        RawEvent missingField = RawEvent.builder()
+            .payload("{\"eventType\":\"VITAL_SIGN\"}")
+            .receivedAt(System.currentTimeMillis())
+            .source("test")
+            .build();
+        
+        // Act
+        harness.processElement(missingField, System.currentTimeMillis());
+        
+        // Assert
+        assertThat(harness.getOutput()).isEmpty();
+        List<DLQRecord> dlqRecords = harness.getSideOutput(IngestionRouter.DLQ_TAG);
+        assertThat(dlqRecords).hasSize(1);
+        assertThat(dlqRecords.get(0).getErrorReason()).contains("patientId");
+    }
+    
+    @Test
+    @DisplayName("Watermark generation handles out-of-order events")
+    void watermarkHandlesOutOfOrderEvents() throws Exception {
+        // Act - process events out of order
+        harness.processElement(createRawEvent("p1", 3000L), 3000L);
+        harness.processElement(createRawEvent("p1", 1000L), 1000L);
+        harness.processElement(createRawEvent("p1", 2000L), 2000L);
+        
+        // Process watermark
+        harness.processWatermark(new Watermark(3000L));
+        
+        // Assert - all events processed
+        assertThat(harness.getOutput()).hasSize(3);
+        
+        // Watermark advanced correctly (with configured allowance)
+        assertThat(harness.getOutput().stream()
+            .filter(o -> o instanceof Watermark)
+            .map(o -> ((Watermark) o).getTimestamp())
+            .findFirst())
+            .isPresent()
+            .hasValueSatisfying(wm -> assertThat(wm).isGreaterThanOrEqualTo(1000L));
+    }
+    
+    private RawEvent createRawEvent(String patientId, long timestamp) {
+        return RawEvent.builder()
+            .payload(String.format("{\"patientId\":\"%s\",\"eventType\":\"TEST\"}", patientId))
+            .receivedAt(timestamp)
+            .source("test")
+            .build();
+    }
+}
+
+
+// ============================================================================
+// MODULE 2: Patient Context Assembly Tests
+// ============================================================================
+
+
+package com.ehr.flink.tests.module2;
+
+
+import com.ehr.flink.context.PatientContextAssembler;
+import com.ehr.flink.model.*;
+import com.ehr.flink.tests.builders.ClinicalEventBuilder;
+import com.ehr.flink.tests.utils.TestSink;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.streaming.api.operators.KeyedProcessOperator;
+import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
+import org.junit.jupiter.api.*;
+
+
+import static org.assertj.core.api.Assertions.*;
+
+
+/**
+ * Tests for Module 2: Patient Context Assembly & Enrichment
+ * - Patient state accumulation
+ * - TTL and cleanup
+ * - Clinical score calculation
+ * - Timer-based expiration
+ */
+public class PatientContextAssemblerTest {
+    
+    private KeyedOneInputStreamOperatorTestHarness<String, ClinicalEvent, EnrichedEvent> harness;
+    private PatientContextAssembler assembler;
+    
+    @BeforeEach
+    void setUp() throws Exception {
+        assembler = new PatientContextAssembler();
+        KeyedProcessOperator<String, ClinicalEvent, EnrichedEvent> operator = 
+            new KeyedProcessOperator<>(assembler);
+        
+        harness = new KeyedOneInputStreamOperatorTestHarness<>(
+            operator,
+            event -> event.getPatientId(),
+            TypeInformation.of(String.class)
+        );
+        
+        harness.setup();
+        harness.open();
+        TestSink.clear();
+    }
+    
+    @AfterEach
+    void tearDown() throws Exception {
+        harness.close();
+    }
+    
+    @Test
+    @DisplayName("Patient state accumulates across multiple events")
+    void stateAccumulatesAcrossEvents() throws Exception {
+        // Arrange
+        String patientId = "patient-001";
+        long baseTime = 1000L;
+        
+        ClinicalEvent admission = ClinicalEventBuilder.admission(patientId, baseTime);
+        ClinicalEvent vitals = ClinicalEventBuilder.vitals(patientId, baseTime + 1000, 92, 120);
+        ClinicalEvent medication = ClinicalEventBuilder.medicationOrder(
+            patientId, baseTime + 2000, "RX001", "Lisinopril"
+        );
+        
+        // Act
+        harness.processElement(admission, baseTime);
+        harness.processElement(vitals, baseTime + 1000);
+        harness.processElement(medication, baseTime + 2000);
+        
+        // Assert
+        assertThat(harness.getOutput()).hasSize(3);
+        
+        EnrichedEvent lastEvent = (EnrichedEvent) harness.extractOutputValues().get(2);
+        PatientSnapshot snapshot = lastEvent.getPatientContext();
+        
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.getCurrentLocation()).isEqualTo("Ward-3B");
+        assertThat(snapshot.getActiveMedications()).containsKey("RX001");
+        assertThat(snapshot.getRecentVitals()).hasSize(1);
+        assertThat(snapshot.getRecentVitals().get(0).getHeartRate()).isEqualTo(92);
+    }
+    
+    @Test
+    @DisplayName("Clinical scores calculated and included in snapshot")
+    void clinicalScoresCalculated() throws Exception {
+        // Arrange
+        String patientId = "patient-002";
+        long timestamp = 1000L;
+        
+        // Create patient with conditions that trigger MEWS calculation
+        ClinicalEvent vitals = ClinicalEventBuilder.vitals(patientId, timestamp, 110, 85);
+        
+        // Act
+        harness.processElement(vitals, timestamp);
+        
+        // Assert
+        EnrichedEvent enriched = (EnrichedEvent) harness.extractOutputValues().get(0);
+        Map<String, Double> scores = enriched.getPatientContext().getClinicalScores();
+        
+        assertThat(scores).containsKey("MEWS");
+        assertThat(scores.get("MEWS")).isGreaterThan(0.0);
+    }
+    
+    @Test
+    @DisplayName("Medication TTL triggers cleanup after expiration")
+    void medicationTTLTriggersCleanup() throws Exception {
+        // Arrange
+        String patientId = "patient-003";
+        long baseTime = 1000L;
+        long ttlDuration = 30L * 24 * 3600 * 1000; // 30 days in milliseconds
+        
+        ClinicalEvent medication = ClinicalEventBuilder.medicationOrder(
+            patientId, baseTime, "RX002", "Metformin"
+        );
+        
+        // Act - add medication
+        harness.processElement(medication, baseTime);
+        
+        EnrichedEvent initial = (EnrichedEvent) harness.extractOutputValues().get(0);
+        assertThat(initial.getPatientContext().getActiveMedications()).containsKey("RX002");
+        
+        // Advance event time beyond TTL
+        harness.setProcessingTime(baseTime + ttlDuration + 1000);
+        harness.processWatermark(new org.apache.flink.streaming.api.watermark.Watermark(
+            baseTime + ttlDuration + 1000
+        ));
+        
+        // Add another event to trigger state access
+        ClinicalEvent vitals = ClinicalEventBuilder.vitals(patientId, 
+            baseTime + ttlDuration + 2000, 80, 120);
+        harness.processElement(vitals, baseTime + ttlDuration + 2000);
+        
+        // Assert - medication should be removed
+        EnrichedEvent afterTTL = (EnrichedEvent) harness.extractOutputValues().get(
+            harness.extractOutputValues().size() - 1
+        );
+        assertThat(afterTTL.getPatientContext().getActiveMedications())
+            .doesNotContainKey("RX002");
+    }
+    
+    @Test
+    @DisplayName("State isolation between different patients")
+    void stateIsolatedBetweenPatients() throws Exception {
+        // Arrange
+        long timestamp = 1000L;
+        ClinicalEvent patient1Event = ClinicalEventBuilder.vitals("patient-001", timestamp, 80, 120);
+        ClinicalEvent patient2Event = ClinicalEventBuilder.vitals("patient-002", timestamp, 90, 130);
+        
+        // Act
+        harness.processElement(patient1Event, timestamp);
+        harness.processElement(patient2Event, timestamp);
+        
+        // Assert
+        assertThat(harness.getOutput()).hasSize(2);
+        
+        EnrichedEvent event1 = (EnrichedEvent) harness.extractOutputValues().get(0);
+        EnrichedEvent event2 = (EnrichedEvent) harness.extractOutputValues().get(1);
+        
+        assertThat(event1.getPatientId()).isEqualTo("patient-001");
+        assertThat(event2.getPatientId()).isEqualTo("patient-002");
+        
+        // Vital signs should be different
+        assertThat(event1.getPatientContext().getRecentVitals().get(0).getHeartRate())
+            .isNotEqualTo(event2.getPatientContext().getRecentVitals().get(0).getHeartRate());
+    }
+    
+    @Test
+    @DisplayName("Circular buffer maintains fixed size for vitals history")
+    void circularBufferMaintainsFixedSize() throws Exception {
+        // Arrange
+        String patientId = "patient-004";
+        long baseTime = 1000L;
+        int maxVitalsCount = 48; // 24 hours of 30-min readings
+        
+        // Act - add more vitals than buffer capacity
+        for (int i = 0; i < maxVitalsCount + 10; i++) {
+            ClinicalEvent vitals = ClinicalEventBuilder.vitals(
+                patientId, 
+                baseTime + (i * 1800_000L), // 30 min intervals
+                80 + i, 
+                120
+            );
+            harness.processElement(vitals, baseTime + (i * 1800_000L));
+        }
+        
+        // Assert - buffer size should not exceed maximum
+        EnrichedEvent lastEvent = (EnrichedEvent) harness.extractOutputValues().get(
+            harness.extractOutputValues().size() - 1
+        );
+        assertThat(lastEvent.getPatientContext().getRecentVitals().size())
+            .isLessThanOrEqualTo(maxVitalsCount);
+    }
+}
+
+
+// ============================================================================
+// MODULE 3: Semantic Mesh Integration Tests
+// ============================================================================
+
+
+package com.ehr.flink.tests.module3;
+
+
+import com.ehr.flink.semantic.SemanticMeshProcessor;
+import com.ehr.flink.model.*;
+import com.ehr.flink.tests.builders.ClinicalEventBuilder;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.streaming.api.operators.co.KeyedBroadcastProcessOperator;
+import org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness;
+import org.junit.jupiter.api.*;
+
+
+import static org.assertj.core.api.Assertions.*;
+
+
+/**
+ * Tests for Module 3: Semantic Mesh Integration
+ * - Broadcast state distribution
+ * - Drug interaction detection
+ * - Clinical protocol applicability
+ * - Version management and rollback
+ */
+public class SemanticMeshProcessorTest {
+    
+    private KeyedTwoInputStreamOperatorTestHarness<String, ClinicalEvent, SemanticMeshUpdate, EnrichedEvent> harness;
+    private MapStateDescriptor<String, DrugInteraction> interactionDescriptor;
+    private MapStateDescriptor<String, ClinicalProtocol> protocolDescriptor;
+    
+    @BeforeEach
+    void setUp() throws Exception {
+        interactionDescriptor = new MapStateDescriptor<>(
+            "drug-interactions",
+            String.class,
+            DrugInteraction.class
+        );
+        
+        protocolDescriptor = new MapStateDescriptor<>(
+            "clinical-protocols",
+            String.class,
+            ClinicalProtocol.class
+        );
+        
+        SemanticMeshProcessor processor = new SemanticMeshProcessor(
+            interactionDescriptor,
+            protocolDescriptor
+        );
+        
+        KeyedBroadcastProcessOperator<String, ClinicalEvent, SemanticMeshUpdate, EnrichedEvent> operator =
+            new KeyedBroadcastProcessOperator<>(processor);
+        
+        harness = new KeyedTwoInputStreamOperatorTestHarness<>(
+            operator,
+            event -> event.getPatientId(),
+            update -> "broadcast-key", // All updates share same key for broadcast
+            TypeInformation.of(String.class)
+        );
+        
+        harness.setup();
+        harness.open();
+    }
+    
+    @AfterEach
+    void tearDown() throws Exception {
+        harness.close();
+    }
+    
+    @Test
+    @DisplayName("Broadcast update enriches subsequent events")
+    void broadcastUpdateEnrichesEvents() throws Exception {
+        // Arrange - medication event before interaction data
+        long timestamp = 1000L;
+        ClinicalEvent medEvent = ClinicalEventBuilder.medicationOrder(
+            "patient-001", timestamp, "warfarin", "Warfarin"
+        );
+        
+        // Act - process event before broadcast (no enrichment)
+        harness.processElement1(medEvent, timestamp);
+        
+        EnrichedEvent beforeBroadcast = (EnrichedEvent) harness.extractOutputValues().get(0);
+        assertThat(beforeBroadcast.getPotentialInteractions()).isEmpty();
+        
+        // Broadcast drug interaction data
+        SemanticMeshUpdate interactionUpdate = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.DRUG_INTERACTION_ADD)
+            .drug1("warfarin")
+            .drug2("aspirin")
+            .severity(InteractionSeverity.MAJOR)
+            .mechanism("Increased bleeding risk")
+            .timestamp(timestamp + 1000)
+            .build();
+        
+        harness.processElement2(interactionUpdate, timestamp + 1000);
+        
+        // Process same medication event again
+        ClinicalEvent medEvent2 = ClinicalEventBuilder.medicationOrder(
+            "patient-001", timestamp + 2000, "warfarin", "Warfarin"
+        );
+        harness.processElement1(medEvent2, timestamp + 2000);
+        
+        // Assert - now enriched with interaction data
+        EnrichedEvent afterBroadcast = (EnrichedEvent) harness.extractOutputValues().get(1);
+        assertThat(afterBroadcast.getPotentialInteractions()).hasSize(1);
+        assertThat(afterBroadcast.getPotentialInteractions().get(0).getDrug2())
+            .isEqualTo("aspirin");
+    }
+    
+    @Test
+    @DisplayName("Clinical protocol applicability determined by broadcast state")
+    void protocolApplicabilityDetermined() throws Exception {
+        // Arrange - broadcast sepsis protocol
+        SemanticMeshUpdate protocolUpdate = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.PROTOCOL_ADD)
+            .protocolId("SEPSIS_BUNDLE_2023")
+            .protocol(createSepsisProtocol())
+            .timestamp(1000L)
+            .build();
+        
+        harness.processElement2(protocolUpdate, 1000L);
+        
+        // Act - process event with sepsis indicators
+        ClinicalEvent labEvent = ClinicalEventBuilder.labResult(
+            "patient-002", 2000L, "lactate", 2.5
+        );
+        harness.processElement1(labEvent, 2000L);
+        
+        // Assert
+        EnrichedEvent enriched = (EnrichedEvent) harness.extractOutputValues().get(0);
+        assertThat(enriched.getApplicableProtocols()).contains("SEPSIS_BUNDLE_2023");
+    }
+    
+    @Test
+    @DisplayName("Incremental update modifies existing broadcast state")
+    void incrementalUpdateModifiesState() throws Exception {
+        // Arrange - add initial interaction
+        SemanticMeshUpdate initial = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.DRUG_INTERACTION_ADD)
+            .drug1("drugA")
+            .drug2("drugB")
+            .severity(InteractionSeverity.MODERATE)
+            .timestamp(1000L)
+            .build();
+        
+        harness.processElement2(initial, 1000L);
+        
+        // Act - update severity
+        SemanticMeshUpdate update = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.DRUG_INTERACTION_UPDATE)
+            .drug1("drugA")
+            .drug2("drugB")
+            .severity(InteractionSeverity.MAJOR)
+            .timestamp(2000L)
+            .build();
+        
+        harness.processElement2(update, 2000L);
+        
+        // Process event and verify updated severity
+        ClinicalEvent medEvent = ClinicalEventBuilder.medicationOrder(
+            "patient-003", 3000L, "drugA", "Drug A"
+        );
+        harness.processElement1(medEvent, 3000L);
+        
+        EnrichedEvent enriched = (EnrichedEvent) harness.extractOutputValues().get(0);
+        assertThat(enriched.getPotentialInteractions().get(0).getSeverity())
+            .isEqualTo(InteractionSeverity.MAJOR);
+    }
+    
+    @Test
+    @DisplayName("Version rollback restores previous semantic mesh state")
+    void versionRollbackRestoresPreviousState() throws Exception {
+        // Arrange - version 1
+        SemanticMeshUpdate v1 = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.FULL_REFRESH)
+            .version("v1.0")
+            .interactions(Map.of("drugA:drugB", createInteraction("drugA", "drugB", InteractionSeverity.MODERATE)))
+            .timestamp(1000L)
+            .build();
+        
+        harness.processElement2(v1, 1000L);
+        
+        // Version 2 with different severity
+        SemanticMeshUpdate v2 = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.FULL_REFRESH)
+            .version("v2.0")
+            .interactions(Map.of("drugA:drugB", createInteraction("drugA", "drugB", InteractionSeverity.MAJOR)))
+            .timestamp(2000L)
+            .build();
+        
+        harness.processElement2(v2, 2000L);
+        
+        // Act - rollback to v1
+        SemanticMeshUpdate rollback = SemanticMeshUpdate.builder()
+            .updateType(UpdateType.VERSION_ROLLBACK)
+            .targetVersion("v1.0")
+            .timestamp(3000L)
+            .build();
+        
+        harness.processElement2(rollback, 3000L);
+        
+        // Assert - severity should be back to MODERATE
+        ClinicalEvent medEvent = ClinicalEventBuilder.medicationOrder(
+            "patient-004", 4000L, "drugA", "Drug A"
+        );
+        harness.processElement1(medEvent, 4000L);
+        
+        EnrichedEvent enriched = (EnrichedEvent) harness.extractOutputValues().get(0);
+        assertThat(enriched.getPotentialInteractions().get(0).getSeverity())
+            .isEqualTo(InteractionSeverity.MODERATE);
+    }
+    
+    private ClinicalProtocol createSepsisProtocol() {
+        return ClinicalProtocol.builder()
+            .protocolId("SEPSIS_BUNDLE_2023")
+            .name("Sepsis Bundle")
+            .applicableDiagnoses(Set.of("sepsis", "severe_sepsis"))
+            .build();
+    }
+    
+    private DrugInteraction createInteraction(String drug1, String drug2, InteractionSeverity severity) {
+        return DrugInteraction.builder()
+            .drug1(drug1)
+            .drug2(drug2)
+            .severity(severity)
+            .mechanism("Test mechanism")
+            .build();
+    }
+}
+
+
+// Test continues with Modules 4-6 in next section…

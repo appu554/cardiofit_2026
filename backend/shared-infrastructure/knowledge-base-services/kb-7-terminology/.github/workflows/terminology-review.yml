@@ -1,0 +1,468 @@
+name: Clinical Terminology Review
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/services/medication-service/knowledge-bases/kb-7-terminology/data/**'
+      - 'backend/services/medication-service/knowledge-bases/kb-7-terminology/schemas/**'
+      - 'backend/services/medication-service/knowledge-bases/kb-7-terminology/contracts/**'
+      - 'backend/services/medication-service/knowledge-bases/kb-7-terminology/internal/models/**'
+      - 'backend/services/medication-service/knowledge-bases/kb-7-terminology/api/**'
+
+env:
+  GO_VERSION: '1.21'
+  POSTGRES_VERSION: '15'
+  REDIS_VERSION: '7-alpine'
+
+defaults:
+  run:
+    working-directory: backend/services/medication-service/knowledge-bases/kb-7-terminology
+
+jobs:
+  # Clinical Safety Assessment
+  clinical-safety-check:
+    name: Clinical Safety Assessment
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.changed_files, 'data/') || contains(github.event.pull_request.changed_files, 'schemas/') || contains(github.event.pull_request.changed_files, 'contracts/') || contains(github.event.pull_request.changed_files, 'internal/models/') || contains(github.event.pull_request.changed_files, 'api/')
+
+    outputs:
+      requires_clinical_review: ${{ steps.safety-analysis.outputs.requires_review }}
+      safety_score: ${{ steps.safety-analysis.outputs.safety_score }}
+      affected_systems: ${{ steps.safety-analysis.outputs.affected_systems }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for change analysis
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/services/medication-service/knowledge-bases/kb-7-terminology/go.sum
+
+      - name: Install dependencies
+        run: make deps
+
+      - name: Clinical Safety Analysis
+        id: safety-analysis
+        run: |
+          echo "Running clinical safety assessment..."
+
+          # Check for high-risk terminology changes
+          CHANGED_FILES="${{ github.event.pull_request.changed_files }}"
+          HIGH_RISK_PATTERNS="medication|drug|dosage|route|frequency|interaction|allergy|contraindication|pregnancy|pediatric"
+          CRITICAL_FILES="snomed|rxnorm|loinc|icd|amt"
+
+          # Initialize variables
+          REQUIRES_REVIEW="false"
+          SAFETY_SCORE=0
+          AFFECTED_SYSTEMS=""
+
+          # Check for high-risk content changes
+          if git diff --name-only HEAD~1 | grep -E "(data/|schemas/)" | xargs grep -l -E "$HIGH_RISK_PATTERNS" 2>/dev/null; then
+            echo "High-risk terminology changes detected"
+            REQUIRES_REVIEW="true"
+            SAFETY_SCORE=$((SAFETY_SCORE + 30))
+            AFFECTED_SYSTEMS="${AFFECTED_SYSTEMS}clinical-decision-support "
+          fi
+
+          # Check for critical terminology file changes
+          if git diff --name-only HEAD~1 | grep -E "$CRITICAL_FILES"; then
+            echo "Critical terminology file changes detected"
+            REQUIRES_REVIEW="true"
+            SAFETY_SCORE=$((SAFETY_SCORE + 50))
+            AFFECTED_SYSTEMS="${AFFECTED_SYSTEMS}core-terminology "
+          fi
+
+          # Check for API schema changes
+          if git diff --name-only HEAD~1 | grep -E "api/.*\.(yaml|json|proto)$"; then
+            echo "API schema changes detected"
+            REQUIRES_REVIEW="true"
+            SAFETY_SCORE=$((SAFETY_SCORE + 20))
+            AFFECTED_SYSTEMS="${AFFECTED_SYSTEMS}api-contracts "
+          fi
+
+          # Check for model changes
+          if git diff --name-only HEAD~1 | grep -E "internal/models/"; then
+            echo "Data model changes detected"
+            REQUIRES_REVIEW="true"
+            SAFETY_SCORE=$((SAFETY_SCORE + 25))
+            AFFECTED_SYSTEMS="${AFFECTED_SYSTEMS}data-models "
+          fi
+
+          # Set outputs
+          echo "requires_review=${REQUIRES_REVIEW}" >> $GITHUB_OUTPUT
+          echo "safety_score=${SAFETY_SCORE}" >> $GITHUB_OUTPUT
+          echo "affected_systems=${AFFECTED_SYSTEMS}" >> $GITHUB_OUTPUT
+
+          # Create safety assessment report
+          cat > safety-assessment.md << EOF
+          # Clinical Safety Assessment Report
+
+          **PR**: #${{ github.event.pull_request.number }}
+          **Branch**: ${{ github.event.pull_request.head.ref }}
+          **Author**: ${{ github.event.pull_request.user.login }}
+          **Assessment Time**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ## Safety Analysis
+          - **Safety Score**: ${SAFETY_SCORE}/100
+          - **Requires Clinical Review**: ${REQUIRES_REVIEW}
+          - **Affected Systems**: ${AFFECTED_SYSTEMS}
+
+          ## Risk Factors Evaluated
+          - ✅ High-risk terminology patterns (medication, dosage, interactions)
+          - ✅ Critical terminology file modifications
+          - ✅ API contract changes
+          - ✅ Data model modifications
+
+          ## Recommendation
+          $(if [ "${REQUIRES_REVIEW}" = "true" ]; then
+            echo "🔴 **CLINICAL REVIEW REQUIRED** - This PR affects patient safety-critical components"
+          else
+            echo "🟢 **AUTOMATED APPROVAL** - Low safety risk changes"
+          fi)
+          EOF
+
+      - name: Run Terminology Validation
+        run: |
+          echo "Running terminology validation..."
+          make validate-terminology || {
+            echo "❌ Terminology validation failed"
+            exit 1
+          }
+
+      - name: Run FHIR Compliance Check
+        run: |
+          echo "Running FHIR compliance validation..."
+          make validate-fhir || {
+            echo "❌ FHIR compliance validation failed"
+            exit 1
+          }
+
+      - name: Upload Safety Assessment
+        uses: actions/upload-artifact@v3
+        with:
+          name: clinical-safety-assessment
+          path: backend/services/medication-service/knowledge-bases/kb-7-terminology/safety-assessment.md
+
+  # Audit Trail Generation
+  audit-trail:
+    name: Generate Audit Trail
+    runs-on: ubuntu-latest
+    needs: clinical-safety-check
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: kb_audit_user
+          POSTGRES_PASSWORD: kb_audit_password
+          POSTGRES_DB: clinical_audit_test
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/services/medication-service/knowledge-bases/kb-7-terminology/go.sum
+
+      - name: Install dependencies
+        run: make deps
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5435 -U kb_audit_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+      - name: Initialize audit database
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          PGPASSWORD=kb_audit_password psql -h localhost -p 5435 -U kb_audit_user -d clinical_audit_test < scripts/init-audit-db.sql
+
+      - name: Generate Audit Entry
+        env:
+          DATABASE_URL: postgresql://kb_audit_user:kb_audit_password@localhost:5435/clinical_audit_test
+        run: |
+          echo "Creating audit trail entry for PR #${{ github.event.pull_request.number }}"
+
+          # Create audit entry
+          go run cmd/audit/main.go create-pr-audit \
+            --pr-number="${{ github.event.pull_request.number }}" \
+            --author="${{ github.event.pull_request.user.login }}" \
+            --branch="${{ github.event.pull_request.head.ref }}" \
+            --safety-score="${{ needs.clinical-safety-check.outputs.safety_score }}" \
+            --affected-systems="${{ needs.clinical-safety-check.outputs.affected_systems }}" \
+            --requires-review="${{ needs.clinical-safety-check.outputs.requires_clinical_review }}"
+
+      - name: Upload Audit Records
+        uses: actions/upload-artifact@v3
+        with:
+          name: audit-trail-records
+          path: backend/services/medication-service/knowledge-bases/kb-7-terminology/audit-records/
+
+  # Clinical Review Enforcement
+  clinical-review:
+    name: Enforce Clinical Review
+    runs-on: ubuntu-latest
+    needs: clinical-safety-check
+    if: needs.clinical-safety-check.outputs.requires_clinical_review == 'true'
+
+    steps:
+      - name: Check for Clinical Reviewer Approval
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const clinicalReviewers = ['clinical-lead', 'medical-director', 'pharmacy-lead'];
+            const approvedReviewers = reviews
+              .filter(review => review.state === 'APPROVED')
+              .map(review => review.user.login);
+
+            const hasClinicianApproval = clinicalReviewers.some(reviewer =>
+              approvedReviewers.includes(reviewer)
+            );
+
+            if (!hasClinicianApproval) {
+              core.setFailed(
+                '🔴 Clinical Review Required: This PR affects patient safety-critical components and must be approved by a clinical reviewer.\n\n' +
+                'Required reviewers: ' + clinicalReviewers.join(', ') + '\n' +
+                'Safety Score: ${{ needs.clinical-safety-check.outputs.safety_score }}/100\n' +
+                'Affected Systems: ${{ needs.clinical-safety-check.outputs.affected_systems }}'
+              );
+            } else {
+              console.log('✅ Clinical review approval found');
+            }
+
+      - name: Add Clinical Review Label
+        uses: actions/github-script@v6
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['clinical-review-required', 'patient-safety-critical']
+            });
+
+  # Policy Engine Validation
+  policy-validation:
+    name: Policy Engine Validation
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: kb_policy_user
+          POSTGRES_PASSWORD: kb_policy_password
+          POSTGRES_DB: clinical_policy_test
+        ports:
+          - 5436:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6382:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/services/medication-service/knowledge-bases/kb-7-terminology/go.sum
+
+      - name: Install dependencies
+        run: make deps
+
+      - name: Wait for services
+        run: |
+          until pg_isready -h localhost -p 5436 -U kb_policy_user; do sleep 2; done
+          until redis-cli -h localhost -p 6382 ping | grep -q PONG; do sleep 1; done
+
+      - name: Initialize policy database
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          PGPASSWORD=kb_policy_password psql -h localhost -p 5436 -U kb_policy_user -d clinical_policy_test < scripts/init-policy-db.sql
+
+      - name: Run Policy Engine Tests
+        env:
+          DATABASE_URL: postgresql://kb_policy_user:kb_policy_password@localhost:5436/clinical_policy_test
+          REDIS_URL: redis://localhost:6382/9
+        run: |
+          echo "Running policy engine validation..."
+          make test-policy-engine
+
+      - name: Validate Clinical Safety Policies
+        env:
+          DATABASE_URL: postgresql://kb_policy_user:kb_policy_password@localhost:5436/clinical_policy_test
+          REDIS_URL: redis://localhost:6382/9
+        run: |
+          echo "Validating clinical safety policies..."
+          go run cmd/policy/main.go validate \
+            --policy-set="clinical-safety" \
+            --pr-files="${{ github.event.pull_request.changed_files }}"
+
+  # Terminology Consistency Check
+  terminology-consistency:
+    name: Terminology Consistency Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/services/medication-service/knowledge-bases/kb-7-terminology/go.sum
+
+      - name: Install dependencies
+        run: make deps
+
+      - name: Check Terminology Consistency
+        run: |
+          echo "Checking terminology consistency across changed files..."
+
+          # Check for terminology conflicts
+          make check-terminology-conflicts
+
+          # Validate terminology mappings
+          make validate-terminology-mappings
+
+          # Check for deprecated terminologies
+          make check-deprecated-terms
+
+      - name: Generate Consistency Report
+        run: |
+          echo "Generating terminology consistency report..."
+          go run cmd/consistency/main.go generate-report \
+            --output="terminology-consistency-report.md" \
+            --pr-number="${{ github.event.pull_request.number }}"
+
+      - name: Upload Consistency Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: terminology-consistency-report
+          path: backend/services/medication-service/knowledge-bases/kb-7-terminology/terminology-consistency-report.md
+
+  # Final Safety Gate
+  safety-gate:
+    name: Clinical Safety Gate
+    runs-on: ubuntu-latest
+    needs: [clinical-safety-check, audit-trail, policy-validation, terminology-consistency]
+    if: always()
+
+    steps:
+      - name: Evaluate Safety Gate
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const safetyScore = parseInt('${{ needs.clinical-safety-check.outputs.safety_score }}');
+            const requiresReview = '${{ needs.clinical-safety-check.outputs.requires_clinical_review }}' === 'true';
+
+            const auditResult = '${{ needs.audit-trail.result }}';
+            const policyResult = '${{ needs.policy-validation.result }}';
+            const consistencyResult = '${{ needs.terminology-consistency.result }}';
+
+            let gatePassed = true;
+            let messages = [];
+
+            // Check individual job results
+            if (auditResult !== 'success') {
+              gatePassed = false;
+              messages.push('❌ Audit trail generation failed');
+            }
+
+            if (policyResult !== 'success') {
+              gatePassed = false;
+              messages.push('❌ Policy validation failed');
+            }
+
+            if (consistencyResult !== 'success') {
+              gatePassed = false;
+              messages.push('❌ Terminology consistency check failed');
+            }
+
+            // Check safety score threshold
+            if (safetyScore > 75) {
+              gatePassed = false;
+              messages.push(`❌ Safety score too high: ${safetyScore}/100 (threshold: 75)`);
+            }
+
+            if (gatePassed) {
+              console.log('✅ Clinical Safety Gate: PASSED');
+              console.log(`Safety Score: ${safetyScore}/100`);
+              console.log(`Clinical Review Required: ${requiresReview}`);
+            } else {
+              const errorMessage = '🔴 Clinical Safety Gate: FAILED\n\n' + messages.join('\n');
+              core.setFailed(errorMessage);
+            }
+
+      - name: Update PR with Safety Status
+        uses: actions/github-script@v6
+        if: always()
+        with:
+          script: |
+            const safetyScore = '${{ needs.clinical-safety-check.outputs.safety_score }}';
+            const requiresReview = '${{ needs.clinical-safety-check.outputs.requires_clinical_review }}';
+            const affectedSystems = '${{ needs.clinical-safety-check.outputs.affected_systems }}';
+
+            const comment = `## 🏥 Clinical Safety Assessment
+
+            **Safety Score**: ${safetyScore}/100
+            **Clinical Review Required**: ${requiresReview}
+            **Affected Systems**: ${affectedSystems}
+
+            ### Validation Results
+            - **Audit Trail**: ${{ needs.audit-trail.result }}
+            - **Policy Validation**: ${{ needs.policy-validation.result }}
+            - **Terminology Consistency**: ${{ needs.terminology-consistency.result }}
+
+            ### Next Steps
+            ${requiresReview === 'true' ?
+              '🔴 **Clinical review required** - Please assign a clinical reviewer' :
+              '🟢 **Ready for technical review** - Clinical safety requirements met'
+            }
+
+            ---
+            *This assessment was generated automatically based on the clinical governance policies.*`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });

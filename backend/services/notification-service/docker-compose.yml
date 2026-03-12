@@ -1,0 +1,287 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # NOTIFICATION SERVICE (Go)
+  # =============================================================================
+  notification-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cardiofit-notification-service-go
+    ports:
+      - "8080:8080"   # HTTP API
+      - "50051:50051" # gRPC API
+    environment:
+      # Database
+      - DATABASE_URL=postgres://cardiofit_user:cardiofit_pass@postgres:5432/cardiofit_db?sslmode=disable
+
+      # Redis
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+
+      # Kafka
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_CONSUMER_GROUP=notification-service
+      - KAFKA_TOPICS=enriched-patient-events-v1,clinical-patterns.v1,composed-alerts.v1,urgent-alerts.v1
+
+      # External Services (Twilio)
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-test_account_sid}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-test_auth_token}
+      - TWILIO_FROM_NUMBER=${TWILIO_FROM_NUMBER:-+15005550006}
+
+      # External Services (SendGrid)
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-test_api_key}
+      - SENDGRID_FROM_EMAIL=${SENDGRID_FROM_EMAIL:-notifications@cardiofit.com}
+      - SENDGRID_FROM_NAME=${SENDGRID_FROM_NAME:-CardioFit Notifications}
+
+      # External Services (Firebase)
+      - FIREBASE_CREDENTIALS_PATH=${FIREBASE_CREDENTIALS_PATH:-}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-}
+      - FIREBASE_ENABLED=${FIREBASE_ENABLED:-false}
+
+      # Service Configuration
+      - SERVER_PORT=8080
+      - GRPC_PORT=50051
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENVIRONMENT=${ENVIRONMENT:-docker}
+      - NOTIFICATION_DELIVERY_MODE=${NOTIFICATION_DELIVERY_MODE:-live}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - cardiofit-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    volumes:
+      # Mount Firebase credentials if provided
+      - ${FIREBASE_CREDENTIALS_PATH:-/dev/null}:/app/firebase-credentials.json:ro
+
+  # =============================================================================
+  # INFRASTRUCTURE SERVICES
+  # =============================================================================
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14-alpine
+    container_name: cardiofit-postgres
+    environment:
+      - POSTGRES_USER=cardiofit_user
+      - POSTGRES_PASSWORD=cardiofit_pass
+      - POSTGRES_DB=cardiofit_db
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardiofit_user -d cardiofit_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: cardiofit-redis
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --save 60 10000
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Zookeeper (for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: cardiofit-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Kafka Message Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: cardiofit-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DELETE_TOPIC_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_NUM_PARTITIONS: 4
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - cardiofit-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # =============================================================================
+  # MONITORING SERVICES (Optional - comment out if not needed)
+  # =============================================================================
+
+  # Prometheus Metrics
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: cardiofit-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - cardiofit-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana Dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: cardiofit-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=redis-datasource
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - cardiofit-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Redis Commander (Redis Web UI)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: cardiofit-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - cardiofit-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+  # Kafka UI
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: cardiofit-kafka-ui
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
+    ports:
+      - "8082:8080"
+    depends_on:
+      - kafka
+    networks:
+      - cardiofit-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  cardiofit-network:
+    driver: bridge
+    name: cardiofit-network
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  postgres-data:
+    name: cardiofit-postgres-data
+  redis-data:
+    name: cardiofit-redis-data
+  zookeeper-data:
+    name: cardiofit-zookeeper-data
+  zookeeper-log:
+    name: cardiofit-zookeeper-log
+  kafka-data:
+    name: cardiofit-kafka-data
+  prometheus-data:
+    name: cardiofit-prometheus-data
+  grafana-data:
+    name: cardiofit-grafana-data

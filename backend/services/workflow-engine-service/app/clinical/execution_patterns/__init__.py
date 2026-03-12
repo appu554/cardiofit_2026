@@ -1,0 +1,3 @@
+"""
+Execution Patterns module
+"""

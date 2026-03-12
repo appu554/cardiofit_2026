@@ -1,0 +1,414 @@
+package com.cardiofit.flink.knowledgebase.medications.calculator;
+
+import com.cardiofit.flink.knowledgebase.medications.model.*;
+import com.cardiofit.flink.knowledgebase.medications.test.MedicationTestData;
+import com.cardiofit.flink.knowledgebase.medications.test.PatientContextFactory;
+import com.cardiofit.flink.knowledgebase.medications.util.PatientContextConverter;
+import com.cardiofit.flink.models.PatientContext;
+import org.junit.jupiter.api.*;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * Test suite for DoseCalculator.
+ *
+ * Tests renal adjustments, hepatic adjustments, pediatric dosing,
+ * geriatric dosing, obesity adjustments, and Cockcroft-Gault formula.
+ *
+ * Coverage Target: >90% line, >88% branch
+ * Test Count: 12 unit tests + edge cases
+ */
+@DisplayName("DoseCalculator Test Suite")
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class DoseCalculatorTest {
+
+    private DoseCalculator calculator;
+
+    @BeforeEach
+    void setUp() {
+        calculator = new DoseCalculator();
+    }
+
+    @Test
+    @Order(1)
+    @DisplayName("Should calculate standard adult dose with normal renal function")
+    void testStandardDoseCalculation() {
+        // Arrange
+        Medication med = MedicationTestData.createCeftriaxone();
+        PatientContext patient = PatientContextFactory.createStandardAdult();
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getCalculatedDose()).isEqualTo("2g");
+        assertThat(dose.getCalculatedFrequency()).isEqualTo("q24h");
+        assertThat(dose.getAdjustmentReason()).isNullOrEmpty();
+        assertThat(dose.getWarnings()).isEmpty();
+    }
+
+    @Test
+    @Order(2)
+    @DisplayName("Should adjust dose for moderate renal impairment (CrCl 40-60)")
+    void testRenalAdjustmentMild() {
+        // Arrange
+        Medication med = MedicationTestData.createCeftriaxone();
+        PatientContext patient = PatientContextFactory.createPatientWithCrCl(50.0); // CrCl 50
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getCalculatedDose()).isEqualTo("1g");
+        assertThat(dose.getCalculatedFrequency()).isEqualTo("q24h");
+        assertThat(dose.getAdjustmentReason()).contains("CrCl 40-60");
+        assertThat(dose.getWarnings()).contains("Monitor renal function");
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("Should adjust dose for severe renal impairment (CrCl 10-20)")
+    void testRenalAdjustmentSevere() {
+        // Arrange
+        Medication med = MedicationTestData.createCeftriaxone();
+        PatientContext patient = PatientContextFactory.createPatientWithCrCl(15.0); // CrCl 15
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getCalculatedDose()).isEqualTo("500mg");
+        assertThat(dose.getCalculatedFrequency()).isEqualTo("q24h");
+        assertThat(dose.getAdjustmentReason()).contains("severe renal impairment");
+        assertThat(dose.getWarnings())
+            .contains("Monitor renal function closely")
+            .contains("Consider pharmacist consult");
+    }
+
+    @Test
+    @Order(4)
+    @DisplayName("Should adjust dose for ESRD (CrCl <10)")
+    void testRenalAdjustmentESRD() {
+        // Arrange
+        Medication med = MedicationTestData.createVancomycin();
+        PatientContext patient = PatientContextFactory.createPatientWithCrCl(5.0); // ESRD
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getAdjustmentReason()).contains("ESRD");
+        assertThat(dose.getWarnings())
+            .contains("Pharmacist consult required")
+            .contains("Therapeutic drug monitoring required");
+        assertThat(dose.isContraindicated()).isFalse();
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("Should provide hemodialysis-specific dosing instructions")
+    void testHemodialysisAdjustment() {
+        // Arrange
+        Medication med = MedicationTestData.createVancomycin();
+        PatientContext patient = PatientContextFactory.createHemodialysisPatient();
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getWarnings())
+            .contains("Administer after dialysis")
+            .contains("Monitor trough levels")
+            .contains("Dialyzable medication");
+    }
+
+    @Test
+    @Order(6)
+    @DisplayName("Should adjust dose for Child-Pugh A hepatic impairment")
+    void testHepaticAdjustmentChildPughA() {
+        // Arrange
+        Medication med = MedicationTestData.createMetoprolol();
+        PatientContext patient = PatientContextFactory.createPatientWithChildPugh("A");
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getWarnings()).contains("Monitor for increased effect");
+    }
+
+    @Test
+    @Order(7)
+    @DisplayName("Should adjust dose for Child-Pugh C severe hepatic impairment")
+    void testHepaticAdjustmentChildPughC() {
+        // Arrange
+        Medication med = MedicationTestData.createMetoprolol();
+        PatientContext patient = PatientContextFactory.createPatientWithChildPugh("C");
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getWarnings())
+            .contains("Severe hepatic impairment")
+            .contains("Consider alternative medication");
+    }
+
+    @Test
+    @Order(8)
+    @DisplayName("Should calculate weight-based pediatric dose (10kg child)")
+    void testPediatricDosing() {
+        // Arrange
+        Medication med = MedicationTestData.createBasicMedication("Cefepime");
+        med.setPediatricDosing(new Medication.PediatricDosing("50mg/kg", "q8h", 0, 18));
+        PatientContext patient = PatientContextFactory.createPediatricPatient(10.0, 5); // 10kg, 5 years
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getCalculatedDose()).isEqualTo("500mg"); // 50mg/kg for 10kg
+        assertThat(dose.getWarnings()).contains("Pediatric patient");
+    }
+
+    @Test
+    @Order(9)
+    @DisplayName("Should apply special neonatal dosing considerations (<1 month)")
+    void testNeonatalDosing() {
+        // Arrange
+        Medication med = MedicationTestData.createBasicMedication("Ampicillin");
+        med.setNeonatalDosing(new Medication.NeonatalDosing("50mg/kg", "q12h"));
+        PatientContext patient = PatientContextFactory.createNeonatePatient(3.0, 0.5); // 3kg, 2 weeks
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getWarnings())
+            .contains("Neonatal dosing")
+            .contains("Immature renal function")
+            .contains("Extended dosing interval recommended");
+    }
+
+    @Test
+    @Order(10)
+    @DisplayName("Should apply geriatric dose reduction (age >85)")
+    void testGeriatricDosing() {
+        // Arrange
+        Medication med = MedicationTestData.createLevofloxacin();
+        PatientContext patient = PatientContextFactory.createGeriatricPatient(60.0, 1.2, 85, "F");
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getWarnings())
+            .contains("Geriatric patient")
+            .contains("Increased risk of adverse effects");
+    }
+
+    @Test
+    @Order(11)
+    @DisplayName("Should use adjusted body weight for obese patients (BMI >40)")
+    void testObesityDosing() {
+        // Arrange
+        Medication med = MedicationTestData.createVancomycin();
+        PatientContext patient = PatientContextFactory.createObesePatient(150.0, 1.65); // BMI ~55
+
+        // Act
+        CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+        // Assert
+        assertThat(dose.getWeightUsed()).isLessThan(150.0); // Adjusted body weight
+        assertThat(dose.getWarnings())
+            .contains("Obesity")
+            .contains("Adjusted body weight used");
+        assertThat(dose.getCalculationNotes())
+            .contains("ABW = IBW + 0.4(TBW - IBW)");
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("Should accurately calculate CrCl using Cockcroft-Gault formula")
+    void testCockcraftGaultFormula() {
+        // Arrange
+        PatientContext malePt = PatientContextFactory.createStandardAdult();
+        malePt.setAge(65);
+        malePt.setWeight(70.0);
+        malePt.setCreatinine(1.0);
+        malePt.setSex("M");
+
+        PatientContext femalePt = PatientContextFactory.createStandardAdult();
+        femalePt.setAge(65);
+        femalePt.setWeight(60.0);
+        femalePt.setCreatinine(1.0);
+        femalePt.setSex("F");
+
+        // Act
+        double maleCrCl = calculator.calculateCrCl(malePt);
+        double femaleCrCl = calculator.calculateCrCl(femalePt);
+
+        // Assert
+        // Male: (140-65) * 70 / (72 * 1.0) = 72.9
+        assertThat(maleCrCl).isCloseTo(72.9, within(1.0));
+
+        // Female: ((140-65) * 60 / (72 * 1.0)) * 0.85 = 53.1
+        assertThat(femaleCrCl).isCloseTo(53.1, within(1.0));
+    }
+
+    @Nested
+    @DisplayName("Edge Case Tests")
+    class EdgeCaseTests {
+
+        @Test
+        @DisplayName("Should mark as contraindicated when CrCl <5")
+        void testContraindicatedCrCl() {
+            // Arrange
+            Medication med = MedicationTestData.createMetformin();
+            PatientContext patient = PatientContextFactory.createPatientWithCrCl(3.0);
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+            // Assert
+            assertThat(dose.isContraindicated()).isTrue();
+            assertThat(dose.getContraindicationReason())
+                .contains("Severe renal impairment");
+        }
+
+        @Test
+        @DisplayName("Should handle premature neonate (<1kg)")
+        void testPrematureNeonate() {
+            // Arrange
+            Medication med = MedicationTestData.createBasicMedication("Ampicillin");
+            PatientContext patient = PatientContextFactory.createNeonatePatient(0.8, 0.1); // 800g, 3 days
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+            // Assert
+            assertThat(dose.getWarnings())
+                .contains("Premature neonate")
+                .contains("NICU pharmacist consult required");
+        }
+
+        @Test
+        @DisplayName("Should handle extreme age (>100 years)")
+        void testExtremAge() {
+            // Arrange
+            Medication med = MedicationTestData.createAspirin();
+            PatientContext patient = PatientContextFactory.createGeriatricPatient(50.0, 1.5, 105, "F");
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+            // Assert
+            assertThat(dose.getWarnings())
+                .contains("Extreme age")
+                .contains("Carefully assess risk/benefit");
+        }
+
+        @Test
+        @DisplayName("Should handle morbid obesity (BMI >50)")
+        void testMorbidObesity() {
+            // Arrange
+            Medication med = MedicationTestData.createBasicMedication("Enoxaparin");
+            med.setStandardDose("1mg/kg");
+            PatientContext patient = PatientContextFactory.createObesePatient(200.0, 1.60); // BMI 78
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+            // Assert
+            assertThat(dose.getWarnings())
+                .contains("Morbid obesity")
+                .contains("Weight-based dosing may be inaccurate");
+        }
+
+        @Test
+        @DisplayName("Should reject negative creatinine values")
+        void testNegativeCreatinine() {
+            // Arrange
+            PatientContext patient = PatientContextFactory.createStandardAdult();
+            patient.setCreatinine(-0.5);
+
+            // Act & Assert
+            assertThatThrownBy(() -> calculator.calculateCrCl(patient))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid creatinine value");
+        }
+
+        @Test
+        @DisplayName("Should reject zero weight")
+        void testZeroWeight() {
+            // Arrange
+            Medication med = MedicationTestData.createBasicMedication("Test");
+            PatientContext patient = PatientContextFactory.createStandardAdult();
+            patient.setWeight(0.0);
+
+            // Act & Assert
+            assertThatThrownBy(() -> calculator.calculateDose(med, patient, "test-indication"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid weight");
+        }
+    }
+
+    @Nested
+    @DisplayName("Validation Tests")
+    class ValidationTests {
+
+        @Test
+        @DisplayName("Should generate warnings when dose approaches maximum daily dose")
+        void testMaxDailyDoseWarning() {
+            // Arrange
+            Medication med = MedicationTestData.createBasicMedication("Acetaminophen");
+            med.setStandardDose("1000mg");
+            med.setMaxDailyDose("4000mg");
+            PatientContext patient = PatientContextFactory.createStandardAdult();
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+            dose.setTimesPerDay(4); // 4000mg/day total
+
+            // Assert
+            assertThat(dose.getWarnings())
+                .contains("Approaching maximum daily dose");
+        }
+
+        @Test
+        @DisplayName("Should prevent dose exceeding maximum daily dose")
+        void testMaxDailyDoseEnforcement() {
+            // Arrange
+            Medication med = MedicationTestData.createBasicMedication("Acetaminophen");
+            med.setStandardDose("1000mg");
+            med.setMaxDailyDose("4000mg");
+            PatientContext patient = PatientContextFactory.createStandardAdult();
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+            boolean canGiveFifthDose = dose.canAdminister(5); // Would be 5000mg
+
+            // Assert
+            assertThat(canGiveFifthDose).isFalse();
+            assertThat(dose.getWarnings())
+                .contains("Would exceed maximum daily dose");
+        }
+
+        @Test
+        @DisplayName("Should ensure frequency adjustments are correct for renal impairment")
+        void testFrequencyAdjustments() {
+            // Arrange
+            Medication med = MedicationTestData.createLevofloxacin();
+            PatientContext patient = PatientContextFactory.createPatientWithCrCl(25.0);
+
+            // Act
+            CalculatedDose dose = calculator.calculateDose(med, patient, "test-indication");
+
+            // Assert
+            assertThat(dose.getCalculatedFrequency()).isEqualTo("q48h"); // Extended from q24h
+            assertThat(dose.getAdjustmentReason()).contains("CrCl <30");
+        }
+    }
+}

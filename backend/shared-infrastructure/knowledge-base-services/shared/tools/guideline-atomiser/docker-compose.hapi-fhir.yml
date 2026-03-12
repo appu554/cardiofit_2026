@@ -1,0 +1,59 @@
+# HAPI FHIR Terminology Server for V3 Pipeline L4 Validation
+# Supports: RxNorm, LOINC, SNOMED-CT, ICD-10
+#
+# Usage:
+#   docker-compose -f docker-compose.hapi-fhir.yml up -d
+#
+# Endpoints:
+#   - FHIR API: http://localhost:8080/fhir
+#   - Web UI: http://localhost:8080
+#
+# Terminology Operations:
+#   - $validate-code: Validate a code in a code system
+#   - $lookup: Get details about a code
+#   - $expand: Expand a ValueSet
+
+version: '3.8'
+
+services:
+  hapi-fhir:
+    image: hapiproject/hapi:v7.0.3
+    container_name: hapi-fhir-terminology
+    ports:
+      - "8083:8080"  # Using 8083 to avoid conflicts
+    environment:
+      # Enable terminology services
+      - hapi.fhir.tester_enabled=true
+      - hapi.fhir.validation.enabled=true
+
+      # Database settings (H2 embedded for simplicity)
+      - spring.datasource.url=jdbc:h2:file:/data/hapi/h2;DB_CLOSE_DELAY=-1
+      - spring.datasource.username=sa
+      - spring.datasource.password=
+      - spring.datasource.driverClassName=org.h2.Driver
+
+      # JPA settings
+      - spring.jpa.hibernate.ddl-auto=update
+      - spring.jpa.properties.hibernate.dialect=ca.uhn.fhir.jpa.model.dialect.HapiFhirH2Dialect
+
+      # Terminology settings
+      - hapi.fhir.enable_repository_validating_interceptor=true
+      - hapi.fhir.enable_remote_terminology_service=false
+
+      # Performance tuning
+      - JAVA_OPTS=-Xmx2g -Xms1g
+
+    volumes:
+      - hapi-fhir-data:/data/hapi
+      - ./terminology-data:/terminology-data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  hapi-fhir-data:
+    name: v3-hapi-fhir-data

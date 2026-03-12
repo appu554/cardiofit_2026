@@ -1,0 +1,233 @@
+# KB-11 Risk Model: 30-Day Readmission Risk
+# ══════════════════════════════════════════════════════════════════════════════
+# This model predicts the probability of hospital readmission within 30 days
+# following an index admission. Based on LACE+ methodology with enhancements.
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: readmission-30day
+type: READMISSION
+version: "1.0.0"
+description: "30-day hospital readmission risk prediction using enhanced LACE methodology"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GOVERNANCE METADATA (KB-18 Integration)
+# ──────────────────────────────────────────────────────────────────────────────
+governance:
+  owner: "Population Health Team"
+  clinical_reviewer: "CMO Office"
+  last_approved: "2025-01-01"
+  approval_id: "GOV-2025-002"
+  requires_validation: true
+  review_cycle_days: 90
+  clinical_evidence:
+    - "LACE Index (van Walraven et al., 2010)"
+    - "HOSPITAL Score validation"
+    - "CMS Hospital Readmission Reduction Program"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LACE+ RISK FACTORS
+# ──────────────────────────────────────────────────────────────────────────────
+factors:
+  # L - Length of Stay
+  - name: length_of_stay
+    description: "Duration of index hospital admission"
+    weight: 0.20
+    source: encounters
+    thresholds:
+      - range: [0, 1]
+        score: 0.1
+      - range: [2, 3]
+        score: 0.2
+      - range: [4, 6]
+        score: 0.4
+      - range: [7, 13]
+        score: 0.6
+      - range: [14, 999]
+        score: 1.0
+
+  # A - Acuity of Admission
+  - name: admission_acuity
+    description: "Whether admission was emergent/urgent"
+    weight: 0.15
+    source: encounters
+    categories:
+      - type: "emergency"
+        score: 1.0
+      - type: "urgent"
+        score: 0.7
+      - type: "elective"
+        score: 0.2
+
+  # C - Comorbidity (Charlson Index)
+  - name: charlson_comorbidity
+    description: "Charlson Comorbidity Index score"
+    weight: 0.25
+    source: diagnosis
+    conditions:
+      # Charlson conditions with weights
+      - code: "I50.*"
+        system: "ICD-10"
+        description: "Congestive heart failure"
+        charlson_weight: 1
+      - code: "I21.*"
+        system: "ICD-10"
+        description: "Myocardial infarction"
+        charlson_weight: 1
+      - code: "J44.*"
+        system: "ICD-10"
+        description: "COPD"
+        charlson_weight: 1
+      - code: "E11.*"
+        system: "ICD-10"
+        description: "Diabetes without complications"
+        charlson_weight: 1
+      - code: "E11.2*"
+        system: "ICD-10"
+        description: "Diabetes with complications"
+        charlson_weight: 2
+      - code: "N18.3"
+        system: "ICD-10"
+        description: "Moderate CKD"
+        charlson_weight: 2
+      - code: "N18.4"
+        system: "ICD-10"
+        description: "Severe CKD"
+        charlson_weight: 2
+      - code: "K70.*"
+        system: "ICD-10"
+        description: "Liver disease"
+        charlson_weight: 1
+      - code: "C*"
+        system: "ICD-10"
+        description: "Cancer (any)"
+        charlson_weight: 2
+      - code: "B20"
+        system: "ICD-10"
+        description: "HIV/AIDS"
+        charlson_weight: 6
+    scoring:
+      - range: [0, 0]
+        score: 0.0
+      - range: [1, 2]
+        score: 0.3
+      - range: [3, 4]
+        score: 0.5
+      - range: [5, 6]
+        score: 0.7
+      - range: [7, 999]
+        score: 1.0
+
+  # E - ED Visits in Past 6 Months
+  - name: ed_visits_6m
+    description: "Emergency department visits in 6 months prior to admission"
+    weight: 0.15
+    source: encounters
+    lookback_days: 180
+    thresholds:
+      - range: [0, 0]
+        score: 0.0
+      - range: [1, 1]
+        score: 0.3
+      - range: [2, 3]
+        score: 0.6
+      - range: [4, 999]
+        score: 1.0
+
+  # Additional: Discharge disposition
+  - name: discharge_disposition
+    description: "Post-discharge care setting"
+    weight: 0.10
+    source: encounters
+    categories:
+      - type: "home_self_care"
+        score: 0.3
+      - type: "home_health"
+        score: 0.5
+      - type: "snf"
+        score: 0.7
+      - type: "rehabilitation"
+        score: 0.6
+      - type: "ltac"
+        score: 0.8
+
+  # Additional: Medication reconciliation
+  - name: medication_changes
+    description: "Number of medication changes at discharge"
+    weight: 0.10
+    source: medications
+    thresholds:
+      - range: [0, 2]
+        score: 0.1
+      - range: [3, 5]
+        score: 0.3
+      - range: [6, 9]
+        score: 0.5
+      - range: [10, 999]
+        score: 0.8
+
+  # Additional: Follow-up scheduled
+  - name: followup_scheduled
+    description: "Whether follow-up appointment scheduled within 7 days"
+    weight: 0.05
+    source: scheduling
+    categories:
+      - type: "scheduled_within_7_days"
+        score: 0.0
+      - type: "scheduled_after_7_days"
+        score: 0.3
+      - type: "not_scheduled"
+        score: 1.0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# RISK TIERS
+# ──────────────────────────────────────────────────────────────────────────────
+tiers:
+  LOW:
+    range: [0, 0.25]
+    intervention: "standard_discharge"
+    description: "Standard discharge planning"
+    recommended_actions:
+      - "Discharge summary to PCP within 48 hours"
+      - "Patient education materials"
+      - "Follow-up appointment scheduling"
+
+  MODERATE:
+    range: [0.25, 0.45]
+    intervention: "enhanced_transition"
+    description: "Enhanced transition of care"
+    recommended_actions:
+      - "Post-discharge phone call within 48 hours"
+      - "Medication reconciliation review"
+      - "Schedule follow-up within 7 days"
+      - "Patient teach-back verification"
+
+  HIGH:
+    range: [0.45, 0.70]
+    intervention: "intensive_transition"
+    description: "Intensive transition of care program"
+    recommended_actions:
+      - "Care manager assignment"
+      - "Home health evaluation"
+      - "Weekly phone follow-ups for 30 days"
+      - "Pharmacist medication review"
+
+  VERY_HIGH:
+    range: [0.70, 1.00]
+    intervention: "complex_discharge"
+    description: "Complex discharge with multidisciplinary support"
+    recommended_actions:
+      - "Inpatient care manager involvement"
+      - "Family/caregiver education session"
+      - "Same-day follow-up call post-discharge"
+      - "Home visit within 72 hours"
+      - "Social work assessment"
+      - "Consider skilled nursing if appropriate"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MODEL CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+configuration:
+  cache_ttl_minutes: 30
+  recalculation_trigger: "discharge"
+  minimum_data_completeness: 0.8
+  confidence_threshold: 0.65

@@ -1,0 +1,212 @@
+# P20 Appetite Loss - HPI Node Definition
+# Bayesian differential for anorexia in cardio-renal-metabolic patients.
+# CKD uraemia is the leading cause in advanced kidney disease (Mak RH, JASN 2011).
+# Metformin GI side effects affect 20-30% of patients (McCreight LJ, Diabetologia 2016).
+# HF cachexia carries high mortality (Anker SD, Lancet 1997).
+# Triggered by: patient self-report of appetite loss or weight loss via KB-21.
+# Output: posterior probabilities -> feeds KB-23 workup card.
+
+node_id: P20_APPETITE_LOSS
+version: "1.0.0"
+description: "Appetite loss differential in cardio-renal-metabolic patients"
+
+# Convergence configuration (R-01 dual criterion)
+convergence_threshold: 0.80
+posterior_gap_threshold: 0.25
+convergence_logic: BOTH
+max_questions: 12
+
+# Strata supported
+strata_supported:
+  - DM_HTN_base
+
+# G15: Other bucket -- open-world diagnosis safety net
+other_bucket_enabled: true
+other_bucket_prior: 0.10
+
+# Guideline prior source (N-01)
+guideline_prior_source: "KDIGO_CKD_2024; ADA_Standards_2025; ESC_HF_2023"
+
+# ============================================================================
+# 6 Differentials with per-stratum priors (F-05)
+# Priors sum to 0.90 (0.10 reserved for G15 Other bucket).
+# ============================================================================
+differentials:
+  - id: CKD_URAEMIA
+    label: "CKD Uraemic Anorexia"
+    population_reference: "KDIGO CKD 2024; Mak RH, JASN 2011; Kalantar-Zadeh K, NDT 2003"
+    priors:
+      DM_HTN_base: 0.25
+
+  - id: MEDICATION_GI_SIDE_EFFECT
+    label: "Medication GI Side Effect (metformin, GLP-1 RA, antibiotics)"
+    population_reference: "ADA Standards 2025; McCreight LJ, Diabetologia 2016"
+    priors:
+      DM_HTN_base: 0.25
+
+  - id: GASTROPARESIS_DM
+    label: "Diabetic Gastroparesis"
+    population_reference: "ADA Standards 2025; Camilleri M, NEJM 2018; Bharucha AE, Gastro 2019"
+    priors:
+      DM_HTN_base: 0.15
+
+  - id: DEPRESSION
+    label: "Depression / Psychological Cause"
+    population_reference: "APA DSM-5-TR; Anderson RJ, Diabetes Care 2001"
+    priors:
+      DM_HTN_base: 0.12
+
+  - id: HEART_FAILURE_CACHEXIA
+    label: "Heart Failure Cachexia"
+    population_reference: "ESC HF 2023; Anker SD, Lancet 1997; von Haehling S, EJHF 2017"
+    priors:
+      DM_HTN_base: 0.08
+
+  - id: OTHER
+    label: "Other (malignancy, thyroid, infection, hepatic)"
+    population_reference: "BMJ Best Practice Anorexia 2024"
+    priors:
+      DM_HTN_base: 0.10
+
+# Safety floors -- posterior never drops below these values
+safety_floors:
+  HEART_FAILURE_CACHEXIA: 0.05
+  CKD_URAEMIA: 0.04
+
+# ============================================================================
+# Safety Triggers (F-02 parallel evaluation)
+# ============================================================================
+safety_triggers:
+  - flag_id: RF01_HF_CACHEXIA_ALARM
+    severity: IMMEDIATE
+    trigger_expression: "HEART_FAILURE_CACHEXIA.posterior > 0.35"
+    recommended_action: "Possible cardiac cachexia indicating advanced HF. Check BNP/NT-proBNP, echocardiogram, assess NYHA class. Cardiac cachexia carries >50% 18-month mortality. Urgent cardiology referral. SNOMED: 85898001"
+
+  - flag_id: RF02_URAEMIC_EMERGENCY
+    severity: URGENT
+    trigger_expression: "CKD_URAEMIA.posterior > 0.45 AND Q001 == YES"
+    recommended_action: "Suspected severe uraemic syndrome with nausea and anorexia. Check serum creatinine, BUN, potassium STAT. If eGFR < 15, nephrology consult for dialysis planning. SNOMED: 90688005"
+
+# ============================================================================
+# 7 Discriminating Questions with LR values
+# Binary YES/NO format with lr_positive and lr_negative maps.
+# ============================================================================
+questions:
+  - id: Q001
+    text_en: "Are you feeling nauseous or have you been vomiting along with the loss of appetite?"
+    text_hi: "Kya aapko bhookh na lagne ke saath ji machlana ya ulti bhi ho rahi hai?"
+    mandatory: true
+    lr_positive:
+      CKD_URAEMIA: 3.80
+      MEDICATION_GI_SIDE_EFFECT: 3.50
+      GASTROPARESIS_DM: 4.00
+      DEPRESSION: 0.50
+      HEART_FAILURE_CACHEXIA: 1.50
+    lr_negative:
+      CKD_URAEMIA: 0.50
+      MEDICATION_GI_SIDE_EFFECT: 0.40
+      GASTROPARESIS_DM: 0.35
+      DEPRESSION: 1.30
+      HEART_FAILURE_CACHEXIA: 0.80
+
+  - id: Q002
+    text_en: "Has the appetite loss started or worsened after beginning a new medication (especially metformin or GLP-1 injections)?"
+    text_hi: "Kya bhookh kam hona nayi dawai shuru karne ke baad hua ya badha hai (khaaskar metformin ya GLP-1 injection)?"
+    mandatory: true
+    lr_positive:
+      CKD_URAEMIA: 0.60
+      MEDICATION_GI_SIDE_EFFECT: 5.50
+      GASTROPARESIS_DM: 0.50
+      DEPRESSION: 0.40
+      HEART_FAILURE_CACHEXIA: 0.50
+    lr_negative:
+      CKD_URAEMIA: 1.15
+      MEDICATION_GI_SIDE_EFFECT: 0.25
+      GASTROPARESIS_DM: 1.15
+      DEPRESSION: 1.15
+      HEART_FAILURE_CACHEXIA: 1.10
+
+  - id: Q003
+    text_en: "Do you feel full very quickly after eating only a small amount of food?"
+    text_hi: "Kya thoda sa khaana khaane ke baad hi pet bhara hua lagta hai?"
+    mandatory: true
+    lr_positive:
+      CKD_URAEMIA: 1.50
+      MEDICATION_GI_SIDE_EFFECT: 1.20
+      GASTROPARESIS_DM: 5.00
+      DEPRESSION: 0.60
+      HEART_FAILURE_CACHEXIA: 2.50
+    lr_negative:
+      CKD_URAEMIA: 0.80
+      MEDICATION_GI_SIDE_EFFECT: 0.90
+      GASTROPARESIS_DM: 0.30
+      DEPRESSION: 1.15
+      HEART_FAILURE_CACHEXIA: 0.60
+
+  - id: Q004
+    text_en: "Have you lost interest in activities you used to enjoy, or do you feel hopeless or low in mood?"
+    text_hi: "Kya aapki un cheezon mein dilchaspi kam ho gayi hai jo pehle achhi lagti thi, ya mann udaas rehta hai?"
+    mandatory: true
+    lr_positive:
+      CKD_URAEMIA: 0.80
+      MEDICATION_GI_SIDE_EFFECT: 0.50
+      GASTROPARESIS_DM: 0.60
+      DEPRESSION: 5.50
+      HEART_FAILURE_CACHEXIA: 1.30
+    lr_negative:
+      CKD_URAEMIA: 1.05
+      MEDICATION_GI_SIDE_EFFECT: 1.15
+      GASTROPARESIS_DM: 1.10
+      DEPRESSION: 0.20
+      HEART_FAILURE_CACHEXIA: 0.90
+
+  - id: Q005
+    text_en: "Have you noticed unintentional weight loss of more than 3 kg in the past 3 months?"
+    text_hi: "Kya pichhle 3 mahine mein bina koshish ke 3 kg se zyada wajan kam hua hai?"
+    mandatory: false
+    lr_positive:
+      CKD_URAEMIA: 2.50
+      MEDICATION_GI_SIDE_EFFECT: 1.30
+      GASTROPARESIS_DM: 2.00
+      DEPRESSION: 1.80
+      HEART_FAILURE_CACHEXIA: 4.00
+    lr_negative:
+      CKD_URAEMIA: 0.60
+      MEDICATION_GI_SIDE_EFFECT: 0.80
+      GASTROPARESIS_DM: 0.70
+      DEPRESSION: 0.70
+      HEART_FAILURE_CACHEXIA: 0.35
+
+  - id: Q006
+    text_en: "Do you have swelling in your ankles or feel breathless when lying flat?"
+    text_hi: "Kya aapke takhne sooje hue hain ya seedha letne par saans phoolti hai?"
+    mandatory: false
+    lr_positive:
+      CKD_URAEMIA: 1.50
+      MEDICATION_GI_SIDE_EFFECT: 0.40
+      GASTROPARESIS_DM: 0.50
+      DEPRESSION: 0.30
+      HEART_FAILURE_CACHEXIA: 5.00
+    lr_negative:
+      CKD_URAEMIA: 0.80
+      MEDICATION_GI_SIDE_EFFECT: 1.15
+      GASTROPARESIS_DM: 1.10
+      DEPRESSION: 1.15
+      HEART_FAILURE_CACHEXIA: 0.30
+
+  - id: Q007
+    text_en: "Has your doctor told you that your kidney function is getting worse or your creatinine is rising?"
+    text_hi: "Kya doctor ne bataya hai ki aapki kidney ki kaamkaji aur kharab ho rahi hai ya creatinine badh raha hai?"
+    mandatory: false
+    lr_positive:
+      CKD_URAEMIA: 4.50
+      MEDICATION_GI_SIDE_EFFECT: 0.80
+      GASTROPARESIS_DM: 0.70
+      DEPRESSION: 0.60
+      HEART_FAILURE_CACHEXIA: 1.30
+    lr_negative:
+      CKD_URAEMIA: 0.30
+      MEDICATION_GI_SIDE_EFFECT: 1.05
+      GASTROPARESIS_DM: 1.10
+      DEPRESSION: 1.10
+      HEART_FAILURE_CACHEXIA: 0.90

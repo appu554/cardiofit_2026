@@ -1,0 +1,911 @@
+package com.cardiofit.flink.operators;
+
+import com.cardiofit.flink.models.EnrichedEvent;
+import com.cardiofit.flink.models.EventType;
+import com.cardiofit.flink.models.PatientContext;
+import com.cardiofit.flink.models.SemanticEvent;
+import com.cardiofit.flink.utils.KafkaConfigLoader;
+import com.cardiofit.stream.models.CanonicalEvent;
+import com.cardiofit.flink.utils.KafkaTopics;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+
+import java.io.Serializable;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.streaming.api.functions.co.CoProcessFunction;
+import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Module 3: Semantic Mesh Integration
+ *
+ * Responsibilities:
+ * - Integrate with knowledge base services for clinical context
+ * - Apply semantic reasoning and clinical guidelines
+ * - Enrich events with evidence-based recommendations
+ * - Detect drug interactions and contraindications
+ * - Generate clinical alerts and decision support
+ * - Connect to KB3-KB7 knowledge base services via change streams
+ */
+public class Module3_SemanticMesh {
+    private static final Logger LOG = LoggerFactory.getLogger(Module3_SemanticMesh.class);
+
+    // Output tags for different types of semantic events
+    private static final OutputTag<SemanticEvent> DRUG_INTERACTION_TAG =
+        new OutputTag<SemanticEvent>("drug-interactions"){};
+
+    private static final OutputTag<SemanticEvent> CLINICAL_ALERT_TAG =
+        new OutputTag<SemanticEvent>("clinical-alerts"){};
+
+    private static final OutputTag<SemanticEvent> GUIDELINE_RECOMMENDATION_TAG =
+        new OutputTag<SemanticEvent>("guideline-recommendations"){};
+
+    public static void main(String[] args) throws Exception {
+        LOG.info("Starting Module 3: Semantic Mesh Integration");
+
+        // Set up execution environment
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // Configure for semantic processing
+        env.setParallelism(4);
+        env.enableCheckpointing(30000);
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+
+        // Create semantic mesh pipeline
+        createSemanticMeshPipeline(env);
+
+        // Execute the job
+        env.execute("Module 3: Semantic Mesh Integration");
+    }
+
+    public static void createSemanticMeshPipeline(StreamExecutionEnvironment env) {
+        LOG.info("Creating semantic mesh integration pipeline");
+
+        // Primary stream: enriched events from Module 2
+        DataStream<EnrichedEvent> enrichedEvents = createEnrichedEventSource(env);
+
+        // Knowledge base change streams
+        DataStream<KnowledgeBaseUpdate> clinicalProtocols = createKBChangeStream(env,
+            KafkaTopics.KB3_CLINICAL_PROTOCOLS, "clinical-protocols");
+
+        DataStream<KnowledgeBaseUpdate> drugCalculations = createKBChangeStream(env,
+            KafkaTopics.KB4_DRUG_CALCULATIONS, "drug-calculations");
+
+        DataStream<KnowledgeBaseUpdate> drugInteractions = createKBChangeStream(env,
+            KafkaTopics.KB5_DRUG_INTERACTIONS, "drug-interactions");
+
+        DataStream<KnowledgeBaseUpdate> validationRules = createKBChangeStream(env,
+            KafkaTopics.KB6_VALIDATION_RULES, "validation-rules");
+
+        DataStream<KnowledgeBaseUpdate> terminology = createKBChangeStream(env,
+            KafkaTopics.KB7_TERMINOLOGY, "terminology");
+
+        // Connect enriched events with knowledge base updates
+        SingleOutputStreamOperator<SemanticEvent> semanticEvents = enrichedEvents
+            .keyBy(EnrichedEvent::getPatientId)
+            .process(new SemanticReasoningProcessor())
+            .uid("Semantic Reasoning Engine");
+
+        // Apply clinical guidelines and protocols
+        SingleOutputStreamOperator<SemanticEvent> guidelineEnrichedEvents = semanticEvents
+            .connect(clinicalProtocols.broadcast())
+            .process(new ClinicalGuidelineProcessor())
+            .uid("Clinical Guideline Application");
+
+        // Drug interaction and safety checking
+        SingleOutputStreamOperator<SemanticEvent> safetyCheckedEvents = guidelineEnrichedEvents
+            .connect(drugInteractions.broadcast())
+            .process(new DrugSafetyProcessor())
+            .uid("Drug Safety Checking");
+
+        // Terminology and coding standardization
+        DataStream<SemanticEvent> standardizedEvents = safetyCheckedEvents
+            .connect(terminology.broadcast())
+            .process(new TerminologyStandardizationProcessor())
+            .uid("Terminology Standardization");
+
+        // Route semantic events to appropriate sinks
+        standardizedEvents
+            .sinkTo(createSemanticEventsSink())
+            .uid("Semantic Events Sink");
+
+        // Route drug interactions to safety alerts
+        safetyCheckedEvents.getSideOutput(DRUG_INTERACTION_TAG)
+            .sinkTo(createDrugInteractionSink())
+            .uid("Drug Interaction Alerts");
+
+        // Route clinical alerts
+        guidelineEnrichedEvents.getSideOutput(CLINICAL_ALERT_TAG)
+            .sinkTo(createClinicalAlertSink())
+            .uid("Clinical Alerts");
+
+        // Route guideline recommendations
+        guidelineEnrichedEvents.getSideOutput(GUIDELINE_RECOMMENDATION_TAG)
+            .sinkTo(createGuidelineRecommendationSink())
+            .uid("Guideline Recommendations");
+
+        LOG.info("Semantic mesh integration pipeline created successfully");
+    }
+
+    /**
+     * Create enriched event source from Module 2
+     */
+    private static DataStream<EnrichedEvent> createEnrichedEventSource(StreamExecutionEnvironment env) {
+        KafkaSource<EnrichedEvent> source = KafkaSource.<EnrichedEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(KafkaTopics.CLINICAL_PATTERNS.getTopicName())
+            .setGroupId("semantic-mesh")
+            .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
+            .setValueOnlyDeserializer(new EnrichedEventDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig("semantic-mesh"))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy
+                .<EnrichedEvent>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                .withTimestampAssigner((event, timestamp) -> event.getEventTime()),
+            "Enriched Events Source");
+    }
+
+    /**
+     * Create knowledge base change stream
+     */
+    private static DataStream<KnowledgeBaseUpdate> createKBChangeStream(
+            StreamExecutionEnvironment env, KafkaTopics topic, String consumerGroup) {
+
+        KafkaSource<KnowledgeBaseUpdate> source = KafkaSource.<KnowledgeBaseUpdate>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setTopics(topic.getTopicName())
+            .setGroupId(consumerGroup)
+            .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
+            .setValueOnlyDeserializer(new KnowledgeBaseUpdateDeserializer())
+            .setProperties(KafkaConfigLoader.getAutoConsumerConfig(consumerGroup))
+            .build();
+
+        return env.fromSource(source,
+            WatermarkStrategy.<KnowledgeBaseUpdate>noWatermarks(),
+            "KB Source: " + topic.getTopicName());
+    }
+
+    /**
+     * Core semantic reasoning processor
+     */
+    public static class SemanticReasoningProcessor
+            extends KeyedProcessFunction<String, EnrichedEvent, SemanticEvent> {
+
+        // State for maintaining semantic context
+        private transient ValueState<SemanticContext> semanticContextState;
+        private transient MapState<String, ClinicalRule> activeClinicalRulesState;
+        private transient MapState<String, Long> ruleLastAppliedState;
+
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(org.apache.flink.configuration.Configuration parameters) {
+            semanticContextState = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("semantic-context", SemanticContext.class));
+
+            activeClinicalRulesState = getRuntimeContext().getMapState(
+                new MapStateDescriptor<>("clinical-rules", String.class, ClinicalRule.class));
+
+            ruleLastAppliedState = getRuntimeContext().getMapState(
+                new MapStateDescriptor<>("rule-applied", String.class, Long.class));
+
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public void processElement(EnrichedEvent event, Context ctx, Collector<SemanticEvent> out)
+                throws Exception {
+
+            try {
+                // Get or create semantic context
+                SemanticContext semanticContext = semanticContextState.value();
+                if (semanticContext == null) {
+                    semanticContext = createSemanticContext(((CanonicalEvent)event).getPatientId());
+                }
+
+                // Apply semantic reasoning
+                SemanticEvent semanticEvent = applySemanticReasoning(event, semanticContext, ctx);
+
+                // Update semantic context
+                updateSemanticContext(semanticContext, event, semanticEvent);
+                semanticContextState.update(semanticContext);
+
+                // Emit semantic event
+                out.collect(semanticEvent);
+
+                LOG.debug("Applied semantic reasoning to event: {}", event.getId());
+
+            } catch (Exception e) {
+                LOG.error("Failed to apply semantic reasoning to event: " + event.getId(), e);
+                // Emit original event as semantic event with error annotation
+                SemanticEvent errorEvent = createErrorSemanticEvent(event, e.getMessage());
+                out.collect(errorEvent);
+            }
+        }
+
+        private SemanticContext createSemanticContext(String patientId) {
+            SemanticContext context = new SemanticContext();
+            context.setPatientId(patientId);
+            context.setCreatedTime(System.currentTimeMillis());
+            context.setLastUpdated(System.currentTimeMillis());
+            context.setActiveInferences(new HashMap<>());
+            context.setConfidenceScores(new HashMap<>());
+            context.setClinicalConcepts(new HashSet<>());
+            return context;
+        }
+
+        private SemanticEvent applySemanticReasoning(EnrichedEvent event, SemanticContext context, Context ctx)
+                throws Exception {
+
+            SemanticEvent semanticEvent = new SemanticEvent();
+
+            // Copy base event data
+            semanticEvent.setId(event.getId());
+            semanticEvent.setPatientId(((CanonicalEvent)event).getPatientId());
+            semanticEvent.setEncounterId(event.getEncounterId());
+            semanticEvent.setEventType(event.getEventType());
+            semanticEvent.setEventTime(event.getEventTime());
+            semanticEvent.setSourceSystem(event.getSourceSystem());
+            semanticEvent.setOriginalPayload(event.getPayload());
+            semanticEvent.setPatientContext(event.getPatientContext());
+            semanticEvent.setEnrichmentData(event.getEnrichmentData());
+
+            // Apply semantic annotations
+            Map<String, Object> semanticAnnotations = applyClinicalReasoning(event, context);
+            semanticEvent.setSemanticAnnotations(semanticAnnotations);
+
+            // Extract clinical concepts
+            Set<String> concepts = extractClinicalConcepts(event, context);
+            semanticEvent.setClinicalConcepts(concepts);
+
+            // Calculate confidence scores
+            Map<String, Double> confidenceScores = calculateConfidenceScores(event, context);
+            semanticEvent.setConfidenceScores(confidenceScores);
+
+            // Generate inferences
+            List<ClinicalInference> inferences = generateClinicalInferences(event, context);
+            semanticEvent.setClinicalInferences(inferences);
+
+            semanticEvent.setProcessingTime(System.currentTimeMillis());
+            semanticEvent.setSemanticVersion("3.0");
+
+            return semanticEvent;
+        }
+
+        private Map<String, Object> applyClinicalReasoning(EnrichedEvent event, SemanticContext context) {
+            Map<String, Object> annotations = new HashMap<>();
+
+            // Clinical significance assessment
+            double clinicalSignificance = assessClinicalSignificance(event);
+            annotations.put("clinical_significance", clinicalSignificance);
+
+            // Temporal context analysis
+            String temporalContext = analyzeTemporalContext(event, context);
+            annotations.put("temporal_context", temporalContext);
+
+            // Risk stratification
+            String riskLevel = stratifyRisk(event, context);
+            annotations.put("risk_level", riskLevel);
+
+            // Evidence level assessment
+            String evidenceLevel = assessEvidenceLevel(event);
+            annotations.put("evidence_level", evidenceLevel);
+
+            return annotations;
+        }
+
+        private Set<String> extractClinicalConcepts(EnrichedEvent event, SemanticContext context) {
+            Set<String> concepts = new HashSet<>();
+
+            // Extract concepts based on event type
+            EventType eventType = event.getEventType();
+            concepts.add("event_type:" + eventType.name().toLowerCase());
+
+            if (eventType.isClinical()) {
+                concepts.add("clinical_event");
+            }
+            if (eventType.isCritical()) {
+                concepts.add("critical_event");
+            }
+            if (eventType.isMedicationRelated()) {
+                concepts.add("medication_event");
+            }
+
+            // Extract concepts from payload
+            Map<String, Object> payload = event.getPayload();
+            if (payload != null) {
+                extractConceptsFromPayload(payload, concepts);
+            }
+
+            // Add acuity-based concepts
+            double acuityScore = event.getAcuityScore();
+            if (acuityScore > 75) {
+                concepts.add("high_acuity");
+            } else if (acuityScore > 50) {
+                concepts.add("moderate_acuity");
+            }
+
+            return concepts;
+        }
+
+        private void extractConceptsFromPayload(Map<String, Object> payload, Set<String> concepts) {
+            for (Map.Entry<String, Object> entry : payload.entrySet()) {
+                String key = entry.getKey().toLowerCase();
+                Object value = entry.getValue();
+
+                // Medical terminology extraction
+                if (key.contains("diagnosis")) {
+                    concepts.add("diagnosis_related");
+                }
+                if (key.contains("medication") || key.contains("drug")) {
+                    concepts.add("pharmacological");
+                }
+                if (key.contains("vital") || key.contains("blood_pressure") || key.contains("heart_rate")) {
+                    concepts.add("vital_signs");
+                }
+                if (key.contains("lab") || key.contains("test")) {
+                    concepts.add("laboratory");
+                }
+            }
+        }
+
+        private Map<String, Double> calculateConfidenceScores(EnrichedEvent event, SemanticContext context) {
+            Map<String, Double> scores = new HashMap<>();
+
+            // Data quality confidence
+            double dataQuality = assessDataQuality(event);
+            scores.put("data_quality", dataQuality);
+
+            // Temporal reliability
+            double temporalReliability = assessTemporalReliability(event, context);
+            scores.put("temporal_reliability", temporalReliability);
+
+            // Clinical relevance confidence
+            double clinicalRelevance = assessClinicalRelevance(event);
+            scores.put("clinical_relevance", clinicalRelevance);
+
+            // Overall confidence
+            double overallConfidence = (dataQuality + temporalReliability + clinicalRelevance) / 3.0;
+            scores.put("overall", overallConfidence);
+
+            return scores;
+        }
+
+        private List<ClinicalInference> generateClinicalInferences(EnrichedEvent event, SemanticContext context) {
+            List<ClinicalInference> inferences = new ArrayList<>();
+
+            // Condition progression inference
+            if (event.getEventType().isClinical()) {
+                ClinicalInference progressionInference = analyzeConditionProgression(event, context);
+                if (progressionInference != null) {
+                    inferences.add(progressionInference);
+                }
+            }
+
+            // Treatment response inference
+            if (event.getEventType().isMedicationRelated()) {
+                ClinicalInference treatmentInference = analyzeTreatmentResponse(event, context);
+                if (treatmentInference != null) {
+                    inferences.add(treatmentInference);
+                }
+            }
+
+            // Risk prediction inference
+            ClinicalInference riskInference = predictClinicalRisks(event, context);
+            if (riskInference != null) {
+                inferences.add(riskInference);
+            }
+
+            return inferences;
+        }
+
+        // Helper methods for assessments
+        private double assessClinicalSignificance(EnrichedEvent event) {
+            double significance = 0.5; // Base significance
+
+            if (event.getEventType().isCritical()) {
+                significance += 0.4;
+            } else if (event.getEventType().isClinical()) {
+                significance += 0.2;
+            }
+
+            significance += Math.min(event.getAcuityScore() / 100.0 * 0.3, 0.3);
+
+            return Math.min(significance, 1.0);
+        }
+
+        private String analyzeTemporalContext(EnrichedEvent event, SemanticContext context) {
+            long contextAge = System.currentTimeMillis() - context.getCreatedTime();
+            double contextAgeHours = contextAge / (1000.0 * 3600.0);
+
+            if (contextAgeHours < 1) {
+                return "acute";
+            } else if (contextAgeHours < 24) {
+                return "recent";
+            } else if (contextAgeHours < 168) { // 1 week
+                return "subacute";
+            } else {
+                return "chronic";
+            }
+        }
+
+        private String stratifyRisk(EnrichedEvent event, SemanticContext context) {
+            double riskScore = event.getAcuityScore() / 100.0;
+
+            PatientContext patientContext = event.getPatientContext();
+            if (patientContext != null) {
+                if (patientContext.hasRiskFactor("high_acuity")) {
+                    riskScore += 0.2;
+                }
+                if (patientContext.getActiveMedicationCount() > 5) {
+                    riskScore += 0.1;
+                }
+            }
+
+            if (riskScore > 0.8) {
+                return "high";
+            } else if (riskScore > 0.5) {
+                return "moderate";
+            } else {
+                return "low";
+            }
+        }
+
+        private String assessEvidenceLevel(EnrichedEvent event) {
+            // Simplified evidence level assessment
+            if (event.getEventType() == EventType.LAB_RESULT ||
+                event.getEventType() == EventType.VITAL_SIGN) {
+                return "objective";
+            } else if (event.getEventType().isClinical()) {
+                return "clinical";
+            } else {
+                return "observational";
+            }
+        }
+
+        private double assessDataQuality(EnrichedEvent event) {
+            double quality = 0.7; // Base quality
+
+            if (event.getPayload() != null && !event.getPayload().isEmpty()) {
+                quality += 0.2;
+            }
+
+            if (event.getPatientContext() != null) {
+                quality += 0.1;
+            }
+
+            return Math.min(quality, 1.0);
+        }
+
+        private double assessTemporalReliability(EnrichedEvent event, SemanticContext context) {
+            long eventAge = System.currentTimeMillis() - event.getEventTime();
+            double ageHours = eventAge / (1000.0 * 3600.0);
+
+            // Recent events are more reliable
+            if (ageHours < 1) {
+                return 0.95;
+            } else if (ageHours < 24) {
+                return 0.85;
+            } else {
+                return Math.max(0.5, 0.85 - (ageHours - 24) * 0.01);
+            }
+        }
+
+        private double assessClinicalRelevance(EnrichedEvent event) {
+            if (event.getEventType().isCritical()) {
+                return 0.95;
+            } else if (event.getEventType().isClinical()) {
+                return 0.8;
+            } else {
+                return 0.6;
+            }
+        }
+
+        private ClinicalInference analyzeConditionProgression(EnrichedEvent event, SemanticContext context) {
+            // Simplified condition progression analysis
+            ClinicalInference inference = new ClinicalInference();
+            inference.setInferenceType("condition_progression");
+            inference.setConfidence(0.7);
+            inference.setDescription("Analyzed clinical progression based on event pattern");
+            inference.setTimestamp(System.currentTimeMillis());
+
+            Map<String, Object> evidence = new HashMap<>();
+            evidence.put("event_type", event.getEventType().name());
+            evidence.put("acuity_score", event.getAcuityScore());
+            inference.setEvidence(evidence);
+
+            return inference;
+        }
+
+        private ClinicalInference analyzeTreatmentResponse(EnrichedEvent event, SemanticContext context) {
+            // Simplified treatment response analysis
+            ClinicalInference inference = new ClinicalInference();
+            inference.setInferenceType("treatment_response");
+            inference.setConfidence(0.6);
+            inference.setDescription("Analyzed treatment response based on medication events");
+            inference.setTimestamp(System.currentTimeMillis());
+
+            return inference;
+        }
+
+        private ClinicalInference predictClinicalRisks(EnrichedEvent event, SemanticContext context) {
+            // Simplified risk prediction
+            if (event.getAcuityScore() > 70) {
+                ClinicalInference inference = new ClinicalInference();
+                inference.setInferenceType("risk_prediction");
+                inference.setConfidence(0.8);
+                inference.setDescription("High acuity score indicates elevated clinical risk");
+                inference.setTimestamp(System.currentTimeMillis());
+
+                Map<String, Object> riskFactors = new HashMap<>();
+                riskFactors.put("acuity_score", event.getAcuityScore());
+                riskFactors.put("event_type", event.getEventType().name());
+                inference.setEvidence(riskFactors);
+
+                return inference;
+            }
+            return null;
+        }
+
+        private void updateSemanticContext(SemanticContext context, EnrichedEvent event, SemanticEvent semanticEvent) {
+            context.setLastUpdated(System.currentTimeMillis());
+
+            // Update active inferences
+            for (ClinicalInference inference : semanticEvent.getClinicalInferences()) {
+                context.getActiveInferences().put(inference.getInferenceType(), inference);
+            }
+
+            // Update confidence scores
+            context.getConfidenceScores().putAll(semanticEvent.getConfidenceScores());
+
+            // Update clinical concepts
+            context.getClinicalConcepts().addAll(semanticEvent.getClinicalConcepts());
+        }
+
+        private SemanticEvent createErrorSemanticEvent(EnrichedEvent event, String errorMessage) {
+            SemanticEvent errorEvent = new SemanticEvent();
+            errorEvent.setId(event.getId());
+            errorEvent.setPatientId(((CanonicalEvent)event).getPatientId());
+            errorEvent.setEventType(event.getEventType());
+            errorEvent.setEventTime(event.getEventTime());
+            errorEvent.setOriginalPayload(event.getPayload());
+
+            Map<String, Object> errorAnnotations = new HashMap<>();
+            errorAnnotations.put("processing_error", errorMessage);
+            errorAnnotations.put("error_timestamp", System.currentTimeMillis());
+            errorEvent.setSemanticAnnotations(errorAnnotations);
+
+            return errorEvent;
+        }
+    }
+
+    /**
+     * Clinical guideline processor
+     */
+    public static class ClinicalGuidelineProcessor
+            extends CoProcessFunction<SemanticEvent, KnowledgeBaseUpdate, SemanticEvent> {
+
+        @Override
+        public void processElement1(SemanticEvent event, Context ctx, Collector<SemanticEvent> out) {
+            // Apply clinical guidelines to semantic events
+            out.collect(event);
+        }
+
+        @Override
+        public void processElement2(KnowledgeBaseUpdate update, Context ctx, Collector<SemanticEvent> out) {
+            // Process knowledge base updates
+            LOG.debug("Received KB update: {}", update.getTableName());
+        }
+    }
+
+    /**
+     * Drug safety processor
+     */
+    public static class DrugSafetyProcessor
+            extends CoProcessFunction<SemanticEvent, KnowledgeBaseUpdate, SemanticEvent> {
+
+        @Override
+        public void processElement1(SemanticEvent event, Context ctx, Collector<SemanticEvent> out) {
+            // Check for drug interactions and safety concerns
+            if (event.getEventType().isMedicationRelated()) {
+                // Perform drug interaction checking
+                checkDrugInteractions(event, ctx);
+            }
+            out.collect(event);
+        }
+
+        @Override
+        public void processElement2(KnowledgeBaseUpdate update, Context ctx, Collector<SemanticEvent> out) {
+            // Process drug interaction knowledge updates
+            LOG.debug("Received drug safety KB update: {}", update.getTableName());
+        }
+
+        private void checkDrugInteractions(SemanticEvent event, Context ctx) {
+            // Simplified drug interaction checking
+            // In a real implementation, this would query the drug interaction knowledge base
+            LOG.debug("Checking drug interactions for event: {}", event.getId());
+        }
+    }
+
+    /**
+     * Terminology standardization processor
+     */
+    public static class TerminologyStandardizationProcessor
+            extends CoProcessFunction<SemanticEvent, KnowledgeBaseUpdate, SemanticEvent> {
+
+        @Override
+        public void processElement1(SemanticEvent event, Context ctx, Collector<SemanticEvent> out) {
+            // Apply terminology standardization
+            standardizeTerminology(event);
+            out.collect(event);
+        }
+
+        @Override
+        public void processElement2(KnowledgeBaseUpdate update, Context ctx, Collector<SemanticEvent> out) {
+            // Process terminology updates
+            LOG.debug("Received terminology KB update: {}", update.getTableName());
+        }
+
+        private void standardizeTerminology(SemanticEvent event) {
+            // Apply standardized clinical terminology (SNOMED, ICD, etc.)
+            Set<String> standardizedConcepts = new HashSet<>();
+            for (String concept : event.getClinicalConcepts()) {
+                // Map to standard terminology
+                String standardized = mapToStandardTerminology(concept);
+                standardizedConcepts.add(standardized);
+            }
+            event.setClinicalConcepts(standardizedConcepts);
+        }
+
+        private String mapToStandardTerminology(String concept) {
+            // Simplified terminology mapping
+            // In practice, this would use comprehensive medical ontologies
+            return concept.toLowerCase().replace("_", " ");
+        }
+    }
+
+    // Helper classes and data models
+    public static class SemanticContext implements Serializable {
+        private String patientId;
+        private long createdTime;
+        private long lastUpdated;
+        private Map<String, ClinicalInference> activeInferences;
+        private Map<String, Double> confidenceScores;
+        private Set<String> clinicalConcepts;
+
+        // Getters and setters
+        public String getPatientId() { return patientId; }
+        public void setPatientId(String patientId) { this.patientId = patientId; }
+
+        public long getCreatedTime() { return createdTime; }
+        public void setCreatedTime(long createdTime) { this.createdTime = createdTime; }
+
+        public long getLastUpdated() { return lastUpdated; }
+        public void setLastUpdated(long lastUpdated) { this.lastUpdated = lastUpdated; }
+
+        public Map<String, ClinicalInference> getActiveInferences() { return activeInferences; }
+        public void setActiveInferences(Map<String, ClinicalInference> activeInferences) { this.activeInferences = activeInferences; }
+
+        public Map<String, Double> getConfidenceScores() { return confidenceScores; }
+        public void setConfidenceScores(Map<String, Double> confidenceScores) { this.confidenceScores = confidenceScores; }
+
+        public Set<String> getClinicalConcepts() { return clinicalConcepts; }
+        public void setClinicalConcepts(Set<String> clinicalConcepts) { this.clinicalConcepts = clinicalConcepts; }
+    }
+
+    public static class ClinicalRule implements Serializable {
+        private String ruleId;
+        private String ruleType;
+        private String condition;
+        private String action;
+        private double confidence;
+
+        // Getters and setters
+        public String getRuleId() { return ruleId; }
+        public void setRuleId(String ruleId) { this.ruleId = ruleId; }
+
+        public String getRuleType() { return ruleType; }
+        public void setRuleType(String ruleType) { this.ruleType = ruleType; }
+
+        public String getCondition() { return condition; }
+        public void setCondition(String condition) { this.condition = condition; }
+
+        public String getAction() { return action; }
+        public void setAction(String action) { this.action = action; }
+
+        public double getConfidence() { return confidence; }
+        public void setConfidence(double confidence) { this.confidence = confidence; }
+    }
+
+    public static class ClinicalInference implements Serializable {
+        private String inferenceType;
+        private String description;
+        private double confidence;
+        private long timestamp;
+        private Map<String, Object> evidence;
+
+        // Getters and setters
+        public String getInferenceType() { return inferenceType; }
+        public void setInferenceType(String inferenceType) { this.inferenceType = inferenceType; }
+
+        public String getDescription() { return description; }
+        public void setDescription(String description) { this.description = description; }
+
+        public double getConfidence() { return confidence; }
+        public void setConfidence(double confidence) { this.confidence = confidence; }
+
+        public long getTimestamp() { return timestamp; }
+        public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
+
+        public Map<String, Object> getEvidence() { return evidence; }
+        public void setEvidence(Map<String, Object> evidence) { this.evidence = evidence; }
+    }
+
+    public static class KnowledgeBaseUpdate implements Serializable {
+        private String tableName;
+        private String operation;
+        private Map<String, Object> data;
+        private long timestamp;
+
+        // Getters and setters
+        public String getTableName() { return tableName; }
+        public void setTableName(String tableName) { this.tableName = tableName; }
+
+        public String getOperation() { return operation; }
+        public void setOperation(String operation) { this.operation = operation; }
+
+        public Map<String, Object> getData() { return data; }
+        public void setData(Map<String, Object> data) { this.data = data; }
+
+        public long getTimestamp() { return timestamp; }
+        public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
+    }
+
+    // Sink creation methods
+    private static KafkaSink<SemanticEvent> createSemanticEventsSink() {
+        return KafkaSink.<SemanticEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.SEMANTIC_MESH_UPDATES.getTopicName())
+                .setKeySerializationSchema(event -> ((CanonicalEvent)event).getPatientId().getBytes())
+                .setValueSerializationSchema(new SemanticEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<SemanticEvent> createDrugInteractionSink() {
+        return KafkaSink.<SemanticEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.SAFETY_EVENTS.getTopicName())
+                .setKeySerializationSchema(event -> ((CanonicalEvent)event).getPatientId().getBytes())
+                .setValueSerializationSchema(new SemanticEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<SemanticEvent> createClinicalAlertSink() {
+        return KafkaSink.<SemanticEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.ALERT_MANAGEMENT.getTopicName())
+                .setKeySerializationSchema(event -> ((CanonicalEvent)event).getPatientId().getBytes())
+                .setValueSerializationSchema(new SemanticEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static KafkaSink<SemanticEvent> createGuidelineRecommendationSink() {
+        return KafkaSink.<SemanticEvent>builder()
+            .setBootstrapServers(getBootstrapServers())
+            .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                .setTopic(KafkaTopics.CLINICAL_REASONING_EVENTS.getTopicName())
+                .setKeySerializationSchema(event -> ((CanonicalEvent)event).getPatientId().getBytes())
+                .setValueSerializationSchema(new SemanticEventSerializer())
+                .build())
+            .setKafkaProducerConfig(KafkaConfigLoader.getAutoProducerConfig())
+            .build();
+    }
+
+    private static String getBootstrapServers() {
+        return KafkaConfigLoader.isRunningInDocker()
+            ? "kafka1:29092,kafka2:29093,kafka3:29094"
+            : "localhost:9092,localhost:9093,localhost:9094";
+    }
+
+    // Serialization classes
+    private static class EnrichedEventDeserializer implements DeserializationSchema<EnrichedEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public EnrichedEvent deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, EnrichedEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(EnrichedEvent nextElement) { return false; }
+
+        @Override
+        public TypeInformation<EnrichedEvent> getProducedType() {
+            return TypeInformation.of(EnrichedEvent.class);
+        }
+    }
+
+    private static class KnowledgeBaseUpdateDeserializer implements DeserializationSchema<KnowledgeBaseUpdate> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(DeserializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public KnowledgeBaseUpdate deserialize(byte[] message) throws IOException {
+            return objectMapper.readValue(message, KnowledgeBaseUpdate.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(KnowledgeBaseUpdate nextElement) { return false; }
+
+        @Override
+        public TypeInformation<KnowledgeBaseUpdate> getProducedType() {
+            return TypeInformation.of(KnowledgeBaseUpdate.class);
+        }
+    }
+
+    private static class SemanticEventSerializer implements SerializationSchema<SemanticEvent> {
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public void open(SerializationSchema.InitializationContext context) {
+            objectMapper = new ObjectMapper();
+            objectMapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(SemanticEvent element) {
+            try {
+                return objectMapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize SemanticEvent", e);
+            }
+        }
+    }
+}

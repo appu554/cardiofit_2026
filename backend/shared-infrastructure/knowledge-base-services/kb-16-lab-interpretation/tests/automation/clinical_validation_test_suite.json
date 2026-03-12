@@ -1,0 +1,1274 @@
+{
+  "testSuite": {
+    "name": "KB-16 Lab Interpretation Clinical Validation Test Suite",
+    "version": "1.0.0",
+    "generated": "2025-12-31",
+    "service": "KB-16 Lab Interpretation & Trending Service",
+    "port": 8095,
+    "baseUrl": "http://localhost:8095",
+    "totalTests": 148,
+    "phases": 9
+  },
+  "phases": [
+    {
+      "phase": 1,
+      "name": "KB-8 Dependency Validation",
+      "description": "Validates integration with KB-8 clinical calculators and graceful degradation",
+      "testCount": 10,
+      "tests": [
+        {
+          "id": "P1.1",
+          "name": "KB8_Available_Uses_Live_Calculator",
+          "description": "When KB-8 is available, use live eGFR/anion gap calculations",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "expectedBehavior": "Uses KB-8 calculated values when service is healthy",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P1.2",
+          "name": "KB8_Unavailable_Returns_Safe_Failure",
+          "description": "When KB-8 is unavailable, return safe fallback interpretation",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "expectedBehavior": "Graceful degradation with fallback values",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P1.3",
+          "name": "KB8_Slow_Response_Timeout_Safety",
+          "description": "KB-8 timeout triggers fallback within SLA",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "timeoutMs": 5000,
+          "expectedBehavior": "Timeout after 5s, use fallback",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P1.4",
+          "name": "KB8_Error_Response_Logged_And_Surfaced",
+          "description": "KB-8 errors are logged and surfaced in interpretation",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "expectedBehavior": "Error logged, clinical comment updated",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P1.5",
+          "name": "KB8_EGFR_Male_Matches_CKDEPI_Reference",
+          "description": "eGFR calculation for male patients matches CKD-EPI formula",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "testData": {
+            "creatinine": 1.2,
+            "age": 55,
+            "sex": "male"
+          },
+          "expectedBehavior": "eGFR within 5% of reference CKD-EPI calculation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P1.6",
+          "name": "KB8_EGFR_Female_Matches_CKDEPI_Reference",
+          "description": "eGFR calculation for female patients matches CKD-EPI formula",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "testData": {
+            "creatinine": 0.9,
+            "age": 65,
+            "sex": "female"
+          },
+          "expectedBehavior": "eGFR within 5% of reference CKD-EPI calculation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P1.7",
+          "name": "KB8_Pediatric_GFR_Declares_Unsupported",
+          "description": "Pediatric GFR calculation declares unsupported (requires Schwartz formula)",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "testData": {
+            "creatinine": 0.5,
+            "age": 8,
+            "sex": "male"
+          },
+          "expectedBehavior": "Returns unsupported flag for pediatric patients",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P1.8",
+          "name": "KB8_Anion_Gap_Matches_Formula",
+          "description": "Anion gap calculation matches Na - (Cl + HCO3) formula",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "testData": {
+            "sodium": 140,
+            "chloride": 100,
+            "bicarbonate": 24
+          },
+          "expectedBehavior": "Anion gap = 16 (140 - 100 - 24)",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P1.9",
+          "name": "KB8_High_Anion_Gap_Detected",
+          "description": "High anion gap (>12) triggers metabolic acidosis flag",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "testData": {
+            "sodium": 140,
+            "chloride": 95,
+            "bicarbonate": 18
+          },
+          "expectedBehavior": "High anion gap metabolic acidosis detected (AG=27)",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P1.10",
+          "name": "KB8_Albumin_Corrected_Anion_Gap",
+          "description": "Anion gap corrected for albumin level",
+          "endpoint": "/api/v1/interpret",
+          "method": "POST",
+          "testData": {
+            "sodium": 140,
+            "chloride": 100,
+            "bicarbonate": 24,
+            "albumin": 2.5
+          },
+          "expectedBehavior": "Corrected AG accounts for low albumin",
+          "criticalityLevel": "HIGH"
+        }
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Core Lab Interpretation",
+      "description": "Single lab value interpretation with flag classification",
+      "testCount": 20,
+      "tests": [
+        {
+          "id": "P2.1",
+          "name": "Hemoglobin_Low_Anemia",
+          "loincCode": "718-7",
+          "testData": {"value": 9.5, "unit": "g/dL", "age": 45, "sex": "male"},
+          "expectedFlag": "LOW",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P2.2",
+          "name": "Hemoglobin_Normal",
+          "loincCode": "718-7",
+          "testData": {"value": 14.5, "unit": "g/dL", "age": 45, "sex": "male"},
+          "expectedFlag": "NORMAL",
+          "expectedSeverity": "NORMAL",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P2.3",
+          "name": "Hemoglobin_High_Polycythemia",
+          "loincCode": "718-7",
+          "testData": {"value": 19.5, "unit": "g/dL", "age": 45, "sex": "male"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P2.4",
+          "name": "WBC_Low_Leukopenia",
+          "loincCode": "6690-2",
+          "testData": {"value": 2.5, "unit": "10^9/L", "age": 50, "sex": "female"},
+          "expectedFlag": "LOW",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P2.5",
+          "name": "WBC_High_Leukocytosis",
+          "loincCode": "6690-2",
+          "testData": {"value": 18.5, "unit": "10^9/L", "age": 50, "sex": "female"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P2.6",
+          "name": "Platelets_Critical_Low",
+          "loincCode": "777-3",
+          "testData": {"value": 15000, "unit": "/uL", "age": 60, "sex": "male"},
+          "expectedFlag": "CRITICAL_LOW",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.7",
+          "name": "Creatinine_High",
+          "loincCode": "2160-0",
+          "testData": {"value": 3.5, "unit": "mg/dL", "age": 70, "sex": "male"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "HIGH",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P2.8",
+          "name": "Sodium_Critical_Low",
+          "loincCode": "2951-2",
+          "testData": {"value": 118, "unit": "mEq/L", "age": 65, "sex": "female"},
+          "expectedFlag": "CRITICAL_LOW",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.9",
+          "name": "Sodium_Critical_High",
+          "loincCode": "2951-2",
+          "testData": {"value": 162, "unit": "mEq/L", "age": 75, "sex": "male"},
+          "expectedFlag": "CRITICAL_HIGH",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.10",
+          "name": "Potassium_Critical_High",
+          "loincCode": "2823-3",
+          "testData": {"value": 7.2, "unit": "mEq/L", "age": 68, "sex": "male"},
+          "expectedFlag": "CRITICAL_HIGH",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.11",
+          "name": "Potassium_Critical_Low",
+          "loincCode": "2823-3",
+          "testData": {"value": 2.3, "unit": "mEq/L", "age": 55, "sex": "female"},
+          "expectedFlag": "CRITICAL_LOW",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.12",
+          "name": "Bicarbonate_Low",
+          "loincCode": "1963-8",
+          "testData": {"value": 15, "unit": "mEq/L", "age": 60, "sex": "male"},
+          "expectedFlag": "LOW",
+          "expectedSeverity": "HIGH",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P2.13",
+          "name": "Glucose_Critical_Low",
+          "loincCode": "2345-7",
+          "testData": {"value": 35, "unit": "mg/dL", "age": 45, "sex": "female"},
+          "expectedFlag": "CRITICAL_LOW",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.14",
+          "name": "Glucose_Critical_High",
+          "loincCode": "2345-7",
+          "testData": {"value": 550, "unit": "mg/dL", "age": 55, "sex": "male"},
+          "expectedFlag": "CRITICAL_HIGH",
+          "expectedSeverity": "CRITICAL",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P2.15",
+          "name": "HbA1c_Prediabetes",
+          "loincCode": "4548-4",
+          "testData": {"value": 6.2, "unit": "%", "age": 50, "sex": "male"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P2.16",
+          "name": "HbA1c_Diabetes",
+          "loincCode": "4548-4",
+          "testData": {"value": 9.5, "unit": "%", "age": 55, "sex": "female"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "HIGH",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P2.17",
+          "name": "TSH_High_Hypothyroidism",
+          "loincCode": "3016-3",
+          "testData": {"value": 12.5, "unit": "mIU/L", "age": 60, "sex": "female"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P2.18",
+          "name": "ALT_Elevated",
+          "loincCode": "1742-6",
+          "testData": {"value": 150, "unit": "U/L", "age": 45, "sex": "male"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P2.19",
+          "name": "Bilirubin_Elevated",
+          "loincCode": "1975-2",
+          "testData": {"value": 4.5, "unit": "mg/dL", "age": 50, "sex": "male"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "MODERATE",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P2.20",
+          "name": "CRP_Elevated_Inflammation",
+          "loincCode": "1988-5",
+          "testData": {"value": 85, "unit": "mg/L", "age": 65, "sex": "female"},
+          "expectedFlag": "HIGH",
+          "expectedSeverity": "HIGH",
+          "criticalityLevel": "HIGH"
+        }
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Panel-Level Intelligence",
+      "description": "Multi-test panel interpretation with pattern detection",
+      "testCount": 30,
+      "tests": [
+        {
+          "id": "P3.1",
+          "name": "BMP_High_AG_MAGA",
+          "panelType": "BMP",
+          "description": "Basic Metabolic Panel with high anion gap metabolic acidosis",
+          "expectedPattern": "HIGH_ANION_GAP_METABOLIC_ACIDOSIS",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.2",
+          "name": "BMP_Normal_AG_MAGA",
+          "panelType": "BMP",
+          "description": "Normal anion gap metabolic acidosis (hyperchloremic)",
+          "expectedPattern": "NORMAL_ANION_GAP_METABOLIC_ACIDOSIS",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.3",
+          "name": "BMP_Hyperkalemia_CKD",
+          "panelType": "BMP",
+          "description": "Hyperkalemia in context of elevated creatinine",
+          "expectedPattern": "HYPERKALEMIA_WITH_RENAL_DYSFUNCTION",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.4",
+          "name": "CBC_Microcytic_Anemia",
+          "panelType": "CBC",
+          "description": "Low hemoglobin with low MCV (iron deficiency pattern)",
+          "expectedPattern": "MICROCYTIC_ANEMIA",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.5",
+          "name": "CBC_Macrocytic_Anemia",
+          "panelType": "CBC",
+          "description": "Low hemoglobin with high MCV (B12/folate deficiency)",
+          "expectedPattern": "MACROCYTIC_ANEMIA",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.6",
+          "name": "CBC_Pancytopenia",
+          "panelType": "CBC",
+          "description": "Low WBC, RBC, and platelets (bone marrow failure)",
+          "expectedPattern": "PANCYTOPENIA",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.7",
+          "name": "CBC_Neutrophilia_Infection",
+          "panelType": "CBC",
+          "description": "Elevated neutrophils suggesting bacterial infection",
+          "expectedPattern": "NEUTROPHILIA",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.8",
+          "name": "LFT_Hepatocellular_Pattern",
+          "panelType": "LFT",
+          "description": "ALT/AST elevation > ALP (hepatocellular injury)",
+          "expectedPattern": "HEPATOCELLULAR_INJURY",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.9",
+          "name": "LFT_Cholestatic_Pattern",
+          "panelType": "LFT",
+          "description": "ALP/GGT elevation > ALT/AST (cholestatic pattern)",
+          "expectedPattern": "CHOLESTATIC_INJURY",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.10",
+          "name": "LFT_Alcoholic_Pattern",
+          "panelType": "LFT",
+          "description": "AST:ALT ratio >2:1 suggesting alcoholic liver disease",
+          "expectedPattern": "ALCOHOLIC_LIVER_PATTERN",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.11",
+          "name": "Thyroid_Primary_Hypothyroidism",
+          "panelType": "THYROID",
+          "description": "High TSH with low T4 (primary hypothyroidism)",
+          "expectedPattern": "PRIMARY_HYPOTHYROIDISM",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.12",
+          "name": "Thyroid_Hyperthyroidism",
+          "panelType": "THYROID",
+          "description": "Low TSH with high T4/T3 (hyperthyroidism)",
+          "expectedPattern": "HYPERTHYROIDISM",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.13",
+          "name": "Thyroid_Subclinical_Hypothyroidism",
+          "panelType": "THYROID",
+          "description": "Mildly elevated TSH with normal T4",
+          "expectedPattern": "SUBCLINICAL_HYPOTHYROIDISM",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P3.14",
+          "name": "Cardiac_Troponin_CKD_Context",
+          "panelType": "CARDIAC",
+          "description": "Elevated troponin interpreted in CKD context",
+          "expectedPattern": "TROPONIN_ELEVATED_CKD_CONTEXT",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.15",
+          "name": "Cardiac_Rising_Troponin",
+          "panelType": "CARDIAC",
+          "description": "Serial troponin showing >20% rise (acute MI pattern)",
+          "expectedPattern": "ACUTE_MI_TROPONIN_RISE",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.16",
+          "name": "Renal_AKI_Stage_1",
+          "panelType": "RENAL",
+          "description": "Creatinine 1.5-2x baseline (AKI Stage 1)",
+          "expectedPattern": "AKI_STAGE_1",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.17",
+          "name": "Renal_AKI_Stage_3",
+          "panelType": "RENAL",
+          "description": "Creatinine >3x baseline or >4.0 mg/dL (AKI Stage 3)",
+          "expectedPattern": "AKI_STAGE_3",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.18",
+          "name": "Renal_CKD_Staging",
+          "panelType": "RENAL",
+          "description": "eGFR-based CKD staging (G1-G5)",
+          "expectedPattern": "CKD_STAGING",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.19",
+          "name": "Lipid_Hyperlipidemia",
+          "panelType": "LIPID",
+          "description": "Elevated LDL and/or triglycerides",
+          "expectedPattern": "HYPERLIPIDEMIA",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.20",
+          "name": "Lipid_Low_HDL_Risk",
+          "panelType": "LIPID",
+          "description": "Low HDL increasing cardiovascular risk",
+          "expectedPattern": "LOW_HDL_CV_RISK",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.21",
+          "name": "Coagulation_Panel_PT_INR_PTT",
+          "panelType": "COAGULATION",
+          "description": "PT/INR/PTT patterns for coagulation assessment",
+          "expectedPattern": "COAGULOPATHY",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.22",
+          "name": "Iron_Studies_Panel",
+          "panelType": "IRON",
+          "description": "Iron deficiency vs overload patterns",
+          "expectedPattern": "IRON_DEFICIENCY",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.23",
+          "name": "Electrolyte_Panel_Hypomagnesemia",
+          "panelType": "ELECTROLYTE",
+          "description": "Magnesium patterns with electrolyte correlation",
+          "expectedPattern": "HYPOMAGNESEMIA",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.24",
+          "name": "Bone_Metabolism_Panel",
+          "panelType": "BONE",
+          "description": "Calcium/Phosphorus/PTH patterns",
+          "expectedPattern": "HYPERPARATHYROIDISM",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.25",
+          "name": "Acute_Phase_Panel",
+          "panelType": "ACUTE_PHASE",
+          "description": "CRP/ESR/Procalcitonin infection markers",
+          "expectedPattern": "ACUTE_INFECTION",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P3.26",
+          "name": "Cardiac_Biomarker_Panel",
+          "panelType": "CARDIAC",
+          "description": "Troponin+BNP+CK-MB comprehensive cardiac assessment",
+          "expectedPattern": "ACUTE_CARDIAC_EVENT",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.27",
+          "name": "Diabetic_Monitoring_Panel",
+          "panelType": "DIABETIC",
+          "description": "Glucose+HbA1c+Lipids diabetic management",
+          "expectedPattern": "DIABETES_UNCONTROLLED",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.28",
+          "name": "Liver_Synthetic_Panel",
+          "panelType": "LIVER_SYNTHETIC",
+          "description": "Albumin+PT+Bilirubin liver synthetic function",
+          "expectedPattern": "LIVER_SYNTHETIC_FAILURE",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P3.29",
+          "name": "Nutritional_Panel",
+          "panelType": "NUTRITIONAL",
+          "description": "B12/Folate/Iron nutritional assessment",
+          "expectedPattern": "NUTRITIONAL_DEFICIENCY",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P3.30",
+          "name": "Tumor_Marker_Panel",
+          "panelType": "TUMOR_MARKER",
+          "description": "PSA/AFP/CA-125 tumor marker assessment",
+          "expectedPattern": "ELEVATED_TUMOR_MARKER",
+          "criticalityLevel": "HIGH"
+        }
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Context-Aware Interpretation",
+      "description": "Patient context modifies lab interpretation",
+      "testCount": 20,
+      "tests": [
+        {
+          "id": "P4.1",
+          "name": "Pregnancy_Trimester_Specific_Ranges",
+          "context": {"isPregnant": true, "trimester": 2},
+          "description": "Use pregnancy-specific reference ranges",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.2",
+          "name": "Pediatric_Range_Enforcement",
+          "context": {"age": 5, "isPediatric": true},
+          "description": "Apply pediatric reference ranges",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.3",
+          "name": "Elderly_Adjusted_Thresholds",
+          "context": {"age": 85, "isElderly": true},
+          "description": "Age-adjusted thresholds for elderly",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P4.4",
+          "name": "Diabetic_HbA1c_Glucose_Joint_Reasoning",
+          "context": {"hasDiabetes": true},
+          "description": "Correlate HbA1c with glucose patterns",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.5",
+          "name": "CKD_Patient_Electrolyte_Risk_Stack",
+          "context": {"hasCKD": true, "ckdStage": 4},
+          "description": "Heightened electrolyte monitoring for CKD",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P4.6",
+          "name": "Heart_Failure_BNP_Contextualized",
+          "context": {"hasHeartFailure": true},
+          "description": "BNP interpretation in known heart failure",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.7",
+          "name": "Sepsis_Suspicion_Lactate_CRP_WBC",
+          "context": {"sepsisSuspected": true},
+          "description": "Combined sepsis markers interpretation",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P4.8",
+          "name": "Dialysis_Patient_Different_Ranges",
+          "context": {"onDialysis": true},
+          "description": "Dialysis-specific reference ranges",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.9",
+          "name": "Medication_Effect_Interpretation",
+          "context": {"medications": ["metformin", "lisinopril"]},
+          "description": "Account for drug effects on labs",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P4.10",
+          "name": "Oncology_Lab_Edge_Cases",
+          "context": {"hasActiveCancer": true, "onChemotherapy": true},
+          "description": "Oncology-specific lab interpretation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.11",
+          "name": "Post_Surgery_Recovery_Patterns",
+          "context": {"recentSurgery": true, "daysSinceSurgery": 3},
+          "description": "Post-operative lab pattern interpretation",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P4.12",
+          "name": "ICU_Patient_Critical_Thresholds",
+          "context": {"inICU": true},
+          "description": "ICU-specific critical value thresholds",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P4.13",
+          "name": "Transplant_Immunosuppression_Monitoring",
+          "context": {"hasTransplant": true, "transplantType": "kidney"},
+          "description": "Transplant patient lab monitoring",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.14",
+          "name": "HIV_Patient_CD4_Viral_Load_Context",
+          "context": {"hasHIV": true},
+          "description": "HIV-specific lab interpretation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.15",
+          "name": "Chronic_Liver_Disease_Coagulation",
+          "context": {"hasChronicLiverDisease": true},
+          "description": "Coagulation interpretation in liver disease",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.16",
+          "name": "Autoimmune_Disease_Activity_Markers",
+          "context": {"hasAutoimmune": true, "autoimmuneDiseaseType": "SLE"},
+          "description": "Autoimmune disease activity markers",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P4.17",
+          "name": "Malnutrition_Cachexia_Metabolic_Panel",
+          "context": {"hasMalnutrition": true},
+          "description": "Metabolic panel in malnutrition context",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.18",
+          "name": "Polypharmacy_Drug_Interference",
+          "context": {"polypharmacy": true, "medicationCount": 12},
+          "description": "Account for drug interference patterns",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P4.19",
+          "name": "Rare_Disease_Specific_Markers",
+          "context": {"hasRareDisease": true, "diseaseCode": "E85.4"},
+          "description": "Rare disease-specific lab interpretation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P4.20",
+          "name": "Athletic_Performance_Context",
+          "context": {"isAthlete": true, "athleteType": "elite"},
+          "description": "Athletic baseline consideration",
+          "criticalityLevel": "LOW"
+        }
+      ]
+    },
+    {
+      "phase": 5,
+      "name": "Severity & Risk Tiering",
+      "description": "Color-coded severity classification and risk scoring",
+      "testCount": 16,
+      "tests": [
+        {
+          "id": "P5.1",
+          "name": "Color_Classification_Green",
+          "expectedColor": "GREEN",
+          "description": "Normal values classified as green",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P5.2",
+          "name": "Color_Classification_Yellow",
+          "expectedColor": "YELLOW",
+          "description": "Mildly abnormal values classified as yellow",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P5.3",
+          "name": "Color_Classification_Orange",
+          "expectedColor": "ORANGE",
+          "description": "Moderately abnormal values classified as orange",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P5.4",
+          "name": "Color_Classification_Red",
+          "expectedColor": "RED",
+          "description": "Significantly abnormal values classified as red",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P5.5",
+          "name": "Color_Classification_Critical",
+          "expectedColor": "CRITICAL",
+          "description": "Panic values classified as critical (flashing)",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.6",
+          "name": "Life_Threatening_Triggers_Governance",
+          "description": "Life-threatening values trigger governance workflow",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.7",
+          "name": "Critical_Value_Sodium_Low",
+          "loincCode": "2951-2",
+          "testData": {"value": 115},
+          "expectedIsCritical": true,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.8",
+          "name": "Critical_Value_Glucose_Low",
+          "loincCode": "2345-7",
+          "testData": {"value": 30},
+          "expectedIsCritical": true,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.9",
+          "name": "Critical_Value_Hemoglobin_Low",
+          "loincCode": "718-7",
+          "testData": {"value": 4.5},
+          "expectedIsCritical": true,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.10",
+          "name": "Critical_Value_Platelets_Low",
+          "loincCode": "777-3",
+          "testData": {"value": 10000},
+          "expectedIsCritical": true,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.11",
+          "name": "Critical_Value_INR_High",
+          "loincCode": "34714-6",
+          "testData": {"value": 10.0},
+          "expectedIsCritical": true,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.12",
+          "name": "Critical_Value_Lactate_High",
+          "loincCode": "2524-7",
+          "testData": {"value": 8.0},
+          "expectedIsCritical": true,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P5.13",
+          "name": "Multi_Value_Risk_Score_Aggregation",
+          "description": "Aggregate risk score from multiple abnormal values",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P5.14",
+          "name": "Trending_Severity_Escalation",
+          "description": "Severity escalates based on worsening trend",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P5.15",
+          "name": "Context_Modified_Severity",
+          "description": "Context modifies base severity classification",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P5.16",
+          "name": "De_escalation_Logic_Recovery",
+          "description": "Severity de-escalates with improving values",
+          "criticalityLevel": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "phase": 6,
+      "name": "Care Gap Intelligence (KB-9)",
+      "description": "Integration with KB-9 for care gap detection",
+      "testCount": 12,
+      "tests": [
+        {
+          "id": "P6.1",
+          "name": "Diabetic_HbA1c_Overdue_Detection",
+          "context": {"hasDiabetes": true},
+          "description": "Detect overdue HbA1c for diabetic patients",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P6.2",
+          "name": "CKD_Annual_Labs_Due",
+          "context": {"hasCKD": true},
+          "description": "Annual CKD monitoring labs due",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P6.3",
+          "name": "Lipid_Panel_Due_With_CAD",
+          "context": {"hasCAD": true},
+          "description": "Lipid panel due for CAD patients",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P6.4",
+          "name": "TSH_Monitoring_On_Thyroid_Meds",
+          "context": {"medications": ["levothyroxine"]},
+          "description": "TSH monitoring for thyroid medication",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P6.5",
+          "name": "INR_Monitoring_On_Warfarin",
+          "context": {"medications": ["warfarin"]},
+          "description": "INR monitoring for warfarin patients",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P6.6",
+          "name": "Renal_Function_Post_Contrast",
+          "context": {"recentContrast": true, "daysSinceContrast": 2},
+          "description": "Post-contrast renal function monitoring",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P6.7",
+          "name": "Potassium_With_ACE_ARB",
+          "context": {"medications": ["lisinopril"]},
+          "description": "Potassium monitoring with ACE/ARB",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P6.8",
+          "name": "No_Gaps_When_All_Current",
+          "description": "No care gaps when monitoring is current",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P6.9",
+          "name": "Metformin_B12_Monitoring_Gap",
+          "context": {"medications": ["metformin"]},
+          "description": "B12 monitoring gap for metformin patients",
+          "monitoringInterval": "12 months",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P6.10",
+          "name": "Statin_LFT_Monitoring_Gap",
+          "context": {"medications": ["atorvastatin"]},
+          "description": "LFT monitoring gap for statin patients",
+          "monitoringInterval": "6 months",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P6.11",
+          "name": "Amiodarone_Thyroid_Liver_Gap",
+          "context": {"medications": ["amiodarone"]},
+          "description": "TSH/LFT monitoring for amiodarone",
+          "monitoringInterval": "6 months",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P6.12",
+          "name": "Immunosuppressant_Drug_Level_Gap",
+          "context": {"medications": ["tacrolimus"]},
+          "description": "Drug level monitoring for immunosuppressants",
+          "monitoringInterval": "30 days",
+          "criticalityLevel": "HIGH"
+        }
+      ]
+    },
+    {
+      "phase": 7,
+      "name": "Governance & Safety",
+      "description": "Critical value governance, audit trails, and safety protocols",
+      "testCount": 15,
+      "tests": [
+        {
+          "id": "P7.1",
+          "name": "Critical_Value_Triggers_KB14_Task",
+          "description": "Critical value creates KB-14 task",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.2",
+          "name": "Panic_Value_Priority_Critical",
+          "description": "Panic values receive CRITICAL priority",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.3",
+          "name": "Audit_Trail_Critical_Value",
+          "description": "Complete audit trail for critical values",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P7.4",
+          "name": "Acknowledgment_Tracking_Required",
+          "description": "Critical values require acknowledgment",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.5",
+          "name": "Critical_Value_SLA_60_Minutes",
+          "description": "60-minute SLA for critical value acknowledgment",
+          "slaMinutes": 60,
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.6",
+          "name": "Duplicate_Critical_Detection",
+          "description": "Detect duplicate critical value alerts",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P7.7",
+          "name": "Provenance_Tracking_KB8_Calculations",
+          "description": "Track provenance of KB-8 calculations",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P7.8",
+          "name": "Normal_Value_No_Task_Created",
+          "description": "Normal values don't create governance tasks",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P7.9",
+          "name": "Escalation_On_Missed_SLA",
+          "description": "Auto-escalation when SLA is missed",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.10",
+          "name": "Multi_Reviewer_Sign_Off_4_Eyes",
+          "description": "Four-eyes principle for critical overrides",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.11",
+          "name": "Audit_Log_Immutability",
+          "description": "Audit logs are immutable and tamper-evident",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P7.12",
+          "name": "HIPAA_Compliance_PHI_Masking",
+          "description": "PHI is masked in logs per HIPAA",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P7.13",
+          "name": "Critical_Override_Documentation",
+          "description": "Override decisions require documentation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P7.14",
+          "name": "System_To_System_Handoff_Tracking",
+          "description": "Track system-to-system handoffs",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P7.15",
+          "name": "Clinician_Alert_Delivery_Confirmation",
+          "description": "Confirm clinician alert delivery",
+          "criticalityLevel": "CRITICAL"
+        }
+      ]
+    },
+    {
+      "phase": 8,
+      "name": "Performance & Chaos",
+      "description": "Performance benchmarks and chaos engineering tests",
+      "testCount": 10,
+      "tests": [
+        {
+          "id": "P8.1",
+          "name": "Single_Interpretation_Under_100ms",
+          "performanceThreshold": "100ms",
+          "description": "Single lab interpretation < 100ms",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P8.2",
+          "name": "Panel_Assembly_Under_500ms",
+          "performanceThreshold": "500ms",
+          "description": "Panel assembly < 500ms",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P8.3",
+          "name": "Batch_20_Labs_Under_2_Seconds",
+          "performanceThreshold": "2000ms",
+          "description": "Batch of 20 labs < 2 seconds",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P8.4",
+          "name": "KB8_Timeout_Graceful_Degradation",
+          "description": "KB-8 timeout triggers graceful degradation",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P8.5",
+          "name": "Database_Connection_Failure_Recovery",
+          "description": "Recover from database connection failure",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P8.6",
+          "name": "Redis_Cache_Miss_Falls_Through",
+          "description": "Cache miss falls through to database",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P8.7",
+          "name": "Concurrent_Requests_Thread_Safety",
+          "description": "Thread safety under concurrent requests",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P8.8",
+          "name": "Memory_Stable_Under_Load",
+          "description": "Memory remains stable under load",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P8.9",
+          "name": "100_Concurrent_Interpretations_Load",
+          "description": "Handle 100 concurrent interpretations",
+          "concurrentRequests": 100,
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P8.10",
+          "name": "Network_Partition_Recovery_Chaos",
+          "description": "Recover from network partition (chaos)",
+          "chaosType": "network_partition",
+          "criticalityLevel": "HIGH"
+        }
+      ]
+    },
+    {
+      "phase": 9,
+      "name": "Clinical Edge Cases",
+      "description": "Edge case handling and special scenarios",
+      "testCount": 15,
+      "tests": [
+        {
+          "id": "P9.1",
+          "name": "Hemolyzed_Sample_Potassium_Warning",
+          "specimenQuality": "hemolyzed",
+          "description": "Warn about hemolyzed sample affecting potassium",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P9.2",
+          "name": "Lipemic_Sample_Chemistry_Warning",
+          "specimenQuality": "lipemic",
+          "description": "Warn about lipemic sample affecting chemistry",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P9.3",
+          "name": "Icteric_Sample_Bilirubin_Interference",
+          "specimenQuality": "icteric",
+          "description": "Warn about icteric sample interference",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P9.4",
+          "name": "Delta_Check_Failure_Suspicious_Value",
+          "description": "Flag suspicious value failing delta check",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P9.5",
+          "name": "String_Value_Lab_Interpretation",
+          "valueType": "string",
+          "description": "Handle string value labs (positive/negative)",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P9.6",
+          "name": "Below_Detection_Limit",
+          "valueModifier": "<",
+          "description": "Handle values below detection limit",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P9.7",
+          "name": "Above_Reportable_Range",
+          "valueModifier": ">",
+          "description": "Handle values above reportable range",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P9.8",
+          "name": "Pregnant_Trimester_Unknown",
+          "context": {"isPregnant": true, "trimester": null},
+          "description": "Handle pregnancy with unknown trimester",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P9.9",
+          "name": "Neonatal_Bilirubin_Special_Handling",
+          "context": {"age": 0, "ageUnit": "days", "ageInDays": 3},
+          "description": "Special bilirubin handling for neonates",
+          "criticalityLevel": "CRITICAL"
+        },
+        {
+          "id": "P9.10",
+          "name": "Post_Transfusion_CBC_Interpretation",
+          "context": {"recentTransfusion": true, "hoursSinceTransfusion": 12},
+          "description": "CBC interpretation post-transfusion",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P9.11",
+          "name": "Athlete_Baseline_Different",
+          "context": {"isAthlete": true},
+          "description": "Athletic baseline consideration",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P9.12",
+          "name": "Altitude_Adjusted_Hemoglobin",
+          "context": {"altitude": 8000},
+          "description": "Altitude-adjusted hemoglobin interpretation",
+          "criticalityLevel": "LOW"
+        },
+        {
+          "id": "P9.13",
+          "name": "Missing_Reference_Range_Fallback",
+          "description": "Handle missing reference range with fallback",
+          "criticalityLevel": "MEDIUM"
+        },
+        {
+          "id": "P9.14",
+          "name": "Unit_Conversion_Handling",
+          "description": "Handle different unit systems (SI vs conventional)",
+          "criticalityLevel": "HIGH"
+        },
+        {
+          "id": "P9.15",
+          "name": "Extremely_Obese_BMI_Consideration",
+          "context": {"bmi": 55},
+          "description": "Consider extreme obesity in interpretation",
+          "criticalityLevel": "MEDIUM"
+        }
+      ]
+    }
+  ],
+  "loincCodeReference": {
+    "2823-3": "Potassium",
+    "2951-2": "Sodium",
+    "2345-7": "Glucose",
+    "718-7": "Hemoglobin",
+    "777-3": "Platelets",
+    "2160-0": "Creatinine",
+    "6690-2": "WBC",
+    "4548-4": "HbA1c",
+    "3016-3": "TSH",
+    "1742-6": "ALT",
+    "1975-2": "Total Bilirubin",
+    "1988-5": "CRP",
+    "1963-8": "Bicarbonate",
+    "34714-6": "INR",
+    "2524-7": "Lactate",
+    "787-2": "MCV",
+    "789-8": "RBC",
+    "4544-3": "Hematocrit",
+    "785-6": "MCH",
+    "786-4": "MCHC",
+    "1920-8": "AST",
+    "6768-6": "ALP",
+    "1751-7": "Albumin",
+    "2093-3": "Total Cholesterol",
+    "2571-8": "Triglycerides",
+    "2085-9": "HDL Cholesterol",
+    "13457-7": "LDL Cholesterol",
+    "10839-9": "Troponin I",
+    "30934-4": "BNP",
+    "2157-6": "CK-MB"
+  },
+  "criticalValueThresholds": {
+    "potassium": {"panicLow": 2.5, "panicHigh": 6.5, "unit": "mEq/L"},
+    "sodium": {"panicLow": 120, "panicHigh": 160, "unit": "mEq/L"},
+    "glucose": {"panicLow": 40, "panicHigh": 500, "unit": "mg/dL"},
+    "hemoglobin": {"panicLow": 5.0, "panicHigh": null, "unit": "g/dL"},
+    "platelets": {"panicLow": 20000, "panicHigh": null, "unit": "/uL"},
+    "inr": {"panicLow": null, "panicHigh": 8.0, "unit": "ratio"},
+    "lactate": {"panicLow": null, "panicHigh": 7.0, "unit": "mmol/L"}
+  },
+  "governanceRequirements": {
+    "criticalValueSLA": "60 minutes",
+    "acknowledgmentRequired": true,
+    "escalationPath": ["ordering_provider", "on_call_physician", "department_head"],
+    "auditRetention": "7 years",
+    "fourEyesPrinciple": true
+  }
+}

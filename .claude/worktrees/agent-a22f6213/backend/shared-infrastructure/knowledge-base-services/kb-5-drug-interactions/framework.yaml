@@ -1,0 +1,438 @@
+framework_version: 2.0.0
+template_type: knowledge_base
+created: '2025-01-15T00:00:00Z'
+last_updated: '2025-08-29T05:44:17.282001+00:00'
+service_identity:
+  component_name: KB-5 Drug Interaction Service
+  service_id: kb-5-interactions
+  version: 1.0.0
+  owner_team: clinical-platform-team
+  clinical_lead: clinical-informatics-team
+  next_review: '2025-04-15'
+1_purpose_and_scope:
+  purpose: Drug-drug interaction detection and management
+  clinical_value: Describe direct clinical benefits and use cases
+  scope:
+    includes:
+    - Specific functionality included
+    - Clinical domains covered
+    - Data types processed
+    excludes:
+    - Out-of-scope functionality
+    - Clinical domains not covered
+    - Limitations and boundaries
+  critical_requirements:
+  - Non-negotiable clinical safety requirements
+  - Performance requirements
+  - Regulatory compliance requirements
+  success_criteria:
+  - Measurable clinical outcomes
+  - Technical performance targets
+  - User satisfaction metrics
+2_data_model:
+  primary_format: JSON
+  schema_location: ./schemas/data-model.json
+  validation_strategy: json_schema|avro|protobuf
+  version_strategy: semantic|calendar|incremental
+  data_classifications:
+    phi_data: false
+    clinical_data: true
+    operational_data: false
+  storage_requirements:
+    encryption_at_rest: true
+    backup_strategy: continuous|daily|weekly
+    retention_period: 7_years
+  schema_evolution:
+    backward_compatibility: true
+    migration_strategy: automated|manual|hybrid
+3_api_contracts:
+  specification_format: openapi_3.0|grpc|graphql
+  specification_location: ./api/openapi.yaml
+  base_path: /v1
+  authentication: api_key|oauth2|mtls|none
+  rate_limiting: true
+  endpoints:
+    primary_endpoints:
+    - path: /health
+      method: GET
+      sla: 1ms p95
+      purpose: Health check
+    - path: /metrics
+      method: GET
+      sla: 5ms p95
+      purpose: Prometheus metrics
+    - path: /v1/check
+      method: POST
+      sla: 15ms p95
+      purpose: Check interactions
+    - path: /v1/batch
+      method: POST
+      sla: 50ms p95
+      purpose: Batch interaction check
+    batch_endpoints:
+    - path: /v1/batch
+      method: POST
+      max_batch_size: 1000
+      sla: 100ms p95
+  versioning:
+    strategy: uri|header|accept
+    deprecation_policy: 90_days_notice
+  error_handling:
+    standard_codes: true
+    error_format: rfc7807
+4_integration_map:
+  dependencies:
+    required:
+    - service: Evidence Envelope
+      contract: ./contracts/audit.proto
+      purpose: Audit trail logging
+      fallback_strategy: async_queue
+    - service: KB-7 Terminology
+      contract: ./contracts/terminology.proto
+      purpose: Code resolution and validation
+      fallback_strategy: cached_response
+    optional: []
+  consumers:
+    internal:
+    - service: Flow2 Orchestrator
+      contract: ./contracts/orchestrator.proto
+      usage_pattern: high_frequency
+    external:
+    - service: Safety Gateway
+      contract: ./contracts/safety.proto
+      usage_pattern: event_driven
+  integration_patterns:
+    synchronous:
+    - terminology_lookup
+    - validation
+    asynchronous:
+    - audit_logging
+    - analytics
+    event_driven:
+    - safety_alerts
+    - notifications
+5_performance:
+  latency_targets:
+    p50: 5ms
+    p95: 10ms
+    p99: 100ms
+    timeout: 30s
+  throughput_targets:
+    rps_target: 50000
+    concurrent_connections: 1000
+  caching_strategy:
+    levels:
+    - name: L1 In-Memory
+      ttl: 5m
+      size_mb: 100
+      hit_rate_target: 0.85
+    - name: L2 Redis
+      ttl: 1h
+      size_mb: 1000
+      hit_rate_target: 0.95
+    invalidation: ttl|event|manual
+  resource_limits:
+    cpu: 2 cores
+    memory: 4GB
+    storage: 50GB
+    network: 1Gbps
+6_testing:
+  test_levels:
+    unit:
+      coverage_target: 0.95
+      framework: go_test|pytest|jest
+    integration:
+      test_data_strategy: synthetic|anonymized|mocked
+      external_services: mocked
+    contract:
+      consumer_tests: true
+      provider_tests: true
+    performance:
+      load_testing: true
+      stress_testing: true
+      chaos_engineering: false
+  clinical_validation:
+    required: true
+    validation_scenarios: ./tests/clinical/scenarios/
+    sign_off_required: true
+    regulatory_testing: true
+  test_automation:
+    ci_integration: true
+    automated_regression: true
+    smoke_tests: true
+7_governance:
+  ownership:
+    technical_owner: platform-team
+    clinical_owner: clinical-informatics
+    business_owner: clinical-operations
+  change_management:
+    change_types:
+    - type: hotfix
+      approval:
+      - technical_lead
+      timeline: immediate
+    - type: minor
+      approval:
+      - technical_lead
+      - clinical_lead
+      timeline: next_sprint
+    - type: major
+      approval:
+      - technical_lead
+      - clinical_lead
+      - medical_director
+      timeline: next_quarter
+    documentation_required: true
+    impact_assessment: true
+  review_cycles:
+    technical_review: monthly
+    clinical_review: quarterly
+    security_review: annually
+  deprecation:
+    notice_period: 90_days
+    migration_support: true
+    sunset_timeline: 6_months
+8_cicd:
+  pipeline_definition: .github/workflows/kb-service-pipeline.yaml
+  stages:
+  - name: validate
+    tasks:
+    - framework_validation
+    - schema_validation
+  - name: test
+    tasks:
+    - unit_tests
+    - integration_tests
+    - security_tests
+  - name: review
+    tasks:
+    - clinical_review
+    - code_review
+  - name: build
+    tasks:
+    - compile
+    - package
+    - sign_artifacts
+  - name: deploy
+    tasks:
+    - deploy_staging
+    - smoke_tests
+    - deploy_production
+  deployment_strategy: blue_green|canary|rolling
+  rollback:
+    automated_rollback: true
+    rollback_triggers:
+    - error_rate
+    - latency
+    - health_check
+    max_rollback_time: 5_minutes
+  artifact_management:
+    registry: docker_hub|ecr|gcr
+    retention: 30_days
+    signing: true
+9_monitoring:
+  metrics:
+    endpoint: /metrics
+    format: prometheus
+    custom_metrics:
+    - name: interactions_requests_total
+      type: counter
+      labels:
+      - method
+      - status
+      - endpoint
+    - name: interactions_request_duration_seconds
+      type: histogram
+      labels:
+      - method
+      - endpoint
+    - name: interactions_found_total
+      type: counter
+      labels:
+      - severity
+      - drug_pair
+    - name: batch_interaction_checks
+      type: histogram
+      labels:
+      - batch_size
+    sla_metrics:
+    - name: availability
+      target: 0.999
+    - name: latency_p95
+      target: 25ms
+    - name: error_rate
+      target: 0.001
+  logging:
+    level: info
+    format: json
+    retention: 90_days
+    pii_scrubbing: true
+  tracing:
+    enabled: true
+    sampling_rate: 0.1
+    trace_retention: 7_days
+  alerting:
+    notification_channels:
+    - slack
+    - pagerduty
+    - email
+    escalation_policy: true
+    alert_fatigue_prevention: true
+  dashboards:
+    operational: ./monitoring/operational-dashboard.json
+    clinical: ./monitoring/clinical-dashboard.json
+    executive: ./monitoring/executive-dashboard.json
+10_security_privacy:
+  data_classification:
+    phi_handling: none|encrypted|tokenized
+    data_residency: us|eu|global
+    consent_management: false
+  encryption:
+    at_rest:
+      algorithm: AES-256
+      key_management: aws_kms|azure_kv|hashicorp_vault
+    in_transit:
+      tls_version: '1.3'
+      mutual_auth: false
+  access_control:
+    authentication: api_key|oauth2|saml
+    authorization: rbac|abac
+    audit_logging: true
+    access_matrix:
+      read:
+      - clinical_user
+      - system_integrator
+      write:
+      - clinical_admin
+      - kb_maintainer
+      admin:
+      - system_admin
+      - security_team
+  vulnerability_management:
+    scanning_frequency: daily
+    patch_management: automated|manual
+    penetration_testing: annually
+  privacy_controls:
+    data_minimization: true
+    purpose_limitation: true
+    right_to_erasure: false
+11_failure_modes:
+  failure_scenarios:
+  - scenario: database_unavailable
+    degradation: serve_cached_responses
+    recovery: automatic_failover
+  - scenario: memory_exhaustion
+    degradation: reject_new_requests
+    recovery: pod_restart
+  circuit_breakers:
+    enabled: true
+    failure_threshold: 0.5
+    recovery_timeout: 30s
+    monitoring: true
+  graceful_degradation:
+    levels:
+    - level: 1
+      description: Serve from cache
+      functionality: 0.8
+    - level: 2
+      description: Conservative defaults
+      functionality: 0.5
+    - level: 3
+      description: Essential functions only
+      functionality: 0.2
+  disaster_recovery:
+    rto: 15_minutes
+    rpo: 5_minutes
+    backup_frequency: hourly
+    geo_redundancy: false
+12_data_lifecycle:
+  retention_policies:
+    transactional_data: 7_years
+    audit_logs: 7_years
+    metrics_data: 2_years
+    cache_data: as_configured
+  archival_strategy:
+    trigger: age_based
+    destination: s3_glacier|azure_archive
+    compression: true
+    encryption: true
+  deletion_workflows:
+    soft_delete: true
+    hard_delete_delay: 30_days
+    verification_required: true
+    audit_trail: true
+  data_quality:
+    validation_rules: ./schemas/validation-rules.json
+    quality_metrics: true
+    anomaly_detection: true
+  compliance_tracking:
+    gdpr_compliance: true
+    hipaa_compliance: true
+    sox_compliance: false
+13_supply_chain:
+  dependency_management:
+    manifest_location: ./go.mod|package.json|requirements.txt
+    vulnerability_scanning:
+      tool: snyk|trivy|grype
+      frequency: on_commit
+      block_on_critical: true
+    license_compliance: true
+    update_policy: security_patches_immediate
+  software_bill_of_materials:
+    format: spdx|cyclonedx
+    location: ./sbom.json
+    generation: automated
+    signing: true
+  artifact_integrity:
+    signing_method: cosign|gpg
+    verification_required: true
+    key_management: kms|hardware_token
+  source_code_security:
+    static_analysis: true
+    secret_detection: true
+    code_signing: true
+    branch_protection: true
+implementation_checklist:
+  framework_setup:
+  - Create framework.yaml
+  - Define API contracts
+  - Set up validation
+  - Configure monitoring
+  development:
+  - Implement core logic
+  - Add tests (>95% coverage)
+  - Set up CI/CD
+  - Create documentation
+  security:
+  - Security review
+  - Vulnerability scanning
+  - Access controls
+  - Encryption setup
+  operations:
+  - Monitoring setup
+  - Alerting configuration
+  - Backup procedures
+  - Incident response
+  compliance:
+  - Clinical validation
+  - Regulatory review
+  - Audit preparation
+  - Sign-off collection
+validation_rules:
+  required_sections:
+  - 1_purpose_and_scope
+  - 2_data_model
+  - 3_api_contracts
+  - 4_integration_map
+  - 5_performance
+  - 6_testing
+  - 7_governance
+  - 8_cicd
+  - 9_monitoring
+  - 10_security_privacy
+  - 11_failure_modes
+  - 12_data_lifecycle
+  - 13_supply_chain
+  version_compatibility: 2.0.x
+  clinical_safety_required: true
+  audit_trail_required: true

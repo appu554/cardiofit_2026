@@ -1,0 +1,293 @@
+# KB-3 Performance Optimization Strategy
+# Multi-layer caching and query optimization for sub-50ms performance
+
+caching:
+  layers:
+    L1_memory:
+      size: 200MB
+      ttl: 300  # 5 minutes
+      engine: "node-cache"
+      preload:
+        # High-frequency guidelines
+        - "ACC-AHA-HTN-2017"
+        - "ADA-DM-2025" 
+        - "KDIGO-CKD-2024"
+        - "ESC-HF-2021"
+        - "WHO-HTN-2023"
+      patterns:
+        - "guideline:*"
+        - "conflict:resolved:*"
+        - "pathway:common:*"
+    
+    L2_redis:
+      size: 2GB
+      ttl: 3600  # 1 hour
+      cluster: "redis-kb3"
+      patterns:
+        - "guideline:*"
+        - "conflict:*"
+        - "pathway:*"
+        - "safety:override:*"
+        - "validation:*"
+      compression: "gzip"
+      pipeline_batch_size: 100
+    
+    L3_cdn:
+      ttl: 86400  # 24 hours
+      provider: "cloudflare"
+      endpoints:
+        - "/api/guidelines/static/*"
+        - "/api/evidence/summary/*"
+      invalidation: "on_update"
+      edge_regions: ["us-east", "eu-west", "ap-southeast"]
+
+query_optimization:
+  neo4j:
+    indexes:
+      # Core entity indexes
+      - "CREATE INDEX guideline_region_idx IF NOT EXISTS FOR (g:Guideline) ON (g.region)"
+      - "CREATE INDEX guideline_condition_idx IF NOT EXISTS FOR (g:Guideline) ON (g.condition_primary)"
+      - "CREATE INDEX guideline_status_idx IF NOT EXISTS FOR (g:Guideline) ON (g.status)"
+      - "CREATE INDEX recommendation_domain_idx IF NOT EXISTS FOR (r:Recommendation) ON (r.domain)"
+      - "CREATE INDEX recommendation_grade_idx IF NOT EXISTS FOR (r:Recommendation) ON (r.evidence_grade)"
+      
+      # Composite indexes for common queries
+      - "CREATE INDEX guideline_region_condition_idx IF NOT EXISTS FOR (g:Guideline) ON (g.region, g.condition_primary)"
+      - "CREATE INDEX recommendation_domain_grade_idx IF NOT EXISTS FOR (r:Recommendation) ON (r.domain, r.evidence_grade)"
+    
+    query_plans:
+      - name: "get_by_condition"
+        cache_key: "condition:{condition}:region:{region}"
+        ttl: 1800  # 30 minutes
+        query: |
+          MATCH (g:Guideline)-[:CONTAINS]->(r:Recommendation)
+          WHERE g.condition_primary = $condition
+          AND (g.region = $region OR g.region IN ['Global', 'WHO'])
+          AND g.status = 'active'
+          RETURN g, r
+        
+      - name: "conflict_detection"
+        cache_key: "conflict:{g1}:{g2}"
+        ttl: 600   # 10 minutes
+        query: |
+          MATCH (g1:Guideline {guideline_id: $g1})-[:CONTAINS]->(r1:Recommendation)
+          MATCH (g2:Guideline {guideline_id: $g2})-[:CONTAINS]->(r2:Recommendation)
+          WHERE r1.domain = r2.domain
+          AND r1.statement <> r2.statement
+          RETURN r1, r2, r1.domain
+        
+      - name: "clinical_pathway"
+        cache_key: "pathway:{conditions}:{region}:{hash}"
+        ttl: 3600  # 1 hour
+        query: |
+          MATCH (g:Guideline)-[:CONTAINS]->(r:Recommendation)
+          WHERE ANY(condition IN $conditions WHERE g.condition_primary =~ condition)
+          AND (g.region = $region OR g.region IN ['Global', 'WHO'])
+          OPTIONAL MATCH (s:SafetyOverride)-[:OVERRIDES]->(r)
+          RETURN g, r, s
+
+  postgresql:
+    indexes:
+      # Guidelines table optimization
+      - "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_guidelines_region_condition ON guideline_evidence.guidelines(region, condition_primary) WHERE status = 'active'"
+      - "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_guidelines_effective_date ON guideline_evidence.guidelines(effective_date DESC) WHERE status = 'active'"
+      
+      # Conflict resolutions performance
+      - "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_conflict_resolution_timestamp ON guideline_evidence.conflict_resolutions(timestamp DESC)"
+      - "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_conflict_safety_override ON guideline_evidence.conflict_resolutions(safety_override, timestamp) WHERE safety_override = true"
+      
+      # Safety overrides optimization
+      - "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_safety_overrides_active ON guideline_evidence.safety_overrides(active, priority) WHERE active = true"
+      
+      # Cross-KB linkages
+      - "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_kb_linkages_validation ON guideline_evidence.kb_linkages(validation_status, target_kb)"
+    
+    connection_pooling:
+      max_connections: 20
+      idle_timeout: 30000
+      connection_timeout: 2000
+      statement_timeout: 30000
+    
+    query_optimization:
+      shared_preload_libraries: "pg_stat_statements"
+      max_prepared_transactions: 100
+      work_mem: "64MB"
+      maintenance_work_mem: "256MB"
+
+monitoring:
+  metrics:
+    # Core performance metrics
+    - name: "guideline_query_latency_p95"
+      description: "95th percentile query latency for guideline requests"
+      target: "<50ms"
+      alert_threshold: ">100ms"
+      collection_interval: "30s"
+      
+    - name: "conflict_resolution_rate"
+      description: "Percentage of conflicts successfully resolved automatically"
+      target: ">95%"
+      alert_threshold: "<90%"
+      collection_interval: "1m"
+      
+    - name: "safety_override_frequency"
+      description: "Rate of safety overrides per hour"
+      target: "<10/hour"
+      alert_threshold: ">50/hour"
+      collection_interval: "1m"
+      
+    - name: "cache_hit_ratio"
+      description: "Overall cache hit ratio across all layers"
+      target: ">90%"
+      alert_threshold: "<75%"
+      collection_interval: "30s"
+      
+    - name: "cross_kb_link_validity"
+      description: "Percentage of valid cross-KB references"
+      target: ">98%"
+      alert_threshold: "<95%"
+      collection_interval: "5m"
+      
+    # Clinical quality metrics
+    - name: "guideline_currency"
+      description: "Percentage of guidelines updated within 2 years"
+      target: ">80%"
+      alert_threshold: "<70%"
+      collection_interval: "1h"
+      
+    - name: "evidence_quality_score"
+      description: "Average evidence quality across recommendations"
+      target: ">75"
+      alert_threshold: "<65"
+      collection_interval: "1h"
+      
+    # System health metrics
+    - name: "database_connection_pool_usage"
+      description: "PostgreSQL connection pool utilization"
+      target: "<80%"
+      alert_threshold: ">90%"
+      collection_interval: "30s"
+      
+    - name: "neo4j_memory_usage"
+      description: "Neo4j heap memory usage"
+      target: "<80%"
+      alert_threshold: ">90%"
+      collection_interval: "30s"
+
+  alerting:
+    critical:
+      # Safety-related alerts
+      - name: "safety_override_storm"
+        condition: "safety_override_frequency > 100/hour"
+        severity: "critical"
+        notification: ["oncall_team", "clinical_leads"]
+        
+      - name: "conflict_resolution_failure"
+        condition: "conflict_resolution_rate < 85%"
+        severity: "critical"
+        notification: ["oncall_team"]
+        
+    warning:
+      # Performance degradation
+      - name: "query_latency_degradation"
+        condition: "guideline_query_latency_p95 > 75ms"
+        severity: "warning"
+        notification: ["dev_team"]
+        
+      - name: "cache_performance_degradation"
+        condition: "cache_hit_ratio < 80%"
+        severity: "warning"
+        notification: ["dev_team"]
+
+optimization_strategies:
+  # Preloading strategy
+  preload:
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    guidelines:
+      high_frequency:
+        - "ACC-AHA-HTN-2017"
+        - "ADA-DM-2025"
+        - "KDIGO-CKD-2024"
+        - "ESC-HF-2021"
+        - "WHO-HTN-2023"
+      regional_priority:
+        US: ["ACC-AHA-*", "ADA-*"]
+        EU: ["ESC-*", "EAS-*"]
+        Global: ["WHO-*"]
+    
+    pathways:
+      common_conditions:
+        - "diabetes_ckd_pathway"
+        - "heart_failure_hypertension_pathway"
+        - "ckd_anemia_pathway"
+  
+  # Query optimization
+  query_hints:
+    use_index_scans: true
+    parallel_query_workers: 4
+    enable_hashjoin: true
+    enable_mergejoin: true
+    
+  # Connection optimization  
+  connection_management:
+    pool_size_scaling:
+      low_load: 10
+      medium_load: 15
+      high_load: 20
+    statement_pooling: true
+    prepared_statement_cache: 1000
+
+# Performance testing configurations
+load_testing:
+  scenarios:
+    - name: "typical_clinical_query"
+      duration: "5m"
+      rate: "100/s"
+      endpoint: "/api/guidelines"
+      parameters:
+        condition: "hypertension"
+        region: "US"
+        
+    - name: "complex_pathway_generation"
+      duration: "2m"
+      rate: "10/s"
+      endpoint: "/api/clinical-pathway"
+      parameters:
+        conditions: ["diabetes", "ckd", "hypertension"]
+        region: "US"
+        
+    - name: "conflict_resolution_stress"
+      duration: "3m"
+      rate: "50/s"
+      endpoint: "/api/conflicts/resolve"
+      parameters:
+        guideline_ids: ["ACC-AHA-HTN-2017", "ESC-ESH-HTN-2023"]
+
+  targets:
+    response_time_p95: "<50ms"
+    response_time_p99: "<100ms"
+    error_rate: "<0.1%"
+    throughput: ">1000 req/s"
+
+# Resource allocation
+resource_allocation:
+  memory:
+    total: "4GB"
+    breakdown:
+      application: "2GB"
+      cache_L1: "200MB"
+      neo4j: "1.5GB"
+      buffers: "300MB"
+      
+  cpu:
+    cores: 4
+    allocation:
+      api_service: "40%"
+      conflict_resolver: "25%"
+      neo4j: "25%"
+      background_tasks: "10%"
+      
+  storage:
+    postgresql: "50GB"
+    neo4j: "20GB"
+    logs: "10GB"
+    cache: "5GB"

@@ -1,0 +1,152 @@
+﻿Of course. Let's proceed with the same rigor to architect KB-1: Dosing Rules. This component is the heart of the system's calculation capabilities and requires absolute precision and auditability.
+This guide provides the detailed design and implementation plan for KB-1, adhering to the established Universal Framework and integrating all essential elements for a SaMD-grade service.
+________________
+
+
+Implementation Guide: KB-1 Drug Dosing Rules
+
+
+Friday, August 29, 2025, 2:15 PM AEST, Sydney, NSW
+This document provides the detailed design and implementation plan for the KB-1 Drug Dosing Rules microservice, following the 13-section Universal Framework 2.0.
+
+
+1. Purpose & Scope
+
+
+* Purpose: To serve as the single, definitive, and auditable source of truth for all mathematical and algorithmic rules required for medication dose calculation. Its primary function is to provide deterministic, unit-aware, and version-controlled inputs to the Rust Dose Calculation Engine.
+* In Scope:
+   * Base, initial, and maximum dose definitions.
+   * Formulation-specific rules.
+   * Algorithmic dose adjustments for factors like renal (eGFR) and hepatic function.
+   * Rules for special populations (e.g., pediatrics, geriatrics).
+   * Complex titration schedules with monitoring requirements.
+* Out of Scope:
+   * Final dose calculation (this is performed by the Rust Engine).
+   * Clinical rationale for a dose (this is from KB-3).
+   * Absolute contraindications that prevent dosing entirely (this is from KB-4).
+
+
+2. Data Model & Schema
+
+
+* Primary Technology: PostgreSQL 15+ with extensive use of JSONB for flexible rule definitions, ensuring transactional integrity and relational consistency.
+* Authoring Format: Dosing rules will be authored in human-readable TOML files 1. A CI/CD pipeline will be responsible for parsing these TOML files and ingesting/normalizing the data into the structured PostgreSQL schema below.
+
+* Schema Implementation: The following tables from the Database Architecture for 7 KB Services document will be implemented:
+   * dosing_rules: The core table for immutable, versioned rules, containing the drug identification, core rule definitions, and audit fields 2.
+
+   * dose_adjustments: A related table holding specific adjustment logic for factors like renal or hepatic impairment, linked to a parent rule version 3.
+
+   * titration_schedules: Defines multi-step titration protocols, including monitoring requirements and target parameters 4.
+
+   * population_dosing: Contains specialized dosing formulas and safety limits for populations like pediatrics or geriatrics 5.
+
+   * active_dosing_rules: A materialized view that joins all related rule components into a single, denormalized record for ultra-fast lookups of currently active rules 6.
+
+
+
+3. Cross-Component Integration
+
+
+      * Primary Consumer: The Rust Dose Calculation Engine is the sole consumer of KB-1's data. This is a critical, high-performance, server-to-server integration.
+      * Orchestrator Interaction: The GO Orchestrator does not call KB-1 directly. It calls the Rust Engine (during Phase 3b), which then queries KB-1 to fetch the necessary rules for its calculation.
+      * Dependencies: KB-1 receives a drug code and patient context (e.g., eGFR, age, weight) via the Rust Engine's request. Its rules are informed by evidence from KB-3 and safety thresholds from KB-4, but these are linked via IDs, not direct runtime calls.
+
+
+4. API & Query Contracts
+
+
+      * Technology: A high-performance, internal-facing gRPC API is mandated for the communication between the Rust Engine and KB-1. This ensures a strict, typed contract and minimal network overhead.
+      * Primary Endpoint: rpc GetDosingRuleset(DosingRuleRequest) returns (DosingRuleResponse)
+      * Protobuf Definition:
+Protocol Buffers
+message DosingRuleRequest {
+ string transaction_id = 1;
+ string drug_code = 2; // e.g., RxNorm CUI
+ PatientContext patient_context = 3;
+ string version_pin = 4; // From the Evidence Envelope
+}
+
+message DosingRuleResponse {
+ DosingRule main_rule = 1;
+ repeated DoseAdjustment adjustments = 2;
+ TitrationSchedule schedule = 3;
+ PopulationDosing population_rule = 4;
+}
+
+      * Service Level Objective (SLO): A p95 latency of < 60ms is required for all gRPC calls.
+
+
+5. Security & Privacy by Design
+
+
+         * Access Control: Deployed in a private network with strict mTLS. Access is restricted exclusively to the Rust Dose Calculation Engine.
+         * Data Minimization: The request payload contains only the patient context attributes essential for selecting and applying dosing rules (e.g., eGFR, age, weight, liver function labs), with no direct patient identifiers.
+
+
+6. Performance & Caching Strategy
+
+
+         * Database: Queries will primarily hit the active_dosing_rules materialized view, which is pre-joined and indexed for extreme speed. The view should be refreshed on a trigger when underlying rule tables are updated.
+         * Caching: A Redis write-through cache is required.
+         * Key Pattern: dose:v2:{drug_code}:{context_hash}7.
+
+         * TTL: 1 hour, with immediate invalidation on any update to a rule affecting that drug code 8.
+
+         * Preloading: The cache for the top 100-200 most frequently prescribed medications will be pre-warmed on service start and refreshed periodically 9.
+
+
+
+7. Testing & Quality Assurance Strategy
+
+
+            * Coverage Requirement: All mathematical logic, including dose calculations, adjustment factor applications, and titration step logic, requires 100% unit test coverage.
+            * Test Suite:
+            * Unit Tests: Each rule and sub-rule must be tested with a matrix of inputs to verify correct outputs.
+            * Integration Tests: Verify the gRPC contract and data flow between KB-1 and the Rust Engine.
+            * Boundary Value Analysis: Test edge cases for all parameters (e.g., eGFR=29 vs eGFR=30, max dose limits, zero weight).
+
+
+8. Governance & Maintenance
+
+
+            * Approval Workflow: All changes to dosing rules, authored as TOML files, must be reviewed and approved by the Pharmacy & Therapeutics (P&T) Committee. A digital signature from an authorized member is required to merge changes.
+            * Versioning: The database schema uses immutable versioning. Any change to a rule results in the creation of a new version, with the old version's expires_date being set. Old versions are never altered.
+
+
+9. CI/CD Pipeline & Deployment
+
+
+            * Pipeline Stages: [Lint TOML -> Schema Validation -> Ingest & Normalize to SQL -> Unit Test (100% coverage) -> P&T Committee Approval Gate -> Deploy].
+            * Deployment: A Blue-Green deployment strategy is recommended. After the new version is deployed, the Redis cache for affected rules must be programmatically invalidated to prevent serving stale data.
+
+
+10. Monitoring & Observability
+
+
+            * Technical Metrics: gRPC latency (p95), error rate, cache hit ratio, database query times.
+            * Clinical/Operational Metrics:
+            * Frequency of use for each rule_id.
+            * Trigger rate for specific dose_adjustments (e.g., "renal adjustments applied in X% of requests").
+            * Usage of population_dosing rules.
+
+
+11. Failure Modes
+
+
+            * Fail-Safe: If KB-1 is unavailable or fails to return a rule, the Rust Engine must not proceed with a calculation. It must return a "No Rule Found" error to the GO Orchestrator, which will then block the recommendation. No default or fallback doses are permitted.
+            * Circuit Breaker: The Rust Engine's client must implement a circuit breaker that trips on repeated failures from KB-1 to prevent cascading failures.
+
+
+12. Data Lifecycle
+
+
+            * Retention: All historical versions of dosing rules must be retained indefinitely for audit and decision replay.
+            * Archiving: Versions that are superseded and no longer in active use can be archived from the primary PostgreSQL database to a secure, long-term storage solution like S3 to maintain performance.
+
+
+13. Supply Chain Security
+
+
+            * Artifact Signing: All service container images and deployment artifacts must be cryptographically signed.
+            * Dependency Scanning: The CI/CD pipeline must include mandatory scanning of all software dependencies for known vulnerabilities.

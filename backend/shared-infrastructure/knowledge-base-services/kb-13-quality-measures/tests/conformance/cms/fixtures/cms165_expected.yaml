@@ -1,0 +1,132 @@
+# CMS165 - Controlling High Blood Pressure Conformance Expected Results
+# Version: 2024
+# NQF Number: 0018
+# Measure Steward: NCQA
+#
+# REGULATORY COMPLIANCE: These expected values are fixed and deterministic.
+# Any deviation indicates a conformance failure requiring investigation.
+
+measure_id: "CMS165v12"
+measure_name: "Controlling High Blood Pressure"
+measure_version: "12.0.000"
+measurement_year: 2024
+
+measurement_period:
+  start: "2024-01-01"
+  end: "2024-12-31"
+
+# Population Criteria (CMS165 Specifications)
+# Initial Population: 18-85 years with hypertension diagnosis before 6 months into period
+# Denominator: Initial Population
+# Denominator Exclusions: Pregnancy, ESRD, Hospice, Kidney Transplant, Dialysis
+# Numerator: Most recent BP < 140 systolic AND < 90 diastolic
+
+population_criteria:
+  initial_population:
+    description: "Patients 18-85 with hypertension diagnosis before July 1 of measurement year"
+    age_minimum: 18
+    age_maximum: 85
+    required_diagnosis:
+      code_system: "ICD-10-CM"
+      codes:
+        - "I10"      # Essential (primary) hypertension
+        - "I11.*"    # Hypertensive heart disease
+        - "I12.*"    # Hypertensive chronic kidney disease
+        - "I13.*"    # Hypertensive heart and CKD
+    diagnosis_must_be_before: "2024-07-01"
+
+  denominator:
+    description: "Same as Initial Population"
+
+  denominator_exclusions:
+    - code: "Z33.1"
+      system: "ICD-10-CM"
+      description: "Pregnancy"
+    - code: "N18.6"
+      system: "ICD-10-CM"
+      description: "End stage renal disease"
+    - code: "Z99.2"
+      system: "ICD-10-CM"
+      description: "Dependence on renal dialysis"
+    - code: "Z94.0"
+      system: "ICD-10-CM"
+      description: "Kidney transplant status"
+    - code: "Z51.5"
+      system: "ICD-10-CM"
+      description: "Encounter for palliative care (hospice)"
+
+  numerator:
+    description: "Most recent BP reading < 140/90 mmHg"
+    systolic_threshold: 140
+    diastolic_threshold: 90
+    bp_loinc_codes:
+      systolic: "8480-6"
+      diastolic: "8462-4"
+      panel: "85354-9"
+
+# Expected Results from Fixed Patient Fixtures (cms165_patients.json)
+# These values MUST match exactly for conformance validation
+# NOTE: Using standard CMS terminology where Denominator = IP (before exclusions)
+expected_results:
+  initial_population: 10
+  denominator: 10           # Same as IP (standard CMS terminology)
+  denominator_exclusion: 2  # ESRD (1) + Hospice (1)
+  denominator_exception: 0
+  numerator: 4              # P001, P004, P006, P008 have BP < 140/90
+  numerator_exclusion: 0
+
+  # Score = Numerator / (Denominator - Exclusions - Exceptions)
+  # Score = 4 / (10 - 2 - 0) = 4/8 = 0.50
+  score: 0.50
+  performance_rate: 50.0
+
+# Stratification by Age Groups
+stratifications:
+  - id: "age-18-44"
+    description: "Ages 18-44"
+    initial_population: 3
+    denominator: 3
+    denominator_exclusion: 0
+    numerator: 1              # Only P001 has BP < 140/90 in this group
+    score: 0.333              # 1/3 = 0.333
+
+  - id: "age-45-64"
+    description: "Ages 45-64"
+    initial_population: 4
+    denominator: 4              # Same as IP (standard CMS terminology)
+    denominator_exclusion: 1    # P005 (ESRD)
+    numerator: 2                # P004, P006 have BP < 140/90
+    score: 0.667                # 2 / (4-1) = 2/3 = 0.667
+
+  - id: "age-65-85"
+    description: "Ages 65-85"
+    initial_population: 3
+    denominator: 3              # Same as IP (standard CMS terminology)
+    denominator_exclusion: 1    # P009 (hospice)
+    numerator: 1                # P008 has BP < 140/90
+    score: 0.500                # 1 / (3-1) = 1/2 = 0.500
+
+# Validation Rules
+validation:
+  # Population counts must be internally consistent
+  consistency_rules:
+    - "initial_population >= denominator"
+    - "denominator >= numerator"
+    - "denominator >= denominator_exclusion"
+    - "sum(stratification.initial_population) == initial_population"
+
+  # Score calculation must be exact
+  score_tolerance: 0.001
+
+  # BP threshold enforcement
+  bp_rules:
+    - "systolic < 140 AND diastolic < 90 for numerator inclusion"
+    - "most recent BP only (within measurement period)"
+    - "both systolic AND diastolic required"
+
+# Audit Trail
+audit:
+  fixture_version: "1.0.0"
+  last_validated: "2024-01-01T00:00:00Z"
+  cms_specification_reference: "CMS165v12-2024"
+  nqf_specification_reference: "NQF-0018"

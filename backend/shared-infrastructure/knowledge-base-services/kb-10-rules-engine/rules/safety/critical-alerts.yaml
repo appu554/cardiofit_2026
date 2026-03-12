@@ -1,0 +1,259 @@
+type: rules
+version: "1.0.0"
+description: Critical laboratory and vital sign alerts for patient safety
+
+rules:
+  # Critical Hyperkalemia Alert
+  - id: ALERT-LAB-K-CRITICAL-HIGH
+    name: Critical Hyperkalemia Alert
+    description: Alerts when potassium level is critically elevated (>=6.5 mEq/L)
+    type: ALERT
+    category: SAFETY
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: labs.potassium.value
+        operator: GTE
+        value: 6.5
+        unit: mEq/L
+
+    condition_logic: AND
+
+    actions:
+      - type: ALERT
+        message: "CRITICAL: Potassium {{.Context.Labs.potassium.value}} mEq/L - Risk of cardiac arrhythmia. Immediate intervention required."
+        priority: STAT
+
+      - type: ESCALATE
+        parameters:
+          level: PHYSICIAN
+          urgency: STAT
+        recipients:
+          - attending_physician
+          - charge_nurse
+        channel: PAGER
+
+    evidence:
+      level: HIGH
+      source: "AHA Guidelines 2023"
+      references:
+        - "https://www.heart.org/hyperkalemia-guidelines"
+
+    tags:
+      - electrolyte
+      - critical
+      - cardiac-risk
+      - potassium
+
+  # Critical Hypoglycemia Alert
+  - id: ALERT-LAB-GLUCOSE-CRITICAL-LOW
+    name: Critical Hypoglycemia Alert
+    description: Alerts when glucose is critically low (<50 mg/dL)
+    type: ALERT
+    category: SAFETY
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: labs.glucose.value
+        operator: LT
+        value: 50
+        unit: mg/dL
+
+    actions:
+      - type: ALERT
+        message: "CRITICAL: Glucose {{.Context.Labs.glucose.value}} mg/dL - Severe hypoglycemia. Administer D50W immediately."
+        priority: STAT
+
+      - type: ESCALATE
+        parameters:
+          level: RAPID_RESPONSE
+        channel: OVERHEAD_PAGE
+
+    evidence:
+      level: HIGH
+      source: "ADA Standards of Care 2024"
+
+    tags:
+      - glucose
+      - critical
+      - diabetic-emergency
+      - hypoglycemia
+
+  # Severe Hypotension Alert
+  - id: ALERT-VITAL-BP-CRITICAL-LOW
+    name: Critical Hypotension Alert
+    description: Alerts when systolic blood pressure is critically low (<80 mmHg)
+    type: ALERT
+    category: SAFETY
+    severity: CRITICAL
+    status: ACTIVE
+    priority: 1
+
+    conditions:
+      - field: vitals.bp_systolic.value
+        operator: LT
+        value: 80
+
+    actions:
+      - type: ALERT
+        message: "CRITICAL: SBP {{.Context.Vitals.bp_systolic.value}} mmHg - Severe hypotension. Assess for shock."
+        priority: STAT
+
+      - type: ESCALATE
+        parameters:
+          level: RAPID_RESPONSE
+          urgency: STAT
+
+    evidence:
+      level: HIGH
+      source: "Surviving Sepsis Campaign 2021"
+
+    tags:
+      - vital-sign
+      - critical
+      - shock
+      - hemodynamic
+
+  # Critical Troponin Elevation
+  - id: ALERT-LAB-TROPONIN-ELEVATED
+    name: Elevated Troponin Alert
+    description: Alerts when troponin level indicates myocardial injury
+    type: ALERT
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: labs.troponin.value
+        operator: GT
+        value: 0.04
+        unit: ng/mL
+
+    actions:
+      - type: ALERT
+        message: "HIGH: Troponin {{.Context.Labs.troponin.value}} ng/mL - Elevated. Evaluate for ACS."
+        priority: URGENT
+
+      - type: RECOMMEND
+        message: "Consider 12-lead ECG, serial troponins, and cardiology consult"
+
+    evidence:
+      level: HIGH
+      source: "ACC/AHA NSTEMI Guidelines 2021"
+
+    tags:
+      - cardiac
+      - troponin
+      - acs
+      - chest-pain
+
+  # Severe Hypertension Alert
+  - id: ALERT-VITAL-BP-CRITICAL-HIGH
+    name: Hypertensive Crisis Alert
+    description: Alerts when blood pressure indicates hypertensive crisis
+    type: ALERT
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: vitals.bp_systolic.value
+        operator: GTE
+        value: 180
+      - field: vitals.bp_diastolic.value
+        operator: GTE
+        value: 120
+
+    condition_logic: OR
+
+    actions:
+      - type: ALERT
+        message: "HIGH: BP {{.Context.Vitals.bp_systolic.value}}/{{.Context.Vitals.bp_diastolic.value}} mmHg - Hypertensive crisis. Assess for end-organ damage."
+        priority: URGENT
+
+      - type: ESCALATE
+        parameters:
+          level: PHYSICIAN
+        recipients:
+          - attending_physician
+
+    evidence:
+      level: HIGH
+      source: "AHA Hypertension Guidelines 2023"
+
+    tags:
+      - vital-sign
+      - hypertension
+      - cardiac-risk
+
+  # Critical Low Hemoglobin
+  - id: ALERT-LAB-HGB-CRITICAL-LOW
+    name: Critical Anemia Alert
+    description: Alerts when hemoglobin is critically low
+    type: ALERT
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: labs.hemoglobin.value
+        operator: LT
+        value: 7.0
+        unit: g/dL
+
+    actions:
+      - type: ALERT
+        message: "HIGH: Hemoglobin {{.Context.Labs.hemoglobin.value}} g/dL - Severe anemia. Consider transfusion."
+        priority: URGENT
+
+      - type: RECOMMEND
+        message: "Type and screen, consider transfusion if symptomatic"
+
+    evidence:
+      level: HIGH
+      source: "AABB Transfusion Guidelines"
+
+    tags:
+      - hematology
+      - anemia
+      - transfusion
+
+  # High Lactate Alert
+  - id: ALERT-LAB-LACTATE-HIGH
+    name: Elevated Lactate Alert
+    description: Alerts when lactate indicates tissue hypoperfusion
+    type: ALERT
+    category: SAFETY
+    severity: HIGH
+    status: ACTIVE
+    priority: 2
+
+    conditions:
+      - field: labs.lactate.value
+        operator: GTE
+        value: 4.0
+        unit: mmol/L
+
+    actions:
+      - type: ALERT
+        message: "HIGH: Lactate {{.Context.Labs.lactate.value}} mmol/L - Elevated. Evaluate for sepsis or shock."
+        priority: URGENT
+
+      - type: RECOMMEND
+        message: "Consider sepsis workup, fluid resuscitation, and source control"
+
+    evidence:
+      level: HIGH
+      source: "Surviving Sepsis Campaign 2021"
+
+    tags:
+      - sepsis
+      - lactate
+      - shock

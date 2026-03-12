@@ -1,0 +1,353 @@
+# CQL Guideline Registry v1.0.0
+#
+# This is the explicit mapping between:
+#   1. CQL defines (the logic) - in vaidshala/clinical-knowledge-core/tier-4-guidelines/
+#   2. Guideline sources (the authority) - KDIGO, ADA, FDA, etc.
+#   3. KB fields consumed (the facts) - KB-1, KB-4, KB-16
+#
+# Each entry is a deliberate clinical assertion:
+#   "This CQL logic implements this guideline recommendation using these KB values."
+#
+# This is clinical traceability for pharmacist review.
+# This is the SECOND MOAT after CR-IR - institutional knowledge that compounds.
+#
+# Maintenance:
+#   - Updated when CQL files change
+#   - Updated when new guidelines are extracted
+#   - Reviewed quarterly by clinical informatics team
+#
+# Usage:
+#   - L5 Compatibility Checker validates extracted facts against expected thresholds
+#   - Gap Detector identifies forward/backward/coverage gaps
+#   - Pharmacist review uses this for traceability
+
+registry_version: "1.0.0"
+last_updated: "2026-02-04"
+curator: "clinical-informatics-team"
+vaidshala_path: "vaidshala/clinical-knowledge-core/tier-4-guidelines"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRY SCHEMA
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# - cql_file: Name of the CQL file
+#   cql_define: Name of the define statement
+#   cql_line: Line number in CQL file (for quick reference)
+#
+#   guideline:
+#     authority: KDIGO | ADA | FDA | ACC/AHA | etc.
+#     document: Full document title
+#     section: Section or recommendation ID
+#     doi: Optional DOI
+#     quote: Verbatim quote from guideline (for audit)
+#
+#   consumes:
+#     - kb: KB-1 | KB-4 | KB-5 | KB-16
+#       table: Database table name
+#       field: Specific field consumed
+#       filter: SQL-like filter for the specific fact
+#
+#   expected_threshold:
+#     parameter: Lab/clinical parameter name
+#     operator: < | <= | > | >= | == | between
+#     value: Single threshold value (or value_min/value_max for between)
+#     unit: Unit of measure
+#
+#   status: ACTIVE | DEPRECATED | PENDING_REVIEW
+# ═══════════════════════════════════════════════════════════════════════════════
+
+entries:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # T2DMGuidelines.cql - METFORMIN RENAL DOSING
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "Metformin Contraindicated"
+    cql_line: 290
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.1.1"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "We recommend that metformin be discontinued when eGFR falls below 30 mL/min/1.73m2"
+
+    consumes:
+      - kb: "KB-1"
+        table: "drug_rules.renal_adjustments"
+        field: "contraindicated"
+        filter: "rxnorm_code = '6809' AND egfr_max < 30"
+      - kb: "KB-4"
+        table: "safety.contraindications"
+        field: "lab_threshold"
+        filter: "rxnorm_code = '6809' AND lab_parameter = 'eGFR'"
+
+    expected_threshold:
+      parameter: "eGFR"
+      operator: "<"
+      value: 30
+      unit: "mL/min/1.73m2"
+
+    status: "ACTIVE"
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "Metformin Dose Adjustment Needed"
+    cql_line: 293
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.1.1"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "We recommend reducing the maximum daily dose of metformin by 50% when eGFR is 30-45 mL/min/1.73m2"
+
+    consumes:
+      - kb: "KB-1"
+        table: "drug_rules.renal_adjustments"
+        field: "adjustment_factor"
+        filter: "rxnorm_code = '6809' AND egfr_min >= 30 AND egfr_max <= 45"
+
+    expected_threshold:
+      parameter: "eGFR"
+      operator: "between"
+      value_min: 30
+      value_max: 45
+      unit: "mL/min/1.73m2"
+
+    status: "ACTIVE"
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "Metformin Monitoring Required"
+    cql_line: 297
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.1.1"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "Monitor eGFR every 3-6 months in patients with eGFR 45-60 on metformin"
+
+    consumes:
+      - kb: "KB-16"
+        table: "lab_monitoring_requirements"
+        field: "frequency"
+        filter: "rxnorm_code = '6809' AND lab_loinc = '33914-3'"
+
+    expected_threshold:
+      parameter: "eGFR"
+      operator: "between"
+      value_min: 45
+      value_max: 60
+      unit: "mL/min/1.73m2"
+
+    status: "ACTIVE"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # T2DMGuidelines.cql - SGLT2 INHIBITORS
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "SGLT2i Contraindicated for Glycemic Control"
+    cql_line: 310
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.2.1"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "SGLT2 inhibitors are not expected to provide meaningful glycemic benefit when eGFR < 20 mL/min/1.73m2"
+
+    consumes:
+      - kb: "KB-1"
+        table: "drug_rules.renal_adjustments"
+        field: "contraindicated"
+        filter: "drug_class = 'SGLT2_inhibitors' AND egfr_max < 20"
+
+    expected_threshold:
+      parameter: "eGFR"
+      operator: "<"
+      value: 20
+      unit: "mL/min/1.73m2"
+
+    status: "ACTIVE"
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "SGLT2i Continue for Cardiorenal Protection"
+    cql_line: 315
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.2.2"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "SGLT2 inhibitors may be continued for cardiorenal protection when eGFR falls below initiation threshold"
+
+    consumes:
+      - kb: "KB-1"
+        table: "drug_rules.renal_adjustments"
+        field: "recommendation"
+        filter: "drug_class = 'SGLT2_inhibitors' AND action_type = 'CONTINUE'"
+
+    expected_threshold:
+      parameter: "eGFR"
+      operator: ">="
+      value: 20
+      unit: "mL/min/1.73m2"
+
+    status: "ACTIVE"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # T2DMGuidelines.cql - FINERENONE
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "Finerenone Potassium Monitoring Required"
+    cql_line: 425
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.3.2"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "Monitor serum potassium within 4 weeks of finerenone initiation; hold if serum potassium > 5.5 mEq/L"
+
+    consumes:
+      - kb: "KB-16"
+        table: "lab_monitoring_requirements"
+        field: "critical_high"
+        filter: "rxnorm_code = '2599530' AND lab_loinc = '2823-3'"
+
+    expected_threshold:
+      parameter: "potassium"
+      operator: ">"
+      value: 5.5
+      unit: "mEq/L"
+
+    status: "ACTIVE"
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "Finerenone Contraindicated"
+    cql_line: 430
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.3.1"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "Do not initiate finerenone if serum potassium > 5.0 mEq/L"
+
+    consumes:
+      - kb: "KB-4"
+        table: "safety.contraindications"
+        field: "lab_threshold"
+        filter: "rxnorm_code = '2599530' AND lab_parameter = 'potassium'"
+
+    expected_threshold:
+      parameter: "potassium"
+      operator: ">"
+      value: 5.0
+      unit: "mEq/L"
+
+    status: "ACTIVE"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # AKIGuidelines.cql - NEPHROTOXIN MANAGEMENT
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - cql_file: "AKIGuidelines.cql"
+    cql_define: "AKI Stage 1"
+    cql_line: 85
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO Clinical Practice Guideline for Acute Kidney Injury"
+      section: "Section 2.1.1"
+      doi: "10.1038/kisup.2012.1"
+      quote: "AKI Stage 1: Increase in serum creatinine ≥0.3 mg/dL within 48 hours"
+
+    consumes:
+      - kb: "KB-1"
+        table: "drug_rules.renal_adjustments"
+        field: "action_type"
+        filter: "condition = 'AKI_STAGE_1'"
+
+    expected_threshold:
+      parameter: "serum_creatinine_increase"
+      operator: ">="
+      value: 0.3
+      unit: "mg/dL"
+      timeframe: "48_hours"
+
+    status: "ACTIVE"
+
+  - cql_file: "AKIGuidelines.cql"
+    cql_define: "Nephrotoxin Alert Required"
+    cql_line: 142
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO Clinical Practice Guideline for Acute Kidney Injury"
+      section: "Section 3.1.3"
+      doi: "10.1038/kisup.2012.1"
+      quote: "We suggest that nephrotoxic agents be discontinued when possible in patients with AKI"
+
+    consumes:
+      - kb: "KB-4"
+        table: "safety.contraindications"
+        field: "condition_codes"
+        filter: "contraindication_type = 'relative' AND condition LIKE '%AKI%'"
+
+    expected_threshold:
+      parameter: "nephrotoxin_count"
+      operator: ">"
+      value: 0
+      condition: "has_aki"
+
+    status: "ACTIVE"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # T2DMGuidelines.cql - SULFONYLUREAS
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  - cql_file: "T2DMGuidelines.cql"
+    cql_define: "Sulfonylurea Caution in CKD"
+    cql_line: 350
+
+    guideline:
+      authority: "KDIGO"
+      document: "KDIGO 2022 Clinical Practice Guideline for Diabetes Management in CKD"
+      section: "Recommendation 4.4.1"
+      doi: "10.1016/j.kint.2022.06.008"
+      quote: "Sulfonylureas should be used with caution in patients with CKD due to risk of prolonged hypoglycemia"
+
+    consumes:
+      - kb: "KB-4"
+        table: "safety.contraindications"
+        field: "contraindication_type"
+        filter: "drug_class = 'sulfonylureas' AND condition LIKE '%CKD%'"
+
+    expected_threshold:
+      parameter: "eGFR"
+      operator: "<"
+      value: 30
+      unit: "mL/min/1.73m2"
+
+    status: "ACTIVE"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REGISTRY STATISTICS (auto-updated)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+statistics:
+  total_entries: 10
+  cql_files_covered: 2
+  guidelines_referenced:
+    - "KDIGO 2022 Diabetes in CKD"
+    - "KDIGO 2012 AKI"
+  kb_coverage:
+    KB-1: 5  # Dosing entries
+    KB-4: 4  # Safety entries
+    KB-16: 2 # Monitoring entries
+  last_validation: "2026-02-04"
+  validation_status: "PASS"

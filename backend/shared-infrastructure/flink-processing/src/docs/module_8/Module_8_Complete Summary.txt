@@ -1,0 +1,3988 @@
+﻿# 🎯 **Module 8: Read Model Projections & Storage Layer**
+
+
+## Executive Summary
+
+
+Module 8 is the **final consumption layer** that materializes Kafka event streams into **queryable, optimized storage systems**. It creates specialized read models tailored for different access patterns: transactional queries (PostgreSQL), full-text search (Elasticsearch), graph relationships (Neo4j), time-series analytics (ClickHouse), and clinical interoperability (FHIR Store).
+
+
+---
+
+
+## 🏗️ **Architecture Overview**
+
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    KAFKA EVENT STREAMS                       │
+│  • enriched-events     • cep-alerts      • analytics-kpis   │
+│  • scored-events       • ml-predictions  • clinical-events  │
+│  • protocol-checks     • fhir-resources  • hl7-inbound      │
+└────────────┬────────────────────────────────────────────────┘
+             │
+             │ Consumed by specialized projectors
+             │
+┌────────────▼────────────────────────────────────────────────┐
+│              MODULE 8: READ MODEL PROJECTORS                 │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ FHIR Store   │  │ Elasticsearch│  │ Neo4j Graph  │     │
+│  │ Projector    │  │ Projector    │  │ Projector    │     │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
+│         │                  │                  │              │
+│  ┌──────▼───────┐  ┌──────▼───────┐  ┌──────▼───────┐     │
+│  │ ClickHouse   │  │ PostgreSQL   │  │ InfluxDB     │     │
+│  │ Projector    │  │ Read Model   │  │ Projector    │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+             │
+             │ Writes to storage backends
+             │
+┌────────────▼────────────────────────────────────────────────┐
+│                    STORAGE BACKENDS                          │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ FHIR Store   │  │ Elasticsearch│  │ Neo4j        │     │
+│  │ (PostgreSQL) │  │ Index        │  │ Graph DB     │     │
+│  │              │  │              │  │              │     │
+│  │ FHIR R4      │  │ Full-text    │  │ Relationships│     │
+│  │ Resources    │  │ Search       │  │ & Queries    │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ ClickHouse   │  │ PostgreSQL   │  │ InfluxDB     │     │
+│  │ OLAP         │  │ UPS Read     │  │ Time-series  │     │
+│  │              │  │ Model        │  │              │     │
+│  │ Analytics    │  │ Materialized │  │ Vitals/      │     │
+│  │ Queries      │  │ Views        │  │ Waveforms    │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+
+---
+
+
+## 🎯 **Storage Selection Matrix**
+
+
+| Use Case | Storage | Why This Storage? | Access Pattern |
+|----------|---------|-------------------|----------------|
+| **Clinical Interoperability** | FHIR Store (PostgreSQL + HAPI FHIR) | Standard-compliant, RESTful API | Read: By resource ID, search by parameters<br>Write: Create/Update FHIR resources |
+| **Full-Text Search** | Elasticsearch | Fast text search, faceted search, autocomplete | Read: Complex queries across all fields<br>Write: Index documents with analyzed fields |
+| **Graph Relationships** | Neo4j | Relationship traversal, pattern matching | Read: Cypher queries (shortest path, relationships)<br>Write: Create nodes and edges |
+| **Analytics (OLAP)** | ClickHouse | Columnar storage, fast aggregations | Read: Complex analytical queries<br>Write: Batch inserts, immutable |
+| **UPS Read Model** | PostgreSQL | ACID transactions, relational queries | Read: Patient summary by ID<br>Write: UPSERT patient state |
+| **Time-Series Vitals** | InfluxDB | Optimized for time-series, downsampling | Read: Range queries, aggregations<br>Write: High-frequency inserts |
+
+
+---
+
+
+## 📦 **Component 8A: FHIR Store Projector**
+
+
+### **Purpose:**
+- Store clinical data in FHIR R4 format for interoperability
+- Enable FHIR REST API queries
+- Publish to HIE (Health Information Exchange)
+
+
+### **Schema: HAPI FHIR Tables**
+
+
+```sql
+-- HAPI FHIR uses ~100 tables, key ones:
+
+
+-- Resource storage
+CREATE TABLE hfj_resource (
+    res_id BIGSERIAL PRIMARY KEY,
+    res_type VARCHAR(40) NOT NULL,        -- Patient, Observation, etc.
+    res_version VARCHAR(7),
+    has_tags BOOLEAN,
+    res_deleted_at TIMESTAMP,
+    res_published TIMESTAMP,
+    res_updated TIMESTAMP,
+    fhir_id VARCHAR(100),                 -- FHIR resource ID
+    res_text BYTEA,                       -- Narrative text
+    res_text_vc TEXT                      -- Text as string
+);
+
+
+-- Resource content (JSONB)
+CREATE TABLE hfj_res_ver (
+    pid BIGSERIAL PRIMARY KEY,
+    res_id BIGINT NOT NULL,
+    res_type VARCHAR(40) NOT NULL,
+    res_version VARCHAR(7),
+    has_tags BOOLEAN,
+    res_encoding VARCHAR(5),
+    res_text BYTEA,                       -- FHIR JSON content
+    res_ver BIGINT NOT NULL,
+    FOREIGN KEY (res_id) REFERENCES hfj_resource(res_id)
+);
+
+
+-- Search parameters (for FHIR search API)
+CREATE TABLE hfj_spidx_string (
+    sp_id BIGSERIAL PRIMARY KEY,
+    res_id BIGINT NOT NULL,
+    sp_name VARCHAR(100) NOT NULL,        -- Search parameter name
+    sp_value_normalized VARCHAR(200),     -- Normalized value
+    sp_value_exact VARCHAR(200),
+    FOREIGN KEY (res_id) REFERENCES hfj_resource(res_id)
+);
+
+
+-- Indexes
+CREATE INDEX idx_res_type ON hfj_resource(res_type);
+CREATE INDEX idx_fhir_id ON hfj_resource(fhir_id);
+CREATE INDEX idx_sp_string_name_value ON hfj_spidx_string(sp_name, sp_value_normalized);
+```
+
+
+---
+
+
+### **Implementation: FHIR Store Projector**
+
+
+```java
+package com.hospital.module8.projectors;
+
+
+import ca.uhn.fhir.context.FhirContext;
+import ca.uhn.fhir.rest.client.api.IGenericClient;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.hl7.fhir.r4.model.*;
+import org.springframework.stereotype.Service;
+
+
+/**
+ * FHIR Store Projector
+ * Consumes clinical events and projects to FHIR R4 resources
+ */
+@Service
+public class FHIRStoreProjector {
+    
+    private final FhirContext fhirContext;
+    private final IGenericClient fhirClient;
+    private final FHIRResourceMapper resourceMapper;
+    
+    public FHIRStoreProjector() {
+        this.fhirContext = FhirContext.forR4();
+        this.fhirClient = fhirContext.newRestfulGenericClient("http://localhost:8080/fhir");
+        this.resourceMapper = new FHIRResourceMapper();
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume from multiple topics
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        KStream<String, MLPrediction> mlPredictions = 
+            builder.stream("ml-predictions");
+        KStream<String, CEPAlert> cepAlerts = 
+            builder.stream("cep-alerts");
+        
+        // Project enriched events to FHIR resources
+        enrichedEvents.foreach((key, event) -> projectToFHIR(event));
+        
+        // Project ML predictions to FHIR RiskAssessment
+        mlPredictions.foreach((key, prediction) -> projectMLPrediction(prediction));
+        
+        // Project CEP alerts to FHIR DetectedIssue
+        cepAlerts.foreach((key, alert) -> projectCEPAlert(alert));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+    }
+    
+    /**
+     * Project clinical event to appropriate FHIR resource
+     */
+    private void projectToFHIR(EnrichedEvent event) {
+        try {
+            switch (event.getEventType()) {
+                case "VITAL_SIGNS":
+                    Observation vitalObs = resourceMapper.toVitalSignObservation(event);
+                    upsertFHIRResource(vitalObs);
+                    break;
+                    
+                case "LAB_RESULT":
+                    Observation labObs = resourceMapper.toLabObservation(event);
+                    upsertFHIRResource(labObs);
+                    break;
+                    
+                case "MEDICATION_ORDER":
+                    MedicationRequest medReq = resourceMapper.toMedicationRequest(event);
+                    upsertFHIRResource(medReq);
+                    break;
+                    
+                case "MEDICATION_ADMINISTRATION":
+                    MedicationAdministration medAdmin = 
+                        resourceMapper.toMedicationAdministration(event);
+                    upsertFHIRResource(medAdmin);
+                    break;
+                    
+                case "DIAGNOSIS":
+                    Condition condition = resourceMapper.toCondition(event);
+                    upsertFHIRResource(condition);
+                    break;
+                    
+                case "PROCEDURE":
+                    Procedure procedure = resourceMapper.toProcedure(event);
+                    upsertFHIRResource(procedure);
+                    break;
+                    
+                case "ENCOUNTER":
+                    Encounter encounter = resourceMapper.toEncounter(event);
+                    upsertFHIRResource(encounter);
+                    break;
+                    
+                default:
+                    log.warn("Unknown event type: {}", event.getEventType());
+            }
+        } catch (Exception e) {
+            log.error("Failed to project event to FHIR: {}", event, e);
+            sendToDeadLetterQueue(event, e);
+        }
+    }
+    
+    /**
+     * Project ML prediction to FHIR RiskAssessment
+     */
+    private void projectMLPrediction(MLPrediction prediction) {
+        RiskAssessment riskAssessment = new RiskAssessment();
+        
+        // Set patient reference
+        riskAssessment.setSubject(new Reference("Patient/" + prediction.getPatientId()));
+        
+        // Set status
+        riskAssessment.setStatus(RiskAssessment.RiskAssessmentStatus.FINAL);
+        
+        // Set method (ML model)
+        CodeableConcept method = new CodeableConcept();
+        method.setText("Machine Learning Model: " + prediction.getModelType());
+        riskAssessment.setMethod(method);
+        
+        // Set prediction
+        RiskAssessment.RiskAssessmentPredictionComponent predictionComp = 
+            new RiskAssessment.RiskAssessmentPredictionComponent();
+        
+        // Outcome (e.g., "30-day mortality")
+        CodeableConcept outcome = new CodeableConcept();
+        outcome.setText(getOutcomeText(prediction.getModelType()));
+        predictionComp.setOutcome(outcome);
+        
+        // Probability
+        DecimalType probability = new DecimalType(prediction.getPrediction());
+        predictionComp.setProbability(probability);
+        
+        // Risk category
+        CodeableConcept qualitativeRisk = new CodeableConcept();
+        qualitativeRisk.setText(prediction.getRiskCategory().toString());
+        predictionComp.setQualitativeRisk(qualitativeRisk);
+        
+        riskAssessment.addPrediction(predictionComp);
+        
+        // Set occurrence time
+        riskAssessment.setOccurrence(new DateTimeType(new Date(prediction.getTimestamp())));
+        
+        // Add note with explanation
+        Annotation note = new Annotation();
+        note.setText("Confidence: " + prediction.getConfidence() + 
+                     "\nInference time: " + prediction.getInferenceTimeMs() + "ms");
+        riskAssessment.addNote(note);
+        
+        // Store to FHIR server
+        upsertFHIRResource(riskAssessment);
+    }
+    
+    /**
+     * Project CEP alert to FHIR DetectedIssue
+     */
+    private void projectCEPAlert(CEPAlert alert) {
+        DetectedIssue issue = new DetectedIssue();
+        
+        // Set patient reference
+        issue.setPatient(new Reference("Patient/" + alert.getPatientId()));
+        
+        // Set status
+        issue.setStatus(DetectedIssue.DetectedIssueStatus.FINAL);
+        
+        // Set severity
+        issue.setSeverity(mapSeverity(alert.getSeverity()));
+        
+        // Set code (alert type)
+        CodeableConcept code = new CodeableConcept();
+        code.setText(alert.getAlertType());
+        issue.setCode(code);
+        
+        // Set detail
+        issue.setDetail(alert.getMessage());
+        
+        // Set identified time
+        issue.setIdentified(new DateTimeType(new Date(alert.getTimestamp())));
+        
+        // Add evidence (triggering events)
+        if (alert.getTriggeringEvents() != null) {
+            alert.getTriggeringEvents().forEach(event -> {
+                Reference evidenceRef = new Reference();
+                evidenceRef.setDisplay(event.toString());
+                issue.addEvidence().addDetail(evidenceRef);
+            });
+        }
+        
+        // Store to FHIR server
+        upsertFHIRResource(issue);
+    }
+    
+    /**
+     * Upsert FHIR resource (create or update)
+     */
+    private <T extends Resource> void upsertFHIRResource(T resource) {
+        try {
+            // Check if resource exists
+            String resourceId = resource.getIdElement().getIdPart();
+            
+            if (resourceId != null) {
+                // Update existing
+                MethodOutcome outcome = fhirClient.update()
+                    .resource(resource)
+                    .execute();
+                
+                log.debug("Updated FHIR resource: {} (version: {})",
+                    outcome.getId(),
+                    outcome.getId().getVersionIdPart());
+            } else {
+                // Create new
+                MethodOutcome outcome = fhirClient.create()
+                    .resource(resource)
+                    .execute();
+                
+                log.debug("Created FHIR resource: {}", outcome.getId());
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to upsert FHIR resource: {}", resource, e);
+            throw e;
+        }
+    }
+    
+    /**
+     * Map severity to FHIR DetectedIssueSeverity
+     */
+    private DetectedIssue.DetectedIssueSeverity mapSeverity(String severity) {
+        switch (severity) {
+            case "CRITICAL":
+            case "HIGH":
+                return DetectedIssue.DetectedIssueSeverity.HIGH;
+            case "MODERATE":
+                return DetectedIssue.DetectedIssueSeverity.MODERATE;
+            default:
+                return DetectedIssue.DetectedIssueSeverity.LOW;
+        }
+    }
+    
+    private String getOutcomeText(ModelType modelType) {
+        switch (modelType) {
+            case MORTALITY_PREDICTION:
+                return "30-day mortality";
+            case SEPSIS_ONSET:
+                return "Sepsis onset within 6 hours";
+            case READMISSION_RISK:
+                return "30-day readmission";
+            case AKI_PROGRESSION:
+                return "Acute Kidney Injury progression";
+            default:
+                return "Unknown outcome";
+        }
+    }
+}
+```
+
+
+---
+
+
+### **FHIR Resource Mapper**
+
+
+```java
+package com.hospital.module8.mappers;
+
+
+import org.hl7.fhir.r4.model.*;
+import java.util.Date;
+
+
+/**
+ * Maps internal events to FHIR R4 resources
+ */
+public class FHIRResourceMapper {
+    
+    /**
+     * Map vital signs event to FHIR Observation
+     */
+    public Observation toVitalSignObservation(EnrichedEvent event) {
+        Observation observation = new Observation();
+        
+        // Set status
+        observation.setStatus(Observation.ObservationStatus.FINAL);
+        
+        // Set category (vital-signs)
+        observation.addCategory()
+            .addCoding()
+            .setSystem("http://terminology.hl7.org/CodeSystem/observation-category")
+            .setCode("vital-signs")
+            .setDisplay("Vital Signs");
+        
+        // Set code (LOINC)
+        CodeableConcept code = new CodeableConcept();
+        Coding coding = mapVitalTypeToLOINC(event.getDataType());
+        code.addCoding(coding);
+        observation.setCode(code);
+        
+        // Set subject (patient)
+        observation.setSubject(new Reference("Patient/" + event.getPatientId()));
+        
+        // Set effective time
+        observation.setEffective(new DateTimeType(new Date(event.getTimestamp())));
+        
+        // Set value
+        Quantity value = new Quantity();
+        value.setValue(event.getValue());
+        value.setUnit(event.getUnit());
+        value.setSystem("http://unitsofmeasure.org");
+        value.setCode(event.getUnit());
+        observation.setValue(value);
+        
+        // Add interpretation (if abnormal)
+        if (event.getAbnormalFlag() != null) {
+            observation.addInterpretation()
+                .addCoding()
+                .setSystem("http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation")
+                .setCode(mapAbnormalFlag(event.getAbnormalFlag()))
+                .setDisplay(event.getAbnormalFlag());
+        }
+        
+        return observation;
+    }
+    
+    /**
+     * Map lab result to FHIR Observation
+     */
+    public Observation toLabObservation(EnrichedEvent event) {
+        Observation observation = new Observation();
+        
+        observation.setStatus(Observation.ObservationStatus.FINAL);
+        
+        // Set category (laboratory)
+        observation.addCategory()
+            .addCoding()
+            .setSystem("http://terminology.hl7.org/CodeSystem/observation-category")
+            .setCode("laboratory")
+            .setDisplay("Laboratory");
+        
+        // Set code (LOINC)
+        CodeableConcept code = new CodeableConcept();
+        code.addCoding()
+            .setSystem("http://loinc.org")
+            .setCode(event.getLoincCode())
+            .setDisplay(event.getLabName());
+        observation.setCode(code);
+        
+        // Set subject
+        observation.setSubject(new Reference("Patient/" + event.getPatientId()));
+        
+        // Set effective time
+        observation.setEffective(new DateTimeType(new Date(event.getTimestamp())));
+        
+        // Set value
+        Quantity value = new Quantity();
+        value.setValue(event.getValue());
+        value.setUnit(event.getUnit());
+        observation.setValue(value);
+        
+        // Add reference range
+        if (event.getReferenceRange() != null) {
+            Observation.ObservationReferenceRangeComponent refRange = 
+                new Observation.ObservationReferenceRangeComponent();
+            refRange.setLow(new Quantity().setValue(event.getReferenceRange().getLow()));
+            refRange.setHigh(new Quantity().setValue(event.getReferenceRange().getHigh()));
+            observation.addReferenceRange(refRange);
+        }
+        
+        return observation;
+    }
+    
+    /**
+     * Map medication order to FHIR MedicationRequest
+     */
+    public MedicationRequest toMedicationRequest(EnrichedEvent event) {
+        MedicationRequest medReq = new MedicationRequest();
+        
+        medReq.setStatus(MedicationRequest.MedicationRequestStatus.ACTIVE);
+        medReq.setIntent(MedicationRequest.MedicationRequestIntent.ORDER);
+        
+        // Set medication
+        CodeableConcept medication = new CodeableConcept();
+        medication.addCoding()
+            .setSystem("http://www.nlm.nih.gov/research/umls/rxnorm")
+            .setCode(event.getRxNormCode())
+            .setDisplay(event.getMedicationName());
+        medReq.setMedication(medication);
+        
+        // Set subject
+        medReq.setSubject(new Reference("Patient/" + event.getPatientId()));
+        
+        // Set authored time
+        medReq.setAuthoredOn(new Date(event.getTimestamp()));
+        
+        // Set dosage instruction
+        Dosage dosage = new Dosage();
+        dosage.setText(event.getDosageText());
+        dosage.setRoute(new CodeableConcept().setText(event.getRoute()));
+        dosage.setTiming(new Timing().setRepeat(
+            new Timing.TimingRepeatComponent()
+                .setFrequency(event.getFrequency())
+                .setPeriod(1)
+                .setPeriodUnit(Timing.UnitsOfTime.D)
+        ));
+        
+        Dosage.DosageDoseAndRateComponent doseAndRate = 
+            new Dosage.DosageDoseAndRateComponent();
+        doseAndRate.setDose(new Quantity()
+            .setValue(event.getDose())
+            .setUnit(event.getDoseUnit()));
+        dosage.addDoseAndRate(doseAndRate);
+        
+        medReq.addDosageInstruction(dosage);
+        
+        return medReq;
+    }
+    
+    /**
+     * Map medication administration to FHIR MedicationAdministration
+     */
+    public MedicationAdministration toMedicationAdministration(EnrichedEvent event) {
+        MedicationAdministration medAdmin = new MedicationAdministration();
+        
+        medAdmin.setStatus(MedicationAdministration.MedicationAdministrationStatus.COMPLETED);
+        
+        // Set medication
+        CodeableConcept medication = new CodeableConcept();
+        medication.setText(event.getMedicationName());
+        medAdmin.setMedication(medication);
+        
+        // Set subject
+        medAdmin.setSubject(new Reference("Patient/" + event.getPatientId()));
+        
+        // Set effective time
+        medAdmin.setEffective(new DateTimeType(new Date(event.getTimestamp())));
+        
+        // Set dosage
+        MedicationAdministration.MedicationAdministrationDosageComponent dosage = 
+            new MedicationAdministration.MedicationAdministrationDosageComponent();
+        dosage.setDose(new Quantity()
+            .setValue(event.getDose())
+            .setUnit(event.getDoseUnit()));
+        dosage.setRoute(new CodeableConcept().setText(event.getRoute()));
+        medAdmin.setDosage(dosage);
+        
+        return medAdmin;
+    }
+    
+    /**
+     * Map diagnosis to FHIR Condition
+     */
+    public Condition toCondition(EnrichedEvent event) {
+        Condition condition = new Condition();
+        
+        condition.setClinicalStatus(new CodeableConcept()
+            .addCoding()
+            .setSystem("http://terminology.hl7.org/CodeSystem/condition-clinical")
+            .setCode("active"));
+        
+        // Set code (ICD-10)
+        CodeableConcept code = new CodeableConcept();
+        code.addCoding()
+            .setSystem("http://hl7.org/fhir/sid/icd-10")
+            .setCode(event.getIcd10Code())
+            .setDisplay(event.getDiagnosisName());
+        condition.setCode(code);
+        
+        // Set subject
+        condition.setSubject(new Reference("Patient/" + event.getPatientId()));
+        
+        // Set onset
+        condition.setOnset(new DateTimeType(new Date(event.getOnsetDate())));
+        
+        return condition;
+    }
+    
+    /**
+     * Map encounter to FHIR Encounter
+     */
+    public Encounter toEncounter(EnrichedEvent event) {
+        Encounter encounter = new Encounter();
+        
+        encounter.setStatus(Encounter.EncounterStatus.INPROGRESS);
+        
+        // Set class (inpatient, outpatient, emergency)
+        encounter.setClass_(new Coding()
+            .setSystem("http://terminology.hl7.org/CodeSystem/v3-ActCode")
+            .setCode(event.getEncounterType())
+            .setDisplay(event.getEncounterType()));
+        
+        // Set subject
+        encounter.setSubject(new Reference("Patient/" + event.getPatientId()));
+        
+        // Set period
+        Period period = new Period();
+        period.setStart(new Date(event.getAdmissionTime()));
+        if (event.getDischargeTime() != null) {
+            period.setEnd(new Date(event.getDischargeTime()));
+            encounter.setStatus(Encounter.EncounterStatus.FINISHED);
+        }
+        encounter.setPeriod(period);
+        
+        return encounter;
+    }
+    
+    /**
+     * Map vital type to LOINC code
+     */
+    private Coding mapVitalTypeToLOINC(String vitalType) {
+        Coding coding = new Coding().setSystem("http://loinc.org");
+        
+        switch (vitalType.toLowerCase()) {
+            case "heartrate":
+                return coding.setCode("8867-4").setDisplay("Heart rate");
+            case "systolicbp":
+                return coding.setCode("8480-6").setDisplay("Systolic blood pressure");
+            case "diastolicbp":
+                return coding.setCode("8462-4").setDisplay("Diastolic blood pressure");
+            case "respiratoryrate":
+                return coding.setCode("9279-1").setDisplay("Respiratory rate");
+            case "temperature":
+                return coding.setCode("8310-5").setDisplay("Body temperature");
+            case "oxygensaturation":
+                return coding.setCode("2708-6").setDisplay("Oxygen saturation");
+            default:
+                return coding.setCode("unknown").setDisplay(vitalType);
+        }
+    }
+    
+    /**
+     * Map abnormal flag to FHIR interpretation code
+     */
+    private String mapAbnormalFlag(String flag) {
+        switch (flag) {
+            case "HIGH":
+                return "H";
+            case "LOW":
+                return "L";
+            case "CRITICAL_HIGH":
+                return "HH";
+            case "CRITICAL_LOW":
+                return "LL";
+            default:
+                return "N";
+        }
+    }
+}
+```
+
+
+---
+
+
+## 📦 **Component 8B: Elasticsearch Projector**
+
+
+### **Purpose:**
+- Enable full-text search across clinical data
+- Faceted search (filter by date, department, etc.)
+- Autocomplete for medications, diagnoses
+
+
+### **Index Schema**
+
+
+```json
+// patients index
+PUT /patients
+{
+  "settings": {
+    "number_of_shards": 3,
+    "number_of_replicas": 2,
+    "analysis": {
+      "analyzer": {
+        "clinical_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding", "clinical_synonyms"]
+        }
+      },
+      "filter": {
+        "clinical_synonyms": {
+          "type": "synonym",
+          "synonyms": [
+            "MI, myocardial infarction, heart attack",
+            "CHF, congestive heart failure, heart failure",
+            "DM, diabetes mellitus, diabetes"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "patient_id": { "type": "keyword" },
+      "mrn": { "type": "keyword" },
+      "name": {
+        "type": "text",
+        "analyzer": "clinical_analyzer",
+        "fields": {
+          "keyword": { "type": "keyword" }
+        }
+      },
+      "date_of_birth": { "type": "date" },
+      "gender": { "type": "keyword" },
+      "department": { "type": "keyword" },
+      "room": { "type": "keyword" },
+      "admission_date": { "type": "date" },
+      "active_problems": {
+        "type": "nested",
+        "properties": {
+          "condition": { "type": "text", "analyzer": "clinical_analyzer" },
+          "icd10_code": { "type": "keyword" },
+          "onset_date": { "type": "date" }
+        }
+      },
+      "active_medications": {
+        "type": "nested",
+        "properties": {
+          "name": { "type": "text", "analyzer": "clinical_analyzer" },
+          "rxnorm_code": { "type": "keyword" },
+          "dose": { "type": "text" }
+        }
+      },
+      "allergies": {
+        "type": "nested",
+        "properties": {
+          "allergen": { "type": "text", "analyzer": "clinical_analyzer" },
+          "severity": { "type": "keyword" }
+        }
+      },
+      "risk_scores": {
+        "type": "object",
+        "properties": {
+          "news2": { "type": "integer" },
+          "qsofa": { "type": "integer" },
+          "sofa": { "type": "integer" }
+        }
+      },
+      "ml_predictions": {
+        "type": "nested",
+        "properties": {
+          "model_type": { "type": "keyword" },
+          "probability": { "type": "float" },
+          "risk_category": { "type": "keyword" },
+          "timestamp": { "type": "date" }
+        }
+      },
+      "last_updated": { "type": "date" }
+    }
+  }
+}
+
+
+// clinical_events index (for audit/search)
+PUT /clinical_events
+{
+  "settings": {
+    "number_of_sh
+```json
+// clinical_events index (for audit/search)
+PUT /clinical_events
+{
+  "settings": {
+    "number_of_shards": 5,
+    "number_of_replicas": 1,
+    "index.lifecycle.name": "clinical_events_policy",
+    "index.lifecycle.rollover_alias": "clinical_events"
+  },
+  "mappings": {
+    "properties": {
+      "event_id": { "type": "keyword" },
+      "event_type": { "type": "keyword" },
+      "patient_id": { "type": "keyword" },
+      "timestamp": { "type": "date" },
+      "department": { "type": "keyword" },
+      "user_id": { "type": "keyword" },
+      "source_system": { "type": "keyword" },
+      
+      "vital_signs": {
+        "type": "object",
+        "properties": {
+          "heart_rate": { "type": "integer" },
+          "systolic_bp": { "type": "integer" },
+          "diastolic_bp": { "type": "integer" },
+          "respiratory_rate": { "type": "integer" },
+          "temperature": { "type": "float" },
+          "oxygen_saturation": { "type": "integer" }
+        }
+      },
+      
+      "lab_result": {
+        "type": "object",
+        "properties": {
+          "loinc_code": { "type": "keyword" },
+          "lab_name": { "type": "text", "analyzer": "clinical_analyzer" },
+          "value": { "type": "float" },
+          "unit": { "type": "keyword" },
+          "abnormal_flag": { "type": "keyword" }
+        }
+      },
+      
+      "medication": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "text", "analyzer": "clinical_analyzer" },
+          "rxnorm_code": { "type": "keyword" },
+          "dose": { "type": "text" },
+          "route": { "type": "keyword" },
+          "frequency": { "type": "keyword" }
+        }
+      },
+      
+      "free_text": {
+        "type": "text",
+        "analyzer": "clinical_analyzer"
+      }
+    }
+  }
+}
+
+
+// alerts index
+PUT /alerts
+{
+  "mappings": {
+    "properties": {
+      "alert_id": { "type": "keyword" },
+      "patient_id": { "type": "keyword" },
+      "alert_type": { "type": "keyword" },
+      "severity": { "type": "keyword" },
+      "message": { "type": "text", "analyzer": "clinical_analyzer" },
+      "source": { "type": "keyword" },
+      "confidence": { "type": "float" },
+      "status": { "type": "keyword" },
+      "created_at": { "type": "date" },
+      "acknowledged_at": { "type": "date" },
+      "acknowledged_by": { "type": "keyword" },
+      "department": { "type": "keyword" },
+      "tags": { "type": "keyword" }
+    }
+  }
+}
+```
+
+
+---
+
+
+### **Implementation: Elasticsearch Projector**
+
+
+```java
+package com.hospital.module8.projectors;
+
+
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch.core.IndexRequest;
+import co.elastic.clients.elasticsearch.core.UpdateRequest;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.springframework.stereotype.Service;
+
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.*;
+
+
+/**
+ * Elasticsearch Projector
+ * Indexes clinical data for full-text search
+ */
+@Service
+public class ElasticsearchProjector {
+    
+    private final ElasticsearchClient esClient;
+    
+    public ElasticsearchProjector(ElasticsearchClient esClient) {
+        this.esClient = esClient;
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume enriched events
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        
+        // Consume ML predictions
+        KStream<String, MLPrediction> mlPredictions = 
+            builder.stream("ml-predictions");
+        
+        // Consume CEP alerts
+        KStream<String, CEPAlert> cepAlerts = 
+            builder.stream("cep-alerts");
+        
+        // Index enriched events
+        enrichedEvents.foreach((key, event) -> indexClinicalEvent(event));
+        
+        // Update patient document with ML predictions
+        mlPredictions
+            .groupByKey()
+            .reduce((oldValue, newValue) -> newValue)
+            .toStream()
+            .foreach((patientId, prediction) -> updatePatientMLPredictions(patientId, prediction));
+        
+        // Index alerts
+        cepAlerts.foreach((key, alert) -> indexAlert(alert));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+    }
+    
+    /**
+     * Index clinical event
+     */
+    private void indexClinicalEvent(EnrichedEvent event) {
+        try {
+            Map<String, Object> document = buildClinicalEventDocument(event);
+            
+            IndexRequest<Map<String, Object>> request = IndexRequest.of(i -> i
+                .index("clinical_events")
+                .id(event.getEventId())
+                .document(document)
+            );
+            
+            esClient.index(request);
+            
+            // Also update patient document
+            updatePatientDocument(event);
+            
+        } catch (IOException e) {
+            log.error("Failed to index clinical event: {}", event, e);
+            sendToDeadLetterQueue(event, e);
+        }
+    }
+    
+    /**
+     * Build Elasticsearch document from clinical event
+     */
+    private Map<String, Object> buildClinicalEventDocument(EnrichedEvent event) {
+        Map<String, Object> doc = new HashMap<>();
+        
+        doc.put("event_id", event.getEventId());
+        doc.put("event_type", event.getEventType());
+        doc.put("patient_id", event.getPatientId());
+        doc.put("timestamp", Instant.ofEpochMilli(event.getTimestamp()));
+        doc.put("department", event.getDepartment());
+        doc.put("user_id", event.getUserId());
+        doc.put("source_system", event.getSourceSystem());
+        
+        // Event-specific data
+        switch (event.getEventType()) {
+            case "VITAL_SIGNS":
+                doc.put("vital_signs", buildVitalSignsObject(event));
+                break;
+                
+            case "LAB_RESULT":
+                doc.put("lab_result", buildLabResultObject(event));
+                break;
+                
+            case "MEDICATION_ORDER":
+            case "MEDICATION_ADMINISTRATION":
+                doc.put("medication", buildMedicationObject(event));
+                break;
+                
+            case "NOTE":
+                doc.put("free_text", event.getNoteText());
+                break;
+        }
+        
+        return doc;
+    }
+    
+    /**
+     * Update patient document (UPSERT)
+     */
+    private void updatePatientDocument(EnrichedEvent event) throws IOException {
+        String patientId = event.getPatientId();
+        
+        // Build update script
+        Map<String, Object> params = new HashMap<>();
+        
+        switch (event.getEventType()) {
+            case "VITAL_SIGNS":
+                // Update latest vitals
+                params.put("vital_signs", buildVitalSignsObject(event));
+                break;
+                
+            case "DIAGNOSIS":
+                // Add to active problems
+                Map<String, Object> problem = new HashMap<>();
+                problem.put("condition", event.getConditionName());
+                problem.put("icd10_code", event.getIcd10Code());
+                problem.put("onset_date", Instant.ofEpochMilli(event.getOnsetDate()));
+                
+                params.put("new_problem", problem);
+                break;
+                
+            case "MEDICATION_ORDER":
+                // Add to active medications
+                Map<String, Object> medication = new HashMap<>();
+                medication.put("name", event.getMedicationName());
+                medication.put("rxnorm_code", event.getRxNormCode());
+                medication.put("dose", event.getDosageText());
+                
+                params.put("new_medication", medication);
+                break;
+        }
+        
+        if (!params.isEmpty()) {
+            params.put("last_updated", Instant.now());
+            
+            String script = buildUpdateScript(event.getEventType());
+            
+            UpdateRequest<Map<String, Object>, Map<String, Object>> request = 
+                UpdateRequest.of(u -> u
+                    .index("patients")
+                    .id(patientId)
+                    .script(s -> s
+                        .inline(i -> i
+                            .source(script)
+                            .params(params)
+                        )
+                    )
+                    .upsert(buildPatientDocument(event))
+                );
+            
+            esClient.update(request, Map.class);
+        }
+    }
+    
+    /**
+     * Update patient ML predictions
+     */
+    private void updatePatientMLPredictions(String patientId, MLPrediction prediction) {
+        try {
+            Map<String, Object> mlPrediction = new HashMap<>();
+            mlPrediction.put("model_type", prediction.getModelType().toString());
+            mlPrediction.put("probability", prediction.getPrediction());
+            mlPrediction.put("risk_category", prediction.getRiskCategory().toString());
+            mlPrediction.put("timestamp", Instant.ofEpochMilli(prediction.getTimestamp()));
+            
+            String script = """
+                if (ctx._source.ml_predictions == null) {
+                    ctx._source.ml_predictions = [];
+                }
+                ctx._source.ml_predictions.removeIf(p -> 
+                    p.model_type == params.ml_prediction.model_type
+                );
+                ctx._source.ml_predictions.add(params.ml_prediction);
+                ctx._source.last_updated = params.last_updated;
+            """;
+            
+            Map<String, Object> params = new HashMap<>();
+            params.put("ml_prediction", mlPrediction);
+            params.put("last_updated", Instant.now());
+            
+            UpdateRequest<Map<String, Object>, Map<String, Object>> request = 
+                UpdateRequest.of(u -> u
+                    .index("patients")
+                    .id(patientId)
+                    .script(s -> s
+                        .inline(i -> i
+                            .source(script)
+                            .params(params)
+                        )
+                    )
+                );
+            
+            esClient.update(request, Map.class);
+            
+        } catch (IOException e) {
+            log.error("Failed to update patient ML predictions: {}", patientId, e);
+        }
+    }
+    
+    /**
+     * Index alert
+     */
+    private void indexAlert(CEPAlert alert) {
+        try {
+            Map<String, Object> document = new HashMap<>();
+            document.put("alert_id", alert.getAlertId());
+            document.put("patient_id", alert.getPatientId());
+            document.put("alert_type", alert.getAlertType());
+            document.put("severity", alert.getSeverity());
+            document.put("message", alert.getMessage());
+            document.put("source", alert.getSource());
+            document.put("confidence", alert.getConfidence());
+            document.put("status", alert.getStatus());
+            document.put("created_at", Instant.ofEpochMilli(alert.getCreatedAt()));
+            document.put("department", alert.getDepartment());
+            
+            IndexRequest<Map<String, Object>> request = IndexRequest.of(i -> i
+                .index("alerts")
+                .id(alert.getAlertId())
+                .document(document)
+            );
+            
+            esClient.index(request);
+            
+        } catch (IOException e) {
+            log.error("Failed to index alert: {}", alert, e);
+        }
+    }
+    
+    /**
+     * Build update script based on event type
+     */
+    private String buildUpdateScript(String eventType) {
+        switch (eventType) {
+            case "VITAL_SIGNS":
+                return """
+                    ctx._source.vital_signs = params.vital_signs;
+                    ctx._source.last_updated = params.last_updated;
+                """;
+                
+            case "DIAGNOSIS":
+                return """
+                    if (ctx._source.active_problems == null) {
+                        ctx._source.active_problems = [];
+                    }
+                    ctx._source.active_problems.removeIf(p -> 
+                        p.icd10_code == params.new_problem.icd10_code
+                    );
+                    ctx._source.active_problems.add(params.new_problem);
+                    ctx._source.last_updated = params.last_updated;
+                """;
+                
+            case "MEDICATION_ORDER":
+                return """
+                    if (ctx._source.active_medications == null) {
+                        ctx._source.active_medications = [];
+                    }
+                    ctx._source.active_medications.removeIf(m -> 
+                        m.rxnorm_code == params.new_medication.rxnorm_code
+                    );
+                    ctx._source.active_medications.add(params.new_medication);
+                    ctx._source.last_updated = params.last_updated;
+                """;
+                
+            default:
+                return "ctx._source.last_updated = params.last_updated;";
+        }
+    }
+    
+    /**
+     * Build patient document for UPSERT
+     */
+    private Map<String, Object> buildPatientDocument(EnrichedEvent event) {
+        Map<String, Object> doc = new HashMap<>();
+        doc.put("patient_id", event.getPatientId());
+        doc.put("mrn", event.getMrn());
+        doc.put("name", event.getPatientName());
+        doc.put("date_of_birth", event.getDateOfBirth());
+        doc.put("gender", event.getGender());
+        doc.put("department", event.getDepartment());
+        doc.put("room", event.getRoom());
+        doc.put("admission_date", Instant.ofEpochMilli(event.getAdmissionTime()));
+        doc.put("active_problems", new ArrayList<>());
+        doc.put("active_medications", new ArrayList<>());
+        doc.put("allergies", new ArrayList<>());
+        doc.put("risk_scores", new HashMap<>());
+        doc.put("ml_predictions", new ArrayList<>());
+        doc.put("last_updated", Instant.now());
+        return doc;
+    }
+    
+    private Map<String, Object> buildVitalSignsObject(EnrichedEvent event) {
+        Map<String, Object> vitals = new HashMap<>();
+        vitals.put("heart_rate", event.getHeartRate());
+        vitals.put("systolic_bp", event.getSystolicBP());
+        vitals.put("diastolic_bp", event.getDiastolicBP());
+        vitals.put("respiratory_rate", event.getRespiratoryRate());
+        vitals.put("temperature", event.getTemperature());
+        vitals.put("oxygen_saturation", event.getOxygenSaturation());
+        return vitals;
+    }
+    
+    private Map<String, Object> buildLabResultObject(EnrichedEvent event) {
+        Map<String, Object> lab = new HashMap<>();
+        lab.put("loinc_code", event.getLoincCode());
+        lab.put("lab_name", event.getLabName());
+        lab.put("value", event.getValue());
+        lab.put("unit", event.getUnit());
+        lab.put("abnormal_flag", event.getAbnormalFlag());
+        return lab;
+    }
+    
+    private Map<String, Object> buildMedicationObject(EnrichedEvent event) {
+        Map<String, Object> med = new HashMap<>();
+        med.put("name", event.getMedicationName());
+        med.put("rxnorm_code", event.getRxNormCode());
+        med.put("dose", event.getDosageText());
+        med.put("route", event.getRoute());
+        med.put("frequency", event.getFrequency());
+        return med;
+    }
+}
+```
+
+
+---
+
+
+### **Search API Examples**
+
+
+```java
+package com.hospital.module8.search;
+
+
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch.core.SearchRequest;
+import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Hit;
+import org.springframework.stereotype.Service;
+
+
+import java.io.IOException;
+import java.util.List;
+import java.util.stream.Collectors;
+
+
+/**
+ * Clinical Search Service
+ * Provides search capabilities over Elasticsearch indices
+ */
+@Service
+public class ClinicalSearchService {
+    
+    private final ElasticsearchClient esClient;
+    
+    public ClinicalSearchService(ElasticsearchClient esClient) {
+        this.esClient = esClient;
+    }
+    
+    /**
+     * Search patients by name, MRN, or diagnosis
+     */
+    public List<PatientSearchResult> searchPatients(String query) throws IOException {
+        SearchRequest request = SearchRequest.of(s -> s
+            .index("patients")
+            .query(q -> q
+                .multiMatch(m -> m
+                    .query(query)
+                    .fields("name^3", "mrn^2", "active_problems.condition", "active_medications.name")
+                    .type(MultiMatchQuery.Type.BestFields)
+                    .fuzziness("AUTO")
+                )
+            )
+            .size(20)
+        );
+        
+        SearchResponse<PatientSearchResult> response = 
+            esClient.search(request, PatientSearchResult.class);
+        
+        return response.hits().hits().stream()
+            .map(Hit::source)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Autocomplete medication names
+     */
+    public List<String> autocompleteMedications(String prefix) throws IOException {
+        SearchRequest request = SearchRequest.of(s -> s
+            .index("patients")
+            .query(q -> q
+                .prefix(p -> p
+                    .field("active_medications.name")
+                    .value(prefix)
+                )
+            )
+            .aggregations("medication_names", a -> a
+                .terms(t -> t
+                    .field("active_medications.name.keyword")
+                    .size(10)
+                )
+            )
+            .size(0)
+        );
+        
+        SearchResponse<Void> response = esClient.search(request, Void.class);
+        
+        return response.aggregations()
+            .get("medication_names")
+            .sterms()
+            .buckets()
+            .array()
+            .stream()
+            .map(b -> b.key().stringValue())
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Search clinical events by patient ID and date range
+     */
+    public List<ClinicalEvent> searchClinicalEvents(
+        String patientId,
+        long startTime,
+        long endTime
+    ) throws IOException {
+        SearchRequest request = SearchRequest.of(s -> s
+            .index("clinical_events")
+            .query(q -> q
+                .bool(b -> b
+                    .must(m -> m
+                        .term(t -> t
+                            .field("patient_id")
+                            .value(patientId)
+                        )
+                    )
+                    .must(m -> m
+                        .range(r -> r
+                            .field("timestamp")
+                            .gte(JsonData.of(startTime))
+                            .lte(JsonData.of(endTime))
+                        )
+                    )
+                )
+            )
+            .sort(so -> so
+                .field(f -> f
+                    .field("timestamp")
+                    .order(SortOrder.Desc)
+                )
+            )
+            .size(100)
+        );
+        
+        SearchResponse<ClinicalEvent> response = 
+            esClient.search(request, ClinicalEvent.class);
+        
+        return response.hits().hits().stream()
+            .map(Hit::source)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Find patients with high-risk ML predictions
+     */
+    public List<PatientSearchResult> findHighRiskPatients(
+        String modelType,
+        double minProbability
+    ) throws IOException {
+        SearchRequest request = SearchRequest.of(s -> s
+            .index("patients")
+            .query(q -> q
+                .nested(n -> n
+                    .path("ml_predictions")
+                    .query(nq -> nq
+                        .bool(b -> b
+                            .must(m -> m
+                                .term(t -> t
+                                    .field("ml_predictions.model_type")
+                                    .value(modelType)
+                                )
+                            )
+                            .must(m -> m
+                                .range(r -> r
+                                    .field("ml_predictions.probability")
+                                    .gte(JsonData.of(minProbability))
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            .sort(so -> so
+                .field(f -> f
+                    .field("ml_predictions.probability")
+                    .order(SortOrder.Desc)
+                    .nested(n -> n
+                        .path("ml_predictions")
+                    )
+                )
+            )
+            .size(50)
+        );
+        
+        SearchResponse<PatientSearchResult> response = 
+            esClient.search(request, PatientSearchResult.class);
+        
+        return response.hits().hits().stream()
+            .map(Hit::source)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Faceted search: Count patients by department and risk category
+     */
+    public Map<String, Map<String, Long>> getDepartmentRiskDistribution() throws IOException {
+        SearchRequest request = SearchRequest.of(s -> s
+            .index("patients")
+            .query(q -> q.matchAll(m -> m))
+            .aggregations("by_department", a -> a
+                .terms(t -> t
+                    .field("department")
+                )
+                .aggregations("by_risk", aa -> aa
+                    .nested(n -> n
+                        .path("ml_predictions")
+                    )
+                    .aggregations("risk_categories", aaa -> aaa
+                        .terms(t -> t
+                            .field("ml_predictions.risk_category")
+                        )
+                    )
+                )
+            )
+            .size(0)
+        );
+        
+        SearchResponse<Void> response = esClient.search(request, Void.class);
+        
+        // Parse aggregations
+        Map<String, Map<String, Long>> result = new HashMap<>();
+        
+        response.aggregations()
+            .get("by_department")
+            .sterms()
+            .buckets()
+            .array()
+            .forEach(deptBucket -> {
+                String department = deptBucket.key().stringValue();
+                Map<String, Long> riskCounts = new HashMap<>();
+                
+                deptBucket.aggregations()
+                    .get("by_risk")
+                    .nested()
+                    .aggregations()
+                    .get("risk_categories")
+                    .sterms()
+                    .buckets()
+                    .array()
+                    .forEach(riskBucket -> {
+                        String riskCategory = riskBucket.key().stringValue();
+                        riskCounts.put(riskCategory, riskBucket.docCount());
+                    });
+                
+                result.put(department, riskCounts);
+            });
+        
+        return result;
+    }
+}
+```
+
+
+---
+
+
+## 📦 **Component 8C: Neo4j Graph Projector**
+
+
+### **Purpose:**
+- Model relationships between patients, medications, diseases, genes
+- Enable graph-based queries (shortest path, pattern matching)
+- Power Knowledge Graph Engine (from our previous discussion)
+
+
+### **Graph Schema**
+
+
+```cypher
+// Node constraints
+CREATE CONSTRAINT patient_id IF NOT EXISTS
+FOR (p:Patient) REQUIRE p.id IS UNIQUE;
+
+
+CREATE CONSTRAINT medication_id IF NOT EXISTS
+FOR (m:Medication) REQUIRE m.id IS UNIQUE;
+
+
+CREATE CONSTRAINT disease_id IF NOT EXISTS
+FOR (d:Disease) REQUIRE d.id IS UNIQUE;
+
+
+CREATE CONSTRAINT lab_id IF NOT EXISTS
+FOR (l:Lab) REQUIRE l.id IS UNIQUE;
+
+
+CREATE CONSTRAINT gene_id IF NOT EXISTS
+FOR (g:Gene) REQUIRE g.id IS UNIQUE;
+
+
+CREATE CONSTRAINT allergen_id IF NOT EXISTS
+FOR (a:Allergen) REQUIRE a.id IS UNIQUE;
+
+
+// Indexes
+CREATE INDEX patient_mrn IF NOT EXISTS
+FOR (p:Patient) ON (p.mrn);
+
+
+CREATE INDEX medication_rxnorm IF NOT EXISTS
+FOR (m:Medication) ON (m.rxnorm);
+
+
+CREATE INDEX disease_icd10 IF NOT EXISTS
+FOR (d:Disease) ON (d.icd10);
+
+
+CREATE INDEX lab_loinc IF NOT EXISTS
+FOR (l:Lab) ON (l.loinc);
+```
+
+
+---
+
+
+### **Implementation: Neo4j Graph Projector**
+
+
+```java
+package com.hospital.module8.projectors;
+
+
+import org.neo4j.driver.*;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.springframework.stereotype.Service;
+
+
+import java.util.*;
+
+
+/**
+ * Neo4j Graph Projector
+ * Builds knowledge graph from clinical events
+ */
+@Service
+public class Neo4jGraphProjector {
+    
+    private final Driver neo4jDriver;
+    
+    public Neo4jGraphProjector(Driver neo4jDriver) {
+        this.neo4jDriver = neo4jDriver;
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume enriched events
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        
+        // Consume ML predictions
+        KStream<String, MLPrediction> mlPredictions = 
+            builder.stream("ml-predictions");
+        
+        // Project to graph
+        enrichedEvents.foreach((key, event) -> projectToGraph(event));
+        mlPredictions.foreach((key, prediction) -> projectMLPredictionToGraph(prediction));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+    }
+    
+    /**
+     * Project clinical event to graph
+     */
+    private void projectToGraph(EnrichedEvent event) {
+        try (Session session = neo4jDriver.session()) {
+            switch (event.getEventType()) {
+                case "PATIENT_ADMISSION":
+                    createOrUpdatePatient(session, event);
+                    break;
+                    
+                case "DIAGNOSIS":
+                    linkPatientToDisease(session, event);
+                    break;
+                    
+                case "MEDICATION_ORDER":
+                    linkPatientToMedication(session, event);
+                    break;
+                    
+                case "LAB_RESULT":
+                    linkPatientToLab(session, event);
+                    break;
+                    
+                case "ALLERGY":
+                    linkPatientToAllergen(session, event);
+                    break;
+            }
+        } catch (Exception e) {
+            log.error("Failed to project to Neo4j: {}", event, e);
+        }
+    }
+    
+    /**
+     * Create or update patient node
+     */
+    private void createOrUpdatePatient(Session session, EnrichedEvent event) {
+        String query = """
+            MERGE (p:Patient {id: $patient_id})
+            SET p.mrn = $mrn,
+                p.name = $name,
+                p.date_of_birth = datetime($dob),
+                p.gender = $gender,
+                p.department = $department,
+                p.room = $room,
+                p.admission_date = datetime($admission_date),
+                p.last_updated = datetime()
+            RETURN p
+        """;
+        
+        Map<String, Object> params = new HashMap<>();
+        params.put("patient_id", event.getPatientId());
+        params.put("mrn", event.getMrn());
+        params.put("name", event.getPatientName());
+        params.put("dob", event.getDateOfBirth());
+        params.put("gender", event.getGender());
+        params.put("department", event.getDepartment());
+        params.put("room", event.getRoom());
+        params.put("admission_date", event.getAdmissionTime());
+        
+        session.run(query, params);
+    }
+    
+    /**
+     * Link patient to disease
+     */
+    private void linkPatientToDisease(Session session, EnrichedEvent event) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})
+            MERGE (d:Disease {icd10: $icd10})
+            ON CREATE SET 
+                d.name = $disease_name,
+                d.snomed = $snomed
+            MERGE (p)-[r:HAS_DIAGNOSIS {
+                onset_date: datetime($onset_date),
+                recorded_date: datetime($recorded_date),
+                status: $status
+            }]->(d)
+            RETURN p, d, r
+        """;
+        
+        Map<String, Object> params = new HashMap<>();
+        params.put("patient_id", event.getPatientId());
+        params.put("icd10", event.getIcd10Code());
+        params.put("disease_name", event.getConditionName());
+        params.put("snomed", event.getSnomedCode());
+        params.put("onset_date", event.getOnsetDate());
+        params.put("recorded_date", event.getTimestamp());
+        params.put("status", "active");
+        
+        session.run(query, params);
+    }
+    
+    /**
+     * Link patient to medication
+     */
+    private void linkPatientToMedication(Session session, EnrichedEvent event) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})
+            MERGE (m:Medication {rxnorm: $rxnorm})
+            ON CREATE SET 
+                m.name = $medication_name,
+                m.class = $drug_class
+            MERGE (p)-[r:TAKING_MEDICATION {
+                start_date: datetime($start_date),
+                dose: $dose,
+                route: $route,
+                frequency: $frequency,
+                status: $status
+            }]->(m)
+            RETURN p, m, r
+        """;
+        
+        Map<String, Object> params = new HashMap<>();
+        params.put("patient_id", event.getPatientId());
+        params.put("rxnorm", event.getRxNormCode());
+        params.put("medication_name", event.getMedicationName());
+        params.put("drug_class", event.getDrugClass());
+        params.put("start_date", event.getTimestamp());
+        params.put("dose", event.getDosageText());
+        params.put("route", event.getRoute());
+        params.put("frequency", event.getFrequency());
+        params.put("status", "active");
+        
+        session.run(query, params);
+    }
+    
+    /**
+     * Link patient to lab test
+     */
+    private void linkPatientToLab(Session session, EnrichedEvent event) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})
+            MERGE (l:Lab {loinc: $loinc})
+            ON CREATE SET 
+                l.name = $lab_name,
+                l.category = $category
+            CREATE (
+```java
+            CREATE (p)-[r:HAS_LAB_RESULT {
+                value: $value,
+                unit: $unit,
+                abnormal_flag: $abnormal_flag,
+                result_date: datetime($result_date),
+                reference_low: $ref_low,
+                reference_high: $ref_high
+            }]->(l)
+            RETURN p, l, r
+        """;
+        
+        Map<String, Object> params = new HashMap<>();
+        params.put("patient_id", event.getPatientId());
+        params.put("loinc", event.getLoincCode());
+        params.put("lab_name", event.getLabName());
+        params.put("category", event.getLabCategory());
+        params.put("value", event.getValue());
+        params.put("unit", event.getUnit());
+        params.put("abnormal_flag", event.getAbnormalFlag());
+        params.put("result_date", event.getTimestamp());
+        params.put("ref_low", event.getReferenceRange() != null ? 
+            event.getReferenceRange().getLow() : null);
+        params.put("ref_high", event.getReferenceRange() != null ? 
+            event.getReferenceRange().getHigh() : null);
+        
+        session.run(query, params);
+    }
+    
+    /**
+     * Link patient to allergen
+     */
+    private void linkPatientToAllergen(Session session, EnrichedEvent event) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})
+            MERGE (a:Allergen {name: $allergen})
+            ON CREATE SET 
+                a.category = $category
+            MERGE (p)-[r:ALLERGIC_TO {
+                severity: $severity,
+                reaction: $reaction,
+                verified_date: datetime($verified_date)
+            }]->(a)
+            RETURN p, a, r
+        """;
+        
+        Map<String, Object> params = new HashMap<>();
+        params.put("patient_id", event.getPatientId());
+        params.put("allergen", event.getAllergen());
+        params.put("category", event.getAllergenCategory());
+        params.put("severity", event.getAllergySeverity());
+        params.put("reaction", event.getAllergyReaction());
+        params.put("verified_date", event.getTimestamp());
+        
+        session.run(query, params);
+    }
+    
+    /**
+     * Project ML prediction to graph
+     */
+    private void projectMLPredictionToGraph(MLPrediction prediction) {
+        try (Session session = neo4jDriver.session()) {
+            String query = """
+                MATCH (p:Patient {id: $patient_id})
+                MERGE (p)-[r:HAS_RISK_PREDICTION {
+                    model_type: $model_type
+                }]->(rp:RiskPrediction {
+                    prediction_id: $prediction_id
+                })
+                SET rp.probability = $probability,
+                    rp.risk_category = $risk_category,
+                    rp.confidence = $confidence,
+                    rp.prediction_date = datetime($prediction_date)
+                RETURN p, r, rp
+            """;
+            
+            Map<String, Object> params = new HashMap<>();
+            params.put("patient_id", prediction.getPatientId());
+            params.put("prediction_id", prediction.getPredictionId());
+            params.put("model_type", prediction.getModelType().toString());
+            params.put("probability", prediction.getPrediction());
+            params.put("risk_category", prediction.getRiskCategory().toString());
+            params.put("confidence", prediction.getConfidence());
+            params.put("prediction_date", prediction.getTimestamp());
+            
+            session.run(query, params);
+            
+        } catch (Exception e) {
+            log.error("Failed to project ML prediction to Neo4j: {}", prediction, e);
+        }
+    }
+    
+    /**
+     * Seed knowledge graph with medical knowledge
+     * (Drug-drug interactions, contraindications, etc.)
+     */
+    public void seedKnowledgeGraph() {
+        try (Session session = neo4jDriver.session()) {
+            // Seed drug-drug interactions
+            seedDrugInteractions(session);
+            
+            // Seed drug-disease contraindications
+            seedContraindications(session);
+            
+            // Seed drug-lab monitoring requirements
+            seedMonitoringRequirements(session);
+            
+            // Seed pharmacogenomic data
+            seedPharmacogenomics(session);
+            
+        } catch (Exception e) {
+            log.error("Failed to seed knowledge graph", e);
+        }
+    }
+    
+    /**
+     * Seed drug-drug interactions
+     */
+    private void seedDrugInteractions(Session session) {
+        // Example: Warfarin + Aspirin interaction
+        String query = """
+            MERGE (m1:Medication {rxnorm: '855332'})
+            ON CREATE SET m1.name = 'Warfarin'
+            MERGE (m2:Medication {rxnorm: '1191'})
+            ON CREATE SET m2.name = 'Aspirin'
+            MERGE (m1)-[r:INTERACTS_WITH {
+                severity: 'SEVERE',
+                mechanism: 'Additive antiplatelet effect',
+                clinical_significance: 'Increased bleeding risk',
+                management: 'Monitor INR closely, consider alternative',
+                evidence_level: '1A'
+            }]->(m2)
+            MERGE (m2)-[r2:INTERACTS_WITH {
+                severity: 'SEVERE',
+                mechanism: 'Additive antiplatelet effect',
+                clinical_significance: 'Increased bleeding risk',
+                management: 'Monitor INR closely, consider alternative',
+                evidence_level: '1A'
+            }]->(m1)
+            RETURN m1, m2
+        """;
+        
+        session.run(query);
+        
+        // Load more interactions from external database
+        loadDrugInteractionsFromCSV(session);
+    }
+    
+    /**
+     * Seed contraindications
+     */
+    private void seedContraindications(Session session) {
+        // Example: Metformin contraindicated in severe renal disease
+        String query = """
+            MERGE (m:Medication {rxnorm: '6809'})
+            ON CREATE SET m.name = 'Metformin'
+            MERGE (d:Disease {icd10: 'N18.5'})
+            ON CREATE SET d.name = 'Chronic kidney disease, stage 5'
+            MERGE (m)-[r:CONTRAINDICATED_IN {
+                severity: 'ABSOLUTE',
+                rationale: 'Risk of lactic acidosis',
+                alternative_options: 'Insulin, DPP-4 inhibitors',
+                evidence_level: '1A'
+            }]->(d)
+            RETURN m, d
+        """;
+        
+        session.run(query);
+        
+        // Load more contraindications
+        loadContraindicationsFromCSV(session);
+    }
+    
+    /**
+     * Seed monitoring requirements
+     */
+    private void seedMonitoringRequirements(Session session) {
+        // Example: Warfarin requires INR monitoring
+        String query = """
+            MERGE (m:Medication {rxnorm: '855332'})
+            ON CREATE SET m.name = 'Warfarin'
+            MERGE (l:Lab {loinc: '6301-6'})
+            ON CREATE SET l.name = 'INR'
+            MERGE (m)-[r:REQUIRES_MONITORING {
+                frequency: 'Weekly initially, then monthly',
+                target_range: '2.0-3.0',
+                critical_low: '1.5',
+                critical_high: '4.0',
+                rationale: 'Maintain therapeutic anticoagulation'
+            }]->(l)
+            RETURN m, l
+        """;
+        
+        session.run(query);
+    }
+    
+    /**
+     * Seed pharmacogenomic data
+     */
+    private void seedPharmacogenomics(Session session) {
+        // Example: CYP2C19 poor metabolizer affects Clopidogrel
+        String query = """
+            MERGE (m:Medication {rxnorm: '32968'})
+            ON CREATE SET m.name = 'Clopidogrel'
+            MERGE (g:Gene {hgnc: 'CYP2C19'})
+            ON CREATE SET g.name = 'Cytochrome P450 2C19'
+            MERGE (g)-[r:AFFECTS_DRUG {
+                variant: '*2/*2',
+                phenotype: 'Poor metabolizer',
+                effect: 'Decreased activation',
+                recommendation: 'Consider alternative antiplatelet (e.g., Prasugrel)',
+                evidence_level: '1A'
+            }]->(m)
+            RETURN g, m
+        """;
+        
+        session.run(query);
+    }
+    
+    /**
+     * Load drug interactions from CSV file
+     */
+    private void loadDrugInteractionsFromCSV(Session session) {
+        String query = """
+            LOAD CSV WITH HEADERS FROM 'file:///drug_interactions.csv' AS row
+            MERGE (m1:Medication {rxnorm: row.drug1_rxnorm})
+            ON CREATE SET m1.name = row.drug1_name
+            MERGE (m2:Medication {rxnorm: row.drug2_rxnorm})
+            ON CREATE SET m2.name = row.drug2_name
+            MERGE (m1)-[r:INTERACTS_WITH]->(m2)
+            SET r.severity = row.severity,
+                r.mechanism = row.mechanism,
+                r.clinical_significance = row.clinical_significance,
+                r.management = row.management,
+                r.evidence_level = row.evidence_level
+        """;
+        
+        session.run(query);
+    }
+    
+    /**
+     * Load contraindications from CSV file
+     */
+    private void loadContraindicationsFromCSV(Session session) {
+        String query = """
+            LOAD CSV WITH HEADERS FROM 'file:///contraindications.csv' AS row
+            MERGE (m:Medication {rxnorm: row.drug_rxnorm})
+            ON CREATE SET m.name = row.drug_name
+            MERGE (d:Disease {icd10: row.disease_icd10})
+            ON CREATE SET d.name = row.disease_name
+            MERGE (m)-[r:CONTRAINDICATED_IN]->(d)
+            SET r.severity = row.severity,
+                r.rationale = row.rationale,
+                r.alternative_options = row.alternatives,
+                r.evidence_level = row.evidence_level
+        """;
+        
+        session.run(query);
+    }
+}
+```
+
+
+---
+
+
+### **Graph Query Examples**
+
+
+```java
+package com.hospital.module8.graph;
+
+
+import org.neo4j.driver.*;
+import org.springframework.stereotype.Service;
+
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+
+/**
+ * Graph Query Service
+ * Executes complex graph queries for clinical insights
+ */
+@Service
+public class GraphQueryService {
+    
+    private final Driver neo4jDriver;
+    
+    public GraphQueryService(Driver neo4jDriver) {
+        this.neo4jDriver = neo4jDriver;
+    }
+    
+    /**
+     * Find all drug-drug interactions for a patient
+     */
+    public List<DrugInteraction> findDrugInteractions(String patientId) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})-[:TAKING_MEDICATION]->(m1:Medication)
+            MATCH (p)-[:TAKING_MEDICATION]->(m2:Medication)
+            WHERE m1 <> m2
+            MATCH (m1)-[i:INTERACTS_WITH]->(m2)
+            RETURN 
+                m1.name AS drug1,
+                m2.name AS drug2,
+                i.severity AS severity,
+                i.mechanism AS mechanism,
+                i.clinical_significance AS significance,
+                i.management AS management
+            ORDER BY 
+                CASE i.severity
+                    WHEN 'SEVERE' THEN 1
+                    WHEN 'MODERATE' THEN 2
+                    ELSE 3
+                END
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of("patient_id", patientId));
+            
+            return result.list(record -> 
+                DrugInteraction.builder()
+                    .drug1(record.get("drug1").asString())
+                    .drug2(record.get("drug2").asString())
+                    .severity(record.get("severity").asString())
+                    .mechanism(record.get("mechanism").asString())
+                    .clinicalSignificance(record.get("significance").asString())
+                    .management(record.get("management").asString())
+                    .build()
+            );
+        }
+    }
+    
+    /**
+     * Find contraindications for a patient
+     */
+    public List<Contraindication> findContraindications(String patientId) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})-[:TAKING_MEDICATION]->(m:Medication)
+            MATCH (p)-[:HAS_DIAGNOSIS]->(d:Disease)
+            MATCH (m)-[c:CONTRAINDICATED_IN]->(d)
+            RETURN 
+                m.name AS medication,
+                d.name AS disease,
+                c.severity AS severity,
+                c.rationale AS rationale,
+                c.alternative_options AS alternatives
+            ORDER BY 
+                CASE c.severity
+                    WHEN 'ABSOLUTE' THEN 1
+                    WHEN 'RELATIVE' THEN 2
+                    ELSE 3
+                END
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of("patient_id", patientId));
+            
+            return result.list(record -> 
+                Contraindication.builder()
+                    .medication(record.get("medication").asString())
+                    .disease(record.get("disease").asString())
+                    .severity(record.get("severity").asString())
+                    .rationale(record.get("rationale").asString())
+                    .alternatives(record.get("alternatives").asString())
+                    .build()
+            );
+        }
+    }
+    
+    /**
+     * Find required lab monitoring for patient's medications
+     */
+    public List<MonitoringRequirement> findMonitoringRequirements(String patientId) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})-[:TAKING_MEDICATION]->(m:Medication)
+            MATCH (m)-[r:REQUIRES_MONITORING]->(l:Lab)
+            OPTIONAL MATCH (p)-[lr:HAS_LAB_RESULT]->(l)
+            WHERE lr.result_date > datetime() - duration('P30D')
+            RETURN 
+                m.name AS medication,
+                l.name AS lab_test,
+                l.loinc AS loinc,
+                r.frequency AS frequency,
+                r.target_range AS target_range,
+                MAX(lr.result_date) AS last_checked,
+                COLLECT(lr.value) AS recent_values
+            ORDER BY last_checked ASC NULLS FIRST
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of("patient_id", patientId));
+            
+            return result.list(record -> 
+                MonitoringRequirement.builder()
+                    .medication(record.get("medication").asString())
+                    .labTest(record.get("lab_test").asString())
+                    .loincCode(record.get("loinc").asString())
+                    .frequency(record.get("frequency").asString())
+                    .targetRange(record.get("target_range").asString())
+                    .lastChecked(record.get("last_checked").isNull() ? 
+                        null : record.get("last_checked").asString())
+                    .recentValues(record.get("recent_values").asList(Value::asDouble))
+                    .build()
+            );
+        }
+    }
+    
+    /**
+     * Find medication alternatives for a contraindication
+     */
+    public List<MedicationAlternative> findMedicationAlternatives(
+        String medicationRxnorm,
+        String patientId
+    ) {
+        String query = """
+            MATCH (original:Medication {rxnorm: $rxnorm})
+            MATCH (p:Patient {id: $patient_id})-[:HAS_DIAGNOSIS]->(d:Disease)
+            MATCH (original)-[:TREATS]->(indication:Disease)
+            
+            // Find alternative medications for same indication
+            MATCH (alt:Medication)-[:TREATS]->(indication)
+            WHERE alt <> original
+            
+            // Ensure alternative is NOT contraindicated
+            OPTIONAL MATCH contraindicationPath = 
+                (alt)-[:CONTRAINDICATED_IN]->(patientDisease:Disease)
+                     <-[:HAS_DIAGNOSIS]-(p)
+            WHERE contraindicationPath IS NULL
+            
+            // Ensure no cross-reactive allergies
+            OPTIONAL MATCH (p)-[:ALLERGIC_TO]->(allergen:Allergen)
+            OPTIONAL MATCH allergyPath = 
+                (alt)-[:CROSS_REACTS_WITH]->(allergen)
+            WHERE allergyPath IS NULL
+            
+            RETURN 
+                alt.name AS name,
+                alt.rxnorm AS rxnorm,
+                alt.class AS drug_class,
+                alt.efficacy AS efficacy,
+                alt.cost AS cost
+            ORDER BY alt.efficacy DESC, alt.cost ASC
+            LIMIT 5
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of(
+                "rxnorm", medicationRxnorm,
+                "patient_id", patientId
+            ));
+            
+            return result.list(record -> 
+                MedicationAlternative.builder()
+                    .name(record.get("name").asString())
+                    .rxnorm(record.get("rxnorm").asString())
+                    .drugClass(record.get("drug_class").asString())
+                    .efficacy(record.get("efficacy").asDouble())
+                    .cost(record.get("cost").asDouble())
+                    .build()
+            );
+        }
+    }
+    
+    /**
+     * Find interaction chains (drug1 → drug2 → lab)
+     */
+    public List<InteractionChain> findInteractionChains(String patientId) {
+        String query = """
+            MATCH (p:Patient {id: $patient_id})-[:TAKING_MEDICATION]->(m1:Medication)
+            MATCH path = (m1)-[:INTERACTS_WITH*1..2]-(m2:Medication)
+            WHERE (p)-[:TAKING_MEDICATION]->(m2)
+            
+            // Find required monitoring
+            OPTIONAL MATCH (m1)-[:INTERACTION_REQUIRES_MONITORING]->(l:Lab)
+            
+            RETURN 
+                [node IN nodes(path) | node.name] AS chain,
+                [rel IN relationships(path) | {
+                    type: type(rel),
+                    severity: rel.severity,
+                    mechanism: rel.mechanism
+                }] AS interactions,
+                COLLECT(DISTINCT {
+                    lab: l.name,
+                    loinc: l.loinc,
+                    frequency: l.frequency
+                }) AS monitoring
+            ORDER BY SIZE(chain) ASC
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of("patient_id", patientId));
+            
+            return result.list(record -> 
+                InteractionChain.builder()
+                    .medicationChain(record.get("chain").asList(Value::asString))
+                    .interactions(parseInteractions(record.get("interactions").asList()))
+                    .monitoring(parseMonitoring(record.get("monitoring").asList()))
+                    .build()
+            );
+        }
+    }
+    
+    /**
+     * Find patients with similar clinical profiles
+     */
+    public List<String> findSimilarPatients(String patientId, int limit) {
+        String query = """
+            MATCH (p1:Patient {id: $patient_id})-[:HAS_DIAGNOSIS]->(d:Disease)
+            MATCH (p2:Patient)-[:HAS_DIAGNOSIS]->(d)
+            WHERE p1 <> p2
+            WITH p1, p2, COUNT(d) AS shared_diseases
+            
+            MATCH (p1)-[:TAKING_MEDICATION]->(m:Medication)
+            MATCH (p2)-[:TAKING_MEDICATION]->(m)
+            WITH p1, p2, shared_diseases, COUNT(m) AS shared_medications
+            
+            RETURN 
+                p2.id AS patient_id,
+                shared_diseases,
+                shared_medications,
+                (shared_diseases * 2 + shared_medications) AS similarity_score
+            ORDER BY similarity_score DESC
+            LIMIT $limit
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of(
+                "patient_id", patientId,
+                "limit", limit
+            ));
+            
+            return result.list(record -> record.get("patient_id").asString());
+        }
+    }
+    
+    /**
+     * Shortest path between two medical concepts
+     */
+    public List<String> findShortestPath(String concept1, String concept2) {
+        String query = """
+            MATCH (n1), (n2)
+            WHERE n1.name = $concept1 AND n2.name = $concept2
+            MATCH path = shortestPath((n1)-[*]-(n2))
+            RETURN [node IN nodes(path) | node.name] AS path
+        """;
+        
+        try (Session session = neo4jDriver.session()) {
+            Result result = session.run(query, Map.of(
+                "concept1", concept1,
+                "concept2", concept2
+            ));
+            
+            if (result.hasNext()) {
+                return result.single().get("path").asList(Value::asString);
+            }
+            return Collections.emptyList();
+        }
+    }
+}
+```
+
+
+---
+
+
+## 📦 **Component 8D: ClickHouse Projector**
+
+
+### **Purpose:**
+- OLAP queries for analytics
+- Fast aggregations over large datasets
+- Population health studies
+
+
+### **Table Schema**
+
+
+```sql
+-- Clinical events fact table
+CREATE TABLE clinical_events_fact (
+    event_id String,
+    patient_id String,
+    event_type LowCardinality(String),
+    event_timestamp DateTime64(3),
+    department LowCardinality(String),
+    
+    -- Vital signs (nullable)
+    heart_rate Nullable(UInt16),
+    systolic_bp Nullable(UInt16),
+    diastolic_bp Nullable(UInt16),
+    respiratory_rate Nullable(UInt16),
+    temperature Nullable(Float32),
+    oxygen_saturation Nullable(UInt8),
+    
+    -- Lab results (nullable)
+    loinc_code Nullable(String),
+    lab_value Nullable(Float64),
+    lab_unit Nullable(String),
+    abnormal_flag Nullable(String),
+    
+    -- Scores
+    news2_score Nullable(UInt8),
+    qsofa_score Nullable(UInt8),
+    sofa_score Nullable(UInt8),
+    
+    -- Dimensions
+    patient_age Nullable(UInt8),
+    patient_gender LowCardinality(Nullable(String)),
+    admission_type LowCardinality(Nullable(String)),
+    
+    -- Metadata
+    source_system LowCardinality(String),
+    inserted_at DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(event_timestamp)
+ORDER BY (department, event_type, event_timestamp, patient_id)
+TTL event_timestamp + INTERVAL 7 YEAR;
+
+
+-- ML predictions fact table
+CREATE TABLE ml_predictions_fact (
+    prediction_id String,
+    patient_id String,
+    model_type LowCardinality(String),
+    prediction_timestamp DateTime64(3),
+    
+    -- Predictions
+    probability Float64,
+    risk_category LowCardinality(String),
+    confidence Float64,
+    
+    -- Features (top 10 for explainability)
+    feature_1_name Nullable(String),
+    feature_1_value Nullable(Float64),
+    feature_2_name Nullable(String),
+    feature_2_value Nullable(Float64),
+    feature_3_name Nullable(String),
+    feature_3_value Nullable(Float64),
+    
+    -- Dimensions
+    department LowCardinality(String),
+    patient_age Nullable(UInt8),
+    patient_gender LowCardinality(Nullable(String)),
+    
+    -- Metadata
+    inference_time_ms UInt32,
+    inserted_at DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(prediction_timestamp)
+ORDER BY (model_type, department, prediction_timestamp, patient_id)
+TTL prediction_timestamp + INTERVAL 2 YEAR;
+
+
+-- Alerts fact table
+CREATE TABLE alerts_fact (
+    alert_id String,
+    patient_id String,
+    alert_type LowCardinality(String),
+    severity LowCardinality(String),
+    created_at DateTime64(3),
+    
+    -- Alert details
+    source LowCardinality(String),
+    confidence Float64,
+    
+    -- Response metrics
+    acknowledged_at Nullable(DateTime64(3)),
+    acknowledged_by Nullable(String),
+    response_time_seconds Nullable(UInt32),
+    
+    -- Dimensions
+    department LowCardinality(String),
+    shift LowCardinality(String),
+    day_of_week LowCardinality(String),
+    
+    -- Metadata
+    inserted_at DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (department, severity, created_at, patient_id)
+TTL created_at + INTERVAL 5 YEAR;
+
+
+-- Patient snapshot dimension table
+CREATE TABLE patient_dimension (
+    patient_id String,
+    mrn String,
+    date_of_birth Date,
+    gender LowCardinality(String),
+    
+    -- Demographics
+    race Nullable(String),
+    ethnicity Nullable(String),
+    primary_language Nullable(String),
+    
+    -- Comorbidities
+    charlson_index Nullable(UInt8),
+    elixhauser_score Nullable(Int16),
+    
+    -- Current status
+    current_department Nullable(String),
+    admission_date Nullable(DateTime),
+    
+    -- Metadata
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY patient_id;
+
+
+-- Indexes for fast lookups
+CREATE INDEX idx_patient_id ON clinical_events_fact(patient_id) TYPE bloom_filter GRANULARITY 1;
+CREATE INDEX idx_event_type ON clinical_events_fact(event_type) TYPE set(100) GRANULARITY 1;
+```
+
+
+---
+
+
+### **Implementation: ClickHouse Projector**
+
+
+```java
+package com.hospital.module8.projectors;
+
+
+import com.clickhouse.jdbc.ClickHouseDataSource;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.springframework.stereotype.Service;
+
+
+import java.sql.*;
+import java.util.Properties;
+
+
+/**
+ * ClickHouse Projector
+ * Projects events to OLAP database for analytics
+ */
+@Service
+public class ClickHouseProjector {
+    
+    private final ClickHouseDataSource dataSource;
+    
+    public ClickHouseProjector() throws SQLException {
+        Properties properties = new Properties();
+        properties.setProperty("user", "default");
+        properties.setProperty("password", "");
+        
+        this.dataSource = new ClickHouseDataSource(
+            "jdbc:clickhouse://localhost:8123/hospital",
+            properties
+        );
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume enriched events
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        
+        // Consume ML predictions
+        KStream<String, MLPrediction> mlPredictions = 
+            builder.stream("ml-predictions");
+        
+        // Consume CEP alerts
+        KStream<String, CEPAlert> cepAlerts = 
+            builder.stream("cep-alerts");
+        
+        // Batch and insert
+        enrichedEvents
+            .groupBy((key, value) -> value.getDepartment())
+            .windowedBy(TimeWindows.of(Duration.ofSeconds(10)))
+            .aggregate(
+                ArrayList::new,
+                (key, value, aggregate) -> {
+                    aggregate.add(value);
+                    return aggregate;
+                }
+            )
+            .toStream()
+            .foreach((key, batch) -> batchInsertClinicalEvents(batch));
+        
+        mlPredictions
+            .groupBy((key, value) -> value.getModelType())
+            .windowedBy(TimeWindows.of(Duration.ofSeconds(10)))
+            .aggregate(
+                ArrayList::new,
+                (key, value, aggregate) -> {
+                    aggregate.add(value);
+                    return aggregate;
+                }
+            )
+            .toStream()
+            .foreach((key, batch) -> batchInsertMLPredictions(batch));
+        
+        cepAlerts
+            .groupBy((key, value) -> value.getDepartment())
+            .windowedBy(TimeWindows.of(Duration.ofSeconds(10)))
+            .aggregate(
+                ArrayList::new,
+                (key, value, aggregate) -> {
+                    aggregate.add(value);
+                    return aggregate;
+                }
+            )
+            .toStream()
+            .foreach((key, batch) -> batchInsertAlerts(batch));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+    }
+    
+    /**
+     * Batch insert clinical events
+     */
+    private void batchInsertClinicalEvents(List<EnrichedEvent> events) {
+        if (events.isEmpty()) return;
+        
+        String sql = """
+            INSERT INTO clinical_events_fact (
+                event_id, patient_id, event_type, event_timestamp, department,
+                heart_rate, systolic_bp, diastolic_bp, respiratory_rate,
+                temperature, oxygen_saturation,
+                loinc_code, lab_value, lab_unit, abnormal_flag,
+                news2_score, qsofa_score, sofa_score,
+                patient_age, patient_gender, admission_type,
+                source_system
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+        
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            for (EnrichedEvent event : events) {
+                stmt.setString(1, event.getEventId());
+                stmt.setString(2, event.getPatientId());
+                stmt.setString(3, event.getEventType());
+                stmt.setTimestamp(4, new Timestamp(event.getTimestamp()));
+                stmt.setString(5, event.getDepartment());
+                
+                // Vital signs
+                setIntOrNull(stmt, 6, event.getHeartRate());
+                setIntOrNull(stmt, 7, event.getSystolicBP());
+                setIntOrNull(stmt, 8, event.getDiastolicBP());
+                setIntOrNull(stmt, 9, event.getRespiratoryRate());
+                setDoubleOrNull(stmt, 10, event.getTemperature());
+                setIntOrNull(stmt, 11, event.getOxygenSat
+```java
+                setIntOrNull(stmt, 11, event.getOxygenSaturation());
+                
+                // Lab results
+                setStringOrNull(stmt, 12, event.getLoincCode());
+                setDoubleOrNull(stmt, 13, event.getLabValue());
+                setStringOrNull(stmt, 14, event.getLabUnit());
+                setStringOrNull(stmt, 15, event.getAbnormalFlag());
+                
+                // Scores
+                setIntOrNull(stmt, 16, event.getNews2Score());
+                setIntOrNull(stmt, 17, event.getQsofaScore());
+                setIntOrNull(stmt, 18, event.getSofaScore());
+                
+                // Dimensions
+                setIntOrNull(stmt, 19, event.getPatientAge());
+                setStringOrNull(stmt, 20, event.getPatientGender());
+                setStringOrNull(stmt, 21, event.getAdmissionType());
+                
+                stmt.setString(22, event.getSourceSystem());
+                
+                stmt.addBatch();
+            }
+            
+            stmt.executeBatch();
+            log.info("Inserted {} clinical events to ClickHouse", events.size());
+            
+        } catch (SQLException e) {
+            log.error("Failed to batch insert clinical events", e);
+        }
+    }
+    
+    /**
+     * Batch insert ML predictions
+     */
+    private void batchInsertMLPredictions(List<MLPrediction> predictions) {
+        if (predictions.isEmpty()) return;
+        
+        String sql = """
+            INSERT INTO ml_predictions_fact (
+                prediction_id, patient_id, model_type, prediction_timestamp,
+                probability, risk_category, confidence,
+                feature_1_name, feature_1_value,
+                feature_2_name, feature_2_value,
+                feature_3_name, feature_3_value,
+                department, patient_age, patient_gender,
+                inference_time_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+        
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            for (MLPrediction prediction : predictions) {
+                stmt.setString(1, prediction.getPredictionId());
+                stmt.setString(2, prediction.getPatientId());
+                stmt.setString(3, prediction.getModelType().toString());
+                stmt.setTimestamp(4, new Timestamp(prediction.getTimestamp()));
+                
+                stmt.setDouble(5, prediction.getPrediction());
+                stmt.setString(6, prediction.getRiskCategory().toString());
+                stmt.setDouble(7, prediction.getConfidence());
+                
+                // Top 3 features for explainability
+                Map<String, Double> featureImportance = prediction.getFeatureImportance();
+                if (featureImportance != null && !featureImportance.isEmpty()) {
+                    List<Map.Entry<String, Double>> topFeatures = 
+                        featureImportance.entrySet().stream()
+                            .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                            .limit(3)
+                            .collect(Collectors.toList());
+                    
+                    for (int i = 0; i < 3; i++) {
+                        if (i < topFeatures.size()) {
+                            stmt.setString(8 + i*2, topFeatures.get(i).getKey());
+                            stmt.setDouble(9 + i*2, topFeatures.get(i).getValue());
+                        } else {
+                            stmt.setNull(8 + i*2, Types.VARCHAR);
+                            stmt.setNull(9 + i*2, Types.DOUBLE);
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < 3; i++) {
+                        stmt.setNull(8 + i*2, Types.VARCHAR);
+                        stmt.setNull(9 + i*2, Types.DOUBLE);
+                    }
+                }
+                
+                // Dimensions
+                setStringOrNull(stmt, 14, prediction.getDepartment());
+                setIntOrNull(stmt, 15, prediction.getPatientAge());
+                setStringOrNull(stmt, 16, prediction.getPatientGender());
+                
+                stmt.setLong(17, prediction.getInferenceTimeMs());
+                
+                stmt.addBatch();
+            }
+            
+            stmt.executeBatch();
+            log.info("Inserted {} ML predictions to ClickHouse", predictions.size());
+            
+        } catch (SQLException e) {
+            log.error("Failed to batch insert ML predictions", e);
+        }
+    }
+    
+    /**
+     * Batch insert alerts
+     */
+    private void batchInsertAlerts(List<CEPAlert> alerts) {
+        if (alerts.isEmpty()) return;
+        
+        String sql = """
+            INSERT INTO alerts_fact (
+                alert_id, patient_id, alert_type, severity, created_at,
+                source, confidence,
+                acknowledged_at, acknowledged_by, response_time_seconds,
+                department, shift, day_of_week
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """;
+        
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            for (CEPAlert alert : alerts) {
+                stmt.setString(1, alert.getAlertId());
+                stmt.setString(2, alert.getPatientId());
+                stmt.setString(3, alert.getAlertType());
+                stmt.setString(4, alert.getSeverity());
+                stmt.setTimestamp(5, new Timestamp(alert.getCreatedAt()));
+                
+                stmt.setString(6, alert.getSource());
+                stmt.setDouble(7, alert.getConfidence());
+                
+                // Response metrics
+                if (alert.getAcknowledgedAt() != null) {
+                    stmt.setTimestamp(8, new Timestamp(alert.getAcknowledgedAt()));
+                    stmt.setString(9, alert.getAcknowledgedBy());
+                    long responseTime = (alert.getAcknowledgedAt() - alert.getCreatedAt()) / 1000;
+                    stmt.setLong(10, responseTime);
+                } else {
+                    stmt.setNull(8, Types.TIMESTAMP);
+                    stmt.setNull(9, Types.VARCHAR);
+                    stmt.setNull(10, Types.INTEGER);
+                }
+                
+                // Dimensions
+                stmt.setString(11, alert.getDepartment());
+                stmt.setString(12, getShift(alert.getCreatedAt()));
+                stmt.setString(13, getDayOfWeek(alert.getCreatedAt()));
+                
+                stmt.addBatch();
+            }
+            
+            stmt.executeBatch();
+            log.info("Inserted {} alerts to ClickHouse", alerts.size());
+            
+        } catch (SQLException e) {
+            log.error("Failed to batch insert alerts", e);
+        }
+    }
+    
+    // Helper methods
+    private void setIntOrNull(PreparedStatement stmt, int paramIndex, Integer value) 
+        throws SQLException {
+        if (value != null) {
+            stmt.setInt(paramIndex, value);
+        } else {
+            stmt.setNull(paramIndex, Types.INTEGER);
+        }
+    }
+    
+    private void setDoubleOrNull(PreparedStatement stmt, int paramIndex, Double value) 
+        throws SQLException {
+        if (value != null) {
+            stmt.setDouble(paramIndex, value);
+        } else {
+            stmt.setNull(paramIndex, Types.DOUBLE);
+        }
+    }
+    
+    private void setStringOrNull(PreparedStatement stmt, int paramIndex, String value) 
+        throws SQLException {
+        if (value != null) {
+            stmt.setString(paramIndex, value);
+        } else {
+            stmt.setNull(paramIndex, Types.VARCHAR);
+        }
+    }
+    
+    private String getShift(long timestamp) {
+        LocalTime time = LocalDateTime.ofInstant(
+            Instant.ofEpochMilli(timestamp), 
+            ZoneId.systemDefault()
+        ).toLocalTime();
+        
+        if (time.isBefore(LocalTime.of(7, 0))) {
+            return "NIGHT";
+        } else if (time.isBefore(LocalTime.of(15, 0))) {
+            return "DAY";
+        } else if (time.isBefore(LocalTime.of(23, 0))) {
+            return "EVENING";
+        } else {
+            return "NIGHT";
+        }
+    }
+    
+    private String getDayOfWeek(long timestamp) {
+        return LocalDateTime.ofInstant(
+            Instant.ofEpochMilli(timestamp), 
+            ZoneId.systemDefault()
+        ).getDayOfWeek().toString();
+    }
+}
+```
+
+
+---
+
+
+### **Analytics Query Examples**
+
+
+```sql
+-- Query 1: Average response time to critical alerts by department
+SELECT 
+    department,
+    COUNT(*) AS alert_count,
+    AVG(response_time_seconds) AS avg_response_seconds,
+    quantile(0.95)(response_time_seconds) AS p95_response_seconds
+FROM alerts_fact
+WHERE severity = 'CRITICAL'
+  AND created_at >= now() - INTERVAL 30 DAY
+  AND acknowledged_at IS NOT NULL
+GROUP BY department
+ORDER BY avg_response_seconds DESC;
+
+
+-- Query 2: ML model prediction accuracy over time
+WITH predictions AS (
+    SELECT 
+        toStartOfDay(prediction_timestamp) AS day,
+        model_type,
+        risk_category,
+        COUNT(*) AS prediction_count
+    FROM ml_predictions_fact
+    WHERE prediction_timestamp >= now() - INTERVAL 90 DAY
+    GROUP BY day, model_type, risk_category
+)
+SELECT 
+    day,
+    model_type,
+    risk_category,
+    prediction_count,
+    prediction_count / SUM(prediction_count) OVER (PARTITION BY day, model_type) AS percentage
+FROM predictions
+ORDER BY day DESC, model_type, risk_category;
+
+
+-- Query 3: Vital sign trends by department
+SELECT 
+    department,
+    toStartOfHour(event_timestamp) AS hour,
+    AVG(heart_rate) AS avg_hr,
+    AVG(systolic_bp) AS avg_sbp,
+    AVG(temperature) AS avg_temp,
+    quantile(0.95)(heart_rate) AS p95_hr
+FROM clinical_events_fact
+WHERE event_type = 'VITAL_SIGNS'
+  AND event_timestamp >= now() - INTERVAL 24 HOUR
+  AND heart_rate IS NOT NULL
+GROUP BY department, hour
+ORDER BY department, hour DESC;
+
+
+-- Query 4: Sepsis detection lead time analysis
+WITH sepsis_predictions AS (
+    SELECT 
+        patient_id,
+        prediction_timestamp,
+        probability
+    FROM ml_predictions_fact
+    WHERE model_type = 'SEPSIS_ONSET'
+      AND probability > 0.5
+),
+sepsis_confirmations AS (
+    SELECT 
+        patient_id,
+        MIN(created_at) AS confirmed_at
+    FROM alerts_fact
+    WHERE alert_type LIKE '%sepsis%'
+    GROUP BY patient_id
+)
+SELECT 
+    AVG(dateDiff('hour', sp.prediction_timestamp, sc.confirmed_at)) AS avg_lead_time_hours,
+    quantile(0.5)(dateDiff('hour', sp.prediction_timestamp, sc.confirmed_at)) AS median_lead_time,
+    COUNT(*) AS case_count
+FROM sepsis_predictions sp
+JOIN sepsis_confirmations sc ON sp.patient_id = sc.patient_id
+WHERE sc.confirmed_at > sp.prediction_timestamp
+  AND dateDiff('hour', sp.prediction_timestamp, sc.confirmed_at) BETWEEN 0 AND 24;
+
+
+-- Query 5: Alert fatigue analysis
+SELECT 
+    toStartOfDay(created_at) AS day,
+    department,
+    COUNT(*) AS total_alerts,
+    COUNT(DISTINCT patient_id) AS unique_patients,
+    COUNT(*) / COUNT(DISTINCT patient_id) AS alerts_per_patient,
+    AVG(response_time_seconds) AS avg_response_time,
+    SUM(CASE WHEN acknowledged_at IS NULL THEN 1 ELSE 0 END) AS unacknowledged_count
+FROM alerts_fact
+WHERE created_at >= now() - INTERVAL 30 DAY
+GROUP BY day, department
+ORDER BY day DESC, alerts_per_patient DESC;
+
+
+-- Query 6: Population health metrics
+SELECT 
+    toStartOfWeek(event_timestamp) AS week,
+    department,
+    
+    -- Census
+    COUNT(DISTINCT patient_id) AS patient_count,
+    
+    -- Vital sign averages
+    AVG(heart_rate) AS avg_hr,
+    AVG(systolic_bp) AS avg_sbp,
+    
+    -- Risk stratification
+    SUM(CASE WHEN news2_score >= 7 THEN 1 ELSE 0 END) AS high_risk_count,
+    SUM(CASE WHEN news2_score >= 5 AND news2_score < 7 THEN 1 ELSE 0 END) AS medium_risk_count,
+    
+    -- Calculate percentage
+    (high_risk_count / patient_count * 100) AS high_risk_percentage
+FROM clinical_events_fact
+WHERE event_timestamp >= now() - INTERVAL 12 WEEK
+  AND event_type = 'VITAL_SIGNS'
+GROUP BY week, department
+ORDER BY week DESC, department;
+
+
+-- Query 7: Lab result abnormality rates
+SELECT 
+    loinc_code,
+    lab_unit,
+    department,
+    COUNT(*) AS total_results,
+    SUM(CASE WHEN abnormal_flag IN ('HIGH', 'CRITICAL_HIGH') THEN 1 ELSE 0 END) AS high_count,
+    SUM(CASE WHEN abnormal_flag IN ('LOW', 'CRITICAL_LOW') THEN 1 ELSE 0 END) AS low_count,
+    (high_count + low_count) / total_results * 100 AS abnormal_percentage
+FROM clinical_events_fact
+WHERE event_type = 'LAB_RESULT'
+  AND event_timestamp >= now() - INTERVAL 30 DAY
+  AND loinc_code IS NOT NULL
+GROUP BY loinc_code, lab_unit, department
+HAVING total_results > 100
+ORDER BY abnormal_percentage DESC
+LIMIT 20;
+
+
+-- Query 8: ML model feature importance aggregation
+SELECT 
+    model_type,
+    feature_1_name AS feature_name,
+    COUNT(*) AS usage_count,
+    AVG(feature_1_value) AS avg_value
+FROM ml_predictions_fact
+WHERE prediction_timestamp >= now() - INTERVAL 30 DAY
+  AND feature_1_name IS NOT NULL
+GROUP BY model_type, feature_1_name
+
+
+UNION ALL
+
+
+SELECT 
+    model_type,
+    feature_2_name AS feature_name,
+    COUNT(*) AS usage_count,
+    AVG(feature_2_value) AS avg_value
+FROM ml_predictions_fact
+WHERE prediction_timestamp >= now() - INTERVAL 30 DAY
+  AND feature_2_name IS NOT NULL
+GROUP BY model_type, feature_2_name
+
+
+UNION ALL
+
+
+SELECT 
+    model_type,
+    feature_3_name AS feature_name,
+    COUNT(*) AS usage_count,
+    AVG(feature_3_value) AS avg_value
+FROM ml_predictions_fact
+WHERE prediction_timestamp >= now() - INTERVAL 30 DAY
+  AND feature_3_name IS NOT NULL
+GROUP BY model_type, feature_3_name
+
+
+ORDER BY model_type, usage_count DESC;
+```
+
+
+---
+
+
+## 📦 **Component 8E: InfluxDB Projector (Time-Series)**
+
+
+### **Purpose:**
+- Store high-frequency vital signs
+- Enable fast time-series queries
+- Automatic downsampling for long-term storage
+
+
+### **Schema**
+
+
+```sql
+-- InfluxDB 2.x uses buckets and measurements
+
+
+-- Bucket: vitals_realtime (retention: 7 days, raw data)
+CREATE BUCKET vitals_realtime 
+  WITH RETENTION 7d 
+  WITH SHARD DURATION 1d;
+
+
+-- Bucket: vitals_1min (retention: 90 days, 1-minute averages)
+CREATE BUCKET vitals_1min 
+  WITH RETENTION 90d 
+  WITH SHARD DURATION 7d;
+
+
+-- Bucket: vitals_1hour (retention: 2 years, 1-hour averages)
+CREATE BUCKET vitals_1hour 
+  WITH RETENTION 730d 
+  WITH SHARD DURATION 30d;
+
+
+-- Measurement schema (implicit):
+-- vitals
+--   tags: patient_id, department, room, data_type
+--   fields: value, quality_flag
+--   time: timestamp
+```
+
+
+### **Implementation: InfluxDB Projector**
+
+
+```java
+package com.hospital.module8.projectors;
+
+
+import com.influxdb.client.InfluxDBClient;
+import com.influxdb.client.WriteApiBlocking;
+import com.influxdb.client.domain.WritePrecision;
+import com.influxdb.client.write.Point;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.springframework.stereotype.Service;
+
+
+import java.time.Instant;
+import java.util.*;
+
+
+/**
+ * InfluxDB Projector
+ * Stores high-frequency time-series data
+ */
+@Service
+public class InfluxDBProjector {
+    
+    private final InfluxDBClient influxClient;
+    private final WriteApiBlocking writeApi;
+    
+    public InfluxDBProjector(InfluxDBClient influxClient) {
+        this.influxClient = influxClient;
+        this.writeApi = influxClient.getWriteApiBlocking();
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume enriched events (vital signs only)
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        
+        // Filter for vital signs
+        enrichedEvents
+            .filter((key, event) -> event.getEventType().equals("VITAL_SIGNS"))
+            .foreach((key, event) -> writeVitalSigns(event));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+        
+        // Setup downsampling tasks
+        setupDownsamplingTasks();
+    }
+    
+    /**
+     * Write vital signs to InfluxDB
+     */
+    private void writeVitalSigns(EnrichedEvent event) {
+        try {
+            List<Point> points = new ArrayList<>();
+            
+            // Heart Rate
+            if (event.getHeartRate() != null) {
+                points.add(createPoint("vitals", "heart_rate", 
+                    event.getHeartRate(), event));
+            }
+            
+            // Blood Pressure
+            if (event.getSystolicBP() != null) {
+                points.add(createPoint("vitals", "systolic_bp", 
+                    event.getSystolicBP(), event));
+            }
+            if (event.getDiastolicBP() != null) {
+                points.add(createPoint("vitals", "diastolic_bp", 
+                    event.getDiastolicBP(), event));
+            }
+            
+            // Respiratory Rate
+            if (event.getRespiratoryRate() != null) {
+                points.add(createPoint("vitals", "respiratory_rate", 
+                    event.getRespiratoryRate(), event));
+            }
+            
+            // Temperature
+            if (event.getTemperature() != null) {
+                points.add(createPoint("vitals", "temperature", 
+                    event.getTemperature(), event));
+            }
+            
+            // Oxygen Saturation
+            if (event.getOxygenSaturation() != null) {
+                points.add(createPoint("vitals", "oxygen_saturation", 
+                    event.getOxygenSaturation(), event));
+            }
+            
+            // Write all points
+            writeApi.writePoints("vitals_realtime", "hospital", points);
+            
+        } catch (Exception e) {
+            log.error("Failed to write vital signs to InfluxDB: {}", event, e);
+        }
+    }
+    
+    /**
+     * Create InfluxDB point
+     */
+    private Point createPoint(String measurement, String vitalType, 
+                              Number value, EnrichedEvent event) {
+        return Point.measurement(measurement)
+            .addTag("patient_id", event.getPatientId())
+            .addTag("department", event.getDepartment())
+            .addTag("room", event.getRoom())
+            .addTag("data_type", vitalType)
+            .addField("value", value)
+            .addField("quality_flag", event.getQualityFlag() != null ? 
+                event.getQualityFlag() : "GOOD")
+            .time(Instant.ofEpochMilli(event.getTimestamp()), WritePrecision.MS);
+    }
+    
+    /**
+     * Setup downsampling tasks (Flux queries)
+     */
+    private void setupDownsamplingTasks() {
+        // Task 1: Downsample to 1-minute averages
+        String downsample1Min = """
+            option task = {name: "Downsample to 1min", every: 1m}
+            
+            from(bucket: "vitals_realtime")
+              |> range(start: -2m)
+              |> filter(fn: (r) => r["_measurement"] == "vitals")
+              |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)
+              |> to(bucket: "vitals_1min")
+        """;
+        
+        // Task 2: Downsample to 1-hour averages
+        String downsample1Hour = """
+            option task = {name: "Downsample to 1hour", every: 1h}
+            
+            from(bucket: "vitals_1min")
+              |> range(start: -2h)
+              |> filter(fn: (r) => r["_measurement"] == "vitals")
+              |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+              |> to(bucket: "vitals_1hour")
+        """;
+        
+        // These would be registered as InfluxDB tasks
+        // (In production, create via InfluxDB UI or API)
+    }
+}
+```
+
+
+---
+
+
+## 📦 **Component 8F: PostgreSQL UPS Read Model**
+
+
+### **Purpose:**
+- Materialized view for UPS (Unified Patient Summary)
+- Fast patient queries for hot path
+- Denormalized for read performance
+
+
+### **Schema**
+
+
+```sql
+-- UPS read model table
+CREATE TABLE ups_read_model (
+    patient_id VARCHAR(50) PRIMARY KEY,
+    mrn VARCHAR(50) NOT NULL,
+    
+    -- Demographics
+    name VARCHAR(200),
+    date_of_birth DATE,
+    age INTEGER,
+    gender VARCHAR(10),
+    
+    -- Current location
+    department VARCHAR(50),
+    room VARCHAR(20),
+    admission_date TIMESTAMP,
+    length_of_stay_hours DECIMAL(10,2),
+    
+    -- Critical flags
+    code_status VARCHAR(50),
+    isolation_type VARCHAR(50),
+    
+    -- Allergies (JSON array)
+    allergies JSONB,
+    
+    -- Active problems (JSON array)
+    active_problems JSONB,
+    
+    -- Active medications (JSON array)
+    active_medications JSONB,
+    
+    -- Latest vitals (JSON)
+    latest_vitals JSONB,
+    vital_timestamp TIMESTAMP,
+    
+    -- Clinical scores
+    news2_score INTEGER,
+    qsofa_score INTEGER,
+    sofa_score INTEGER,
+    apache_score INTEGER,
+    combined_acuity_score DECIMAL(5,2),
+    
+    -- ML predictions (JSON)
+    ml_predictions JSONB,
+    
+    -- Active alerts (JSON array)
+    active_alerts JSONB,
+    alert_count INTEGER,
+    
+    -- Protocol compliance (JSON)
+    protocol_status JSONB,
+    
+    -- Metadata
+    last_updated TIMESTAMP DEFAULT NOW(),
+    
+    -- Indexes
+    INDEX idx_department (department),
+    INDEX idx_news2_score (news2_score DESC),
+    INDEX idx_alert_count (alert_count DESC),
+    INDEX idx_admission_date (admission_date DESC)
+);
+
+
+-- GIN index for JSONB queries
+CREATE INDEX idx_allergies_gin ON ups_read_model USING GIN (allergies);
+CREATE INDEX idx_active_problems_gin ON ups_read_model USING GIN (active_problems);
+CREATE INDEX idx_ml_predictions_gin ON ups_read_model USING GIN (ml_predictions);
+```
+
+
+---
+
+
+### **Implementation: UPS Read Model Projector**
+
+
+```java
+package com.hospital.module8.projectors;
+
+
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.postgresql.util.PGobject;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+
+import java.sql.SQLException;
+import java.util.*;
+
+
+/**
+ * UPS Read Model Projector
+ * Maintains denormalized patient summary for fast reads
+ */
+@Service
+public class UPSReadModelProjector {
+    
+    private final JdbcTemplate jdbcTemplate;
+    
+    public UPSReadModelProjector(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume all relevant topics
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        KStream<String, ScoredEvent> scoredEvents = 
+            builder.stream("scored-events");
+        KStream<String, MLPrediction> mlPredictions = 
+            builder.stream("ml-predictions");
+        KStream<String, CEPAlert> cepAlerts = 
+            builder.stream("cep-alerts");
+        
+        // Update UPS for each event type
+        enrichedEvents.foreach((key, event) -> updateUPSFromEvent(event));
+        scoredEvents.foreach((key, event) -> updateUPSScores(event));
+        mlPredictions.foreach((key, pred) -> updateUPSMLPredictions(pred));
+        cepAlerts.foreach((key, alert) -> updateUPSAlerts(alert));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+    }
+    
+    /**
+     * Update UPS from enriched event
+     */
+    private void updateUPSFromEvent(EnrichedEvent event) {
+        String sql = """
+            INSERT INTO ups_read_model (
+                patient_id, mrn, name, date_of_birth, age, gender,
+                department, room, admission_date,
+                code_status, isolation_type,
+                latest_vitals, vital_timestamp,
+                last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, NOW())
+            ON CONFLICT (patient_id) DO UPDATE SET
+                department = EXCLUDED.department,
+                room = EXCLUDED.room,
+                latest_vitals = EXCLUDED.latest_vitals,
+                vital_timestamp = EXCLUDED.vital_timestamp,
+                last_updated = NOW()
+        """;
+        
+        try {
+            Map<String, Object> vitals = buildVitalsJSON(event);
+            
+            jdbcTemplate.update(sql,
+                event.getPatientId(),
+                event.getMrn(),
+                event.getPatientName(),
+                event.getDateOfBirth(),
+                event.getAge(),
+                event.getGender(),
+                event.getDepartment(),
+                event.getRoom(),
+                new Timestamp(event.getAdmissionTime()),
+                event.getCodeStatus(),
+                event.getIsolationType(),
+                toJsonb(vitals),
+                new Timestamp(event.getTimestamp())
+            );
+            
+        } catch (Exception e) {
+            log.error("Failed to update UPS from event: {}", event, e);
+        }
+    }
+    
+    /**
+     * Update UPS scores
+     */
+    private void updateUPSScores(ScoredEvent event) {
+        String sql = """
+            UPDATE ups_read_model
+            SET news2_score = ?,
+                qsofa_score = ?,
+                sofa_score = ?,
+                apache_score = ?,
+                combined_acuity_score = ?,
+                last_updated = NOW()
+            WHERE patient_id = ?
+        """;
+        
+        jdbcTemplate.update(sql,
+            event.getNews2Score(),
+            event.getQsofaScore(),
+            event.getSofaScore(),
+            event.getApacheScore(),
+            event.getCombinedAcuityScore(),
+            event.getPatientId()
+        );
+    }
+    
+    /**
+     * Update UPS ML predictions
+     */
+    private void updateUPSMLPredictions(MLPrediction prediction) {
+        String sql = """
+            UPDATE ups_read_model
+            SET ml_predictions = COALESCE(ml_predictions, '{}'::jsonb) || ?::jsonb,
+                last_updated = NOW()
+            WHERE patient_id = ?
+        """;
+        
+        Map<String, Object> predictionData = new HashMap<>();
+        predictionData.put(prediction.getModelType().toString(), Map.of(
+            "probability", prediction.getPrediction(),
+            "risk_category", prediction.getRiskCategory().toString(),
+            "confidence", prediction.getConfidence(),
+            "timestamp", prediction.getTimestamp()
+        ));
+        
+        jdbcTemplate.update(sql,
+            toJsonb(predictionData),
+            prediction.getPatientId()
+        );
+    }
+    
+    /**
+     * Update UPS alerts
+     */
+    private void updateUPSAlerts(CEPAlert alert) {
+        if (alert.getStatus().equals("ACTIVE")) {
+            // Add active alert
+            String sql = """
+                UPDATE ups_read_model
+                SET active_alerts = COALESCE(active_alerts, '[]'::jsonb) || ?::jsonb,
+                    alert_count = COALESCE(alert_count, 0) + 1,
+                    last_updated = NOW()
+                WHERE patient_id = ?
+            """;
+            
+            Map<String, Object> alertData = Map.of(
+                "alert_id", alert.getAlertId(),
+                "alert_type", alert.getAlertType(),
+                "severity", alert.getSeverity(),
+                "message", alert.getMessage(),
+                "created_at", alert.getCreatedAt()
+            );
+            
+            jdbcTemplate.update(sql,
+                toJsonb(List.of(alertData)),
+                alert.getPatientId()
+            );
+            
+        } else if (alert.getStatus().equals("RESOLVED")) {
+            // Remove resolved alert
+            String sql = """
+                UPDATE ups_read_model
+                SET active_alerts = (
+                    SELECT jsonb_agg(alert)
+                    FROM jsonb_array_elements(active_alerts) AS alert
+                    WHERE alert->>'alert_id' != ?
+                ),
+                alert_count = GREATEST(COALESCE(alert_count, 0) - 1, 0),
+                last_updated = NOW()
+                WHERE patient_id = ?
+            """;
+            
+            jdbcTemplate.update(sql,
+                alert.getAlertId(),
+                alert.getPatientId()
+            );
+        }
+    }
+    
+    /**
+     * Build vitals JSON object
+     */
+    private Map<String, Object> buildVitalsJSON(EnrichedEvent event) {
+        Map<String, Object>
+package com.hospital.module8.projectors;
+
+
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.kstream.KStream;
+import org.postgresql.util.PGobject;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.*;
+
+
+/**
+ * UPS Read Model Projector - COMPLETE
+ * Maintains denormalized patient summary for fast reads
+ * Integrated with Flink for real-time updates
+ */
+@Service
+@Slf4j
+public class UPSReadModelProjector {
+    
+    private final JdbcTemplate jdbcTemplate;
+    private final ObjectMapper objectMapper;
+    
+    public UPSReadModelProjector(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.objectMapper = new ObjectMapper();
+    }
+    
+    /**
+     * Start Kafka Streams processor
+     */
+    public void start() {
+        StreamsBuilder builder = new StreamsBuilder();
+        
+        // Consume all relevant topics
+        KStream<String, EnrichedEvent> enrichedEvents = 
+            builder.stream("enriched-events");
+        KStream<String, ScoredEvent> scoredEvents = 
+            builder.stream("scored-events");
+        KStream<String, MLPrediction> mlPredictions = 
+            builder.stream("ml-predictions");
+        KStream<String, CEPAlert> cepAlerts = 
+            builder.stream("cep-alerts");
+        
+        // Update UPS for each event type
+        enrichedEvents.foreach((key, event) -> updateUPSFromEvent(event));
+        scoredEvents.foreach((key, event) -> updateUPSScores(event));
+        mlPredictions.foreach((key, pred) -> updateUPSMLPredictions(pred));
+        cepAlerts.foreach((key, alert) -> updateUPSAlerts(alert));
+        
+        // Start streams
+        KafkaStreams streams = new KafkaStreams(builder.build(), getStreamsConfig());
+        streams.start();
+        
+        log.info("UPS Read Model Projector started");
+    }
+    
+    /**
+     * Update UPS from enriched event
+     */
+    private void updateUPSFromEvent(EnrichedEvent event) {
+        String sql = """
+            INSERT INTO ups_read_model (
+                patient_id, mrn, name, date_of_birth, age, gender,
+                department, room, admission_date, length_of_stay_hours,
+                code_status, isolation_type,
+                allergies, active_problems, active_medications,
+                latest_vitals, vital_timestamp,
+                last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?, NOW())
+            ON CONFLICT (patient_id) DO UPDATE SET
+                department = EXCLUDED.department,
+                room = EXCLUDED.room,
+                length_of_stay_hours = EXCLUDED.length_of_stay_hours,
+                latest_vitals = EXCLUDED.latest_vitals,
+                vital_timestamp = EXCLUDED.vital_timestamp,
+                last_updated = NOW()
+        """;
+        
+        try {
+            Map<String, Object> vitals = buildVitalsJSON(event);
+            
+            // Calculate length of stay
+            double losHours = Duration.between(
+                Instant.ofEpochMilli(event.getAdmissionTime()),
+                Instant.ofEpochMilli(event.getTimestamp())
+            ).toHours();
+            
+            jdbcTemplate.update(sql,
+                event.getPatientId(),
+                event.getMrn(),
+                event.getPatientName(),
+                event.getDateOfBirth(),
+                event.getAge(),
+                event.getGender(),
+                event.getDepartment(),
+                event.getRoom(),
+                new Timestamp(event.getAdmissionTime()),
+                losHours,
+                event.getCodeStatus(),
+                event.getIsolationType(),
+                toJsonb(event.getAllergies()),
+                toJsonb(event.getActiveProblems()),
+                toJsonb(event.getActiveMedications()),
+                toJsonb(vitals),
+                new Timestamp(event.getTimestamp())
+            );
+            
+            log.debug("Updated UPS for patient: {}", event.getPatientId());
+            
+        } catch (Exception e) {
+            log.error("Failed to update UPS from event: {}", event, e);
+        }
+    }
+    
+    /**
+     * Update UPS scores
+     */
+    private void updateUPSScores(ScoredEvent event) {
+        String sql = """
+            UPDATE ups_read_model
+            SET news2_score = ?,
+                qsofa_score = ?,
+                sofa_score = ?,
+                apache_score = ?,
+                combined_acuity_score = ?,
+                last_updated = NOW()
+            WHERE patient_id = ?
+        """;
+        
+        try {
+            jdbcTemplate.update(sql,
+                event.getNews2Score(),
+                event.getQsofaScore(),
+                event.getSofaScore(),
+                event.getApacheScore(),
+                event.getCombinedAcuityScore(),
+                event.getPatientId()
+            );
+            
+            log.debug("Updated UPS scores for patient: {}", event.getPatientId());
+            
+        } catch (Exception e) {
+            log.error("Failed to update UPS scores: {}", event, e);
+        }
+    }
+    
+    /**
+     * Update UPS ML predictions
+     */
+    private void updateUPSMLPredictions(MLPrediction prediction) {
+        String sql = """
+            UPDATE ups_read_model
+            SET ml_predictions = COALESCE(ml_predictions, '{}'::jsonb) || ?::jsonb,
+                last_updated = NOW()
+            WHERE patient_id = ?
+        """;
+        
+        try {
+            Map<String, Object> predictionData = new HashMap<>();
+            predictionData.put(prediction.getModelType().toString(), Map.of(
+                "probability", prediction.getPrediction(),
+                "risk_category", prediction.getRiskCategory().toString(),
+                "confidence", prediction.getConfidence(),
+                "timestamp", prediction.getTimestamp(),
+                "feature_importance", prediction.getFeatureImportance()
+            ));
+            
+            jdbcTemplate.update(sql,
+                toJsonb(predictionData),
+                prediction.getPatientId()
+            );
+            
+            log.debug("Updated UPS ML predictions for patient: {}", prediction.getPatientId());
+            
+        } catch (Exception e) {
+            log.error("Failed to update UPS ML predictions: {}", prediction, e);
+        }
+    }
+    
+    /**
+     * Update UPS alerts
+     */
+    private void updateUPSAlerts(CEPAlert alert) {
+        try {
+            if (alert.getStatus().equals("ACTIVE")) {
+                // Add active alert
+                String sql = """
+                    UPDATE ups_read_model
+                    SET active_alerts = COALESCE(active_alerts, '[]'::jsonb) || ?::jsonb,
+                        alert_count = COALESCE(alert_count, 0) + 1,
+                        last_updated = NOW()
+                    WHERE patient_id = ?
+                """;
+                
+                Map<String, Object> alertData = Map.of(
+                    "alert_id", alert.getAlertId(),
+                    "alert_type", alert.getAlertType(),
+                    "severity", alert.getSeverity(),
+                    "message", alert.getMessage(),
+                    "created_at", alert.getCreatedAt(),
+                    "confidence", alert.getConfidence(),
+                    "source", alert.getSource()
+                );
+                
+                jdbcTemplate.update(sql,
+                    toJsonb(List.of(alertData)),
+                    alert.getPatientId()
+                );
+                
+                log.debug("Added alert to UPS for patient: {}", alert.getPatientId());
+                
+            } else if (alert.getStatus().equals("RESOLVED") || 
+                       alert.getStatus().equals("ACKNOWLEDGED")) {
+                // Remove resolved/acknowledged alert
+                String sql = """
+                    UPDATE ups_read_model
+                    SET active_alerts = (
+                        SELECT jsonb_agg(alert)
+                        FROM jsonb_array_elements(active_alerts) AS alert
+                        WHERE alert->>'alert_id' != ?
+                    ),
+                    alert_count = GREATEST(COALESCE(alert_count, 0) - 1, 0),
+                    last_updated = NOW()
+                    WHERE patient_id = ?
+                """;
+                
+                jdbcTemplate.update(sql,
+                    alert.getAlertId(),
+                    alert.getPatientId()
+                );
+                
+                log.debug("Removed alert from UPS for patient: {}", alert.getPatientId());
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to update UPS alerts: {}", alert, e);
+        }
+    }
+    
+    /**
+     * Build vitals JSON object
+     */
+    private Map<String, Object> buildVitalsJSON(EnrichedEvent event) {
+        Map<String, Object> vitals = new HashMap<>();
+        
+        if (event.getHeartRate() != null) {
+            vitals.put("heart_rate", event.getHeartRate());
+        }
+        if (event.getSystolicBP() != null) {
+            vitals.put("systolic_bp", event.getSystolicBP());
+        }
+        if (event.getDiastolicBP() != null) {
+            vitals.put("diastolic_bp", event.getDiastolicBP());
+        }
+        if (event.getRespiratoryRate() != null) {
+            vitals.put("respiratory_rate", event.getRespiratoryRate());
+        }
+        if (event.getTemperature() != null) {
+            vitals.put("temperature", event.getTemperature());
+        }
+        if (event.getOxygenSaturation() != null) {
+            vitals.put("oxygen_saturation", event.getOxygenSaturation());
+        }
+        
+        return vitals;
+    }
+    
+    /**
+     * Convert object to JSONB
+     */
+    private PGobject toJsonb(Object obj) throws SQLException {
+        PGobject jsonb = new PGobject();
+        jsonb.setType("jsonb");
+        
+        try {
+            if (obj == null) {
+                jsonb.setValue("{}");
+            } else {
+                jsonb.setValue(objectMapper.writeValueAsString(obj));
+            }
+        } catch (Exception e) {
+            log.error("Failed to convert object to JSONB", e);
+            jsonb.setValue("{}");
+        }
+        
+        return jsonb;
+    }
+    
+    /**
+     * Get Kafka Streams config
+     */
+    private Properties getStreamsConfig() {
+        Properties props = new Properties();
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "ups-read-model-projector");
+        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
+        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, JsonSerde.class);
+        props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, "exactly_once_v2");
+        return props;
+    }
+    
+    /**
+     * Query API for UPS read model
+     */
+    public UPSReadModel getPatientSummary(String patientId) {
+        String sql = """
+            SELECT * FROM ups_read_model WHERE patient_id = ?
+        """;
+        
+        return jdbcTemplate.queryForObject(sql, 
+            (rs, rowNum) -> UPSReadModel.builder()
+                .patientId(rs.getString("patient_id"))
+                .mrn(rs.getString("mrn"))
+                .name(rs.getString("name"))
+                .dateOfBirth(rs.getDate("date_of_birth").toLocalDate())
+                .age(rs.getInt("age"))
+                .gender(rs.getString("gender"))
+                .department(rs.getString("department"))
+                .room(rs.getString("room"))
+                .admissionDate(rs.getTimestamp("admission_date").toInstant())
+                .lengthOfStayHours(rs.getDouble("length_of_stay_hours"))
+                .codeStatus(rs.getString("code_status"))
+                .isolationType(rs.getString("isolation_type"))
+                .allergies(parseJsonb(rs.getString("allergies")))
+                .activeProblems(parseJsonb(rs.getString("active_problems")))
+                .activeMedications(parseJsonb(rs.getString("active_medications")))
+                .latestVitals(parseJsonb(rs.getString("latest_vitals")))
+                .vitalTimestamp(rs.getTimestamp("vital_timestamp").toInstant())
+                .news2Score(rs.getInt("news2_score"))
+                .qsofaScore(rs.getInt("qsofa_score"))
+                .sofaScore(rs.getInt("sofa_score"))
+                .apacheScore(rs.getInt("apache_score"))
+                .combinedAcuityScore(rs.getDouble("combined_acuity_score"))
+                .mlPredictions(parseJsonb(rs.getString("ml_predictions")))
+                .activeAlerts(parseJsonb(rs.getString("active_alerts")))
+                .alertCount(rs.getInt("alert_count"))
+                .protocolStatus(parseJsonb(rs.getString("protocol_status")))
+                .lastUpdated(rs.getTimestamp("last_updated").toInstant())
+                .build(),
+            patientId
+        );
+    }
+    
+    /**
+     * Get department census with acuity
+     */
+    public List<DepartmentCensus> getDepartmentCensus() {
+        String sql = """
+            SELECT 
+                department,
+                COUNT(*) AS patient_count,
+                AVG(combined_acuity_score) AS avg_acuity,
+                SUM(CASE WHEN news2_score >= 7 THEN 1 ELSE 0 END) AS high_risk_count,
+                SUM(alert_count) AS total_alerts
+            FROM ups_read_model
+            GROUP BY department
+            ORDER BY avg_acuity DESC
+        """;
+        
+        return jdbcTemplate.query(sql, 
+            (rs, rowNum) -> DepartmentCensus.builder()
+                .department(rs.getString("department"))
+                .patientCount(rs.getInt("patient_count"))
+                .averageAcuity(rs.getDouble("avg_acuity"))
+                .highRiskCount(rs.getInt("high_risk_count"))
+                .totalAlerts(rs.getInt("total_alerts"))
+                .build()
+        );
+    }
+    
+    /**
+     * Get high-risk patients
+     */
+    public List<UPSReadModel> getHighRiskPatients(int limit) {
+        String sql = """
+            SELECT * FROM ups_read_model
+            WHERE combined_acuity_score > 50
+               OR alert_count > 0
+               OR news2_score >= 7
+            ORDER BY combined_acuity_score DESC, alert_count DESC
+            LIMIT ?
+        """;
+        
+        return jdbcTemplate.query(sql, 
+            (rs, rowNum) -> mapToUPSReadModel(rs),
+            limit
+        );
+    }
+    
+    private Map<String, Object> parseJsonb(String json) {
+        try {
+            if (json == null || json.isEmpty()) {
+                return new HashMap<>();
+            }
+            return objectMapper.readValue(json, Map.class);
+        } catch (Exception e) {
+            log.error("Failed to parse JSONB", e);
+            return new HashMap<>();
+        }
+    }
+}
+
+
+/**
+ * UPS Read Model DTO
+ */
+@Data
+@Builder
+class UPSReadModel {
+    private String patientId;
+    private String mrn;
+    private String name;
+    private LocalDate dateOfBirth;
+    private Integer age;
+    private String gender;
+    private String department;
+    private String room;
+    private Instant admissionDate;
+    private Double lengthOfStayHours;
+    private String codeStatus;
+    private String isolationType;
+    private Map<String, Object> allergies;
+    private Map<String, Object> activeProblems;
+    private Map<String, Object> activeMedications;
+    private Map<String, Object> latestVitals;
+    private Instant vitalTimestamp;
+    private Integer news2Score;
+    private Integer qsofaScore;
+    private Integer sofaScore;
+    private Integer apacheScore;
+    private Double combinedAcuityScore;
+    private Map<String, Object> mlPredictions;
+    private Map<String, Object> activeAlerts;
+    private Integer alertCount;
+    private Map<String, Object> protocolStatus;
+    private Instant lastUpdated;
+}
+
+
+/**
+ * Department Census DTO
+ */
+@Data
+@Builder
+class DepartmentCensus {
+    private String department;
+    private Integer patientCount;
+    private Double averageAcuity;
+    private Integer highRiskCount;
+    private Integer totalAlerts;
+}

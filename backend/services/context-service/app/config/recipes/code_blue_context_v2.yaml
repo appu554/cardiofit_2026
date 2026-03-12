@@ -1,0 +1,260 @@
+# Clinical Context Recipe: Code Blue Context (PRODUCTION)
+# Implements emergency resuscitation data gathering for code blue situations
+# Based on ContextRecipeBook.txt specifications
+
+recipe_id: "code_blue_context_v2"
+recipe_name: "Emergency Resuscitation Data - Production"
+version: "2.0"
+clinical_scenario: "emergency_response"
+workflow_category: "event_triggered"
+execution_pattern: "digital_reflex_arc"
+
+# Performance requirements (Emergency SLA - Ultra Fast)
+sla_ms: 50  # Ultra-fast for emergency
+cache_duration_seconds: 86400  # 24hr for stable demographics
+real_data_only: true
+mock_data_detection: true
+mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Clinical recipe references
+clinical_recipe_refs:
+  - "emergency-code-blue-v3.0"
+
+# Triggers
+triggers:
+  - domain: "emergency"
+  - action: "code_blue"
+  - priority: "STAT"
+  - workflow_type: "digital_reflex_arc"
+
+# Required data points for code blue emergency
+required_data_points:
+  - name: "code_status"
+    source_type: "encounter_service"
+    endpoint: "http://localhost:8020/api/code-status"
+    fields: ["code_status", "advance_directives", "dnr_status", "family_contact"]
+    required: true
+    max_age_hours: 0  # Real-time
+    quality_threshold: 0.98
+    timeout_ms: 20
+    retry_count: 1
+    fallback_sources: []
+    protocol: "http"
+    critical: true
+    fallback: "Assume full code if unavailable"
+
+  - name: "emergency_medications"
+    source_type: "medication_service"
+    endpoint: "http://localhost:8009/api/medications/emergency"
+    fields: ["recent_emergency_meds", "dosing_info", "administration_times", "contraindications"]
+    required: true
+    max_age_hours: 0.17  # 10 minutes
+    quality_threshold: 0.95
+    timeout_ms: 30
+    retry_count: 1
+    fallback_sources: []
+    protocol: "http"
+    critical: true
+
+  - name: "patient_emergency_context"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["age", "weight", "gender", "severe_allergies"]
+    required: true
+    max_age_hours: 24  # Demographics stable for 24hr
+    quality_threshold: 0.90
+    timeout_ms: 40
+    retry_count: 1
+    fallback_sources: ["patient_service", "fhir_store"]
+    cache_strategy: "l1_only"  # Emergency cache strategy
+    fallback: "Use cached or defaults"
+
+  - name: "cae_emergency_validation"
+    source_type: "cae_service"
+    endpoint: "localhost:8027"
+    fields: ["emergency_drug_interactions", "critical_contraindications", "dosing_recommendations"]
+    required: false  # Don't block emergency response
+    max_age_hours: 0
+    quality_threshold: 0.95
+    timeout_ms: 50
+    retry_count: 1
+    fallback_sources: []
+    protocol: "grpc"
+    critical: false
+
+# Optional data points (don't block emergency response)
+optional_data_points:
+  - name: "recent_vitals"
+    source_type: "observation_service"
+    endpoint: "http://localhost:8007/api/observations/vitals"
+    fields: ["blood_pressure", "heart_rate", "oxygen_saturation", "temperature"]
+    required: false
+    max_age_hours: 1
+    quality_threshold: 0.80
+    timeout_ms: 30
+    retry_count: 1
+    fallback_sources: []
+    protocol: "http"
+    fallback: "skip_if_unavailable"
+
+# Conditional rules for additional data requirements
+conditional_rules:
+  - condition: "patient.age < 18"
+    description: "Pediatric code blue requires weight-based dosing"
+    additional_data_points:
+      - name: "pediatric_emergency_dosing"
+        source_type: "patient_service"
+        endpoint: "http://localhost:8003/api/patients/pediatric-emergency"
+        fields: ["weight_kg", "age_months", "bsa_m2", "pediatric_dosing_chart"]
+        required: true
+        max_age_hours: 24
+        quality_threshold: 0.98
+        timeout_ms: 25
+        retry_count: 1
+
+  - condition: "patient.pregnancy_status == 'pregnant'"
+    description: "Pregnant patient requires modified resuscitation protocols"
+    additional_data_points:
+      - name: "pregnancy_emergency_context"
+        source_type: "patient_service"
+        endpoint: "http://localhost:8003/api/patients/pregnancy-emergency"
+        fields: ["gestational_age", "pregnancy_complications", "fetal_status"]
+        required: true
+        max_age_hours: 24
+        quality_threshold: 0.95
+        timeout_ms: 30
+        retry_count: 1
+
+# Quality constraints (Relaxed for emergency)
+quality_constraints:
+  minimum_completeness: 0.70  # Lower threshold for emergency
+  maximum_age_hours: 24
+  required_fields: ["code_status", "emergency_medications", "patient_emergency_context"]
+  accuracy_threshold: 0.85
+
+# Safety requirements (Emergency focused)
+safety_requirements:
+  minimum_completeness_score: 0.70
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "SKIP_IF_UNAVAILABLE"
+  critical_missing_data_action: "CONTINUE_WITH_WARNINGS"
+  stale_data_action: "USE_WITH_WARNING"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Emergency performance strategy
+performance_strategy:
+  parallelization: true  # Parallel for speed in emergency
+  sla_budget_ms: 50  # Ultra-fast for emergency
+  circuit_breaker: true
+  retry_policy: "single_retry_fast"
+  fail_fast: true
+  emergency_mode: true
+
+# Cache strategy (Emergency optimized)
+cache_strategy:
+  l1_ttl_seconds: 86400  # 24hr for demographics (stable data)
+  l2_ttl_seconds: 3600   # 1hr for allergies
+  l3_ttl_seconds: 1800   # 30min for medications
+  emergency_cache: true  # Special emergency cache
+  cache_key_pattern: "context:emergency:{patient_id}:{code_type}"
+  invalidation_events:
+    - "emergency.code_status.changed"
+    - "emergency.medications.administered"
+
+# Assembly rules (Emergency optimized)
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 40  # 40ms of the 50ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: false  # No retries in emergency
+  validate_data_freshness: false  # Skip validation for speed
+  enforce_quality_constraints: false  # Skip for speed
+  fail_fast: true
+  emergency_mode: true
+
+# QoS Tier (Highest priority for emergency)
+qos_tier: "platinum"
+max_latency: 50  # Every millisecond counts in emergency
+availability: "99.99%"
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2025-07-31T10:00:00Z"
+  version: "2.0"
+  effective_date: "2025-07-31T00:00:00Z"
+  expiry_date: "2026-07-31T00:00:00Z"
+  clinical_board_approval_id: "CGB-CODE-BLUE-20250731"
+  tags: ["approved", "production", "emergency", "code_blue", "critical"]
+  change_log:
+    - "v2.0: Production implementation with digital reflex arc pattern"
+    - "v1.0: Initial approved version for code blue emergency response"
+
+# Data source endpoints (Production)
+data_sources:
+  - service: "encounter_service"
+    endpoint: "http://localhost:8020"
+    timeout_ms: 20
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "medication_service"
+    endpoint: "http://localhost:8009"
+    timeout_ms: 30
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    timeout_ms: 40
+    health_check: "/health"
+    protocol: "graphql"
+
+  - service: "cae_service"
+    endpoint: "localhost:8027"
+    timeout_ms: 50
+    protocol: "grpc"
+
+  - service: "observation_service"
+    endpoint: "http://localhost:8007"
+    timeout_ms: 30
+    health_check: "/health"
+    protocol: "http"
+
+# Emergency-specific configuration
+emergency_configuration:
+  code_types:
+    - "code_blue"
+    - "code_red"
+    - "rapid_response"
+  
+  response_priorities:
+    - priority: "STAT"
+      max_latency_ms: 50
+    - priority: "URGENT"
+      max_latency_ms: 100
+  
+  emergency_protocols:
+    - "acls_adult"
+    - "pals_pediatric"
+    - "nrp_neonatal"
+    - "pregnancy_modifications"
+
+# Clinical decision support integration
+clinical_decision_support:
+  emergency_drug_dosing: true
+  code_status_verification: true
+  contraindication_checking: true
+  pediatric_modifications: true
+  pregnancy_modifications: true
+
+# Audit and compliance (Emergency focused)
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true
+  log_emergency_decisions: true
+  track_response_times: true
+  monitor_code_outcomes: true

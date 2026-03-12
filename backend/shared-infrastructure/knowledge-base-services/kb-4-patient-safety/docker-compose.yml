@@ -1,0 +1,83 @@
+# KB-4 Patient Safety Service - Docker Compose
+# Comprehensive medication safety checking with PostgreSQL backend
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose up -d kb4-postgres # Start only PostgreSQL
+#   docker-compose logs -f kb4-safety # Follow service logs
+#   docker-compose down -v            # Stop and remove volumes
+
+services:
+  # =============================================================================
+  # PostgreSQL Database for KB-4 Patient Safety
+  # =============================================================================
+  kb4-postgres:
+    image: postgres:15-alpine
+    container_name: kb4-patient-safety-postgres
+    environment:
+      POSTGRES_USER: kb4_safety_user
+      POSTGRES_PASSWORD: kb4_safety_password
+      POSTGRES_DB: kb4_patient_safety
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5436:5432"  # Map to 5436 to match main.go default
+    volumes:
+      - kb4_postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb4_safety_user -d kb4_patient_safety"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - kb4-network
+
+  # =============================================================================
+  # KB-4 Patient Safety Service
+  # =============================================================================
+  kb4-safety:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kb4-patient-safety:latest
+    container_name: kb4-patient-safety-service
+    environment:
+      # Database connection
+      DATABASE_URL: postgres://kb4_safety_user:kb4_safety_password@kb4-postgres:5432/kb4_patient_safety?sslmode=disable
+      # Service configuration
+      PORT: "8088"
+      GIN_MODE: release
+      # Optional: Enable debug logging
+      # GIN_MODE: debug
+    ports:
+      - "8088:8088"
+    depends_on:
+      kb4-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - kb4-network
+
+# =============================================================================
+# Persistent Volumes
+# =============================================================================
+volumes:
+  kb4_postgres_data:
+    driver: local
+    name: kb4_postgres_data
+
+# =============================================================================
+# Network Configuration
+# =============================================================================
+networks:
+  kb4-network:
+    driver: bridge
+    name: kb4-safety-network

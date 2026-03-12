@@ -1,0 +1,261 @@
+recipe_id: "warfarin-initiation-v2"
+version: "2.0.0"
+last_updated: "2024-01-15"
+medication_code: "warfarin"
+recipe_name: "Warfarin Anticoagulation Initiation"
+description: "Evidence-based warfarin initiation with genetic and clinical factors"
+
+# Clinical indications
+indications:
+  - "atrial_fibrillation"
+  - "deep_vein_thrombosis"
+  - "pulmonary_embolism"
+  - "mechanical_heart_valve"
+  - "stroke_prevention"
+
+# Algorithm type and parameters
+algorithm:
+  type: "pharmacogenetic_dosing"
+  base_calculation: "clinical_algorithm"
+  
+  # Initial dosing parameters
+  parameters:
+    standard_initial_dose_mg: 5.0
+    elderly_initial_dose_mg: 2.5  # Age >75
+    target_inr_range: [2.0, 3.0]  # Standard range
+    target_inr_mechanical_valve: [2.5, 3.5]
+    
+  # Age-based adjustments
+  age_adjustments:
+    - age_min: 18
+      age_max: 65
+      dose_factor: 1.0
+    - age_min: 66
+      age_max: 75
+      dose_factor: 0.8
+    - age_min: 76
+      age_max: 999
+      dose_factor: 0.5
+
+  # Weight-based considerations
+  weight_adjustments:
+    - weight_min: 0
+      weight_max: 50
+      dose_factor: 0.7
+    - weight_min: 51
+      weight_max: 100
+      dose_factor: 1.0
+    - weight_min: 101
+      weight_max: 999
+      dose_factor: 1.2
+
+# Pharmacogenetic considerations
+pharmacogenetics:
+  cyp2c9_variants:
+    "*1/*1": 
+      dose_factor: 1.0
+      description: "Normal metabolizer"
+    "*1/*2":
+      dose_factor: 0.8
+      description: "Intermediate metabolizer"
+    "*1/*3":
+      dose_factor: 0.7
+      description: "Intermediate metabolizer"
+    "*2/*2":
+      dose_factor: 0.6
+      description: "Poor metabolizer"
+    "*2/*3":
+      dose_factor: 0.5
+      description: "Poor metabolizer"
+    "*3/*3":
+      dose_factor: 0.3
+      description: "Poor metabolizer"
+      
+  vkorc1_variants:
+    "GG":
+      dose_factor: 1.3
+      description: "High warfarin requirement"
+    "GA":
+      dose_factor: 1.0
+      description: "Intermediate warfarin requirement"
+    "AA":
+      dose_factor: 0.7
+      description: "Low warfarin requirement"
+
+# Required clinical context
+required_context:
+  patient_demographics:
+    - "age_years"
+    - "weight_kg"
+    - "gender"
+    - "race_ethnicity"
+    
+  laboratory_values:
+    - "baseline_inr"
+    - "baseline_pt"
+    - "liver_function_tests"
+    - "platelet_count"
+    
+  clinical_factors:
+    - "indication"
+    - "target_inr"
+    - "bleeding_risk_factors"
+    - "concurrent_medications"
+    
+  genetic_factors:
+    - "cyp2c9_genotype"
+    - "vkorc1_genotype"
+
+# Dosing schedule and monitoring
+dosing_schedule:
+  initiation:
+    day_1_to_2: "initial_calculated_dose"
+    day_3: "check_inr_adjust_dose"
+    day_5_to_7: "check_inr_adjust_dose"
+    
+  maintenance:
+    frequency: "daily_same_time"
+    inr_monitoring: "weekly_until_stable"
+    stable_monitoring: "monthly"
+
+# INR-based dose adjustments
+inr_adjustments:
+  - inr_min: 0.0
+    inr_max: 1.5
+    action: "increase_dose_10_to_20_percent"
+    next_inr: "3_to_7_days"
+    
+  - inr_min: 1.5
+    inr_max: 1.9
+    action: "increase_dose_5_to_10_percent"
+    next_inr: "1_week"
+    
+  - inr_min: 2.0
+    inr_max: 3.0
+    action: "no_change"
+    next_inr: "1_to_4_weeks"
+    
+  - inr_min: 3.1
+    inr_max: 3.5
+    action: "decrease_dose_5_to_10_percent"
+    next_inr: "1_week"
+    
+  - inr_min: 3.6
+    inr_max: 4.0
+    action: "hold_1_dose_then_decrease_10_to_15_percent"
+    next_inr: "3_to_7_days"
+    
+  - inr_min: 4.1
+    inr_max: 5.0
+    action: "hold_1_to_2_doses_then_decrease_15_to_20_percent"
+    next_inr: "3_to_7_days"
+    
+  - inr_min: 5.1
+    inr_max: 999
+    action: "hold_warfarin_consider_vitamin_k"
+    next_inr: "daily_until_therapeutic"
+
+# Safety checks and contraindications
+safety_checks:
+  - check_id: "contraindications_absolute"
+    description: "Check for absolute contraindications to warfarin"
+    type: "contraindication_check"
+    severity: "critical"
+    action: "reject"
+
+  - check_id: "contraindications_relative"
+    description: "Check for relative contraindications to warfarin"
+    type: "contraindication_check"
+    severity: "warning"
+    action: "warn_and_monitor"
+
+  - check_id: "bleeding_risk"
+    description: "Assess bleeding risk factors"
+    type: "risk_assessment"
+    severity: "warning"
+    action: "calculate_risk_score"
+
+# Drug interactions
+interactions:
+  increase_inr:
+    drugs:
+      - "amiodarone"
+      - "metronidazole"
+      - "trimethoprim_sulfamethoxazole"
+      - "fluconazole"
+    action: "decrease_warfarin_dose_25_to_50_percent"
+
+  decrease_inr:
+    drugs:
+      - "rifampin"
+      - "carbamazepine"
+      - "phenytoin"
+      - "barbiturates"
+    action: "increase_warfarin_dose_monitor_closely"
+
+# Monitoring requirements
+monitoring:
+  required: true
+  frequency: "variable_by_phase"
+  parameters:
+    - parameter: "inr"
+      type: "laboratory"
+      normal_range: [2.0, 3.0]
+      critical_range: [4.0, 999.0]
+    - parameter: "complete_blood_count"
+      type: "laboratory"
+      normal_range: "baseline"
+      critical_range: "significant_change"
+    - parameter: "liver_function"
+      type: "laboratory"
+      normal_range: "baseline"
+      critical_range: "elevated_enzymes"
+  alerts:
+    - alert_id: "supratherapeutic_inr"
+      condition: "inr > 4.0"
+      severity: "critical"
+      action: "hold_warfarin_consider_vitamin_k"
+      message: "INR dangerously high - bleeding risk"
+    - alert_id: "bleeding_signs"
+      condition: "bleeding_detected"
+      severity: "critical"
+      action: "hold_warfarin_evaluate_bleeding"
+      message: "Bleeding detected - evaluate and manage"
+
+# Clinical decision support
+decision_support:
+  rationale: "Warfarin initiation requires careful dose titration based on patient factors and INR response"
+  evidence_level: "HIGH"
+  guideline_source: "ACC/AHA/ESC Atrial Fibrillation Guidelines 2023"
+  
+  patient_education:
+    - "consistent_vitamin_k_intake"
+    - "bleeding_precautions"
+    - "drug_interaction_awareness"
+    - "importance_of_monitoring"
+
+# Quality metrics
+quality_metrics:
+  time_in_therapeutic_range: ">70%"
+  major_bleeding_rate: "<3%_per_year"
+  thrombotic_events: "<2%_per_year"
+  
+audit_points:
+  - "appropriate_initiation_dose"
+  - "timely_inr_monitoring"
+  - "appropriate_dose_adjustments"
+  - "bleeding_risk_assessment"
+
+# Approval and version control
+approval:
+  clinical_pharmacist: "required"
+  cardiology: "recommended"
+  hematology: "if_complex_case"
+  
+change_log:
+  - version: "2.0.0"
+    date: "2024-01-15"
+    changes: "Added pharmacogenetic dosing, updated guidelines"
+  - version: "1.0.0"
+    date: "2023-01-01"
+    changes: "Initial warfarin initiation recipe"

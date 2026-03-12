@@ -1,0 +1,498 @@
+﻿# Flink EHR Intelligence Engine - Module Technical Specifications
+
+
+## Module 2: Context Assembly & Enrichment - Deep Dive
+
+
+### State Schema Design
+
+
+#### PatientSnapshot State Structure
+```java
+// Primary state container per patient
+public class PatientSnapshot {
+    private String patientId;
+    private long lastUpdated;
+    private long snapshotVersion;
+    
+    // Core clinical data
+    private Map<String, MedicationEntry> activeMedications;
+    private Map<String, ConditionEntry> activeConditions;
+    private CircularBuffer<VitalReading> recentVitals;
+    private LocationEntry currentLocation;
+    private Map<String, Double> clinicalScores;
+    
+    // Aggregated data
+    private AdmissionHistory admissionHistory;
+    private Set<String> allergyHistory;
+    private RiskProfile riskProfile;
+}
+```
+
+
+#### State Descriptors Setup
+```java
+// Flink state descriptors
+private ValueStateDescriptor<PatientSnapshot> patientStateDescriptor;
+private MapStateDescriptor<String, MedicationEntry> medicationStateDescriptor;
+private ListStateDescriptor<AlertHistory> alertHistoryDescriptor;
+
+
+// TTL configurations
+StateTtlConfig medicationTtl = StateTtlConfig
+    .newBuilder(Time.days(30))
+    .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+    .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+    .cleanupFullSnapshot()
+    .build();
+```
+
+
+### Flink Operator Implementation Pattern
+
+
+```java
+public class PatientContextAssembler extends KeyedProcessFunction<String, CanonicalEvent, EnrichedEvent> {
+    
+    // State handles
+    private transient ValueState<PatientSnapshot> patientState;
+    private transient MapState<String, MedicationEntry> medicationState;
+    
+    @Override
+    public void open(Configuration parameters) {
+        // Initialize state descriptors with TTL
+        ValueStateDescriptor<PatientSnapshot> patientDescriptor = 
+            new ValueStateDescriptor<>("patient-snapshot", PatientSnapshot.class);
+        patientDescriptor.enableTimeToLive(getTtlConfig(Time.days(365)));
+        
+        patientState = getRuntimeContext().getState(patientDescriptor);
+    }
+    
+    @Override
+    public void processElement(CanonicalEvent event, Context ctx, Collector<EnrichedEvent> out) {
+        // Get current patient snapshot
+        PatientSnapshot snapshot = patientState.value();
+        if (snapshot == null) {
+            snapshot = new PatientSnapshot(event.getPatientId());
+        }
+        
+        // Update snapshot based on event type
+        updateSnapshot(snapshot, event);
+        
+        // Generate enriched event
+        EnrichedEvent enriched = enrichEvent(event, snapshot);
+        
+        // Update state and emit
+        patientState.update(snapshot);
+        out.collect(enriched);
+        
+        // Set cleanup timer if needed
+        if (shouldSetCleanupTimer(snapshot)) {
+            ctx.timerService().registerEventTimeTimer(
+                ctx.timestamp() + Duration.ofDays(30).toMillis()
+            );
+        }
+    }
+    
+    @Override
+    public void onTimer(long timestamp, OnTimerContext ctx, Collector<EnrichedEvent> out) {
+        // Cleanup expired data
+        cleanupExpiredData(ctx.getCurrentKey());
+    }
+}
+```
+
+
+---
+
+
+## Module 4a: CEP Pattern Engine - Implementation Details
+
+
+### FlinkCEP Pattern Definitions
+
+
+#### Sepsis Detection Pattern
+```java
+public class SepsisDetectionPattern {
+    
+    public static Pattern<EnrichedEvent, ?> createSepsisPattern() {
+        return Pattern.<EnrichedEvent>begin("fever")
+            .where(new SimpleCondition<EnrichedEvent>() {
+                @Override
+                public boolean filter(EnrichedEvent event) {
+                    return event.getEventType().equals("VITAL_SIGN") && 
+                           event.getVital("temperature") > 38.0;
+                }
+            })
+            .next("tachycardia")
+            .where(new SimpleCondition<EnrichedEvent>() {
+                @Override
+                public boolean filter(EnrichedEvent event) {
+                    return event.getEventType().equals("VITAL_SIGN") && 
+                           event.getVital("heart_rate") > 100;
+                }
+            })
+            .followedBy("lactate")
+            .where(new SimpleCondition<EnrichedEvent>() {
+                @Override
+                public boolean filter(EnrichedEvent event) {
+                    return event.getEventType().equals("LAB_RESULT") && 
+                           event.getLabValue("lactate") > 2.0;
+                }
+            })
+            .within(Time.hours(2));
+    }
+}
+```
+
+
+#### Medication Adherence Pattern
+```java
+public static Pattern<EnrichedEvent, ?> createAdherencePattern() {
+    return Pattern.<EnrichedEvent>begin("medication_due")
+        .where(new SimpleCondition<EnrichedEvent>() {
+            @Override
+            public boolean filter(EnrichedEvent event) {
+                return event.getEventType().equals("MEDICATION_SCHEDULED");
+            }
+        })
+        .notFollowedBy("administration")
+        .where(new SimpleCondition<EnrichedEvent>() {
+            @Override
+            public boolean filter(EnrichedEvent event) {
+                return event.getEventType().equals("MEDICATION_ADMINISTERED") &&
+                       event.getMedicationId().equals(event.getScheduledMedicationId());
+            }
+        })
+        .within(Time.hours(6)); // 6-hour adherence window
+}
+```
+
+
+### CEP Process Function Implementation
+```java
+public class ClinicalPatternProcessor extends KeyedProcessFunction<String, EnrichedEvent, ClinicalAlert> {
+    
+    private transient PatternStream<EnrichedEvent> sepsisPatterns;
+    private transient PatternStream<EnrichedEvent> adherencePatterns;
+    
+    @Override
+    public void open(Configuration config) {
+        // Create pattern streams
+        DataStream<EnrichedEvent> input = ...; // input stream
+        
+        sepsisPatterns = CEP.pattern(input, SepsisDetectionPattern.createSepsisPattern());
+        adherencePatterns = CEP.pattern(input, createAdherencePattern());
+    }
+    
+    @Override
+    public void processElement(EnrichedEvent event, Context ctx, Collector<ClinicalAlert> out) {
+        // Pattern matching is handled by CEP automatically
+        // This function handles post-pattern processing and alert generation
+    }
+}
+```
+
+
+---
+
+
+## Module 4b: Windowed Analytics - Implementation
+
+
+### Window Function Implementations
+
+
+#### Vital Sign Trend Analysis
+```java
+public class VitalTrendAnalyzer implements WindowFunction<EnrichedEvent, TrendAlert, String, TimeWindow> {
+    
+    @Override
+    public void apply(String patientId, TimeWindow window, 
+                     Iterable<EnrichedEvent> events, Collector<TrendAlert> out) {
+        
+        List<Double> heartRates = new ArrayList<>();
+        List<Double> bloodPressures = new ArrayList<>();
+        
+        // Collect vital signs from window
+        for (EnrichedEvent event : events) {
+            if (event.getEventType().equals("VITAL_SIGN")) {
+                heartRates.add(event.getVital("heart_rate"));
+                bloodPressures.add(event.getVital("systolic_bp"));
+            }
+        }
+        
+        // Calculate trends
+        TrendAnalysis hrTrend = calculateTrend(heartRates);
+        TrendAnalysis bpTrend = calculateTrend(bloodPressures);
+        
+        // Generate alerts based on trends
+        if (hrTrend.isIncreasing() && bpTrend.isDecreasing()) {
+            TrendAlert alert = new TrendAlert(
+                patientId, 
+                "DETERIORATING_VITALS", 
+                AlertSeverity.HIGH,
+                window.getStart(),
+                window.getEnd()
+            );
+            out.collect(alert);
+        }
+    }
+    
+    private TrendAnalysis calculateTrend(List<Double> values) {
+        // Linear regression or moving average implementation
+        // Returns trend direction, slope, confidence interval
+        return new TrendAnalysis(values);
+    }
+}
+```
+
+
+#### Lab Value Processing
+```java
+public class LabTrendProcessor extends ProcessWindowFunction<EnrichedEvent, LabTrendAlert, String, TimeWindow> {
+    
+    @Override
+    public void process(String patientId, Context context, 
+                       Iterable<EnrichedEvent> elements, Collector<LabTrendAlert> out) {
+        
+        Map<String, List<LabValue>> labsByType = new HashMap<>();
+        
+        // Group lab values by type
+        for (EnrichedEvent event : elements) {
+            if (event.getEventType().equals("LAB_RESULT")) {
+                String labType = event.getLabType();
+                labsByType.computeIfAbsent(labType, k -> new ArrayList<>())
+                          .add(new LabValue(event.getLabValue(), event.getTimestamp()));
+            }
+        }
+        
+        // Analyze each lab type for concerning trends
+        for (Map.Entry<String, List<LabValue>> entry : labsByType.entrySet()) {
+            String labType = entry.getKey();
+            List<LabValue> values = entry.getValue();
+            
+            LabTrendAnalysis analysis = analyzeLabTrend(labType, values);
+            
+            if (analysis.isCritical()) {
+                LabTrendAlert alert = new LabTrendAlert(
+                    patientId, labType, analysis.getSeverity(),
+                    analysis.getCurrentValue(), analysis.getTrendDirection(),
+                    context.window().getStart(), context.window().getEnd()
+                );
+                out.collect(alert);
+            }
+        }
+    }
+}
+```
+
+
+---
+
+
+## Module 3: Semantic Mesh Integration - Broadcast State
+
+
+### Broadcast State Management
+```java
+public class SemanticMeshProcessor extends KeyedBroadcastProcessFunction<String, EnrichedEvent, SemanticMeshUpdate, EnrichedEvent> {
+    
+    // Broadcast state descriptors
+    private static final MapStateDescriptor<String, DrugInteraction> DRUG_INTERACTIONS_DESC =
+        new MapStateDescriptor<>("drug-interactions", String.class, DrugInteraction.class);
+    
+    private static final MapStateDescriptor<String, ClinicalProtocol> PROTOCOLS_DESC =
+        new MapStateDescriptor<>("clinical-protocols", String.class, ClinicalProtocol.class);
+    
+    @Override
+    public void processElement(EnrichedEvent event, ReadOnlyContext ctx, Collector<EnrichedEvent> out) {
+        // Get current semantic mesh state
+        ReadOnlyBroadcastState<String, DrugInteraction> drugInteractions = 
+            ctx.getBroadcastState(DRUG_INTERACTIONS_DESC);
+        ReadOnlyBroadcastState<String, ClinicalProtocol> protocols = 
+            ctx.getBroadcastState(PROTOCOLS_DESC);
+        
+        // Enrich event with semantic information
+        EnrichedEvent enrichedWithSemantic = addSemanticContext(event, drugInteractions, protocols);
+        
+        out.collect(enrichedWithSemantic);
+    }
+    
+    @Override
+    public void processBroadcastElement(SemanticMeshUpdate update, Context ctx, Collector<EnrichedEvent> out) {
+        // Update broadcast state with new semantic mesh data
+        BroadcastState<String, DrugInteraction> drugInteractions = 
+            ctx.getBroadcastState(DRUG_INTERACTIONS_DESC);
+        BroadcastState<String, ClinicalProtocol> protocols = 
+            ctx.getBroadcastState(PROTOCOLS_DESC);
+        
+        switch (update.getUpdateType()) {
+            case DRUG_INTERACTION_UPDATE:
+                drugInteractions.put(update.getKey(), update.getDrugInteraction());
+                break;
+            case PROTOCOL_UPDATE:
+                protocols.put(update.getKey(), update.getProtocol());
+                break;
+            case FULL_REFRESH:
+                refreshAllState(update, drugInteractions, protocols);
+                break;
+        }
+    }
+}
+```
+
+
+---
+
+
+## Module 5: ML Inference Integration
+
+
+### Embedded Model Inference
+```java
+public class SepsisRiskScorer extends RichMapFunction<EnrichedEvent, ScoredEvent> {
+    
+    private transient OnnxModel sepsisModel;
+    private transient FeatureExtractor featureExtractor;
+    
+    @Override
+    public void open(Configuration parameters) {
+        // Load ONNX model from resources
+        String modelPath = parameters.getString("sepsis.model.path");
+        this.sepsisModel = OnnxModel.loadFromPath(modelPath);
+        this.featureExtractor = new FeatureExtractor();
+    }
+    
+    @Override
+    public ScoredEvent map(EnrichedEvent event) {
+        // Extract features for ML model
+        float[] features = featureExtractor.extractFeatures(event);
+        
+        // Run inference
+        ModelPrediction prediction = sepsisModel.predict(features);
+        
+        // Create scored event
+        return new ScoredEvent(
+            event,
+            "SEPSIS_RISK_SCORE",
+            prediction.getScore(),
+            prediction.getConfidence(),
+            prediction.getFeatureImportance(),
+            sepsisModel.getVersion()
+        );
+    }
+}
+```
+
+
+### Async External Model Inference
+```java
+public class AsyncMLInference extends RichAsyncFunction<EnrichedEvent, ScoredEvent> {
+    
+    private transient HttpClient httpClient;
+    private String modelEndpoint;
+    
+    @Override
+    public void open(Configuration parameters) {
+        this.modelEndpoint = parameters.getString("ml.inference.endpoint");
+        this.httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofMillis(500))
+            .build();
+    }
+    
+    @Override
+    public void asyncInvoke(EnrichedEvent input, ResultFuture<ScoredEvent> resultFuture) {
+        // Prepare inference request
+        InferenceRequest request = createInferenceRequest(input);
+        
+        // Make async HTTP call
+        CompletableFuture<HttpResponse<String>> future = httpClient
+            .sendAsync(HttpRequest.newBuilder()
+                .uri(URI.create(modelEndpoint))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(request.toJson()))
+                .build(), 
+                HttpResponse.BodyHandlers.ofString());
+        
+        // Handle response asynchronously
+        future.whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                resultFuture.completeExceptionally(throwable);
+            } else {
+                try {
+                    ModelPrediction prediction = parseResponse(response.body());
+                    ScoredEvent result = new ScoredEvent(input, prediction);
+                    resultFuture.complete(Collections.singleton(result));
+                } catch (Exception e) {
+                    resultFuture.completeExceptionally(e);
+                }
+            }
+        });
+    }
+    
+    @Override
+    public void timeout(EnrichedEvent input, ResultFuture<ScoredEvent> resultFuture) {
+        // Handle timeout - return default score or skip
+        ScoredEvent defaultResult = createDefaultScore(input);
+        resultFuture.complete(Collections.singleton(defaultResult));
+    }
+}
+```
+
+
+---
+
+
+## Performance Tuning Guidelines
+
+
+### RocksDB Configuration
+```java
+// RocksDB state backend configuration
+RocksDBStateBackend rocksDB = new RocksDBStateBackend("s3://checkpoints/rocksdb");
+rocksDB.setDbStoragePath("/tmp/rocksdb"); 
+rocksDB.setPredefinedOptions(PredefinedOptions.SPINNING_DISK_OPTIMIZED_HIGH_MEM);
+
+
+// Memory management
+Configuration rocksDBConfig = new Configuration();
+rocksDBConfig.setString("state.backend.rocksdb.memory.managed", "true");
+rocksDBConfig.setString("state.backend.rocksdb.memory.high-prio-pool-ratio", "0.1");
+rocksDBConfig.setString("state.backend.rocksdb.block.cache-size", "256MB");
+```
+
+
+### Checkpoint Configuration
+```java
+// Checkpoint settings for production
+env.enableCheckpointing(60000); // 1 minute
+env.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
+env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+env.getCheckpointConfig().setCheckpointTimeout(600000); // 10 minutes
+env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+env.getCheckpointConfig().enableExternalizedCheckpoints(ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
+env.getCheckpointConfig().enableUnalignedCheckpoints(true);
+```
+
+
+### Kafka Configuration
+```properties
+# Kafka consumer settings for Flink
+bootstrap.servers=kafka-cluster:9092
+key.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer
+value.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer
+schema.registry.url=http://schema-registry:8081
+
+
+# Performance tuning
+fetch.min.bytes=1048576
+fetch.max.wait.ms=500
+max.poll.records=5000
+session.timeout.ms=30000
+heartbeat.interval.ms=10000
+```
+
+
+This technical specification provides your development teams with concrete implementation patterns and configuration guidance for the most critical modules of your Flink EHR Intelligence Engine.

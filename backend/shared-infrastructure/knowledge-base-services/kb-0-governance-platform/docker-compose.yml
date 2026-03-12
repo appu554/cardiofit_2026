@@ -1,0 +1,103 @@
+version: '3.8'
+
+# =============================================================================
+# KB-0 Governance Platform Docker Compose
+# =============================================================================
+# Production-grade deployment for KB-0 unified governance workflow engine
+# Integrates with KB-1 Drug Rules Service via REST API
+# =============================================================================
+
+services:
+  # ==================== KB-0 GOVERNANCE SERVICE ====================
+
+  kb0-governance:
+    build: .
+    container_name: kb0-governance
+    ports:
+      - "8080:8080"
+    environment:
+      # Server Configuration
+      - KB0_PORT=8080
+
+      # Database Configuration
+      - KB0_DATABASE_HOST=kb0-db
+      - KB0_DATABASE_PORT=5432
+      - KB0_DATABASE_NAME=kb0_governance
+      - KB0_DATABASE_USER=kb0_user
+      - KB0_DATABASE_PASSWORD=kb0_secure_password
+
+      # Redis Configuration
+      - KB0_REDIS_URL=redis://kb0-redis:6379
+
+      # KB-1 Integration (CRITICAL: governance orchestration)
+      - KB1_URL=http://host.docker.internal:8081
+    depends_on:
+      kb0-db:
+        condition: service_healthy
+      kb0-redis:
+        condition: service_healthy
+    networks:
+      - kb0-network
+      - kb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ==================== DATABASE ====================
+
+  kb0-db:
+    image: postgres:15-alpine
+    container_name: kb0-postgres
+    environment:
+      - POSTGRES_USER=kb0_user
+      - POSTGRES_PASSWORD=kb0_secure_password
+      - POSTGRES_DB=kb0_governance
+    ports:
+      - "5500:5432"  # Use 5500 to avoid conflicts with other KB services
+    volumes:
+      - kb0_postgres_data:/var/lib/postgresql/data
+      - ./migrations/001_create_schema.sql:/docker-entrypoint-initdb.d/001_create_schema.sql
+    networks:
+      - kb0-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb0_user -d kb0_governance"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ==================== REDIS CACHE ====================
+
+  kb0-redis:
+    image: redis:7-alpine
+    container_name: kb0-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"  # Use 6381 to avoid conflicts
+    volumes:
+      - kb0_redis_data:/data
+    networks:
+      - kb0-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  kb0_postgres_data:
+    name: kb0_postgres_data
+  kb0_redis_data:
+    name: kb0_redis_data
+
+networks:
+  kb0-network:
+    name: kb0-network
+  kb-network:
+    name: kb-network
+    external: true

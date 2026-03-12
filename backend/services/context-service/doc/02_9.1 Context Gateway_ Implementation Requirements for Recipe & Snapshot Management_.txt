@@ -1,0 +1,309 @@
+﻿Context Gateway: Implementation Requirements for Recipe & Snapshot Management
+After reviewing the comprehensive documentation, here are the critical implementation requirements for the Context Gateway to support Recipe Resolution and Snapshot creation:
+1. Core Architectural Changes
+1.1 Dual-Layer Storage Implementation (Critical Addition)
+// context-gateway/storage/snapshot-store.ts
+
+
+export class SnapshotStore {
+  private hotStore: RedisCluster;  // L1 Cache
+  private coldStore: S3Client;     // L2 Persistent
+  
+  async save(snapshot: ClinicalSnapshot): Promise<void> {
+    // Write to both layers atomically
+    await Promise.all([
+      this.writeToHotStore(snapshot),
+      this.writeToColdStore(snapshot)
+    ]);
+  }
+  
+  async get(snapshotId: string): Promise<ClinicalSnapshot> {
+    // Try hot store first
+    const cached = await this.hotStore.get(snapshotId);
+    if (cached) return cached;
+    
+    // Fallback to cold store and warm cache
+    const stored = await this.coldStore.get(snapshotId);
+    if (stored) {
+      await this.hotStore.set(snapshotId, stored, snapshot.ttlSeconds);
+    }
+    return stored;
+  }
+  
+  private async writeToColdStore(snapshot: ClinicalSnapshot): Promise<void> {
+    // S3 with Object Lock for immutability
+    await this.s3.putObject({
+      Bucket: 'clinical-snapshots',
+      Key: `${snapshot.patientId}/${snapshot.id}`,
+      Body: JSON.stringify(snapshot),
+      ObjectLockMode: 'COMPLIANCE',
+      ObjectLockRetainUntilDate: this.calculateRetention(),
+      ServerSideEncryption: 'aws:kms'
+    });
+  }
+}
+
+
+1.2 Data Source Registry (New Component)
+// context-gateway/registry/data-source-registry.ts
+
+
+export class DataSourceRegistry {
+  private sources: Map<string, DataSourceConfig>;
+  
+  constructor() {
+    this.loadSourceConfigurations();
+  }
+  
+  async fetchFieldWithFreshness(
+    field: string,
+    patientId: string,
+    freshnessRequirement: number,
+    transaction: Transaction
+  ): Promise<FieldData> {
+    const config = this.sources.get(field);
+    if (!config) {
+      throw new UnknownFieldError(field);
+    }
+    
+    // Route to appropriate service
+    const data = await this.routeToService(
+      config,
+      patientId,
+      transaction
+    );
+    
+    // Validate freshness
+    if (!this.validateFreshness(data, freshnessRequirement)) {
+      throw new StaleDataError(field, data.timestamp);
+    }
+    
+    return data;
+  }
+  
+  private routeToService(
+    config: DataSourceConfig,
+    patientId: string,
+    transaction: Transaction
+  ): Promise<any> {
+    switch(config.serviceType) {
+      case 'fhir':
+        return this.fhirClient.query(config.query, patientId, transaction);
+      case 'grpc':
+        return this.grpcClient.call(config.service, config.method, patientId);
+      case 'graphql':
+        return this.graphqlClient.query(config.query, { patientId });
+      default:
+        throw new UnsupportedServiceType(config.serviceType);
+    }
+  }
+}
+
+
+2. Enhanced Snapshot Creation Process
+2.1 Atomic Transaction Support
+// context-gateway/snapshot-manager.ts
+
+
+export class SnapshotManager {
+  async createSnapshot(
+    recipe: WorkflowRecipe,
+    patientId: string
+  ): Promise<ClinicalSnapshot> {
+    // Start distributed transaction
+    const transaction = await this.transactionManager.begin({
+      isolation: 'SERIALIZABLE',
+      timeout: 30000  // 30 seconds
+    });
+    
+    try {
+      // Parallel fetch with transaction context
+      const dataPromises = recipe.requiredFields.map(field => 
+        this.dataSourceRegistry.fetchFieldWithFreshness(
+          field.name,
+          patientId,
+          field.freshness,
+          transaction
+        )
+      );
+      
+      const rawData = await Promise.all(dataPromises);
+      
+      // Build snapshot with all metadata
+      const snapshot = this.buildSnapshot(
+        rawData,
+        recipe,
+        patientId
+      );
+      
+      // Calculate checksum BEFORE signing
+      snapshot.checksum = this.calculateDeterministicChecksum(snapshot.data);
+      
+      // Sign with service identity
+      snapshot.signature = await this.signer.signWithServiceKey(
+        snapshot.checksum,
+        'medication-service'  // Service identity
+      );
+      
+      // Store immutably
+      await this.snapshotStore.save(snapshot);
+      
+      // Commit transaction
+      await transaction.commit();
+      
+      // Emit event for audit
+      await this.eventBus.publish('snapshot.created', {
+        snapshotId: snapshot.id,
+        patientId,
+        recipeId: recipe.recipeId
+      });
+      
+      return snapshot;
+      
+    } catch (error) {
+      await transaction.rollback();
+      throw new SnapshotCreationError(error);
+    }
+  }
+}
+
+
+2.2 Live Fetch Governance
+// context-gateway/governance/live-fetch-controller.ts
+
+
+export class LiveFetchController {
+  private auditLogger: AuditLogger;
+  private metrics: MetricsCollector;
+  private alertManager: AlertManager;
+  
+  async fetchLiveFields(
+    snapshot: ClinicalSnapshot,
+    missingFields: string[],
+    patientId: string,
+    requestingService: string
+  ): Promise<any> {
+    // Validate permission
+    if (!snapshot.allowLiveFetch) {
+      throw new LiveFetchNotAllowedError();
+    }
+    
+    // Check field-level permissions
+    const unauthorizedFields = missingFields.filter(
+      field => !snapshot.allowedLiveFields?.includes(field)
+    );
+    
+    if (unauthorizedFields.length > 0) {
+      throw new UnauthorizedFieldsError(unauthorizedFields);
+    }
+    
+    // Fetch with audit trail
+    const fetchResult = await this.dataSourceRegistry.fetchFields(
+      patientId,
+      missingFields
+    );
+    
+    // Create audit entry
+    await this.auditLogger.logHighPriority({
+      event: 'LIVE_FETCH',
+      snapshotId: snapshot.id,
+      patientId,
+      requestingService,
+      fieldsFetched: missingFields,
+      reason: 'missing_required_fields',
+      timestamp: new Date()
+    });
+    
+    // Update metrics
+    this.metrics.increment('live_fetch_count', {
+      service: requestingService,
+      fields: missingFields.join(',')
+    });
+    
+    // Check threshold for alerting
+    const hourlyCount = await this.metrics.getHourlyCount('live_fetch_count');
+    if (hourlyCount > 10) {
+      await this.alertManager.trigger('HIGH_LIVE_FETCH_RATE', {
+        count: hourlyCount,
+        threshold: 10
+      });
+    }
+    
+    return fetchResult;
+  }
+}
+
+
+3. Integration Points
+3.1 Service Boundaries Clarification
+# Context Gateway is SEPARATE from Apollo Federation
+architecture:
+  context_gateway:
+    type: "standalone_service"
+    protocol: "gRPC + REST"
+    purpose: "snapshot_management"
+    
+  apollo_federation:
+    type: "graphql_gateway"
+    protocol: "GraphQL"
+    purpose: "knowledge_base_access"
+    
+  interaction:
+    - Medication Service -> Context Gateway: "create/get snapshots"
+    - Medication Service -> Apollo Federation: "query KBs"
+    - Safety Gateway -> Context Gateway: "get snapshots"
+    - Safety Gateway -> Apollo Federation: "query KBs"
+    - NO direct interaction between Context Gateway and Apollo Federation
+
+
+3.2 API Contracts
+// context-gateway.proto
+
+
+service ContextGateway {
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (ClinicalSnapshot);
+  rpc GetSnapshot(GetSnapshotRequest) returns (ClinicalSnapshot);
+  rpc FetchLiveFields(LiveFetchRequest) returns (LiveFetchResponse);
+  rpc InvalidateSnapshot(InvalidateRequest) returns (InvalidateResponse);
+}
+
+
+message CreateSnapshotRequest {
+  WorkflowRecipe recipe = 1;
+  string patient_id = 2;
+  string requesting_service = 3;
+}
+
+
+message GetSnapshotRequest {
+  string snapshot_id = 1;
+  string requesting_service = 2;
+}
+
+
+4. Performance Optimizations
+4.1 Predictive Caching
+// context-gateway/cache/predictive-cache.ts
+
+
+export class PredictiveCacheManager {
+  async warmCacheForWorkflow(intent: string, patientId: string): Promise<void> {
+    // Predict likely recipe based on intent
+    const likelyRecipes = await this.ml.predictRecipes(intent);
+    
+    // Prefetch common fields
+    const commonFields = this.getCommonFields(likelyRecipes);
+    
+    // Warm cache in background
+    this.backgroundFetch(patientId, commonFields);
+  }
+}
+
+
+5. Critical Implementation Notes
+1. Context Gateway remains independent - It does NOT interact with Apollo Federation
+2. Dual-layer storage is mandatory - Both Redis (hot) and S3 (cold) are required
+3. Live fetches are exceptional - Default to false, require explicit permission
+4. Checksums before signatures - Always calculate checksum on canonical data before signing
+5. Transaction boundaries - All snapshot creation must be atomic
+This architecture ensures the Context Gateway provides reliable, performant, and auditable snapshot management while maintaining clean separation from the Knowledge Base federation layer.

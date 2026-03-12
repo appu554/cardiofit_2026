@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  # KB-12 Order Sets & Care Plans Service
+  kb-12-ordersets:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-12-ordersets
+    ports:
+      - "8112:8112"
+    environment:
+      # Server
+      - PORT=8112
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info
+
+      # Database
+      - DATABASE_URL=postgres://kb12user:kb12password@kb-12-postgres:5432/kb_ordersets?sslmode=disable
+
+      # Redis Cache
+      - REDIS_URL=redis://kb-12-redis:6379/0
+      - REDIS_CACHE_TTL=3600
+
+      # KB Service Clients
+      - KB1_URL=http://kb-drug-rules:8081
+      - KB3_URL=http://kb-guidelines:8083
+      - KB6_URL=http://kb-formulary:8086
+      - KB7_URL=http://kb-terminology:8087
+
+      # Timeouts
+      - HTTP_CLIENT_TIMEOUT=30s
+      - DATABASE_TIMEOUT=10s
+
+      # FHIR Configuration
+      - FHIR_VERSION=R4
+      - FHIR_BASE_URL=http://fhir-server:8080/fhir
+    depends_on:
+      kb-12-postgres:
+        condition: service_healthy
+      kb-12-redis:
+        condition: service_healthy
+    networks:
+      - kb-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8112/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  # PostgreSQL Database for KB-12 (Port 5435)
+  kb-12-postgres:
+    image: postgres:16-alpine
+    container_name: kb-12-postgres
+    ports:
+      - "5435:5432"
+    environment:
+      - POSTGRES_USER=kb12user
+      - POSTGRES_PASSWORD=kb12password
+      - POSTGRES_DB=kb_ordersets
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - kb12-postgres-data:/var/lib/postgresql/data
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - kb-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb12user -d kb_ordersets"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # Redis Cache for KB-12 (Port 6385)
+  kb-12-redis:
+    image: redis:7-alpine
+    container_name: kb-12-redis
+    ports:
+      - "6385:6379"
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - kb12-redis-data:/data
+    networks:
+      - kb-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+
+networks:
+  kb-network:
+    driver: bridge
+    name: kb12-network
+
+volumes:
+  kb12-postgres-data:
+    driver: local
+  kb12-redis-data:
+    driver: local

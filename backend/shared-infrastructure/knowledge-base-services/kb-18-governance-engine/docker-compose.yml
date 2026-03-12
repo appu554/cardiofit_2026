@@ -1,0 +1,136 @@
+version: '3.8'
+
+# KB-18 Governance Engine Docker Compose
+# Clinical Governance Enforcement Platform
+
+services:
+  # ============================================================================
+  # KB-18 GOVERNANCE ENGINE SERVICE
+  # ============================================================================
+  kb-18-governance-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-18-governance-engine
+    ports:
+      - "8018:8018"
+    environment:
+      # Server Configuration
+      PORT: "8018"
+      ENVIRONMENT: "development"
+      LOG_LEVEL: "debug"
+
+      # Database Configuration
+      DATABASE_URL: "postgres://kb18user:kb18password@kb18-postgres:5432/kb_governance?sslmode=disable"
+      DB_MAX_OPEN_CONNS: "25"
+      DB_MAX_IDLE_CONNS: "5"
+      DB_CONN_MAX_LIFETIME: "5m"
+
+      # Redis Configuration
+      REDIS_URL: "redis://kb18-redis:6379"
+      REDIS_DB: "0"
+      REDIS_POOL_SIZE: "10"
+
+      # Feature Flags
+      FEATURE_PATTERN_MONITORING: "true"
+      FEATURE_AUDIT_LOGGING: "true"
+      FEATURE_METRICS: "true"
+      PATTERN_THRESHOLD_24H: "5"
+      PATTERN_THRESHOLD_7D: "20"
+    depends_on:
+      kb18-postgres:
+        condition: service_healthy
+      kb18-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8018/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - kb18-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # POSTGRESQL DATABASE
+  # ============================================================================
+  kb18-postgres:
+    image: postgres:15-alpine
+    container_name: kb18-postgres
+    ports:
+      - "5418:5432"
+    environment:
+      POSTGRES_USER: kb18user
+      POSTGRES_PASSWORD: kb18password
+      POSTGRES_DB: kb_governance
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - kb18-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb18user -d kb_governance"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - kb18-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # REDIS CACHE
+  # ============================================================================
+  kb18-redis:
+    image: redis:7-alpine
+    container_name: kb18-redis
+    ports:
+      - "6318:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - kb18-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - kb18-network
+    restart: unless-stopped
+
+  # ============================================================================
+  # ADMINER (DATABASE UI) - Optional for development
+  # ============================================================================
+  kb18-adminer:
+    image: adminer:latest
+    container_name: kb18-adminer
+    ports:
+      - "8118:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: kb18-postgres
+      ADMINER_DESIGN: nette
+    depends_on:
+      - kb18-postgres
+    networks:
+      - kb18-network
+    profiles:
+      - dev
+    restart: unless-stopped
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+networks:
+  kb18-network:
+    driver: bridge
+    name: kb18-governance-network
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+volumes:
+  kb18-postgres-data:
+    name: kb18-postgres-data
+  kb18-redis-data:
+    name: kb18-redis-data

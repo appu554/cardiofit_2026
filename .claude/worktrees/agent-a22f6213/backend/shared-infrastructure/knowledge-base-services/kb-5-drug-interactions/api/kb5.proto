@@ -1,0 +1,253 @@
+syntax = "proto3";
+package kb5.v1;
+
+option go_package = "kb-drug-interactions/api/pb";
+
+import "google/protobuf/timestamp.proto";
+
+// Drug interaction checking service
+service DrugInteractionService {
+  // Primary endpoint for interaction checking
+  rpc CheckInteractions(InteractionCheckRequest) returns (InteractionCheckResponse);
+  
+  // Batch interaction checking for multiple drug sets
+  rpc BatchCheckInteractions(BatchInteractionCheckRequest) returns (BatchInteractionCheckResponse);
+  
+  // Fast pairwise interaction lookup
+  rpc FastLookup(FastLookupRequest) returns (FastLookupResponse);
+  
+  // Health check
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Get interaction matrix statistics
+  rpc GetMatrixStatistics(MatrixStatisticsRequest) returns (MatrixStatisticsResponse);
+}
+
+// Patient context for personalized interaction checking
+message PatientContext {
+  map<string, string> pgx = 1;       // {"CYP2D6": "ultrarapid", "SLCO1B1": "poor"}
+  string hepatic_stage = 2;          // "ChildPugh_A", "ChildPugh_B", "ChildPugh_C"
+  string renal_stage = 3;            // "CKD_1", "CKD_2", "CKD_3a", "CKD_3b", "CKD_4", "CKD_5"
+  string age_band = 4;               // "pediatric", "adult", "older_adult"
+  repeated string comorbidities = 5; // SNOMED codes for relevant conditions
+  map<string, string> allergies = 6; // drug allergies and intolerances
+}
+
+// Main interaction check request
+message InteractionCheckRequest {
+  string transaction_id = 1;              // for audit trail
+  repeated string drug_codes = 2;         // RxNorm/ATC codes normalized by KB-7
+  PatientContext patient_context = 3;     // optional patient-specific factors
+  string dataset_version = 4;             // Evidence Envelope pin
+  bool expand_classes = 5;                // resolve ATC classes to member drugs
+  bool include_contextuals = 6;           // include route/dose-specific flags
+  bool include_alternatives = 7;          // include alternative drug suggestions
+  bool include_monitoring = 8;            // include monitoring recommendations
+  repeated string severity_filter = 9;    // filter by severity levels
+  map<string, string> clinical_context = 10; // additional clinical parameters
+}
+
+// Detailed interaction information
+message InteractionDetail {
+  string drug1_code = 1;
+  string drug2_code = 2;
+  string severity = 3;                    // contraindicated, major, moderate, minor
+  string mechanism = 4;                   // PK, PD, PK_PD
+  string clinical_effects = 5;
+  string management_strategy = 6;
+  string evidence = 7;                    // A, B, C, D, ExpertOpinion
+  double confidence = 8;                  // 0.0-1.0
+  map<string, string> qualifiers = 9;     // route, dose thresholds, acute/chronic
+  repeated string sources = 10;           // vendor source identifiers
+  bool pgx_applicable = 11;              // applies to patient's PGx profile
+  bool dose_adjustment_required = 12;
+  string interaction_id = 13;
+  google.protobuf.Timestamp time_to_onset = 14;
+  string duration = 15;
+  map<string, string> monitoring_parameters = 16;
+  repeated string alternative_drugs = 17;
+}
+
+// Provenance and audit trail information
+message ConflictTrail {
+  string synthesized_from_version = 1;        // vendor_version -> harmonized_version
+  repeated string vendor_evidence_ids = 2;    // source evidence identifiers
+  repeated string overrides_applied = 3;      // institutional rule IDs applied
+  google.protobuf.Timestamp harmonized_at = 4; // when data was harmonized
+  string harmonizer_version = 5;              // version of harmonization process
+}
+
+// Drug information
+message DrugInfo {
+  string code = 1;        // RxNorm/ATC code
+  string name = 2;        // generic name
+  string brand_name = 3;  // brand name if applicable
+  string strength = 4;    // dosage strength
+  string route = 5;       // route of administration
+  string form = 6;        // dosage form
+}
+
+// Interaction check response
+message InteractionCheckResponse {
+  string transaction_id = 1;
+  string dataset_version = 2;
+  repeated InteractionDetail interactions = 3;
+  ConflictTrail conflict_trail = 4;
+  InteractionSummary summary = 5;
+  repeated string recommendations = 6;
+  map<string, DrugAlternatives> alternative_drugs = 7;
+  repeated MonitoringRecommendation monitoring_plan = 8;
+  google.protobuf.Timestamp check_timestamp = 9;
+  bool cache_hit = 10;
+  double risk_score = 11;                    // overall risk score 0.0-1.0
+}
+
+// Summary statistics for interaction check
+message InteractionSummary {
+  int32 total_interactions = 1;
+  map<string, int32> severity_counts = 2;    // severity -> count
+  string highest_severity = 3;
+  int32 contraindicated_pairs = 4;
+  repeated string required_actions = 5;
+  int32 pgx_interactions = 6;               // count of PGx-related interactions
+  int32 class_interactions = 7;             // count of class-based interactions
+  int32 modifier_interactions = 8;          // count of food/alcohol/herbal interactions
+}
+
+// Alternative drug suggestions
+message DrugAlternatives {
+  repeated AlternativeDrug alternatives = 1;
+  string rationale = 2;
+}
+
+message AlternativeDrug {
+  DrugInfo drug_info = 1;
+  string reason = 2;                       // why this is a good alternative
+  double safety_score = 3;                 // relative safety score 0.0-1.0
+  bool requires_monitoring = 4;
+}
+
+// Monitoring recommendations
+message MonitoringRecommendation {
+  string parameter = 1;                    // what to monitor (e.g., "INR", "serum_creatinine")
+  string frequency = 2;                    // "daily", "weekly", "monthly"
+  string duration = 3;                     // "1_week", "ongoing", "until_stable"
+  string target_range = 4;                 // target values
+  repeated string critical_values = 5;     // values requiring immediate action
+  string instructions = 6;                 // detailed monitoring instructions
+  string rationale = 7;                    // why monitoring is needed
+}
+
+// Batch interaction checking
+message BatchInteractionCheckRequest {
+  repeated InteractionCheckRequest requests = 1;
+  BatchCheckOptions options = 2;
+}
+
+message BatchCheckOptions {
+  bool parallel = 1;                       // process requests in parallel
+  int32 max_concurrency = 2;              // maximum concurrent requests
+  repeated string severity_filter = 3;     // global severity filter
+  bool include_statistics = 4;            // include batch processing statistics
+  bool fail_fast = 5;                     // stop on first error
+}
+
+message BatchInteractionCheckResponse {
+  repeated InteractionCheckResponse responses = 1;
+  BatchProcessingStatistics statistics = 2;
+  int32 successful_checks = 3;
+  int32 failed_checks = 4;
+  google.protobuf.Timestamp processed_at = 5;
+}
+
+message BatchProcessingStatistics {
+  google.protobuf.Timestamp started_at = 1;
+  google.protobuf.Timestamp completed_at = 2;
+  int32 total_requests = 3;
+  int32 successful_requests = 4;
+  int32 failed_requests = 5;
+  double average_processing_time_ms = 6;
+  double cache_hit_rate = 7;
+  int32 total_interactions_found = 8;
+}
+
+// Fast pairwise lookup for high-frequency use cases
+message FastLookupRequest {
+  string drug_a_code = 1;
+  string drug_b_code = 2;
+  string dataset_version = 3;
+  PatientContext patient_context = 4;
+}
+
+message FastLookupResponse {
+  bool interaction_found = 1;
+  InteractionDetail interaction = 2;
+  bool cache_hit = 3;
+  double lookup_time_ms = 4;
+}
+
+// Health check
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;                       // "healthy", "degraded", "unhealthy"
+  map<string, string> component_health = 2; // database, cache, etc.
+  string version = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string dataset_version = 5;             // current active dataset version
+  int32 total_interactions = 6;           // count in current dataset
+}
+
+// Matrix statistics for monitoring
+message MatrixStatisticsRequest {}
+
+message MatrixStatisticsResponse {
+  int32 total_drugs = 1;
+  int32 total_interactions = 2;
+  double matrix_density = 3;              // interaction density in matrix
+  google.protobuf.Timestamp last_updated = 4;
+  double memory_usage_mb = 5;
+  PerformanceMetrics lookup_performance = 6;
+  string current_dataset_version = 7;
+  CacheStatistics cache_statistics = 8;
+}
+
+// Performance metrics
+message PerformanceMetrics {
+  int64 average_lookup_time_ns = 1;
+  double cache_hit_rate = 2;
+  int64 total_lookups = 3;
+  double batch_processing_rate = 4;        // interactions/second
+  int64 p50_latency_ns = 5;
+  int64 p95_latency_ns = 6;
+  int64 p99_latency_ns = 7;
+}
+
+// Cache statistics
+message CacheStatistics {
+  double hot_cache_hit_rate = 1;          // Redis hot cache
+  double warm_cache_hit_rate = 2;         // Database materialized view
+  int64 hot_cache_entries = 3;
+  int64 warm_cache_entries = 4;
+  double hot_cache_memory_mb = 5;
+  double eviction_rate = 6;
+  google.protobuf.Timestamp last_refresh = 7;
+}
+
+// Error details for comprehensive error handling
+message ErrorDetail {
+  string code = 1;                        // error code
+  string message = 2;                     // human-readable message
+  map<string, string> details = 3;        // additional error context
+  string component = 4;                   // which component failed
+  bool retryable = 5;                     // whether request can be retried
+}
+
+// Extended response for error scenarios
+message InteractionCheckErrorResponse {
+  string transaction_id = 1;
+  ErrorDetail error = 2;
+  repeated string partial_results = 3;    // any partial data available
+  string fallback_recommendation = 4;     // conservative clinical guidance
+  google.protobuf.Timestamp error_timestamp = 5;
+}

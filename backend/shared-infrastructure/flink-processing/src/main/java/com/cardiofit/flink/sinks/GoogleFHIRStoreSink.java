@@ -1,0 +1,251 @@
+
+package com.cardiofit.flink.sinks;
+
+import com.cardiofit.flink.config.GoogleHealthcareConfig;
+import com.cardiofit.flink.models.RoutedEvent;
+import com.cardiofit.stream.models.CanonicalEvent;
+import com.google.api.client.http.HttpRequestInitializer;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import com.google.api.services.healthcare.v1.CloudHealthcare;
+import com.google.api.services.healthcare.v1.CloudHealthcareScopes;
+import com.google.auth.http.HttpCredentialsAdapter;
+import com.google.auth.oauth2.GoogleCredentials;
+import org.apache.flink.api.connector.sink2.Sink;
+import org.apache.flink.api.connector.sink2.WriterInitContext;
+import org.apache.flink.api.connector.sink2.SinkWriter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Collections;
+import java.util.Map;
+
+/**
+ * Flink sink for Google Cloud Healthcare FHIR Store
+ * Routes FHIR R4 resources to Google Cloud Healthcare API
+ * Uses configuration compatible with patient-service settings
+ *
+ * Migrated to Flink 2.x Sink API (replaces RichSinkFunction)
+ */
+public class GoogleFHIRStoreSink implements Sink<RoutedEvent> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(GoogleFHIRStoreSink.class);
+
+    private final GoogleHealthcareConfig config;
+
+    public GoogleFHIRStoreSink(GoogleHealthcareConfig config) {
+        this.config = config;
+    }
+
+    public GoogleFHIRStoreSink() {
+        // Use default configuration from environment variables (same as patient-service)
+        this.config = GoogleHealthcareConfig.createDevelopmentConfig();
+    }
+
+    @Override
+    public SinkWriter<RoutedEvent> createWriter(WriterInitContext context) throws IOException {
+        return new FHIRSinkWriter(config);
+    }
+
+    /**
+     * SinkWriter implementation for Google Cloud Healthcare FHIR Store operations
+     */
+    private static class FHIRSinkWriter implements SinkWriter<RoutedEvent> {
+
+        private static final Logger LOG = LoggerFactory.getLogger(FHIRSinkWriter.class);
+
+        private final GoogleHealthcareConfig config;
+        private transient CloudHealthcare healthcare;
+        private transient GoogleCredentials credentials;
+
+        public FHIRSinkWriter(GoogleHealthcareConfig config) {
+            this.config = config;
+
+            try {
+                initializeGoogleHealthcare();
+            } catch (Exception e) {
+                LOG.error("Failed to initialize Google Healthcare FHIR sink", e);
+                throw new RuntimeException("Google Healthcare initialization failed", e);
+            }
+        }
+
+        private void initializeGoogleHealthcare() throws IOException {
+            // Check if Google Healthcare API is enabled
+            if (!config.isUseGoogleHealthcareApi()) {
+                LOG.warn("Google Healthcare API is disabled, sink will not process events");
+                return;
+            }
+
+            // Validate configuration
+            config.validate();
+
+            // Initialize Google Cloud Healthcare client
+            if (config.getCredentialsPath() != null && !config.getCredentialsPath().isEmpty()) {
+                // Use service account key file (same as patient-service)
+                try (FileInputStream credentialsStream = new FileInputStream(config.getCredentialsPath())) {
+                    credentials = GoogleCredentials.fromStream(credentialsStream)
+                        .createScoped(Collections.singleton(CloudHealthcareScopes.CLOUD_PLATFORM));
+                    LOG.info("Loaded Google Cloud credentials from file: {}", config.getCredentialsPath());
+                } catch (IOException e) {
+                    LOG.warn("Failed to load credentials from file: {}, falling back to application default credentials",
+                            config.getCredentialsPath());
+                    credentials = GoogleCredentials.getApplicationDefault()
+                        .createScoped(Collections.singleton(CloudHealthcareScopes.CLOUD_PLATFORM));
+                }
+            } else {
+                // Use application default credentials
+                credentials = GoogleCredentials.getApplicationDefault()
+                    .createScoped(Collections.singleton(CloudHealthcareScopes.CLOUD_PLATFORM));
+                LOG.info("Using application default credentials for Google Cloud Healthcare API");
+            }
+
+            HttpRequestInitializer requestInitializer = new HttpCredentialsAdapter(credentials);
+
+            healthcare = new CloudHealthcare.Builder(
+                    new NetHttpTransport(),
+                    new GsonFactory(),
+                    requestInitializer)
+                .setApplicationName("CardioFit-EHR-Intelligence")
+                .build();
+
+            LOG.info("Initialized Google FHIR Store sink with configuration: {}", config.toString());
+        }
+
+        @Override
+        public void write(RoutedEvent event, Context context) throws IOException, InterruptedException {
+            // Skip processing if Google Healthcare API is disabled
+            if (!config.isUseGoogleHealthcareApi()) {
+                return;
+            }
+
+            // Only process events that have FHIR transformation
+            if (!event.getTransformedPayloads().containsKey("FHIR_R4_TRANSFORM")) {
+                LOG.warn("Event {} missing FHIR transformation, skipping", event.getId());
+                return;
+            }
+
+            Map<String, Object> fhirResource = (Map<String, Object>) event.getTransformedPayloads().get("FHIR_R4_TRANSFORM");
+
+            try {
+                createFHIRResource(fhirResource, event);
+                LOG.debug("Successfully stored FHIR resource for patient: {} in store: {}",
+                        ((CanonicalEvent)event).getPatientId(), config.getFhirStorePath());
+            } catch (Exception e) {
+                LOG.error("Failed to store FHIR resource for event: {} in store: {}",
+                        event.getId(), config.getFhirStorePath(), e);
+
+                // Add error metadata to the event for downstream error handling
+                if (event.getTransformationMetadata() != null) {
+                    event.getTransformationMetadata().put("fhir_store_error", e.getMessage());
+                    event.getTransformationMetadata().put("fhir_store_error_timestamp", System.currentTimeMillis());
+                }
+
+                throw new IOException("Failed to store FHIR resource", e);
+            }
+        }
+
+        private void createFHIRResource(Map<String, Object> fhirResource, RoutedEvent originalEvent) throws IOException {
+            String resourceType = (String) fhirResource.get("resourceType");
+
+            if (resourceType == null || resourceType.trim().isEmpty()) {
+                throw new IllegalArgumentException("FHIR resource missing resourceType");
+            }
+
+            // Convert Map to JSON string for Google Healthcare API
+            String jsonResource = convertToJson(fhirResource);
+
+            // Add CardioFit-specific metadata to the FHIR resource
+            addCardioFitMetadata(fhirResource, originalEvent);
+
+            try {
+                // Create HttpBody from JSON string
+                com.google.api.services.healthcare.v1.model.HttpBody httpBody = new com.google.api.services.healthcare.v1.model.HttpBody();
+                httpBody.setContentType("application/fhir+json");
+                httpBody.setData(jsonResource);
+
+                // Create the FHIR resource in Google Cloud Healthcare
+                healthcare.projects().locations().datasets().fhirStores().fhir()
+                    .create(config.getFhirStorePath(), resourceType, httpBody)
+                    .execute();
+
+                LOG.debug("Created FHIR {} resource for patient {} with ID {}",
+                        resourceType, ((CanonicalEvent)originalEvent).getPatientId(), fhirResource.get("id"));
+
+            } catch (Exception e) {
+                LOG.error("Google Healthcare API error creating {} resource: {}",
+                        resourceType, e.getMessage());
+                throw new IOException("Google Healthcare API error", e);
+            }
+        }
+
+        private void addCardioFitMetadata(Map<String, Object> fhirResource, RoutedEvent originalEvent) {
+            // Add CardioFit-specific tags and metadata
+            Map<String, Object> meta = (Map<String, Object>) fhirResource.get("meta");
+            if (meta == null) {
+                meta = new java.util.HashMap<>();
+                fhirResource.put("meta", meta);
+            }
+
+            // Add source system information
+            meta.put("source", "CardioFit-EHR-Intelligence-Engine");
+            meta.put("profile", java.util.Arrays.asList("http://cardiofit.com/fhir/StructureDefinition/cardiofit-resource"));
+
+            // Add tags for tracking
+            java.util.List<Map<String, Object>> tags = (java.util.List<Map<String, Object>>) meta.get("tag");
+            if (tags == null) {
+                tags = new java.util.ArrayList<>();
+                meta.put("tag", tags);
+            }
+
+            // Source event tag
+            Map<String, Object> sourceTag = new java.util.HashMap<>();
+            sourceTag.put("system", "http://cardiofit.com/fhir/CodeSystem/source-event-type");
+            sourceTag.put("code", originalEvent.getSourceEventType());
+            sourceTag.put("display", "Source Event Type");
+            tags.add(sourceTag);
+
+            // Priority tag
+            Map<String, Object> priorityTag = new java.util.HashMap<>();
+            priorityTag.put("system", "http://cardiofit.com/fhir/CodeSystem/event-priority");
+            priorityTag.put("code", originalEvent.getPriority().name());
+            priorityTag.put("display", "Event Priority");
+            tags.add(priorityTag);
+
+            // Processing timestamp
+            Map<String, Object> extension = new java.util.HashMap<>();
+            extension.put("url", "http://cardiofit.com/fhir/StructureDefinition/processing-timestamp");
+            extension.put("valueDateTime", new java.util.Date(originalEvent.getRoutingTime()));
+
+            java.util.List<Map<String, Object>> extensions = (java.util.List<Map<String, Object>>) meta.get("extension");
+            if (extensions == null) {
+                extensions = new java.util.ArrayList<>();
+                meta.put("extension", extensions);
+            }
+            extensions.add(extension);
+        }
+
+        private String convertToJson(Map<String, Object> resource) {
+            // Convert Map to JSON string using Jackson
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                return mapper.writeValueAsString(resource);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to convert FHIR resource to JSON", e);
+            }
+        }
+
+        @Override
+        public void flush(boolean endOfInput) throws IOException, InterruptedException {
+            // Google Healthcare API writes are synchronous, no explicit flush needed
+            LOG.debug("Flush called (endOfInput: {})", endOfInput);
+        }
+
+        @Override
+        public void close() throws Exception {
+            // No persistent connections to close for Google Healthcare API
+            LOG.info("Google FHIR Store sink closed");
+        }
+    }
+}

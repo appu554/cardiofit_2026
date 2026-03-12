@@ -1,0 +1,978 @@
+# Implementation Guide: Neo4j Dual-Stream & Service Runtime Layer
+
+## Phase 1: Neo4j Dual-Stream Architecture
+
+### 1.1 Neo4j Setup for Dual Streams
+
+```python
+# neo4j-setup/dual_stream_manager.py
+import asyncio
+from neo4j import AsyncGraphDatabase
+from typing import Dict, List, Optional
+import json
+import hashlib
+from datetime import datetime
+
+class Neo4jDualStreamManager:
+    """
+    Manages two distinct data streams in Neo4j:
+    1. Patient Data Stream (real-time clinical data)
+    2. Semantic Mesh Stream (from GraphDB OWL reasoning)
+    """
+    
+    def __init__(self, config):
+        self.driver = AsyncGraphDatabase.driver(
+            config['neo4j_uri'],
+            auth=(config['neo4j_user'], config['neo4j_password']),
+            max_connection_pool_size=50
+        )
+        
+        # Separate databases for each stream
+        self.patient_db = "patient_data"
+        self.semantic_db = "semantic_mesh"
+        
+    async def initialize_databases(self):
+        """Create separate databases and indexes for each stream"""
+        
+        async with self.driver.session() as session:
+            # Create databases
+            await session.run("CREATE DATABASE patient_data IF NOT EXISTS")
+            await session.run("CREATE DATABASE semantic_mesh IF NOT EXISTS")
+        
+        # Initialize patient data indexes
+        async with self.driver.session(database=self.patient_db) as session:
+            await self._create_patient_indexes(session)
+        
+        # Initialize semantic mesh indexes
+        async with self.driver.session(database=self.semantic_db) as session:
+            await self._create_semantic_indexes(session)
+    
+    async def _create_patient_indexes(self, session):
+        """Indexes for real-time patient data"""
+        indexes = [
+            "CREATE INDEX patient_id IF NOT EXISTS FOR (p:Patient) ON (p.id)",
+            "CREATE INDEX medication_rxnorm IF NOT EXISTS FOR (m:Medication) ON (m.rxnorm)",
+            "CREATE INDEX condition_icd10 IF NOT EXISTS FOR (c:Condition) ON (c.icd10)",
+            "CREATE INDEX encounter_id IF NOT EXISTS FOR (e:Encounter) ON (e.id)",
+            "CREATE INDEX timestamp_idx IF NOT EXISTS FOR (n) ON (n.timestamp)"
+        ]
+        
+        for idx in indexes:
+            await session.run(idx)
+    
+    async def _create_semantic_indexes(self, session):
+        """Indexes for semantic mesh from GraphDB"""
+        indexes = [
+            "CREATE INDEX concept_uri IF NOT EXISTS FOR (c:Concept) ON (c.uri)",
+            "CREATE INDEX drug_class IF NOT EXISTS FOR (dc:DrugClass) ON (dc.code)",
+            "CREATE INDEX interaction_severity IF NOT EXISTS FOR ()-[i:INTERACTS_WITH]-() ON (i.severity)",
+            "CREATE INDEX contraindication IF NOT EXISTS FOR ()-[c:CONTRAINDICATED_IN]-() ON (c.severity)",
+            "CREATE INDEX terminology_code IF NOT EXISTS FOR (t:Term) ON (t.code, t.system)"
+        ]
+        
+        for idx in indexes:
+            await session.run(idx)
+```
+
+### 1.2 GraphDB to Neo4j Adapter
+
+```python
+# adapters/graphdb_neo4j_adapter.py
+import asyncio
+from SPARQLWrapper import SPARQLWrapper, JSON
+from rdflib import Graph, Namespace
+import logging
+
+class GraphDBToNeo4jAdapter:
+    """
+    Extracts OWL reasoning results from GraphDB and 
+    transforms them into Neo4j property graph
+    """
+    
+    def __init__(self, graphdb_url, neo4j_manager):
+        self.sparql = SPARQLWrapper(f"{graphdb_url}/repositories/kb7")
+        self.neo4j = neo4j_manager
+        self.logger = logging.getLogger(__name__)
+        
+        # Namespaces
+        self.SNOMED = Namespace("http://snomed.info/id/")
+        self.OWL = Namespace("http://www.w3.org/2002/07/owl#")
+        
+    async def sync_reasoning_results(self):
+        """Extract inferred relationships from GraphDB and sync to Neo4j"""
+        
+        # Query GraphDB for inferred drug relationships
+        drug_query = """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+        PREFIX sct: <http://snomed.info/id/>
+        
+        SELECT ?drug ?drugLabel ?class ?classLabel ?property ?value
+        WHERE {
+            ?drug rdfs:subClassOf sct:410942007 .  # Drug or medicament
+            ?drug rdfs:label ?drugLabel .
+            ?drug rdfs:subClassOf ?class .
+            ?class rdfs:label ?classLabel .
+            
+            # Get inferred properties
+            ?drug ?property ?value .
+            FILTER(?property != rdfs:label && ?property != rdf:type)
+        }
+        LIMIT 10000
+        """
+        
+        self.sparql.setQuery(drug_query)
+        self.sparql.setReturnFormat(JSON)
+        results = self.sparql.query().convert()
+        
+        # Transform to Neo4j
+        await self._load_drug_concepts(results['results']['bindings'])
+        
+        # Query for contraindications
+        contraindication_query = """
+        PREFIX kb: <http://kb7.org/ontology#>
+        
+        SELECT ?drug ?condition ?severity ?evidence
+        WHERE {
+            ?drug kb:contraindicatedIn ?condition .
+            OPTIONAL { ?drug kb:contraindicationSeverity ?severity }
+            OPTIONAL { ?drug kb:evidenceLevel ?evidence }
+        }
+        """
+        
+        self.sparql.setQuery(contraindication_query)
+        contra_results = self.sparql.query().convert()
+        
+        await self._load_contraindications(contra_results['results']['bindings'])
+    
+    async def _load_drug_concepts(self, bindings):
+        """Load drug concepts into Neo4j semantic mesh"""
+        
+        async with self.neo4j.driver.session(database="semantic_mesh") as session:
+            for binding in bindings:
+                drug_uri = binding['drug']['value']
+                drug_label = binding['drugLabel']['value']
+                class_uri = binding.get('class', {}).get('value')
+                class_label = binding.get('classLabel', {}).get('value')
+                
+                cypher = """
+                MERGE (d:Drug {uri: $drug_uri})
+                SET d.label = $drug_label, d.updated = datetime()
+                WITH d
+                MERGE (c:DrugClass {uri: $class_uri})
+                SET c.label = $class_label
+                MERGE (d)-[:BELONGS_TO]->(c)
+                """
+                
+                await session.run(cypher, {
+                    'drug_uri': drug_uri,
+                    'drug_label': drug_label,
+                    'class_uri': class_uri,
+                    'class_label': class_label
+                })
+```
+
+### 1.3 Patient Data Stream Handler
+
+```python
+# streams/patient_data_handler.py
+from aiokafka import AIOKafkaConsumer
+import json
+
+class PatientDataStreamHandler:
+    """Handles real-time patient data stream into Neo4j"""
+    
+    def __init__(self, neo4j_manager, kafka_config):
+        self.neo4j = neo4j_manager
+        self.consumer = AIOKafkaConsumer(
+            'patient-events',
+            bootstrap_servers=kafka_config['brokers'],
+            value_deserializer=lambda m: json.loads(m.decode('utf-8'))
+        )
+        
+    async def process_patient_events(self):
+        """Process patient events and update Neo4j patient graph"""
+        
+        await self.consumer.start()
+        
+        try:
+            async for msg in self.consumer:
+                event = msg.value
+                
+                if event['type'] == 'medication_prescribed':
+                    await self._handle_medication_event(event)
+                elif event['type'] == 'diagnosis_recorded':
+                    await self._handle_diagnosis_event(event)
+                elif event['type'] == 'lab_result':
+                    await self._handle_lab_event(event)
+                    
+        finally:
+            await self.consumer.stop()
+    
+    async def _handle_medication_event(self, event):
+        """Add medication to patient graph"""
+        
+        async with self.neo4j.driver.session(database="patient_data") as session:
+            cypher = """
+            MERGE (p:Patient {id: $patient_id})
+            MERGE (m:Medication {rxnorm: $rxnorm, name: $drug_name})
+            CREATE (p)-[r:PRESCRIBED {
+                start_date: datetime($start_date),
+                dose: $dose,
+                frequency: $frequency,
+                encounter_id: $encounter_id
+            }]->(m)
+            """
+            
+            await session.run(cypher, event['data'])
+```
+
+## Phase 2: Service-Specific Runtime Layer
+
+### 2.1 ClickHouse Integration
+
+```python
+# clickhouse-runtime/manager.py
+from clickhouse_driver import Client
+import pandas as pd
+from typing import Dict, List
+import hashlib
+
+class ClickHouseRuntimeManager:
+    """Manages ClickHouse for analytics and scoring"""
+    
+    def __init__(self, config):
+        self.client = Client(
+            host=config['host'],
+            port=config['port'],
+            database='kb7_analytics'
+        )
+        self.initialize_tables()
+        
+    def initialize_tables(self):
+        """Create tables for service-specific analytics"""
+        
+        # Medication scoring table
+        self.client.execute("""
+            CREATE TABLE IF NOT EXISTS medication_scores (
+                drug_rxnorm String,
+                indication_code String,
+                guideline_score Float32,
+                formulary_tier UInt8,
+                safety_score Float32,
+                composite_score Float32,
+                
+                -- Snapshot tracking
+                snapshot_id String,
+                kb_version String,
+                calculated_at DateTime DEFAULT now(),
+                
+                INDEX idx_indication (indication_code) TYPE minmax GRANULARITY 4,
+                INDEX idx_snapshot (snapshot_id) TYPE bloom_filter GRANULARITY 1
+            ) ENGINE = ReplacingMergeTree(calculated_at)
+            PARTITION BY toYYYYMM(calculated_at)
+            ORDER BY (indication_code, drug_rxnorm, snapshot_id)
+        """)
+        
+        # Safety analytics table
+        self.client.execute("""
+            CREATE TABLE IF NOT EXISTS safety_analytics (
+                patient_id String,
+                drug_combination Array(String),
+                risk_score Float32,
+                interaction_count UInt32,
+                contraindication_flags Array(String),
+                
+                snapshot_id String,
+                evaluated_at DateTime DEFAULT now()
+            ) ENGINE = MergeTree()
+            PARTITION BY toYYYYMM(evaluated_at)
+            ORDER BY (patient_id, evaluated_at)
+        """)
+    
+    async def calculate_medication_scores(self, drugs: List[str], indication: str, snapshot_id: str) -> pd.DataFrame:
+        """Calculate composite scores for medications"""
+        
+        query = """
+        SELECT 
+            drug_rxnorm,
+            guideline_score * 0.4 + 
+            (10 - formulary_tier) * 0.3 + 
+            safety_score * 0.3 as composite_score,
+            guideline_score,
+            formulary_tier,
+            safety_score
+        FROM medication_scores
+        WHERE 
+            drug_rxnorm IN %(drugs)s 
+            AND indication_code = %(indication)s
+            AND snapshot_id = %(snapshot_id)s
+        ORDER BY composite_score DESC
+        """
+        
+        return self.client.query_dataframe(query, {
+            'drugs': drugs,
+            'indication': indication,
+            'snapshot_id': snapshot_id
+        })
+```
+
+### 2.2 Snapshot Manager
+
+```python
+# snapshot/manager.py
+import uuid
+import hashlib
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+import asyncio
+
+class SnapshotManager:
+    """Manages consistent snapshots across all data stores"""
+    
+    def __init__(self):
+        self.active_snapshots = {}
+        self.lock = asyncio.Lock()
+        
+    async def create_snapshot(self, service_id: str, context: Dict) -> 'Snapshot':
+        """Create a new snapshot for consistent reads"""
+        
+        async with self.lock:
+            snapshot = Snapshot(
+                id=str(uuid.uuid4()),
+                service_id=service_id,
+                created_at=datetime.now(),
+                ttl=timedelta(minutes=5),
+                context=context
+            )
+            
+            # Get current versions from all stores
+            snapshot.versions = await self._gather_versions()
+            
+            # Calculate checksum
+            snapshot.checksum = self._calculate_checksum(snapshot)
+            
+            self.active_snapshots[snapshot.id] = snapshot
+            return snapshot
+    
+    async def _gather_versions(self) -> Dict[str, str]:
+        """Gather current versions from all data stores"""
+        
+        versions = {}
+        
+        # PostgreSQL version
+        versions['postgres'] = await self._get_postgres_version()
+        
+        # Neo4j versions (both streams)
+        versions['neo4j_patient'] = await self._get_neo4j_version('patient_data')
+        versions['neo4j_semantic'] = await self._get_neo4j_version('semantic_mesh')
+        
+        # ClickHouse version
+        versions['clickhouse'] = await self._get_clickhouse_version()
+        
+        # GraphDB version
+        versions['graphdb'] = await self._get_graphdb_version()
+        
+        return versions
+    
+    def validate_snapshot(self, snapshot_id: str) -> bool:
+        """Validate if snapshot is still valid"""
+        
+        snapshot = self.active_snapshots.get(snapshot_id)
+        if not snapshot:
+            return False
+            
+        # Check TTL
+        if datetime.now() > snapshot.created_at + snapshot.ttl:
+            return False
+            
+        # Verify checksum
+        current_checksum = self._calculate_checksum(snapshot)
+        return current_checksum == snapshot.checksum
+
+class Snapshot:
+    def __init__(self, id, service_id, created_at, ttl, context):
+        self.id = id
+        self.service_id = service_id
+        self.created_at = created_at
+        self.ttl = ttl
+        self.context = context
+        self.versions = {}
+        self.checksum = ""
+```
+
+## Phase 3: Query Router Implementation
+
+### 3.1 Main Query Router
+
+```python
+# query-router/router.py
+from typing import Dict, Optional, Any, List
+import asyncio
+from enum import Enum
+
+class DataSource(Enum):
+    POSTGRES = "postgres"
+    ELASTICSEARCH = "elasticsearch"
+    NEO4J_PATIENT = "neo4j_patient"
+    NEO4J_SEMANTIC = "neo4j_semantic"
+    CLICKHOUSE = "clickhouse"
+    GRAPHDB = "graphdb"
+
+class QueryRouter:
+    """Routes queries to optimal data source based on pattern"""
+    
+    def __init__(self, config):
+        self.postgres = PostgresClient(config['postgres'])
+        self.elasticsearch = ElasticsearchClient(config['elasticsearch'])
+        self.neo4j = Neo4jDualStreamManager(config['neo4j'])
+        self.clickhouse = ClickHouseRuntimeManager(config['clickhouse'])
+        self.graphdb = GraphDBClient(config['graphdb'])
+        self.snapshot_manager = SnapshotManager()
+        
+    async def route_query(self, query_request: 'QueryRequest') -> 'QueryResponse':
+        """Route query to optimal data source"""
+        
+        # Create snapshot if needed
+        snapshot = None
+        if query_request.require_snapshot:
+            snapshot = await self.snapshot_manager.create_snapshot(
+                query_request.service_id,
+                query_request.context
+            )
+        
+        # Determine optimal source
+        source = self._determine_source(query_request)
+        
+        # Execute query
+        try:
+            if source == DataSource.POSTGRES:
+                result = await self._query_postgres(query_request)
+            elif source == DataSource.ELASTICSEARCH:
+                result = await self._query_elasticsearch(query_request)
+            elif source == DataSource.NEO4J_PATIENT:
+                result = await self._query_neo4j_patient(query_request, snapshot)
+            elif source == DataSource.NEO4J_SEMANTIC:
+                result = await self._query_neo4j_semantic(query_request, snapshot)
+            elif source == DataSource.CLICKHOUSE:
+                result = await self._query_clickhouse(query_request, snapshot)
+            elif source == DataSource.GRAPHDB:
+                result = await self._query_graphdb(query_request)
+            else:
+                raise ValueError(f"Unknown source: {source}")
+                
+            return QueryResponse(
+                data=result,
+                source=source.value,
+                snapshot_id=snapshot.id if snapshot else None,
+                latency=query_request.timer.elapsed()
+            )
+            
+        except Exception as e:
+            # Fallback logic
+            return await self._handle_fallback(query_request, e)
+    
+    def _determine_source(self, request: 'QueryRequest') -> DataSource:
+        """Determine optimal data source based on query pattern"""
+        
+        pattern = request.pattern
+        
+        # Terminology lookups
+        if pattern == "terminology_lookup":
+            return DataSource.POSTGRES
+            
+        # Text search
+        elif pattern == "terminology_search":
+            return DataSource.ELASTICSEARCH
+            
+        # Patient graph queries
+        elif pattern in ["patient_medications", "patient_conditions"]:
+            return DataSource.NEO4J_PATIENT
+            
+        # Drug interactions and contraindications
+        elif pattern in ["drug_interactions", "contraindications"]:
+            return DataSource.NEO4J_SEMANTIC
+            
+        # Analytics and scoring
+        elif pattern in ["medication_scoring", "safety_analytics"]:
+            return DataSource.CLICKHOUSE
+            
+        # Complex reasoning
+        elif pattern == "clinical_reasoning":
+            return DataSource.GRAPHDB
+            
+        else:
+            # Default to PostgreSQL
+            return DataSource.POSTGRES
+```
+
+### 3.2 Service-Specific Runtimes
+
+```python
+# services/medication_runtime.py
+class MedicationRuntime:
+    """Medication service runtime with all integrations"""
+    
+    def __init__(self, query_router, cache_prefetcher):
+        self.router = query_router
+        self.cache = cache_prefetcher
+        
+    async def calculate_medication_options(self, request: Dict) -> Dict:
+        """Complete medication calculation flow"""
+        
+        # Step 1: Create snapshot for consistency
+        snapshot = await self.router.snapshot_manager.create_snapshot(
+            service_id="medication",
+            context=request
+        )
+        
+        # Step 2: Get candidates from Neo4j semantic mesh
+        candidates_query = QueryRequest(
+            service_id="medication",
+            pattern="drug_alternatives",
+            params={
+                'indication': request['indication'],
+                'patient_id': request['patient_id']
+            },
+            require_snapshot=True
+        )
+        
+        candidates_response = await self.router.route_query(candidates_query)
+        candidates = candidates_response.data
+        
+        # Step 3: Score using ClickHouse
+        scores_query = QueryRequest(
+            service_id="medication",
+            pattern="medication_scoring",
+            params={
+                'drugs': [c['drug_rxnorm'] for c in candidates],
+                'indication': request['indication'],
+                'snapshot_id': snapshot.id
+            }
+        )
+        
+        scores_response = await self.router.route_query(scores_query)
+        
+        # Step 4: Check patient-specific safety
+        safety_query = QueryRequest(
+            service_id="medication",
+            pattern="patient_medications",
+            params={
+                'patient_id': request['patient_id']
+            }
+        )
+        
+        safety_response = await self.router.route_query(safety_query)
+        
+        # Combine results
+        return self._combine_results(candidates, scores_response.data, safety_response.data, snapshot)
+```
+
+## Phase 4: Docker Compose Configuration
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Neo4j with dual database support
+  neo4j:
+    image: neo4j:5.12-enterprise
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      NEO4J_dbms_memory_heap_max__size: 4G
+      NEO4J_dbms_memory_pagecache_size: 4G
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: yes
+    volumes:
+      - neo4j-data:/data
+      - ./neo4j/conf:/conf
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    
+  # GraphDB for OWL reasoning
+  graphdb:
+    image: ontotext/graphdb:10.1.0-ee
+    environment:
+      GDB_HEAP_SIZE: 4G
+      GDB_MIN_MEM: 2G
+      GDB_MAX_MEM: 4G
+    volumes:
+      - graphdb-data:/opt/graphdb/home
+    ports:
+      - "7200:7200"
+    
+  # ClickHouse for analytics
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    environment:
+      CLICKHOUSE_DB: kb7_analytics
+      CLICKHOUSE_USER: kb7
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+      
+  # Query Router
+  query-router:
+    build: ./query-router
+    environment:
+      POSTGRES_URL: postgresql://postgres:5432/kb7
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      NEO4J_URL: bolt://neo4j:7687
+      CLICKHOUSE_URL: http://clickhouse:8123
+      GRAPHDB_URL: http://graphdb:7200
+    depends_on:
+      - neo4j
+      - graphdb
+      - clickhouse
+    ports:
+      - "8080:8080"
+      
+  # Adapter services
+  graphdb-neo4j-adapter:
+    build: ./adapters/graphdb-neo4j
+    environment:
+      GRAPHDB_URL: http://graphdb:7200
+      NEO4J_URL: bolt://neo4j:7687
+    depends_on:
+      - graphdb
+      - neo4j
+      
+  patient-stream-handler:
+    build: ./streams/patient
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      NEO4J_URL: bolt://neo4j:7687
+    depends_on:
+      - neo4j
+      - kafka
+
+volumes:
+  neo4j-data:
+  graphdb-data:
+  clickhouse-data:
+```
+
+## Implementation Steps
+
+1. **Week 1: Neo4j Dual-Stream Setup**
+   ```bash
+   # Initialize Neo4j with dual databases
+   python neo4j-setup/dual_stream_manager.py --init
+   
+   # Test patient data stream
+   python streams/patient_data_handler.py --test
+   
+   # Test GraphDB adapter
+   python adapters/graphdb_neo4j_adapter.py --sync
+   ```
+
+2. **Week 2: ClickHouse & Snapshot Integration**
+   ```bash
+   # Setup ClickHouse tables
+   python clickhouse-runtime/manager.py --init
+   
+   # Test snapshot manager
+   python snapshot/manager.py --test
+   ```
+
+3. **Week 3: Query Router & Service Runtimes**
+   ```bash
+   # Deploy query router
+   docker-compose up query-router
+   
+   # Test medication runtime
+   python services/medication_runtime.py --test
+   ```
+
+This implementation provides:
+- **Dual-stream Neo4j** for patient data and semantic mesh
+- **GraphDB integration** for OWL reasoning results
+- **ClickHouse** for high-performance analytics
+- **Snapshot management** for consistency
+- **Query router** that intelligently routes to your existing PostgreSQL/Elasticsearch and new Neo4j/ClickHouse stores
+- **Service-specific runtimes** that leverage all components
+
+The architecture maintains separation between real-time patient data and knowledge graph data while enabling efficient querying across both streams.
+
+
+
+Looking at my implementation guide, I need to address gaps in these three critical components. While I included some elements, they aren't fully integrated. Let me provide the missing implementation details:
+
+## Missing Component 1: Complete Adapter Layer with CDC
+
+```python
+# adapters/adapter_microservice.py
+from aiokafka import AIOKafkaProducer
+import asyncio
+from typing import Dict, List
+import json
+
+class AdapterMicroservice:
+    """
+    Central adapter that synchronizes data from authoritative KBs 
+    to runtime stores and publishes CDC events
+    """
+    
+    def __init__(self, config):
+        self.kafka_producer = AIOKafkaProducer(
+            bootstrap_servers=config['kafka_brokers'],
+            value_serializer=lambda v: json.dumps(v).encode()
+        )
+        self.neo4j = Neo4jDualStreamManager(config)
+        self.clickhouse = ClickHouseRuntimeManager(config)
+        self.graphdb = GraphDBClient(config)
+        
+    async def sync_kb_changes(self, change_event: Dict):
+        """Process KB changes and sync to runtime stores"""
+        
+        kb_source = change_event['source']
+        change_type = change_event['type']
+        
+        # Sync to appropriate runtime store
+        if kb_source in ['KB-4', 'KB-5', 'KB-7']:
+            # Sync to Neo4j semantic mesh
+            await self._sync_to_neo4j(change_event)
+            
+        if kb_source in ['KB-3', 'KB-6']:
+            # Sync to ClickHouse for scoring
+            await self._sync_to_clickhouse(change_event)
+        
+        # Publish CDC event for cache warming
+        await self.kafka_producer.send(
+            'adapter.cdc.events',
+            value={
+                'event_type': 'kb_synchronized',
+                'kb_source': kb_source,
+                'change_type': change_type,
+                'affected_entities': change_event.get('entities', []),
+                'timestamp': asyncio.get_event_loop().time()
+            }
+        )
+    
+    async def _sync_to_neo4j(self, change_event: Dict):
+        """Sync KB changes to Neo4j semantic mesh"""
+        
+        async with self.neo4j.driver.session(database="semantic_mesh") as session:
+            if change_event['type'] == 'drug_interaction_added':
+                await session.run("""
+                    MERGE (d1:Drug {rxnorm: $drug1})
+                    MERGE (d2:Drug {rxnorm: $drug2})
+                    MERGE (d1)-[i:INTERACTS_WITH {
+                        severity: $severity,
+                        source: $kb_source,
+                        updated: datetime()
+                    }]-(d2)
+                """, change_event['data'])
+```
+
+## Missing Component 2: CDC Pipeline for Cache Warming
+
+```python
+# cache-warming/cdc_subscriber.py
+class CDCCacheWarmer:
+    """
+    Subscribes to CDC events from Adapter and warms caches
+    """
+    
+    def __init__(self, config):
+        self.kafka_consumer = AIOKafkaConsumer(
+            'adapter.cdc.events',
+            bootstrap_servers=config['kafka_brokers'],
+            group_id='cache-warmer-cdc'
+        )
+        self.cache_prefetcher = CachePrefetcher(config)
+        self.redis_l2 = RedisClient(config['redis_l2'])
+        
+    async def start_warming_from_cdc(self):
+        """Listen to CDC events and warm relevant caches"""
+        
+        await self.kafka_consumer.start()
+        
+        async for msg in self.kafka_consumer:
+            cdc_event = json.loads(msg.value)
+            
+            # Determine what to prefetch based on CDC event
+            if cdc_event['event_type'] == 'kb_synchronized':
+                await self._warm_from_kb_change(cdc_event)
+            elif cdc_event['event_type'] == 'entity_updated':
+                await self._warm_from_entity_change(cdc_event)
+    
+    async def _warm_from_kb_change(self, event: Dict):
+        """Warm caches based on KB changes"""
+        
+        kb_source = event['kb_source']
+        
+        if kb_source == 'KB-5':  # Drug interactions
+            # Query Neo4j for updated interactions
+            interactions = await self._query_updated_interactions(
+                event['affected_entities']
+            )
+            
+            # Cache in Redis L2
+            for interaction in interactions:
+                cache_key = f"ddi:{interaction['drug1']}:{interaction['drug2']}"
+                await self.redis_l2.setex(
+                    cache_key, 
+                    3600,  # 1 hour TTL
+                    json.dumps(interaction)
+                )
+```
+
+## Missing Component 3: Event Bus Integration
+
+```python
+# event-bus/orchestrator.py
+class EventBusOrchestrator:
+    """
+    Manages event flow between services, adapter, and cache warming
+    """
+    
+    def __init__(self, config):
+        self.kafka_producer = AIOKafkaProducer(
+            bootstrap_servers=config['kafka_brokers']
+        )
+        self.event_router = EventRouter()
+        
+    async def publish_service_event(self, service_id: str, event: Dict):
+        """Services publish events that trigger downstream actions"""
+        
+        # Enrich event with routing info
+        enriched_event = {
+            'source_service': service_id,
+            'event': event,
+            'timestamp': datetime.now().isoformat(),
+            'triggers': self._determine_triggers(service_id, event)
+        }
+        
+        # Publish to appropriate topics
+        if 'cache_warming' in enriched_event['triggers']:
+            await self.kafka_producer.send(
+                'cache.warming.requests',
+                value=enriched_event
+            )
+        
+        if 'data_sync' in enriched_event['triggers']:
+            await self.kafka_producer.send(
+                'adapter.sync.requests',
+                value=enriched_event
+            )
+    
+    def _determine_triggers(self, service_id: str, event: Dict) -> List[str]:
+        """Determine what downstream actions to trigger"""
+        
+        triggers = []
+        
+        if service_id == 'medication' and event['type'] == 'calculation_starting':
+            triggers.extend(['cache_warming', 'snapshot_creation'])
+            
+        elif service_id == 'safety' and event['type'] == 'validation_required':
+            triggers.append('cache_warming')
+            
+        elif service_id == 'admin' and event['type'] == 'kb_updated':
+            triggers.extend(['data_sync', 'cache_invalidation'])
+            
+        return triggers
+```
+
+## Complete Integration Flow
+
+```python
+# main_integration.py
+class CompleteIntegration:
+    """Ties everything together"""
+    
+    def __init__(self, config):
+        # Core components
+        self.adapter = AdapterMicroservice(config)
+        self.cdc_warmer = CDCCacheWarmer(config)
+        self.event_bus = EventBusOrchestrator(config)
+        self.query_router = QueryRouter(config)
+        
+        # Service runtimes
+        self.medication_runtime = MedicationRuntime(
+            self.query_router, 
+            self.cdc_warmer.cache_prefetcher
+        )
+        
+    async def start(self):
+        """Start all components"""
+        
+        # Start adapter listening for KB changes
+        asyncio.create_task(self.adapter.start_kb_listener())
+        
+        # Start CDC cache warming
+        asyncio.create_task(self.cdc_warmer.start_warming_from_cdc())
+        
+        # Start event bus
+        asyncio.create_task(self.event_bus.start())
+        
+    async def handle_medication_request(self, request: Dict):
+        """Example flow showing all components working together"""
+        
+        # 1. Service publishes event to event bus
+        await self.event_bus.publish_service_event(
+            'medication',
+            {
+                'type': 'calculation_starting',
+                'indication': request['indication'],
+                'patient_id': request['patient_id']
+            }
+        )
+        
+        # 2. Event bus triggers cache warming (async)
+        # CDC warmer prefetches data based on event
+        
+        # 3. Service runtime queries through router
+        # Data is already warm in cache from step 2
+        result = await self.medication_runtime.calculate_medication_options(request)
+        
+        return result
+```
+
+## Docker Compose Addition for Missing Services
+
+```yaml
+# docker-compose-complete.yml
+services:
+  adapter-microservice:
+    build: ./adapters
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      NEO4J_URL: bolt://neo4j:7687
+      CLICKHOUSE_URL: http://clickhouse:8123
+      GRAPHDB_URL: http://graphdb:7200
+    depends_on:
+      - kafka
+      - neo4j
+      - clickhouse
+      - graphdb
+      
+  cdc-cache-warmer:
+    build: ./cache-warming
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_L2: redis-l2:6379
+      NEO4J_URL: bolt://neo4j:7687
+    depends_on:
+      - kafka
+      - redis-l2
+      - adapter-microservice
+      
+  event-bus-orchestrator:
+    build: ./event-bus
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      - kafka
+```
+
+These missing components complete the architecture by ensuring:
+1. **Adapter Layer** properly synchronizes data and publishes CDC events
+2. **CDC Pipeline** subscribes to adapter events and warms caches
+3. **Event Bus** coordinates between services, triggering cache warming and data sync
+
+The flow is now: Service Event → Event Bus → Cache Warming (parallel with) → Service Query → Warm Cache Hit

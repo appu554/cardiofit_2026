@@ -1,0 +1,189 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for workflow engine
+  postgres:
+    image: postgres:15-alpine
+    container_name: workflow-engine-postgres
+    environment:
+      POSTGRES_DB: workflow_engine
+      POSTGRES_USER: workflow_user
+      POSTGRES_PASSWORD: workflow_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    networks:
+      - workflow-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workflow_user -d workflow_engine"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: workflow-engine-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - workflow-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redis_password
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_password", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    container_name: workflow-engine-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: true
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # HTTP collector
+      - "14250:14250"  # gRPC collector
+    networks:
+      - workflow-network
+    restart: unless-stopped
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: workflow-engine-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - workflow-network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: workflow-engine-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - workflow-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # Workflow Engine Service
+  workflow-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: workflow-engine-service
+    environment:
+      # Service configuration
+      SERVICE_NAME: workflow-engine-service
+      SERVICE_PORT: 8017
+      DEBUG: true
+      LOG_LEVEL: info
+      
+      # Database configuration
+      DATABASE_URL: postgres://workflow_user:workflow_password@postgres:5432/workflow_engine?sslmode=disable
+      DATABASE_MAX_CONNECTIONS: 10
+      DATABASE_MIN_CONNECTIONS: 5
+      
+      # External services (use host.docker.internal for local services)
+      AUTH_SERVICE_URL: http://host.docker.internal:8001
+      MEDICATION_SERVICE_URL: http://host.docker.internal:8004
+      SAFETY_GATEWAY_URL: http://host.docker.internal:8018
+      FLOW2_GO_URL: http://host.docker.internal:8080
+      FLOW2_RUST_URL: http://host.docker.internal:8090
+      CONTEXT_GATEWAY_URL: http://host.docker.internal:8016
+      
+      # Monitoring configuration
+      MONITORING_PROMETHEUS_ENABLED: true
+      MONITORING_JAEGER_ENDPOINT: http://jaeger:14268/api/traces
+      
+      # Performance targets
+      PERFORMANCE_CALCULATE_TARGET_MS: 175
+      PERFORMANCE_VALIDATE_TARGET_MS: 100
+      PERFORMANCE_COMMIT_TARGET_MS: 50
+      PERFORMANCE_TOTAL_TARGET_MS: 325
+      
+      # Security
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      
+      # Workflow configuration
+      WORKFLOW_EXECUTION_TIMEOUT: 3600s
+      WORKFLOW_TASK_ASSIGNMENT_TIMEOUT: 86400s
+      WORKFLOW_MOCK_MODE: false
+      WORKFLOW_ENABLE_WEBHOOKS: true
+      WORKFLOW_ENABLE_FHIR_MONITORING: true
+    ports:
+      - "8017:8017"
+    networks:
+      - workflow-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Development database management tool
+  adminer:
+    image: adminer:4.8.1
+    container_name: workflow-engine-adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8080:8080"
+    networks:
+      - workflow-network
+    restart: unless-stopped
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  workflow-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,316 @@
+# Prometheus configuration for Medication Service V2
+# Healthcare-grade metrics collection with HIPAA compliance
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'medication-service-cluster'
+    environment: 'production'
+    datacenter: 'hospital-dc1'
+    compliance: 'hipaa'
+
+# Rule files for alerting
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      path_prefix: /
+      scheme: http
+      timeout: 10s
+
+# Scrape configurations
+scrape_configs:
+  # Medication Service V2 main application
+  - job_name: 'medication-service-v2'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+        - 'host.docker.internal:9090'  # Adjust based on your setup
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'medication-service-v2:9090'
+    metric_relabel_configs:
+      # Add healthcare-specific labels
+      - target_label: healthcare_service
+        replacement: medication-management
+      - target_label: criticality
+        replacement: high
+      - target_label: data_classification
+        replacement: phi
+
+  # Health check endpoint  
+  - job_name: 'medication-service-v2-health'
+    scrape_interval: 30s
+    metrics_path: /health/metrics
+    static_configs:
+      - targets:
+        - 'host.docker.internal:8080'
+    metric_relabel_configs:
+      - target_label: check_type
+        replacement: health
+
+  # PostgreSQL database metrics
+  - job_name: 'postgresql'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'postgres-exporter:9187'
+    relabel_configs:
+      - target_label: database_type
+        replacement: postgresql
+      - target_label: healthcare_component
+        replacement: database
+
+  # Redis cache metrics
+  - job_name: 'redis'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'redis-exporter:9121'
+    relabel_configs:
+      - target_label: cache_type
+        replacement: redis
+      - target_label: healthcare_component
+        replacement: cache
+
+  # System metrics via Node Exporter
+  - job_name: 'node-exporter'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'node-exporter:9100'
+    relabel_configs:
+      - target_label: metrics_type
+        replacement: system
+      - target_label: healthcare_component
+        replacement: infrastructure
+
+  # Container metrics via cAdvisor
+  - job_name: 'cadvisor'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'cadvisor:8080'
+    relabel_configs:
+      - target_label: metrics_type
+        replacement: container
+      - target_label: healthcare_component
+        replacement: containers
+
+  # External dependencies monitoring
+  - job_name: 'clinical-engine'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+        - 'clinical-engine:8090'
+    relabel_configs:
+      - target_label: service_type
+        replacement: clinical-engine
+      - target_label: healthcare_component
+        replacement: clinical-processing
+      - target_label: language
+        replacement: rust
+    # Allow for service to be down without failing scrape
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'up'
+        target_label: dependency_status
+        replacement: external
+
+  - job_name: 'apollo-federation'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+        - 'apollo-federation:4000'
+    relabel_configs:
+      - target_label: service_type
+        replacement: apollo-federation
+      - target_label: healthcare_component
+        replacement: api-gateway
+      - target_label: language
+        replacement: nodejs
+
+  # Google Healthcare API monitoring (synthetic checks)
+  - job_name: 'google-healthcare-api'
+    scrape_interval: 60s
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - https://healthcare.googleapis.com/v1/projects/test-project
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service_type
+        replacement: google-healthcare-api
+      - target_label: healthcare_component
+        replacement: external-fhir
+
+  # Blackbox exporter for external service monitoring
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - http://medication-service-v2:8080/health/live
+        - http://clinical-engine:8090/health
+        - http://apollo-federation:4000/.well-known/apollo/server-health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: probe_type
+        replacement: health_check
+
+  # Monitoring stack self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets:
+        - 'localhost:9090'
+    relabel_configs:
+      - target_label: service_type
+        replacement: prometheus
+      - target_label: healthcare_component
+        replacement: monitoring
+
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets:
+        - 'alertmanager:9093'
+    relabel_configs:
+      - target_label: service_type
+        replacement: alertmanager
+      - target_label: healthcare_component
+        replacement: alerting
+
+  - job_name: 'grafana'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'grafana:3000'
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service_type
+        replacement: grafana
+      - target_label: healthcare_component
+        replacement: visualization
+
+  # OpenTelemetry Collector metrics
+  - job_name: 'otel-collector'
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+        - 'otel-collector:8889'
+    relabel_configs:
+      - target_label: service_type
+        replacement: otel-collector
+      - target_label: healthcare_component
+        replacement: telemetry
+
+# Remote write configuration for long-term storage (optional)
+# Uncomment and configure for production environments
+# remote_write:
+#   - url: "https://prometheus-remote-write.hospital.com/api/v1/write"
+#     basic_auth:
+#       username: "${REMOTE_WRITE_USERNAME}"
+#       password: "${REMOTE_WRITE_PASSWORD}"
+#     write_relabel_configs:
+#       - source_labels: [__name__]
+#         regex: 'medication_service_.*'
+#         action: keep
+
+# Storage configuration
+storage:
+  tsdb:
+    # Healthcare compliance: 30 days local retention
+    retention: "30d"
+    retention.size: "10GB"
+    # Enable compression for healthcare data efficiency
+    wal-compression: true
+
+# Healthcare-specific recording rules for efficient querying
+recording_rules:
+  - name: medication_service_aggregations
+    interval: 30s
+    rules:
+      # SLA calculations
+      - record: medication_service:availability:5m
+        expr: avg_over_time(up{job="medication-service-v2"}[5m])
+        
+      - record: medication_service:latency_p95:5m
+        expr: histogram_quantile(0.95, rate(medication_service_http_request_duration_seconds_bucket[5m]))
+        
+      - record: medication_service:error_rate:5m
+        expr: rate(medication_service_errors_total[5m]) / rate(medication_service_http_requests_total[5m])
+        
+      # Business metrics aggregations
+      - record: medication_service:proposals_per_minute:5m
+        expr: rate(medication_service_proposals_total[5m]) * 60
+        
+      - record: medication_service:clinical_processing_p95:5m
+        expr: histogram_quantile(0.95, rate(medication_service_clinical_calculation_duration_seconds_bucket[5m]))
+        
+      # Safety metrics
+      - record: medication_service:safety_violations:1h
+        expr: increase(medication_service_safety_violations_total[1h])
+        
+      - record: medication_service:dosage_accuracy:5m
+        expr: avg(medication_service_dosage_calculation_accuracy)
+        
+      # Data quality metrics
+      - record: medication_service:data_freshness:5m
+        expr: avg(medication_service_clinical_data_freshness_score)
+        
+  # Infrastructure aggregations
+  - name: infrastructure_aggregations
+    interval: 30s
+    rules:
+      - record: medication_service:cpu_usage:5m
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+        
+      - record: medication_service:memory_usage:5m
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+        
+      - record: medication_service:disk_usage:5m
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100
+
+# Federation configuration (if part of larger monitoring setup)
+# Uncomment for multi-cluster healthcare environments
+# federation:
+#   - job_name: 'federate'
+#     scrape_interval: 30s
+#     honor_labels: true
+#     metrics_path: '/federate'
+#     params:
+#       'match[]':
+#         - '{job=~"medication-service.*"}'
+#         - '{job=~"clinical.*"}'
+#         - '{job=~"healthcare.*"}'
+#     static_configs:
+#       - targets:
+#         - 'prometheus-central.hospital.com:9090'

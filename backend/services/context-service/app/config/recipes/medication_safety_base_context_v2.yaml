@@ -1,0 +1,264 @@
+# Clinical Context Recipe: Basic Medication Safety Context (PRODUCTION)
+# Implements production-ready medication safety data gathering
+# Based on ContextRecipeBook.txt specifications
+
+recipe_id: "medication_safety_base_context_v2"
+recipe_name: "Basic Medication Safety Data Gathering - Production"
+version: "2.0"
+clinical_scenario: "medication_ordering"
+workflow_category: "command_initiated"
+execution_pattern: "pessimistic"
+
+# Performance requirements (Production SLA)
+sla_ms: 150  # Context gathering budget
+cache_duration_seconds: 300
+real_data_only: true
+mock_data_detection: true
+mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Clinical recipe references
+clinical_recipe_refs:
+  - "medication-safety-base-v3.0"
+  - "medication-safety-interactions-v3.0"
+
+# Flow 2 Integration - Medication Service Clinical Recipes
+flow2_integration:
+  enabled: true
+  medication_service_url: "http://localhost:8009"
+  clinical_recipes_endpoint: "/api/flow2/medication-safety/clinical-recipes"
+  recipe_analysis_endpoint: "/api/flow2/medication-safety/execute-clinical-recipes"
+
+# Triggers
+triggers:
+  - domain: "medication"
+  - action: ["prescribe", "modify", "renew"]
+  - workflow_type: "command_initiated"
+
+# Required data points for medication safety
+required_data_points:
+  - name: "patient_demographics"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["age", "weight", "gender", "pregnancy_status", "lactation_status"]
+    required: true
+    max_age_hours: 1
+    quality_threshold: 0.95
+    timeout_ms: 80
+    retry_count: 2
+    fallback_sources: ["patient_service", "fhir_store"]
+    cache_strategy: "l1_l2_l3"
+
+  - name: "patient_allergies"
+    source_type: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    fields: ["substance", "type", "severity", "reactions", "verification_status", "last_updated"]
+    required: true
+    max_age_hours: 1
+    quality_threshold: 0.95
+    timeout_ms: 80
+    retry_count: 2
+    fallback_sources: ["patient_service", "fhir_store"]
+    cache_strategy: "l1_l2_l3"
+
+  - name: "current_medications"
+    source_type: "medication_service"
+    endpoint: "http://localhost:8009/api/medications/active"
+    fields: ["drug_code", "generic_name", "dose", "frequency", "start_date", "prescriber", "last_administered"]
+    required: true
+    max_age_hours: 0.083  # 5 minutes
+    quality_threshold: 0.90
+    timeout_ms: 50
+    retry_count: 2
+    fallback_sources: ["fhir_store"]
+    protocol: "http"
+
+  - name: "recent_orders"
+    source_type: "encounter_service"
+    endpoint: "http://localhost:8020/api/orders/recent"
+    fields: ["order_id", "order_type", "status", "medication_id", "timestamp"]
+    required: true
+    max_age_hours: 0  # Real-time
+    quality_threshold: 0.85
+    timeout_ms: 40
+    retry_count: 2
+    fallback_sources: []
+    protocol: "http"
+
+  - name: "cae_safety_check"
+    source_type: "cae_service"
+    endpoint: "localhost:8027"
+    fields: ["interactions", "contraindications", "dosing_recommendations", "safety_flags"]
+    required: true
+    max_age_hours: 0  # Real-time
+    quality_threshold: 0.95
+    timeout_ms: 100
+    retry_count: 1
+    fallback_sources: []
+    protocol: "grpc"
+    critical: true
+
+# Optional analytical data
+optional_data_points:
+  - name: "medication_adherence"
+    source_type: "elasticsearch"
+    endpoint: "http://localhost:9200"
+    index: "medication-history"
+    fields: ["adherence_rate", "missed_doses", "patterns"]
+    required: false
+    max_age_hours: 24
+    quality_threshold: 0.70
+    timeout_ms: 200
+    retry_count: 1
+    fallback_sources: []
+    fallback: "skip_analytics"
+
+# Conditional rules for additional data requirements
+conditional_rules:
+  - condition: "patient.age < 18"
+    description: "Pediatric patient requires additional dosing context"
+    additional_data_points:
+      - name: "pediatric_dosing_weight"
+        source_type: "patient_service"
+        endpoint: "http://localhost:8003/api/patients/pediatric-data"
+        fields: ["weight_kg", "bsa_m2", "age_months"]
+        required: true
+        max_age_hours: 24
+        quality_threshold: 0.95
+        timeout_ms: 50
+        retry_count: 2
+
+  - condition: "medication.category == 'controlled_substance'"
+    description: "Controlled substance requires DEA verification"
+    additional_data_points:
+      - name: "dea_verification"
+        source_type: "context_service_internal"
+        endpoint: "http://localhost:8016/api/internal/dea-verification"
+        fields: ["dea_number", "expiry_date", "schedule_authority"]
+        required: true
+        max_age_hours: 1
+        quality_threshold: 1.0
+        timeout_ms: 30
+        retry_count: 1
+
+# Quality constraints
+quality_constraints:
+  minimum_completeness: 0.85
+  maximum_age_hours: 24
+  required_fields: ["patient_demographics", "current_medications", "patient_allergies"]
+  accuracy_threshold: 0.90
+
+# Safety requirements (Production)
+safety_requirements:
+  minimum_completeness_score: 0.85
+  absolute_required_enforcement: "STRICT"
+  preferred_data_handling: "GRACEFUL_DEGRADE"
+  critical_missing_data_action: "FAIL_WORKFLOW"
+  stale_data_action: "FLAG_FOR_REVIEW"
+  mock_data_policy: "STRICTLY_PROHIBITED"
+
+# Production performance strategy
+performance_strategy:
+  parallelization: true  # Mandatory for sub-200ms
+  sla_budget_ms: 150
+  circuit_breaker: true
+  retry_policy: "exponential_backoff"
+
+# Cache strategy (Production L1/L2/L3)
+cache_strategy:
+  l1_ttl_seconds: 300    # 5 minutes
+  l2_ttl_seconds: 3600   # 1 hour
+  l3_ttl_seconds: 86400  # 24 hours
+  cache_key_pattern: "context:medication_safety:{patient_id}:{provider_id}"
+  invalidation_events:
+    - "clinical-data-changes.patient.medication.added"
+    - "clinical-data-changes.patient.medication.updated"
+    - "clinical-data-changes.patient.allergy.added"
+    - "clinical-data-changes.patient.demographics.updated"
+
+# Assembly rules (Production)
+assembly_rules:
+  parallel_execution: true
+  timeout_budget_ms: 120  # 120ms of the 150ms SLA budget
+  circuit_breaker_enabled: true
+  retry_failed_sources: true
+  validate_data_freshness: true
+  enforce_quality_constraints: true
+  fail_fast: false
+
+# QoS Tier
+qos_tier: "gold"
+max_latency: 150
+availability: "99.9%"
+
+# Governance metadata
+governance_metadata:
+  approved_by: "Clinical Governance Board"
+  approval_date: "2025-07-31T10:00:00Z"
+  version: "2.0"
+  effective_date: "2025-07-31T00:00:00Z"
+  expiry_date: "2026-07-31T00:00:00Z"
+  clinical_board_approval_id: "CGB-MED-SAFETY-BASE-20250731"
+  tags: ["approved", "production", "medication", "safety", "pessimistic"]
+  change_log:
+    - "v2.0: Production implementation with Apollo Federation and CAE integration"
+    - "v1.0: Initial approved version for medication safety workflows"
+
+# Data source endpoints (Production)
+data_sources:
+  - service: "apollo_federation"
+    endpoint: "http://localhost:4000/graphql"
+    timeout_ms: 80
+    health_check: "/health"
+    protocol: "graphql"
+
+  - service: "medication_service"
+    endpoint: "http://localhost:8009"
+    timeout_ms: 50
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "encounter_service"
+    endpoint: "http://localhost:8020"
+    timeout_ms: 40
+    health_check: "/health"
+    protocol: "http"
+
+  - service: "cae_service"
+    endpoint: "localhost:8027"
+    timeout_ms: 100
+    protocol: "grpc"
+
+  - service: "elasticsearch"
+    endpoint: "http://localhost:9200"
+    timeout_ms: 200
+    protocol: "http"
+
+  # Flow 2 Integration Data Point
+  - name: "clinical_recipe_requirements"
+    source_type: "medication_service"
+    endpoint: "http://localhost:8009"
+    fields: ["triggered_recipes", "required_patient_data", "required_clinical_data"]
+    required: false
+    max_age_hours: 0  # Always fresh for clinical decisions
+    quality_threshold: 0.8
+    timeout_ms: 100
+    retry_count: 1
+    fallback_sources: []
+    cache_strategy: "none"  # No caching for clinical recipe analysis
+    flow2_integration: true
+
+# Clinical decision support integration
+clinical_decision_support:
+  drug_interaction_checking: true
+  allergy_screening: true
+  dosing_validation: true
+  contraindication_checking: true
+  cae_integration: true
+
+# Audit and compliance
+audit_requirements:
+  log_all_data_access: true
+  track_data_sources: true
+  record_assembly_time: true
+  capture_safety_flags: true
+  maintain_data_lineage: true

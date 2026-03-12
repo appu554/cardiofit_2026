@@ -1,0 +1,178 @@
+# Stage 1: Validator & Enricher Service Configuration
+# Port 8041 - Dedicated Kafka Streams application for validation and enrichment
+
+server:
+  port: 8041
+  servlet:
+    context-path: /api/v1
+
+spring:
+  application:
+    name: stage1-validator-enricher
+  
+  # Kafka Streams Configuration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:pkc-619z3.us-east1.gcp.confluent.cloud:9092}
+    security:
+      protocol: SASL_SSL
+    sasl:
+      mechanism: PLAIN
+      jaas:
+        config: org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_API_KEY:LGJ3AQ2L6VRPW4S2}" password="${KAFKA_API_SECRET:your-secret}";
+    
+    streams:
+      application-id: stage1-validator-enricher
+      default-key-serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+      default-value-serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+      bootstrap-servers: ${spring.kafka.bootstrap-servers}
+      security:
+        protocol: ${spring.kafka.security.protocol}
+      properties:
+        sasl.mechanism: ${spring.kafka.sasl.mechanism}
+        sasl.jaas.config: ${spring.kafka.sasl.jaas.config}
+        # Performance tuning
+        num.stream.threads: 2
+        commit.interval.ms: 1000
+        cache.max.bytes.buffering: 10485760  # 10MB
+        default.deserialization.exception.handler: org.apache.kafka.streams.errors.LogAndContinueExceptionHandler
+        default.production.exception.handler: org.apache.kafka.streams.errors.DefaultProductionExceptionHandler
+        # Monitoring
+        metrics.recording.level: INFO
+        metrics.sample.window.ms: 30000
+  
+  # Redis Configuration for Patient Context Caching
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+          max-wait: -1ms
+
+# Management and Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,kafka-streams
+  endpoint:
+    health:
+      show-details: always
+    kafka-streams:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    com.clinicalsynthesis.validator: DEBUG
+    org.apache.kafka.streams: INFO
+    org.springframework.kafka: INFO
+    org.springframework.data.redis: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%logger{36}] - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [%logger{36}] - %msg%n"
+  file:
+    name: logs/stage1-validator-enricher.log
+
+# Application-specific Configuration
+app:
+  # Patient Service Configuration
+  patient-service:
+    url: ${PATIENT_SERVICE_URL:http://patient-service:8003/api/v1/patient}
+    timeout: 5000ms
+    retry-attempts: 3
+  
+  # Validation Configuration
+  validation:
+    enabled: true
+    rules-version: "1.0.0"
+    cache-validation-rules: true
+    emergency-bypass: true  # Always process critical medical data
+  
+  # Patient Context Configuration
+  patient-context:
+    cache-ttl-seconds: 300  # 5 minutes
+    fallback-to-service: true
+    timeout-ms: 3000
+  
+  # Kafka Topics Configuration
+  topics:
+    input: raw-device-data.v1
+    output: validated-device-data.v1
+    dlq: failed-validation.v1
+  
+  # Circuit Breaker Configuration
+  circuit-breaker:
+    enabled: true
+    failure-threshold: 10
+    recovery-timeout-seconds: 60
+    medical-data-bypass: true
+
+# Health Check Configuration
+health:
+  kafka-streams:
+    enabled: true
+  redis:
+    enabled: true
+  patient-service:
+    enabled: true
+
+---
+# Development Profile
+spring:
+  config:
+    activate:
+      on-profile: dev
+  
+  kafka:
+    bootstrap-servers: localhost:9092
+    security:
+      protocol: PLAINTEXT
+    streams:
+      properties:
+        num.stream.threads: 1
+  
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+logging:
+  level:
+    com.clinicalsynthesis.validator: DEBUG
+    org.apache.kafka.streams: DEBUG
+
+app:
+  patient-service:
+    url: http://localhost:8003/api/v1/patient
+
+---
+# Production Profile
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+logging:
+  level:
+    com.clinicalsynthesis.validator: INFO
+    org.apache.kafka.streams: WARN
+    org.springframework.kafka: WARN
+
+app:
+  validation:
+    emergency-bypass: true
+  circuit-breaker:
+    enabled: true
+    failure-threshold: 5
+    recovery-timeout-seconds: 30

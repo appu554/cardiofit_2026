@@ -1,0 +1,312 @@
+import { gql } from '@apollo/client';
+
+// Type Definitions
+export interface RiskScore {
+  patientId: string;
+  riskCategory: string;
+  riskScore: number;
+  timestamp: string;
+  factors: string[];
+}
+
+export interface Patient {
+  id: string;
+  name: string;
+  age: number;
+  gender: string;
+  department: string;
+  admissionDate: string;
+  currentRiskScore?: number;
+  riskCategory?: string;
+  alerts?: number;
+}
+
+export interface Alert {
+  id: string;
+  patientId: string;
+  patientName: string;
+  severity: string;
+  message: string;
+  timestamp: string;
+  acknowledged: boolean;
+}
+
+export interface HospitalMetrics {
+  totalPatients: number;
+  highRiskPatients: number;
+  mediumRiskPatients: number;
+  lowRiskPatients: number;
+  activeAlerts: number;
+  averageRiskScore: number;
+  bedOccupancyRate: number;
+  departments: DepartmentMetrics[];
+}
+
+export interface DepartmentMetrics {
+  name: string;
+  patientCount: number;
+  highRiskCount: number;
+  alertCount: number;
+  averageRiskScore: number;
+}
+
+export interface RiskTrend {
+  timestamp: string;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface PatientDetail {
+  id: string;
+  name: string;
+  age: number;
+  gender: string;
+  department: string;
+  admissionDate: string;
+  diagnosis: string;
+  currentRiskScore: number;
+  riskCategory: string;
+  riskHistory: RiskScore[];
+  vitals: VitalSign[];
+  alerts: Alert[];
+  medications: Medication[];
+}
+
+export interface VitalSign {
+  type: string;
+  value: number;
+  unit: string;
+  timestamp: string;
+  status: string;
+}
+
+export interface Medication {
+  name: string;
+  dosage: string;
+  frequency: string;
+  startDate: string;
+}
+
+export interface BundleCompliance {
+  bundleType: string;
+  totalCases: number;
+  compliantCases: number;
+  complianceRate: number;
+  avgTimeToCompletion: number;
+  nationalBenchmark: number;
+}
+
+export interface OutcomeMetric {
+  metricType: string;
+  currentValue: number;
+  previousPeriodValue: number;
+  nationalBenchmark: number;
+  trend: string;
+}
+
+export interface DepartmentQualityComparison {
+  departmentId: string;
+  departmentName: string;
+  bundleCompliance: number;
+  mortalityRate: number;
+  readmissionRate: number;
+  hcahpsScore: number;
+}
+
+// GraphQL Queries
+
+export const GET_HOSPITAL_METRICS = gql`
+  query GetHospitalMetrics {
+    hospitalMetrics {
+      totalPatients
+      highRiskPatients
+      mediumRiskPatients
+      lowRiskPatients
+      activeAlerts
+      averageRiskScore
+      bedOccupancyRate
+      departments {
+        name
+        patientCount
+        highRiskCount
+        alertCount
+        averageRiskScore
+      }
+    }
+  }
+`;
+
+export const GET_RISK_TRENDS = gql`
+  query GetRiskTrends($hours: Int!) {
+    riskTrends(hours: $hours) {
+      timestamp
+      high
+      medium
+      low
+    }
+  }
+`;
+
+export const GET_DEPARTMENT_PATIENTS = gql`
+  query GetDepartmentPatients($department: String!) {
+    patients(department: $department) {
+      id
+      name
+      age
+      gender
+      department
+      admissionDate
+      currentRiskScore
+      riskCategory
+      alerts
+    }
+  }
+`;
+
+export const GET_ACTIVE_ALERTS = gql`
+  query GetActiveAlerts($limit: Int) {
+    alerts(acknowledged: false, limit: $limit) {
+      id
+      patientId
+      patientName
+      severity
+      message
+      timestamp
+      acknowledged
+    }
+  }
+`;
+
+export const GET_PATIENT_DETAIL = gql`
+  query GetPatientDetail($patientId: ID!) {
+    patient(id: $patientId) {
+      id
+      name
+      age
+      gender
+      department
+      admissionDate
+      diagnosis
+      currentRiskScore
+      riskCategory
+      riskHistory {
+        patientId
+        riskCategory
+        riskScore
+        timestamp
+        factors
+      }
+      vitals {
+        type
+        value
+        unit
+        timestamp
+        status
+      }
+      alerts {
+        id
+        patientId
+        patientName
+        severity
+        message
+        timestamp
+        acknowledged
+      }
+      medications {
+        name
+        dosage
+        frequency
+        startDate
+      }
+    }
+  }
+`;
+
+export const GET_RISK_SCORES = gql`
+  query GetRiskScores($patientId: ID, $limit: Int) {
+    riskScores(patientId: $patientId, limit: $limit) {
+      patientId
+      riskCategory
+      riskScore
+      timestamp
+      factors
+    }
+  }
+`;
+
+// Subscriptions
+
+export const RISK_SCORE_UPDATED = gql`
+  subscription OnRiskScoreUpdated($patientId: ID) {
+    riskScoreUpdated(patientId: $patientId) {
+      patientId
+      riskCategory
+      riskScore
+      timestamp
+      factors
+    }
+  }
+`;
+
+export const ALERT_CREATED = gql`
+  subscription OnAlertCreated {
+    alertCreated {
+      id
+      patientId
+      patientName
+      severity
+      message
+      timestamp
+      acknowledged
+    }
+  }
+`;
+
+// Mutations
+
+export const ACKNOWLEDGE_ALERT = gql`
+  mutation AcknowledgeAlert($alertId: ID!) {
+    acknowledgeAlert(alertId: $alertId) {
+      id
+      acknowledged
+    }
+  }
+`;
+
+export const UPDATE_PATIENT_DEPARTMENT = gql`
+  mutation UpdatePatientDepartment($patientId: ID!, $department: String!) {
+    updatePatientDepartment(patientId: $patientId, department: $department) {
+      id
+      department
+    }
+  }
+`;
+
+export const GET_QUALITY_METRICS = gql`
+  query GetQualityMetrics($departmentId: String, $period: String!) {
+    bundleCompliance(departmentId: $departmentId, period: $period) {
+      bundleType
+      totalCases
+      compliantCases
+      complianceRate
+      avgTimeToCompletion
+      nationalBenchmark
+    }
+    outcomeMetrics(departmentId: $departmentId) {
+      metricType
+      currentValue
+      previousPeriodValue
+      nationalBenchmark
+      trend
+    }
+    departmentQualityComparison {
+      departmentId
+      departmentName
+      bundleCompliance
+      mortalityRate
+      readmissionRate
+      hcahpsScore
+    }
+  }
+`;

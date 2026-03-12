@@ -1,0 +1,97 @@
+# KB-19 Protocol Orchestrator - Docker Compose Configuration
+# Decision Synthesis Engine for coordinating clinical protocols
+
+services:
+  # KB-19 Protocol Orchestrator API
+  kb-19-protocol-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-19-protocol-orchestrator
+    ports:
+      - "8099:8099"
+    environment:
+      PORT: 8099
+      ENVIRONMENT: development
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      # Database Configuration
+      DATABASE_URL: postgres://kb19_user:kb19_password@kb19-postgres:5432/kb19_orchestrator?sslmode=disable
+      # Redis Configuration
+      REDIS_URL: redis://kb19-redis:6379/0
+      # External KB Services
+      KB3_URL: ${KB3_URL:-http://host.docker.internal:8083}
+      KB5_URL: ${KB5_URL:-http://host.docker.internal:8095}
+      KB7_URL: ${KB7_URL:-http://host.docker.internal:8092}
+      KB10_URL: ${KB10_URL:-http://host.docker.internal:8100}
+      KB11_URL: ${KB11_URL:-http://host.docker.internal:8111}
+      KB18_URL: ${KB18_URL:-http://host.docker.internal:8018}
+      # V3 Architecture: Med-Advisor = Judge (calculates risks), KB-19 = Clerk (makes decisions)
+      MEDICATION_ADVISOR_URL: ${MEDICATION_ADVISOR_URL:-http://host.docker.internal:8101}
+      # Metrics
+      METRICS_ENABLED: "true"
+    depends_on:
+      kb19-postgres:
+        condition: service_healthy
+      kb19-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - kb19-network
+    restart: unless-stopped
+
+  # PostgreSQL for KB-19
+  kb19-postgres:
+    image: postgres:15-alpine
+    container_name: kb19-postgres
+    ports:
+      - "5449:5432"
+    environment:
+      POSTGRES_USER: kb19_user
+      POSTGRES_PASSWORD: kb19_password
+      POSTGRES_DB: kb19_orchestrator
+    volumes:
+      - kb19-postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb19_user -d kb19_orchestrator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb19-network
+    restart: unless-stopped
+
+  # Redis Cache for KB-19
+  kb19-redis:
+    image: redis:7-alpine
+    container_name: kb19-redis
+    ports:
+      - "6399:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - kb19-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb19-network
+    restart: unless-stopped
+
+volumes:
+  kb19-postgres-data:
+    name: kb19-postgres-data
+  kb19-redis-data:
+    name: kb19-redis-data
+
+networks:
+  kb19-network:
+    name: kb19-network
+    driver: bridge

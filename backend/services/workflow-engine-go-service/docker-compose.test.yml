@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for testing
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: workflow_engine_test
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d workflow_engine_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Workflow Engine Go Service
+  workflow-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://test_user:test_password@postgres:5432/workflow_engine_test?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+      - SERVICE_PORT=8080
+      - DEBUG=true
+      - LOG_LEVEL=debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Mock services for testing
+  mock-safety-gateway:
+    image: nginx:alpine
+    ports:
+      - "8090:80"
+    volumes:
+      - ./test/mock-responses:/usr/share/nginx/html
+
+  mock-medication-service:
+    image: nginx:alpine
+    ports:
+      - "8004:80"
+    volumes:
+      - ./test/mock-responses:/usr/share/nginx/html
+
+  # Test runner container
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    depends_on:
+      workflow-engine:
+        condition: service_healthy
+    volumes:
+      - ./test/results:/test/results
+    environment:
+      - WORKFLOW_ENGINE_URL=http://workflow-engine:8080
+      - POSTGRES_URL=postgres://test_user:test_password@postgres:5432/workflow_engine_test
+      - REDIS_URL=redis://redis:6379
+
+volumes:
+  postgres_test_data:

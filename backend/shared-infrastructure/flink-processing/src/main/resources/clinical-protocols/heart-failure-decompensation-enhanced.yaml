@@ -1,0 +1,893 @@
+# ============================================================
+# HEART FAILURE DECOMPENSATION PROTOCOL - ENHANCED CDS-COMPLIANT VERSION
+# ============================================================
+
+protocol_id: "HF-ACUTE-DECOMP-001"
+name: "Acute Heart Failure Decompensation Management"
+category: "CARDIOVASCULAR"
+specialty: "CARDIOLOGY"
+version: "2.0"
+last_updated: "2025-10-21"
+
+# ============================================================
+# TRIGGER CRITERIA (Enhanced with AND/OR logic)
+# ============================================================
+trigger_criteria:
+  match_logic: "ANY_OF"  # Any of these clinical presentations triggers protocol
+
+  conditions:
+    - condition_id: "HF-TRIG-001"
+      description: "Volume overload clinical signs"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "dyspnea_at_rest"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+        - parameter: "orthopnea"
+          operator: "=="
+          threshold: true
+          source: "clinical_assessment"
+
+        - parameter: "peripheral_edema_grade"
+          operator: ">="
+          threshold: 2
+          source: "clinical_assessment"
+
+        - parameter: "jugular_venous_distension"
+          operator: ">"
+          threshold: 8
+          unit: "cm at 45 degrees"
+          source: "clinical_assessment"
+
+    - condition_id: "HF-TRIG-002"
+      description: "Pulmonary congestion evidence"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "pulmonary_crackles"
+          operator: "=="
+          threshold: "bibasilar or worse"
+          source: "clinical_assessment"
+
+        - parameter: "spo2"
+          operator: "<"
+          threshold: 92
+          unit: "%"
+          source: "vital_signs"
+
+        - parameter: "chest_xray_pulmonary_edema"
+          operator: "=="
+          threshold: true
+          source: "imaging"
+
+    - condition_id: "HF-TRIG-003"
+      description: "Elevated cardiac biomarkers"
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "bnp"
+          operator: ">"
+          threshold: 500
+          unit: "pg/mL"
+          source: "lab_results"
+
+        - parameter: "nt_probnp"
+          operator: ">"
+          threshold: 900
+          unit: "pg/mL"
+          source: "lab_results"
+
+    - condition_id: "HF-TRIG-004"
+      description: "Hemodynamic compromise (cardiogenic shock)"
+      match_logic: "ALL_OF"
+      conditions:
+        - parameter: "systolic_bp"
+          operator: "<"
+          threshold: 90
+          unit: "mmHg"
+          source: "vital_signs"
+
+        - match_logic: "ANY_OF"
+          conditions:
+            - parameter: "cool_clammy_extremities"
+              operator: "=="
+              threshold: true
+            - parameter: "altered_mental_status"
+              operator: "=="
+              threshold: true
+            - parameter: "urine_output"
+              operator: "<"
+              threshold: 0.5
+              unit: "mL/kg/hr"
+
+# ============================================================
+# CONFIDENCE SCORING
+# ============================================================
+confidence_scoring:
+  base_confidence: 0.82
+
+  modifiers:
+    - modifier_id: "HF-CONF-001"
+      description: "Cardiogenic shock significantly increases urgency"
+      condition:
+        match_logic: "ALL_OF"
+        conditions:
+          - parameter: "systolic_bp"
+            operator: "<"
+            threshold: 90
+            unit: "mmHg"
+          - parameter: "poor_perfusion"
+            operator: "=="
+            threshold: true
+      adjustment: 0.15
+
+    - modifier_id: "HF-CONF-002"
+      description: "Very high BNP/NT-proBNP confirms severe HF"
+      condition:
+        match_logic: "ANY_OF"
+        conditions:
+          - parameter: "bnp"
+            operator: ">"
+            threshold: 1000
+            unit: "pg/mL"
+          - parameter: "nt_probnp"
+            operator: ">"
+            threshold: 3600
+            unit: "pg/mL"
+      adjustment: 0.10
+
+    - modifier_id: "HF-CONF-003"
+      description: "Severe hypoxemia indicates pulmonary edema"
+      condition:
+        parameter: "spo2"
+        operator: "<"
+        threshold: 90
+        unit: "%"
+      adjustment: 0.08
+
+    - modifier_id: "HF-CONF-004"
+      description: "Known HF with reduced EF"
+      condition:
+        parameter: "ejection_fraction"
+        operator: "<"
+        threshold: 40
+      adjustment: 0.05
+
+  activation_threshold: 0.70
+
+# ============================================================
+# EVIDENCE SOURCE
+# ============================================================
+evidence_source:
+  primary_guideline: "ACC/AHA/HFSA 2022 Guideline for Management of Heart Failure"
+  guideline_version: "2022"
+  publication_date: "2022-04"
+  evidence_level: "STRONG"
+
+  key_citations:
+    - citation_id: "HF-CITE-001"
+      authors: "Heidenreich PA, et al."
+      title: "2022 AHA/ACC/HFSA Guideline for the Management of Heart Failure"
+      journal: "Circulation"
+      year: 2022
+      doi: "10.1161/CIR.0000000000001063"
+
+  last_review_date: "2022-04-01"
+  next_review_date: "2025-04-01"
+
+# ============================================================
+# ACTIONS
+# ============================================================
+actions:
+  # ==========================================================
+  # DIAGNOSTIC ACTIONS
+  # ==========================================================
+  - action_id: "HF-ACT-001"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 1
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "BNP or NT-proBNP"
+      test_code: "LOINC-42637-9"
+      sample_type: "plasma"
+      urgency: "STAT"
+      instructions: "Confirm acute HF diagnosis; BNP >500 or NT-proBNP >900-3600 (age-dependent) suggests acute HF"
+
+  - action_id: "HF-ACT-002"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 2
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "Chest X-ray (portable)"
+      urgency: "STAT"
+      instructions: "Assess pulmonary edema, cardiomegaly, pleural effusions"
+
+  - action_id: "HF-ACT-003"
+    type: "DIAGNOSTIC"
+    priority: "CRITICAL"
+    sequence_number: 3
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    diagnostic:
+      test_name: "12-lead ECG and high-sensitivity troponin"
+      urgency: "STAT"
+      instructions: "Identify arrhythmias, ischemia, or acute MI as precipitants"
+
+  - action_id: "HF-ACT-004"
+    type: "DIAGNOSTIC"
+    priority: "HIGH"
+    sequence_number: 4
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    diagnostic:
+      test_name: "CBC, CMP, magnesium, LFTs, TSH"
+      urgency: "STAT"
+      instructions: "Assess renal function, electrolytes, anemia, liver congestion, thyroid dysfunction"
+
+  # ==========================================================
+  # OXYGEN THERAPY
+  # ==========================================================
+  - action_id: "HF-ACT-005"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 5
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 5
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "STANDARD_OXYGEN"
+          description: "Supplemental oxygen for hypoxemia"
+
+          condition:
+            parameter: "spo2"
+            operator: "<"
+            threshold: 92
+            unit: "%"
+
+          primary_medication:
+            name: "Supplemental Oxygen"
+            dose: "2-4"
+            dose_unit: "L/min"
+            route: "Inhalation (nasal cannula)"
+            frequency: "Continuous"
+            administration_instructions: "Start 2-4 L/min nasal cannula; titrate to SpO2 >92%; escalate to non-rebreather if needed"
+
+  # ==========================================================
+  # IV LOOP DIURETICS
+  # ==========================================================
+  - action_id: "HF-ACT-006"
+    type: "MEDICATION"
+    priority: "CRITICAL"
+    sequence_number: 6
+
+    timing:
+      window: "IMMEDIATE"
+      max_delay_minutes: 30
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "DIURETIC_NAIVE"
+          description: "Initial dose for diuretic-naive patient"
+
+          condition:
+            parameter: "home_diuretic_use"
+            operator: "=="
+            threshold: false
+
+          primary_medication:
+            name: "Furosemide"
+            dose: "20-40"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "Bolus every 6-12 hours"
+            administration_instructions: "Start 20-40 mg IV bolus; reassess after 2-4 hours; adjust based on response"
+
+        - criteria_id: "ON_HOME_DIURETIC"
+          description: "Match or exceed home oral dose IV"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "home_diuretic_use"
+                operator: "=="
+                threshold: true
+              - parameter: "home_furosemide_dose_mg"
+                operator: ">"
+                threshold: 0
+
+          primary_medication:
+            name: "Furosemide"
+            dose: "Equal to or 2x home oral daily dose"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "Every 6-12 hours"
+            administration_instructions: "Give home daily dose IV (e.g., 40 mg PO daily → 40-80 mg IV); IV bioavailability ~100% vs 50% oral"
+
+        - criteria_id: "SEVERE_VOLUME_OVERLOAD"
+          description: "High-dose or continuous infusion for diuretic resistance"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "egfr"
+                operator: "<"
+                threshold: 30
+                unit: "mL/min/1.73m2"
+              - parameter: "inadequate_diuresis"
+                operator: "=="
+                threshold: true
+              - parameter: "severe_volume_overload"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Furosemide Continuous Infusion"
+            dose: "5-20"
+            dose_unit: "mg/hour"
+            route: "IV continuous infusion"
+            frequency: "Continuous"
+            duration: "24-72 hours, then transition to bolus dosing"
+            administration_instructions: "Furosemide 5-20 mg/hr continuous infusion; titrate to achieve net negative 1-2 L/day; may add thiazide (metolazone 2.5-5 mg PO daily) if resistant"
+
+        - criteria_id: "SULFA_ALLERGY"
+          description: "Ethacrynic acid for sulfa allergy"
+
+          condition:
+            parameter: "sulfa_allergy"
+            operator: "=="
+            threshold: true
+
+          primary_medication:
+            name: "Ethacrynic Acid"
+            dose: "50-100"
+            dose_unit: "mg"
+            route: "IV"
+            frequency: "Every 8-12 hours"
+            indication: "Non-sulfa loop diuretic for sulfa allergy"
+
+  # ==========================================================
+  # VASODILATOR THERAPY (IF HYPERTENSIVE)
+  # ==========================================================
+  - action_id: "HF-ACT-007"
+    type: "MEDICATION"
+    priority: "HIGH"
+    sequence_number: 7
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 60
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "HYPERTENSIVE_HF"
+          description: "Nitroglycerin infusion for SBP >110 mmHg"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "systolic_bp"
+                operator: ">"
+                threshold: 110
+                unit: "mmHg"
+              - parameter: "pulmonary_congestion"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "Nitroglycerin IV"
+            dose: "10-20"
+            dose_unit: "mcg/min"
+            route: "IV continuous infusion"
+            frequency: "Continuous"
+            administration_instructions: "Start 10-20 mcg/min; increase by 10-20 mcg/min q5-10min to target BP reduction (reduce SBP by 10-15%, not below 90 mmHg); use non-PVC tubing"
+
+        - criteria_id: "HYPOTENSIVE_HF"
+          description: "HOLD vasodilators for hypotension"
+
+          condition:
+            parameter: "systolic_bp"
+            operator: "<="
+            threshold: 110
+            unit: "mmHg"
+
+          primary_medication:
+            name: "HOLD VASODILATORS"
+            indication: "Hypotension - focus on diuretics alone"
+            administration_instructions: "Avoid vasodilators if SBP <110; use diuretics; consider inotropes if low output state"
+
+  # ==========================================================
+  # GUIDELINE-DIRECTED MEDICAL THERAPY (GDMT)
+  # ==========================================================
+  - action_id: "HF-ACT-008"
+    type: "MEDICATION"
+    priority: "MEDIUM"
+    sequence_number: 8
+
+    timing:
+      window: "ROUTINE"
+
+    medication_selection:
+      selection_strategy: "RULE_BASED"
+
+      selection_criteria:
+        - criteria_id: "CONTINUE_GDMT_STABLE"
+          description: "Continue home ACE-I/ARB and beta-blocker if stable"
+
+          condition:
+            match_logic: "ALL_OF"
+            conditions:
+              - parameter: "on_home_acei_arb"
+                operator: "=="
+                threshold: true
+              - parameter: "systolic_bp"
+                operator: ">="
+                threshold: 90
+                unit: "mmHg"
+
+          primary_medication:
+            name: "Continue Home ACE-I/ARB and Beta-Blocker"
+            administration_instructions: "Continue home doses unless contraindicated (hypotension, shock); hold if SBP <90"
+
+        - criteria_id: "HOLD_GDMT_SHOCK"
+          description: "HOLD ACE-I/ARB and beta-blocker in cardiogenic shock"
+
+          condition:
+            match_logic: "ANY_OF"
+            conditions:
+              - parameter: "systolic_bp"
+                operator: "<"
+                threshold: 90
+                unit: "mmHg"
+              - parameter: "cardiogenic_shock"
+                operator: "=="
+                threshold: true
+
+          primary_medication:
+            name: "HOLD GDMT TEMPORARILY"
+            administration_instructions: "Hold ACE-I/ARB and beta-blocker during shock; restart before discharge once stabilized"
+            indication: "Cardiogenic shock - temporary hold"
+
+  # ==========================================================
+  # NON-INVASIVE POSITIVE PRESSURE VENTILATION
+  # ==========================================================
+  - action_id: "HF-ACT-009"
+    type: "PROCEDURE"
+    priority: "CRITICAL"
+    sequence_number: 9
+
+    timing:
+      window: "URGENT"
+      max_delay_minutes: 30
+
+    procedure:
+      procedure_name: "Non-Invasive Positive Pressure Ventilation (BiPAP or CPAP)"
+      indication: "Severe dyspnea, hypoxemia (SpO2 <90% despite oxygen), pulmonary edema"
+      urgency: "URGENT"
+      consent_required: false
+      estimated_duration_minutes: 120
+      location: "ICU or monitored unit"
+
+  # ==========================================================
+  # MONITORING
+  # ==========================================================
+  - action_id: "HF-ACT-010"
+    type: "CLINICAL_ASSESSMENT"
+    priority: "HIGH"
+    sequence_number: 10
+
+    timing:
+      window: "IMMEDIATE"
+
+    clinical_assessment:
+      assessment_type: "Continuous telemetry and hemodynamic monitoring"
+      frequency: "Continuous telemetry; vitals q15-30min initially; daily weights; strict I/O"
+      specific_parameters:
+        - "Blood pressure and heart rate"
+        - "SpO2 (target >92%)"
+        - "Urine output (goal >1-2 L/day net negative)"
+        - "Volume status (JVD, edema, lung exam)"
+
+# ============================================================
+# TIME CONSTRAINTS
+# ============================================================
+time_constraints:
+  - constraint_id: "HF-TIME-001"
+    bundle_name: "Hour-1 Initial Management"
+    description: "Critical interventions within 1 hour"
+    offset_minutes: 60
+    critical: true
+
+    required_actions:
+      - action_id: "HF-ACT-001"
+        description: "BNP/NT-proBNP obtained"
+      - action_id: "HF-ACT-002"
+        description: "Chest X-ray completed"
+      - action_id: "HF-ACT-006"
+        description: "IV diuretics administered"
+
+    compliance_monitoring:
+      track_completion: true
+      alert_at_minutes: 30
+      critical_alert_at_minutes: 0
+      missed_deadline_message: "Hour-1 acute HF bundle not completed"
+
+# ============================================================
+# CONTRAINDICATIONS
+# ============================================================
+contraindications:
+  - contraindication_id: "HF-CONTRA-001"
+    condition_description: "Severe volume depletion or hypotension for diuretics"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "systolic_bp"
+          operator: "<"
+          threshold: 90
+          unit: "mmHg"
+        - parameter: "volume_depletion"
+          operator: "=="
+          threshold: true
+
+    severity: "MODERATE"
+    affected_actions:
+      - "HF-ACT-006"
+
+    alternative_action:
+      action_id: "HF-ALT-001"
+      type: "MEDICATION"
+      medication:
+        name: "CAUTIOUS diuretics OR inotropes first"
+        dose: "20-40 mg furosemide cautiously OR dobutamine 2.5-5 mcg/kg/min"
+      rationale: "Hold or reduce diuretic until hemodynamically stable; consider inotropes if low output"
+
+  - contraindication_id: "HF-CONTRA-002"
+    condition_description: "Recent PDE-5 inhibitor use (sildenafil, tadalafil) for nitrates"
+
+    trigger_condition:
+      parameter: "pde5_inhibitor_within_48h"
+      operator: "=="
+      threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "HF-ACT-007"
+
+    alternative_action:
+      action_id: "HF-ALT-002"
+      type: "MEDICATION"
+      medication:
+        name: "HOLD NITRATES"
+      rationale: "ABSOLUTE contraindication - severe hypotension risk; wait 24h (sildenafil) or 48h (tadalafil)"
+
+  - contraindication_id: "HF-CONTRA-003"
+    condition_description: "Severe aortic stenosis or HOCM for vasodilators"
+
+    trigger_condition:
+      match_logic: "ANY_OF"
+      conditions:
+        - parameter: "severe_aortic_stenosis"
+          operator: "=="
+          threshold: true
+        - parameter: "hypertrophic_cardiomyopathy_obstructive"
+          operator: "=="
+          threshold: true
+
+    severity: "CRITICAL"
+    affected_actions:
+      - "HF-ACT-007"
+
+    alternative_action:
+      action_id: "HF-ALT-003"
+      type: "MEDICATION"
+      medication:
+        name: "Diuretics ONLY"
+      rationale: "Vasodilators can worsen hemodynamics in AS/HOCM; use diuretics cautiously"
+
+# ============================================================
+# MONITORING REQUIREMENTS
+# ============================================================
+monitoring_requirements:
+  - monitoring_id: "HF-MON-001"
+    parameter: "vital_signs"
+
+    target_range:
+      min: null
+      max: null
+      unit: "SBP 90-140, HR 60-100, RR <20, SpO2 >92%"
+
+    frequency: "q15-30min initially, then hourly when stable"
+    duration_hours: 24
+
+  - monitoring_id: "HF-MON-002"
+    parameter: "daily_weights"
+
+    target_range:
+      min: null
+      max: null
+      unit: "kg"
+
+    frequency: "daily (same time, same scale)"
+
+    alert_condition:
+      parameter: "daily_weight_change"
+      operator: ">"
+      threshold: 0
+      unit: "kg"
+
+  - monitoring_id: "HF-MON-003"
+    parameter: "intake_output"
+
+    target_range:
+      min: null
+      max: null
+      unit: "mL"
+
+    frequency: "every shift (q8h), calculate net balance"
+
+    alert_condition:
+      parameter: "net_fluid_balance"
+      operator: ">"
+      threshold: 0
+      unit: "mL"
+
+  - monitoring_id: "HF-MON-004"
+    parameter: "basic_metabolic_panel"
+
+    target_range:
+      min: null
+      max: null
+      unit: "Cr stable, K >4, Na >135"
+
+    frequency: "daily while on IV diuretics"
+
+# ============================================================
+# SPECIAL POPULATIONS
+# ============================================================
+special_populations:
+  - population_id: "ELDERLY"
+    description: "Patients ≥65 years"
+
+    inclusion_criteria:
+      parameter: "age"
+      operator: ">="
+      threshold: 65
+      unit: "years"
+
+    modifications:
+      - action_id: "HF-ACT-006"
+        modification_type: "CAUTION"
+        rationale: "Higher risk of over-diuresis, AKI, electrolyte abnormalities"
+
+        new_parameters:
+          monitoring: "More frequent renal function and electrolyte monitoring; lower diuretic doses; careful volume assessment"
+
+  - population_id: "PREGNANCY"
+    description: "Pregnant patients with heart failure"
+
+    inclusion_criteria:
+      parameter: "pregnancy_status"
+      operator: "=="
+      threshold: true
+
+    modifications:
+      - action_id: "HF-ACT-008"
+        modification_type: "CONTRAINDICATION"
+        rationale: "ACE-I/ARB contraindicated in pregnancy (teratogenic)"
+
+        contraindications:
+          - "ACE inhibitors (fetal renal dysgenesis, oligohydramnios)"
+          - "ARBs (same teratogenic risks as ACE-I)"
+
+        alternative_medication:
+          name: "Hydralazine + Nitrates"
+          dose: "Hydralazine 25-50 mg PO q6h + Isosorbide dinitrate 20-40 mg PO TID"
+          route: "PO"
+          pregnancy_category: "C (Hydralazine), C (Isosorbide)"
+
+  - population_id: "RENAL_IMPAIRMENT"
+    description: "Chronic kidney disease (eGFR <30 mL/min/1.73m2)"
+
+    inclusion_criteria:
+      parameter: "egfr"
+      operator: "<"
+      threshold: 30
+      unit: "mL/min/1.73m2"
+
+    modifications:
+      - action_id: "HF-ACT-006"
+        modification_type: "DOSE_ADJUSTMENT"
+        rationale: "Higher diuretic doses or continuous infusion needed for adequate diuresis"
+
+        new_parameters:
+          dose: "80-200 mg furosemide bolus OR 5-20 mg/hr continuous infusion"
+          monitoring: "Nephrology consultation if eGFR <15; may need ultrafiltration or dialysis"
+
+  - population_id: "HFPEF"
+    description: "Heart failure with preserved ejection fraction (EF ≥50%)"
+
+    inclusion_criteria:
+      parameter: "ejection_fraction"
+      operator: ">="
+      threshold: 50
+
+    modifications:
+      - action_id: "HF-ACT-006"
+        modification_type: "CAUTION"
+        rationale: "HFpEF patients are preload-dependent; aggressive diuresis can reduce cardiac output"
+
+        new_parameters:
+          dose: "Lower diuretic doses (20-40 mg furosemide)"
+          monitoring: "Careful volume assessment; avoid over-diuresis; maintain adequate preload"
+
+# ============================================================
+# ESCALATION RULES
+# ============================================================
+escalation_rules:
+  - rule_id: "HF-ESC-001"
+    description: "ICU transfer for cardiogenic shock or refractory symptoms"
+
+    escalation_trigger:
+      match_logic: "ANY_OF"
+      conditions:
+        - match_logic: "ALL_OF"
+          conditions:
+            - parameter: "systolic_bp"
+              operator: "<"
+              threshold: 90
+              unit: "mmHg"
+            - parameter: "poor_perfusion"
+              operator: "=="
+              threshold: true
+
+        - parameter: "refractory_hypoxemia"
+          operator: "=="
+          threshold: true
+
+        - parameter: "niv_required"
+          operator: "=="
+          threshold: true
+
+    recommendation:
+      escalation_level: "ICU_TRANSFER"
+      urgency: "IMMEDIATE"
+      rationale: "Cardiogenic shock or respiratory failure requires ICU-level care"
+
+      required_interventions:
+        - "ICU bed and advanced monitoring"
+        - "Consider inotropes (dobutamine, milrinone)"
+        - "Possible mechanical circulatory support"
+
+      specialist_consultation:
+        - specialty: "CRITICAL_CARE"
+          urgency: "STAT"
+          specific_question: "ICU admission for cardiogenic shock and organ support"
+
+  - rule_id: "HF-ESC-002"
+    description: "Cardiology consultation for all acute HF admissions"
+
+    escalation_trigger:
+      parameter: "acute_hf_admission"
+      operator: "=="
+      threshold: true
+
+    recommendation:
+      escalation_level: "CONSULT"
+      urgency: "URGENT"
+      rationale: "Cardiology input for GDMT optimization and advanced therapies"
+
+      specialist_consultation:
+        - specialty: "CARDIOLOGY"
+          urgency: "URGENT"
+          specific_question: "Optimize GDMT, assess for advanced HF therapies (LVAD, transplant)"
+
+# ============================================================
+# DE-ESCALATION CRITERIA
+# ============================================================
+de_escalation_criteria:
+  - criteria_id: "HF-DE-ESC-001"
+    description: "Transition from IV to oral diuretics"
+
+    conditions:
+      - parameter: "clinical_euvolemia"
+        operator: "=="
+        threshold: true
+
+      - parameter: "stable_weight"
+        operator: "=="
+        threshold: true
+
+      - parameter: "stable_renal_function"
+        operator: "=="
+        threshold: true
+
+    recommendation:
+      action: "Transition to oral furosemide (typically 2x IV dose PO); continue daily weights; titrate based on volume status"
+      rationale: "Clinical euvolemia achieved; ready for oral diuretic maintenance"
+
+# ============================================================
+# OUTCOME TRACKING
+# ============================================================
+outcome_tracking:
+  primary_outcomes:
+    - outcome_id: "HF-OUT-001"
+      metric: "clinical_improvement"
+      target: "Improved dyspnea, RR <20, SpO2 >92% within 6-12 hours"
+      benchmark_source: "ACC/AHA 2022"
+
+    - outcome_id: "HF-OUT-002"
+      metric: "net_negative_fluid_balance"
+      target: "1-2 L/day net negative within 24-48 hours"
+      benchmark_source: "ACC/AHA 2022"
+
+  process_measures:
+    - measure_id: "HF-PROC-001"
+      description: "Time to IV diuretic administration"
+      target: "<30 minutes from diagnosis"
+
+  balancing_measures:
+    - measure_id: "HF-BAL-001"
+      description: "Worsening renal function"
+      target: "<30% develop Cr increase >0.3 mg/dL"
+
+# ============================================================
+# METADATA
+# ============================================================
+metadata:
+  protocol_type: "CLINICAL_PATHWAY"
+  implementation_complexity: "HIGH"
+  requires_icu_level_care: false
+  estimated_implementation_time_minutes: 30
+  review_cycle_months: 12
+
+  tags:
+    - "cardiovascular-emergency"
+    - "volume-management"
+    - "gdmt-optimization"
+
+  related_protocols:
+    - protocol_id: "CARDIOGENIC-SHOCK-001"
+      relationship: "COMPLEMENTS"
+
+  approval_history:
+    - approver: "Clinical Governance Committee"
+      approval_date: "2025-10-21"
+      version: "2.0"
+
+  change_log:
+    - version: "2.0"
+      date: "2025-10-21"
+      changes:
+        - "Enhanced to CDS-compliant format"
+        - "Added confidence scoring and medication_selection"
+        - "Added special populations (elderly, pregnancy, renal, HFpEF)"
+        - "Added escalation rules and time constraints"
+
+# ============================================================
+# END OF HEART FAILURE DECOMPENSATION PROTOCOL
+# ============================================================

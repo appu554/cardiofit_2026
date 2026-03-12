@@ -1,0 +1,723 @@
+package api
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"kb-7-terminology/internal/cache"
+	"kb-7-terminology/internal/config"
+	"kb-7-terminology/internal/metrics"
+	"kb-7-terminology/internal/models"
+	"kb-7-terminology/internal/services"
+
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sirupsen/logrus"
+)
+
+// EnhancedServer extends the basic server with advanced terminology operations
+type EnhancedServer struct {
+	config                *config.Config
+	terminologyService    *services.TerminologyService
+	expansionService      *services.ExpansionService
+	validationService     *services.ValidationService
+	snomedService         *services.SNOMEDService
+	enhancedSearchService *services.EnhancedSearchService
+	conceptMapService     *services.ConceptMapService
+	cacheManager          *cache.CacheManager
+	logger                *logrus.Logger
+	metrics               *metrics.Collector
+}
+
+// NewEnhancedServer creates a new enhanced terminology server
+func NewEnhancedServer(
+	config *config.Config,
+	terminologyService *services.TerminologyService,
+	expansionService *services.ExpansionService,
+	validationService *services.ValidationService,
+	snomedService *services.SNOMEDService,
+	enhancedSearchService *services.EnhancedSearchService,
+	conceptMapService *services.ConceptMapService,
+	cacheManager *cache.CacheManager,
+	logger *logrus.Logger,
+	metrics *metrics.Collector,
+) *EnhancedServer {
+	return &EnhancedServer{
+		config:                config,
+		terminologyService:    terminologyService,
+		expansionService:      expansionService,
+		validationService:     validationService,
+		snomedService:         snomedService,
+		enhancedSearchService: enhancedSearchService,
+		conceptMapService:     conceptMapService,
+		cacheManager:          cacheManager,
+		logger:             logger,
+		metrics:            metrics,
+	}
+}
+
+// SetupRoutes configures all API routes including FHIR-compliant endpoints
+func (s *EnhancedServer) SetupRoutes() *gin.Engine {
+	if s.config.Environment == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	router := gin.New()
+
+	// Add middleware
+	router.Use(s.loggingMiddleware())
+	router.Use(s.metricsMiddleware())
+	router.Use(s.cacheMiddleware())
+	router.Use(gin.Recovery())
+
+	if s.config.Environment != "production" {
+		router.Use(s.corsMiddleware())
+	}
+
+	// Health and monitoring endpoints
+	router.GET(s.config.HealthEndpoint, s.healthCheck)
+	router.GET("/health/detailed", s.detailedHealthCheck)
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	router.GET("/version", s.versionInfo)
+	router.GET("/statistics", s.getCacheStatistics)
+
+	// Apollo Federation endpoint
+	router.Any("/api/federation", s.FederationHandler)
+
+	// API v1 routes
+	v1 := router.Group("/v1")
+	{
+		// Terminology systems
+		v1.GET("/systems", s.listTerminologySystems)
+		v1.GET("/systems/:identifier", s.getTerminologySystem)
+
+		// Enhanced concept operations
+		v1.GET("/concepts", s.searchConcepts)
+		v1.POST("/concepts/search", s.advancedSearch)
+		v1.POST("/concepts/search/enhanced", s.enhancedSearch)
+		v1.GET("/concepts/suggest", s.suggestConcepts)
+		v1.GET("/concepts/:uuid/similar", s.findSimilarConcepts)
+		v1.GET("/concepts/:system/:code", s.lookupConcept)
+		v1.POST("/concepts/validate", s.validateCode)
+		v1.GET("/concepts/:system/:code/hierarchy", s.getConceptHierarchy)
+		v1.GET("/concepts/:system/:code/relationships", s.getConceptRelationships)
+		v1.GET("/search/statistics", s.getSearchStatistics)
+
+		// Drug-specific endpoints
+		v1.GET("/drugs/:rxnorm", s.getDrugInfo)
+		v1.GET("/drugs/search", s.searchDrugs)
+		v1.GET("/drugs/:rxnorm/interactions", s.getDrugInteractions)
+
+		// Lab test endpoints
+		v1.GET("/labs/:loinc", s.getLabInfo)
+		v1.GET("/labs/:loinc/references", s.getLabReferences)
+
+		// Value sets - FHIR-compliant
+		v1.GET("/valuesets", s.listValueSets)
+		v1.GET("/valuesets/:url", s.getValueSet)
+		v1.POST("/valuesets/:url/expand", s.expandValueSet)
+		v1.POST("/valuesets/validate-code", s.validateValueSetCode)
+
+		// Enhanced concept mappings
+		v1.GET("/mappings", s.getConceptMappings)
+		v1.POST("/mappings", s.createConceptMapping)
+		v1.GET("/mappings/:source_system/:source_code/:target_system", s.getSpecificMapping)
+		v1.POST("/mappings/translate", s.translateConcept)
+		v1.POST("/mappings/translate/batch", s.batchTranslateConcepts)
+		v1.GET("/mappings/statistics", s.getMappingStatistics)
+		v1.GET("/mappings/semantic/:source_system/:source_code/:target_system", s.findSemanticMappings)
+
+		// Batch operations
+		v1.POST("/batch/lookup", s.batchLookupConcepts)
+		v1.POST("/batch/validate", s.batchValidateCodes)
+		v1.POST("/batch/translate", s.batchTranslateConcepts)
+
+		// SNOMED CT specific operations
+		snomed := v1.Group("/snomed")
+		{
+			snomed.POST("/expressions/validate", s.validateSNOMEDExpression)
+			snomed.POST("/expressions/normalize", s.normalizeSNOMEDExpression)
+			snomed.POST("/expressions/classify", s.classifySNOMEDExpression)
+			snomed.GET("/expressions/:id", s.getSNOMEDExpression)
+		}
+
+		// Administration endpoints
+		admin := v1.Group("/admin")
+		{
+			admin.POST("/cache/warm", s.warmCache)
+			admin.POST("/cache/invalidate", s.invalidateCache)
+			admin.GET("/cache/stats", s.getCacheStatistics)
+			admin.POST("/etl/trigger", s.triggerETL)
+			admin.GET("/etl/status", s.getETLStatus)
+		}
+	}
+
+	// FHIR R4 terminology operations
+	fhir := router.Group("/fhir")
+	{
+		fhir.GET("/CodeSystem", s.listCodeSystems)
+		fhir.GET("/CodeSystem/:id", s.getCodeSystem)
+		fhir.POST("/CodeSystem/$lookup", s.fhirLookup)
+		fhir.POST("/CodeSystem/$validate-code", s.fhirValidateCode)
+
+		fhir.GET("/ValueSet", s.listFHIRValueSets)
+		fhir.GET("/ValueSet/:id", s.getFHIRValueSet)
+		fhir.POST("/ValueSet/$expand", s.fhirExpandValueSet)
+		fhir.POST("/ValueSet/$validate-code", s.fhirValidateValueSetCode)
+
+		fhir.GET("/ConceptMap", s.listConceptMaps)
+		fhir.GET("/ConceptMap/:id", s.getConceptMap)
+		fhir.POST("/ConceptMap/$translate", s.fhirTranslate)
+	}
+
+	return router
+}
+
+// Enhanced concept search with advanced filtering
+func (s *EnhancedServer) advancedSearch(c *gin.Context) {
+	var query models.EnhancedSearchQuery
+	if err := c.ShouldBindJSON(&query); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid search query", "details": err.Error()})
+		return
+	}
+
+	result, err := s.terminologyService.AdvancedSearch(query)
+	if err != nil {
+		s.logger.WithError(err).Error("Advanced search failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Search failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// Get concept hierarchy (parents and children)
+func (s *EnhancedServer) getConceptHierarchy(c *gin.Context) {
+	system := c.Param("system")
+	code := c.Param("code")
+	maxDepth := parseInt(c.Query("max_depth"), 5)
+
+	hierarchy, err := s.terminologyService.GetConceptHierarchy(system, code, maxDepth)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logrus.Fields{
+			"system": system,
+			"code":   code,
+		}).Error("Failed to get concept hierarchy")
+		
+		c.JSON(http.StatusNotFound, gin.H{"error": "Concept hierarchy not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, hierarchy)
+}
+
+// Get concept relationships
+func (s *EnhancedServer) getConceptRelationships(c *gin.Context) {
+	system := c.Param("system")
+	code := c.Param("code")
+	includeInverse := c.Query("include_inverse") == "true"
+
+	relationships, err := s.terminologyService.GetConceptRelationships(system, code, includeInverse)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logrus.Fields{
+			"system": system,
+			"code":   code,
+		}).Error("Failed to get concept relationships")
+		
+		c.JSON(http.StatusNotFound, gin.H{"error": "Concept relationships not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, relationships)
+}
+
+// Drug-specific operations
+func (s *EnhancedServer) getDrugInfo(c *gin.Context) {
+	rxnorm := c.Param("rxnorm")
+	
+	drugInfo, err := s.terminologyService.GetDrugInfo(rxnorm)
+	if err != nil {
+		s.logger.WithError(err).WithField("rxnorm", rxnorm).Error("Failed to get drug info")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Drug not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, drugInfo)
+}
+
+func (s *EnhancedServer) searchDrugs(c *gin.Context) {
+	query := c.Query("q")
+	ingredient := c.Query("ingredient")
+	doseForm := c.Query("dose_form")
+	limit := parseInt(c.Query("limit"), 20)
+
+	results, err := s.terminologyService.SearchDrugs(query, ingredient, doseForm, limit)
+	if err != nil {
+		s.logger.WithError(err).Error("Drug search failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Drug search failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, results)
+}
+
+// Lab test operations
+func (s *EnhancedServer) getLabInfo(c *gin.Context) {
+	loinc := c.Param("loinc")
+	
+	labInfo, err := s.terminologyService.GetLabInfo(loinc)
+	if err != nil {
+		s.logger.WithError(err).WithField("loinc", loinc).Error("Failed to get lab info")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Lab test not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, labInfo)
+}
+
+func (s *EnhancedServer) getLabReferences(c *gin.Context) {
+	loinc := c.Param("loinc")
+	age := parseInt(c.Query("age"), 0)
+	sex := c.Query("sex")
+
+	references, err := s.terminologyService.GetLabReferences(loinc, age, sex)
+	if err != nil {
+		s.logger.WithError(err).WithField("loinc", loinc).Error("Failed to get lab references")
+		c.JSON(http.StatusNotFound, gin.H{"error": "Lab references not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, references)
+}
+
+// Enhanced value set operations
+func (s *EnhancedServer) expandValueSet(c *gin.Context) {
+	url := c.Param("url")
+	
+	var params models.ExpansionParameters
+	if err := c.ShouldBindJSON(&params); err != nil {
+		// Fall back to query parameters
+		params = models.ExpansionParameters{
+			URL:                 url,
+			ValueSetVersion:     c.Query("valueSetVersion"),
+			Filter:              c.Query("filter"),
+			Offset:              parseInt(c.Query("offset"), 0),
+			Count:               parseInt(c.Query("count"), 1000),
+			IncludeDesignations: c.Query("includeDesignations") == "true",
+			ActiveOnly:          c.Query("activeOnly") != "false", // Default true
+		}
+	}
+	params.URL = url
+
+	expansion, err := s.expansionService.ExpandValueSet(params)
+	if err != nil {
+		s.logger.WithError(err).WithField("url", url).Error("Failed to expand value set")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Value set expansion failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, expansion)
+}
+
+func (s *EnhancedServer) validateValueSetCode(c *gin.Context) {
+	var request struct {
+		URL     string `json:"url" binding:"required"`
+		Code    string `json:"code" binding:"required"`
+		System  string `json:"system" binding:"required"`
+		Display string `json:"display,omitempty"`
+		Version string `json:"version,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
+		return
+	}
+
+	result, err := s.validationService.ValidateValueSetCode(
+		request.URL, request.Code, request.System, request.Display, request.Version)
+	if err != nil {
+		s.logger.WithError(err).Error("Value set code validation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Validation failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// Concept mapping and translation
+func (s *EnhancedServer) translateConcept(c *gin.Context) {
+	var request struct {
+		Code         string `json:"code" binding:"required"`
+		System       string `json:"system" binding:"required"`
+		TargetSystem string `json:"target_system" binding:"required"`
+		Version      string `json:"version,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
+		return
+	}
+
+	mappings, err := s.terminologyService.TranslateConcept(
+		request.Code, request.System, request.TargetSystem, request.Version)
+	if err != nil {
+		s.logger.WithError(err).Error("Concept translation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Translation failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"mappings": mappings})
+}
+
+// Batch operations with parallel processing
+func (s *EnhancedServer) batchLookupConcepts(c *gin.Context) {
+	var request models.BatchLookupRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid batch request", "details": err.Error()})
+		return
+	}
+
+	// Validate batch size
+	if len(request.Requests) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Batch size exceeds maximum of 1000"})
+		return
+	}
+
+	start := time.Now()
+	response, err := s.terminologyService.BatchLookup(request)
+	if err != nil {
+		s.logger.WithError(err).Error("Batch lookup failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Batch lookup failed"})
+		return
+	}
+
+	response.Metadata.ProcessingTimeMs = float64(time.Since(start).Nanoseconds()) / 1e6
+	c.JSON(http.StatusOK, response)
+}
+
+func (s *EnhancedServer) batchValidateCodes(c *gin.Context) {
+	var request models.BatchValidationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid batch request", "details": err.Error()})
+		return
+	}
+
+	if len(request.Requests) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Batch size exceeds maximum of 500"})
+		return
+	}
+
+	start := time.Now()
+	response, err := s.validationService.BatchValidate(request)
+	if err != nil {
+		s.logger.WithError(err).Error("Batch validation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Batch validation failed"})
+		return
+	}
+
+	response.Metadata.ProcessingTimeMs = float64(time.Since(start).Nanoseconds()) / 1e6
+	c.JSON(http.StatusOK, response)
+}
+
+// SNOMED CT operations
+func (s *EnhancedServer) validateSNOMEDExpression(c *gin.Context) {
+	var request struct {
+		Expression string `json:"expression" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
+		return
+	}
+
+	result, err := s.snomedService.ValidateExpression(request.Expression)
+	if err != nil {
+		s.logger.WithError(err).Error("SNOMED expression validation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Validation failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *EnhancedServer) normalizeSNOMEDExpression(c *gin.Context) {
+	var request struct {
+		Expression string `json:"expression" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
+		return
+	}
+
+	result, err := s.snomedService.NormalizeExpression(request.Expression)
+	if err != nil {
+		s.logger.WithError(err).Error("SNOMED expression normalization failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Normalization failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// Administrative operations
+func (s *EnhancedServer) warmCache(c *gin.Context) {
+	var request struct {
+		Patterns []string `json:"patterns"`
+		Force    bool     `json:"force,omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
+		return
+	}
+
+	err := s.terminologyService.WarmCache(request.Patterns, request.Force)
+	if err != nil {
+		s.logger.WithError(err).Error("Cache warming failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cache warming failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Cache warming initiated"})
+}
+
+func (s *EnhancedServer) invalidateCache(c *gin.Context) {
+	var request struct {
+		Pattern cache.InvalidationPattern `json:"pattern"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request", "details": err.Error()})
+		return
+	}
+
+	err := s.cacheManager.Invalidate(request.Pattern)
+	if err != nil {
+		s.logger.WithError(err).Error("Cache invalidation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Cache invalidation failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Cache invalidation completed"})
+}
+
+func (s *EnhancedServer) getCacheStatistics(c *gin.Context) {
+	stats := s.cacheManager.GetStatistics()
+	c.JSON(http.StatusOK, stats)
+}
+
+func (s *EnhancedServer) detailedHealthCheck(c *gin.Context) {
+	health := s.terminologyService.DetailedHealthCheck()
+	
+	if health.Status == "healthy" {
+		c.JSON(http.StatusOK, health)
+	} else {
+		c.JSON(http.StatusServiceUnavailable, health)
+	}
+}
+
+// Enhanced search operations
+func (s *EnhancedServer) enhancedSearch(c *gin.Context) {
+	var request struct {
+		SearchTerm string                        `json:"search_term"`
+		Options    services.SearchOptions       `json:"options"`
+	}
+	
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+		return
+	}
+	
+	if request.SearchTerm == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "search_term is required"})
+		return
+	}
+	
+	response, err := s.enhancedSearchService.Search(request.SearchTerm, request.Options)
+	if err != nil {
+		s.logger.WithError(err).WithField("search_term", request.SearchTerm).Error("Enhanced search failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Search failed"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, response)
+}
+
+func (s *EnhancedServer) suggestConcepts(c *gin.Context) {
+	partialTerm := c.Query("q")
+	if partialTerm == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Query parameter 'q' is required"})
+		return
+	}
+	
+	options := services.SearchOptions{
+		TargetSystem:    c.Query("system"),
+		MaxResults:      parseInt(c.Query("limit"), 20),
+		IncludeInactive: c.Query("include_inactive") == "true",
+	}
+	
+	response, err := s.enhancedSearchService.SuggestConcepts(partialTerm, options)
+	if err != nil {
+		s.logger.WithError(err).WithField("partial_term", partialTerm).Error("Concept suggestion failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Suggestion failed"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, response)
+}
+
+func (s *EnhancedServer) findSimilarConcepts(c *gin.Context) {
+	conceptUUID := c.Param("uuid")
+	limit := parseInt(c.Query("limit"), 10)
+	
+	response, err := s.enhancedSearchService.FindSimilarConcepts(conceptUUID, limit)
+	if err != nil {
+		s.logger.WithError(err).WithField("concept_uuid", conceptUUID).Error("Similar concepts search failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Similar concepts search failed"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, response)
+}
+
+func (s *EnhancedServer) getSearchStatistics(c *gin.Context) {
+	days := parseInt(c.Query("days"), 7)
+	
+	stats, err := s.enhancedSearchService.SearchStatistics(days)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to get search statistics")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get search statistics"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, stats)
+}
+
+// Enhanced concept mapping operations
+func (s *EnhancedServer) createConceptMapping(c *gin.Context) {
+	var mapping services.ConceptMapping
+	
+	if err := c.ShouldBindJSON(&mapping); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid mapping data"})
+		return
+	}
+	
+	if err := s.conceptMapService.CreateConceptMapping(mapping); err != nil {
+		s.logger.WithError(err).Error("Failed to create concept mapping")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create mapping"})
+		return
+	}
+	
+	c.JSON(http.StatusCreated, gin.H{"message": "Mapping created successfully", "id": mapping.ID})
+}
+
+func (s *EnhancedServer) batchTranslateConcepts(c *gin.Context) {
+	var request services.BatchTranslationRequest
+	
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid batch translation request"})
+		return
+	}
+	
+	if len(request.Concepts) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No concepts provided for translation"})
+		return
+	}
+	
+	if len(request.Concepts) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Maximum 1000 concepts per batch"})
+		return
+	}
+	
+	response, err := s.conceptMapService.BatchTranslateConcepts(request)
+	if err != nil {
+		s.logger.WithError(err).Error("Batch translation failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Batch translation failed"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, response)
+}
+
+func (s *EnhancedServer) getMappingStatistics(c *gin.Context) {
+	stats, err := s.conceptMapService.GetMappingStatistics()
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to get mapping statistics")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get mapping statistics"})
+		return
+	}
+	
+	c.JSON(http.StatusOK, stats)
+}
+
+func (s *EnhancedServer) findSemanticMappings(c *gin.Context) {
+	sourceSystem := c.Param("source_system")
+	sourceCode := c.Param("source_code")
+	targetSystem := c.Param("target_system")
+	
+	// Create a translation request for semantic mapping
+	request := services.TranslationRequest{
+		SourceSystem: sourceSystem,
+		TargetSystem: targetSystem,
+		Code:         sourceCode,
+	}
+	
+	response, err := s.conceptMapService.TranslateConcept(request)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logrus.Fields{
+			"source_system": sourceSystem,
+			"source_code":   sourceCode,
+			"target_system": targetSystem,
+		}).Error("Semantic mapping failed")
+		
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Semantic mapping failed"})
+		return
+	}
+	
+	// Filter to only semantic mappings (those with comments about semantic matching)
+	semanticMappings := make([]services.ConceptMapping, 0)
+	for _, mapping := range response.Mappings {
+		if strings.Contains(strings.ToLower(mapping.Comment), "semantic") {
+			semanticMappings = append(semanticMappings, mapping)
+		}
+	}
+	
+	result := map[string]interface{}{
+		"source_system":    sourceSystem,
+		"source_code":      sourceCode,
+		"target_system":    targetSystem,
+		"semantic_mappings": semanticMappings,
+		"count":           len(semanticMappings),
+	}
+	
+	c.JSON(http.StatusOK, result)
+}
+
+// Middleware functions
+func (s *EnhancedServer) cacheMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Add cache headers for cacheable endpoints
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/concepts/") && c.Request.Method == "GET" {
+			c.Header("Cache-Control", "public, max-age=3600")
+		}
+		
+		c.Next()
+	}
+}
+
+// Utility functions (same as in original server.go but repeated here for completeness)
+func parseInt(s string, defaultValue int) int {
+	if s == "" {
+		return defaultValue
+	}
+	
+	if i, err := strconv.Atoi(s); err == nil {
+		return i
+	}
+	
+	return defaultValue
+}

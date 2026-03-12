@@ -1,0 +1,571 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://api.hospital.com/schemas/kb-7-terminology-schema.json",
+  "title": "KB-7 Terminology Service Data Schema",
+  "description": "JSON Schema for clinical terminology management and code resolution",
+  "version": "1.0.0",
+  "type": "object",
+  "definitions": {
+    "CodeSystem": {
+      "type": "string",
+      "enum": ["snomed", "icd10", "rxnorm", "loinc"],
+      "description": "Supported terminology code systems"
+    },
+    "TerminologyCode": {
+      "type": "object",
+      "required": ["code", "system"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^[A-Za-z0-9\\-\\.]+$",
+          "description": "The terminology code identifier"
+        },
+        "system": {
+          "$ref": "#/definitions/CodeSystem"
+        },
+        "display": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Human-readable display name"
+        },
+        "definition": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Detailed definition of the terminology"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TerminologyEntry": {
+      "type": "object",
+      "required": ["code", "system", "display"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "system": {
+          "$ref": "#/definitions/CodeSystem"
+        },
+        "display": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "definition": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "synonyms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "maxItems": 20,
+          "description": "Alternative names and synonyms"
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              {"type": "string"},
+              {"type": "number"},
+              {"type": "boolean"}
+            ]
+          },
+          "description": "System-specific properties"
+        },
+        "relationships": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Relationship"
+          },
+          "maxItems": 100
+        },
+        "metadata": {
+          "$ref": "#/definitions/EntryMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Relationship": {
+      "type": "object",
+      "required": ["type", "target_code", "target_system"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["parent", "child", "related", "maps_to", "synonym"],
+          "description": "Type of relationship"
+        },
+        "target_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "target_system": {
+          "$ref": "#/definitions/CodeSystem"
+        },
+        "target_display": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence score for mapping relationships"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EntryMetadata": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+(\\.\\d+)?$",
+          "description": "Terminology version"
+        },
+        "effective_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date when this version became effective"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "inactive", "deprecated"],
+          "default": "active"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modification timestamp"
+        },
+        "source_uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "Source terminology URI"
+        }
+      },
+      "additionalProperties": false
+    },
+    "SearchRequest": {
+      "type": "object",
+      "required": ["query"],
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Search term or phrase"
+        },
+        "systems": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CodeSystem"
+          },
+          "uniqueItems": true,
+          "maxItems": 4,
+          "description": "Limit search to specific terminology systems"
+        },
+        "max_results": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 50,
+          "description": "Maximum number of results to return"
+        },
+        "include_inactive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include inactive/deprecated codes"
+        },
+        "fuzzy_matching": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable fuzzy string matching"
+        },
+        "filters": {
+          "type": "object",
+          "properties": {
+            "concept_class": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Filter by concept class"
+            },
+            "domain": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Filter by clinical domain"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "SearchResult": {
+      "type": "object",
+      "required": ["code", "system", "display", "score"],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "system": {
+          "$ref": "#/definitions/CodeSystem"
+        },
+        "display": {
+          "type": "string"
+        },
+        "definition": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Relevance score (0-1)"
+        },
+        "highlights": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Highlighted matching text segments"
+        },
+        "metadata": {
+          "$ref": "#/definitions/EntryMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValidationRequest": {
+      "type": "object",
+      "required": ["codes"],
+      "properties": {
+        "codes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CodeToValidate"
+          },
+          "minItems": 1,
+          "maxItems": 500,
+          "description": "Codes to validate"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CodeToValidate": {
+      "type": "object",
+      "required": ["code", "system"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "system": {
+          "$ref": "#/definitions/CodeSystem"
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Clinical context for validation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ValidationResult": {
+      "type": "object",
+      "required": ["code", "system", "valid", "status"],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "system": {
+          "$ref": "#/definitions/CodeSystem"
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "Whether the code is valid"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "inactive", "deprecated", "invalid"],
+          "description": "Current status of the code"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Validation messages and warnings"
+        },
+        "entry": {
+          "$ref": "#/definitions/TerminologyEntry",
+          "description": "Full terminology entry if valid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BatchOperation": {
+      "type": "object",
+      "required": ["operation_id", "status"],
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique identifier for the batch operation"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "processing", "completed", "failed"],
+          "description": "Current status of the batch operation"
+        },
+        "total_items": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of items in the batch"
+        },
+        "processed_items": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items processed"
+        },
+        "failed_items": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items that failed processing"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item_index": {
+                "type": "integer"
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HealthStatus": {
+      "type": "object",
+      "required": ["status", "timestamp", "service", "version"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["healthy", "unhealthy", "degraded"],
+          "description": "Overall service health status"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "service": {
+          "type": "string",
+          "const": "kb-7-terminology"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "checks": {
+          "type": "object",
+          "properties": {
+            "database": {
+              "$ref": "#/definitions/HealthCheck"
+            },
+            "cache": {
+              "$ref": "#/definitions/HealthCheck"
+            },
+            "search_index": {
+              "$ref": "#/definitions/HealthCheck"
+            },
+            "terminology_sources": {
+              "$ref": "#/definitions/HealthCheck"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/HealthCheck"
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "uptime_seconds": {
+              "type": "number",
+              "minimum": 0
+            },
+            "total_requests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "active_connections": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "memory_usage_mb": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cache_hit_rate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HealthCheck": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["healthy", "unhealthy"]
+        },
+        "response_time_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Response time in milliseconds"
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message if unhealthy"
+        },
+        "details": {
+          "type": "object",
+          "description": "Additional check-specific details"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "required": ["type", "title", "status"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "format": "uri",
+          "description": "Problem type URI (RFC 7807)"
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-readable problem title"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599,
+          "description": "HTTP status code"
+        },
+        "detail": {
+          "type": "string",
+          "description": "Detailed error description"
+        },
+        "instance": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI identifying the specific occurrence"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique request identifier for tracing"
+        },
+        "validation_errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "rejected_value": {
+                "oneOf": [
+                  {"type": "string"},
+                  {"type": "number"},
+                  {"type": "boolean"},
+                  {"type": "null"}
+                ]
+              }
+            },
+            "required": ["field", "message"]
+          },
+          "description": "Detailed validation error information"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "terminologyEntry": {
+      "$ref": "#/definitions/TerminologyEntry",
+      "description": "A complete terminology entry"
+    },
+    "searchRequest": {
+      "$ref": "#/definitions/SearchRequest",
+      "description": "Search request payload"
+    },
+    "searchResults": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SearchResult"
+      },
+      "description": "Array of search results"
+    },
+    "validationRequest": {
+      "$ref": "#/definitions/ValidationRequest",
+      "description": "Validation request payload"
+    },
+    "validationResults": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ValidationResult"
+      },
+      "description": "Array of validation results"
+    },
+    "healthStatus": {
+      "$ref": "#/definitions/HealthStatus",
+      "description": "Service health status"
+    },
+    "error": {
+      "$ref": "#/definitions/ErrorResponse",
+      "description": "Standard error response"
+    }
+  },
+  "additionalProperties": false
+}

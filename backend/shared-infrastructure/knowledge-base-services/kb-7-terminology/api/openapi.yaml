@@ -1,0 +1,1523 @@
+openapi: 3.0.0
+info:
+  title: KB-7 Terminology Service API
+  version: 1.0.0
+  description: Clinical terminology management and code resolution for SNOMED CT, ICD-10, RxNorm, and LOINC
+  contact:
+    name: Clinical Platform Team
+    email: clinical-platform@hospital.com
+  license:
+    name: Proprietary
+    url: https://internal.hospital.com/licenses
+
+servers:
+  - url: http://localhost:8087
+    description: Development server
+  - url: https://api.hospital.com/kb7
+    description: Production server
+
+tags:
+  - name: health
+    description: Service health and status
+  - name: lookup
+    description: Individual code lookups
+  - name: search
+    description: Full-text terminology search
+  - name: validation
+    description: Code validation operations
+  - name: mapping
+    description: Cross-terminology mapping
+  - name: hierarchy
+    description: Hierarchical relationships
+  - name: batch
+    description: Batch operations
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      description: Returns the health status of the terminology service
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /metrics:
+    get:
+      tags: [health]
+      summary: Prometheus metrics
+      description: Returns Prometheus-format metrics
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Metrics in Prometheus format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /v1/lookup:
+    get:
+      tags: [lookup]
+      summary: Lookup code by ID
+      description: Retrieve terminology entry by code ID
+      operationId: lookupCode
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: The terminology code to lookup
+          schema:
+            type: string
+            example: "387517004"
+        - name: system
+          in: query
+          required: false
+          description: Code system (snomed, icd10, rxnorm, loinc)
+          schema:
+            type: string
+            enum: [snomed, icd10, rxnorm, loinc]
+        - name: include_hierarchy
+          in: query
+          required: false
+          description: Include hierarchical relationships
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Code found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TerminologyEntry'
+        '404':
+          description: Code not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/search:
+    get:
+      tags: [search]
+      summary: Simple terminology search
+      description: Simple search across all terminologies using query parameters
+      operationId: searchTerminologySimple
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query
+          schema:
+            type: string
+            example: "hypertension"
+        - name: systems
+          in: query
+          required: false
+          description: Comma-separated list of systems to search
+          schema:
+            type: string
+            example: "snomed,icd10"
+        - name: mode
+          in: query
+          required: false
+          description: Search mode
+          schema:
+            type: string
+            enum: [standard, exact, fuzzy, phonetic, wildcard, semantic, hybrid, autocomplete]
+            default: standard
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 10
+        - name: offset
+          in: query
+          required: false
+          description: Offset for pagination
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: include_inactive
+          in: query
+          required: false
+          description: Include inactive codes
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClinicalSearchResponse'
+        '400':
+          description: Invalid search request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [search]
+      summary: Advanced terminology search
+      description: Advanced search across all terminologies with full clinical search capabilities
+      operationId: searchTerminologyAdvanced
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClinicalSearchRequest'
+      responses:
+        '200':
+          description: Advanced search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClinicalSearchResponse'
+        '400':
+          description: Invalid search request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/search/autocomplete:
+    get:
+      tags: [search]
+      summary: Autocomplete suggestions
+      description: Get real-time autocomplete suggestions for search queries
+      operationId: getAutocompleteSuggestions
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Partial query for autocomplete
+          schema:
+            type: string
+            example: "hyper"
+        - name: systems
+          in: query
+          required: false
+          description: Comma-separated list of systems
+          schema:
+            type: string
+            example: "snomed,icd10"
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of suggestions
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+        - name: user_id
+          in: query
+          required: false
+          description: User ID for personalized suggestions
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Autocomplete suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutocompleteResponse'
+        '400':
+          description: Invalid autocomplete request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      tags: [search]
+      summary: Advanced autocomplete
+      description: Advanced autocomplete with user context and preferences
+      operationId: getAdvancedAutocompleteSuggestions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AutocompleteRequest'
+      responses:
+        '200':
+          description: Advanced autocomplete suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AutocompleteResponse'
+        '400':
+          description: Invalid autocomplete request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/search/analyze:
+    post:
+      tags: [search]
+      summary: Query analysis
+      description: Analyze search query for intent, entities, and optimization suggestions
+      operationId: analyzeQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryAnalysisRequest'
+      responses:
+        '200':
+          description: Query analysis results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryAnalysisResponse'
+        '400':
+          description: Invalid analysis request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/search/suggestions:
+    get:
+      tags: [search]
+      summary: Search suggestions
+      description: Get search suggestions based on query history and trends
+      operationId: getSearchSuggestions
+      parameters:
+        - name: user_id
+          in: query
+          required: false
+          description: User ID for personalized suggestions
+          schema:
+            type: string
+        - name: domain
+          in: query
+          required: false
+          description: Clinical domain filter
+          schema:
+            type: string
+            enum: [cardiology, neurology, oncology, psychiatry, general]
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of suggestions
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: Search suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchSuggestionsResponse'
+        '400':
+          description: Invalid suggestions request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/validate:
+    post:
+      tags: [validation]
+      summary: Validate codes
+      description: Validate one or more terminology codes
+      operationId: validateCodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRequest'
+      responses:
+        '200':
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResponse'
+        '400':
+          description: Invalid validation request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/map:
+    post:
+      tags: [mapping]
+      summary: Cross-terminology mapping
+      description: Map codes between different terminology systems
+      operationId: mapCodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MappingRequest'
+      responses:
+        '200':
+          description: Mapping results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MappingResponse'
+        '400':
+          description: Invalid mapping request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/hierarchy/{code}:
+    get:
+      tags: [hierarchy]
+      summary: Get hierarchical relationships
+      description: Retrieve parent/child relationships for a code
+      operationId: getHierarchy
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: The terminology code
+          schema:
+            type: string
+        - name: system
+          in: query
+          required: true
+          description: Code system
+          schema:
+            type: string
+            enum: [snomed, icd10, rxnorm, loinc]
+        - name: depth
+          in: query
+          required: false
+          description: Maximum depth of hierarchy to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+            default: 3
+        - name: direction
+          in: query
+          required: false
+          description: Direction of hierarchy traversal
+          schema:
+            type: string
+            enum: [up, down, both]
+            default: both
+      responses:
+        '200':
+          description: Hierarchy information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HierarchyResponse'
+        '404':
+          description: Code not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/batch/lookup:
+    post:
+      tags: [batch]
+      summary: Batch code lookup
+      description: Lookup multiple codes in a single request
+      operationId: batchLookup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchLookupRequest'
+      responses:
+        '200':
+          description: Batch lookup results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchLookupResponse'
+        '400':
+          description: Invalid batch request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/batch/validate:
+    post:
+      tags: [batch]
+      summary: Batch code validation
+      description: Validate multiple codes in a single request
+      operationId: batchValidate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchValidationRequest'
+      responses:
+        '200':
+          description: Batch validation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchValidationResponse'
+        '400':
+          description: Invalid batch validation request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+        service:
+          type: string
+          example: "kb-7-terminology"
+        version:
+          type: string
+          example: "1.0.0"
+        checks:
+          type: object
+          properties:
+            database:
+              $ref: '#/components/schemas/HealthCheck'
+            cache:
+              $ref: '#/components/schemas/HealthCheck'
+            search_index:
+              $ref: '#/components/schemas/HealthCheck'
+
+    HealthCheck:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        response_time_ms:
+          type: number
+        error:
+          type: string
+
+    TerminologyEntry:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "387517004"
+        system:
+          type: string
+          enum: [snomed, icd10, rxnorm, loinc]
+        display:
+          type: string
+          example: "Paracetamol"
+        definition:
+          type: string
+        synonyms:
+          type: array
+          items:
+            type: string
+        properties:
+          type: object
+          additionalProperties: true
+        relationships:
+          type: array
+          items:
+            $ref: '#/components/schemas/Relationship'
+        metadata:
+          $ref: '#/components/schemas/EntryMetadata'
+
+    Relationship:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [parent, child, related, maps_to]
+        target_code:
+          type: string
+        target_system:
+          type: string
+        target_display:
+          type: string
+
+    EntryMetadata:
+      type: object
+      properties:
+        version:
+          type: string
+        effective_date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [active, inactive, deprecated]
+        last_updated:
+          type: string
+          format: date-time
+
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Search term
+          example: "paracetamol"
+        systems:
+          type: array
+          items:
+            type: string
+            enum: [snomed, icd10, rxnorm, loinc]
+          description: Limit search to specific systems
+        max_results:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 50
+        include_inactive:
+          type: boolean
+          default: false
+        fuzzy_matching:
+          type: boolean
+          default: true
+
+    SearchResponse:
+      type: object
+      properties:
+        total_results:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        query_time_ms:
+          type: number
+
+    SearchResult:
+      type: object
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+        display:
+          type: string
+        definition:
+          type: string
+        score:
+          type: number
+          description: Relevance score (0-1)
+        highlights:
+          type: array
+          items:
+            type: string
+
+    # Enhanced Clinical Search Schemas
+    ClinicalSearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Clinical search query
+          example: "hypertension medication"
+        systems:
+          type: array
+          items:
+            type: string
+            enum: [snomed, icd10, rxnorm, loinc, cpt]
+          description: Target terminology systems
+        mode:
+          type: string
+          enum: [standard, exact, fuzzy, phonetic, wildcard, semantic, hybrid, autocomplete]
+          default: standard
+          description: Search mode strategy
+        filters:
+          $ref: '#/components/schemas/SearchFilters'
+        facets:
+          type: array
+          items:
+            type: string
+            enum: [system, domain, status, relationships]
+          description: Faceted search dimensions
+        user_context:
+          $ref: '#/components/schemas/UserContext'
+        preferences:
+          $ref: '#/components/schemas/SearchPreferences'
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional search metadata
+
+    SearchFilters:
+      type: object
+      properties:
+        domains:
+          type: array
+          items:
+            type: string
+            enum: [cardiology, neurology, oncology, psychiatry, general, pharmacology]
+        status:
+          type: array
+          items:
+            type: string
+            enum: [active, inactive, deprecated]
+        date_range:
+          $ref: '#/components/schemas/DateRange'
+        hierarchical_level:
+          type: integer
+          minimum: 0
+          maximum: 10
+        relationship_types:
+          type: array
+          items:
+            type: string
+            enum: [parent, child, related, maps_to]
+        min_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Minimum relevance score threshold
+
+    DateRange:
+      type: object
+      properties:
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+
+    UserContext:
+      type: object
+      properties:
+        user_id:
+          type: string
+        specialty:
+          type: string
+          enum: [cardiology, neurology, oncology, psychiatry, general_practice]
+        institution:
+          type: string
+        search_history:
+          type: array
+          items:
+            type: string
+          maxItems: 100
+        preferences:
+          type: object
+          additionalProperties: true
+
+    SearchPreferences:
+      type: object
+      properties:
+        max_results:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 10
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+        include_inactive:
+          type: boolean
+          default: false
+        include_deprecated:
+          type: boolean
+          default: false
+        include_synonyms:
+          type: boolean
+          default: true
+        include_definitions:
+          type: boolean
+          default: true
+        include_relationships:
+          type: boolean
+          default: false
+        highlight:
+          type: boolean
+          default: true
+        spell_check:
+          type: boolean
+          default: true
+        personalization:
+          type: boolean
+          default: true
+
+    ClinicalSearchResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        total_results:
+          type: integer
+        total_pages:
+          type: integer
+        current_page:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClinicalSearchResult'
+        facets:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/FacetResult'
+        suggestions:
+          $ref: '#/components/schemas/SearchSuggestions'
+        metadata:
+          $ref: '#/components/schemas/SearchMetadata'
+        performance:
+          $ref: '#/components/schemas/PerformanceMetrics'
+
+    ClinicalSearchResult:
+      type: object
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+          enum: [snomed, icd10, rxnorm, loinc, cpt]
+        display:
+          type: string
+        definition:
+          type: string
+        synonyms:
+          type: array
+          items:
+            type: string
+        domain:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, deprecated]
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        highlights:
+          type: array
+          items:
+            type: string
+        relationships:
+          type: array
+          items:
+            $ref: '#/components/schemas/Relationship'
+        properties:
+          type: object
+          additionalProperties: true
+        metadata:
+          $ref: '#/components/schemas/EntryMetadata'
+
+    FacetResult:
+      type: object
+      properties:
+        buckets:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              count:
+                type: integer
+              selected:
+                type: boolean
+
+    SearchSuggestions:
+      type: object
+      properties:
+        spell_corrections:
+          type: array
+          items:
+            type: string
+        query_expansions:
+          type: array
+          items:
+            type: string
+        related_terms:
+          type: array
+          items:
+            type: string
+        recommended_filters:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              values:
+                type: array
+                items:
+                  type: string
+
+    SearchMetadata:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        search_mode:
+          type: string
+        systems_searched:
+          type: array
+          items:
+            type: string
+        filters_applied:
+          type: object
+          additionalProperties: true
+        cache_hit:
+          type: boolean
+        personalized:
+          type: boolean
+
+    PerformanceMetrics:
+      type: object
+      properties:
+        total_time_ms:
+          type: number
+        query_time_ms:
+          type: number
+        index_time_ms:
+          type: number
+        network_time_ms:
+          type: number
+        cache_time_ms:
+          type: number
+
+    # Autocomplete Schemas
+    AutocompleteRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Partial query for autocomplete
+          example: "hyper"
+        systems:
+          type: array
+          items:
+            type: string
+            enum: [snomed, icd10, rxnorm, loinc, cpt]
+        user_context:
+          $ref: '#/components/schemas/UserContext'
+        preferences:
+          $ref: '#/components/schemas/AutocompletePreferences'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    AutocompletePreferences:
+      type: object
+      properties:
+        max_suggestions:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+        min_query_length:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 2
+        include_popular:
+          type: boolean
+          default: true
+        include_recent:
+          type: boolean
+          default: true
+        include_personalized:
+          type: boolean
+          default: true
+        fuzzy_matching:
+          type: boolean
+          default: true
+
+    AutocompleteResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutocompleteSuggestion'
+        metadata:
+          $ref: '#/components/schemas/AutocompleteMetadata'
+        performance:
+          $ref: '#/components/schemas/PerformanceMetrics'
+
+    AutocompleteSuggestion:
+      type: object
+      properties:
+        text:
+          type: string
+        display_text:
+          type: string
+        code:
+          type: string
+        system:
+          type: string
+        type:
+          type: string
+          enum: [exact_match, prefix_match, fuzzy_match, popular, recent, personalized]
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        metadata:
+          type: object
+          additionalProperties: true
+
+    AutocompleteMetadata:
+      type: object
+      properties:
+        total_suggestions:
+          type: integer
+        suggestion_sources:
+          type: object
+          properties:
+            exact_matches:
+              type: integer
+            fuzzy_matches:
+              type: integer
+            popular_terms:
+              type: integer
+            recent_searches:
+              type: integer
+            personalized:
+              type: integer
+        cache_hit:
+          type: boolean
+        personalized:
+          type: boolean
+
+    # Query Analysis Schemas
+    QueryAnalysisRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          description: Query to analyze
+          example: "hypertension drugs side effects"
+        user_context:
+          $ref: '#/components/schemas/UserContext'
+        analysis_options:
+          $ref: '#/components/schemas/AnalysisOptions'
+
+    AnalysisOptions:
+      type: object
+      properties:
+        include_intent:
+          type: boolean
+          default: true
+        include_entities:
+          type: boolean
+          default: true
+        include_complexity:
+          type: boolean
+          default: true
+        include_suggestions:
+          type: boolean
+          default: true
+        include_semantic:
+          type: boolean
+          default: false
+
+    QueryAnalysisResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        original_query:
+          type: string
+        intent:
+          $ref: '#/components/schemas/QueryIntent'
+        entities:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryEntity'
+        complexity:
+          $ref: '#/components/schemas/QueryComplexity'
+        suggestions:
+          $ref: '#/components/schemas/QuerySuggestions'
+        semantic_analysis:
+          $ref: '#/components/schemas/SemanticAnalysis'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    QueryIntent:
+      type: object
+      properties:
+        primary_intent:
+          type: string
+          enum: [lookup, search, browse, compare, relationship]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        intent_details:
+          type: object
+          additionalProperties: true
+
+    QueryEntity:
+      type: object
+      properties:
+        text:
+          type: string
+        type:
+          type: string
+          enum: [code, condition, medication, procedure, anatomy, symptom]
+        start_position:
+          type: integer
+        end_position:
+          type: integer
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        system_predictions:
+          type: array
+          items:
+            type: object
+            properties:
+              system:
+                type: string
+              confidence:
+                type: number
+
+    QueryComplexity:
+      type: object
+      properties:
+        complexity_score:
+          type: number
+          minimum: 0
+          maximum: 1
+        factors:
+          type: object
+          properties:
+            term_count:
+              type: integer
+            entity_count:
+              type: integer
+            ambiguity_score:
+              type: number
+            specificity_score:
+              type: number
+        recommended_strategy:
+          type: string
+          enum: [simple, moderate, complex, expert]
+
+    QuerySuggestions:
+      type: object
+      properties:
+        reformulated_queries:
+          type: array
+          items:
+            type: string
+        filter_suggestions:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              values:
+                type: array
+                items:
+                  type: string
+        search_strategies:
+          type: array
+          items:
+            type: string
+            enum: [standard, exact, fuzzy, phonetic, semantic, hybrid]
+
+    SemanticAnalysis:
+      type: object
+      properties:
+        semantic_concepts:
+          type: array
+          items:
+            type: object
+            properties:
+              concept:
+                type: string
+              confidence:
+                type: number
+              related_systems:
+                type: array
+                items:
+                  type: string
+        concept_relationships:
+          type: array
+          items:
+            type: object
+            properties:
+              from_concept:
+                type: string
+              to_concept:
+                type: string
+              relationship_type:
+                type: string
+              strength:
+                type: number
+
+    # Search Suggestions Schemas
+    SearchSuggestionsResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        popular_searches:
+          type: array
+          items:
+            $ref: '#/components/schemas/PopularSearch'
+        trending_searches:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrendingSearch'
+        personalized_suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonalizedSuggestion'
+        domain_suggestions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DomainSuggestion'
+        metadata:
+          type: object
+          additionalProperties: true
+
+    PopularSearch:
+      type: object
+      properties:
+        query:
+          type: string
+        frequency:
+          type: integer
+        systems:
+          type: array
+          items:
+            type: string
+        success_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    TrendingSearch:
+      type: object
+      properties:
+        query:
+          type: string
+        trend_score:
+          type: number
+        time_period:
+          type: string
+        growth_rate:
+          type: number
+
+    PersonalizedSuggestion:
+      type: object
+      properties:
+        query:
+          type: string
+        relevance_score:
+          type: number
+        reason:
+          type: string
+          enum: [search_history, specialty_match, institution_pattern, similar_users]
+
+    DomainSuggestion:
+      type: object
+      properties:
+        query:
+          type: string
+        domain:
+          type: string
+        domain_relevance:
+          type: number
+
+    ValidationRequest:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeToValidate'
+          maxItems: 500
+
+    CodeToValidate:
+      type: object
+      required: [code, system]
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+          enum: [snomed, icd10, rxnorm, loinc]
+        context:
+          type: string
+          description: Optional context for validation
+
+    ValidationResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationResult'
+
+    ValidationResult:
+      type: object
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+        valid:
+          type: boolean
+        status:
+          type: string
+          enum: [active, inactive, deprecated, invalid]
+        messages:
+          type: array
+          items:
+            type: string
+
+    MappingRequest:
+      type: object
+      required: [source_code, source_system, target_system]
+      properties:
+        source_code:
+          type: string
+        source_system:
+          type: string
+          enum: [snomed, icd10, rxnorm, loinc]
+        target_system:
+          type: string
+          enum: [snomed, icd10, rxnorm, loinc]
+        mapping_type:
+          type: string
+          enum: [exact, narrow, broad, related]
+          default: exact
+
+    MappingResponse:
+      type: object
+      properties:
+        source_code:
+          type: string
+        source_system:
+          type: string
+        mappings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Mapping'
+
+    Mapping:
+      type: object
+      properties:
+        target_code:
+          type: string
+        target_system:
+          type: string
+        target_display:
+          type: string
+        mapping_type:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    HierarchyResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+        display:
+          type: string
+        parents:
+          type: array
+          items:
+            $ref: '#/components/schemas/HierarchyNode'
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/HierarchyNode'
+
+    HierarchyNode:
+      type: object
+      properties:
+        code:
+          type: string
+        display:
+          type: string
+        level:
+          type: integer
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/HierarchyNode'
+
+    BatchLookupRequest:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeToLookup'
+          maxItems: 1000
+
+    CodeToLookup:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+          enum: [snomed, icd10, rxnorm, loinc]
+        include_hierarchy:
+          type: boolean
+          default: false
+
+    BatchLookupResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchLookupResult'
+
+    BatchLookupResult:
+      type: object
+      properties:
+        code:
+          type: string
+        system:
+          type: string
+        found:
+          type: boolean
+        entry:
+          $ref: '#/components/schemas/TerminologyEntry'
+        error:
+          type: string
+
+    BatchValidationRequest:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeToValidate'
+          maxItems: 500
+
+    BatchValidationResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationResult'
+
+    Error:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.hospital.com/problems/validation-error"
+        title:
+          type: string
+          example: "Validation Error"
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+          example: "The provided code is not valid"
+        instance:
+          type: string
+          format: uri
+        timestamp:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+          format: uuid
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for service authentication
+
+security:
+  - ApiKeyAuth: []
+
+# Performance requirements embedded in OpenAPI
+x-performance-requirements:
+  latency_targets:
+    p50: "3ms"
+    p95: "15ms" 
+    p99: "50ms"
+  throughput_targets:
+    rps_target: 25000
+    concurrent_connections: 2000

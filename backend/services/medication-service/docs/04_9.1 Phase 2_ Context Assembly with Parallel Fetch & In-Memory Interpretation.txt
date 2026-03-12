@@ -1,0 +1,1056 @@
+﻿# Phase 2: Context Assembly with Parallel Fetch & In-Memory Interpretation
+
+
+## Executive Overview
+
+
+Phase 2 orchestrates the assembly of complete clinical context through parallel data acquisition and in-memory interpretation. The GO Orchestrator simultaneously fetches raw patient data from the Context Gateway and clinical rules from Knowledge Bases, then performs high-speed phenotype evaluation locally. This phase must complete in ≤50ms while maintaining snapshot consistency through the Evidence Envelope.
+
+
+## 1. Core Architecture for Phase 2
+
+
+### 1.1 Enhanced Orchestrator Structure
+
+
+```go
+// internal/phase2/context_assembly.go
+
+
+type Phase2ContextAssembler struct {
+    // Core clients
+    contextGateway    *ContextGatewayClient
+    apolloClient      *ApolloFederationClient
+    
+    // Evidence Envelope management
+    evidenceEnvelope  *EvidenceEnvelope
+    kbVersionManager  *KBVersionManager
+    
+    // In-memory interpretation engines
+    phenotypeEngine   *PhenotypeEvaluator
+    ruleInterpreter   *ClinicalRuleInterpreter
+    
+    // Performance optimization
+    parallelExecutor  *ParallelQueryExecutor
+    cache            *ContextCache
+    
+    // Monitoring
+    metrics          *Phase2Metrics
+    tracer           *Tracer
+}
+
+
+// Evidence Envelope structure from KB version sets
+type EvidenceEnvelope struct {
+    VersionSetName   string                    `json:"version_set_name"`
+    KBVersions       map[string]string         `json:"kb_versions"`
+    SnapshotID       string                    `json:"snapshot_id"`
+    Environment      string                    `json:"environment"`
+    ActivatedAt      time.Time                 `json:"activated_at"`
+    
+    // Runtime tracking
+    UsedVersions     map[string]VersionUsage   `json:"used_versions"`
+}
+
+
+type VersionUsage struct {
+    Version         string     `json:"version"`
+    AccessedAt      time.Time  `json:"accessed_at"`
+    QueryCount      int        `json:"query_count"`
+    CacheHits       int        `json:"cache_hits"`
+}
+```
+
+
+### 1.2 Payload Preparation Model
+
+
+```go
+// internal/phase2/payload_builder.go
+
+
+type ContextPayloadBuilder struct {
+    manifest         *IntentManifest
+    evidenceEnvelope *EvidenceEnvelope
+}
+
+
+// PrepareQueryPayloads builds all necessary payloads BEFORE making any network calls
+func (cpb *ContextPayloadBuilder) PrepareQueryPayloads(
+    manifest *IntentManifest,
+    patientID string,
+) (*QueryPayloadSet, error) {
+    
+    payloads := &QueryPayloadSet{
+        RequestID:    manifest.RequestID,
+        PreparedAt:   time.Now(),
+        Queries:      make([]QueryPayload, 0),
+    }
+    
+    // 1. Prepare Context Gateway payload for snapshot creation
+    contextPayload := cpb.prepareContextGatewayPayload(manifest, patientID)
+    payloads.Queries = append(payloads.Queries, contextPayload)
+    
+    // 2. Prepare KB-2 (Clinical Context) payload for phenotype rules
+    kb2Payload := cpb.prepareKB2Payload(manifest)
+    payloads.Queries = append(payloads.Queries, kb2Payload)
+    
+    // 3. Prepare other KB payloads based on manifest requirements
+    additionalPayloads := cpb.prepareAdditionalKBPayloads(manifest)
+    payloads.Queries = append(payloads.Queries, additionalPayloads...)
+    
+    return payloads, nil
+}
+
+
+type QueryPayload struct {
+    Target          string                    `json:"target"`          // "context_gateway" or "kb_x"
+    Operation       string                    `json:"operation"`
+    Priority        int                       `json:"priority"`        // For execution ordering
+    
+    // For Context Gateway
+    ContextRequest  *ContextGatewayRequest    `json:"context_request,omitempty"`
+    
+    // For KB queries via Apollo
+    ApolloQuery     *ApolloQueryRequest       `json:"apollo_query,omitempty"`
+    
+    // Version control
+    RequiredVersion string                    `json:"required_version"`
+    
+    // Performance hints
+    CacheStrategy   CacheStrategy             `json:"cache_strategy"`
+    Timeout         time.Duration             `json:"timeout"`
+}
+
+
+type ContextGatewayRequest struct {
+    PatientID       string                    `json:"patient_id"`
+    RecipeID        string                    `json:"recipe_id"`
+    RequiredFields  []FieldRequirement        `json:"required_fields"`
+    FreshnessReq    FreshnessRequirements     `json:"freshness_requirements"`
+    
+    // Snapshot control
+    CreateSnapshot  bool                      `json:"create_snapshot"`
+    SnapshotTTL     int                       `json:"snapshot_ttl_seconds"`
+}
+
+
+type ApolloQueryRequest struct {
+    Query           string                    `json:"query"`
+    Variables       map[string]interface{}    `json:"variables"`
+    KBTarget        string                    `json:"kb_target"`
+    
+    // Version header to be added
+    VersionHeader   string                    `json:"version_header"`
+}
+```
+
+
+## 2. Evidence Envelope Integration
+
+
+### 2.1 Fetching and Managing Active Envelope
+
+
+```go
+// internal/phase2/evidence_envelope.go
+
+
+func (p2 *Phase2ContextAssembler) InitializeEvidenceEnvelope(
+    ctx context.Context,
+) error {
+    span, ctx := p2.tracer.Start(ctx, "phase2.init_evidence_envelope")
+    defer span.End()
+    
+    // Fetch active version set from Knowledge Broker
+    activeVersionSet, err := p2.fetchActiveVersionSet(ctx)
+    if err != nil {
+        return fmt.Errorf("failed to fetch active version set: %w", err)
+    }
+    
+    // Initialize Evidence Envelope
+    p2.evidenceEnvelope = &EvidenceEnvelope{
+        VersionSetName: activeVersionSet.Name,
+        KBVersions:     activeVersionSet.KBVersions,
+        Environment:    activeVersionSet.Environment,
+        ActivatedAt:    activeVersionSet.ActivatedAt,
+        UsedVersions:   make(map[string]VersionUsage),
+    }
+    
+    // Pre-validate all KB versions are accessible
+    if err := p2.validateKBVersions(ctx); err != nil {
+        return fmt.Errorf("KB version validation failed: %w", err)
+    }
+    
+    p2.metrics.RecordEnvelopeInitialization(p2.evidenceEnvelope)
+    
+    return nil
+}
+
+
+func (p2 *Phase2ContextAssembler) fetchActiveVersionSet(
+    ctx context.Context,
+) (*ActiveVersionSet, error) {
+    // Call Knowledge Broker API
+    resp, err := p2.httpClient.Get(
+        fmt.Sprintf("%s/api/v1/version-sets/active?environment=%s",
+            p2.config.KnowledgeBrokerURL,
+            p2.config.Environment,
+        ),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    var versionSet ActiveVersionSet
+    if err := json.NewDecoder(resp.Body).Decode(&versionSet); err != nil {
+        return nil, err
+    }
+    
+    return &versionSet, nil
+}
+```
+
+
+### 2.2 Version-Aware KB Queries
+
+
+```go
+// internal/phase2/versioned_queries.go
+
+
+func (p2 *Phase2ContextAssembler) BuildVersionedApolloQuery(
+    kbName string,
+    query string,
+    variables map[string]interface{},
+) (*ApolloQueryRequest, error) {
+    // Get the specific version for this KB from Evidence Envelope
+    version, ok := p2.evidenceEnvelope.KBVersions[kbName]
+    if !ok {
+        return nil, fmt.Errorf("no version found for KB: %s", kbName)
+    }
+    
+    // Build the query with version header
+    apolloQuery := &ApolloQueryRequest{
+        Query:         query,
+        Variables:     variables,
+        KBTarget:      kbName,
+        VersionHeader: version,
+    }
+    
+    // Track version usage
+    p2.evidenceEnvelope.UsedVersions[kbName] = VersionUsage{
+        Version:    version,
+        AccessedAt: time.Now(),
+        QueryCount: p2.evidenceEnvelope.UsedVersions[kbName].QueryCount + 1,
+    }
+    
+    return apolloQuery, nil
+}
+
+
+// Example: Building KB-2 phenotype query with version
+func (p2 *Phase2ContextAssembler) prepareKB2PhenotypeQuery(
+    manifest *IntentManifest,
+) (*ApolloQueryRequest, error) {
+    
+    query := `
+        query GetPhenotypeRules($condition: String!, $version: String!) {
+            kb_clinical_context @version(v: $version) {
+                phenotypeRules(condition: $condition) {
+                    ruleId
+                    name
+                    condition
+                    evaluationLogic {
+                        type
+                        parameters
+                        thresholds
+                    }
+                    riskStratification {
+                        lowRisk
+                        moderateRisk
+                        highRisk
+                    }
+                }
+            }
+        }
+    `
+    
+    variables := map[string]interface{}{
+        "condition": manifest.PrimaryIntent.Condition,
+        "version":   p2.evidenceEnvelope.KBVersions["kb_2_context"],
+    }
+    
+    return p2.BuildVersionedApolloQuery("kb_2_context", query, variables)
+}
+```
+
+
+## 3. Parallel Execution Engine
+
+
+### 3.1 Parallel Query Orchestration
+
+
+```go
+// internal/phase2/parallel_executor.go
+
+
+type ParallelQueryExecutor struct {
+    maxConcurrency  int
+    timeout         time.Duration
+    circuitBreaker  *circuitbreaker.CircuitBreaker
+}
+
+
+func (pqe *ParallelQueryExecutor) ExecuteQueries(
+    ctx context.Context,
+    payloads *QueryPayloadSet,
+) (*CombinedResults, error) {
+    span, ctx := pqe.tracer.Start(ctx, "phase2.parallel_execution")
+    defer span.End()
+    
+    results := &CombinedResults{
+        RequestID:    payloads.RequestID,
+        StartTime:    time.Now(),
+        Results:      make(map[string]interface{}),
+        Errors:       make(map[string]error),
+    }
+    
+    // Create bounded concurrency semaphore
+    sem := make(chan struct{}, pqe.maxConcurrency)
+    
+    // Result channels
+    type queryResult struct {
+        target string
+        result interface{}
+        err    error
+    }
+    resultChan := make(chan queryResult, len(payloads.Queries))
+    
+    // Launch parallel queries
+    var wg sync.WaitGroup
+    for _, payload := range payloads.Queries {
+        wg.Add(1)
+        go func(p QueryPayload) {
+            defer wg.Done()
+            
+            // Acquire semaphore
+            sem <- struct{}{}
+            defer func() { <-sem }()
+            
+            // Execute with timeout
+            queryCtx, cancel := context.WithTimeout(ctx, p.Timeout)
+            defer cancel()
+            
+            result, err := pqe.executeQuery(queryCtx, p)
+            resultChan <- queryResult{
+                target: p.Target,
+                result: result,
+                err:    err,
+            }
+        }(payload)
+    }
+    
+    // Wait for all queries to complete
+    go func() {
+        wg.Wait()
+        close(resultChan)
+    }()
+    
+    // Collect results
+    for res := range resultChan {
+        if res.err != nil {
+            results.Errors[res.target] = res.err
+            // Log but don't fail entire operation for non-critical queries
+            if !isCriticalQuery(res.target) {
+                continue
+            }
+            return nil, fmt.Errorf("critical query failed: %s: %w", res.target, res.err)
+        }
+        results.Results[res.target] = res.result
+    }
+    
+    results.Duration = time.Since(results.StartTime)
+    return results, nil
+}
+
+
+func (pqe *ParallelQueryExecutor) executeQuery(
+    ctx context.Context,
+    payload QueryPayload,
+) (interface{}, error) {
+    switch payload.Target {
+    case "context_gateway":
+        return pqe.executeContextGatewayQuery(ctx, payload.ContextRequest)
+    default:
+        if strings.HasPrefix(payload.Target, "kb_") {
+            return pqe.executeApolloQuery(ctx, payload.ApolloQuery)
+        }
+        return nil, fmt.Errorf("unknown target: %s", payload.Target)
+    }
+}
+```
+
+
+### 3.2 Context Gateway Integration
+
+
+```go
+// internal/phase2/context_gateway_client.go
+
+
+type ContextGatewayClient struct {
+    baseURL     string
+    httpClient  *http.Client
+    authToken   string
+}
+
+
+func (cgc *ContextGatewayClient) CreateSnapshot(
+    ctx context.Context,
+    request *ContextGatewayRequest,
+) (*ClinicalSnapshot, error) {
+    span, ctx := cgc.tracer.Start(ctx, "context_gateway.create_snapshot")
+    defer span.End()
+    
+    // Build snapshot creation request
+    snapshotReq := &SnapshotCreationRequest{
+        PatientID:      request.PatientID,
+        RecipeID:       request.RecipeID,
+        RequiredFields: request.RequiredFields,
+        Freshness:      request.FreshnessReq,
+        TTL:            request.SnapshotTTL,
+        
+        // Request atomic snapshot creation
+        AtomicCreation: true,
+        IncludeHash:    true,
+    }
+    
+    // Make HTTP request
+    body, err := json.Marshal(snapshotReq)
+    if err != nil {
+        return nil, err
+    }
+    
+    req, err := http.NewRequestWithContext(
+        ctx,
+        "POST",
+        fmt.Sprintf("%s/api/v1/snapshots", cgc.baseURL),
+        bytes.NewReader(body),
+    )
+    if err != nil {
+        return nil, err
+    }
+    
+    req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cgc.authToken))
+    req.Header.Set("Content-Type", "application/json")
+    
+    resp, err := cgc.httpClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("snapshot creation failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusCreated {
+        return nil, fmt.Errorf("snapshot creation returned status %d", resp.StatusCode)
+    }
+    
+    var snapshot ClinicalSnapshot
+    if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+        return nil, err
+    }
+    
+    return &snapshot, nil
+}
+
+
+type ClinicalSnapshot struct {
+    SnapshotID      string                    `json:"snapshot_id"`
+    PatientID       string                    `json:"patient_id"`
+    CreatedAt       time.Time                 `json:"created_at"`
+    ExpiresAt       time.Time                 `json:"expires_at"`
+    
+    // Patient data
+    Demographics    Demographics              `json:"demographics"`
+    Vitals          []VitalSign               `json:"vitals"`
+    LabResults      []LabResult               `json:"lab_results"`
+    Medications     []CurrentMedication       `json:"current_medications"`
+    Allergies       []Allergy                 `json:"allergies"`
+    Conditions      []Condition               `json:"conditions"`
+    
+    // Metadata
+    DataSources     map[string]DataSource     `json:"data_sources"`
+    Checksum        string                    `json:"checksum"`
+    Signature       string                    `json:"signature"`
+}
+```
+
+
+## 4. In-Memory Phenotype Evaluation
+
+
+### 4.1 Phenotype Engine Implementation
+
+
+```go
+// internal/phase2/phenotype_engine.go
+
+
+type PhenotypeEvaluator struct {
+    ruleCache       *RuleCache
+    evaluator       *expression.Evaluator
+}
+
+
+func (pe *PhenotypeEvaluator) DeterminePhenotype(
+    ctx context.Context,
+    patientData *ClinicalSnapshot,
+    phenotypeRules *PhenotypeRuleSet,
+) (*PhenotypeResult, error) {
+    span, ctx := pe.tracer.Start(ctx, "phenotype.evaluate")
+    defer span.End()
+    
+    startTime := time.Now()
+    
+    // Build evaluation context from patient data
+    evalContext := pe.buildEvaluationContext(patientData)
+    
+    // Evaluate each phenotype rule
+    var matches []PhenotypeMatch
+    for _, rule := range phenotypeRules.Rules {
+        if pe.evaluateRule(rule, evalContext) {
+            matches = append(matches, PhenotypeMatch{
+                RuleID:     rule.RuleID,
+                Phenotype:  rule.Phenotype,
+                Confidence: pe.calculateConfidence(rule, evalContext),
+                Evidence:   pe.gatherEvidence(rule, evalContext),
+            })
+        }
+    }
+    
+    // Select best match (highest confidence)
+    bestMatch := pe.selectBestMatch(matches)
+    
+    // Build result with risk stratification
+    result := &PhenotypeResult{
+        PrimaryPhenotype: bestMatch.Phenotype,
+        Confidence:       bestMatch.Confidence,
+        RiskLevel:        pe.stratifyRisk(bestMatch, evalContext),
+        AllMatches:       matches,
+        EvaluationTime:   time.Since(startTime),
+        Evidence: PhenotypeEvidence{
+            RulesEvaluated:   len(phenotypeRules.Rules),
+            DataPointsUsed:   pe.countDataPoints(evalContext),
+            RuleVersion:      phenotypeRules.Version,
+        },
+    }
+    
+    pe.metrics.RecordPhenotypeEvaluation(result)
+    
+    return result, nil
+}
+
+
+func (pe *PhenotypeEvaluator) buildEvaluationContext(
+    snapshot *ClinicalSnapshot,
+) map[string]interface{} {
+    // Transform snapshot data into evaluation context
+    context := make(map[string]interface{})
+    
+    // Demographics
+    context["age"] = snapshot.Demographics.Age
+    context["sex"] = snapshot.Demographics.Sex
+    context["bmi"] = pe.calculateBMI(snapshot.Demographics)
+    
+    // Latest vitals
+    if latestVitals := pe.getLatestVitals(snapshot.Vitals); latestVitals != nil {
+        context["systolic_bp"] = latestVitals.SystolicBP
+        context["diastolic_bp"] = latestVitals.DiastolicBP
+        context["heart_rate"] = latestVitals.HeartRate
+    }
+    
+    // Lab values
+    context["egfr"] = pe.getLatestLabValue(snapshot.LabResults, "eGFR")
+    context["creatinine"] = pe.getLatestLabValue(snapshot.LabResults, "creatinine")
+    context["hba1c"] = pe.getLatestLabValue(snapshot.LabResults, "HbA1c")
+    
+    // Conditions
+    context["has_diabetes"] = pe.hasCondition(snapshot.Conditions, "diabetes")
+    context["has_ckd"] = pe.hasCondition(snapshot.Conditions, "chronic_kidney_disease")
+    context["has_heart_failure"] = pe.hasCondition(snapshot.Conditions, "heart_failure")
+    
+    // Medication counts
+    context["medication_count"] = len(snapshot.Medications)
+    context["ace_inhibitor_use"] = pe.hasMedicationClass(snapshot.Medications, "ACE_INHIBITOR")
+    
+    return context
+}
+
+
+func (pe *PhenotypeEvaluator) evaluateRule(
+    rule *PhenotypeRule,
+    context map[string]interface{},
+) bool {
+    // Use expression evaluator to evaluate rule logic
+    result, err := pe.evaluator.Evaluate(rule.EvaluationLogic, context)
+    if err != nil {
+        pe.logger.Warn("Rule evaluation failed", 
+            "ruleID", rule.RuleID, 
+            "error", err,
+        )
+        return false
+    }
+    
+    return result.(bool)
+}
+
+
+type PhenotypeResult struct {
+    PrimaryPhenotype  string              `json:"primary_phenotype"`
+    Confidence        float64             `json:"confidence"`
+    RiskLevel         string              `json:"risk_level"`
+    AllMatches        []PhenotypeMatch    `json:"all_matches"`
+    EvaluationTime    time.Duration       `json:"evaluation_time_ms"`
+    Evidence          PhenotypeEvidence   `json:"evidence"`
+}
+```
+
+
+### 4.2 Risk Stratification
+
+
+```go
+// internal/phase2/risk_stratification.go
+
+
+func (pe *PhenotypeEvaluator) stratifyRisk(
+    match PhenotypeMatch,
+    context map[string]interface{},
+) string {
+    // Apply risk stratification rules
+    riskScore := 0.0
+    
+    // Age-based risk
+    if age, ok := context["age"].(float64); ok {
+        if age > 65 {
+            riskScore += 2.0
+        } else if age > 50 {
+            riskScore += 1.0
+        }
+    }
+    
+    // Renal function
+    if egfr, ok := context["egfr"].(float64); ok {
+        if egfr < 30 {
+            riskScore += 3.0
+        } else if egfr < 60 {
+            riskScore += 1.5
+        }
+    }
+    
+    // Polypharmacy
+    if medCount, ok := context["medication_count"].(int); ok {
+        if medCount > 10 {
+            riskScore += 2.0
+        } else if medCount > 5 {
+            riskScore += 1.0
+        }
+    }
+    
+    // Determine risk level
+    switch {
+    case riskScore >= 5.0:
+        return "HIGH"
+    case riskScore >= 2.5:
+        return "MODERATE"
+    default:
+        return "LOW"
+    }
+}
+```
+
+
+## 5. Complete Phase 2 Execution Flow
+
+
+### 5.1 Main Orchestration Method
+
+
+```go
+// internal/phase2/orchestrator.go
+
+
+func (p2 *Phase2ContextAssembler) AssembleContext(
+    ctx context.Context,
+    manifest *IntentManifest,
+    patientID string,
+) (*EnrichedContext, error) {
+    span, ctx := p2.tracer.Start(ctx, "phase2.assemble_context")
+    defer span.End()
+    
+    phase2Start := time.Now()
+    
+    // Step 1: Initialize Evidence Envelope if not already done
+    if p2.evidenceEnvelope == nil {
+        if err := p2.InitializeEvidenceEnvelope(ctx); err != nil {
+            return nil, fmt.Errorf("evidence envelope initialization failed: %w", err)
+        }
+    }
+    
+    // Step 2: Prepare all query payloads
+    payloads, err := p2.PrepareQueryPayloads(manifest, patientID)
+    if err != nil {
+        return nil, fmt.Errorf("payload preparation failed: %w", err)
+    }
+    
+    // Step 3: Execute queries in parallel
+    results, err := p2.parallelExecutor.ExecuteQueries(ctx, payloads)
+    if err != nil {
+        return nil, fmt.Errorf("parallel query execution failed: %w", err)
+    }
+    
+    // Step 4: Extract results
+    snapshot := results.Results["context_gateway"].(*ClinicalSnapshot)
+    phenotypeRules := results.Results["kb_2_context"].(*PhenotypeRuleSet)
+    
+    // Step 5: Perform in-memory phenotype evaluation
+    phenotypeResult, err := p2.phenotypeEngine.DeterminePhenotype(
+        ctx,
+        snapshot,
+        phenotypeRules,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("phenotype evaluation failed: %w", err)
+    }
+    
+    // Step 6: Assemble additional KB data
+    additionalKBData := p2.assembleKBData(results)
+    
+    // Step 7: Build enriched context
+    enrichedContext := &EnrichedContext{
+        RequestID:          manifest.RequestID,
+        PatientID:          patientID,
+        SnapshotID:         snapshot.SnapshotID,
+        SnapshotCreatedAt:  snapshot.CreatedAt,
+        
+        // Clinical data
+        Demographics:       snapshot.Demographics,
+        CurrentMedications: snapshot.Medications,
+        Allergies:         snapshot.Allergies,
+        Conditions:        snapshot.Conditions,
+        LabResults:        snapshot.LabResults,
+        Vitals:           snapshot.Vitals,
+        
+        // Computed phenotype
+        Phenotype:         phenotypeResult.PrimaryPhenotype,
+        RiskLevel:         phenotypeResult.RiskLevel,
+        PhenotypeEvidence: phenotypeResult.Evidence,
+        
+        // KB data
+        Guidelines:        additionalKBData.Guidelines,
+        FormularyStatus:   additionalKBData.FormularyStatus,
+        ResistanceProfile: additionalKBData.ResistanceProfile,
+        
+        // Evidence tracking
+        EvidenceEnvelope:  p2.evidenceEnvelope,
+        
+        // Performance metrics
+        Phase2Duration:    time.Since(phase2Start),
+    }
+    
+    // Step 8: Cache the enriched context
+    p2.cache.Store(manifest.RequestID, enrichedContext)
+    
+    // Step 9: Record metrics
+    p2.metrics.RecordPhase2Completion(enrichedContext)
+    
+    // Verify we met the 50ms SLA
+    if enrichedContext.Phase2Duration > 50*time.Millisecond {
+        p2.logger.Warn("Phase 2 exceeded SLA",
+            "duration", enrichedContext.Phase2Duration,
+            "requestID", manifest.RequestID,
+        )
+    }
+    
+    return enrichedContext, nil
+}
+```
+
+
+### 5.2 EnrichedContext Output Structure
+
+
+```go
+// internal/phase2/models.go
+
+
+type EnrichedContext struct {
+    // Identity
+    RequestID          string                 `json:"request_id"`
+    PatientID          string                 `json:"patient_id"`
+    SnapshotID         string                 `json:"snapshot_id"`
+    SnapshotCreatedAt  time.Time              `json:"snapshot_created_at"`
+    
+    // Patient clinical data
+    Demographics       Demographics           `json:"demographics"`
+    CurrentMedications []CurrentMedication    `json:"current_medications"`
+    Allergies         []Allergy              `json:"allergies"`
+    Conditions        []Condition            `json:"conditions"`
+    LabResults        []LabResult            `json:"lab_results"`
+    Vitals            []VitalSign            `json:"vitals"`
+    
+    // Computed phenotype (from in-memory evaluation)
+    Phenotype         string                 `json:"phenotype"`
+    RiskLevel         string                 `json:"risk_level"`
+    PhenotypeEvidence PhenotypeEvidence      `json:"phenotype_evidence"`
+    
+    // Additional KB data
+    Guidelines        []ClinicalGuideline    `json:"guidelines"`
+    FormularyStatus   FormularyInfo          `json:"formulary_status"`
+    ResistanceProfile ResistanceData         `json:"resistance_profile"`
+    
+    // Evidence & Audit
+    EvidenceEnvelope  *EvidenceEnvelope      `json:"evidence_envelope"`
+    
+    // Performance tracking
+    Phase2Duration    time.Duration          `json:"phase2_duration_ms"`
+}
+```
+
+
+## 6. Error Handling & Resilience
+
+
+### 6.1 Graceful Degradation Strategy
+
+
+```go
+// internal/phase2/resilience.go
+
+
+func (p2 *Phase2ContextAssembler) HandlePartialFailures(
+    results *CombinedResults,
+    manifest *IntentManifest,
+) (*EnrichedContext, error) {
+    // Check if critical data is available
+    snapshot, hasSnapshot := results.Results["context_gateway"].(*ClinicalSnapshot)
+    if !hasSnapshot {
+        return nil, fmt.Errorf("critical failure: no patient snapshot available")
+    }
+    
+    // Build degraded context with available data
+    degradedContext := &EnrichedContext{
+        RequestID:  manifest.RequestID,
+        PatientID:  snapshot.PatientID,
+        SnapshotID: snapshot.SnapshotID,
+        
+        // Use snapshot data
+        Demographics:       snapshot.Demographics,
+        CurrentMedications: snapshot.Medications,
+        Allergies:         snapshot.Allergies,
+        
+        // Default phenotype if KB-2 failed
+        Phenotype: "UNKNOWN_STANDARD_RISK",
+        RiskLevel: "MODERATE",
+        
+        // Mark as degraded
+        Warnings: []Warning{{
+            Code:    "PARTIAL_CONTEXT",
+            Message: fmt.Sprintf("Some KBs unavailable: %v", results.Errors),
+        }},
+    }
+    
+    // Attempt simplified phenotype determination with available data
+    if phenotypeRules, hasRules := results.Results["kb_2_context"]; hasRules {
+        // Still perform in-memory evaluation
+        phenotypeResult, _ := p2.phenotypeEngine.DeterminePhenotype(
+            context.Background(),
+            snapshot,
+            phenotypeRules.(*PhenotypeRuleSet),
+        )
+        if phenotypeResult != nil {
+            degradedContext.Phenotype = phenotypeResult.PrimaryPhenotype
+            degradedContext.RiskLevel = phenotypeResult.RiskLevel
+        }
+    }
+    
+    return degradedContext, nil
+}
+```
+
+
+## 7. Performance Optimization
+
+
+### 7.1 Caching Strategy
+
+
+```go
+// internal/phase2/cache.go
+
+
+type ContextCache struct {
+    phenotypeRules  *lru.Cache
+    snapshots       *ttlcache.Cache
+    kbResults       *sync.Map
+}
+
+
+func (cc *ContextCache) GetOrFetchPhenotypeRules(
+    ctx context.Context,
+    condition string,
+    version string,
+    fetcher func() (*PhenotypeRuleSet, error),
+) (*PhenotypeRuleSet, error) {
+    key := fmt.Sprintf("%s:%s", condition, version)
+    
+    // Check cache
+    if cached, ok := cc.phenotypeRules.Get(key); ok {
+        cc.metrics.RecordCacheHit("phenotype_rules")
+        return cached.(*PhenotypeRuleSet), nil
+    }
+    
+    // Fetch and cache
+    rules, err := fetcher()
+    if err != nil {
+        return nil, err
+    }
+    
+    cc.phenotypeRules.Add(key, rules)
+    cc.metrics.RecordCacheMiss("phenotype_rules")
+    
+    return rules, nil
+}
+```
+
+
+## 8. Testing Strategy
+
+
+### 8.1 Unit Tests for Parallel Execution
+
+
+```go
+// internal/phase2/parallel_executor_test.go
+
+
+func TestParallelQueryExecution(t *testing.T) {
+    executor := NewParallelQueryExecutor(5, 100*time.Millisecond)
+    
+    // Create test payloads
+    payloads := &QueryPayloadSet{
+        RequestID: "test-123",
+        Queries: []QueryPayload{
+            {
+                Target:  "context_gateway",
+                Timeout: 50 * time.Millisecond,
+            },
+            {
+                Target:  "kb_2_context",
+                Timeout: 50 * time.Millisecond,
+            },
+            {
+                Target:  "kb_3_guidelines",
+                Timeout: 50 * time.Millisecond,
+            },
+        },
+    }
+    
+    // Execute
+    ctx := context.Background()
+    results, err := executor.ExecuteQueries(ctx, payloads)
+    
+    // Assertions
+    require.NoError(t, err)
+    assert.Equal(t, 3, len(results.Results))
+    assert.Less(t, results.Duration, 60*time.Millisecond) // Should complete in parallel
+}
+```
+
+
+### 8.2 Benchmark for In-Memory Phenotype Evaluation
+
+
+```go
+// internal/phase2/phenotype_bench_test.go
+
+
+func BenchmarkPhenotypeEvaluation(b *testing.B) {
+    evaluator := setupTestEvaluator()
+    snapshot := createTestSnapshot()
+    rules := createTestRules()
+    
+    b.ResetTimer()
+    b.RunParallel(func(pb *testing.PB) {
+        for pb.Next() {
+            result, err := evaluator.DeterminePhenotype(
+                context.Background(),
+                snapshot,
+                rules,
+            )
+            if err != nil {
+                b.Fatal(err)
+            }
+            _ = result
+        }
+    })
+    
+    // Ensure in-memory evaluation is fast
+    if b.Elapsed()/time.Duration(b.N) > 1*time.Millisecond {
+        b.Fatalf("Phenotype evaluation too slow: %v", b.Elapsed()/time.Duration(b.N))
+    }
+}
+```
+
+
+## 9. Configuration
+
+
+```yaml
+# config/phase2.yaml
+phase2:
+  context_gateway:
+    url: "https://context-gateway.internal:8443"
+    timeout: 30s
+    snapshot_ttl: 300s
+    
+  parallel_execution:
+    max_concurrency: 10
+    default_timeout: 25ms
+    circuit_breaker:
+      max_requests: 3
+      interval: 10s
+      timeout: 30s
+      
+  phenotype_evaluation:
+    cache_size: 1000
+    rule_ttl: 1h
+    evaluation_timeout: 5ms
+    
+  evidence_envelope:
+    knowledge_broker_url: "https://kb-broker.internal:8443"
+    refresh_interval: 5m
+    
+  performance:
+    target_latency_ms: 50
+    cache_warmup: true
+    preload_common_phenotypes:
+      - "htn_stage2_high_risk"
+      - "diabetes_ckd"
+      - "heart_failure_preserved_ef"
+```
+
+
+This Phase 2 implementation provides:
+
+
+1. **Evidence Envelope Integration**: Every KB query includes version from the active envelope
+2. **Parallel Fetching**: Context Gateway and KB queries execute simultaneously  
+3. **In-Memory Phenotype Evaluation**: High-speed local computation after data fetching
+4. **Resilient Design**: Circuit breakers, timeouts, and graceful degradation
+5. **Performance Optimized**: Multi-level caching, bounded concurrency, and parallel execution
+6. **Full Observability**: Comprehensive metrics and distributed tracing
+
+
+The architecture ensures Phase 2 completes within the 50ms SLA while maintaining clinical safety through version-controlled knowledge and immutable snapshots.

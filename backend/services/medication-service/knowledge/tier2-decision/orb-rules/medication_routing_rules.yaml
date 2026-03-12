@@ -1,0 +1,303 @@
+metadata:
+  version: "1.0.0"
+  last_updated: "2024-01-15"
+  description: "ORB Rules - The Brain of the Clinical Decision Support System"
+  author: "Clinical Decision Support Team"
+  validation_status: "approved"
+
+# THE BRAIN: Orchestrator Rule Base Rules
+# These rules transform generic medication requests into specific clinical recipes
+# This is the MOST CRITICAL component of the entire architecture
+
+rules:
+  # VANCOMYCIN RULES - Antibiotic with renal considerations
+  - id: "vancomycin-renal-impairment"
+    priority: 100
+    medication_code: "vancomycin"
+    rule_name: "Vancomycin with Renal Impairment"
+    
+    conditions:
+      medication:
+        code: "vancomycin"
+        
+      patient_conditions:
+        any_of:
+          - "chronic_kidney_disease"
+          - "acute_kidney_injury"
+          - "renal_impairment"
+          - "dialysis"
+          
+      clinical_context:
+        severity: ["moderate", "severe"]
+        
+    intent_manifest:
+      recipe_id: "vancomycin-renal-v2"
+      data_requirements:
+        - "creatinine_clearance"
+        - "current_weight"
+        - "age"
+        - "dialysis_status"
+        - "baseline_hearing"
+      priority: "high"
+      rationale: "Vancomycin requires renal dose adjustment due to 90% renal elimination and nephrotoxicity risk"
+      estimated_execution_time_ms: 5
+      
+  - id: "vancomycin-standard"
+    priority: 80
+    medication_code: "vancomycin"
+    rule_name: "Vancomycin Standard Dosing"
+    
+    conditions:
+      medication:
+        code: "vancomycin"
+        
+      patient_conditions:
+        none_of:
+          - "chronic_kidney_disease"
+          - "acute_kidney_injury"
+          - "renal_impairment"
+          - "dialysis"
+          
+    intent_manifest:
+      recipe_id: "vancomycin-standard-v1"
+      data_requirements:
+        - "current_weight"
+        - "age"
+        - "creatinine_clearance"
+      priority: "medium"
+      rationale: "Standard vancomycin dosing for patients with normal renal function"
+      estimated_execution_time_ms: 3
+
+  # WARFARIN RULES - Anticoagulation with multiple factors
+  - id: "warfarin-initiation-genetic"
+    priority: 100
+    medication_code: "warfarin"
+    rule_name: "Warfarin Initiation with Genetic Testing"
+    
+    conditions:
+      medication:
+        code: "warfarin"
+        
+      clinical_context:
+        indication: ["atrial_fibrillation", "dvt", "pulmonary_embolism"]
+        genetic_testing_available: true
+        
+    intent_manifest:
+      recipe_id: "warfarin-initiation-v2"
+      data_requirements:
+        - "age"
+        - "weight_kg"
+        - "cyp2c9_genotype"
+        - "vkorc1_genotype"
+        - "baseline_inr"
+        - "concurrent_medications"
+        - "bleeding_risk_factors"
+      priority: "high"
+      rationale: "Pharmacogenetic-guided warfarin initiation improves safety and efficacy"
+      estimated_execution_time_ms: 8
+      
+  - id: "warfarin-initiation-clinical"
+    priority: 80
+    medication_code: "warfarin"
+    rule_name: "Warfarin Initiation Clinical Algorithm"
+    
+    conditions:
+      medication:
+        code: "warfarin"
+        
+      clinical_context:
+        indication: ["atrial_fibrillation", "dvt", "pulmonary_embolism"]
+        genetic_testing_available: false
+        
+    intent_manifest:
+      recipe_id: "warfarin-clinical-v1"
+      data_requirements:
+        - "age"
+        - "weight_kg"
+        - "baseline_inr"
+        - "concurrent_medications"
+        - "bleeding_risk_factors"
+        - "liver_function"
+      priority: "medium"
+      rationale: "Clinical algorithm-based warfarin initiation when genetic testing unavailable"
+      estimated_execution_time_ms: 6
+
+  # ACETAMINOPHEN RULES - Analgesic with hepatotoxicity considerations
+  - id: "acetaminophen-liver-disease"
+    priority: 100
+    medication_code: "acetaminophen"
+    rule_name: "Acetaminophen with Liver Disease"
+    
+    conditions:
+      medication:
+        code: "acetaminophen"
+        
+      patient_conditions:
+        any_of:
+          - "liver_disease"
+          - "hepatitis"
+          - "cirrhosis"
+          - "elevated_liver_enzymes"
+          
+    intent_manifest:
+      recipe_id: "acetaminophen-hepatic-v1"
+      data_requirements:
+        - "weight_kg"
+        - "liver_function_tests"
+        - "alcohol_use_history"
+        - "concurrent_hepatotoxic_drugs"
+      priority: "high"
+      rationale: "Acetaminophen dose reduction required in liver disease to prevent hepatotoxicity"
+      estimated_execution_time_ms: 4
+      
+  - id: "acetaminophen-chronic-alcohol"
+    priority: 90
+    medication_code: "acetaminophen"
+    rule_name: "Acetaminophen with Chronic Alcohol Use"
+    
+    conditions:
+      medication:
+        code: "acetaminophen"
+        
+      patient_conditions:
+        any_of:
+          - "chronic_alcohol_use"
+          - "alcohol_abuse"
+          - "alcoholism"
+          
+    intent_manifest:
+      recipe_id: "acetaminophen-alcohol-v1"
+      data_requirements:
+        - "weight_kg"
+        - "alcohol_consumption_pattern"
+        - "liver_function_tests"
+        - "nutritional_status"
+      priority: "high"
+      rationale: "Chronic alcohol use increases acetaminophen hepatotoxicity risk"
+      estimated_execution_time_ms: 4
+      
+  - id: "acetaminophen-pediatric"
+    priority: 85
+    medication_code: "acetaminophen"
+    rule_name: "Acetaminophen Pediatric Dosing"
+    
+    conditions:
+      medication:
+        code: "acetaminophen"
+        
+      patient_demographics:
+        age_years: "<18"
+        
+    intent_manifest:
+      recipe_id: "acetaminophen-pediatric-v1"
+      data_requirements:
+        - "age_years"
+        - "weight_kg"
+        - "fever_temperature"
+        - "pain_severity"
+      priority: "medium"
+      rationale: "Pediatric acetaminophen dosing based on weight and age"
+      estimated_execution_time_ms: 3
+      
+  - id: "acetaminophen-standard"
+    priority: 70
+    medication_code: "acetaminophen"
+    rule_name: "Acetaminophen Standard Adult Dosing"
+    
+    conditions:
+      medication:
+        code: "acetaminophen"
+        
+      patient_demographics:
+        age_years: ">=18"
+        
+      patient_conditions:
+        none_of:
+          - "liver_disease"
+          - "chronic_alcohol_use"
+          
+    intent_manifest:
+      recipe_id: "acetaminophen-standard-v2"
+      data_requirements:
+        - "weight_kg"
+        - "age_years"
+        - "pain_severity"
+        - "concurrent_medications"
+      priority: "low"
+      rationale: "Standard adult acetaminophen dosing for pain and fever"
+      estimated_execution_time_ms: 2
+
+# Rule evaluation configuration
+rule_evaluation:
+  # Rules are evaluated in priority order (highest first)
+  evaluation_order: "priority_descending"
+  
+  # Stop at first matching rule
+  stop_on_first_match: true
+  
+  # Timeout for rule evaluation
+  evaluation_timeout_ms: 100
+  
+  # Default behavior if no rules match
+  no_match_behavior:
+    action: "error"
+    message: "No ORB rule matches the medication request"
+    
+# Rule validation and quality checks
+validation:
+  required_fields:
+    - "id"
+    - "priority"
+    - "medication_code"
+    - "conditions"
+    - "intent_manifest"
+    
+  priority_ranges:
+    critical: [90, 100]
+    high: [70, 89]
+    medium: [50, 69]
+    low: [1, 49]
+    
+  data_requirements_validation:
+    max_requirements: 10
+    required_categories:
+      - "patient_demographics"
+      - "clinical_context"
+
+# Performance monitoring
+performance_targets:
+  rule_evaluation_time_ms: "<1"
+  intent_manifest_generation_ms: "<1"
+  total_orb_execution_ms: "<5"
+  
+# Audit and compliance
+audit_configuration:
+  log_all_evaluations: true
+  log_rule_matches: true
+  log_performance_metrics: true
+  
+compliance:
+  clinical_validation: "required"
+  pharmacist_review: "required"
+  periodic_review_months: 6
+
+# Emergency and override rules
+emergency_rules:
+  - id: "emergency-override"
+    priority: 999
+    description: "Emergency override for critical situations"
+    conditions:
+      clinical_context:
+        urgency: "emergency"
+        override_token: "present"
+    intent_manifest:
+      recipe_id: "emergency-override-v1"
+      data_requirements:
+        - "emergency_indication"
+        - "override_rationale"
+        - "prescriber_credentials"
+      priority: "critical"
+      rationale: "Emergency override - clinical judgment supersedes standard protocols"
+
+# No fallback rules - unknown medications should be rejected
+# Clinical safety requires explicit knowledge of all medications

@@ -1,0 +1,2154 @@
+﻿## 🚀 **Let's Build: ProtocolLoader + Sepsis Protocol**
+
+
+---
+
+
+## 📦 **Part 1: ProtocolLoader Implementation**
+
+
+### **1.1 Project Structure**
+
+
+```
+cardiofit-flink/
+├── pom.xml                                    # Add SnakeYAML dependency
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/cardiofit/flink/
+│   │   │       ├── knowledge/                # NEW PACKAGE
+│   │   │       │   ├── loader/
+│   │   │       │   │   ├── ProtocolLoader.java
+│   │   │       │   │   ├── KnowledgeBaseManager.java
+│   │   │       │   │   └── YamlValidator.java
+│   │   │       │   │
+│   │   │       │   ├── models/
+│   │   │       │   │   ├── Protocol.java
+│   │   │       │   │   ├── TriggerCriteria.java
+│   │   │       │   │   ├── Condition.java
+│   │   │       │   │   ├── Action.java
+│   │   │       │   │   ├── Medication.java
+│   │   │       │   │   ├── TimeConstraint.java
+│   │   │       │   │   └── EvidenceLink.java
+│   │   │       │   │
+│   │   │       │   └── matcher/
+│   │   │       │       ├── ProtocolMatcher.java
+│   │   │       │       ├── ConditionEvaluator.java
+│   │   │       │       └── ConfidenceCalculator.java
+│   │   │       │
+│   │   │       └── operators/
+│   │   │           └── RecommendationGenerator.java  # Module 3
+│   │   │
+│   │   └── resources/
+│   │       └── knowledge-base/
+│   │           ├── protocols/
+│   │           │   └── sepsis/
+│   │           │       └── sepsis-bundle-ssc-2021.yaml
+│   │           │
+│   │           └── schemas/
+│   │               └── protocol-schema.json
+│   │
+│   └── test/
+│       └── java/
+│           └── com/cardiofit/flink/knowledge/
+│               ├── ProtocolLoaderTest.java
+│               ├── ProtocolMatcherTest.java
+│               └── SepsisProtocolTest.java
+```
+
+
+---
+
+
+### **1.2 Maven Dependencies**
+
+
+**File:** `pom.xml`
+
+
+```xml
+<!-- Add to dependencies section -->
+
+
+<!-- SnakeYAML for YAML parsing -->
+<dependency>
+    <groupId>org.yaml</groupId>
+    <artifactId>snakeyaml</artifactId>
+    <version>2.0</version>
+</dependency>
+
+
+<!-- Jackson for JSON Schema validation -->
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>2.15.2</version>
+</dependency>
+
+
+<dependency>
+    <groupId>com.fasterxml.jackson.dataformat</groupId>
+    <artifactId>jackson-dataformat-yaml</artifactId>
+    <version>2.15.2</version>
+</dependency>
+
+
+<!-- NetworkNT JSON Schema Validator -->
+<dependency>
+    <groupId>com.networknt</groupId>
+    <artifactId>json-schema-validator</artifactId>
+    <version>1.0.87</version>
+</dependency>
+
+
+<!-- Lombok (optional but recommended) -->
+<dependency>
+    <groupId>org.projectlombok</groupId>
+    <artifactId>lombok</artifactId>
+    <version>1.18.30</version>
+    <scope>provided</scope>
+</dependency>
+
+
+<!-- SLF4J Logging -->
+<dependency>
+    <groupId>org.slf4j</groupId>
+    <artifactId>slf4j-api</artifactId>
+    <version>1.7.36</version>
+</dependency>
+```
+
+
+---
+
+
+### **1.3 Model Classes**
+
+
+#### **Protocol.java** (Main model)
+
+
+```java
+package com.cardiofit.flink.knowledge.models;
+
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+
+import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
+
+
+/**
+ * Represents a complete clinical protocol.
+ * 
+ * This is the root object loaded from protocol YAML files.
+ * Contains all information needed to match protocol triggers,
+ * generate actions, and track evidence.
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Protocol implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    
+    // ========================================================================
+    // METADATA
+    // ========================================================================
+    
+    private ProtocolMetadata metadata;
+    
+    // ========================================================================
+    // TRIGGER CRITERIA
+    // ========================================================================
+    
+    private TriggerCriteria triggerCriteria;
+    
+    // ========================================================================
+    // CONFIDENCE SCORING
+    // ========================================================================
+    
+    private ConfidenceScoring confidenceScoring;
+    
+    // ========================================================================
+    // TIME CONSTRAINTS
+    // ========================================================================
+    
+    private TimeConstraints timeConstraints;
+    
+    // ========================================================================
+    // ACTIONS
+    // ========================================================================
+    
+    private Actions actions;
+    
+    // ========================================================================
+    // MONITORING
+    // ========================================================================
+    
+    private Monitoring monitoring;
+    
+    // ========================================================================
+    // ESCALATION RULES
+    // ========================================================================
+    
+    private List<EscalationRule> escalationRules;
+    
+    // ========================================================================
+    // SUCCESS CRITERIA
+    // ========================================================================
+    
+    private SuccessCriteria successCriteria;
+    
+    // ========================================================================
+    // CONTRAINDICATIONS
+    // ========================================================================
+    
+    private Contraindications contraindications;
+    
+    // ========================================================================
+    // SPECIAL POPULATIONS
+    // ========================================================================
+    
+    private Map<String, SpecialPopulation> specialPopulations;
+    
+    // ========================================================================
+    // REFERENCES
+    // ========================================================================
+    
+    private References references;
+    
+    // ========================================================================
+    // SYSTEM METADATA
+    // ========================================================================
+    
+    private SystemMetadata systemMetadata;
+    
+    
+    // ========================================================================
+    // NESTED CLASSES
+    // ========================================================================
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class ProtocolMetadata implements Serializable {
+        private String protocolId;
+        private String name;
+        private String version;
+        private String effectiveDate;
+        private String reviewDate;
+        private String status;
+        private String category;
+        private String specialty;
+        private String urgency;
+        private DevelopedBy developedBy;
+        private EvidenceSource evidenceSource;
+        private List<Validator> validatedBy;
+        private String lastUpdated;
+        private String lastUpdatedBy;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class DevelopedBy implements Serializable {
+        private String organization;
+        private String committee;
+        private String leadAuthor;
+        private List<String> contributors;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EvidenceSource implements Serializable {
+        private PrimaryGuideline primaryGuideline;
+        private String evidenceLevel;
+        private String classOfRecommendation;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PrimaryGuideline implements Serializable {
+        private String name;
+        private String organization;
+        private Integer year;
+        private String url;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Validator implements Serializable {
+        private String name;
+        private String role;
+        private String date;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class ConfidenceScoring implements Serializable {
+        private Double baseScore;
+        private List<ConfidenceModifier> modifiers;
+        private Double activationThreshold;
+        private Double humanConfirmationThreshold;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ConfidenceModifier implements Serializable {
+        private String condition;
+        private String description;
+        private Map<String, Object> parameters;
+        private Double adjustment;
+        private String rationale;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class TimeConstraints implements Serializable {
+        private String bundleType;
+        private Integer bundleDeadlineHours;
+        private List<TimeWindow> timeWindows;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TimeWindow implements Serializable {
+        private String windowName;
+        private String description;
+        private Integer startOffsetMinutes;
+        private Integer endOffsetMinutes;
+        private String priority;
+        private Boolean critical;
+        private String mortalityImpact;
+        private List<String> actions;
+        private List<TimeAlert> alerts;
+        private List<String> successCriteria;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TimeAlert implements Serializable {
+        private Integer timeRemainingMinutes;
+        private String alertLevel;
+        private String message;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class Actions implements Serializable {
+        private List<Action> mandatory;
+        private List<Action> optional;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class Monitoring implements Serializable {
+        private VitalSignsMonitoring vitalSigns;
+        private LaboratoryMonitoring laboratory;
+        private List<ClinicalAssessment> clinical;
+        private TreatmentResponse treatmentResponse;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class VitalSignsMonitoring implements Serializable {
+        private Map<String, MonitoringFrequency> frequencyByAcuity;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MonitoringFrequency implements Serializable {
+        private String description;
+        private List<VitalParameter> parameters;
+        private String frequency;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class VitalParameter implements Serializable {
+        private String name;
+        private String frequency;
+        private String method;
+        private String target;
+        private Map<String, Object> alertThresholds;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LaboratoryMonitoring implements Serializable {
+        private List<LabTest> statLabs;
+        private List<LabTest> dailyLabs;
+        private List<LabTest> asNeeded;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LabTest implements Serializable {
+        private String test;
+        private String loinc;
+        private String timing;
+        private String target;
+        private String rationale;
+        private String frequency;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ClinicalAssessment implements Serializable {
+        private String assessment;
+        private String frequency;
+        private List<String> parameters;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TreatmentResponse implements Serializable {
+        private List<ReassessmentTimepoint> reassessmentTimepoints;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReassessmentTimepoint implements Serializable {
+        private String timepoint;
+        private List<String> assess;
+        private List<Decision> decisions;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Decision implements Serializable {
+        private String condition;
+        private String action;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class EscalationRule implements Serializable {
+        private String ruleId;
+        private Trigger trigger;
+        private String action;
+        private Map<String, Object> details;
+        private Map<String, Object> evidence;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Trigger implements Serializable {
+        private String condition;
+        private String timeframe;
+        private List<String> anyOf;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class SuccessCriteria implements Serializable {
+        private List<ProcessMeasure> processMeasures;
+        private OutcomeCriteria shortTerm;
+        private OutcomeCriteria mediumTerm;
+        private OutcomeCriteria longTerm;
+        private List<QualityMetric> qualityMetrics;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ProcessMeasure implements Serializable {
+        private String measure;
+        private String target;
+        private String rationale;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class OutcomeCriteria implements Serializable {
+        private String timeframe;
+        private List<String> goals;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class QualityMetric implements Serializable {
+        private String metric;
+        private String baseline;
+        private String target;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class Contraindications implements Serializable {
+        private List<Contraindication> absolute;
+        private List<Contraindication> relative;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Contraindication implements Serializable {
+        private String condition;
+        private String description;
+        private String rationale;
+        private String alternative;
+        private Boolean documentationRequired;
+        private Boolean familyDiscussionRequired;
+        private List<String> modifications;
+        private String consultationRequired;
+        private Boolean monitoringIntensification;
+        private String specialistRequired;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SpecialPopulation implements Serializable {
+        private Map<String, Object> definition;
+        private Map<String, Object> considerations;
+        private List<String> outcomes;
+        private String protocolReference;
+        private Map<String, Object> keyDifferences;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class References implements Serializable {
+        private List<Citation> primaryGuidelines;
+        private List<Citation> keyStudies;
+        private List<String> additionalResources;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Citation implements Serializable {
+        private String citation;
+        private String pmid;
+        private String url;
+        private String finding;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class SystemMetadata implements Serializable {
+        private String protocolFileFormatVersion;
+        private String schemaValidation;
+        private List<String> tags;
+        private List<String> searchKeywords;
+        private List<String> clinicalDomains;
+        private List<String> implementationNotes;
+        private PerformanceRequirements performanceRequirements;
+        private List<Dependency> dependencies;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PerformanceRequirements implements Serializable {
+        private Integer protocolMatchLatencyMs;
+        private Integer actionGenerationLatencyMs;
+        private Integer totalRecommendationLatencyMs;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Dependency implements Serializable {
+        private String service;
+        private Boolean required;
+    }
+    
+    
+    // ========================================================================
+    // UTILITY METHODS
+    // ========================================================================
+    
+    /**
+     * Check if protocol is currently active and within valid date range
+     */
+    public boolean isActive() {
+        return "active".equalsIgnoreCase(metadata.getStatus());
+    }
+    
+    /**
+     * Get protocol urgency level
+     */
+    public String getUrgency() {
+        return metadata.getUrgency();
+    }
+    
+    /**
+     * Get all mandatory action IDs
+     */
+    public List<String> getMandatoryActionIds() {
+        if (actions == null || actions.getMandatory() == null) {
+            return List.of();
+        }
+        return actions.getMandatory().stream()
+            .map(Action::getActionId)
+            .toList();
+    }
+    
+    /**
+     * Get protocol display name for UI
+     */
+    public String getDisplayName() {
+        return metadata.getName() + " (v" + metadata.getVersion() + ")";
+    }
+    
+    /**
+     * Check if protocol requires immediate action
+     */
+    public boolean isTimeCritical() {
+        return timeConstraints != null && 
+               "time_sensitive".equalsIgnoreCase(timeConstraints.getBundleType());
+    }
+}
+```
+
+
+---
+
+
+#### **TriggerCriteria.java**
+
+
+```java
+package com.cardiofit.flink.knowledge.models;
+
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+
+import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
+
+
+/**
+ * Represents the trigger criteria that determine when a protocol should activate.
+ * 
+ * Supports:
+ * - ALL_OF logic (all conditions must be true)
+ * - ANY_OF logic (at least one condition must be true)
+ * - Nested conditions
+ * - Context filters (age, location, exclusions)
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class TriggerCriteria implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    
+    /**
+     * Evaluation logic: "ALL_OF" or "ANY_OF"
+     */
+    private String evaluationLogic;
+    
+    /**
+     * List of conditions to evaluate
+     */
+    private List<Condition> conditions;
+    
+    /**
+     * Additional context filters (age limits, location requirements, etc.)
+     */
+    private ContextFilters contextFilters;
+    
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class ContextFilters implements Serializable {
+        private Integer minAge;
+        private Integer maxAge;
+        private List<String> excludeConditions;
+        private String requireLocation;
+        private String timeRestrictions;
+    }
+    
+    
+    /**
+     * Check if trigger uses ALL_OF logic
+     */
+    public boolean isAllOf() {
+        return "ALL_OF".equalsIgnoreCase(evaluationLogic);
+    }
+    
+    /**
+     * Check if trigger uses ANY_OF logic
+     */
+    public boolean isAnyOf() {
+        return "ANY_OF".equalsIgnoreCase(evaluationLogic);
+    }
+}
+```
+
+
+---
+
+
+#### **Condition.java**
+
+
+```java
+package com.cardiofit.flink.knowledge.models;
+
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+
+import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
+
+
+/**
+ * Represents a single condition in protocol trigger criteria.
+ * 
+ * Condition types:
+ * - SCORING_SYSTEM: NEWS2, qSOFA, SIRS
+ * - LAB_VALUE: Lab result threshold
+ * - VITAL_SIGN: Vital sign threshold
+ * - ANY_OF: Nested OR logic
+ * - ALL_OF: Nested AND logic
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Condition implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    
+    /**
+     * Unique identifier for this condition
+     */
+    private String conditionId;
+    
+    /**
+     * Type of condition: SCORING_SYSTEM, LAB_VALUE, VITAL_SIGN, ANY_OF, ALL_OF
+     */
+    private String conditionType;
+    
+    /**
+     * Human-readable description
+     */
+    private String description;
+    
+    /**
+     * Parameters specific to condition type
+     */
+    private Map<String, Object> parameters;
+    
+    /**
+     * Data requirements (what data is needed to evaluate)
+     */
+    private List<String> dataRequirements;
+    
+    /**
+     * Importance weight for confidence calculation
+     */
+    private Double weight;
+    
+    /**
+     * For nested conditions (ANY_OF, ALL_OF)
+     */
+    private List<SubCondition> subConditions;
+    
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SubCondition implements Serializable {
+        private String indicator;
+        private String parameter;
+        private String loincCode;
+        private Double threshold;
+        private String operator;
+        private String unit;
+    }
+    
+    
+    /**
+     * Get parameter as String
+     */
+    public String getParameterAsString(String key) {
+        if (parameters == null || !parameters.containsKey(key)) {
+            return null;
+        }
+        Object value = parameters.get(key);
+        return value != null ? value.toString() : null;
+    }
+    
+    /**
+     * Get parameter as Double
+     */
+    public Double getParameterAsDouble(String key) {
+        if (parameters == null || !parameters.containsKey(key)) {
+            return null;
+        }
+        Object value = parameters.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        try {
+            return Double.parseDouble(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+    
+    /**
+     * Get parameter as Integer
+     */
+    public Integer getParameterAsInteger(String key) {
+        Double d = getParameterAsDouble(key);
+        return d != null ? d.intValue() : null;
+    }
+    
+    /**
+     * Check if condition is a nested condition (ANY_OF or ALL_OF)
+     */
+    public boolean isNestedCondition() {
+        return "ANY_OF".equalsIgnoreCase(conditionType) || 
+               "ALL_OF".equalsIgnoreCase(conditionType);
+    }
+}
+```
+
+
+---
+
+
+#### **Action.java**
+
+
+```java
+package com.cardiofit.flink.knowledge.models;
+
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+
+import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
+
+
+/**
+ * Represents a clinical action to be recommended.
+ * 
+ * Action types:
+ * - DIAGNOSTIC: Labs, imaging, procedures
+ * - THERAPEUTIC: Medications, interventions
+ * - MONITORING: Vital signs, labs
+ * - ESCALATION: RRT, ICU, consultations
+ * - MEDICATION_REVIEW: Dose adjustments, discontinuations
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Action implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    
+    // ========================================================================
+    // IDENTIFICATION
+    // ========================================================================
+    
+    private String actionId;
+    private String actionType;
+    private String category;
+    private Integer priority;
+    
+    // ========================================================================
+    // DESCRIPTION
+    // ========================================================================
+    
+    private String title;
+    private String shortDescription;
+    private String detailedDescription;
+    
+    // ========================================================================
+    // TIMING
+    // ========================================================================
+    
+    private Timing timing;
+    
+    // ========================================================================
+    // CLINICAL DETAILS
+    // ========================================================================
+    
+    private Map<String, Object> clinicalDetails;
+    private MedicationSelection medicationSelection;
+    private Map<String, Object> interventionDetails;
+    private Map<String, Object> notificationDetails;
+    
+    // ========================================================================
+    // SAFETY
+    // ========================================================================
+    
+    private List<ContraindicationInfo> contraindications;
+    private List<String> warnings;
+    private List<String> precautions;
+    
+    // ========================================================================
+    // MONITORING & SUCCESS
+    // ========================================================================
+    
+    private List<String> monitoring;
+    private List<String> goals;
+    private String expectedOutcome;
+    private List<String> successCriteria;
+    private List<String> escalationCriteria;
+    
+    // ========================================================================
+    // EVIDENCE
+    // ========================================================================
+    
+    private Evidence evidence;
+    
+    // ========================================================================
+    // RATIONALE
+    // ========================================================================
+    
+    private String rationale;
+    
+    // ========================================================================
+    // METADATA
+    // ========================================================================
+    
+    private ActionMetadata metadata;
+    
+    
+    // ========================================================================
+    // NESTED CLASSES
+    // ========================================================================
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class Timing implements Serializable {
+        private String urgency;
+        private String timeframe;
+        private Integer deadlineOffsetMinutes;
+        private Integer sequencePosition;
+        private List<String> prerequisiteActions;
+        private List<String> blockingActions;
+        private Boolean canStartImmediately;
+        private Boolean canBeParallel;
+        private Boolean optional;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class MedicationSelection implements Serializable {
+        private String selectionAlgorithm;
+        private MedicationOption primary;
+        private List<MedicationOption> alternatives;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class MedicationOption implements Serializable {
+        private String medicationName;
+        private String genericName;
+        private List<String> brandNames;
+        private String rxnormCode;
+        private String dose;
+        private String doseUnit;
+        private String route;
+        private String frequency;
+        private String duration;
+        private Map<String, Object> administration;
+        private List<String> indications;
+        private Map<String, Object> spectrum;
+        private SelectionCriteria selectionCriteria;
+        private List<DoseAdjustment> doseAdjustments;
+        private List<ContraindicationInfo> contraindications;
+        private List<String> warnings;
+        private List<String> precautions;
+        private MonitoringInfo monitoring;
+        private List<DrugInteraction> drugInteractions;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SelectionCriteria implements Serializable {
+        private List<String> allOf;
+        private List<String> anyOf;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class DoseAdjustment implements Serializable {
+        private List<Integer> creatinineClearanceRange;
+        private String creatinineClearanceUnit;
+        private String adjustedDose;
+        private String adjustedDoseUnit;
+        private String adjustedFrequency;
+        private String rationale;
+        private String severity;
+        private String adjustment;
+        private String condition;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ContraindicationInfo implements Serializable {
+        private String condition;
+        private String rationale;
+        private String alternative;
+        private List<String> absolute;
+        private List<String> relative;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class MonitoringInfo implements Serializable {
+        private List<String> parameters;
+        private List<LabToOrder> labsToOrder;
+        private String checkFrequency;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class LabToOrder implements Serializable {
+        private String loinc;
+        private String frequency;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class DrugInteraction implements Serializable {
+        private String interactingDrug;
+        private String mechanism;
+        private String consequence;
+        private String management;
+        private String severity;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class Evidence implements Serializable {
+        private String guidelineReference;
+        private String evidenceLevel;
+        private String classOfRecommendation;
+        private String keyEvidence;
+        private List<SupportingStudy> supportingStudies;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SupportingStudy implements Serializable {
+        private String pmid;
+        private String citation;
+        private String finding;
+    }
+    
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class ActionMetadata implements Serializable {
+        private Integer estimatedCost;
+        private Integer estimatedDurationMinutes;
+        private Boolean requiresPharmacyReview;
+        private Boolean requiresPhysicianOrder;
+        private Boolean requiresInformedConsent;
+        private Boolean requiresConsent;
+        private Boolean requiresSpecialist;
+        private Boolean available247;
+    }
+    
+    
+    // ========================================================================
+    // UTILITY METHODS
+    // ========================================================================
+    
+    /**
+     * Check if action is time-critical
+     */
+    public boolean isTimeCritical() {
+        if (timing == null) return false;
+        String urgency = timing.getUrgency();
+        return "IMMEDIATE".equalsIgnoreCase(urgency) || 
+               "STAT".equalsIgnoreCase(urgency) ||
+               "CRITICAL".equalsIgnoreCase(urgency);
+    }
+    
+    /**
+     * Check if action is mandatory (not optional)
+     */
+    public boolean isMandatory() {
+        return timing == null || timing.getOptional() == null || !timing.getOptional();
+    }
+    
+    /**
+     * Get deadline in milliseconds from now
+     */
+    public Long getDeadlineMs() {
+        if (timing == null || timing.getDeadlineOffsetMinutes() == null) {
+            return null;
+        }
+        return timing.getDeadlineOffsetMinutes() * 60 * 1000L;
+    }
+}
+
+
+
+
+## 📦 **Part 1: ProtocolLoader Implementation (Continued)**
+
+
+---
+
+
+### **1.4 ProtocolLoader.java**
+
+
+```java
+package com.cardiofit.flink.knowledge.loader;
+
+
+import com.cardiofit.flink.knowledge.models.Protocol;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Serializable;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+
+/**
+ * Loads clinical protocols from YAML files.
+ * 
+ * Features:
+ * - Loads protocols from classpath or filesystem
+ * - Validates protocol structure
+ * - Caches loaded protocols for performance
+ * - Supports hot-reload for development
+ * 
+ * Usage:
+ * <pre>
+ * ProtocolLoader loader = new ProtocolLoader();
+ * Protocol sepsisProtocol = loader.loadProtocol("sepsis-bundle-ssc-2021");
+ * List<Protocol> allProtocols = loader.loadAllProtocols();
+ * </pre>
+ */
+public class ProtocolLoader implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    private static final Logger LOG = LoggerFactory.getLogger(ProtocolLoader.class);
+    
+    // Default protocol directory in classpath
+    private static final String DEFAULT_PROTOCOL_PATH = "knowledge-base/protocols/";
+    
+    // Jackson YAML mapper
+    private transient ObjectMapper yamlMapper;
+    
+    // Cache of loaded protocols (protocolId -> Protocol)
+    private transient Map<String, Protocol> protocolCache;
+    
+    // Protocol base path (can be overridden)
+    private String protocolBasePath;
+    
+    // Whether to use filesystem or classpath
+    private boolean useFileSystem;
+    
+    
+    /**
+     * Default constructor - loads from classpath
+     */
+    public ProtocolLoader() {
+        this(DEFAULT_PROTOCOL_PATH, false);
+    }
+    
+    /**
+     * Constructor with custom path
+     * 
+     * @param protocolBasePath Path to protocol directory
+     * @param useFileSystem If true, load from filesystem; if false, load from classpath
+     */
+    public ProtocolLoader(String protocolBasePath, boolean useFileSystem) {
+        this.protocolBasePath = protocolBasePath;
+        this.useFileSystem = useFileSystem;
+        this.yamlMapper = new ObjectMapper(new YAMLFactory());
+        this.protocolCache = new HashMap<>();
+        
+        LOG.info("ProtocolLoader initialized: path={}, useFileSystem={}", 
+                 protocolBasePath, useFileSystem);
+    }
+    
+    
+    // ========================================================================
+    // PUBLIC API
+    // ========================================================================
+    
+    /**
+     * Load a specific protocol by ID
+     * 
+     * @param protocolId Protocol identifier (e.g., "SEPSIS_BUNDLE_SSC_2021")
+     * @return Loaded protocol
+     * @throws ProtocolLoadException if protocol cannot be loaded
+     */
+    public Protocol loadProtocol(String protocolId) throws ProtocolLoadException {
+        LOG.debug("Loading protocol: {}", protocolId);
+        
+        // Check cache first
+        if (protocolCache.containsKey(protocolId)) {
+            LOG.debug("Protocol found in cache: {}", protocolId);
+            return protocolCache.get(protocolId);
+        }
+        
+        // Find protocol file
+        String protocolFilePath = findProtocolFile(protocolId);
+        if (protocolFilePath == null) {
+            throw new ProtocolLoadException("Protocol file not found: " + protocolId);
+        }
+        
+        // Load and parse
+        Protocol protocol = loadProtocolFromFile(protocolFilePath);
+        
+        // Validate
+        validateProtocol(protocol);
+        
+        // Cache
+        protocolCache.put(protocolId, protocol);
+        
+        LOG.info("Successfully loaded protocol: {} ({})", 
+                 protocol.getMetadata().getName(), 
+                 protocol.getMetadata().getVersion());
+        
+        return protocol;
+    }
+    
+    /**
+     * Load all protocols from the protocol directory
+     * 
+     * @return List of all loaded protocols
+     */
+    public List<Protocol> loadAllProtocols() {
+        LOG.info("Loading all protocols from: {}", protocolBasePath);
+        
+        List<String> protocolFiles = findAllProtocolFiles();
+        List<Protocol> protocols = new ArrayList<>();
+        
+        int successCount = 0;
+        int failCount = 0;
+        
+        for (String filePath : protocolFiles) {
+            try {
+                Protocol protocol = loadProtocolFromFile(filePath);
+                validateProtocol(protocol);
+                
+                // Cache by protocol ID
+                String protocolId = protocol.getMetadata().getProtocolId();
+                protocolCache.put(protocolId, protocol);
+                protocols.add(protocol);
+                
+                successCount++;
+                LOG.debug("Loaded protocol: {} from {}", protocolId, filePath);
+                
+            } catch (Exception e) {
+                failCount++;
+                LOG.error("Failed to load protocol from {}: {}", filePath, e.getMessage(), e);
+            }
+        }
+        
+        LOG.info("Loaded {} protocols successfully ({} failed)", successCount, failCount);
+        return protocols;
+    }
+    
+    /**
+     * Get a protocol from cache (does not load if not cached)
+     * 
+     * @param protocolId Protocol identifier
+     * @return Cached protocol or null
+     */
+    public Protocol getCachedProtocol(String protocolId) {
+        return protocolCache.get(protocolId);
+    }
+    
+    /**
+     * Get all cached protocols
+     * 
+     * @return Map of protocolId -> Protocol
+     */
+    public Map<String, Protocol> getAllCachedProtocols() {
+        return Collections.unmodifiableMap(protocolCache);
+    }
+    
+    /**
+     * Clear protocol cache (useful for hot-reload in development)
+     */
+    public void clearCache() {
+        LOG.info("Clearing protocol cache ({} protocols)", protocolCache.size());
+        protocolCache.clear();
+    }
+    
+    /**
+     * Reload a specific protocol (clears cache and reloads)
+     * 
+     * @param protocolId Protocol identifier
+     * @return Reloaded protocol
+     */
+    public Protocol reloadProtocol(String protocolId) throws ProtocolLoadException {
+        LOG.info("Reloading protocol: {}", protocolId);
+        protocolCache.remove(protocolId);
+        return loadProtocol(protocolId);
+    }
+    
+    
+    // ========================================================================
+    // PRIVATE HELPERS
+    // ========================================================================
+    
+    /**
+     * Find protocol file by ID
+     * Searches recursively in protocol directory
+     */
+    private String findProtocolFile(String protocolId) {
+        List<String> allFiles = findAllProtocolFiles();
+        
+        // Try exact match first (protocolId.yaml or protocolId.yml)
+        String exactMatch1 = protocolId.toLowerCase() + ".yaml";
+        String exactMatch2 = protocolId.toLowerCase() + ".yml";
+        
+        for (String filePath : allFiles) {
+            String fileName = getFileName(filePath).toLowerCase();
+            if (fileName.equals(exactMatch1) || fileName.equals(exactMatch2)) {
+                return filePath;
+            }
+        }
+        
+        // Try fuzzy match (file contains protocolId)
+        String fuzzyMatch = protocolId.toLowerCase().replace("_", "-");
+        for (String filePath : allFiles) {
+            String fileName = getFileName(filePath).toLowerCase();
+            if (fileName.contains(fuzzyMatch)) {
+                LOG.debug("Fuzzy matched protocol file: {} for ID: {}", fileName, protocolId);
+                return filePath;
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Find all YAML files in protocol directory
+     */
+    private List<String> findAllProtocolFiles() {
+        List<String> files = new ArrayList<>();
+        
+        if (useFileSystem) {
+            files = findFilesOnFilesystem();
+        } else {
+            files = findFilesOnClasspath();
+        }
+        
+        LOG.debug("Found {} protocol files", files.size());
+        return files;
+    }
+    
+    /**
+     * Find protocol files on filesystem
+     */
+    private List<String> findFilesOnFilesystem() {
+        List<String> files = new ArrayList<>();
+        Path basePath = Paths.get(protocolBasePath);
+        
+        if (!Files.exists(basePath)) {
+            LOG.warn("Protocol directory does not exist: {}", basePath);
+            return files;
+        }
+        
+        try (Stream<Path> paths = Files.walk(basePath)) {
+            files = paths
+                .filter(Files::isRegularFile)
+                .filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".yml"))
+                .map(Path::toString)
+                .collect(Collectors.toList());
+        } catch (IOException e) {
+            LOG.error("Error scanning filesystem for protocols: {}", e.getMessage(), e);
+        }
+        
+        return files;
+    }
+    
+    /**
+     * Find protocol files on classpath
+     * Note: This is simplified - in production you may need more sophisticated classpath scanning
+     */
+    private List<String> findFilesOnClasspath() {
+        List<String> files = new ArrayList<>();
+        
+        // For now, return known protocol paths
+        // In production, you might use Spring's PathMatchingResourcePatternResolver
+        // or Apache Commons VFS for recursive classpath scanning
+        
+        String[] knownProtocols = {
+            protocolBasePath + "sepsis/sepsis-bundle-ssc-2021.yaml",
+            protocolBasePath + "respiratory/acute-respiratory-failure.yaml",
+            protocolBasePath + "cardiac/stemi-protocol.yaml"
+        };
+        
+        for (String path : knownProtocols) {
+            if (getClass().getClassLoader().getResource(path) != null) {
+                files.add(path);
+            }
+        }
+        
+        return files;
+    }
+    
+    /**
+     * Load and parse protocol from file
+     */
+    private Protocol loadProtocolFromFile(String filePath) throws ProtocolLoadException {
+        LOG.debug("Parsing protocol file: {}", filePath);
+        
+        try {
+            Protocol protocol;
+            
+            if (useFileSystem) {
+                // Load from filesystem
+                File file = new File(filePath);
+                protocol = yamlMapper.readValue(file, Protocol.class);
+            } else {
+                // Load from classpath
+                InputStream inputStream = getClass().getClassLoader().getResourceAsStream(filePath);
+                if (inputStream == null) {
+                    throw new ProtocolLoadException("Protocol file not found in classpath: " + filePath);
+                }
+                protocol = yamlMapper.readValue(inputStream, Protocol.class);
+            }
+            
+            return protocol;
+            
+        } catch (IOException e) {
+            throw new ProtocolLoadException("Failed to parse protocol file: " + filePath, e);
+        }
+    }
+    
+    /**
+     * Validate protocol structure and required fields
+     */
+    private void validateProtocol(Protocol protocol) throws ProtocolLoadException {
+        List<String> errors = new ArrayList<>();
+        
+        // Check metadata
+        if (protocol.getMetadata() == null) {
+            errors.add("Missing metadata section");
+        } else {
+            if (protocol.getMetadata().getProtocolId() == null || 
+                protocol.getMetadata().getProtocolId().trim().isEmpty()) {
+                errors.add("Missing protocol_id in metadata");
+            }
+            if (protocol.getMetadata().getName() == null || 
+                protocol.getMetadata().getName().trim().isEmpty()) {
+                errors.add("Missing name in metadata");
+            }
+            if (protocol.getMetadata().getVersion() == null || 
+                protocol.getMetadata().getVersion().trim().isEmpty()) {
+                errors.add("Missing version in metadata");
+            }
+        }
+        
+        // Check trigger criteria
+        if (protocol.getTriggerCriteria() == null) {
+            errors.add("Missing trigger_criteria section");
+        } else {
+            if (protocol.getTriggerCriteria().getEvaluationLogic() == null) {
+                errors.add("Missing evaluation_logic in trigger_criteria");
+            }
+            if (protocol.getTriggerCriteria().getConditions() == null || 
+                protocol.getTriggerCriteria().getConditions().isEmpty()) {
+                errors.add("Missing conditions in trigger_criteria");
+            }
+        }
+        
+        // Check actions
+        if (protocol.getActions() == null) {
+            errors.add("Missing actions section");
+        } else {
+            if ((protocol.getActions().getMandatory() == null || 
+                 protocol.getActions().getMandatory().isEmpty()) &&
+                (protocol.getActions().getOptional() == null || 
+                 protocol.getActions().getOptional().isEmpty())) {
+                errors.add("No mandatory or optional actions defined");
+            }
+        }
+        
+        // Check confidence scoring
+        if (protocol.getConfidenceScoring() != null) {
+            Double baseScore = protocol.getConfidenceScoring().getBaseScore();
+            if (baseScore == null || baseScore < 0.0 || baseScore > 1.0) {
+                errors.add("Invalid base_score in confidence_scoring (must be 0.0-1.0)");
+            }
+        }
+        
+        // If errors found, throw exception
+        if (!errors.isEmpty()) {
+            String errorMsg = "Protocol validation failed:\n  - " + String.join("\n  - ", errors);
+            throw new ProtocolLoadException(errorMsg);
+        }
+        
+        LOG.debug("Protocol validation passed: {}", protocol.getMetadata().getProtocolId());
+    }
+    
+    /**
+     * Extract filename from path
+     */
+    private String getFileName(String filePath) {
+        int lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+        return lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
+    }
+    
+    
+    // ========================================================================
+    // CUSTOM EXCEPTION
+    // ========================================================================
+    
+    /**
+     * Exception thrown when protocol loading fails
+     */
+    public static class ProtocolLoadException extends Exception {
+        public ProtocolLoadException(String message) {
+            super(message);
+        }
+        
+        public ProtocolLoadException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+}
+```
+
+
+---
+
+
+### **1.5 KnowledgeBaseManager.java** (Singleton manager)
+
+
+```java
+package com.cardiofit.flink.knowledge.loader;
+
+
+import com.cardiofit.flink.knowledge.models.Protocol;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
+import java.io.Serializable;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+
+
+/**
+ * Singleton manager for the clinical knowledge base.
+ * 
+ * Responsibilities:
+ * - Load and cache all protocols
+ * - Provide protocol lookup by ID, category, specialty
+ * - Handle protocol updates and versioning
+ * - Thread-safe access for Flink operators
+ * 
+ * Usage in Flink operator:
+ * <pre>
+ * KnowledgeBaseManager kb = KnowledgeBaseManager.getInstance();
+ * kb.initialize();
+ * Protocol sepsisProtocol = kb.getProtocol("SEPSIS_BUNDLE_SSC_2021");
+ * </pre>
+ */
+public class KnowledgeBaseManager implements Serializable {
+    
+    private static final long serialVersionUID = 1L;
+    private static final Logger LOG = LoggerFactory.getLogger(KnowledgeBaseManager.class);
+    
+    // Singleton instance
+    private static volatile KnowledgeBaseManager instance;
+    
+    // Protocol loader
+    private transient ProtocolLoader protocolLoader;
+    
+    // Thread-safe protocol cache
+    private transient Map<String, Protocol> protocols;
+    
+    // Index by category for fast lookup
+    private transient Map<String, List<Protocol>> protocolsByCategory;
+    
+    // Index by specialty
+    private transient Map<String, List<Protocol>> protocolsBySpecialty;
+    
+    // Initialization flag
+    private transient volatile boolean initialized = false;
+    
+    
+    /**
+     * Private constructor (singleton pattern)
+     */
+    private KnowledgeBaseManager() {
+        this.protocolLoader = new ProtocolLoader();
+        this.protocols = new ConcurrentHashMap<>();
+        this.protocolsByCategory = new ConcurrentHashMap<>();
+        this.protocolsBySpecialty = new ConcurrentHashMap<>();
+    }
+    
+    /**
+     * Get singleton instance
+     */
+    public static KnowledgeBaseManager getInstance() {
+        if (instance == null) {
+            synchronized (KnowledgeBaseManager.class) {
+                if (instance == null) {
+                    instance = new KnowledgeBaseManager();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    
+    // ========================================================================
+    // INITIALIZATION
+    // ========================================================================
+    
+    /**
+     * Initialize knowledge base (load all protocols)
+     * Should be called once at application startup
+     */
+    public synchronized void initialize() {
+        if (initialized) {
+            LOG.warn("Knowledge base already initialized");
+            return;
+        }
+        
+        LOG.info("Initializing knowledge base...");
+        long startTime = System.currentTimeMillis();
+        
+        try {
+            // Load all protocols
+            List<Protocol> loadedProtocols = protocolLoader.loadAllProtocols();
+            
+            // Store in main cache
+            for (Protocol protocol : loadedProtocols) {
+                String protocolId = protocol.getMetadata().getProtocolId();
+                protocols.put(protocolId, protocol);
+            }
+            
+            // Build indexes
+            buildIndexes();
+            
+            long duration = System.currentTimeMillis() - startTime;
+            LOG.info("Knowledge base initialized successfully: {} protocols loaded in {}ms", 
+                     protocols.size(), duration);
+            
+            initialized = true;
+            
+        } catch (Exception e) {
+            LOG.error("Failed to initialize knowledge base: {}", e.getMessage(), e);
+            throw new RuntimeException("Knowledge base initialization failed", e);
+        }
+    }
+    
+    /**
+     * Check if knowledge base is initialized
+     */
+    public boolean isInitialized() {
+        return initialized;
+    }
+    
+    
+    // ========================================================================
+    // PROTOCOL LOOKUP
+    // ========================================================================
+    
+    /**
+     * Get protocol by ID
+     * 
+     * @param protocolId Protocol identifier
+     * @return Protocol or null if not found
+     */
+    public Protocol getProtocol(String protocolId) {
+        ensureInitialized();
+        return protocols.get(protocolId);
+    }
+    
+    /**
+     * Get all protocols
+     * 
+     * @return Unmodifiable collection of all protocols
+     */
+    public Collection<Protocol> getAllProtocols() {
+        ensureInitialized();
+        return Collections.unmodifiableCollection(protocols.values());
+    }
+    
+    /**
+     * Get protocols by category
+     * 
+     * @param category Category (e.g., "sepsis", "cardiac", "respiratory")
+     * @return List of protocols in category
+     */
+    public List<Protocol> getProtocolsByCategory(String category) {
+        ensureInitialized();
+        return protocolsByCategory.getOrDefault(category.toLowerCase(), Collections.emptyList());
+    }
+    
+    /**
+     * Get protocols by specialty
+     * 
+     * @param specialty Specialty (e.g., "emergency", "critical_care", "cardiology")
+     * @return List of protocols for specialty
+     */
+    public List<Protocol> getProtocolsBySpecialty(String specialty) {
+        ensureInitialized();
+        return protocolsBySpecialty.getOrDefault(specialty.toLowerCase(), Collections.emptyList());
+    }
+    
+    /**
+     * Get active protocols only
+     * 
+     * @return List of active protocols
+     */
+    public List<Protocol> getActiveProtocols() {
+        ensureInitialized();
+        return protocols.values().stream()
+            .filter(Protocol::isActive)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get time-critical protocols
+     * 
+     * @return List of time-critical protocols
+     */
+    public List<Protocol> getTimeCriticalProtocols() {
+        ensureInitialized();
+        return protocols.values().stream()
+            .filter(Protocol::isTimeCritical)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Search protocols by keyword
+     * 
+     * @param keyword Search term
+     * @return List of matching protocols
+     */
+    public List<Protocol> searchProtocols(String keyword) {
+        ensureInitialized();
+        String lowerKeyword = keyword.toLowerCase();
+        
+        return protocols.values().stream()
+            .filter(p -> {
+                // Search in name
+                if (p.getMetadata().getName().toLowerCase().contains(lowerKeyword)) {
+                    return true;
+                }
+                // Search in protocol ID
+                if (p.getMetadata().getProtocolId().toLowerCase().contains(lowerKeyword)) {
+                    return true;
+                }
+                // Search in category
+                if (p.getMetadata().getCategory() != null && 
+                    p.getMetadata().getCategory().toLowerCase().contains(lowerKeyword)) {
+                    return true;
+                }
+                // Search in tags (if available)
+                if (p.getSystemMetadata() != null && 
+                    p.getSystemMetadata().getSearchKeywords() != null) {
+                    return p.getSystemMetadata().getSearchKeywords().stream()
+                        .anyMatch(kw -> kw.toLowerCase().contains(lowerKeyword));
+                }
+                return false;
+            })
+            .collect(Collectors.toList());
+    }
+    
+    
+    // ========================================================================
+    // PROTOCOL MANAGEMENT
+    // ========================================================================
+    
+    /**
+     * Reload a specific protocol
+     * 
+     * @param protocolId Protocol to reload
+     */
+    public synchronized void reloadProtocol(String protocolId) {
+        LOG.info("Reloading protocol: {}", protocolId);
+        
+        try {
+            Protocol protocol = protocolLoader.reloadProtocol(protocolId);
+            protocols.put(protocolId, protocol);
+            buildIndexes(); // Rebuild indexes
+            
+            LOG.info("Protocol reloaded successfully: {}", protocolId);
+            
+        } catch (ProtocolLoader.ProtocolLoadException e) {
+            LOG.error("Failed to reload protocol {}: {}", protocolId, e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Reload all protocols (hot reload)
+     */
+    public synchronized void reloadAll() {
+        LOG.info("Reloading all protocols...");
+        
+        protocolLoader.clearCache();
+        protocols.clear();
+        protocolsByCategory.clear();
+        protocolsBySpecialty.clear();
+        
+        initialized = false;
+        initialize();
+    }
+    
+    /**
+     * Get protocol count
+     */
+    public int getProtocolCount() {
+        return protocols.size();
+    }
+    
+    /**
+     * Get knowledge base statistics
+     */
+    public Map<String, Object> getStatistics() {
+        ensureInitialized();
+        
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("total_protocols", protocols.size());
+        stats.put("active_protocols", getActiveProtocols().size());
+        stats.put("time_critical_protocols", getTimeCriticalProtocols().size());
+        stats.put("categories", protocolsByCategory.size());
+        stats.put("specialties", protocolsBySpecialty.size());
+        stats.put("initialized", initialized);
+        
+        return stats;
+    }
+    
+    
+    // ========================================================================
+    // PRIVATE HELPERS
+    // ========================================================================
+    
+    /**
+     * Ensure knowledge base is initialized
+     */
+    private void ensureInitialized() {
+        if (!initialized) {
+            throw new IllegalStateException(
+                "Knowledge base not initialized. Call initialize() first.");
+        }
+    }
+    
+    /**
+     * Build lookup indexes for fast querying
+     */
+    private void buildIndexes() {
+        LOG.debug("Building protocol indexes...");
+        
+        // Clear existing indexes
+        protocolsByCategory.clear();
+        protocolsBySpecialty.clear();
+        
+        // Build category index
+        for (Protocol protocol : protocols.values()) {
+            String category = protocol.getMetadata().getCategory();
+            if (category != null) {
+                protocolsByCategory
+                    .computeIfAbsent(category.toLowerCase(), k -> new ArrayList<>())
+                    .add(protocol);
+            }
+            
+            String specialty = protocol.getMetadata().getSpecialty();
+            if (specialty != null) {
+                protocolsBySpecialty
+                    .computeIfAbsent(specialty.toLowerCase(), k -> new ArrayList<>())
+                    .add(protocol);
+            }
+        }
+        
+        LOG.debug("Indexes built: {} categories, {} specialties", 
+                  protocolsByCategory.size(), protocolsBySpecialty.size());
+    }
+}
+```
+
+
+---
+
+
+### **1.6 Unit Tests**
+
+
+#### **ProtocolLoaderTest.java**
+
+
+```java
+package com.cardiofit.flink.knowledge;
+
+
+import com.cardiofit.flink.knowledge.loader.ProtocolLoader;
+import com.cardiofit.flink.knowledge.models.Protocol;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+
+import java.util.List;
+
+
+import static org.junit.jupiter.api.Assertions.*;
+
+
+/**
+ * Unit tests for ProtocolLoader
+ */
+public class ProtocolLoaderTest {
+    
+    private ProtocolLoader loader;
+    
+    @BeforeEach
+    public void setup() {
+        loader = new ProtocolLoader();
+    }
+    
+    @Test
+    public void testLoadSepsisProtocol() throws Exception {
+        // Load sepsis protocol
+        Protocol protocol = loader.loadProtocol("SEPSIS_BUNDLE_SSC_2021");
+        
+        // Verify metadata
+        assertNotNull(protocol);
+        assertNotNull(protocol.getMetadata());
+        assertEquals("SEPSIS_BUNDLE_SSC_2021", protocol.getMetadata().getProtocolId());
+        assertEquals("Sepsis Resuscitation Bundle", protocol.getMetadata().getName());
+        
+        // Verify trigger criteria
+        assertNotNull(protocol.getTriggerCriteria());
+        assertNotNull(protocol.getTriggerCriteria().getConditions());
+        assertFalse(protocol.getTriggerCriteria().getConditions().isEmpty());
+        
+        // Verify actions
+        assertNotNull(protocol.getActions());
+        assertNotNull(protocol.getActions().getMandatory());
+        assertFalse(protocol.getActions().getMandatory().isEmpty());
+        
+        System.out.println("✅ Loaded sepsis protocol: " + protocol.getDisplayName());
+        System.out.println("   Mandatory actions: " + protocol.getActions().getMandatory().size());
+        System.out.println("   Optional actions: " + 
+            (protocol.getActions().getOptional() != null ? protocol.getActions().getOptional().size() : 0));
+    }
+    
+    @Test
+    public void testProtocolCaching() throws Exception {
+        // Load protocol twice
+        Protocol protocol1 = loader.loadProtocol("SEPSIS_BUNDLE_SSC_2021");
+        Protocol protocol2 = loader.loadProtocol("SEPSIS_BUNDLE_SSC_2021");
+        
+        // Should return same instance from cache
+        assertSame(protocol1, protocol2);
+        
+        System.out.println("✅ Protocol caching works");
+    }
+    
+    @Test
+    public void testLoadAllProtocols() {
+        // Load all available protocols
+        List<Protocol> protocols = loader.loadAllProtocols();
+        
+        assertNotNull(protocols);
+        assertFalse(protocols.isEmpty(), "Should load at least one protocol");
+        
+        System.out.println("✅ Loaded " + protocols.size() + " protocols");
+        for (Protocol p : protocols) {
+            System.out.println("   - " + p.getDisplayName());
+        }
+    }
+    
+    @Test
+    public void testInvalidProtocolId() {
+        // Try to load non-existent protocol
+        assertThrows(ProtocolLoader.ProtocolLoadException.class, () -> {
+            loader.loadProtocol("NONEXISTENT_PROTOCOL");
+        });
+        
+        System.out.println("✅ Correctly throws exception for invalid protocol ID");
+    }
+    
+    @Test
+    public void testProtocolIsActive() throws Exception {
+        Protocol protocol = loader.loadProtocol("SEPSIS_BUNDLE_SSC_2021");
+        
+        assertTrue(protocol.isActive(), "Sepsis protocol should be active");
+        
+        System.out.println("✅ Protocol active status: " + protocol.isActive());
+    }
+    
+    @Test
+    public void testProtocolIsTimeCritical() throws Exception {
+        Protocol protocol = loader.loadProtocol("SEPSIS_BUNDLE_SSC_2021");
+        
+        assertTrue(protocol.isTimeCritical(), "Sepsis protocol should be time-critical");
+        
+        System.out.println("✅ Protocol time-critical status: " + protocol.isTimeCritical());
+    }
+}
+```
+
+
+---
+
+
+## 📄 **Part 2: Sepsis Protocol YAML**
+
+
+### **2.1 Complete Sepsis Protocol**
+
+
+**File:** `src/main/resources/knowledge-base/protocols/sepsis/sepsis-bundle-ssc-2021.yaml`
+
+
+Due to length constraints, I'll provide the complete sepsis protocol in the next message. For now, here's the beginning:
+
+
+```yaml
+# ==============================================================================
+# SEPSIS RESUSCITATION BUNDLE - SSC 2021
+# ==============================================================================
+# Based on: Surviving Sepsis Campaign Guidelines 2021
+# Version: 2.1.0
+# Last Updated: 2025-01-15
+# ==============================================================================
+
+
+metadata:
+  protocol_id: "SEPSIS_BUNDLE_SSC_2021"
+  name: "Sepsis Resuscitation Bundle"
+  version: "2.1.0"
+  effective_date: "2025-01-01"
+  review_date: "2026-01-01"
+  status: "active"
+  
+  # Classification
+  category: "sepsis"
+  specialty: "critical_care"
+  urgency: "high"
+  
+  # Authorship
+  developed_by:
+    organization: "Surviving Sepsis Campaign"
+    committee: "SSC Steering Committee"
+    lead_author: "Dr. Andrew Rhodes"
+    contributors:
+      - "Dr. Laura Evans"
+      - "Dr. Waleed Alhazzani"
+      - "Dr. Mitchell Levy"
+  
+  # Evidence base
+  evidence_source:
+    primary_guideline:
+      name: "Surviving Sepsis Campaign: International Guidelines for Management of Sepsis and Septic Shock: 2021"
+      organization: "Society of Critical Care Medicine / European Society of Intensive Care Medicine"
+      year: 2021
+      url: "https://www.sccm.org/SurvivingSepsisCampaign/Guidelines"
+    evidence_level: "A"
+    class_of_recommendation: "I"
+  
+  # Validation
+  validated_by:
+    - name: "Dr. Clinical Validator"
+      role: "Chief of Critical Care"
+      date: "2025-01-10"
+  
+  last_updated: "2025-01-15"
+  last_updated_by: "Clinical Informatics Team"
+
+
+# ==============================================================================
+# TRIGGER CRITERIA

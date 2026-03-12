@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # KB-4 Patient Safety Service
+  kb4-patient-safety:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb4-patient-safety-service
+    environment:
+      - PORT=8088
+      - GIN_MODE=release
+      - DATABASE_URL=postgres://kb4_safety_user:kb4_safety_password@kb4-timescaledb:5432/kb4_patient_safety?sslmode=disable
+      - REDIS_URL=redis://kb4-redis:6379
+      - KNOWLEDGE_PATH=/app/knowledge
+      - JURISDICTION=US
+      - USE_GOVERNED_KNOWLEDGE=true
+      - LOG_LEVEL=info
+    ports:
+      - "8088:8088"
+    volumes:
+      # Mount knowledge directory for hot-reload during development
+      - ./knowledge:/app/knowledge:ro
+    networks:
+      - kb4-safety-network
+    depends_on:
+      kb4-timescaledb:
+        condition: service_healthy
+      kb4-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  # TimescaleDB for KB-4 Patient Safety (PostgreSQL with time-series extensions)
+  kb4-timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: kb4-patient-safety-timescaledb
+    environment:
+      - POSTGRES_USER=kb4_safety_user
+      - POSTGRES_PASSWORD=kb4_safety_password
+      - POSTGRES_DB=kb4_patient_safety
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5432:5432"  # Standard PostgreSQL port
+    volumes:
+      - kb4_timescaledb_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb4_safety_user -d kb4_patient_safety"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - kb4-safety-network
+    command: >
+      postgres
+      -c shared_preload_libraries=timescaledb
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+
+  # Redis for KB-4 caching and real-time alerts
+  kb4-redis:
+    image: redis:7-alpine
+    container_name: kb4-patient-safety-redis
+    command: redis-server --appendonly yes --maxmemory 1GB --maxmemory-policy allkeys-lru
+    ports:
+      - "6381:6379"  # Different port for KB-4
+    volumes:
+      - kb4_redis_data:/data
+    networks:
+      - kb4-safety-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  kb4_timescaledb_data:
+    driver: local
+  kb4_redis_data:
+    driver: local
+
+networks:
+  kb4-safety-network:
+    driver: bridge

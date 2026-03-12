@@ -1,0 +1,80 @@
+services:
+  kb-10-rules-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-10-rules-engine
+    ports:
+      - "8100:8100"
+    environment:
+      - KB10_PORT=8100
+      - KB10_RULES_PATH=/app/rules
+      - KB10_LOG_LEVEL=info
+      - KB10_DB_HOST=kb-postgres
+      - KB10_DB_PORT=5432
+      - KB10_DB_NAME=kb10_rules
+      - KB10_DB_USER=postgres
+      - KB10_DB_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - KB10_REDIS_HOST=kb-redis
+      - KB10_REDIS_PORT=6379
+      - KB10_ENABLE_CACHING=true
+      - KB10_CACHE_TTL=5m
+      - VAIDSHALA_URL=http://vaidshala:8096
+    volumes:
+      - ./rules:/app/rules:ro
+    depends_on:
+      kb-postgres:
+        condition: service_healthy
+      kb-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - kb-network
+    restart: unless-stopped
+
+  kb-postgres:
+    image: postgres:15-alpine
+    container_name: kb-10-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_DB=kb10_rules
+    ports:
+      - "5440:5432"
+    volumes:
+      - kb10-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-network
+
+  kb-redis:
+    image: redis:7-alpine
+    container_name: kb-10-redis
+    ports:
+      - "6390:6379"
+    volumes:
+      - kb10-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kb-network
+
+volumes:
+  kb10-postgres-data:
+  kb10-redis-data:
+
+networks:
+  kb-network:
+    driver: bridge

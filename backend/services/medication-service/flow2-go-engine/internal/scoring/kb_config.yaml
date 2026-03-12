@@ -1,0 +1,179 @@
+# KB Compare-Rank Profiles Configuration
+# This file defines the knowledge base configuration for compare-and-rank profiles
+# that can be updated without code changes
+
+profiles:
+  # Phenotype-specific weight profiles
+  ASCVD:
+    weights:
+      efficacy: 0.38      # Prioritize efficacy for cardiovascular outcomes
+      safety: 0.22        # Important safety considerations
+      availability: 0.10  # Moderate availability importance
+      cost: 0.08          # Lower cost priority for high-risk patients
+      adherence: 0.12     # Important for long-term outcomes
+      preference: 0.10    # Patient preference consideration
+
+  HF:
+    weights:
+      efficacy: 0.36      # Strong efficacy focus for heart failure
+      safety: 0.24        # Higher safety priority
+      availability: 0.12  # Moderate availability importance
+      cost: 0.06          # Lower cost priority for high-risk patients
+      adherence: 0.12     # Important for chronic management
+      preference: 0.10    # Patient preference consideration
+
+  CKD:
+    weights:
+      efficacy: 0.36      # Strong efficacy focus for kidney disease
+      safety: 0.24        # Higher safety priority (renal function)
+      availability: 0.12  # Moderate availability importance
+      cost: 0.06          # Lower cost priority for high-risk patients
+      adherence: 0.12     # Important for chronic management
+      preference: 0.10    # Patient preference consideration
+
+  NONE:
+    weights:
+      efficacy: 0.30      # Balanced efficacy focus
+      safety: 0.22        # Standard safety priority
+      availability: 0.14  # Higher availability importance
+      cost: 0.14          # Higher cost consideration
+      adherence: 0.12     # Standard adherence importance
+      preference: 0.08    # Lower preference weight
+
+  BUDGET_MODE:
+    weights:
+      efficacy: 0.28      # Slightly lower efficacy focus
+      safety: 0.22        # Maintain safety standards
+      availability: 0.16  # Higher availability importance
+      cost: 0.22          # High cost consideration
+      adherence: 0.08     # Lower adherence weight
+      preference: 0.04    # Minimal preference consideration
+
+# Penalty and bonus configurations
+penalties:
+  safety:
+    residual_ddi:
+      none: 0.0
+      moderate: 0.15
+      major: 0.30
+    hypo:
+      low: 0.00
+      med: 0.15
+      high: 0.25
+    weight_gain: 0.05
+
+  adherence:
+    base: 0.50
+    frequency_bonus:
+      od: 0.20    # Once daily bonus
+      bid: 0.05   # Twice daily bonus
+      tid: -0.05  # Three times daily penalty
+      qid: -0.10  # Four times daily penalty
+    fdc_bonus: 0.15                    # Fixed-dose combination bonus
+    injectable_penalty: 0.10           # Injectable route penalty
+    weekly_injectable_bonus: 0.05      # Weekly injectable offset
+    device_training_penalty: 0.05      # Device training requirement penalty
+
+  availability:
+    tier_factor:
+      1: 1.0      # Tier 1 (preferred)
+      2: 0.8      # Tier 2 (non-preferred)
+      3: 0.6      # Tier 3 (non-preferred)
+      4: 0.4      # Tier 4 (specialty)
+      999: 0.2    # Out of network
+    out_of_stock_multiplier: 0.2
+
+# Efficacy bonuses for phenotype benefits
+efficacy_bonuses:
+  cv_benefit: 0.10      # Cardiovascular outcome benefit
+  hf_benefit: 0.15      # Heart failure benefit
+  ckd_benefit: 0.15     # Chronic kidney disease benefit
+  max_phenotype_bonus: 0.25  # Maximum total phenotype bonus
+
+# Knockout rule thresholds
+knockout_rules:
+  stock:
+    max_lead_time_days: 7     # Maximum acceptable lead time for top slot
+  budget:
+    minimal_tier_max: 2       # Maximum tier for minimal resource settings
+    standard_tier_max: 3      # Maximum tier for standard resource settings
+    advanced_tier_max: 4      # Maximum tier for advanced resource settings
+
+# Tie-breaker priorities (in order)
+tie_breakers:
+  - safety_score      # Higher safety score wins
+  - efficacy_score    # Higher efficacy score wins
+  - cost_score        # Higher cost score (lower cost) wins
+  - pill_burden       # Lower pill burden wins
+  - therapy_id        # Deterministic lexicographic ordering
+
+# Normalization settings
+normalization:
+  efficacy:
+    a1c_drop_max: 2.0         # Maximum A1c drop for normalization (2.0%)
+    a1c_drop_cap: 1.0         # Cap normalized score at 1.0
+  cost:
+    use_relative_normalization: true  # Use min-max normalization within candidate set
+  safety:
+    base_score: 1.0           # Starting safety score
+    min_score: 0.0            # Minimum allowable safety score
+
+# Clinical decision thresholds
+thresholds:
+  minimum_safety_score: 0.1   # Minimum safety score for consideration
+  minimum_efficacy_score: 0.2 # Minimum efficacy score for consideration
+  top_slot_minimum_score: 0.6 # Minimum total score for top slot eligibility
+
+# Metadata
+metadata:
+  version: "1.0.0"
+  last_updated: "2024-08-19"
+  clinical_governance_approved: true
+  next_review_date: "2024-11-19"
+  
+# Profile validation rules
+validation:
+  weight_sum_tolerance: 0.001   # Tolerance for weight sum validation (should sum to 1.0)
+  score_range:
+    min: 0.0
+    max: 1.0
+  required_profiles:
+    - "ASCVD"
+    - "HF" 
+    - "CKD"
+    - "NONE"
+    - "BUDGET_MODE"
+
+# Audit and compliance
+audit:
+  track_profile_usage: true
+  log_score_distributions: true
+  monitor_clinical_outcomes: true
+  regulatory_compliance: "FDA_SaMD_Class_II"
+
+# Performance optimization
+performance:
+  enable_dominance_pruning: true
+  max_candidates_before_pruning: 50
+  parallel_scoring: true
+  cache_normalization_ranges: true
+
+# Clinical validation settings
+clinical_validation:
+  enable_monotonicity_checks: true    # Ensure score increases with better outcomes
+  enable_sensitivity_analysis: true   # Track score sensitivity to input changes
+  enable_fairness_checks: true       # Monitor for systematic bias
+  validation_test_cases:
+    - "diabetes_type2_ascvd"
+    - "diabetes_type2_ckd"
+    - "diabetes_type2_hf"
+    - "diabetes_type2_uncomplicated"
+    - "hypertension_uncomplicated"
+    - "hypertension_ckd"
+
+# Integration settings
+integration:
+  kb_update_frequency: "daily"       # How often to check for KB updates
+  hot_reload_enabled: true           # Enable hot reloading of configuration
+  fallback_to_defaults: true         # Fall back to defaults if profile not found
+  validate_on_load: true             # Validate configuration on startup

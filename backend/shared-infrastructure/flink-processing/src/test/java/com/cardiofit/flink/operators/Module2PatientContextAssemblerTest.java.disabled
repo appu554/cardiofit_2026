@@ -1,0 +1,394 @@
+package com.cardiofit.flink.operators;
+
+import com.cardiofit.flink.builders.ClinicalEventBuilder;
+import com.cardiofit.flink.clients.GoogleFHIRClient;
+import com.cardiofit.flink.clients.Neo4jGraphClient;
+import com.cardiofit.flink.models.*;
+import com.cardiofit.flink.utils.TestSink;
+import org.apache.flink.streaming.api.functions.async.ResultFuture;
+import org.apache.flink.streaming.util.AsyncFunctionTestHarness;
+import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
+
+import java.util.*;
+import java.util.concurrent.*;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+/**
+ * Test harness for Module 2: Patient Context Assembly & Enrichment.
+ *
+ * Tests the async enrichment pipeline:
+ * - Async FHIR and Neo4j data fetching
+ * - Patient snapshot hydration and state management
+ * - Clinical score calculation
+ * - Timeout handling and fallback mechanisms
+ * - State isolation between patients
+ * - First-time patient handling
+ *
+ * Based on Flink AsyncFunctionTestHarness patterns.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@DisplayName("Module 2: Patient Context Assembly Test Harness")
+public class Module2PatientContextAssemblerTest {
+
+    private AsyncFunctionTestHarness<CanonicalEvent, AsyncPatientEnricher.EnrichedEventWithSnapshot> harness;
+    private GoogleFHIRClient mockFhirClient;
+    private Neo4jGraphClient mockNeo4jClient;
+    private AsyncPatientEnricher asyncEnricher;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        // Create mock clients
+        mockFhirClient = mock(GoogleFHIRClient.class);
+        mockNeo4jClient = mock(Neo4jGraphClient.class);
+
+        // Create async enricher with mocks
+        asyncEnricher = new AsyncPatientEnricher(mockFhirClient, mockNeo4jClient);
+
+        // Create async test harness
+        // Parameters: function, capacity, maxConcurrentRequests, timeout (ms)
+        harness = new AsyncFunctionTestHarness<>(
+            asyncEnricher,
+            100,    // Capacity: max elements in queue
+            10,     // Max concurrent requests
+            500     // Timeout: 500ms
+        );
+
+        // Setup and open
+        harness.setup();
+        harness.open();
+
+        // Clear test sink
+        TestSink.clear();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        if (harness != null) {
+            harness.close();
+        }
+    }
+
+    // ====================================================================
+    // Test Case 1: Async Enrichment with FHIR Data
+    // ====================================================================
+
+    @Test
+    @DisplayName("Async enrichment successfully fetches FHIR data and creates patient snapshot")
+    void testAsyncEnrichmentWithFHIRData() throws Exception {
+        // Arrange - create test event
+        long timestamp = System.currentTimeMillis();
+        CanonicalEvent event = ClinicalEventBuilder.vitalsCanonical("patient-001", timestamp, 78, 120);
+
+        // Mock FHIR responses
+        FHIRPatientData mockPatientData = createMockFHIRPatientData("patient-001");
+        List<Condition> mockConditions = createMockConditions();
+        List<Medication> mockMedications = createMockMedications();
+        GraphData mockGraphData = new GraphData();
+
+        when(mockFhirClient.getPatientAsync("patient-001"))
+            .thenReturn(CompletableFuture.completedFuture(mockPatientData));
+        when(mockFhirClient.getConditionsAsync("patient-001"))
+            .thenReturn(CompletableFuture.completedFuture(mockConditions));
+        when(mockFhirClient.getMedicationsAsync("patient-001"))
+            .thenReturn(CompletableFuture.completedFuture(mockMedications));
+        when(mockNeo4jClient.queryGraphAsync("patient-001"))
+            .thenReturn(CompletableFuture.completedFuture(mockGraphData));
+
+        // Act - process element through async harness
+        Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> results =
+            harness.processElement(event);
+
+        // Assert - verify enrichment occurred
+        assertThat(results).hasSize(1);
+
+        AsyncPatientEnricher.EnrichedEventWithSnapshot enriched = results.iterator().next();
+        assertThat(enriched).isNotNull();
+        assertThat(enriched.getPatientId()).isEqualTo("patient-001");
+        assertThat(enriched.getEvent()).isEqualTo(event);
+
+        // Verify snapshot was created
+        PatientSnapshot snapshot = enriched.getSnapshot();
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.getPatientId()).isEqualTo("patient-001");
+
+        // Verify FHIR clients were called
+        verify(mockFhirClient, times(1)).getPatientAsync("patient-001");
+        verify(mockFhirClient, times(1)).getConditionsAsync("patient-001");
+        verify(mockFhirClient, times(1)).getMedicationsAsync("patient-001");
+        verify(mockNeo4jClient, times(1)).queryGraphAsync("patient-001");
+    }
+
+    // ====================================================================
+    // Test Case 2: First-Time Patient (404 from FHIR)
+    // ====================================================================
+
+    @Test
+    @DisplayName("First-time patient creates empty snapshot when FHIR returns null")
+    void testFirstTimePatientCreatesEmptySnapshot() throws Exception {
+        // Arrange - create event for new patient
+        long timestamp = System.currentTimeMillis();
+        CanonicalEvent event = ClinicalEventBuilder.vitalsCanonical("patient-new-001", timestamp, 80, 125);
+
+        // Mock FHIR responses - null patient data (404)
+        when(mockFhirClient.getPatientAsync("patient-new-001"))
+            .thenReturn(CompletableFuture.completedFuture(null));  // 404 Not Found
+        when(mockFhirClient.getConditionsAsync("patient-new-001"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockFhirClient.getMedicationsAsync("patient-new-001"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockNeo4jClient.queryGraphAsync("patient-new-001"))
+            .thenReturn(CompletableFuture.completedFuture(new GraphData()));
+
+        // Act
+        Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> results =
+            harness.processElement(event);
+
+        // Assert - empty snapshot created
+        assertThat(results).hasSize(1);
+
+        AsyncPatientEnricher.EnrichedEventWithSnapshot enriched = results.iterator().next();
+        PatientSnapshot snapshot = enriched.getSnapshot();
+
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.getPatientId()).isEqualTo("patient-new-001");
+
+        // Verify empty snapshot characteristics
+        // (Implementation-specific - adjust based on PatientSnapshot.createEmpty() logic)
+        assertThat(snapshot).isNotNull();
+
+        // Verify FHIR clients were still called
+        verify(mockFhirClient, times(1)).getPatientAsync("patient-new-001");
+    }
+
+    // ====================================================================
+    // Test Case 3: Timeout Handling with Fallback
+    // ====================================================================
+
+    @Test
+    @DisplayName("Async timeout triggers fallback to empty snapshot")
+    void testAsyncTimeoutTriggersFallback() throws Exception {
+        // Arrange - create event
+        long timestamp = System.currentTimeMillis();
+        CanonicalEvent event = ClinicalEventBuilder.vitalsCanonical("patient-timeout", timestamp, 75, 115);
+
+        // Mock slow FHIR responses (never complete)
+        CompletableFuture<FHIRPatientData> neverCompleteFuture = new CompletableFuture<>();
+        // Don't complete this future - it will timeout
+
+        when(mockFhirClient.getPatientAsync("patient-timeout"))
+            .thenReturn(neverCompleteFuture);
+        when(mockFhirClient.getConditionsAsync("patient-timeout"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockFhirClient.getMedicationsAsync("patient-timeout"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockNeo4jClient.queryGraphAsync("patient-timeout"))
+            .thenReturn(CompletableFuture.completedFuture(new GraphData()));
+
+        // Act - process with timeout
+        // The harness will invoke timeout() method after 500ms
+        Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> results =
+            harness.processElement(event);
+
+        // Note: Timeout handling is tricky in test harness
+        // The actual timeout callback may not fire in synchronous test execution
+        // This test documents the expected behavior
+
+        // Assert - should return results (either completed or timeout fallback)
+        assertThat(results).isNotEmpty();
+
+        AsyncPatientEnricher.EnrichedEventWithSnapshot enriched = results.iterator().next();
+        assertThat(enriched.getPatientId()).isEqualTo("patient-timeout");
+
+        // Snapshot should exist (either from completion or timeout fallback)
+        assertThat(enriched.getSnapshot()).isNotNull();
+    }
+
+    // ====================================================================
+    // Test Case 4: Error Handling During Async Operations
+    // ====================================================================
+
+    @Test
+    @DisplayName("Error during async operations triggers fallback to empty snapshot")
+    void testAsyncErrorTriggersFallback() throws Exception {
+        // Arrange - create event
+        long timestamp = System.currentTimeMillis();
+        CanonicalEvent event = ClinicalEventBuilder.vitalsCanonical("patient-error", timestamp, 82, 130);
+
+        // Mock FHIR error responses
+        CompletableFuture<FHIRPatientData> errorFuture = new CompletableFuture<>();
+        errorFuture.completeExceptionally(new RuntimeException("FHIR API Error"));
+
+        when(mockFhirClient.getPatientAsync("patient-error"))
+            .thenReturn(errorFuture);
+        when(mockFhirClient.getConditionsAsync("patient-error"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockFhirClient.getMedicationsAsync("patient-error"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockNeo4jClient.queryGraphAsync("patient-error"))
+            .thenReturn(CompletableFuture.completedFuture(new GraphData()));
+
+        // Act
+        Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> results =
+            harness.processElement(event);
+
+        // Assert - should return fallback snapshot
+        assertThat(results).hasSize(1);
+
+        AsyncPatientEnricher.EnrichedEventWithSnapshot enriched = results.iterator().next();
+        assertThat(enriched.getPatientId()).isEqualTo("patient-error");
+
+        // Verify empty snapshot was used as fallback
+        PatientSnapshot snapshot = enriched.getSnapshot();
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.getPatientId()).isEqualTo("patient-error");
+    }
+
+    // ====================================================================
+    // Test Case 5: State Isolation Between Patients
+    // ====================================================================
+
+    @Test
+    @DisplayName("State is isolated between different patients")
+    void testStateIsolatedBetweenPatients() throws Exception {
+        // Arrange - create events for two different patients
+        long timestamp = System.currentTimeMillis();
+        CanonicalEvent event1 = ClinicalEventBuilder.vitalsCanonical("patient-A", timestamp, 70, 110);
+        CanonicalEvent event2 = ClinicalEventBuilder.vitalsCanonical("patient-B", timestamp, 90, 140);
+
+        // Mock different FHIR data for each patient
+        FHIRPatientData patientAData = createMockFHIRPatientData("patient-A");
+        FHIRPatientData patientBData = createMockFHIRPatientData("patient-B");
+
+        when(mockFhirClient.getPatientAsync("patient-A"))
+            .thenReturn(CompletableFuture.completedFuture(patientAData));
+        when(mockFhirClient.getConditionsAsync("patient-A"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockFhirClient.getMedicationsAsync("patient-A"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockNeo4jClient.queryGraphAsync("patient-A"))
+            .thenReturn(CompletableFuture.completedFuture(new GraphData()));
+
+        when(mockFhirClient.getPatientAsync("patient-B"))
+            .thenReturn(CompletableFuture.completedFuture(patientBData));
+        when(mockFhirClient.getConditionsAsync("patient-B"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockFhirClient.getMedicationsAsync("patient-B"))
+            .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+        when(mockNeo4jClient.queryGraphAsync("patient-B"))
+            .thenReturn(CompletableFuture.completedFuture(new GraphData()));
+
+        // Act - process both events
+        Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> resultsA =
+            harness.processElement(event1);
+        Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> resultsB =
+            harness.processElement(event2);
+
+        // Assert - both patients processed independently
+        assertThat(resultsA).hasSize(1);
+        assertThat(resultsB).hasSize(1);
+
+        AsyncPatientEnricher.EnrichedEventWithSnapshot enrichedA = resultsA.iterator().next();
+        AsyncPatientEnricher.EnrichedEventWithSnapshot enrichedB = resultsB.iterator().next();
+
+        assertThat(enrichedA.getPatientId()).isEqualTo("patient-A");
+        assertThat(enrichedB.getPatientId()).isEqualTo("patient-B");
+
+        // Verify separate FHIR calls for each patient
+        verify(mockFhirClient, times(1)).getPatientAsync("patient-A");
+        verify(mockFhirClient, times(1)).getPatientAsync("patient-B");
+    }
+
+    // ====================================================================
+    // Test Case 6: Concurrent Request Capacity Management
+    // ====================================================================
+
+    @Test
+    @DisplayName("Concurrent requests are bounded by harness capacity")
+    void testConcurrentRequestsBounded() throws Exception {
+        // Arrange - create multiple events
+        long timestamp = System.currentTimeMillis();
+        List<CanonicalEvent> events = new ArrayList<>();
+
+        for (int i = 0; i < 5; i++) {
+            events.add(ClinicalEventBuilder.vitalsCanonical("patient-" + i, timestamp, 75 + i, 120));
+        }
+
+        // Mock FHIR responses for all patients
+        for (int i = 0; i < 5; i++) {
+            String patientId = "patient-" + i;
+            when(mockFhirClient.getPatientAsync(patientId))
+                .thenReturn(CompletableFuture.completedFuture(createMockFHIRPatientData(patientId)));
+            when(mockFhirClient.getConditionsAsync(patientId))
+                .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+            when(mockFhirClient.getMedicationsAsync(patientId))
+                .thenReturn(CompletableFuture.completedFuture(Collections.emptyList()));
+            when(mockNeo4jClient.queryGraphAsync(patientId))
+                .thenReturn(CompletableFuture.completedFuture(new GraphData()));
+        }
+
+        // Act - process all events
+        List<Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot>> allResults = new ArrayList<>();
+        for (CanonicalEvent event : events) {
+            Collection<AsyncPatientEnricher.EnrichedEventWithSnapshot> results =
+                harness.processElement(event);
+            allResults.add(results);
+        }
+
+        // Assert - all events processed
+        assertThat(allResults).hasSize(5);
+
+        for (int i = 0; i < 5; i++) {
+            assertThat(allResults.get(i)).hasSize(1);
+            assertThat(allResults.get(i).iterator().next().getPatientId())
+                .isEqualTo("patient-" + i);
+        }
+
+        // Verify all FHIR calls were made
+        for (int i = 0; i < 5; i++) {
+            verify(mockFhirClient, times(1)).getPatientAsync("patient-" + i);
+        }
+    }
+
+    // ====================================================================
+    // Helper Methods
+    // ====================================================================
+
+    private FHIRPatientData createMockFHIRPatientData(String patientId) {
+        FHIRPatientData data = new FHIRPatientData();
+        data.setPatientId(patientId);
+
+        PatientDemographics demographics = new PatientDemographics();
+        demographics.setAge(45);
+        demographics.setGender("M");
+        data.setDemographics(demographics);
+
+        return data;
+    }
+
+    private List<Condition> createMockConditions() {
+        List<Condition> conditions = new ArrayList<>();
+
+        Condition hypertension = new Condition();
+        hypertension.setCode("I10");
+        hypertension.setDisplay("Hypertension");
+        hypertension.setOnsetDate("2020-01-15");
+        conditions.add(hypertension);
+
+        return conditions;
+    }
+
+    private List<Medication> createMockMedications() {
+        List<Medication> medications = new ArrayList<>();
+
+        Medication lisinopril = new Medication();
+        lisinopril.setCode("RX123");
+        lisinopril.setDisplay("Lisinopril 10mg");
+        lisinopril.setStatus("active");
+        medications.add(lisinopril);
+
+        return medications;
+    }
+}

@@ -1,0 +1,642 @@
+syntax = "proto3";
+
+package kb4.safety;
+
+option go_package = "github.com/clinical-synthesis-hub/kb4-patient-safety/api";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// KB-4 Patient Safety gRPC Service
+// High-performance clinical safety evaluation with real-time monitoring
+service SafetyService {
+    // Core safety evaluation - primary endpoint
+    rpc EvaluateTherapy(SafetyRequest) returns (SafetyResponse);
+    
+    // Batch evaluation for efficiency
+    rpc EvaluateTherapyBatch(BatchSafetyRequest) returns (BatchSafetyResponse);
+    
+    // Real-time streaming for monitoring dashboards
+    rpc StreamSafetyAlerts(StreamRequest) returns (stream SafetyAlert);
+    
+    // Administrative override management
+    rpc RequestOverride(OverrideRequest) returns (OverrideResponse);
+    rpc ApproveOverride(OverrideApprovalRequest) returns (OverrideApprovalResponse);
+    rpc RevokeOverride(OverrideRevocationRequest) returns (OverrideRevocationResponse);
+    
+    // Signal detection and analytics
+    rpc DetectSafetySignals(SignalDetectionRequest) returns (SignalDetectionResponse);
+    rpc GetStatisticalTrends(TrendAnalysisRequest) returns (TrendAnalysisResponse);
+    
+    // Rule management (for authorized administrators)
+    rpc UpdateSafetyRules(RuleUpdateRequest) returns (RuleUpdateResponse);
+    rpc ValidateRuleSet(RuleValidationRequest) returns (RuleValidationResponse);
+    
+    // Service health and diagnostics
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+    rpc GetServiceMetrics(MetricsRequest) returns (MetricsResponse);
+}
+
+// Primary safety evaluation request
+message SafetyRequest {
+    string request_id = 1;
+    string patient_id = 2;
+    string therapy_id = 3;
+    string drug_code = 4;
+    string drug_class = 5;
+    
+    // Patient clinical context
+    PatientContext patient_context = 6;
+    
+    // Current medication list for interaction checking
+    repeated string concurrent_medications = 7;
+    
+    // Request metadata
+    string requesting_service = 8;
+    string user_id = 9;
+    RequestPriority priority = 10;
+    
+    // Optional override context if continuing from previous veto
+    string override_token = 11;
+}
+
+// Patient clinical snapshot
+message PatientContext {
+    string patient_id = 1;
+    int32 age_years = 2;
+    string gender = 3;
+    double weight_kg = 4;
+    double height_cm = 5;
+    
+    // Clinical values
+    repeated LabValue lab_values = 6;
+    repeated string allergies = 7;
+    repeated string medical_conditions = 8;
+    repeated VitalSigns vital_signs = 9;
+    
+    // Risk factors
+    repeated string risk_factors = 10;
+    string pregnancy_status = 11;
+    string kidney_function = 12;
+    string liver_function = 13;
+    
+    // Compliance and care context
+    string care_setting = 14; // inpatient, outpatient, icu, emergency
+    string prescriber_id = 15;
+    google.protobuf.Timestamp context_timestamp = 16;
+}
+
+message LabValue {
+    string code = 1;
+    string name = 2;
+    double value = 3;
+    string unit = 4;
+    google.protobuf.Timestamp collected_at = 5;
+    string reference_range = 6;
+}
+
+message VitalSigns {
+    double systolic_bp = 1;
+    double diastolic_bp = 2;
+    double heart_rate = 3;
+    double temperature = 4;
+    double respiratory_rate = 5;
+    double oxygen_saturation = 6;
+    google.protobuf.Timestamp recorded_at = 7;
+}
+
+enum RequestPriority {
+    PRIORITY_UNSPECIFIED = 0;
+    PRIORITY_ROUTINE = 1;
+    PRIORITY_URGENT = 2;
+    PRIORITY_EMERGENCY = 3;
+    PRIORITY_CRITICAL = 4;
+}
+
+// Primary safety evaluation response
+message SafetyResponse {
+    string request_id = 1;
+    SafetyStatus status = 2;
+    repeated SafetyFinding findings = 3;
+    
+    // Evidence and traceability
+    EvidenceEnvelope evidence = 4;
+    string decision_hash = 5;
+    
+    // Performance metrics
+    int64 evaluation_time_ms = 6;
+    bool cache_hit = 7;
+    string cache_key = 8;
+    
+    // Override information if applicable
+    OverrideInfo override_info = 9;
+    
+    // Metadata
+    google.protobuf.Timestamp evaluated_at = 10;
+    string evaluator_version = 11;
+    string rule_set_version = 12;
+}
+
+enum SafetyStatus {
+    SAFETY_STATUS_UNSPECIFIED = 0;
+    SAFETY_STATUS_PASS = 1;      // Safe to proceed
+    SAFETY_STATUS_WARN = 2;      // Proceed with caution
+    SAFETY_STATUS_VETO = 3;      // Do not proceed - override required
+}
+
+message SafetyFinding {
+    string finding_id = 1;
+    FindingSeverity severity = 2;
+    string category = 3;
+    string rule_name = 4;
+    string description = 5;
+    string clinical_rationale = 6;
+    
+    // Evidence linking
+    repeated string evidence_ids = 7;
+    repeated string guideline_refs = 8;
+    
+    // Recommendation
+    string recommendation = 9;
+    repeated string alternative_therapies = 10;
+    
+    // Metadata
+    double confidence_score = 11;
+    google.protobuf.Timestamp detected_at = 12;
+}
+
+enum FindingSeverity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_INFO = 1;
+    SEVERITY_LOW = 2;
+    SEVERITY_MODERATE = 3;
+    SEVERITY_HIGH = 4;
+    SEVERITY_CRITICAL = 5;
+}
+
+// Tamper-evident evidence envelope
+message EvidenceEnvelope {
+    string envelope_id = 1;
+    string envelope_hash = 2;
+    
+    // Evidence content
+    repeated EvidenceItem evidence_items = 3;
+    repeated string knowledge_sources = 4;
+    repeated string applied_rules = 5;
+    
+    // Audit trail
+    google.protobuf.Timestamp created_at = 6;
+    string created_by = 7;
+    string integrity_signature = 8;
+}
+
+message EvidenceItem {
+    string evidence_id = 1;
+    string source_type = 2; // guideline, study, rule, calculation
+    string source_reference = 3;
+    string evidence_text = 4;
+    double strength_rating = 5;
+    google.protobuf.Struct metadata = 6;
+}
+
+// Override management
+message OverrideInfo {
+    string override_id = 1;
+    OverrideLevel level = 2;
+    OverrideStatus status = 3;
+    string justification = 4;
+    string authorized_by = 5;
+    google.protobuf.Timestamp expires_at = 6;
+    repeated string approval_chain = 7;
+}
+
+enum OverrideLevel {
+    OVERRIDE_LEVEL_UNSPECIFIED = 0;
+    OVERRIDE_LEVEL_L1 = 1;  // Pharmacist override - standard warnings
+    OVERRIDE_LEVEL_L2 = 2;  // Senior pharmacist - moderate risks
+    OVERRIDE_LEVEL_L3 = 3;  // Physician + pharmacist - high risks
+}
+
+enum OverrideStatus {
+    OVERRIDE_STATUS_UNSPECIFIED = 0;
+    OVERRIDE_STATUS_PENDING = 1;
+    OVERRIDE_STATUS_APPROVED = 2;
+    OVERRIDE_STATUS_DENIED = 3;
+    OVERRIDE_STATUS_EXPIRED = 4;
+    OVERRIDE_STATUS_REVOKED = 5;
+}
+
+// Batch processing
+message BatchSafetyRequest {
+    string batch_id = 1;
+    repeated SafetyRequest requests = 2;
+    BatchProcessingOptions options = 3;
+}
+
+message BatchProcessingOptions {
+    bool fail_fast = 1;
+    int32 max_parallel = 2;
+    int32 timeout_seconds = 3;
+    bool return_partial_results = 4;
+}
+
+message BatchSafetyResponse {
+    string batch_id = 1;
+    repeated SafetyResponse responses = 2;
+    BatchExecutionStats stats = 3;
+    repeated string errors = 4;
+}
+
+message BatchExecutionStats {
+    int32 total_requests = 1;
+    int32 successful_responses = 2;
+    int32 failed_responses = 3;
+    int64 total_execution_time_ms = 4;
+    double cache_hit_rate = 5;
+    int32 parallel_threads_used = 6;
+}
+
+// Real-time streaming
+message StreamRequest {
+    string stream_id = 1;
+    repeated string filter_patterns = 2;
+    repeated SafetyStatus status_filter = 3;
+    repeated FindingSeverity severity_filter = 4;
+    google.protobuf.Timestamp start_time = 5;
+    int32 max_results = 6;
+}
+
+message SafetyAlert {
+    string alert_id = 1;
+    string patient_id = 2;
+    string drug_code = 3;
+    SafetyStatus status = 4;
+    FindingSeverity max_severity = 5;
+    string summary = 6;
+    int32 finding_count = 7;
+    google.protobuf.Timestamp timestamp = 8;
+    bool requires_override = 9;
+}
+
+// Override workflow
+message OverrideRequest {
+    string request_id = 1;
+    string safety_event_id = 2;
+    OverrideLevel requested_level = 3;
+    string justification = 4;
+    string requesting_user_id = 5;
+    string clinical_context = 6;
+    repeated string supporting_evidence = 7;
+    google.protobuf.Timestamp expiry_time = 8;
+}
+
+message OverrideResponse {
+    string override_id = 1;
+    OverrideStatus status = 2;
+    string status_message = 3;
+    repeated string required_approvals = 4;
+    google.protobuf.Timestamp created_at = 5;
+    string tracking_token = 6;
+}
+
+message OverrideApprovalRequest {
+    string override_id = 1;
+    string approver_user_id = 2;
+    string approval_code = 3;
+    bool approved = 4;
+    string approval_comments = 5;
+    google.protobuf.Timestamp decision_time = 6;
+}
+
+message OverrideApprovalResponse {
+    string override_id = 1;
+    OverrideStatus new_status = 2;
+    bool approval_complete = 3;
+    repeated string remaining_approvals = 4;
+    string authorization_token = 5;
+}
+
+message OverrideRevocationRequest {
+    string override_id = 1;
+    string revoking_user_id = 2;
+    string revocation_reason = 3;
+    bool emergency_revocation = 4;
+}
+
+message OverrideRevocationResponse {
+    string override_id = 1;
+    bool revoked = 2;
+    string revocation_message = 3;
+    google.protobuf.Timestamp revoked_at = 4;
+}
+
+// Signal detection and analytics
+message SignalDetectionRequest {
+    string analysis_id = 1;
+    repeated string drug_codes = 2;
+    google.protobuf.Timestamp start_time = 3;
+    google.protobuf.Timestamp end_time = 4;
+    SignalDetectionAlgorithm algorithm = 5;
+    SignalDetectionOptions options = 6;
+}
+
+enum SignalDetectionAlgorithm {
+    SIGNAL_ALGORITHM_UNSPECIFIED = 0;
+    SIGNAL_ALGORITHM_SPC = 1;      // Statistical Process Control
+    SIGNAL_ALGORITHM_CUSUM = 2;    // Cumulative Sum
+    SIGNAL_ALGORITHM_EWMA = 3;     // Exponentially Weighted Moving Average
+    SIGNAL_ALGORITHM_ML_ANOMALY = 4; // Machine Learning Anomaly Detection
+}
+
+message SignalDetectionOptions {
+    double confidence_threshold = 1;
+    int32 minimum_sample_size = 2;
+    bool include_historical_baseline = 3;
+    repeated string excluded_periods = 4;
+    google.protobuf.Struct algorithm_parameters = 5;
+}
+
+message SignalDetectionResponse {
+    string analysis_id = 1;
+    repeated SafetySignal detected_signals = 2;
+    StatisticalSummary summary = 3;
+    repeated string warnings = 4;
+    google.protobuf.Timestamp analysis_timestamp = 5;
+}
+
+message SafetySignal {
+    string signal_id = 1;
+    string drug_code = 2;
+    string signal_type = 3;
+    double signal_strength = 4;
+    double p_value = 5;
+    double confidence_interval_lower = 6;
+    double confidence_interval_upper = 7;
+    
+    // Clinical context
+    string clinical_description = 8;
+    repeated string affected_populations = 9;
+    string severity_assessment = 10;
+    
+    // Temporal information
+    google.protobuf.Timestamp first_detected = 11;
+    google.protobuf.Timestamp last_updated = 12;
+    int32 occurrence_count = 13;
+    
+    // Metadata
+    SignalDetectionAlgorithm detection_method = 14;
+    google.protobuf.Struct detection_parameters = 15;
+}
+
+message StatisticalSummary {
+    int64 total_events_analyzed = 1;
+    int32 signals_detected = 2;
+    double overall_signal_rate = 3;
+    google.protobuf.Timestamp analysis_period_start = 4;
+    google.protobuf.Timestamp analysis_period_end = 5;
+    repeated StatisticalMetric metrics = 6;
+}
+
+message StatisticalMetric {
+    string metric_name = 1;
+    double value = 2;
+    string unit = 3;
+    string description = 4;
+}
+
+// Trend analysis
+message TrendAnalysisRequest {
+    string analysis_id = 1;
+    repeated string drug_codes = 2;
+    TrendTimeframe timeframe = 3;
+    repeated TrendMetric requested_metrics = 4;
+    TrendAggregation aggregation = 5;
+}
+
+enum TrendTimeframe {
+    TIMEFRAME_UNSPECIFIED = 0;
+    TIMEFRAME_LAST_24H = 1;
+    TIMEFRAME_LAST_7D = 2;
+    TIMEFRAME_LAST_30D = 3;
+    TIMEFRAME_LAST_90D = 4;
+    TIMEFRAME_LAST_YEAR = 5;
+    TIMEFRAME_CUSTOM = 6;
+}
+
+enum TrendMetric {
+    TREND_METRIC_UNSPECIFIED = 0;
+    TREND_METRIC_ALERT_RATE = 1;
+    TREND_METRIC_VETO_RATE = 2;
+    TREND_METRIC_OVERRIDE_RATE = 3;
+    TREND_METRIC_RESPONSE_TIME = 4;
+    TREND_METRIC_CACHE_HIT_RATE = 5;
+    TREND_METRIC_SIGNAL_DETECTION = 6;
+}
+
+enum TrendAggregation {
+    AGGREGATION_UNSPECIFIED = 0;
+    AGGREGATION_HOURLY = 1;
+    AGGREGATION_DAILY = 2;
+    AGGREGATION_WEEKLY = 3;
+    AGGREGATION_MONTHLY = 4;
+}
+
+message TrendAnalysisResponse {
+    string analysis_id = 1;
+    repeated TrendDataPoint data_points = 2;
+    TrendSummary summary = 3;
+    repeated TrendAlert trend_alerts = 4;
+}
+
+message TrendDataPoint {
+    google.protobuf.Timestamp timestamp = 1;
+    string drug_code = 2;
+    repeated MetricValue metrics = 3;
+}
+
+message MetricValue {
+    TrendMetric metric_type = 1;
+    double value = 2;
+    double previous_period_value = 3;
+    double percent_change = 4;
+}
+
+message TrendSummary {
+    int32 total_data_points = 1;
+    google.protobuf.Timestamp period_start = 2;
+    google.protobuf.Timestamp period_end = 3;
+    repeated TrendInsight insights = 4;
+}
+
+message TrendInsight {
+    string insight_type = 1;
+    string description = 2;
+    double statistical_significance = 3;
+    string recommendation = 4;
+}
+
+message TrendAlert {
+    string alert_id = 1;
+    string alert_type = 2;
+    string description = 3;
+    double severity_score = 4;
+    repeated string affected_drugs = 5;
+}
+
+// Rule management
+message RuleUpdateRequest {
+    string update_id = 1;
+    string rule_set_version = 2;
+    repeated RuleDefinition new_rules = 3;
+    repeated string deprecated_rule_ids = 4;
+    string update_rationale = 5;
+    string authorized_by = 6;
+    bool validate_before_deploy = 7;
+}
+
+message RuleDefinition {
+    string rule_id = 1;
+    string rule_name = 2;
+    string rule_category = 3;
+    string yaml_definition = 4;
+    string clinical_rationale = 5;
+    repeated string evidence_references = 6;
+    RulePriority priority = 7;
+    bool requires_override_approval = 8;
+}
+
+enum RulePriority {
+    RULE_PRIORITY_UNSPECIFIED = 0;
+    RULE_PRIORITY_LOW = 1;
+    RULE_PRIORITY_MEDIUM = 2;
+    RULE_PRIORITY_HIGH = 3;
+    RULE_PRIORITY_CRITICAL = 4;
+}
+
+message RuleUpdateResponse {
+    string update_id = 1;
+    bool success = 2;
+    string new_rule_set_version = 3;
+    repeated RuleValidationResult validation_results = 4;
+    repeated string warnings = 5;
+    int32 rules_updated = 6;
+    int32 rules_deprecated = 7;
+}
+
+message RuleValidationRequest {
+    string validation_id = 1;
+    repeated RuleDefinition rules_to_validate = 2;
+    bool check_syntax_only = 3;
+    bool run_test_cases = 4;
+}
+
+message RuleValidationResponse {
+    string validation_id = 1;
+    bool all_rules_valid = 2;
+    repeated RuleValidationResult results = 3;
+    int32 total_test_cases_run = 4;
+    int32 test_cases_passed = 5;
+}
+
+message RuleValidationResult {
+    string rule_id = 1;
+    bool is_valid = 2;
+    repeated string syntax_errors = 3;
+    repeated string semantic_warnings = 4;
+    repeated TestCaseResult test_results = 5;
+    double compilation_time_ms = 6;
+}
+
+message TestCaseResult {
+    string test_case_id = 1;
+    bool passed = 2;
+    string expected_result = 3;
+    string actual_result = 4;
+    string error_message = 5;
+}
+
+// Service health and monitoring
+message HealthCheckRequest {
+    string check_id = 1;
+    repeated string component_names = 2;
+    bool include_dependencies = 3;
+}
+
+message HealthCheckResponse {
+    string check_id = 1;
+    ServiceHealth overall_health = 2;
+    repeated ComponentHealth component_health = 3;
+    google.protobuf.Timestamp check_timestamp = 4;
+    string version = 5;
+}
+
+enum ServiceHealth {
+    HEALTH_UNSPECIFIED = 0;
+    HEALTH_HEALTHY = 1;
+    HEALTH_DEGRADED = 2;
+    HEALTH_UNHEALTHY = 3;
+    HEALTH_CRITICAL = 4;
+}
+
+message ComponentHealth {
+    string component_name = 1;
+    ServiceHealth status = 2;
+    string status_message = 3;
+    repeated HealthMetric metrics = 4;
+    google.protobuf.Timestamp last_check = 5;
+}
+
+message HealthMetric {
+    string metric_name = 1;
+    double value = 2;
+    string unit = 3;
+    double threshold_warning = 4;
+    double threshold_critical = 5;
+}
+
+message MetricsRequest {
+    string request_id = 1;
+    repeated string metric_names = 2;
+    google.protobuf.Timestamp start_time = 3;
+    google.protobuf.Timestamp end_time = 4;
+    MetricAggregation aggregation = 5;
+}
+
+enum MetricAggregation {
+    METRIC_AGGREGATION_UNSPECIFIED = 0;
+    METRIC_AGGREGATION_RAW = 1;
+    METRIC_AGGREGATION_AVERAGE = 2;
+    METRIC_AGGREGATION_SUM = 3;
+    METRIC_AGGREGATION_MIN = 4;
+    METRIC_AGGREGATION_MAX = 5;
+    METRIC_AGGREGATION_PERCENTILE_95 = 6;
+}
+
+message MetricsResponse {
+    string request_id = 1;
+    repeated ServiceMetric metrics = 2;
+    google.protobuf.Timestamp collection_timestamp = 3;
+}
+
+message ServiceMetric {
+    string metric_name = 1;
+    repeated MetricDataPoint data_points = 2;
+    string description = 3;
+    string unit = 4;
+}
+
+message MetricDataPoint {
+    google.protobuf.Timestamp timestamp = 1;
+    double value = 2;
+    repeated string labels = 3;
+}
+
+// Error handling
+message ErrorDetails {
+    string error_code = 1;
+    string error_message = 2;
+    string error_category = 3;
+    repeated string error_context = 4;
+    bool retryable = 5;
+    google.protobuf.Timestamp error_timestamp = 6;
+}
