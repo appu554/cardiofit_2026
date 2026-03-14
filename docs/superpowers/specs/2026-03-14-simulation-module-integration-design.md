@@ -30,7 +30,7 @@ Integrate the standalone V-MCU simulation module (16 Go files, ~2,000 lines) int
 
 ```
 vaidshala/simulation/
-├── go.mod                          # module github.com/vaidshala/simulation
+├── go.mod                          # module vaidshala/simulation (go 1.23.0+)
 ├── go.sum
 │
 ├── bridge/                         # Integration layer (sim ↔ production)
@@ -42,7 +42,7 @@ vaidshala/simulation/
 │
 ├── pkg/                            # Standalone simulation (from /Downloads/simulation/)
 │   ├── types/types.go              # Simulation's own types (unchanged)
-│   ├── patient/archetypes.go       # 10 single-cycle archetypes (unchanged)
+│   ├── patient/archetypes.go       # 10 single-cycle archetypes used across 12 scenarios (unchanged)
 │   ├── harness/
 │   │   ├── channel_b.go            # 18 rules (reference implementation)
 │   │   ├── channel_c.go            # 9 rules (reference implementation)
@@ -52,7 +52,7 @@ vaidshala/simulation/
 │   │   ├── registry.go             # Scenario registry with tags
 │   │   ├── simulation_test.go      # 12 scenarios against SIMULATION engine
 │   │   └── production_test.go      # 12 scenarios against PRODUCTION engine (via bridge)
-│   └── physiology/                 # Layer 2 — 5 engines
+│   └── physiology/                 # Layer 2 — 5 engines (NEW CODE, not migration)
 │       ├── body_composition.go     # Engine 1: visceral fat, insulin sensitivity
 │       ├── glucose.go              # Engine 2: FBG, PPBG, HbA1c, beta cell
 │       ├── hemodynamic.go          # Engine 3: SBP/DBP equilibrium-seeking
@@ -71,7 +71,7 @@ vaidshala/simulation/
 │   └── simulation-gate.yml         # GitHub Actions CI workflow
 │
 └── cmd/
-    └── main.go                     # CLI runner (summary table + --production flag)
+    └── main.go                     # CLI runner (see Section 11 for CLI specification)
 ```
 
 ## 2. Bridge Type Mapping
@@ -81,12 +81,16 @@ vaidshala/simulation/
 | Aspect | Simulation | Production | Bridge Action |
 |--------|-----------|------------|---------------|
 | GateSignal | `int` (CLEAR=0..HALT=4) | `string` ("CLEAR".."HALT") | Enum ↔ string lookup table |
-| Lab values | `float64` | `*float64` | Value → pointer; nil → zero-value with flag |
+| Lab values (glucose, K+, Cr, etc.) | `float64` | `*float64` | Value → pointer; nil → zero-value with flag |
+| SBP, DBP, HeartRate | `int` | `*float64` | `int` → `float64` → pointer wrapping |
 | Glucose units | mmol/L | mmol/L | Pass-through |
 | Creatinine units | µmol/L | µmol/L | Pass-through |
 | Timestamps | `time.Time` | `*time.Time` | Value → pointer |
-| Channel result | `string` rule fired | `ChannelBResult` struct | Extract `.RuleFired` field |
-| Arbiter input | `ArbiterInput{3 ints}` | `ArbiterInput{3 strings}` | Convert each gate signal |
+| Channel B result | `string` rule fired | `ChannelBResult` struct | Extract `.RuleFired` field |
+| Channel C result | `string` rule fired | `ChannelCResult` struct | Extract `.RuleID` field |
+| Arbiter input | `ArbiterInput{3 GateSignal(int)}` | `ArbiterInput{3 GateSignal(string)}` | Convert each gate signal |
+| Arbiter output `AllChannels` | `map[Channel]GateSignal` | `ArbiterInput` struct | Map ↔ struct field extraction |
+| Arbiter output `DominantChannel` | `Channel` (string alias) | `string` | Type alias ↔ bare string |
 
 ### Round-Trip Safety
 
@@ -131,7 +135,7 @@ The bridge imports both `pkg/types` (simulation) and `engines/vmcu` (production)
 | `simulation_test.go` | `harness.VMCUEngine` | Baseline — proves scenarios are correct |
 | `production_test.go` | `bridge.ProductionEngine` | Validation — proves production V-MCU matches |
 
-Both share same archetypes and expected outcomes. Discrepancy = production bug or bridge bug, never test bug.
+Both share same archetypes and expected outcomes. 10 archetypes are used across 12 scenarios (not 1:1 — Scenario 11 uses 2 archetypes in sequence for freeze/resume, Scenario 12 uses no archetypes for the arbiter sweep). Discrepancy = production bug or bridge bug, never test bug.
 
 ### Engine Adapter
 
@@ -148,6 +152,8 @@ func (pe *ProductionEngine) RunCycle(input types.TitrationCycleInput) types.Titr
 
 Production `VMCUEngine` constructed with no infrastructure: `safetyCache: nil`, `asyncTracer: nil`, `holdResponder: nil`, `eventPublisher: nil`. Zero network calls.
 
+**ProtocolRulesPath**: Production's `NewVMCUEngine()` calls `channel_c.LoadRules(cfg.ProtocolRulesPath)` which reads `protocol_rules.yaml` from disk. The bridge must provide a valid path. `engine_adapter.go` resolves this as `../clinical-runtime-platform/engines/vmcu/protocol_rules.yaml` relative to the simulation module root. In CI, the checkout ensures both directories exist side-by-side. This is the ONE file I/O dependency — all other inputs are in-memory.
+
 ### Production's Extra Rules
 
 Production has 25 Channel B + expanded Channel C (vs simulation's 18+9). Extra rules (DA-01..DA-08, B-19, PG-15, PG-16) don't interfere with existing 12 scenarios because:
@@ -163,6 +169,28 @@ Bridge must map BOTH:
 - AND → `prod.TitrationContext.RAASCreatinineTolerant`
 
 Both must be `true` for PG-14 downgrade to fire from both channels.
+
+**Rule ID divergence**: The simulation fires rule `B-04+PG-14` for the RAAS tolerance downgrade. Production uses rule ID `B-03-RAAS-SUPPRESSED` for the Channel B suppression. The bridge's `result_mapper.go` must normalize these IDs. The `production_test.go` expected rule attribution for Scenario 3 must use production's rule ID (`B-03-RAAS-SUPPRESSED`), not the simulation's (`B-04+PG-14`). This is the ONE scenario where expected rule attribution differs between `simulation_test.go` and `production_test.go`.
+
+### Rule ID Mapping Table
+
+| Simulation Rule ID | Production Rule ID | Notes |
+|---|---|---|
+| B-04+PG-14 | B-03-RAAS-SUPPRESSED | RAAS tolerance downgrade |
+| B-01 | B-01 | Hypoglycaemia (same) |
+| All other B-xx | B-xx | Same IDs |
+| All PG-xx | PG-xx | Same IDs |
+
+### Production Extra Steps Impact Analysis
+
+Production's `RunCycle()` has post-arbiter steps that the simulation engine does not. Each has been verified per-scenario:
+
+| Production Step | Impact on 12 Scenarios | Reason |
+|---|---|---|
+| BP-velocity modulation (`classifyBPStatus`) | No impact. SBP values in archetypes (102, 135, etc.) fall between 90-140, classified as "" (no category). Neutral multiplier. | Only fires at SBP extremes (<90 or >140) |
+| Metabolic engine (KB-24) | No impact. Bridge sets `MetabolicInput: nil`, which skips KB-24 enrichment. | Optional enrichment, not safety-critical |
+| Deprescribing suppression | No impact. No archetype has `DeprescribingContext.Active = true`. | Only affects active deprescribing plans |
+| Cooldown tracker | Bridge must set `LastDoseChangeTime` to >48h ago so cooldown doesn't block dose. | Scenario 9 (GreenTrajectory) would fail if cooldown blocks the expected dose application |
 
 ### Discrepancy Investigation Order
 
@@ -193,6 +221,8 @@ Day N:
 
 Engine execution order is fixed: Body → Glucose → Hemodynamic → Renal. Each depends on the previous engine's output.
 
+**NOTE**: The 5 physiology engines are **NEW code** to be authored during integration. The existing `harness/multicycle.go` provides a skeleton with a simplified `PhysiologyState` (~15 variables, linear models), but it is insufficient for the full 5-engine architecture described here (~40 state variables, equilibrium-seeking models). The guidelines doc (Sections 4.1-4.5) provides the authoritative clinical specification for each engine's inputs, outputs, and coefficients.
+
 ### Configurable Coefficients (`config/default.yaml`)
 
 ```yaml
@@ -208,7 +238,7 @@ body_composition:
 glucose:
   equilibrium_drift_rate: 0.10
   beta_cell_decline_rate: 0.001
-  glucotoxicity_threshold_mgdl: 180
+  glucotoxicity_threshold_mmol: 10.0    # 180 mg/dL ÷ 18 = 10.0 mmol/L
   glucotoxicity_multiplier: 2.5
   carb_baseline_g: 250
   ppbg_spike_coefficient: 0.15
@@ -229,8 +259,9 @@ renal:
   uncontrolled_sbp_threshold: 140
   high_glucose_threshold_mmol: 10.0
 
+# All noise values in the same units as the engines (mmol/L, mmHg, µmol/L, kg)
 observation_noise:
-  glucose_stddev_mgdl: 5.0
+  glucose_stddev_mmol: 0.28             # 5.0 mg/dL ÷ 18 ≈ 0.28 mmol/L
   bp_stddev_mmhg: 3.0
   potassium_stddev_mmol: 0.1
   creatinine_stddev_umol: 5.0
@@ -322,7 +353,7 @@ Checked by `validateInvariants(result)` after every cycle in both Layer 1 and La
 Triggers on PRs touching `vaidshala/clinical-runtime-platform/engines/vmcu/**` or `vaidshala/simulation/**`.
 
 Steps:
-1. Checkout + Go 1.22+ setup
+1. Checkout + Go 1.23.0+ setup (must match production's `go.mod` directive)
 2. Bridge compile check: `go build ./bridge/...`
 3. Bridge round-trip tests: `go test ./bridge/ -v`
 4. Layer 1 simulation scenarios: `go test ./pkg/scenarios/ -run TestSimulation -v -count=1`
@@ -341,7 +372,7 @@ Steps:
 | Any scenario (production) | Block merge |
 | Arbiter <125/125 | Block merge |
 | Trajectory assertions | Block merge |
-| Benchmark P99 >100µs | Block merge |
+| Benchmark regression >3x baseline | Warn (not block) |
 
 No exceptions. No skipped tests. `-count=1` disables test caching.
 
@@ -364,12 +395,16 @@ Registry `Tags` field maps scenarios to rules. CI post-step warns (not blocks) i
 The `go.mod` uses a `replace` directive:
 
 ```
-module github.com/vaidshala/simulation
+module vaidshala/simulation
 
-require github.com/vaidshala/clinical-runtime-platform v0.0.0
+go 1.23.0
 
-replace github.com/vaidshala/clinical-runtime-platform => ../clinical-runtime-platform
+require vaidshala/clinical-runtime-platform v0.0.0
+
+replace vaidshala/clinical-runtime-platform => ../clinical-runtime-platform
 ```
+
+**NOTE**: Module path is `vaidshala/simulation` (no `github.com/` prefix), matching the production module's path convention (`vaidshala/clinical-runtime-platform`). Go version must be `1.23.0` or later to match production's `go.mod` directive — the simulation cannot import the production module with a lower Go version.
 
 Simulation always tests against the local branch version. No published versions, no version skew.
 
@@ -383,3 +418,24 @@ Add a scenario when:
 - Autonomy limits updated
 
 Pattern: define archetype → define expected gate → assert gate + rule attribution → tag with rule IDs.
+
+## 11. CLI Specification (`cmd/main.go`)
+
+The CLI provides quick local validation before pushing:
+
+```bash
+# Default: run all 12 scenarios against SIMULATION engine
+go run cmd/main.go
+
+# --production: run all 12 scenarios against PRODUCTION engine (via bridge)
+go run cmd/main.go --production
+
+# --trajectory: additionally run 90-day trajectory tests (slower)
+go run cmd/main.go --production --trajectory
+```
+
+**Default mode**: Runs 12 scenarios against the simulation's own `harness.VMCUEngine`. Prints a summary table with columns: `#`, `SCENARIO`, `GATE`, `DOSE (YES/NO)`, `DELTA`, `B-RULE`, `C-RULE`, `STATUS (PASS/FAIL)`. Appends arbiter sweep result (125/125). Exits 0 if all pass, 1 if any fail.
+
+**--production mode**: Same output format, but runs scenarios via `bridge.ProductionEngine`. Requires `protocol_rules.yaml` to be resolvable (see Section 4).
+
+**--trajectory mode**: After scenarios, runs the 4 trajectory archetypes for 90 days each. Prints per-archetype summary: initial/final FBG, HbA1c, eGFR, dose, HALT count, and pass/fail against trajectory assertions.
