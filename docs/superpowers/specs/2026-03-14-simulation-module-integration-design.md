@@ -11,7 +11,7 @@
 
 ## Summary
 
-Integrate the standalone V-MCU simulation module (16 Go files, ~2,000 lines) into the CardioFit monorepo at `vaidshala/simulation/`. A bridge adapter layer converts between simulation types and production V-MCU types, enabling the 12 safety scenarios and 5 physiology engines to validate the production engine without modifying either codebase. The existing production `engines/vmcu/simulation/` package is preserved — the bridge connects both worlds.
+Integrate the standalone V-MCU simulation module (16 Go files, 3,004 lines across 6 packages) into the CardioFit monorepo at `vaidshala/simulation/`. A bridge adapter layer converts between simulation types and production V-MCU types, enabling the 13 safety scenarios and 5 physiology engines to validate the production engine without modifying either codebase. The existing production `engines/vmcu/simulation/` package is preserved — the bridge connects both worlds.
 
 ## Decisions
 
@@ -42,7 +42,7 @@ vaidshala/simulation/
 │
 ├── pkg/                            # Standalone simulation (from /Downloads/simulation/)
 │   ├── types/types.go              # Simulation's own types (unchanged)
-│   ├── patient/archetypes.go       # 10 single-cycle archetypes used across 12 scenarios (unchanged)
+│   ├── patient/archetypes.go       # 11 single-cycle archetypes used across 13 scenarios (10 original + SeasonalHyponatraemia)
 │   ├── harness/
 │   │   ├── channel_b.go            # 18 rules (reference implementation)
 │   │   ├── channel_c.go            # 9 rules (reference implementation)
@@ -50,13 +50,13 @@ vaidshala/simulation/
 │   │   └── multicycle.go           # 90-day trajectory runner
 │   ├── scenarios/
 │   │   ├── registry.go             # Scenario registry with tags
-│   │   ├── simulation_test.go      # 12 scenarios against SIMULATION engine
-│   │   └── production_test.go      # 12 scenarios against PRODUCTION engine (via bridge)
-│   └── physiology/                 # Layer 2 — 5 engines (NEW CODE, not migration)
-│       ├── body_composition.go     # Engine 1: visceral fat, insulin sensitivity
-│       ├── glucose.go              # Engine 2: FBG, PPBG, HbA1c, beta cell
-│       ├── hemodynamic.go          # Engine 3: SBP/DBP equilibrium-seeking
-│       ├── renal.go                # Engine 4: eGFR, creatinine, K+, Na+, ACR
+│   │   ├── simulation_test.go      # 13 scenarios against SIMULATION engine
+│   │   └── production_test.go      # 13 scenarios against PRODUCTION engine (via bridge)
+│   └── physiology/                 # Layer 2 — 5 engines (migrated from v2 delivery)
+│       ├── body_composition.go     # Engine 1: visceral fat, insulin sensitivity (from body_engine.go)
+│       ├── glucose.go              # Engine 2: FBG, PPBG, HbA1c, beta cell (from glucose_engine.go)
+│       ├── hemodynamic.go          # Engine 3: SBP/DBP equilibrium-seeking (from hemodynamic_engine.go)
+│       ├── renal.go                # Engine 4: eGFR, creatinine, K+, Na+, ACR (from renal_engine.go)
 │       ├── observation.go          # Engine 5: Gaussian noise generator
 │       ├── state.go                # PhysiologyState vector (~40 variables)
 │       ├── config.go               # LoadPopulationConfig() from YAML
@@ -122,7 +122,7 @@ The bridge imports both `pkg/types` (simulation) and `engines/vmcu` (production)
 ### Test-Time Guarantees (`bridge_test.go`)
 
 1. **Field coverage test**: Every simulation `RawPatientData` field has a mapping to production. Adding a field without a mapping fails the test.
-2. **Round-trip test**: For each of 10 archetypes, convert sim→production→sim and assert equality.
+2. **Round-trip test**: For each of 11 archetypes, convert sim→production→sim and assert equality.
 3. **GateSignal equivalence test**: All 5 values map correctly in both directions. Ordering invariant preserved.
 4. **Arbiter compatibility test**: Run `Arbitrate()` on both simulation and production arbiters for all 125 combinations. Results must be identical.
 
@@ -135,7 +135,7 @@ The bridge imports both `pkg/types` (simulation) and `engines/vmcu` (production)
 | `simulation_test.go` | `harness.VMCUEngine` | Baseline — proves scenarios are correct |
 | `production_test.go` | `bridge.ProductionEngine` | Validation — proves production V-MCU matches |
 
-Both share same archetypes and expected outcomes. 10 archetypes are used across 12 scenarios (not 1:1 — Scenario 11 uses 2 archetypes in sequence for freeze/resume, Scenario 12 uses no archetypes for the arbiter sweep). Discrepancy = production bug or bridge bug, never test bug.
+Both share same archetypes and expected outcomes. 11 archetypes are used across 13 scenarios (not 1:1 — Scenario 11 uses 2 archetypes in sequence for freeze/resume, Scenario 12 uses no archetypes for the arbiter sweep, Scenario 13 adds a new seasonal hyponatraemia archetype). Discrepancy = production bug or bridge bug, never test bug.
 
 ### Engine Adapter
 
@@ -152,14 +152,20 @@ func (pe *ProductionEngine) RunCycle(input types.TitrationCycleInput) types.Titr
 
 Production `VMCUEngine` constructed with no infrastructure: `safetyCache: nil`, `asyncTracer: nil`, `holdResponder: nil`, `eventPublisher: nil`. Zero network calls.
 
-**ProtocolRulesPath**: Production's `NewVMCUEngine()` calls `channel_c.LoadRules(cfg.ProtocolRulesPath)` which reads `protocol_rules.yaml` from disk. The bridge must provide a valid path. `engine_adapter.go` resolves this as `../clinical-runtime-platform/engines/vmcu/protocol_rules.yaml` relative to the simulation module root. In CI, the checkout ensures both directories exist side-by-side. This is the ONE file I/O dependency — all other inputs are in-memory.
+**ProtocolRulesPath**: Production's `NewVMCUEngine()` calls `channel_c.LoadRules(cfg.ProtocolRulesPath)` which reads `protocol_rules.yaml` from disk. The bridge resolves this path using two strategies:
+
+1. **`//go:embed` in test fixture** (preferred): Copy `protocol_rules.yaml` into `bridge/testdata/protocol_rules.yaml` and embed it at build time. This eliminates working-directory sensitivity and makes the simulation fully self-contained for CI. The embedded copy must be refreshed when the production YAML changes — the CI gate verifies `sha256(bridge/testdata/protocol_rules.yaml) == sha256(../clinical-runtime-platform/engines/vmcu/protocol_rules.yaml)` and blocks merge on mismatch.
+
+2. **Explicit path parameter** (fallback): `NewProductionEngine(opts ...EngineOption)` accepts `WithProtocolRulesPath(path string)` for cases where the caller needs to point to a specific YAML file. CI workflow sets this explicitly via environment variable `SIMULATION_PROTOCOL_RULES_PATH`.
+
+This is the ONE file I/O dependency — all other inputs are in-memory.
 
 ### Production's Extra Rules
 
-Production has 25 Channel B + expanded Channel C (vs simulation's 18+9). Extra rules (DA-01..DA-08, B-19, PG-15, PG-16) don't interfere with existing 12 scenarios because:
+Production has 25 Channel B + expanded Channel C (vs simulation's 18+9). Extra rules (DA-01..DA-08, B-19, PG-15, PG-16) don't interfere with the original 12 scenarios because:
 
 - DA rules: Archetypes have valid data with recent timestamps → evaluate CLEAR
-- B-19: Requires SUMMER season, archetypes don't set it
+- B-19: Now covered by new Scenario 13 (seasonal hyponatraemia archetype)
 - PG-15/PG-16: Require specific boolean flags not set by archetypes
 
 ### Scenario 3 (RAAS Tolerance) — Special Handling
@@ -174,12 +180,52 @@ Both must be `true` for PG-14 downgrade to fire from both channels.
 
 ### Rule ID Mapping Table
 
-| Simulation Rule ID | Production Rule ID | Notes |
-|---|---|---|
-| B-04+PG-14 | B-03-RAAS-SUPPRESSED | RAAS tolerance downgrade |
-| B-01 | B-01 | Hypoglycaemia (same) |
-| All other B-xx | B-xx | Same IDs |
-| All PG-xx | PG-xx | Same IDs |
+The bridge must include an exhaustive `RuleIDNormalization` map that is tested at build time. If a production rule ID is missing from this map, the bridge must panic (not silently pass). This table must be verified during implementation by comparing every `checkBxx()` function in production's `monitor.go` against every `ruleXxx()` function in the simulation's `channel_b.go`.
+
+| Simulation Rule ID | Production Rule ID | Clinical Condition | Verified Match |
+|---|---|---|---|
+| B-01 | B-01 | Glucose <3.9 mmol/L (hypoglycaemia) | Gate + threshold |
+| B-02 | B-07 | Glucose declining + recent dose + <5.5 | Gate + logic |
+| B-03 | B-04 | K+ <3.0 or >6.0 (extreme electrolyte) | Gate + thresholds |
+| B-04 | B-03 | Creatinine 48h delta >26 µmol/L (AKI) | Gate + delta calc |
+| B-04+PG-14 | B-03-RAAS-SUPPRESSED | RAAS tolerance downgrade | **DIVERGENT** — only entry where rule attribution differs |
+| B-05 | B-06 | Weight 72h delta >2.5 kg | Gate + delta calc |
+| B-06 | DA-01..DA-05 | Physiologically impossible values | Production splits into 5 DA rules |
+| B-07 | B-08 | eGFR <15 (CKD Stage 5) | Gate + threshold |
+| B-08 | B-05 | SBP <90 (hypotension) | Gate + threshold |
+| B-09 | B-09 | eGFR 15-29 (CKD Stage 4) | Gate + threshold |
+| B-10 (DA-06) | DA-06 | Stale K+ >14 days | Gate + staleness |
+| B-11 (DA-07) | DA-07 | Stale creatinine >30 days | Gate + staleness |
+| B-12 | B-12 | J-curve eGFR-stratified BP floor | Gate + CKD stage map |
+| B-13 | B-13 | HR <45 resting (severe bradycardia) | Gate + threshold |
+| B-14 | B-14 | HR <55 + beta-blocker + recent dose | Gate + conditions |
+| B-15 | B-15 | HR >120 resting (tachycardia) | Gate + threshold |
+| B-16 | B-16 | Irregular HR (possible AF) | Gate + KB22 trigger |
+| B-17 | B-17 | Na+ <132 + thiazide (severe hyponatraemia) | Gate + threshold |
+| B-18 | B-18 | Na+ 132-135 + thiazide (mild hyponatraemia) | Gate + threshold |
+| — | B-10 | eGFR slope <-5 mL/min/year (rapid decline) | Production-only, no sim equivalent |
+| — | B-11 | Beta-blocker + glucose <4.5 (raised threshold) | Production-only, no sim equivalent |
+| — | B-19 | Na+ <135 + SUMMER + thiazide (seasonal) | Production-only — covered by new Scenario 13 |
+| — | DA-08 | On RAAS + creatinine >14d stale | Production-only, no sim equivalent |
+| PG-01..PG-08 | PG-01..PG-08 | Same IDs | Verified match |
+| PG-14 | PG-14 | RAAS creatinine tolerance | Same ID (but see B-04+PG-14 above) |
+| — | PG-09..PG-13, PG-15, PG-16 | HTN composite conditions | Production-only, no sim equivalent |
+
+**NOTE**: Production-only rules (marked "—" in simulation column) have no simulation equivalent. These rules are tested through production's own test suite at `engines/vmcu/`, not through the simulation bridge. The bridge's `RuleIDNormalization` map must include them with a `PRODUCTION_ONLY` marker so the bridge doesn't panic on unknown IDs — it simply passes them through without asserting rule attribution.
+
+### Scenario 13 (NEW) — Seasonal Hyponatraemia (B-19)
+
+Added to cover production's B-19 rule, which has zero test coverage from the original 12 scenarios. This is clinically important for the Indian deployment — summer amplifies thiazide-induced electrolyte losses.
+
+**Archetype: `SeasonalHyponatraemia`**
+- `SodiumCurrent: 134 mmol/L` (below 135 threshold)
+- `ThiazideActive: true`
+- `Season: "SUMMER"`
+- All other labs normal
+
+**Expected**: `PAUSE` (B-19). Not HALT — Na+ is 134 (above the 132 severe threshold for B-17). This tests the seasonal modifier that only exists in production's Channel B, not in the simulation's 18-rule set. Therefore Scenario 13 only runs in `production_test.go`, not `simulation_test.go` (the simulation engine lacks B-19).
+
+This brings production Channel B coverage from 18/25 to 19/25 rules tested via simulation scenarios.
 
 ### Production Extra Steps Impact Analysis
 
@@ -221,7 +267,7 @@ Day N:
 
 Engine execution order is fixed: Body → Glucose → Hemodynamic → Renal. Each depends on the previous engine's output.
 
-**NOTE**: The 5 physiology engines are **NEW code** to be authored during integration. The existing `harness/multicycle.go` provides a skeleton with a simplified `PhysiologyState` (~15 variables, linear models), but it is insufficient for the full 5-engine architecture described here (~40 state variables, equilibrium-seeking models). The guidelines doc (Sections 4.1-4.5) provides the authoritative clinical specification for each engine's inputs, outputs, and coefficients.
+**NOTE**: The 5 physiology engines are **migrated and adapted from the v2 delivery** (`glucose_engine.go`, `hemodynamic_engine.go`, `renal_engine.go`, `body_engine.go`, `simulator.go`). The v2 engines are the authoritative implementation — already built, tuned to published trial data, and passing 7 trajectory tests. The existing `harness/multicycle.go` from v1 was a skeleton with simplified linear models; v2 replaced it with full equilibrium-seeking models (~40 state variables). Migration involves renaming files to match this spec's conventions and wiring the bridge adapter for closed-loop integration with the production `RunCycle()`.
 
 ### Configurable Coefficients (`config/default.yaml`)
 
@@ -424,18 +470,18 @@ Pattern: define archetype → define expected gate → assert gate + rule attrib
 The CLI provides quick local validation before pushing:
 
 ```bash
-# Default: run all 12 scenarios against SIMULATION engine
+# Default: run all 13 scenarios against SIMULATION engine
 go run cmd/main.go
 
-# --production: run all 12 scenarios against PRODUCTION engine (via bridge)
+# --production: run all 13 scenarios against PRODUCTION engine (via bridge)
 go run cmd/main.go --production
 
 # --trajectory: additionally run 90-day trajectory tests (slower)
 go run cmd/main.go --production --trajectory
 ```
 
-**Default mode**: Runs 12 scenarios against the simulation's own `harness.VMCUEngine`. Prints a summary table with columns: `#`, `SCENARIO`, `GATE`, `DOSE (YES/NO)`, `DELTA`, `B-RULE`, `C-RULE`, `STATUS (PASS/FAIL)`. Appends arbiter sweep result (125/125). Exits 0 if all pass, 1 if any fail.
+**Default mode**: Runs 12 scenarios (1-12) against the simulation's own `harness.VMCUEngine`. Prints a summary table with columns: `#`, `SCENARIO`, `GATE`, `DOSE (YES/NO)`, `DELTA`, `B-RULE`, `C-RULE`, `STATUS (PASS/FAIL)`. Appends arbiter sweep result (125/125). Exits 0 if all pass, 1 if any fail.
 
-**--production mode**: Same output format, but runs scenarios via `bridge.ProductionEngine`. Requires `protocol_rules.yaml` to be resolvable (see Section 4).
+**--production mode**: Same output format, but runs all 13 scenarios (1-13, including Scenario 13 which is production-only) via `bridge.ProductionEngine`. Requires `protocol_rules.yaml` to be resolvable (see Section 4).
 
 **--trajectory mode**: After scenarios, runs the 4 trajectory archetypes for 90 days each. Prints per-archetype summary: initial/final FBG, HbA1c, eGFR, dose, HALT count, and pass/fail against trajectory assertions.
