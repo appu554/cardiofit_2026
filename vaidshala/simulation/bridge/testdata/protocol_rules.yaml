@@ -1,0 +1,170 @@
+# protocol_rules.yaml — V-MCU Channel C pre-compiled rules
+# Loaded at startup, versioned with deployment.
+# SHA-256 hash of this file is recorded in every SafetyTrace.
+version: "2.0.0"
+
+rules:
+  - rule_id: PG-01
+    description: "Metformin absolute contraindication at eGFR < 30"
+    guideline_ref: "KDIGO_CKD_2024_S4.3"
+    condition:
+      field: egfr
+      operator: lt
+      value: 30
+      medication_active: METFORMIN
+    gate: HALT
+
+  - rule_id: PG-02
+    description: "SGLT2i efficacy threshold at eGFR < 45"
+    guideline_ref: "SGLT2I_EFFICACY_THRESHOLD"
+    condition:
+      field: egfr
+      operator: lt
+      value: 45
+      medication_active: SGLT2I
+    gate: PAUSE
+
+  - rule_id: PG-03
+    description: "AKI detected — hold all nephrotoxic agents"
+    guideline_ref: "KDIGO_AKI_2012"
+    condition:
+      field: aki_detected
+      operator: eq
+      value: true
+    gate: HALT
+
+  - rule_id: PG-04
+    description: "Never increase insulin into active hypoglycaemia"
+    guideline_ref: "ADA_HYPO_MANAGEMENT_2024"
+    condition:
+      field: active_hypoglycaemia
+      operator: eq
+      value: true
+      action_type: insulin_increase
+    gate: HALT
+
+  - rule_id: PG-05
+    description: "Maximum 20% dose change per cycle"
+    guideline_ref: "ALGORITHMIC_DRIFT_PROTECTION"
+    condition:
+      field: dose_delta_percent
+      operator: gt
+      value: 20
+    gate: PAUSE
+
+  # PG-06 (therapeutic futility) excluded from v1 pending clinical team
+  # decision on HbA1c improvement metric. Three options under review.
+
+  - rule_id: PG-07
+    description: "Post-hypoglycaemia dose increase prohibition (7d window)"
+    guideline_ref: "POST_HYPO_SAFETY_WINDOW"
+    condition:
+      field: hypoglycaemia_within_7d
+      operator: eq
+      value: true
+      action_type: dose_increase
+    gate: HALT
+
+  # ════════════════════════════════════════════════════════════════════════
+  # HTN CO-MANAGEMENT RULES (Wave 1 P0)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - rule_id: PG-08
+    description: "ACEi/ARB + hyperkalaemia (K+ ≥5.5) + declining eGFR → halt uptitration"
+    guideline_ref: "KDIGO_CKD_2024_S4.4_RAAS_SAFETY"
+    condition:
+      field: acei_arb_hyperk_declining_egfr
+      operator: eq
+      value: true
+      action_type: dose_increase
+    gate: HALT
+
+  - rule_id: PG-09
+    description: "Beta-blocker + active insulin therapy → modify (hypo masking risk)"
+    guideline_ref: "ADA_HYPO_MANAGEMENT_2024_BB"
+    condition:
+      field: beta_blocker_insulin_active
+      operator: eq
+      value: true
+    gate: MODIFY
+
+  - rule_id: PG-10
+    description: "Resistant HTN detected (≥3 agents at max + uncontrolled BP) → pause for specialist review"
+    guideline_ref: "ISH_2020_RESISTANT_HTN"
+    condition:
+      field: resistant_htn_detected
+      operator: eq
+      value: true
+    gate: PAUSE
+
+  - rule_id: PG-11
+    description: "Thiazide diuretic + sodium <130 mEq/L → halt (hyponatraemia risk)"
+    guideline_ref: "KDIGO_CKD_2024_ELECTROLYTE_SAFETY"
+    condition:
+      field: thiazide_hyponatraemia
+      operator: eq
+      value: true
+    gate: HALT
+
+  - rule_id: PG-12
+    description: "MRA + potassium >5.0 + eGFR <45 → modify (cap MRA dose)"
+    guideline_ref: "ESC_HF_2023_MRA_MONITORING"
+    condition:
+      field: mra_hyperk_low_egfr
+      operator: eq
+      value: true
+    gate: MODIFY
+
+  - rule_id: PG-13
+    description: "CCB + SBP <110 + recent dose increase → modify (excessive BP response)"
+    guideline_ref: "ISH_2020_CCB_TITRATION"
+    condition:
+      field: ccb_excessive_response
+      operator: eq
+      value: true
+    gate: MODIFY
+
+  - rule_id: PG-14
+    description: "RAAS creatinine tolerance — expected Cr rise post-ACEi/ARB, suppress AKI alarm"
+    guideline_ref: "NICE_CKD_2021_RAAS_MONITORING"
+    condition:
+      field: raas_creatinine_tolerant
+      operator: eq
+      value: true
+    gate: CLEAR
+
+  # ════════════════════════════════════════════════════════════════════════
+  # HTN CO-MANAGEMENT RULES (Wave 2 P1)
+  # ════════════════════════════════════════════════════════════════════════
+
+  - rule_id: PG-15
+    description: "ACEi-induced cough probability > 0.70 (from KB-22 posterior) → switch to ARB"
+    guideline_ref: "NICE_HTN_2022_ACEI_COUGH"
+    condition:
+      field: acei_induced_cough_probability
+      operator: gt
+      value: 0.70
+    gate: MODIFY
+    safety_instruction: "ACEi cough likely (posterior > 0.70). Recommend ARB switch. See decision card dc-htn-acei-cough-arb-switch-v1."
+
+  - rule_id: PG-16
+    description: "AF confirmed (from B-16) but no anticoagulation documented → pause for stroke risk review"
+    guideline_ref: "ESC_AF_2024_ANTICOAGULATION"
+    condition:
+      field: af_confirmed_no_anticoagulation
+      operator: eq
+      value: true
+    gate: PAUSE
+
+  # ════════════════════════════════════════════════════════════════════════
+  # DEPRESCRIBING SAFETY RULES
+  # ════════════════════════════════════════════════════════════════════════
+
+  - rule_id: AD-09
+    description: "CKD Stage 4/5 antihypertensive deprescribing hard block — no BP headroom below J-curve floor"
+    guideline_ref: "KDIGO_CKD_2024_DEPRESCRIBING_EXCLUSION"
+    condition:
+      field: ckd_stage4_deprescribing_blocked
+      operator: eq
+      value: true
+    gate: HALT

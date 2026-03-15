@@ -456,6 +456,22 @@ func TestToProductionRawLabs_OnRAASAgent(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// ProductionEngine construction test
+// ---------------------------------------------------------------------------
+
+func TestNewProductionEngine_Constructs(t *testing.T) {
+	engine, err := NewProductionEngine(
+		WithProtocolRulesPath("testdata/protocol_rules.yaml"),
+	)
+	if err != nil {
+		t.Fatalf("NewProductionEngine failed: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("engine is nil")
+	}
+}
+
 func TestToProductionRawLabs_ContextFieldTransfer(t *testing.T) {
 	sim := &simtypes.RawPatientData{GlucoseCurrent: 7.5}
 	ctx := &simtypes.TitrationContext{
