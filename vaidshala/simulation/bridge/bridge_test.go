@@ -10,6 +10,173 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// RuleID normalization tests
+// ---------------------------------------------------------------------------
+
+func TestRuleIDNormalization_ExhaustiveMap(t *testing.T) {
+	simRules := []string{
+		"B-01", "B-02", "B-03", "B-04", "B-04+PG-14",
+		"B-05", "B-06", "B-07", "B-08", "B-09",
+		"B-10", "B-11", "B-12", "B-13", "B-14",
+		"B-15", "B-16", "B-17", "B-18",
+		"PG-01", "PG-02", "PG-03", "PG-04", "PG-05",
+		"PG-06", "PG-07", "PG-08", "PG-14",
+	}
+	for _, ruleID := range simRules {
+		prodID := NormalizeRuleID(ruleID, DirectionSimToProduction)
+		if prodID == "" {
+			t.Errorf("no production mapping for sim rule %q", ruleID)
+		}
+	}
+}
+
+func TestRuleIDNormalization_Scenario3Divergence(t *testing.T) {
+	prodID := NormalizeRuleID("B-04+PG-14", DirectionSimToProduction)
+	if prodID != "B-03-RAAS-SUPPRESSED" {
+		t.Errorf("got %q, want %q", prodID, "B-03-RAAS-SUPPRESSED")
+	}
+}
+
+func TestRuleIDNormalization_ProductionOnly(t *testing.T) {
+	prodOnlyRules := []string{
+		"B-10", "B-11", "B-19",
+		"DA-02", "DA-03", "DA-04", "DA-05", "DA-08",
+		"PG-09", "PG-10", "PG-11", "PG-12", "PG-13",
+		"PG-15", "PG-16",
+	}
+	for _, ruleID := range prodOnlyRules {
+		simID := NormalizeRuleID(ruleID, DirectionProdToSimulation)
+		if simID != "PRODUCTION_ONLY" {
+			t.Errorf("prod-only rule %q: got %q, want PRODUCTION_ONLY", ruleID, simID)
+		}
+	}
+}
+
+func TestRuleIDNormalization_RoundTrip(t *testing.T) {
+	// Every sim→prod mapping should reverse cleanly (except composite keys
+	// like B-04+PG-14 which may not round-trip through the reverse map
+	// deterministically if multiple sim IDs map to overlapping prod IDs).
+	for simID, prodID := range ruleIDSimToProd {
+		backToSim := NormalizeRuleID(prodID, DirectionProdToSimulation)
+		// The reverse lookup finds the first match in map iteration order,
+		// so we verify the back-mapped sim ID produces the same prod ID.
+		backToProd := NormalizeRuleID(backToSim, DirectionSimToProduction)
+		if backToProd != prodID {
+			t.Errorf("round-trip broken: sim %q → prod %q → sim %q → prod %q",
+				simID, prodID, backToSim, backToProd)
+		}
+	}
+}
+
+func TestRuleIDNormalization_UnknownSimPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for unknown simulation rule ID")
+		}
+	}()
+	NormalizeRuleID("BOGUS-99", DirectionSimToProduction)
+}
+
+func TestRuleIDNormalization_UnknownProdPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for unknown production rule ID")
+		}
+	}()
+	NormalizeRuleID("BOGUS-99", DirectionProdToSimulation)
+}
+
+// ---------------------------------------------------------------------------
+// ToSimulationResult tests
+// ---------------------------------------------------------------------------
+
+func TestToSimulationResult_BasicMapping(t *testing.T) {
+	doseVal := 5.0
+	deltaVal := 2.5
+	prod := &vt.TitrationCycleResult{
+		ChannelA: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 0.85},
+		ChannelB: vt.ChannelBResult{Gate: vt.GatePause, RuleFired: "B-01"},
+		ChannelC: vt.ChannelCResult{Gate: vt.GateClear, RuleID: "PG-01"},
+		Arbiter:  vt.ArbiterOutput{FinalGate: vt.GatePause, DominantChannel: "B"},
+		DoseApplied: &doseVal,
+		DoseDelta:   &deltaVal,
+		BlockedBy:   "PHYSIO_GATE",
+	}
+
+	sim := ToSimulationResult(prod)
+
+	if sim.FinalGate != simtypes.PAUSE {
+		t.Errorf("FinalGate: got %v, want PAUSE", sim.FinalGate)
+	}
+	if sim.DominantChannel != simtypes.ChannelB {
+		t.Errorf("DominantChannel: got %q, want %q", sim.DominantChannel, simtypes.ChannelB)
+	}
+	if !sim.DoseApplied {
+		t.Error("DoseApplied: got false, want true")
+	}
+	if sim.DoseDelta != 2.5 {
+		t.Errorf("DoseDelta: got %.2f, want 2.5", sim.DoseDelta)
+	}
+	if sim.BlockedBy != "PHYSIO_GATE" {
+		t.Errorf("BlockedBy: got %q, want PHYSIO_GATE", sim.BlockedBy)
+	}
+	if sim.PhysioRuleFired != "B-01" {
+		t.Errorf("PhysioRuleFired: got %q, want B-01", sim.PhysioRuleFired)
+	}
+	if sim.ProtocolRuleFired != "PG-01" {
+		t.Errorf("ProtocolRuleFired: got %q, want PG-01", sim.ProtocolRuleFired)
+	}
+	// SafetyTrace sub-fields
+	if sim.SafetyTrace.MCUGate != simtypes.CLEAR {
+		t.Errorf("SafetyTrace.MCUGate: got %v, want CLEAR", sim.SafetyTrace.MCUGate)
+	}
+	if sim.SafetyTrace.GainFactor != 0.85 {
+		t.Errorf("SafetyTrace.GainFactor: got %.2f, want 0.85", sim.SafetyTrace.GainFactor)
+	}
+}
+
+func TestToSimulationResult_NilDose(t *testing.T) {
+	prod := &vt.TitrationCycleResult{
+		ChannelA: vt.ChannelAResult{Gate: vt.GateClear},
+		ChannelB: vt.ChannelBResult{Gate: vt.GateHalt},
+		ChannelC: vt.ChannelCResult{Gate: vt.GateClear},
+		Arbiter:  vt.ArbiterOutput{FinalGate: vt.GateHalt, DominantChannel: "B"},
+		DoseApplied: nil,
+		DoseDelta:   nil,
+	}
+
+	sim := ToSimulationResult(prod)
+	if sim.DoseApplied {
+		t.Error("DoseApplied: got true, want false (nil dose)")
+	}
+	if sim.DoseDelta != 0 {
+		t.Errorf("DoseDelta: got %.2f, want 0 (nil delta)", sim.DoseDelta)
+	}
+}
+
+func TestToSimulationResult_DominantChannelMapping(t *testing.T) {
+	tests := []struct {
+		prodCh string
+		wantCh simtypes.Channel
+	}{
+		{"A", simtypes.ChannelA},
+		{"B", simtypes.ChannelB},
+		{"C", simtypes.ChannelC},
+		{"NONE", simtypes.ChannelB}, // NONE defaults to B
+		{"", simtypes.ChannelB},     // empty defaults to B
+	}
+	for _, tt := range tests {
+		prod := &vt.TitrationCycleResult{
+			Arbiter: vt.ArbiterOutput{FinalGate: vt.GateClear, DominantChannel: tt.prodCh},
+		}
+		sim := ToSimulationResult(prod)
+		if sim.DominantChannel != tt.wantCh {
+			t.Errorf("DominantChannel(%q): got %q, want %q", tt.prodCh, sim.DominantChannel, tt.wantCh)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // GateSignal mapper tests
 // ---------------------------------------------------------------------------
 
