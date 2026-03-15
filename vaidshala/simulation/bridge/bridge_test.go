@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"vaidshala/clinical-runtime-platform/engines/vmcu/arbiter"
 	vt "vaidshala/clinical-runtime-platform/engines/vmcu/types"
 	"vaidshala/simulation/pkg/patient"
 	simtypes "vaidshala/simulation/pkg/types"
@@ -495,4 +496,51 @@ func TestToProductionRawLabs_ContextFieldTransfer(t *testing.T) {
 	if !prod.OliguriaReported {
 		t.Error("OliguriaReported not transferred")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Arbiter compatibility test: 125 gate signal combinations
+// ---------------------------------------------------------------------------
+
+func TestArbiterCompatibility_125Combinations(t *testing.T) {
+	gates := []simtypes.GateSignal{
+		simtypes.CLEAR, simtypes.MODIFY, simtypes.PAUSE,
+		simtypes.HOLD_DATA, simtypes.HALT,
+	}
+
+	passed := 0
+	for _, a := range gates {
+		for _, b := range gates {
+			for _, c := range gates {
+				// Simulation arbiter
+				simInput := simtypes.ArbiterInput{
+					MCUGate:      a,
+					PhysioGate:   b,
+					ProtocolGate: c,
+				}
+				simResult := simtypes.Arbitrate(simInput)
+
+				// Production arbiter (via converted gate signals)
+				prodInput := vt.ArbiterInput{
+					MCUGate:      GateSignalToProduction(a),
+					PhysioGate:   GateSignalToProduction(b),
+					ProtocolGate: GateSignalToProduction(c),
+				}
+				prodResult := arbiter.Arbitrate(prodInput)
+
+				// Compare: both must agree on FinalGate
+				expectedGate := GateSignalToProduction(simResult.FinalGate)
+				if prodResult.FinalGate != expectedGate {
+					t.Errorf("Arbiter(%d,%d,%d): sim=%d→%q, prod=%q",
+						a, b, c, simResult.FinalGate, expectedGate, prodResult.FinalGate)
+				} else {
+					passed++
+				}
+			}
+		}
+	}
+	if passed != 125 {
+		t.Fatalf("Arbiter: %d/125 passed", passed)
+	}
+	t.Logf("Arbiter: 125/125 combinations verified")
 }
