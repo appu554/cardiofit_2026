@@ -58,8 +58,8 @@ func GateSignalToSimulation(prod vt.GateSignal) simtypes.GateSignal {
 // Pointer helpers
 // ---------------------------------------------------------------------------
 
-func float64Ptr(v float64) *float64   { return &v }
-func timePtr(v time.Time) *time.Time   { return &v }
+func float64Ptr(v float64) *float64  { return &v }
+func timePtr(v time.Time) *time.Time { return &v }
 
 func derefFloat64(p *float64) float64 {
 	if p == nil {
@@ -118,8 +118,8 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		Weight72hAgo:     float64Ptr(sim.WeightPrevious),
 
 		// Measurement timestamps
-		EGFRLastMeasuredAt:      nilTimeIfZero(ts.LastEGFR),
-		HbA1cLastMeasuredAt:     nilTimeIfZero(ts.LastHbA1c),
+		EGFRLastMeasuredAt:       nilTimeIfZero(ts.LastEGFR),
+		HbA1cLastMeasuredAt:      nilTimeIfZero(ts.LastHbA1c),
 		CreatinineLastMeasuredAt: nilTimeIfZero(ts.LastCreatinine),
 
 		// Context flags from sim.RawPatientData
@@ -180,22 +180,22 @@ func nilTimeIfZero(t time.Time) *time.Time {
 // Float64 SBP/DBP/HeartRate are truncated to int.
 func ToSimulationRawLabs(prod *cb.RawPatientData) simtypes.RawPatientData {
 	sim := simtypes.RawPatientData{
-		GlucoseCurrent:    derefFloat64(prod.GlucoseCurrent),
-		GlucoseTimestamp:  prod.GlucoseTimestamp,
-		CreatinineCurrent: derefFloat64(prod.CreatinineCurrent),
-		PotassiumCurrent:  derefFloat64(prod.PotassiumCurrent),
-		SBP:               floatToInt(derefFloat64(prod.SBPCurrent)),
-		DBP:               floatToInt(derefFloat64(prod.DBPCurrent)),
-		HeartRate:          floatToInt(derefFloat64(prod.HeartRateCurrent)),
-		HeartRateRegularity: prod.HRRegularity,
-		Weight:             derefFloat64(prod.WeightKgCurrent),
-		WeightPrevious:    derefFloat64(prod.Weight72hAgo),
-		EGFR:               derefFloat64(prod.EGFRCurrent),
-		HbA1c:              derefFloat64(prod.HbA1cCurrent),
-		SodiumCurrent:     derefFloat64(prod.SodiumCurrent),
-		BetaBlockerActive:  prod.BetaBlockerActive,
+		GlucoseCurrent:          derefFloat64(prod.GlucoseCurrent),
+		GlucoseTimestamp:        prod.GlucoseTimestamp,
+		CreatinineCurrent:       derefFloat64(prod.CreatinineCurrent),
+		PotassiumCurrent:        derefFloat64(prod.PotassiumCurrent),
+		SBP:                     floatToInt(derefFloat64(prod.SBPCurrent)),
+		DBP:                     floatToInt(derefFloat64(prod.DBPCurrent)),
+		HeartRate:               floatToInt(derefFloat64(prod.HeartRateCurrent)),
+		HeartRateRegularity:     prod.HRRegularity,
+		Weight:                  derefFloat64(prod.WeightKgCurrent),
+		WeightPrevious:          derefFloat64(prod.Weight72hAgo),
+		EGFR:                    derefFloat64(prod.EGFRCurrent),
+		HbA1c:                   derefFloat64(prod.HbA1cCurrent),
+		SodiumCurrent:           derefFloat64(prod.SodiumCurrent),
+		BetaBlockerActive:       prod.BetaBlockerActive,
 		CreatinineRiseExplained: prod.CreatinineRiseExplained,
-		RecentDoseIncrease: prod.RecentDoseIncrease,
+		RecentDoseIncrease:      prod.RecentDoseIncrease,
 
 		// Historical
 		CreatininePrevious: derefFloat64(prod.Creatinine48hAgo),

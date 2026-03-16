@@ -62,14 +62,14 @@ type RawPatientData struct {
 	MeasurementUncertainty float64 // σ mmHg — dampens dose change near thresholds
 
 	// ── Heart rate extensions (Wave 2, Amendment 3) ──
-	HeartRateCurrent           *float64 // bpm, nil if not available
-	HRRegularity               string   // REGULAR | IRREGULAR | UNKNOWN
-	HRContext                  string   // RESTING | POST_ACTIVITY | STANDING | SUPINE
-	HeartRateConfirmed         bool     // true if 2 consecutive readings within 10%
-	BetaBlockerActive              bool     // from KB-20 MedicationFact
-	BetaBlockerDoseChangeIn7d      bool     // true if beta-blocker dose changed in last 7 days
-	BetaBlockerPerturbationActive  bool     // true if BB perturbation window is active (recently started/uptitrated)
-	ThiazideActive             bool     // from KB-20 MedicationFact (for B-17/B-18/B-19)
+	HeartRateCurrent              *float64 // bpm, nil if not available
+	HRRegularity                  string   // REGULAR | IRREGULAR | UNKNOWN
+	HRContext                     string   // RESTING | POST_ACTIVITY | STANDING | SUPINE
+	HeartRateConfirmed            bool     // true if 2 consecutive readings within 10%
+	BetaBlockerActive             bool     // from KB-20 MedicationFact
+	BetaBlockerDoseChangeIn7d     bool     // true if beta-blocker dose changed in last 7 days
+	BetaBlockerPerturbationActive bool     // true if BB perturbation window is active (recently started/uptitrated)
+	ThiazideActive                bool     // from KB-20 MedicationFact (for B-17/B-18/B-19)
 
 	// Season (from KB-20 PatientProfile)
 	Season string // SUMMER|MONSOON|WINTER|AUTUMN|UNKNOWN
