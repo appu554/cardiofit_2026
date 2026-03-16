@@ -301,6 +301,20 @@ func buildEvaluator(cond ruleCondition) (func(*TitrationContext) bool, error) {
 			return ctx.ACRA2NoRAAS
 		}, nil
 
+	// ── Finerenone rules (PG-18, PG-19) ──
+
+	case "finerenone_eligible":
+		// PG-18: Finerenone eligibility (eGFR ≥25, K+ <5.0, on max RAAS, ACR A2+)
+		return func(ctx *TitrationContext) bool {
+			return ctx.FinerenoneEligible
+		}, nil
+
+	case "finerenone_k_monitoring":
+		// PG-19: Finerenone active + K+ 5.0-5.5 → close monitoring
+		return func(ctx *TitrationContext) bool {
+			return ctx.FinerenoneKMonitoring
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown field %q", cond.Field)
 	}

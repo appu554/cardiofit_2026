@@ -74,6 +74,10 @@ type TitrationContext struct {
 	ACRA2NoRAAS bool   // PG-17-A2: ACR category A2 AND NOT on ACEi/ARB
 	ACRCategory string // A1 | A2 | A3 (for audit trail)
 	ACRTrend    string // IMPROVING | STABLE | WORSENING (for audit trail)
+
+	// Finerenone rules (PG-18, PG-19)
+	FinerenoneEligible    bool // PG-18: eGFR ≥25, K+ <5.0, on max RAAS, ACR A2+
+	FinerenoneKMonitoring bool // PG-19: finerenone active + K+ 5.0-5.5
 }
 
 // ProtocolGate is Channel C's local gate type.

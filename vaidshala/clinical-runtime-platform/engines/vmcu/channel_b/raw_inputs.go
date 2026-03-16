@@ -74,11 +74,17 @@ type RawPatientData struct {
 	BetaBlockerPerturbationActive bool     // true if BB perturbation window is active (recently started/uptitrated)
 	ThiazideActive                bool     // from KB-20 MedicationFact (for B-17/B-18/B-19)
 
+	// Finerenone (from KB-20 MedicationFact)
+	FinerenoneActive bool // B-21: finerenone hyperkalemia monitoring
+
 	// Season (from KB-20 PatientProfile)
 	Season string // SUMMER|MONSOON|WINTER|AUTUMN|UNKNOWN
 
 	// CKD stage for J-curve stratification (from KB-20)
 	CKDStage string // e.g., "3a", "3b", "4", "5"
+
+	// Glucose variability (from KB-20 FBGTracking)
+	GlucoseCV30d *float64 // 30-day coefficient of variation %, nil if insufficient data
 
 	// Glucose trend (last 3 readings, most recent first)
 	GlucoseReadings []TimestampedValue

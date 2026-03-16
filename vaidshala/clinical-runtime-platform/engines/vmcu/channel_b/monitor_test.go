@@ -824,6 +824,123 @@ func TestB19_SeasonalHyponatraemia(t *testing.T) {
 	}
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// GLUCOSE VARIABILITY RULE (B-20) — Wave 2
+// ════════════════════════════════════════════════════════════════════════
+
+func TestB20_GlucoseCVHighVariability(t *testing.T) {
+	cfg := DefaultPhysioConfig()
+	m := NewPhysiologySafetyMonitor(cfg)
+	d := safeDefaults()
+	d.GlucoseCV30d = Float64Ptr(38.5) // > 36% threshold
+	result := m.Evaluate(d)
+	if result.Gate != PhysioPause {
+		t.Errorf("B-20: gate = %v, want PAUSE", result.Gate)
+	}
+	if result.RuleFired != "B-20" {
+		t.Errorf("RuleFired = %v, want B-20", result.RuleFired)
+	}
+}
+
+func TestB20_GlucoseCVNormal(t *testing.T) {
+	cfg := DefaultPhysioConfig()
+	m := NewPhysiologySafetyMonitor(cfg)
+	d := safeDefaults()
+	d.GlucoseCV30d = Float64Ptr(25.0) // < 36%
+	result := m.Evaluate(d)
+	if result.RuleFired == "B-20" {
+		t.Errorf("B-20 should not fire for CV 25%%")
+	}
+}
+
+func TestB20_GlucoseCVNil(t *testing.T) {
+	cfg := DefaultPhysioConfig()
+	m := NewPhysiologySafetyMonitor(cfg)
+	d := safeDefaults()
+	// GlucoseCV30d is nil — should not fire
+	result := m.Evaluate(d)
+	if result.RuleFired == "B-20" {
+		t.Errorf("B-20 should not fire for nil CV")
+	}
+}
+
+func TestB20_GlucoseCVBoundary(t *testing.T) {
+	cfg := DefaultPhysioConfig()
+	m := NewPhysiologySafetyMonitor(cfg)
+
+	// Exactly 36.0 — should NOT fire (> not >=)
+	d := safeDefaults()
+	d.GlucoseCV30d = Float64Ptr(36.0)
+	result := m.Evaluate(d)
+	if result.RuleFired == "B-20" {
+		t.Errorf("B-20 should not fire for CV exactly at threshold (36.0)")
+	}
+
+	// Just above — should fire
+	d.GlucoseCV30d = Float64Ptr(36.01)
+	result = m.Evaluate(d)
+	if result.Gate != PhysioPause || result.RuleFired != "B-20" {
+		t.Errorf("B-20 should fire for CV 36.01, got gate=%s rule=%s", result.Gate, result.RuleFired)
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// FINERENONE HYPERKALEMIA RULE (B-21)
+// ════════════════════════════════════════════════════════════════════════
+
+func TestB21_FinerenoneHyperkalemia(t *testing.T) {
+	cfg := DefaultPhysioConfig()
+	m := NewPhysiologySafetyMonitor(cfg)
+
+	tests := []struct {
+		name     string
+		data     *RawPatientData
+		wantGate PhysioGate
+		wantRule string
+	}{
+		{"K+ 5.8 + finerenone → HALT", &RawPatientData{
+			PotassiumCurrent: Float64Ptr(5.8),
+			FinerenoneActive: true,
+			GlucoseCurrent:   Float64Ptr(6.0),
+			GlucoseTimestamp: time.Now(),
+		}, PhysioHalt, "B-21"},
+		{"K+ 5.5 + finerenone → HALT (boundary)", &RawPatientData{
+			PotassiumCurrent: Float64Ptr(5.5),
+			FinerenoneActive: true,
+			GlucoseCurrent:   Float64Ptr(6.0),
+			GlucoseTimestamp: time.Now(),
+		}, PhysioHalt, "B-21"},
+		{"K+ 5.4 + finerenone → not B-21", &RawPatientData{
+			PotassiumCurrent: Float64Ptr(5.4),
+			FinerenoneActive: true,
+			GlucoseCurrent:   Float64Ptr(6.0),
+			GlucoseTimestamp: time.Now(),
+		}, PhysioClear, ""},
+		{"K+ 5.8 no finerenone → not B-21", &RawPatientData{
+			PotassiumCurrent: Float64Ptr(5.8),
+			FinerenoneActive: false,
+			GlucoseCurrent:   Float64Ptr(6.0),
+			GlucoseTimestamp: time.Now(),
+		}, PhysioClear, ""},
+		{"finerenone but nil K+ → clear", &RawPatientData{
+			FinerenoneActive: true,
+			GlucoseCurrent:   Float64Ptr(6.0),
+			GlucoseTimestamp: time.Now(),
+		}, PhysioClear, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := m.Evaluate(tt.data)
+			if result.Gate != tt.wantGate {
+				t.Errorf("gate = %v, want %v", result.Gate, tt.wantGate)
+			}
+			if tt.wantRule != "" && result.RuleFired != tt.wantRule {
+				t.Errorf("rule = %v, want %v", result.RuleFired, tt.wantRule)
+			}
+		})
+	}
+}
+
 func TestB13_TakesPriorityOverB14(t *testing.T) {
 	// B-13 (HR<45, HALT) fires before B-14 (HR<55, PAUSE) in evaluation order
 	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())

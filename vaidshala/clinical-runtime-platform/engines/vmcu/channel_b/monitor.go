@@ -6,7 +6,7 @@ import (
 )
 
 // PhysiologySafetyMonitor implements SA-02: raw lab threshold rules.
-// 22 rules total: 17 clinical thresholds + 5 data anomaly checks.
+// 23 rules total: 18 clinical thresholds + 5 data anomaly checks.
 //
 // Rule evaluation order (most severe first):
 //  1. Data anomaly checks (DA-01 through DA-05) → HOLD_DATA
@@ -61,6 +61,9 @@ type PhysioConfig struct {
 	SodiumPauseThreshold    float64 // B-18: mEq/L (default 135) — thiazide + Na+ 132-135
 	SodiumSeasonalThreshold float64 // B-19: mEq/L (default 135) — seasonal amplification
 
+	// Glucose variability threshold (B-20)
+	GlucoseCVPauseThreshold float64 // B-20: CV% above this triggers PAUSE (default 36.0)
+
 	// Data anomaly thresholds (SA-05)
 	EGFRDeltaHoldData       float64 // DA-01: % in 48h (default 40)
 	CreatinineDeltaHoldData float64 // DA-02: % in 48h (default 100)
@@ -98,6 +101,7 @@ func DefaultPhysioConfig() PhysioConfig {
 		SodiumHaltThreshold:     132.0,
 		SodiumPauseThreshold:    135.0,
 		SodiumSeasonalThreshold: 135.0,
+		GlucoseCVPauseThreshold: 36.0,
 		WeightDeltaPause:        2.5,
 		GlucoseTrendThreshold:   5.5,
 		EGFRDeltaHoldData:       40.0,
@@ -250,6 +254,11 @@ func (m *PhysiologySafetyMonitor) Evaluate(data *RawPatientData) PhysioResult {
 		r.RawValues = rawVals
 		return *r
 	}
+	// B-21: finerenone + K+ ≥5.5 → HALT (hyperkalemia risk)
+	if r := m.checkB21(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
 
 	// ── Phase 3: Warning thresholds → PAUSE ──
 
@@ -298,6 +307,11 @@ func (m *PhysiologySafetyMonitor) Evaluate(data *RawPatientData) PhysioResult {
 	}
 	// B-19: seasonal hyponatraemia amplification (Na+ < 135 + SUMMER + thiazide)
 	if r := m.checkB19(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
+	// B-20: glucose variability — CV% > 36% → PAUSE
+	if r := m.checkB20(data); r != nil {
 		r.RawValues = rawVals
 		return *r
 	}
@@ -991,6 +1005,50 @@ func (m *PhysiologySafetyMonitor) checkB19(d *RawPatientData) *PhysioResult {
 	}
 	if *d.SodiumCurrent < m.cfg.SodiumSeasonalThreshold {
 		return &PhysioResult{Gate: PhysioPause, RuleFired: "B-19"}
+	}
+	return nil
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// GLUCOSE VARIABILITY RULE (B-20) — Wave 2
+// ════════════════════════════════════════════════════════════════════════
+
+// B-21: Finerenone + K+ ≥5.5 → HALT (hyperkalemia risk)
+//
+// CLINICAL RATIONALE:
+// Finerenone (non-steroidal MRA) reduces albuminuria and CKD progression
+// but carries significant hyperkalemia risk, especially in CKD patients
+// already on RAAS blockade. FIDELIO-DKD and FIGARO-DKD trials mandated
+// K+ <5.5 for continuation. At K+ ≥5.5 with finerenone active,
+// immediate titration halt is required to prevent life-threatening
+// hyperkalemia. This threshold is lower than B-04's general K+ >6.0
+// because finerenone potentiates potassium retention.
+func (m *PhysiologySafetyMonitor) checkB21(d *RawPatientData) *PhysioResult {
+	if !d.FinerenoneActive {
+		return nil
+	}
+	if d.PotassiumCurrent == nil {
+		return nil
+	}
+	if *d.PotassiumCurrent >= 5.5 {
+		return &PhysioResult{Gate: PhysioHalt, RuleFired: "B-21"}
+	}
+	return nil
+}
+
+// B-20: Glucose variability — CV% > 36% → PAUSE
+// ADA 2024: CV >36% indicates unstable glycaemic control;
+// dose adjustments during high variability are unsafe.
+func (m *PhysiologySafetyMonitor) checkB20(d *RawPatientData) *PhysioResult {
+	if d.GlucoseCV30d == nil {
+		return nil
+	}
+	if *d.GlucoseCV30d > m.cfg.GlucoseCVPauseThreshold {
+		return &PhysioResult{
+			Gate:      PhysioPause,
+			RuleFired: "B-20",
+			RawValues: map[string]float64{"glucose_cv_30d": *d.GlucoseCV30d},
+		}
 	}
 	return nil
 }

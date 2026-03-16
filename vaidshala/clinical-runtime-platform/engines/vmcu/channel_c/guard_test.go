@@ -195,9 +195,9 @@ func TestRulesHashStable(t *testing.T) {
 
 func TestRuleCount(t *testing.T) {
 	guard := setupTestRules(t)
-	// PG-01..PG-05, PG-07..PG-17-A3, PG-17-A2, PG-08-DUAL-RAAS, AD-09 (PG-06 excluded) = 19 rules
-	if guard.RuleCount() != 19 {
-		t.Errorf("expected 19 rules (PG-06 excluded), got %d", guard.RuleCount())
+	// PG-01..PG-05, PG-07..PG-19, PG-08-DUAL-RAAS, AD-09 (PG-06 excluded) = 21 rules
+	if guard.RuleCount() != 21 {
+		t.Errorf("expected 21 rules (PG-06 excluded), got %d", guard.RuleCount())
 	}
 }
 
@@ -505,6 +505,86 @@ rules:
 				t.Errorf("RuleID = %v, want %v", result.RuleID, tt.wantRule)
 			}
 		})
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// FINERENONE RULES (PG-18, PG-19)
+// ════════════════════════════════════════════════════════════════════════
+
+func TestPG18_FinerenoneEligibility(t *testing.T) {
+	rulesYAML := `
+version: "test"
+rules:
+  - rule_id: PG-18
+    description: "Finerenone eligibility"
+    guideline_ref: FIDELIO-DKD-2020
+    condition:
+      field: finerenone_eligible
+      operator: eq
+      value: true
+    gate: MODIFY
+`
+	tmpFile, _ := os.CreateTemp("", "protocol_rules_*.yaml")
+	tmpFile.WriteString(rulesYAML)
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	guard, err := LoadRules(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := guard.Evaluate(&TitrationContext{FinerenoneEligible: true})
+	if result.Gate != ProtoModify {
+		t.Errorf("PG-18: gate = %v, want MODIFY", result.Gate)
+	}
+	if result.RuleID != "PG-18" {
+		t.Errorf("PG-18: rule_id = %s, want PG-18", result.RuleID)
+	}
+
+	// Not eligible → CLEAR
+	result2 := guard.Evaluate(&TitrationContext{FinerenoneEligible: false})
+	if result2.Gate != ProtoClear {
+		t.Errorf("PG-18 not eligible: gate = %v, want CLEAR", result2.Gate)
+	}
+}
+
+func TestPG19_FinerenoneKMonitoring(t *testing.T) {
+	rulesYAML := `
+version: "test"
+rules:
+  - rule_id: PG-19
+    description: "Finerenone K+ monitoring"
+    guideline_ref: FIGARO-DKD-2021
+    condition:
+      field: finerenone_k_monitoring
+      operator: eq
+      value: true
+    gate: PAUSE
+`
+	tmpFile, _ := os.CreateTemp("", "protocol_rules_*.yaml")
+	tmpFile.WriteString(rulesYAML)
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	guard, err := LoadRules(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := guard.Evaluate(&TitrationContext{FinerenoneKMonitoring: true})
+	if result.Gate != ProtoPause {
+		t.Errorf("PG-19: gate = %v, want PAUSE", result.Gate)
+	}
+	if result.RuleID != "PG-19" {
+		t.Errorf("PG-19: rule_id = %s, want PG-19", result.RuleID)
+	}
+
+	// Not monitoring → CLEAR
+	result2 := guard.Evaluate(&TitrationContext{FinerenoneKMonitoring: false})
+	if result2.Gate != ProtoClear {
+		t.Errorf("PG-19 not monitoring: gate = %v, want CLEAR", result2.Gate)
 	}
 }
 
