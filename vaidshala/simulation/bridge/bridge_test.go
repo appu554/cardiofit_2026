@@ -458,6 +458,35 @@ func TestToProductionRawLabs_OnRAASAgent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// RAAS tolerance context propagation test (Scenario 3)
+// ---------------------------------------------------------------------------
+
+func TestToProductionRawLabs_RAASToleranceContext(t *testing.T) {
+	sim := &simtypes.RawPatientData{
+		CreatinineCurrent:       120.0,
+		CreatininePrevious:      90.0,
+		PotassiumCurrent:        4.8,
+		CreatinineRiseExplained: true,
+	}
+	ctx := &simtypes.TitrationContext{
+		OliguriaReported: false,
+		CKDStage:         "3a",
+	}
+	ts := PatientTimestamps{}
+	prod := ToProductionRawLabs(sim, ctx, ts)
+
+	if prod.PotassiumCurrent == nil || *prod.PotassiumCurrent != 4.8 {
+		t.Errorf("PotassiumCurrent not propagated: got %v", prod.PotassiumCurrent)
+	}
+	if prod.OliguriaReported != false {
+		t.Errorf("OliguriaReported should be false")
+	}
+	if !prod.CreatinineRiseExplained {
+		t.Errorf("CreatinineRiseExplained should be true")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ProductionEngine construction test
 // ---------------------------------------------------------------------------
 

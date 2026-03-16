@@ -124,13 +124,13 @@ func RAASCreatinineTolerance() VirtualPatient {
 	return VirtualPatient{
 		ID:          "SIM-RAAS-001",
 		Archetype:   "raas_creatinine_tolerance",
-		Description: "ACEi increased 7 days ago. Creatinine rose 20% (within 30% tolerance). Expected RAAS response — NOT AKI.",
+		Description: "ACEi increased 7 days ago. Creatinine rose 30% (117→90, delta=27 > 26 µmol/L). Expected RAAS response — NOT AKI. B-03 suppressed to PAUSE via RAAS tolerance (PG-14).",
 		Labs: types.RawPatientData{
 			PatientID:              "SIM-RAAS-001",
 			Timestamp:              time.Now(),
 			GlucoseCurrent:         7.5,
 			GlucoseTimestamp:        hoursAgo(6),
-			CreatinineCurrent:      108, // 20% rise from 90 (within 30% tolerance)
+			CreatinineCurrent:      117, // 30% rise from 90 (delta=27 > 26 µmol/L → triggers B-03, suppressed to PAUSE via RAAS tolerance)
 			CreatininePrevious:     90,
 			CreatinineTimestamp:     daysAgo(0),
 			CreatinineRiseExplained: true, // Orchestrator sets this when PG-14 conditions met

@@ -49,7 +49,13 @@ type RawPatientData struct {
 	// When true, a creatinine delta >26 µmol/L is downgraded from HALT→PAUSE
 	// because it is explained by expected RAAS blockade pharmacodynamics.
 	CreatinineRiseExplained bool
-	OliguriaReported       bool // clinician-reported oliguria overrides RAAS tolerance
+	OliguriaReported        bool // clinician-reported oliguria overrides RAAS tolerance
+	OnRAASAgent             bool // true if patient is on ACEi or ARB
+
+	// Lab measurement timestamps (from KB-20 LabFact)
+	EGFRLastMeasuredAt       *time.Time // nil if timestamp not available
+	HbA1cLastMeasuredAt      *time.Time // nil if timestamp not available
+	CreatinineLastMeasuredAt *time.Time // nil if timestamp not available
 
 	// BP pattern and measurement uncertainty (from KB-20 BPTrajectory)
 	BPPattern              string  // matches BPPattern constants in KB-20

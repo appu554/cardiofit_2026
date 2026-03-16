@@ -76,12 +76,11 @@ func TestProductionScenarios(t *testing.T) {
 					"Intended gate=%v. Fix bridge/type_mapper.go to send nil for zero CreatininePrevious.", sc.ID, sc.Expected.Gate)
 
 			case sc.ID == 3:
-				// RAAS Creatinine Tolerance: production engine processes PG-14 differently.
-				// CreatininePrevious=90, delta=18 (<26), so B-03 does NOT fire.
-				// The production engine may return CLEAR (creatinine rise within tolerance
-				// and no rule fires) or PAUSE (if tolerance downgrade still produces PAUSE).
-				if result.FinalGate > types.PAUSE {
-					t.Errorf("gate: got %v, want CLEAR or PAUSE for RAAS tolerance (not HALT)", result.FinalGate)
+				// RAAS Creatinine Tolerance: delta=30 > 26 µmol/L triggers B-03, but
+				// CreatinineRiseExplained=true, OliguriaReported=false, K+=4.8 (<5.5)
+				// suppresses HALT→PAUSE via B-03-RAAS-SUPPRESSED.
+				if result.FinalGate != types.PAUSE {
+					t.Errorf("Scenario 3: gate = %v, want PAUSE (RAAS tolerance should suppress HALT→PAUSE)", result.FinalGate)
 				}
 				t.Logf("Scenario 3 RAAS tolerance: production returns %s (sim expects PAUSE via B-04+PG-14)", result.FinalGate)
 
