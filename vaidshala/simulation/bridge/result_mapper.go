@@ -65,7 +65,7 @@ var productionOnlyRules = map[string]bool{
 	"B-10": true, "B-11": true, "B-19": true,
 	"DA-02": true, "DA-03": true, "DA-04": true, "DA-05": true, "DA-08": true,
 	"PG-08-DUAL-RAAS": true,
-	"PG-09": true, "PG-10": true, "PG-11": true, "PG-12": true, "PG-13": true,
+	"PG-09":           true, "PG-10": true, "PG-11": true, "PG-12": true, "PG-13": true,
 	"PG-15": true, "PG-16": true,
 }
 

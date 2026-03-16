@@ -97,10 +97,10 @@ func TestToSimulationResult_BasicMapping(t *testing.T) {
 	doseVal := 5.0
 	deltaVal := 2.5
 	prod := &vt.TitrationCycleResult{
-		ChannelA: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 0.85},
-		ChannelB: vt.ChannelBResult{Gate: vt.GatePause, RuleFired: "B-01"},
-		ChannelC: vt.ChannelCResult{Gate: vt.GateClear, RuleID: "PG-01"},
-		Arbiter:  vt.ArbiterOutput{FinalGate: vt.GatePause, DominantChannel: "B"},
+		ChannelA:    vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 0.85},
+		ChannelB:    vt.ChannelBResult{Gate: vt.GatePause, RuleFired: "B-01"},
+		ChannelC:    vt.ChannelCResult{Gate: vt.GateClear, RuleID: "PG-01"},
+		Arbiter:     vt.ArbiterOutput{FinalGate: vt.GatePause, DominantChannel: "B"},
 		DoseApplied: &doseVal,
 		DoseDelta:   &deltaVal,
 		BlockedBy:   "PHYSIO_GATE",
@@ -140,10 +140,10 @@ func TestToSimulationResult_BasicMapping(t *testing.T) {
 
 func TestToSimulationResult_NilDose(t *testing.T) {
 	prod := &vt.TitrationCycleResult{
-		ChannelA: vt.ChannelAResult{Gate: vt.GateClear},
-		ChannelB: vt.ChannelBResult{Gate: vt.GateHalt},
-		ChannelC: vt.ChannelCResult{Gate: vt.GateClear},
-		Arbiter:  vt.ArbiterOutput{FinalGate: vt.GateHalt, DominantChannel: "B"},
+		ChannelA:    vt.ChannelAResult{Gate: vt.GateClear},
+		ChannelB:    vt.ChannelBResult{Gate: vt.GateHalt},
+		ChannelC:    vt.ChannelCResult{Gate: vt.GateClear},
+		Arbiter:     vt.ArbiterOutput{FinalGate: vt.GateHalt, DominantChannel: "B"},
 		DoseApplied: nil,
 		DoseDelta:   nil,
 	}
@@ -607,12 +607,12 @@ func TestNilFloat64_ZeroMapsToNil(t *testing.T) {
 func TestToProductionRawLabs_StaleTimestamps(t *testing.T) {
 	staleTime := time.Now().Add(-17 * 24 * time.Hour) // 17 days ago
 	sim := &simtypes.RawPatientData{
-		PotassiumCurrent:   4.5,
-		PotassiumTimestamp: staleTime,
-		CreatinineCurrent:  90.0,
+		PotassiumCurrent:    4.5,
+		PotassiumTimestamp:  staleTime,
+		CreatinineCurrent:   90.0,
 		CreatinineTimestamp: staleTime,
-		EGFR:              45.0,
-		EGFRTimestamp:      staleTime,
+		EGFR:                45.0,
+		EGFRTimestamp:       staleTime,
 	}
 	ts := PatientTimestamps{
 		LastPotassium:  staleTime,

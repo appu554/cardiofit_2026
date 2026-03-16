@@ -51,9 +51,9 @@ type TitrationContext struct {
 	RAASCreatinineTolerant bool
 
 	// Numeric values for threshold comparisons in PG-08..PG-14
-	PotassiumCurrent float64 // mEq/L (from cache)
-	SBPCurrent       float64 // mmHg (from cache)
-	SodiumCurrent    float64 // mEq/L (from cache)
+	PotassiumCurrent  float64 // mEq/L (from cache)
+	SBPCurrent        float64 // mmHg (from cache)
+	SodiumCurrent     float64 // mEq/L (from cache)
 	CreatinineRisePct float64 // % rise from baseline (for PG-14 monitoring)
 
 	// ── HTN co-management fields (Wave 2 P1) ──
