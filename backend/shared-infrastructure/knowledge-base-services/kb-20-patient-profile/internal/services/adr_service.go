@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -97,8 +98,14 @@ func (s *ADRService) mergeProfiles(existing, incoming *models.AdverseReactionPro
 
 	// SPL provides better mechanism and onset data
 	if existing.Source == "SPL" && incoming.Source == "PIPELINE" {
-		if incoming.ContextModifierRule != "" {
-			updates["context_modifier_rule"] = incoming.ContextModifierRule
+		if incoming.ContextModifierRule != "" && incoming.ContextModifierRule != "{}" {
+			if existing.ContextModifierRule != "" && existing.ContextModifierRule != "{}" {
+				// Partial merge: pipeline adds condition to existing CM rule
+				updates["context_modifier_rule"] = mergePartialCMRule(
+					existing.ContextModifierRule, incoming.ContextModifierRule)
+			} else {
+				updates["context_modifier_rule"] = incoming.ContextModifierRule
+			}
 		}
 		if incoming.Confidence.GreaterThan(existing.Confidence) {
 			updates["confidence"] = incoming.Confidence
@@ -121,8 +128,14 @@ func (s *ADRService) mergeProfiles(existing, incoming *models.AdverseReactionPro
 		updates["onset_window"] = incoming.OnsetWindow
 		updates["onset_category"] = incoming.OnsetCategory
 	}
-	if incoming.ContextModifierRule != "" && existing.ContextModifierRule == "" {
-		updates["context_modifier_rule"] = incoming.ContextModifierRule
+	if incoming.ContextModifierRule != "" && incoming.ContextModifierRule != "{}" {
+		if existing.ContextModifierRule == "" || existing.ContextModifierRule == "{}" {
+			updates["context_modifier_rule"] = incoming.ContextModifierRule
+		} else if _, alreadySet := updates["context_modifier_rule"]; !alreadySet {
+			// Fallthrough: both have data but neither SPL nor PIPELINE block handled it
+			updates["context_modifier_rule"] = mergePartialCMRule(
+				existing.ContextModifierRule, incoming.ContextModifierRule)
+		}
 	}
 
 	// Recompute completeness grade on merged result
@@ -131,6 +144,33 @@ func (s *ADRService) mergeProfiles(existing, incoming *models.AdverseReactionPro
 	}
 
 	return updates
+}
+
+// mergePartialCMRule merges two JSONB CM rule strings at the field level.
+// Incoming (PIPELINE) fields fill gaps in existing (MANUAL) without overwriting.
+// This handles the case where pipeline adds a "condition" but the manual record
+// already has "delta_p" — both fields are preserved in the merged result.
+func mergePartialCMRule(existingJSON, incomingJSON string) string {
+	var existing, incoming map[string]interface{}
+	if err := json.Unmarshal([]byte(existingJSON), &existing); err != nil {
+		return incomingJSON // existing is malformed — use incoming
+	}
+	if err := json.Unmarshal([]byte(incomingJSON), &incoming); err != nil {
+		return existingJSON // incoming is malformed — keep existing
+	}
+
+	// Add incoming keys only if they don't exist in existing
+	for k, v := range incoming {
+		if _, exists := existing[k]; !exists {
+			existing[k] = v
+		}
+	}
+
+	result, err := json.Marshal(existing)
+	if err != nil {
+		return existingJSON
+	}
+	return string(result)
 }
 
 func computeMergedGrade(existing *models.AdverseReactionProfile, updates map[string]interface{}) string {
