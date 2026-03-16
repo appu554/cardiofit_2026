@@ -20,6 +20,25 @@ import (
 	"kb-patient-profile/internal/services"
 )
 
+// kb7Adapter wraps fhir.KB7Client to satisfy services.KB7ConceptLookup interface.
+type kb7Adapter struct {
+	client *fhir.KB7Client
+}
+
+func (a *kb7Adapter) LookupConcept(loincCode string) (*services.KB7ConceptResult, error) {
+	concept, err := a.client.LookupConcept(loincCode)
+	if err != nil {
+		return nil, err
+	}
+	if concept == nil {
+		return nil, nil
+	}
+	return &services.KB7ConceptResult{
+		Code:    concept.Code,
+		Display: concept.Display,
+	}, nil
+}
+
 func main() {
 	// Initialize structured logging
 	logger, _ := zap.NewProduction()
@@ -69,6 +88,23 @@ func main() {
 	cmRegistry := services.NewCMRegistry(db, logger)
 	stratumEngine := services.NewStratumEngine(db, cacheClient, logger, metricsCollector, cmRegistry, eventBus)
 
+	// Initialize LOINC registry and projection service (FactStore Phase 0)
+	var kb7Lookup services.KB7ConceptLookup
+	if cfg.KB7.BaseURL != "" {
+		kb7Lookup = &kb7Adapter{client: fhir.NewKB7Client(cfg.KB7, logger)}
+	}
+	var loincRegistry *services.LOINCRegistry
+	var projectionService *services.ProjectionService
+	if kb7Lookup != nil {
+		loincRegistry = services.NewLOINCRegistry(kb7Lookup, logger)
+		loincRegistry.Initialize(context.Background())
+		projectionService = services.NewProjectionService(db, cacheClient, logger, loincRegistry)
+		logger.Info("FactStore projection service initialized with KB-7 LOINC registry")
+	} else {
+		projectionService = services.NewProjectionService(db, cacheClient, logger, nil)
+		logger.Info("FactStore projection service initialized (KB-7 not configured)")
+	}
+
 	// Initialize HTTP server with all services
 	logger.Info("Initializing HTTP server...")
 	httpServer := api.NewServer(
@@ -83,6 +119,8 @@ func main() {
 		cmRegistry,
 		adrService,
 		pipelineService,
+		projectionService,
+		loincRegistry,
 	)
 
 	// Start HTTP server

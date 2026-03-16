@@ -15,10 +15,10 @@ vaidshala/
 │           ├── vmcu_engine.go     # Core closed-loop engine (RunCycle)
 │           ├── arbiter/           # 1oo3 veto arbiter (most-restrictive-wins)
 │           ├── autonomy/          # Dose autonomy limits (20% step, 50% cumulative)
-│           ├── channel_b/         # PhysiologySafetyMonitor (16 rules: B-01..B-09, DA-01..DA-07)
+│           ├── channel_b/         # PhysiologySafetyMonitor (18 rules: B-01..B-09, B-20, B-21, DA-01..DA-07)
 │           ├── channel_c/         # ProtocolGuard (guideline-driven gate)
 │           ├── titration/         # TitrationEngine + DeprescribingManager
-│           ├── simulation/        # 90-day simulation harness (8 scenarios)
+│           ├── simulation/        # 90-day simulation harness (16 scenarios)
 │           ├── trace/             # SafetyTrace audit logging
 │           ├── types/             # Shared types (GateSignal, CycleInput, etc.)
 │           ├── cache/             # KB-20 data caching

@@ -72,8 +72,9 @@ const (
 	DrugClassStatin        = "STATIN"
 	DrugClassBetaBlocker   = "BETA_BLOCKER"
 	DrugClassDiuretic      = "DIURETIC"
-	DrugClassGLP1RA        = "GLP1RA"
+	DrugClassGLP1RA            = "GLP1RA"
 	DrugClassThiazolidinedione = "THIAZOLIDINEDIONE"
+	DrugClassFinerenone        = "FINERENONE" // non-steroidal MRA (FIDELIO-DKD / FIGARO-DKD)
 
 	// India-specific agents (F-01)
 	DrugClassTeneligliptin = "TENELIGLIPTIN"

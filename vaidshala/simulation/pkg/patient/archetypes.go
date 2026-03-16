@@ -184,6 +184,7 @@ func DataDropOut() VirtualPatient {
 		Context: types.TitrationContext{
 			CurrentDose: 16.0,
 			EGFRCurrent: 60,
+			ACEiActive:  true, // DA-08: validate HOLD_DATA fires despite RAAS agent active
 		},
 		MCUGate:   types.CLEAR,
 		Adherence: 0.70, // PRE_GATEWAY_DEFAULT

@@ -29,6 +29,8 @@ type Server struct {
 	cmRegistry        *services.CMRegistry
 	adrService        *services.ADRService
 	pipelineService   *services.PipelineService
+	projectionService *services.ProjectionService
+	loincRegistry     *services.LOINCRegistry
 }
 
 // NewServer constructs the HTTP server with all dependencies injected.
@@ -44,6 +46,8 @@ func NewServer(
 	cmReg *services.CMRegistry,
 	adrSvc *services.ADRService,
 	pipelineSvc *services.PipelineService,
+	projSvc *services.ProjectionService,
+	loincReg *services.LOINCRegistry,
 ) *Server {
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -64,6 +68,8 @@ func NewServer(
 		cmRegistry:        cmReg,
 		adrService:        adrSvc,
 		pipelineService:   pipelineSvc,
+		projectionService: projSvc,
+		loincRegistry:     loincReg,
 	}
 
 	s.Router.Use(s.metricsMiddleware())

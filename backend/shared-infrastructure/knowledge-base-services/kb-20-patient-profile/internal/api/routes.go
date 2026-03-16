@@ -35,6 +35,17 @@ func (s *Server) setupRoutes() {
 
 			// Stratum
 			patient.GET("/:id/stratum/:node_id", s.getStratum)
+
+			// FactStore projections (V-MCU Channel B/C inputs)
+			patient.GET("/:id/channel-b-inputs", s.getChannelBInputs)
+			patient.GET("/:id/channel-c-inputs", s.getChannelCInputs)
+			patient.DELETE("/:id/projections/cache", s.invalidateProjectionCache)
+		}
+
+		// LOINC registry
+		loinc := v1.Group("/loinc")
+		{
+			loinc.GET("/registry", s.getLOINCRegistry)
 		}
 
 		// Context modifier registry
