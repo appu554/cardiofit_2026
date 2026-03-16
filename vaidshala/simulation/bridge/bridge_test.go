@@ -43,6 +43,7 @@ func TestRuleIDNormalization_ProductionOnly(t *testing.T) {
 	prodOnlyRules := []string{
 		"B-10", "B-11", "B-19",
 		"DA-02", "DA-03", "DA-04", "DA-05", "DA-08",
+		"PG-08-DUAL-RAAS",
 		"PG-09", "PG-10", "PG-11", "PG-12", "PG-13",
 		"PG-15", "PG-16",
 	}
@@ -500,6 +501,54 @@ func TestNewProductionEngine_Constructs(t *testing.T) {
 	}
 	if engine == nil {
 		t.Fatal("engine is nil")
+	}
+}
+
+func TestToProductionRawLabs_DualRAAS(t *testing.T) {
+	sim := &simtypes.RawPatientData{GlucoseCurrent: 8.0}
+	ctx := &simtypes.TitrationContext{
+		ACEiActive: true,
+		ARBActive:  true,
+	}
+	prod := ToProductionRawLabs(sim, ctx, PatientTimestamps{})
+
+	if !prod.ACEiActive {
+		t.Error("ACEiActive should be true")
+	}
+	if !prod.ARBActive {
+		t.Error("ARBActive should be true")
+	}
+	if !prod.OnRAASAgent {
+		t.Error("OnRAASAgent should be true (OR of ACEi/ARB)")
+	}
+}
+
+func TestToProductionContext_DualRAAS(t *testing.T) {
+	// Both active → DualRAASActive=true
+	sim := &simtypes.TitrationContext{
+		ACEiActive: true,
+		ARBActive:  true,
+	}
+	prod := ToProductionContext(sim)
+	if !prod.DualRAASActive {
+		t.Error("DualRAASActive should be true when both ACEi and ARB active")
+	}
+
+	// Only ACEi → DualRAASActive=false
+	sim = &simtypes.TitrationContext{
+		ACEiActive: true,
+		ARBActive:  false,
+	}
+	prod = ToProductionContext(sim)
+	if prod.DualRAASActive {
+		t.Error("DualRAASActive should be false when only ACEi active")
+	}
+
+	// Neither → DualRAASActive=false
+	sim = &simtypes.TitrationContext{}
+	prod = ToProductionContext(sim)
+	if prod.DualRAASActive {
+		t.Error("DualRAASActive should be false when neither active")
 	}
 }
 

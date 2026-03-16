@@ -195,9 +195,35 @@ func TestRulesHashStable(t *testing.T) {
 
 func TestRuleCount(t *testing.T) {
 	guard := setupTestRules(t)
-	// PG-01..PG-05, PG-07..PG-16, AD-09 (PG-06 excluded) = 16 rules
-	if guard.RuleCount() != 16 {
-		t.Errorf("expected 16 rules (PG-06 excluded), got %d", guard.RuleCount())
+	// PG-01..PG-05, PG-07..PG-16, PG-08-DUAL-RAAS, AD-09 (PG-06 excluded) = 17 rules
+	if guard.RuleCount() != 17 {
+		t.Errorf("expected 17 rules (PG-06 excluded), got %d", guard.RuleCount())
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// DUAL RAAS CONTRAINDICATION (PG-08-DUAL-RAAS)
+// ════════════════════════════════════════════════════════════════════════
+
+func TestDualRAAS_HALT(t *testing.T) {
+	guard := setupTestRules(t)
+
+	// DualRAASActive=true → HALT via PG-08-DUAL-RAAS
+	result := guard.Evaluate(&TitrationContext{
+		EGFR:           60,
+		DualRAASActive: true,
+	})
+	if result.Gate != ProtoHalt || result.RuleID != "PG-08-DUAL-RAAS" {
+		t.Errorf("PG-08-DUAL-RAAS should HALT on dual RAAS, got gate=%s rule=%s", result.Gate, result.RuleID)
+	}
+
+	// DualRAASActive=false → CLEAR (no fire)
+	result = guard.Evaluate(&TitrationContext{
+		EGFR:           60,
+		DualRAASActive: false,
+	})
+	if result.RuleID == "PG-08-DUAL-RAAS" {
+		t.Error("PG-08-DUAL-RAAS should not fire when DualRAASActive is false")
 	}
 }
 

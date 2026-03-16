@@ -275,6 +275,12 @@ func buildEvaluator(cond ruleCondition) (func(*TitrationContext) bool, error) {
 			return ctx.AFConfirmedNoAnticoagulation
 		}, nil
 
+	case "dual_raas_active":
+		// PG-08-DUAL-RAAS: ACEi AND ARB simultaneously (contraindicated)
+		return func(ctx *TitrationContext) bool {
+			return ctx.DualRAASActive
+		}, nil
+
 	case "ckd_stage4_deprescribing_blocked":
 		// AD-09: CKD Stage 4 deprescribing hard block
 		return func(ctx *TitrationContext) bool {

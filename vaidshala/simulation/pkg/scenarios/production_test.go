@@ -25,7 +25,7 @@ func newProdEngine(t *testing.T) *bridge.ProductionEngine {
 // false-positive for all previously affected scenarios:
 //   - Scenario 4: now correctly gets HOLD_DATA via DA-06 (stale K+)
 //   - Scenario 6: now correctly gets PAUSE via B-12-3B (J-curve)
-//   - Scenario 7: exposed pre-existing gap — PG-08 not implemented (lenient)
+//   - Scenario 7: now correctly gets HALT via PG-08-DUAL-RAAS (dual RAAS contraindication)
 //   - Scenario 13: now correctly gets PAUSE via B-18 (mild hyponatraemia)
 
 // TestProductionScenarios runs the 11 registry scenarios (10 standard + Scenario 13)
@@ -74,13 +74,10 @@ func TestProductionScenarios(t *testing.T) {
 				t.Logf("Scenario 3 RAAS tolerance: production returns %s (sim expects PAUSE via B-04+PG-14)", result.FinalGate)
 
 			case sc.ID == 7:
-				// Dual RAAS: PG-08 should fire HALT in Channel C, but the production
-				// protocol guard does not yet implement PG-08. Previously this scenario
-				// passed because B-03 fired a spurious HALT from zero CreatininePrevious.
-				// With the nilFloat64 fix, the false-positive is gone and the real gap
-				// is exposed. Lenient: accept any gate until PG-08 is implemented.
-				t.Logf("Scenario 7 KNOWN GAP: PG-08 not implemented in production protocol guard. "+
-					"Got gate=%v (want HALT from PG-08). Will be fixed in a future task.", result.FinalGate)
+				// Dual RAAS: production should HALT via PG-08-DUAL-RAAS.
+				if result.FinalGate != types.HALT {
+					t.Errorf("Scenario 7: gate = %v, want HALT (dual RAAS contraindication)", result.FinalGate)
+				}
 
 			case sc.ID == 5:
 				// Non-adherent: gate depends on cooldown state in production.
@@ -101,8 +98,8 @@ func TestProductionScenarios(t *testing.T) {
 				}
 			}
 
-			// Dose assertion (skip for cooldown-affected and known-gap scenarios)
-			if sc.ID != 5 && sc.ID != 7 && sc.ID != 9 && sc.ID != 3 {
+			// Dose assertion (skip for cooldown-affected scenarios)
+			if sc.ID != 5 && sc.ID != 9 && sc.ID != 3 {
 				if result.DoseApplied != sc.Expected.DoseApplied {
 					t.Errorf("doseApplied: got %v, want %v", result.DoseApplied, sc.Expected.DoseApplied)
 				}

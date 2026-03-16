@@ -29,6 +29,9 @@ type TitrationContext struct {
 	// PG-08: ACEi/ARB + K+ ≥5.5 + declining eGFR → HALT uptitration
 	ACEiARBHyperKDecliningEGFR bool
 
+	// PG-08-DUAL-RAAS: ACEi AND ARB simultaneously (contraindicated per ONTARGET 2008)
+	DualRAASActive bool
+
 	// PG-09: Beta-blocker + active insulin therapy → MODIFY (mask hypo)
 	BetaBlockerInsulinActive bool
 

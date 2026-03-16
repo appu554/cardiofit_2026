@@ -50,7 +50,9 @@ type RawPatientData struct {
 	// because it is explained by expected RAAS blockade pharmacodynamics.
 	CreatinineRiseExplained bool
 	OliguriaReported        bool // clinician-reported oliguria overrides RAAS tolerance
-	OnRAASAgent             bool // true if patient is on ACEi or ARB
+	OnRAASAgent bool // true if patient is on ACEi or ARB
+	ACEiActive  bool // Separate flag for ACEi detection
+	ARBActive   bool // Separate flag for ARB detection
 
 	// Lab measurement timestamps (from KB-20 LabFact)
 	EGFRLastMeasuredAt       *time.Time // nil if timestamp not available

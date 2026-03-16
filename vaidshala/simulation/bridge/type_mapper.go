@@ -151,6 +151,8 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 	// simulation splits them across Labs + Context).
 	if ctx != nil {
 		prod.OnRAASAgent = ctx.ACEiActive || ctx.ARBActive
+		prod.ACEiActive = ctx.ACEiActive
+		prod.ARBActive = ctx.ARBActive
 		prod.ThiazideActive = ctx.ThiazideActive
 		prod.Season = ctx.Season
 		prod.CKDStage = ctx.CKDStage
@@ -280,6 +282,9 @@ func ToProductionContext(sim *simtypes.TitrationContext) *cc.TitrationContext {
 		// orchestrator. In simulation we set them from the context flags that
 		// exist on the simulation TitrationContext.
 		HypoglycaemiaWithin7d: sim.HypoWithin7d,
+
+		// Dual RAAS detection: ACEi AND ARB simultaneously → contraindicated
+		DualRAASActive: sim.ACEiActive && sim.ARBActive,
 
 		// Numeric values for PG threshold comparisons
 		// (production gets these from cache; simulation has them in Labs,
