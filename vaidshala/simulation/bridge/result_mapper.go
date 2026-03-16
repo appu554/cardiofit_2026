@@ -67,6 +67,7 @@ var productionOnlyRules = map[string]bool{
 	"PG-08-DUAL-RAAS": true,
 	"PG-09":           true, "PG-10": true, "PG-11": true, "PG-12": true, "PG-13": true,
 	"PG-15": true, "PG-16": true,
+	"PG-17-A3": true, "PG-17-A2": true,
 }
 
 // NormalizeRuleID maps a rule ID between simulation and production namespaces.

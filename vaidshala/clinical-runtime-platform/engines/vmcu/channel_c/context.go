@@ -68,6 +68,12 @@ type TitrationContext struct {
 
 	// CKD Stage 4 deprescribing hard block (AD-09)
 	CKDStage4DeprescribingBlocked bool // true = eGFR <30 + attempting to deprescribe renoprotective agent
+
+	// ACR-based RAAS escalation (PG-17)
+	ACRA3NoRAAS bool   // PG-17-A3: ACR category A3 AND NOT on ACEi/ARB
+	ACRA2NoRAAS bool   // PG-17-A2: ACR category A2 AND NOT on ACEi/ARB
+	ACRCategory string // A1 | A2 | A3 (for audit trail)
+	ACRTrend    string // IMPROVING | STABLE | WORSENING (for audit trail)
 }
 
 // ProtocolGate is Channel C's local gate type.

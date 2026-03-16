@@ -195,9 +195,9 @@ func TestRulesHashStable(t *testing.T) {
 
 func TestRuleCount(t *testing.T) {
 	guard := setupTestRules(t)
-	// PG-01..PG-05, PG-07..PG-16, PG-08-DUAL-RAAS, AD-09 (PG-06 excluded) = 17 rules
-	if guard.RuleCount() != 17 {
-		t.Errorf("expected 17 rules (PG-06 excluded), got %d", guard.RuleCount())
+	// PG-01..PG-05, PG-07..PG-17-A3, PG-17-A2, PG-08-DUAL-RAAS, AD-09 (PG-06 excluded) = 19 rules
+	if guard.RuleCount() != 19 {
+		t.Errorf("expected 19 rules (PG-06 excluded), got %d", guard.RuleCount())
 	}
 }
 
@@ -448,6 +448,65 @@ func TestPG15_PG16_Combined(t *testing.T) {
 // ════════════════════════════════════════════════════════════════════════
 // DEPRESCRIBING SAFETY RULE (AD-09)
 // ════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════
+// ACR-BASED RAAS ESCALATION (PG-17)
+// ════════════════════════════════════════════════════════════════════════
+
+func TestPG17_ACRA3NoRAAS_HALT(t *testing.T) {
+	rulesYAML := `
+version: "test"
+rules:
+  - rule_id: PG-17-A3
+    description: "ACR A3 without RAAS blockade"
+    guideline_ref: KDIGO-2024-CKD
+    condition:
+      field: acr_a3_no_raas
+      operator: eq
+      value: true
+    gate: HALT
+  - rule_id: PG-17-A2
+    description: "ACR A2 without RAAS blockade"
+    guideline_ref: KDIGO-2024-CKD
+    condition:
+      field: acr_a2_no_raas
+      operator: eq
+      value: true
+    gate: MODIFY
+`
+	tmpFile, _ := os.CreateTemp("", "protocol_rules_*.yaml")
+	tmpFile.WriteString(rulesYAML)
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	guard, err := LoadRules(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("LoadRules: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		ctx      *TitrationContext
+		wantGate ProtocolGate
+		wantRule string
+	}{
+		{"A3 no RAAS → HALT", &TitrationContext{ACRA3NoRAAS: true}, ProtoHalt, "PG-17-A3"},
+		{"A2 no RAAS → MODIFY", &TitrationContext{ACRA2NoRAAS: true}, ProtoModify, "PG-17-A2"},
+		{"A3 on RAAS → CLEAR", &TitrationContext{ACRA3NoRAAS: false}, ProtoClear, ""},
+		{"A1 → CLEAR", &TitrationContext{}, ProtoClear, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := guard.Evaluate(tt.ctx)
+			if result.Gate != tt.wantGate {
+				t.Errorf("PG-17: gate = %v, want %v", result.Gate, tt.wantGate)
+			}
+			if tt.wantRule != "" && result.RuleID != tt.wantRule {
+				t.Errorf("RuleID = %v, want %v", result.RuleID, tt.wantRule)
+			}
+		})
+	}
+}
 
 func TestAD09_CKDStage4DeprescribingBlock(t *testing.T) {
 	guard := setupTestRules(t)

@@ -287,6 +287,20 @@ func buildEvaluator(cond ruleCondition) (func(*TitrationContext) bool, error) {
 			return ctx.CKDStage4DeprescribingBlocked
 		}, nil
 
+	// ── ACR-based RAAS escalation (PG-17) ──
+
+	case "acr_a3_no_raas":
+		// PG-17-A3: ACR category A3 AND NOT on ACEi/ARB → HALT
+		return func(ctx *TitrationContext) bool {
+			return ctx.ACRA3NoRAAS
+		}, nil
+
+	case "acr_a2_no_raas":
+		// PG-17-A2: ACR category A2 AND NOT on ACEi/ARB → MODIFY
+		return func(ctx *TitrationContext) bool {
+			return ctx.ACRA2NoRAAS
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown field %q", cond.Field)
 	}
