@@ -118,58 +118,67 @@ type RawPatientData struct {
 	Timestamp time.Time
 
 	// Glycaemic
-	GlucoseCurrent    float64 // mmol/L
-	GlucosePrevious   float64 // mmol/L (for trend detection)
-	GlucoseTimestamp   time.Time
-	HbA1c             float64 // percentage
-	HbA1cTimestamp     time.Time
+	GlucoseCurrent   float64 // mmol/L
+	GlucosePrevious  float64 // mmol/L (for trend detection)
+	GlucoseTimestamp time.Time
+	HbA1c            float64 // percentage
+	HbA1cTimestamp   time.Time
 
 	// Renal
-	CreatinineCurrent  float64 // µmol/L
-	CreatininePrevious float64 // µmol/L (48h prior)
+	CreatinineCurrent   float64 // µmol/L
+	CreatininePrevious  float64 // µmol/L (48h prior)
 	CreatinineTimestamp time.Time
-	EGFR               float64 // mL/min/1.73m²
+	EGFR                float64 // mL/min/1.73m²
 	EGFRTimestamp       time.Time
-	PotassiumCurrent   float64 // mmol/L
+	PotassiumCurrent    float64 // mmol/L
 	PotassiumTimestamp  time.Time
 
 	// Haemodynamic
-	SBP               int     // mmHg
-	DBP               int     // mmHg
-	BPTimestamp        time.Time
-	HeartRate          int     // bpm
-	HeartRateRegularity string // REGULAR, IRREGULAR, UNKNOWN
-	Weight             float64 // kg
-	WeightPrevious     float64 // kg (72h prior)
+	SBP                 int // mmHg
+	DBP                 int // mmHg
+	BPTimestamp         time.Time
+	HeartRate           int     // bpm
+	HeartRateRegularity string  // REGULAR, IRREGULAR, UNKNOWN
+	Weight              float64 // kg
+	WeightPrevious      float64 // kg (72h prior)
 	WeightTimestamp     time.Time
 
 	// Electrolytes
-	SodiumCurrent     float64 // mmol/L
-	SodiumTimestamp    time.Time
+	SodiumCurrent   float64 // mmol/L
+	SodiumTimestamp time.Time
+
+	// Glucose variability (from KB-20 FBGTracking)
+	GlucoseCV30d float64 // 30-day coefficient of variation %
 
 	// Context flags (set by orchestrator before Channel B evaluation)
-	BetaBlockerActive         bool
-	CreatinineRiseExplained   bool // PG-14 RAAS tolerance flag
-	RecentDoseIncrease        bool
+	BetaBlockerActive           bool
+	FinerenoneActive            bool // B-21: finerenone hyperkalemia monitoring
+	CreatinineRiseExplained     bool // PG-14 RAAS tolerance flag
+	RecentDoseIncrease          bool
 	RecentDoseIncreaseTimestamp time.Time
 }
 
 // TitrationContext matches V-MCU's TitrationContext for Channel C evaluation.
 type TitrationContext struct {
-	ActiveMedications []ActiveMedication
-	CurrentDose       float64
-	ProposedDoseDelta float64
-	DoseChangeCount   int     // consecutive cycles with dose changes
-	CyclesSinceHbA1c  int     // cycles since last HbA1c improvement
-	EGFRCurrent       float64
-	ThiazideActive    bool
-	ACEiActive        bool
-	ARBActive         bool
-	SGLT2iActive      bool
-	InsulinActive     bool
+	ActiveMedications  []ActiveMedication
+	CurrentDose        float64
+	ProposedDoseDelta  float64
+	DoseChangeCount    int // consecutive cycles with dose changes
+	CyclesSinceHbA1c   int // cycles since last HbA1c improvement
+	EGFRCurrent        float64
+	ThiazideActive     bool
+	ACEiActive         bool
+	ARBActive          bool
+	SGLT2iActive       bool
+	InsulinActive      bool
 	SulfonylureaActive bool
-	DualRAASActive    bool // ACEi AND ARB simultaneously
-	Season            string // SUMMER, MONSOON, WINTER, AUTUMN
+	DualRAASActive     bool   // ACEi AND ARB simultaneously
+	Season             string // SUMMER, MONSOON, WINTER, AUTUMN
+
+	// ACR-based RAAS escalation (PG-17)
+	ACRCategory         string // A1 | A2 | A3
+	FinerenoneActive    bool
+	FinerenoneCandidate bool
 
 	// RAAS tolerance context
 	RAASChangeWithin14Days bool
@@ -177,9 +186,9 @@ type TitrationContext struct {
 	PreRAASCreatinine      float64
 
 	// Bridge-required fields (needed by production bridge adapter)
-	CKDStage           string // "3a", "3b", "4", "5" — for B-12 J-curve stratification
-	OliguriaReported   bool   // overrides RAAS tolerance (B-03)
-	HypoWithin7d       bool   // any hypoglycaemia event in last 7 days (PG-07)
+	CKDStage         string // "3a", "3b", "4", "5" — for B-12 J-curve stratification
+	OliguriaReported bool   // overrides RAAS tolerance (B-03)
+	HypoWithin7d     bool   // any hypoglycaemia event in last 7 days (PG-07)
 }
 
 type ActiveMedication struct {
@@ -205,13 +214,13 @@ type TitrationCycleInput struct {
 }
 
 type TitrationCycleResult struct {
-	FinalGate       GateSignal
-	DominantChannel Channel
-	DoseApplied     bool
-	DoseDelta       float64
-	BlockedBy       string
-	SafetyTrace     SafetyTrace
-	PhysioRuleFired string
+	FinalGate         GateSignal
+	DominantChannel   Channel
+	DoseApplied       bool
+	DoseDelta         float64
+	BlockedBy         string
+	SafetyTrace       SafetyTrace
+	PhysioRuleFired   string
 	ProtocolRuleFired string
 }
 
@@ -243,10 +252,10 @@ type SafetyTrace struct {
 	DominantChannel Channel
 
 	// Outcome
-	DoseApplied   bool
-	DoseDelta     float64
-	BlockedBy     string
-	GainFactor    float64
+	DoseApplied     bool
+	DoseDelta       float64
+	BlockedBy       string
+	GainFactor      float64
 	AdherenceSource string
 }
 

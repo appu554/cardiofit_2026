@@ -55,6 +55,9 @@ var ruleIDSimToProd = map[string]string{
 	"PG-07":      "PG-07",
 	"PG-08":      "PG-08",
 	"PG-14":      "PG-14",
+	"B-20":       "B-20",
+	"PG-17-A3":   "PG-17-A3",
+	"PG-17-A2":   "PG-17-A2",
 }
 
 // productionOnlyRules: rules in production with NO simulation equivalent.
@@ -62,12 +65,12 @@ var ruleIDSimToProd = map[string]string{
 // e.g., DA-01 maps FROM sim B-06, so it's NOT production-only.
 // Production B-10/B-11 are DIFFERENT rules from simulation B-10/B-11.
 var productionOnlyRules = map[string]bool{
-	"B-10": true, "B-11": true, "B-19": true,
+	"B-10": true, "B-11": true, "B-19": true, "B-21": true,
 	"DA-02": true, "DA-03": true, "DA-04": true, "DA-05": true, "DA-08": true,
 	"PG-08-DUAL-RAAS": true,
 	"PG-09":           true, "PG-10": true, "PG-11": true, "PG-12": true, "PG-13": true,
 	"PG-15": true, "PG-16": true,
-	"PG-17-A3": true, "PG-17-A2": true,
+	"PG-18": true, "PG-19": true,
 }
 
 // NormalizeRuleID maps a rule ID between simulation and production namespaces.

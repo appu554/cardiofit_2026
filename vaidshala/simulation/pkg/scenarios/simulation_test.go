@@ -377,5 +377,49 @@ func TestScenario12_ArbiterExhaustiveSweep(t *testing.T) {
 	t.Logf("PASS: Arbiter exhaustive sweep — %d/125 combinations verified, all 4 invariants hold", count)
 }
 
+// ---------------------------------------------------------------------------
+// SCENARIO 14: High Glucose Variability — B-20 PAUSE
+// CV% 42% > 36% threshold → Channel B PAUSE.
+// ---------------------------------------------------------------------------
+func TestScenario14_HighGlucoseVariability(t *testing.T) {
+	engine := harness.NewVMCUEngine()
+	vp := patient.HighGlucoseVariability()
+	result := engine.RunCycle(vp.ToTitrationInput(1))
+
+	if result.FinalGate < types.PAUSE {
+		t.Fatalf("GLYCAEMIC SAFETY: Glucose CV%% 42%% should trigger at least PAUSE. Got %s", result.FinalGate)
+	}
+	if result.PhysioRuleFired != "B-20" {
+		t.Errorf("Expected B-20 (glucose CV%%), got %s", result.PhysioRuleFired)
+	}
+	if result.DoseApplied {
+		t.Errorf("Dose should not be applied during high glucose variability")
+	}
+
+	t.Logf("PASS: High glucose variability → %s via %s (CV30d=42%%)", result.FinalGate, result.PhysioRuleFired)
+}
+
+// ---------------------------------------------------------------------------
+// SCENARIO 15: ACR A3 Without RAAS — PG-17 HALT
+// ACR category A3 without ACEi/ARB → Channel C HALT (PG-17-A3).
+// ---------------------------------------------------------------------------
+func TestScenario15_ACRA3NoRAAS(t *testing.T) {
+	engine := harness.NewVMCUEngine()
+	vp := patient.ACRA3NoRAAS()
+	result := engine.RunCycle(vp.ToTitrationInput(1))
+
+	if result.FinalGate != types.HALT {
+		t.Fatalf("RENAL SAFETY: ACR A3 without RAAS must trigger HALT. Got %s", result.FinalGate)
+	}
+	if result.ProtocolRuleFired != "PG-17-A3" {
+		t.Errorf("Expected PG-17-A3 (ACR A3 RAAS escalation), got %s", result.ProtocolRuleFired)
+	}
+	if result.DoseApplied {
+		t.Fatalf("SAFETY FAILURE: Dose applied when RAAS blockade required!")
+	}
+
+	t.Logf("PASS: ACR A3 without RAAS → HALT via %s", result.ProtocolRuleFired)
+}
+
 // helper
 func hoursAgo(h int) time.Time { return time.Now().Add(-time.Duration(h) * time.Hour) }

@@ -31,6 +31,7 @@ func (pg *ProtocolGuard) Evaluate(ctx *types.TitrationContext, labs *types.RawPa
 		pg.rulePG07(labs, ctx),
 		pg.rulePG08(ctx),
 		pg.rulePG14(ctx, labs),
+		pg.rulePG17(ctx),
 	}
 
 	worst := ChannelCResult{Gate: types.CLEAR, RuleFired: "NONE"}
@@ -153,5 +154,20 @@ func (pg *ProtocolGuard) rulePG14(ctx *types.TitrationContext, labs *types.RawPa
 				risePct, labs.PotassiumCurrent)}
 	}
 
+	return ChannelCResult{Gate: types.CLEAR}
+}
+
+// PG-17: ACR-based RAAS escalation
+// A3 without RAAS → HALT (RAAS blockade required)
+// A2 without RAAS → MODIFY (recommend RAAS initiation)
+func (pg *ProtocolGuard) rulePG17(ctx *types.TitrationContext) ChannelCResult {
+	if ctx.ACRCategory == "A3" && !ctx.ACEiActive && !ctx.ARBActive {
+		return ChannelCResult{types.HALT, "PG-17-A3",
+			"acr_a3_no_raas: RAAS blockade required"}
+	}
+	if ctx.ACRCategory == "A2" && !ctx.ACEiActive && !ctx.ARBActive {
+		return ChannelCResult{types.MODIFY, "PG-17-A2",
+			"acr_a2_no_raas: recommend RAAS initiation"}
+	}
 	return ChannelCResult{Gate: types.CLEAR}
 }

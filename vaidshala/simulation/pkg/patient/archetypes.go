@@ -411,6 +411,115 @@ func MetforminCKD4() VirtualPatient {
 	}
 }
 
+// ========================================================================
+// SCENARIO 14: High Glucose Variability — B-20 PAUSE
+// Expected: Channel B PAUSE (B-20). CV% 42% > 36% threshold.
+// Tests: B-20 glucose variability rule.
+// ========================================================================
+func HighGlucoseVariability() VirtualPatient {
+	return VirtualPatient{
+		ID:          "SIM-014",
+		Archetype:   "high_glucose_variability",
+		Description: "Glucose CV% 42% (>36% threshold). High glycaemic variability → B-20 PAUSE.",
+		Labs: types.RawPatientData{
+			PatientID:           "SIM-014",
+			Timestamp:           time.Now(),
+			GlucoseCurrent:      7.5,
+			GlucoseTimestamp:    hoursAgo(2),
+			GlucoseCV30d:        42.0, // >36% threshold → B-20
+			EGFR:                65.0,
+			EGFRTimestamp:       daysAgo(2),
+			PotassiumCurrent:    4.2,
+			PotassiumTimestamp:  daysAgo(1),
+			CreatinineCurrent:   88,
+			CreatinineTimestamp: daysAgo(2),
+			SBP:                 130,
+			DBP:                 82,
+		},
+		Context: types.TitrationContext{
+			CurrentDose: 20.0,
+			EGFRCurrent: 65,
+		},
+		MCUGate:   types.CLEAR,
+		Adherence: 0.90,
+		LoopTrust: 0.85,
+	}
+}
+
+// ========================================================================
+// SCENARIO 15: ACR A3 Without RAAS — PG-17 HALT
+// Expected: Channel C HALT (PG-17-A3). ACR A3 requires RAAS blockade.
+// Tests: PG-17 ACR-based RAAS escalation rule.
+// ========================================================================
+func ACRA3NoRAAS() VirtualPatient {
+	return VirtualPatient{
+		ID:          "SIM-015",
+		Archetype:   "acr_a3_no_raas",
+		Description: "ACR category A3 without ACEi/ARB. PG-17-A3 must fire HALT — RAAS blockade required.",
+		Labs: types.RawPatientData{
+			PatientID:           "SIM-015",
+			Timestamp:           time.Now(),
+			GlucoseCurrent:      6.5,
+			GlucoseTimestamp:    hoursAgo(3),
+			CreatinineCurrent:   110.0,
+			CreatinineTimestamp: daysAgo(1),
+			EGFR:                42.0,
+			EGFRTimestamp:       daysAgo(1),
+			PotassiumCurrent:    4.5,
+			PotassiumTimestamp:  daysAgo(1),
+			SBP:                 135,
+			DBP:                 85,
+		},
+		Context: types.TitrationContext{
+			ACRCategory: "A3",
+			ACEiActive:  false,
+			ARBActive:   false,
+			CurrentDose: 15.0,
+			EGFRCurrent: 42,
+		},
+		MCUGate:   types.CLEAR,
+		Adherence: 0.85,
+		LoopTrust: 0.80,
+	}
+}
+
+// ========================================================================
+// SCENARIO 16: Finerenone Hyperkalemia — B-21 HALT (production-only)
+// Expected: B-21 HALT in production (K+ ≥5.5 + finerenone).
+// Tests: B-21 production-only rule (finerenone hyperkalemia monitoring).
+// ========================================================================
+func FinerenoneHyperkalemia() VirtualPatient {
+	return VirtualPatient{
+		ID:          "SIM-016",
+		Archetype:   "finerenone_hyperkalemia",
+		Description: "K+=5.8 on finerenone. B-21 must fire HALT in production — finerenone hyperkalemia monitoring.",
+		Labs: types.RawPatientData{
+			PatientID:           "SIM-016",
+			Timestamp:           time.Now(),
+			GlucoseCurrent:      7.0,
+			GlucoseTimestamp:    hoursAgo(3),
+			CreatinineCurrent:   100.0,
+			CreatinineTimestamp: daysAgo(1),
+			EGFR:                35.0,
+			EGFRTimestamp:       daysAgo(1),
+			PotassiumCurrent:    5.8, // ≥5.5 + finerenone → B-21 HALT
+			PotassiumTimestamp:  daysAgo(0),
+			SBP:                 128,
+			DBP:                 80,
+			FinerenoneActive:    true,
+		},
+		Context: types.TitrationContext{
+			FinerenoneActive: true,
+			ACEiActive:       true,
+			CurrentDose:      10.0,
+			EGFRCurrent:      35,
+		},
+		MCUGate:   types.CLEAR,
+		Adherence: 0.90,
+		LoopTrust: 0.85,
+	}
+}
+
 // AllScenarios returns all virtual patients for the standard test suite.
 func AllScenarios() []VirtualPatient {
 	return []VirtualPatient{
@@ -424,5 +533,8 @@ func AllScenarios() []VirtualPatient {
 		HyponatraemiaThiazide(),
 		GreenTrajectory(),
 		MetforminCKD4(),
+		HighGlucoseVariability(),
+		ACRA3NoRAAS(),
+		FinerenoneHyperkalemia(),
 	}
 }

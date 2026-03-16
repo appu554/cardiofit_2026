@@ -145,6 +145,9 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		// BP extensions
 		SodiumCurrent: float64Ptr(sim.SodiumCurrent),
 		DBPCurrent:    intToFloat64Ptr(sim.DBP),
+
+		// Glucose variability
+		GlucoseCV30d: nilFloat64(sim.GlucoseCV30d),
 	}
 
 	// Fields sourced from TitrationContext (production RawPatientData has them;
@@ -157,6 +160,7 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		prod.Season = ctx.Season
 		prod.CKDStage = ctx.CKDStage
 		prod.OliguriaReported = ctx.OliguriaReported
+		prod.FinerenoneActive = ctx.FinerenoneActive || sim.FinerenoneActive
 	}
 
 	// Construct GlucoseReadings from current + previous glucose values.
@@ -207,8 +211,10 @@ func ToSimulationRawLabs(prod *cb.RawPatientData) simtypes.RawPatientData {
 		HbA1c:                   derefFloat64(prod.HbA1cCurrent),
 		SodiumCurrent:           derefFloat64(prod.SodiumCurrent),
 		BetaBlockerActive:       prod.BetaBlockerActive,
+		FinerenoneActive:        prod.FinerenoneActive,
 		CreatinineRiseExplained: prod.CreatinineRiseExplained,
 		RecentDoseIncrease:      prod.RecentDoseIncrease,
+		GlucoseCV30d:            derefFloat64(prod.GlucoseCV30d),
 
 		// Historical
 		CreatininePrevious: derefFloat64(prod.Creatinine48hAgo),
@@ -292,5 +298,14 @@ func ToProductionContext(sim *simtypes.TitrationContext) *cc.TitrationContext {
 		PotassiumCurrent: 0, // Caller should set from Labs if needed
 		SBPCurrent:       0, // Caller should set from Labs if needed
 		SodiumCurrent:    0, // Caller should set from Labs if needed
+
+		// ACR-based RAAS escalation (PG-17)
+		ACRA3NoRAAS: sim.ACRCategory == "A3" && !sim.ACEiActive && !sim.ARBActive,
+		ACRA2NoRAAS: sim.ACRCategory == "A2" && !sim.ACEiActive && !sim.ARBActive,
+		ACRCategory: sim.ACRCategory,
+
+		// Finerenone rules (PG-18, PG-19)
+		FinerenoneEligible:    sim.FinerenoneCandidate,
+		FinerenoneKMonitoring: sim.FinerenoneActive,
 	}
 }

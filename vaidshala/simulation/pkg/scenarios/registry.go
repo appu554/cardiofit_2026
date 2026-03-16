@@ -27,9 +27,9 @@ type ExpectedOutcome struct {
 	ProtocolRule string
 }
 
-// AllScenarios returns the full registry: 10 standard scenarios + Scenario 13
-// (SeasonalHyponatraemia, production-only). Scenarios 11 (IntegratorResume)
-// and 12 (ArbiterSweep) are structural tests handled separately.
+// AllScenarios returns the full registry: 12 standard scenarios + 2 production-only
+// (Scenario 13: SeasonalHyponatraemia, Scenario 16: FinerenoneHyperkalemia).
+// Scenarios 11 (IntegratorResume) and 12 (ArbiterSweep) are structural tests handled separately.
 func AllScenarios() []Scenario {
 	return []Scenario{
 		{1, "Active Hypoglycaemia", patient.ActiveHypoglycaemia,
@@ -75,5 +75,17 @@ func AllScenarios() []Scenario {
 		{13, "Seasonal Hyponatraemia", patient.SeasonalHyponatraemia,
 			ExpectedOutcome{types.PAUSE, false, "B-19", ""},
 			[]string{"B-19"}, true},
+
+		{14, "High Glucose Variability", patient.HighGlucoseVariability,
+			ExpectedOutcome{types.PAUSE, false, "B-20", ""},
+			[]string{"B-20"}, false},
+
+		{15, "ACR A3 Without RAAS", patient.ACRA3NoRAAS,
+			ExpectedOutcome{types.HALT, false, "", "PG-17-A3"},
+			[]string{"PG-17"}, false},
+
+		{16, "Finerenone Hyperkalemia", patient.FinerenoneHyperkalemia,
+			ExpectedOutcome{types.HALT, false, "B-21", ""},
+			[]string{"B-21"}, true}, // prodOnly: B-21 only in production Channel B
 	}
 }

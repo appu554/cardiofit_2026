@@ -36,7 +36,7 @@ type ChannelBResult struct {
 }
 
 // Evaluate runs all Channel B rules and returns the most restrictive result.
-// Rules are numbered per the HTN Amendment canonical scheme (B-01 through B-19).
+// Rules are numbered per the HTN Amendment canonical scheme (B-01 through B-20).
 func (m *PhysiologySafetyMonitor) Evaluate(data *types.RawPatientData) ChannelBResult {
 	results := []ChannelBResult{
 		m.ruleB01(data), // Active hypoglycaemia
@@ -57,6 +57,7 @@ func (m *PhysiologySafetyMonitor) Evaluate(data *types.RawPatientData) ChannelBR
 		m.ruleB16(data), // Irregular heart rate — AF (Amendment 3)
 		m.ruleB17(data), // Severe hyponatraemia + thiazide (Amendment 11)
 		m.ruleB18(data), // Mild hyponatraemia + thiazide (Amendment 11)
+		m.ruleB20(data), // Glucose CV% > 36% (high glycaemic variability)
 	}
 
 	worst := ChannelBResult{Gate: types.CLEAR, RuleFired: "NONE", Details: "all clear"}
@@ -289,6 +290,15 @@ func (m *PhysiologySafetyMonitor) ruleB18(d *types.RawPatientData) ChannelBResul
 	if d.SodiumCurrent > 0 && d.SodiumCurrent >= 132 && d.SodiumCurrent < 135 {
 		return ChannelBResult{types.PAUSE, "B-18",
 			fmt.Sprintf("mild_hyponatraemia: Na+=%.0f mmol/L (132-135)", d.SodiumCurrent)}
+	}
+	return ChannelBResult{Gate: types.CLEAR}
+}
+
+// B-20: Glucose CV% > 36% → PAUSE (high glycaemic variability)
+func (m *PhysiologySafetyMonitor) ruleB20(d *types.RawPatientData) ChannelBResult {
+	if d.GlucoseCV30d > 36.0 {
+		return ChannelBResult{types.PAUSE, "B-20",
+			fmt.Sprintf("glucose_cv_high: CV30d=%.1f%% (>36%%)", d.GlucoseCV30d)}
 	}
 	return ChannelBResult{Gate: types.CLEAR}
 }
