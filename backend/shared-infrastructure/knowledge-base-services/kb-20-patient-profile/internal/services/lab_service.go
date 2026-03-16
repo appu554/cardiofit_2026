@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -476,6 +477,11 @@ func (s *LabService) processACR(tx *gorm.DB, patientID string, valueMgMmol float
 			zap.String("from", oldCategory),
 			zap.String("to", newCategory))
 	}
+
+	// Recompute cross-domain CDI
+	if err := s.ComputeCDI(context.Background(), patientID); err != nil {
+		s.logger.Warn("CDI recompute failed after ACR update", zap.Error(err))
+	}
 }
 
 // processFBG handles a new FBG lab result within the caller's transaction.
@@ -546,6 +552,11 @@ func (s *LabService) processFBG(tx *gorm.DB, patientID string, value float64, me
 			CV30d:     tracking.CV30d,
 			Window:    window,
 		})
+	}
+
+	// Recompute cross-domain CDI
+	if err := s.ComputeCDI(context.Background(), patientID); err != nil {
+		s.logger.Warn("CDI recompute failed after FBG update", zap.Error(err))
 	}
 
 	return nil
@@ -1258,4 +1269,200 @@ func (s *LabService) GetEGFRTrajectory(patientID string) (*models.EGFRTrajectory
 		Trend:        trend,
 		AnnualChange: annualChange,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// CDI: Composite Deterioration Index (cross-domain 0-20)
+// ---------------------------------------------------------------------------
+
+// getHbA1cPair returns (current, previous) HbA1c values for a patient.
+// Uses the two most recent lab entries of type "HBA1C".
+// Returns (0, 0) if insufficient data.
+func (s *LabService) getHbA1cPair(ctx context.Context, patientID string) (float64, float64) {
+	var labs []models.LabEntry
+	s.db.DB.WithContext(ctx).Where("patient_id = ? AND lab_type = ? AND validation_status = ?",
+		patientID, models.LabTypeHbA1c, models.ValidationAccepted).
+		Order("measured_at DESC").Limit(2).Find(&labs)
+	current, prev := 0.0, 0.0
+	if len(labs) >= 1 {
+		v, _ := labs[0].Value.Float64()
+		current = v
+	}
+	if len(labs) >= 2 {
+		v, _ := labs[1].Value.Float64()
+		prev = v
+	}
+	return current, prev
+}
+
+// getEGFRSlope returns the eGFR slope (mL/min/year) from the patient's
+// eGFR trajectory. Falls back to 0 (stable) if insufficient data.
+func (s *LabService) getEGFRSlope(ctx context.Context, patientID string) float64 {
+	var entries []models.LabEntry
+	s.db.DB.WithContext(ctx).Where("patient_id = ? AND lab_type = ? AND validation_status = ?",
+		patientID, models.LabTypeEGFR, models.ValidationAccepted).
+		Order("measured_at ASC").Find(&entries)
+	if len(entries) < 3 {
+		return 0
+	}
+	var points []models.EGFRTrajectoryPoint
+	for _, e := range entries {
+		val, _ := e.Value.Float64()
+		points = append(points, models.EGFRTrajectoryPoint{
+			Value:      val,
+			MeasuredAt: e.MeasuredAt,
+			CKDStage:   s.egfr.CKDStageFromEGFR(val),
+		})
+	}
+	_, annualChange := s.egfr.ClassifyTrajectory(points)
+	if annualChange != nil {
+		return *annualChange
+	}
+	return 0
+}
+
+// getCreatinineRisePct returns the percentage rise in creatinine from the
+// last two readings. Returns 0 if insufficient data.
+func (s *LabService) getCreatinineRisePct(ctx context.Context, patientID string) float64 {
+	var labs []models.LabEntry
+	s.db.DB.WithContext(ctx).Where("patient_id = ? AND lab_type = ? AND validation_status = ?",
+		patientID, models.LabTypeCreatinine, models.ValidationAccepted).
+		Order("measured_at DESC").Limit(2).Find(&labs)
+	if len(labs) < 2 {
+		return 0
+	}
+	curr, _ := labs[0].Value.Float64()
+	prev, _ := labs[1].Value.Float64()
+	if prev == 0 {
+		return 0
+	}
+	return (curr - prev) / prev * 100
+}
+
+// emitCDIAlertIfCooldownExpired emits CDI events with 72h hysteresis.
+func (s *LabService) emitCDIAlertIfCooldownExpired(patientID string, cdi *models.CDIScore) error {
+	now := time.Now()
+	if !cdi.CooldownUntil.IsZero() && now.Before(cdi.CooldownUntil) && cdi.TotalScore <= cdi.LastAlertScore {
+		return nil // still in cooldown and score hasn't increased
+	}
+
+	payload := models.CDIPayload{
+		PatientID:      patientID,
+		TotalScore:     cdi.TotalScore,
+		BPScore:        cdi.BPComponentScore,
+		GlycaemicScore: cdi.GlycaemicScore,
+		RenalScore:     cdi.RenalScore,
+		RiskLevel:      cdi.RiskLevel,
+		ActiveDomains:  cdi.ActiveDomains,
+		PreviousScore:  cdi.LastAlertScore,
+	}
+
+	if cdi.RiskLevel == "CRITICAL" {
+		s.eventBus.Publish(models.EventCDICritical, patientID, payload)
+	} else {
+		s.eventBus.Publish(models.EventCDIModerate, patientID, payload)
+	}
+
+	cdi.LastAlertScore = cdi.TotalScore
+	cdi.CooldownUntil = now.Add(72 * time.Hour)
+	return s.db.DB.Save(cdi).Error
+}
+
+// ComputeCDI recalculates the cross-domain Composite Deterioration Index.
+// Called after any lab update that could change a domain score.
+func (s *LabService) ComputeCDI(ctx context.Context, patientID string) error {
+	// 1. BP domain: from BPTrajectory.DamageScore (0-8)
+	bpScore := 0
+	var traj models.BPTrajectory
+	if err := s.db.DB.WithContext(ctx).Where("patient_id = ?", patientID).First(&traj).Error; err == nil {
+		if traj.DamageScore != nil {
+			bpScore = traj.DamageScore.Score
+		}
+	}
+
+	// 2. Glycaemic domain (0-6)
+	var fbg models.FBGTracking
+	var fbgPtr *models.FBGTracking
+	if err := s.db.DB.WithContext(ctx).Where("patient_id = ?", patientID).First(&fbg).Error; err == nil {
+		fbgPtr = &fbg
+	}
+	hba1cCurrent, hba1cPrev := s.getHbA1cPair(ctx, patientID)
+	glycScore := computeGlycaemicScore(fbgPtr, hba1cCurrent, hba1cPrev)
+
+	// 3. Renal domain (0-6)
+	egfrSlope := s.getEGFRSlope(ctx, patientID)
+	var acr models.ACRTracking
+	acrTrend, acrCategory := "", ""
+	if err := s.db.DB.WithContext(ctx).Where("patient_id = ?", patientID).First(&acr).Error; err == nil {
+		acrTrend = acr.Trend
+		acrCategory = acr.Category
+	}
+	creatRisePct := s.getCreatinineRisePct(ctx, patientID)
+	renalScore := computeRenalScore(egfrSlope, acrTrend, acrCategory, creatRisePct)
+
+	// 4. Composite
+	total := bpScore + glycScore + renalScore
+	level := cdiRiskLevel(total)
+
+	// Build active domains string
+	var domains []string
+	if bpScore > 0 {
+		domains = append(domains, "BP")
+	}
+	if glycScore > 0 {
+		domains = append(domains, "GLYCAEMIC")
+	}
+	if renalScore > 0 {
+		domains = append(domains, "RENAL")
+	}
+	activeDomains := strings.Join(domains, ",")
+
+	// 5. Upsert CDIScore with Create/Save pattern
+	var cdi models.CDIScore
+	err := s.db.DB.WithContext(ctx).Where("patient_id = ?", patientID).First(&cdi).Error
+	isNew := err != nil
+
+	previousScore := cdi.TotalScore // 0 if new
+
+	cdi.PatientID = patientID
+	cdi.BPComponentScore = bpScore
+	cdi.GlycaemicScore = glycScore
+	cdi.RenalScore = renalScore
+	cdi.TotalScore = total
+	cdi.RiskLevel = level
+	cdi.ActiveDomains = activeDomains
+	cdi.ComputedAt = time.Now()
+
+	if isNew {
+		if err := s.db.DB.WithContext(ctx).Create(&cdi).Error; err != nil {
+			return fmt.Errorf("create CDI: %w", err)
+		}
+	} else {
+		if err := s.db.DB.WithContext(ctx).Save(&cdi).Error; err != nil {
+			return fmt.Errorf("save CDI: %w", err)
+		}
+	}
+
+	// 6. Emit event with 72h hysteresis cooldown
+	if level == "CRITICAL" || level == "HIGH" || level == "MODERATE" {
+		if err := s.emitCDIAlertIfCooldownExpired(patientID, &cdi); err != nil {
+			s.logger.Warn("CDI alert emission failed", zap.Error(err))
+		}
+	}
+
+	// 7. CDI_IMPROVED: score dropped >= 4 points
+	if !isNew && previousScore-total >= 4 {
+		s.eventBus.Publish(models.EventCDIImproved, patientID, models.CDIPayload{
+			PatientID:      patientID,
+			TotalScore:     total,
+			BPScore:        bpScore,
+			GlycaemicScore: glycScore,
+			RenalScore:     renalScore,
+			RiskLevel:      level,
+			ActiveDomains:  activeDomains,
+			PreviousScore:  previousScore,
+		})
+	}
+
+	return nil
 }

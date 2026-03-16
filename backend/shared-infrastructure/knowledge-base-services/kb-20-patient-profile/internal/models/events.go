@@ -6,20 +6,20 @@ import (
 
 // Event types published by KB-20 to the event bus.
 const (
-	EventStratumChange             = "STRATUM_CHANGE"
-	EventSafetyAlert               = "SAFETY_ALERT"
+	EventStratumChange              = "STRATUM_CHANGE"
+	EventSafetyAlert                = "SAFETY_ALERT"
 	EventMedicationThresholdCrossed = "MEDICATION_THRESHOLD_CROSSED" // F-03 RED
-	EventMedicationChange          = "MEDICATION_CHANGE"
+	EventMedicationChange           = "MEDICATION_CHANGE"
 	EventLabResult                  = "LAB_RESULT"
-	EventRAASMonitoringEscalate     = "RAAS_MONITORING_ESCALATE"     // creatinine rise >20% post-ACEi/ARB not explained
-	EventRAASMonitoringResolved     = "RAAS_MONITORING_RESOLVED"     // creatinine stabilised within tolerance
-	EventResistantHTNDetected       = "RESISTANT_HTN_DETECTED"       // ≥3 agents at max tolerated + uncontrolled BP
-	EventBPTrajectoryConcern        = "BP_TRAJECTORY_CONCERN"        // sustained elevated or J-curve proximity
-	EventBPSubclinicalConcern       = "BP_SUBCLINICAL_CONCERN"       // EW-07: damage composite score 3-4
-	EventDamageCompositeAlert       = "DAMAGE_COMPOSITE_ALERT"       // EW-08: damage composite score >= 5
-	EventACRWorsening               = "ACR_WORSENING"                // ACR trend changed to WORSENING
-	EventACRTargetMet               = "ACR_TARGET_MET"               // ACR category improved (e.g., A3 -> A2)
-	EventBPVariabilityAlert         = "BP_VARIABILITY_ALERT"         // Wave 3.1: BP variability transitioned to HIGH
+	EventRAASMonitoringEscalate     = "RAAS_MONITORING_ESCALATE" // creatinine rise >20% post-ACEi/ARB not explained
+	EventRAASMonitoringResolved     = "RAAS_MONITORING_RESOLVED" // creatinine stabilised within tolerance
+	EventResistantHTNDetected       = "RESISTANT_HTN_DETECTED"   // ≥3 agents at max tolerated + uncontrolled BP
+	EventBPTrajectoryConcern        = "BP_TRAJECTORY_CONCERN"    // sustained elevated or J-curve proximity
+	EventBPSubclinicalConcern       = "BP_SUBCLINICAL_CONCERN"   // EW-07: damage composite score 3-4
+	EventDamageCompositeAlert       = "DAMAGE_COMPOSITE_ALERT"   // EW-08: damage composite score >= 5
+	EventACRWorsening               = "ACR_WORSENING"            // ACR trend changed to WORSENING
+	EventACRTargetMet               = "ACR_TARGET_MET"           // ACR category improved (e.g., A3 -> A2)
+	EventBPVariabilityAlert         = "BP_VARIABILITY_ALERT"     // Wave 3.1: BP variability transitioned to HIGH
 
 	// Glycaemic domain events
 	EventFBGWorsening               = "FBG_WORSENING"
@@ -27,13 +27,18 @@ const (
 	EventGlucoseVariabilityHigh     = "GLUCOSE_VARIABILITY_HIGH"
 	EventGlucoseVariabilityResolved = "GLUCOSE_VARIABILITY_RESOLVED"
 
+	// Cross-domain CDI events
+	EventCDIModerate = "CDI_MODERATE" // Score 7-12: multi-domain concern
+	EventCDICritical = "CDI_CRITICAL" // Score ≥17: CKM_CRISIS_ALERT
+	EventCDIImproved = "CDI_IMPROVED" // Score dropped ≥4 points
+
 	// HTN Proposal §3.3 — Core BP events
-	EventBPAlert           = "BP_ALERT"              // bp_status transitions to ABOVE_TARGET or DECLINING
-	EventBPSevereAlert     = "BP_SEVERE_ALERT"       // bp_status transitions to SEVERE
-	EventBPUrgencyAlert    = "BP_URGENCY_ALERT"      // bp_status = URGENCY — immediate notification
-	EventBPControlled      = "BP_CONTROLLED"          // bp_status transitions to AT_TARGET (first time or after ABOVE_TARGET)
-	EventOrthostaticAlert  = "ORTHOSTATIC_ALERT"      // orthostatic_drop < -20 mmHg confirmed 2 readings
-	EventMaskedHTNDetected = "MASKED_HTN_DETECTED"    // bp_pattern = MASKED confirmed over 4+ paired readings
+	EventBPAlert           = "BP_ALERT"            // bp_status transitions to ABOVE_TARGET or DECLINING
+	EventBPSevereAlert     = "BP_SEVERE_ALERT"     // bp_status transitions to SEVERE
+	EventBPUrgencyAlert    = "BP_URGENCY_ALERT"    // bp_status = URGENCY — immediate notification
+	EventBPControlled      = "BP_CONTROLLED"       // bp_status transitions to AT_TARGET (first time or after ABOVE_TARGET)
+	EventOrthostaticAlert  = "ORTHOSTATIC_ALERT"   // orthostatic_drop < -20 mmHg confirmed 2 readings
+	EventMaskedHTNDetected = "MASKED_HTN_DETECTED" // bp_pattern = MASKED confirmed over 4+ paired readings
 )
 
 // Event is the base envelope for all KB-20 events.
@@ -46,11 +51,11 @@ type Event struct {
 
 // StratumChangePayload is published when a patient's stratum label changes.
 type StratumChangePayload struct {
-	OldStratum    string `json:"old_stratum"`
-	NewStratum    string `json:"new_stratum"`
+	OldStratum     string `json:"old_stratum"`
+	NewStratum     string `json:"new_stratum"`
 	OldCKDSubstage string `json:"old_ckd_substage,omitempty"`
 	NewCKDSubstage string `json:"new_ckd_substage,omitempty"`
-	Trigger       string `json:"trigger"`
+	Trigger        string `json:"trigger"`
 }
 
 // SafetyAlertPayload is published for clinically significant safety events.
@@ -66,11 +71,11 @@ type SafetyAlertPayload struct {
 // MedicationThresholdCrossedPayload (F-03 RED) fires when eGFR crosses any
 // medication-relevant boundary (60, 45, 30, 15) regardless of stratum change.
 type MedicationThresholdCrossedPayload struct {
-	Lab                string                  `json:"lab"`
-	OldValue           float64                 `json:"old_value"`
-	NewValue           float64                 `json:"new_value"`
-	ThresholdCrossed   float64                 `json:"threshold_crossed"`
-	AffectedMedications []AffectedMedication   `json:"affected_medications"`
+	Lab                 string               `json:"lab"`
+	OldValue            float64              `json:"old_value"`
+	NewValue            float64              `json:"new_value"`
+	ThresholdCrossed    float64              `json:"threshold_crossed"`
+	AffectedMedications []AffectedMedication `json:"affected_medications"`
 }
 
 // AffectedMedication describes a drug affected by a threshold crossing.
@@ -181,7 +186,7 @@ type BPAlertPayload struct {
 // OrthostaticAlertPayload carries data for ORTHOSTATIC_ALERT events.
 type OrthostaticAlertPayload struct {
 	PatientID       string  `json:"patient_id"`
-	OrthostaticDrop float64 `json:"orthostatic_drop"`  // negative value
+	OrthostaticDrop float64 `json:"orthostatic_drop"` // negative value
 	SeatedSBP       float64 `json:"seated_sbp"`
 	StandingSBP     float64 `json:"standing_sbp"`
 }
@@ -211,6 +216,18 @@ type GlucoseVariabilityPayload struct {
 	CV14d     float64 `json:"cv_14d_pct"`
 	CV30d     float64 `json:"cv_30d_pct"`
 	Window    string  `json:"trigger_window"`
+}
+
+// CDIPayload carries data for CDI events.
+type CDIPayload struct {
+	PatientID      string `json:"patient_id"`
+	TotalScore     int    `json:"total_score"`
+	BPScore        int    `json:"bp_score"`
+	GlycaemicScore int    `json:"glycaemic_score"`
+	RenalScore     int    `json:"renal_score"`
+	RiskLevel      string `json:"risk_level"`
+	ActiveDomains  string `json:"active_domains"`
+	PreviousScore  int    `json:"previous_score"`
 }
 
 // LabResultPayload is published when a lab result is ingested.
