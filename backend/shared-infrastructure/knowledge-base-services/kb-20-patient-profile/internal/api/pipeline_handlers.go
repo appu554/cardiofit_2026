@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,8 +26,27 @@ func (s *Server) batchWriteModifiers(c *gin.Context) {
 }
 
 func (s *Server) batchWriteADRProfiles(c *gin.Context) {
+	// Bind raw JSON for validation before model binding
+	var rawPayload []map[string]interface{}
+	if err := c.ShouldBindJSON(&rawPayload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// L3 intake validation
+	validationErrors := validateL3Payload(rawPayload)
+	if len(validationErrors) > 0 {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":             "L3 validation failed",
+			"validation_errors": validationErrors,
+		})
+		return
+	}
+
+	// Re-marshal and bind to typed models for upsert
+	jsonBytes, _ := json.Marshal(rawPayload)
 	var profiles []models.AdverseReactionProfile
-	if err := c.ShouldBindJSON(&profiles); err != nil {
+	if err := json.Unmarshal(jsonBytes, &profiles); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
