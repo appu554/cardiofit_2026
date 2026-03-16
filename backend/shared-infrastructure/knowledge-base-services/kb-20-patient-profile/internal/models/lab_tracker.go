@@ -44,6 +44,7 @@ const (
 	LabTypeDBP            = "DBP"
 	LabTypePotassium      = "POTASSIUM"
 	LabTypeTotalCholesterol = "TOTAL_CHOLESTEROL"
+	LabTypeHDL              = "HDL"  // HDL cholesterol
 	LabTypeSodium           = "SODIUM"
 	LabTypeACR              = "ACR" // albumin-to-creatinine ratio (mg/mmol)
 )

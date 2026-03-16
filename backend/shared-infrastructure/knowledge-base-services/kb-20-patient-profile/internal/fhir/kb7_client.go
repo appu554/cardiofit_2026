@@ -174,7 +174,7 @@ func displayToLabType(display string) string {
 	lower := strings.ToLower(display)
 
 	switch {
-	case strings.Contains(lower, "creatinine"):
+	case strings.Contains(lower, "creatinine") && !strings.Contains(lower, "albumin"):
 		return models.LabTypeCreatinine
 	case strings.Contains(lower, "glomerular filtration") || strings.Contains(lower, "egfr"):
 		return models.LabTypeEGFR
@@ -190,6 +190,16 @@ func displayToLabType(display string) string {
 		return models.LabTypeDBP
 	case strings.Contains(lower, "potassium"):
 		return models.LabTypePotassium
+	case strings.Contains(lower, "sodium"):
+		return models.LabTypeSodium
+	case strings.Contains(lower, "heart rate"):
+		return "HEART_RATE"
+	case strings.Contains(lower, "body weight") || (strings.Contains(lower, "weight") && !strings.Contains(lower, "birth")):
+		return "WEIGHT"
+	case strings.Contains(lower, "albumin") && strings.Contains(lower, "creatinine") && strings.Contains(lower, "ratio"):
+		return models.LabTypeACR
+	case strings.Contains(lower, "cholesterol") && strings.Contains(lower, "hdl"):
+		return models.LabTypeHDL
 	case strings.Contains(lower, "cholesterol") && strings.Contains(lower, "total"):
 		return models.LabTypeTotalCholesterol
 	case strings.Contains(lower, "cholesterol"):
