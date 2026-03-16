@@ -107,6 +107,13 @@ func (s *LabService) AddLab(patientID string, req models.AddLabRequest) (*models
 			s.processACR(tx, patientID, req.Value, measuredAt)
 		}
 
+		// Process FBG longitudinal tracking
+		if req.LabType == models.LabTypeFBG {
+			if err := s.processFBG(tx, patientID, req.Value, measuredAt); err != nil {
+				s.logger.Warn("FBG tracking failed", zap.Error(err))
+			}
+		}
+
 		return nil
 	})
 
@@ -469,6 +476,68 @@ func (s *LabService) processACR(tx *gorm.DB, patientID string, valueMgMmol float
 			zap.String("from", oldCategory),
 			zap.String("to", newCategory))
 	}
+}
+
+// processFBG handles a new FBG lab result within the caller's transaction.
+// It maintains the FBGTracking record: appends readings, computes slope/trend/CV,
+// and emits FBG_WORSENING or GLUCOSE_VARIABILITY_HIGH events.
+func (s *LabService) processFBG(tx *gorm.DB, patientID string, value float64, measuredAt time.Time) error {
+	var tracking models.FBGTracking
+	err := tx.Where("patient_id = ?", patientID).First(&tracking).Error
+	if err != nil {
+		tracking = models.FBGTracking{PatientID: patientID}
+	}
+
+	readings := tracking.Readings
+	readings = append(readings, models.TimestampedReading{Value: value, Timestamp: measuredAt})
+	if len(readings) > 30 {
+		readings = readings[len(readings)-30:]
+	}
+	tracking.Readings = readings
+
+	previousTrend := tracking.Trend
+	tracking.SlopePerQ = computeFBGSlope(readings)
+	tracking.Trend = classifyFBGTrend(tracking.SlopePerQ)
+
+	tracking.CV7d = computeGlucoseCV(filterReadingsInWindow(readings, 7))
+	tracking.CV14d = computeGlucoseCV(filterReadingsInWindow(readings, 14))
+	tracking.CV30d = computeGlucoseCV(filterReadingsInWindow(readings, 30))
+
+	if err := tx.Save(&tracking).Error; err != nil {
+		return err
+	}
+
+	// Emit FBG_WORSENING if trend just transitioned to WORSENING
+	if previousTrend != "" && previousTrend != "WORSENING" && tracking.Trend == "WORSENING" {
+		s.eventBus.PublishTx(tx, models.EventFBGWorsening, patientID, models.FBGWorseningPayload{
+			PatientID:     patientID,
+			CurrentFBG:    value,
+			SlopePerQ:     tracking.SlopePerQ,
+			Trend:         tracking.Trend,
+			PreviousTrend: previousTrend,
+			OnInsulin:     tracking.OnInsulin,
+		})
+	}
+
+	// Emit GLUCOSE_VARIABILITY_HIGH if any CV window exceeds threshold
+	maxCV := math.Max(tracking.CV7d, math.Max(tracking.CV14d, tracking.CV30d))
+	if maxCV > glucoseCVHighThreshold {
+		window := "30d"
+		if tracking.CV7d > glucoseCVHighThreshold {
+			window = "7d"
+		} else if tracking.CV14d > glucoseCVHighThreshold {
+			window = "14d"
+		}
+		s.eventBus.PublishTx(tx, models.EventGlucoseVariabilityHigh, patientID, models.GlucoseVariabilityPayload{
+			PatientID: patientID,
+			CV7d:      tracking.CV7d,
+			CV14d:     tracking.CV14d,
+			CV30d:     tracking.CV30d,
+			Window:    window,
+		})
+	}
+
+	return nil
 }
 
 // computeACRTrend classifies the ACR trend from readings.

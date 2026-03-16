@@ -198,6 +198,27 @@ type DamageComposite struct {
 	ComputedAt           time.Time `json:"computed_at"`
 }
 
+// TimestampedReading represents a single timestamped numeric measurement.
+// Used by FBGTracking and other longitudinal trackers.
+type TimestampedReading struct {
+	Value     float64   `json:"value"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// FBGTracking maintains rolling FBG readings for trajectory analysis.
+type FBGTracking struct {
+	PatientID string               `gorm:"primaryKey" json:"patient_id"`
+	Readings  []TimestampedReading `json:"readings" gorm:"serializer:json"`
+	Trend     string               `json:"trend"`
+	SlopePerQ float64              `json:"slope_per_q"`
+	CV7d      float64              `json:"cv_7d"`
+	CV14d     float64              `json:"cv_14d"`
+	CV30d     float64              `json:"cv_30d"`
+	OnInsulin bool                 `json:"on_insulin"`
+	UpdatedAt time.Time            `gorm:"autoUpdateTime" json:"updated_at"`
+	CreatedAt time.Time            `gorm:"autoCreateTime" json:"created_at"`
+}
+
 // BPRiskStratumEntry defines a row in the risk stratum table for BP early warning thresholds.
 type BPRiskStratumEntry struct {
 	Label              string  // human-readable label

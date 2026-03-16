@@ -21,6 +21,12 @@ const (
 	EventACRTargetMet               = "ACR_TARGET_MET"               // ACR category improved (e.g., A3 -> A2)
 	EventBPVariabilityAlert         = "BP_VARIABILITY_ALERT"         // Wave 3.1: BP variability transitioned to HIGH
 
+	// Glycaemic domain events
+	EventFBGWorsening               = "FBG_WORSENING"
+	EventFBGTargetMet               = "FBG_TARGET_MET"
+	EventGlucoseVariabilityHigh     = "GLUCOSE_VARIABILITY_HIGH"
+	EventGlucoseVariabilityResolved = "GLUCOSE_VARIABILITY_RESOLVED"
+
 	// HTN Proposal §3.3 — Core BP events
 	EventBPAlert           = "BP_ALERT"              // bp_status transitions to ABOVE_TARGET or DECLINING
 	EventBPSevereAlert     = "BP_SEVERE_ALERT"       // bp_status transitions to SEVERE
@@ -186,6 +192,25 @@ type MaskedHTNPayload struct {
 	ClinicSBPMean     float64 `json:"clinic_sbp_mean"`
 	HomeDeviceSBPMean float64 `json:"home_device_sbp_mean"`
 	PairedReadings    int     `json:"paired_readings_count"`
+}
+
+// FBGWorseningPayload fires when FBG trend transitions to WORSENING (GW-01).
+type FBGWorseningPayload struct {
+	PatientID     string  `json:"patient_id"`
+	CurrentFBG    float64 `json:"current_fbg_mmol"`
+	SlopePerQ     float64 `json:"slope_per_quarter_mmol"`
+	Trend         string  `json:"trend"`
+	PreviousTrend string  `json:"previous_trend"`
+	OnInsulin     bool    `json:"on_insulin"`
+}
+
+// GlucoseVariabilityPayload fires when glucose CV% exceeds threshold (GW-03).
+type GlucoseVariabilityPayload struct {
+	PatientID string  `json:"patient_id"`
+	CV7d      float64 `json:"cv_7d_pct"`
+	CV14d     float64 `json:"cv_14d_pct"`
+	CV30d     float64 `json:"cv_30d_pct"`
+	Window    string  `json:"trigger_window"`
 }
 
 // LabResultPayload is published when a lab result is ingested.
