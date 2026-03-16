@@ -33,9 +33,9 @@ type PhysioConfig struct {
 	GlucoseTrendThreshold float64 // B-07: mmol/L (default 5.5)
 
 	// eGFR thresholds (policy extension — see B-08/B-09/B-10 clinical rationale)
-	EGFRHaltThreshold          float64 // B-08: mL/min/1.73m² (default 15, CKD Stage 5)
-	EGFRPauseThreshold         float64 // B-09: mL/min/1.73m² (default 30, CKD Stage 4)
-	EGFRSlopeRapidDecline      float64 // B-10: mL/min/1.73m²/year (default -5.0, rapid decline)
+	EGFRHaltThreshold     float64 // B-08: mL/min/1.73m² (default 15, CKD Stage 5)
+	EGFRPauseThreshold    float64 // B-09: mL/min/1.73m² (default 30, CKD Stage 4)
+	EGFRSlopeRapidDecline float64 // B-10: mL/min/1.73m²/year (default -5.0, rapid decline)
 
 	// J-curve eGFR-stratified SBP lower limits (B-12)
 	// Below these floors, antihypertensive dose reduction is needed to protect renal perfusion.
@@ -46,10 +46,10 @@ type PhysioConfig struct {
 	// Amendment 8: Stage-specific HALT/PAUSE thresholds (replaces unified SBPHaltFloorStage4)
 	// These are the hard lower limits where perfusion concern triggers PAUSE or HALT
 	// depending on CKD stage-specific autoregulatory reserve.
-	SBPHaltStage3a  float64 // B-12: mmHg PAUSE threshold (default 100, CKD 3a — autoregulation partially intact)
-	SBPHaltStage3b  float64 // B-12: mmHg PAUSE threshold (default 105, CKD 3b — reduced reserve)
-	SBPHaltStage4   float64 // B-12: mmHg HALT threshold (default 100, CKD 4 — perfusion danger)
-	SBPPauseStage4  float64 // B-12: mmHg PAUSE threshold (default 110, CKD 4 — cautionary zone)
+	SBPHaltStage3a float64 // B-12: mmHg PAUSE threshold (default 100, CKD 3a — autoregulation partially intact)
+	SBPHaltStage3b float64 // B-12: mmHg PAUSE threshold (default 105, CKD 3b — reduced reserve)
+	SBPHaltStage4  float64 // B-12: mmHg HALT threshold (default 100, CKD 4 — perfusion danger)
+	SBPPauseStage4 float64 // B-12: mmHg PAUSE threshold (default 110, CKD 4 — cautionary zone)
 
 	// Heart rate thresholds (B-13, B-14, B-15)
 	HRBradycardiaHalt  float64 // B-13: bpm (default 45) — confirmed resting HR
@@ -57,8 +57,8 @@ type PhysioConfig struct {
 	HRTachycardiaPause float64 // B-15: bpm (default 120) — confirmed resting HR
 
 	// Hyponatraemia thresholds (B-17, B-18, B-19)
-	SodiumHaltThreshold    float64 // B-17: mEq/L (default 132) — thiazide + Na+ < 132
-	SodiumPauseThreshold   float64 // B-18: mEq/L (default 135) — thiazide + Na+ 132-135
+	SodiumHaltThreshold     float64 // B-17: mEq/L (default 132) — thiazide + Na+ < 132
+	SodiumPauseThreshold    float64 // B-18: mEq/L (default 135) — thiazide + Na+ 132-135
 	SodiumSeasonalThreshold float64 // B-19: mEq/L (default 135) — seasonal amplification
 
 	// Data anomaly thresholds (SA-05)
@@ -67,6 +67,10 @@ type PhysioConfig struct {
 	GlucoseFloorHoldData    float64 // DA-03: mmol/L (default 1.0)
 	HbA1cDeltaHoldData      float64 // DA-04: % in 30d (default 2.0)
 	PotassiumCeilingHold    float64 // DA-05: mEq/L (default 8.0)
+
+	// Staleness thresholds (DA-06, DA-07)
+	PotassiumStaleDays  float64 // DA-06: days (default 14)
+	CreatinineStaleDays float64 // DA-07: days (default 30)
 }
 
 // DefaultPhysioConfig returns production-safe threshold defaults.
@@ -78,9 +82,9 @@ func DefaultPhysioConfig() PhysioConfig {
 		PotassiumLowHalt:        3.0,
 		PotassiumHighHalt:       6.0,
 		SBPHaltThreshold:        90.0,
-		EGFRHaltThreshold:          15.0,
-		EGFRPauseThreshold:         30.0,
-		EGFRSlopeRapidDecline:      -5.0,
+		EGFRHaltThreshold:       15.0,
+		EGFRPauseThreshold:      30.0,
+		EGFRSlopeRapidDecline:   -5.0,
 		SBPFloorStage3a:         120.0,
 		SBPFloorStage3b:         125.0,
 		SBPFloorStage4:          130.0,
@@ -101,6 +105,8 @@ func DefaultPhysioConfig() PhysioConfig {
 		GlucoseFloorHoldData:    1.0,
 		HbA1cDeltaHoldData:      2.0,
 		PotassiumCeilingHold:    8.0,
+		PotassiumStaleDays:      14.0,
+		CreatinineStaleDays:     30.0,
 	}
 }
 
@@ -123,8 +129,8 @@ func (m *PhysiologySafetyMonitor) EvaluateWithOptions(data *RawPatientData, opts
 	if opts.DeprescribingActive {
 		// Create a monitor copy with widened glucose thresholds
 		widened := *m
-		widened.cfg.GlucoseHaltThreshold = 3.5   // 3.9 → 3.5 mmol/L
-		widened.cfg.GlucosePauseThreshold = 3.9  // 4.5 → 3.9 mmol/L
+		widened.cfg.GlucoseHaltThreshold = 3.5  // 3.9 → 3.5 mmol/L
+		widened.cfg.GlucosePauseThreshold = 3.9 // 4.5 → 3.9 mmol/L
 		return widened.Evaluate(data)
 	}
 	return m.Evaluate(data)
@@ -399,7 +405,7 @@ func (m *PhysiologySafetyMonitor) checkDA06(d *RawPatientData) *PhysioResult {
 	if d.PotassiumCurrent == nil || d.PotassiumLastMeasuredAt == nil {
 		return nil // no value or no timestamp — cannot assess staleness
 	}
-	if IsStale(d.PotassiumLastMeasuredAt, 14*24*time.Hour) {
+	if IsStale(d.PotassiumLastMeasuredAt, time.Duration(m.cfg.PotassiumStaleDays*24)*time.Hour) {
 		return &PhysioResult{
 			Gate:       PhysioHoldData,
 			RuleFired:  "DA-06",
@@ -422,7 +428,7 @@ func (m *PhysiologySafetyMonitor) checkDA07(d *RawPatientData) *PhysioResult {
 	if d.CreatinineCurrent == nil || d.CreatinineLastMeasuredAt == nil {
 		return nil // no value or no timestamp — cannot assess staleness
 	}
-	if IsStale(d.CreatinineLastMeasuredAt, 30*24*time.Hour) {
+	if IsStale(d.CreatinineLastMeasuredAt, time.Duration(m.cfg.CreatinineStaleDays*24)*time.Hour) {
 		return &PhysioResult{
 			Gate:       PhysioHoldData,
 			RuleFired:  "DA-07",
@@ -670,7 +676,7 @@ func (m *PhysiologySafetyMonitor) checkB10(d *RawPatientData) *PhysioResult {
 //   - Stage 3a: SBP < 100 → PAUSE (autoregulation still partially intact)
 //   - Stage 3b: SBP < 105 → PAUSE (reduced reserve, but not perfusion-critical)
 //   - Stage 4:  SBP < 100 → HALT  (perfusion danger, minimal autoregulatory reserve)
-//               SBP 100-110 → PAUSE (cautionary zone)
+//     SBP 100-110 → PAUSE (cautionary zone)
 //
 // B-08 (SBP < 90 → HALT via B-05) remains the absolute floor for all stages.
 //

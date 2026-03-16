@@ -212,6 +212,147 @@ func TestDA02_CreatinineAnomaly(t *testing.T) {
 	}
 }
 
+func TestDA06_StalePotassium(t *testing.T) {
+	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		kValue   *float64
+		kTime    *time.Time
+		wantGate PhysioGate
+		wantRule string
+	}{
+		{
+			name:     "K+ 15 days old → HOLD_DATA (stale)",
+			kValue:   Float64Ptr(4.5),
+			kTime:    timePtr(now.Add(-15 * 24 * time.Hour)),
+			wantGate: PhysioHoldData,
+			wantRule: "DA-06",
+		},
+		{
+			name:     "K+ 13 days old → CLEAR (fresh)",
+			kValue:   Float64Ptr(4.5),
+			kTime:    timePtr(now.Add(-13 * 24 * time.Hour)),
+			wantGate: PhysioClear,
+			wantRule: "",
+		},
+		{
+			name:     "K+ nil timestamp → CLEAR (nil = unknown, not stale)",
+			kValue:   Float64Ptr(4.5),
+			kTime:    nil,
+			wantGate: PhysioClear,
+			wantRule: "",
+		},
+		{
+			name:     "K+ nil value + stale timestamp → CLEAR",
+			kValue:   nil,
+			kTime:    timePtr(now.Add(-15 * 24 * time.Hour)),
+			wantGate: PhysioClear,
+			wantRule: "",
+		},
+		{
+			name:     "K+ exactly 14 days old → boundary (not stale, equal is not past)",
+			kValue:   Float64Ptr(4.5),
+			kTime:    timePtr(now.Add(-14 * 24 * time.Hour)),
+			wantGate: PhysioHoldData,
+			wantRule: "DA-06",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := safeDefaults()
+			data.PotassiumCurrent = tt.kValue
+			data.PotassiumLastMeasuredAt = tt.kTime
+			result := m.Evaluate(data)
+			if result.Gate != tt.wantGate {
+				t.Errorf("got gate %s, want %s", result.Gate, tt.wantGate)
+			}
+			if tt.wantRule != "" && result.RuleFired != tt.wantRule {
+				t.Errorf("got rule %s, want %s", result.RuleFired, tt.wantRule)
+			}
+			if tt.wantRule == "DA-06" {
+				if !result.IsAnomaly || result.AnomalyLab != "POTASSIUM" {
+					t.Errorf("should flag POTASSIUM anomaly, got anomaly=%v lab=%s", result.IsAnomaly, result.AnomalyLab)
+				}
+			}
+		})
+	}
+}
+
+func TestDA07_StaleCreatinine(t *testing.T) {
+	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		crValue  *float64
+		crTime   *time.Time
+		wantGate PhysioGate
+		wantRule string
+	}{
+		{
+			name:     "Creatinine 31 days old → HOLD_DATA (stale)",
+			crValue:  Float64Ptr(80),
+			crTime:   timePtr(now.Add(-31 * 24 * time.Hour)),
+			wantGate: PhysioHoldData,
+			wantRule: "DA-07",
+		},
+		{
+			name:     "Creatinine 29 days old → CLEAR (fresh)",
+			crValue:  Float64Ptr(80),
+			crTime:   timePtr(now.Add(-29 * 24 * time.Hour)),
+			wantGate: PhysioClear,
+			wantRule: "",
+		},
+		{
+			name:     "Creatinine nil timestamp → CLEAR (nil = unknown, not stale)",
+			crValue:  Float64Ptr(80),
+			crTime:   nil,
+			wantGate: PhysioClear,
+			wantRule: "",
+		},
+		{
+			name:     "Creatinine nil value + stale timestamp → CLEAR",
+			crValue:  nil,
+			crTime:   timePtr(now.Add(-31 * 24 * time.Hour)),
+			wantGate: PhysioClear,
+			wantRule: "",
+		},
+		{
+			name:     "Creatinine exactly 30 days old → boundary",
+			crValue:  Float64Ptr(80),
+			crTime:   timePtr(now.Add(-30 * 24 * time.Hour)),
+			wantGate: PhysioHoldData,
+			wantRule: "DA-07",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := safeDefaults()
+			data.CreatinineCurrent = tt.crValue
+			data.CreatinineLastMeasuredAt = tt.crTime
+			result := m.Evaluate(data)
+			if result.Gate != tt.wantGate {
+				t.Errorf("got gate %s, want %s", result.Gate, tt.wantGate)
+			}
+			if tt.wantRule != "" && result.RuleFired != tt.wantRule {
+				t.Errorf("got rule %s, want %s", result.RuleFired, tt.wantRule)
+			}
+			if tt.wantRule == "DA-07" {
+				if !result.IsAnomaly || result.AnomalyLab != "CREATININE" {
+					t.Errorf("should flag CREATININE anomaly, got anomaly=%v lab=%s", result.IsAnomaly, result.AnomalyLab)
+				}
+			}
+		})
+	}
+}
+
+// timePtr returns a pointer to the given time.Time value.
+func timePtr(t time.Time) *time.Time { return &t }
+
 func TestDataAnomalyPriority(t *testing.T) {
 	// DA rules fire BEFORE clinical rules. Even if glucose is < 3.9 (B-01 HALT),
 	// if glucose < 1.0 (DA-03 HOLD_DATA), the anomaly check fires first.
@@ -264,30 +405,30 @@ func TestB03_RAASToleranceSuppression(t *testing.T) {
 			name:              "RAAS explained + safe K+ + no oliguria → PAUSE (suppressed)",
 			creatinineCurrent: 110, creatinine48hAgo: 80,
 			creatinineRiseExplained: true,
-			potassium:              Float64Ptr(4.8),
-			wantGate:               PhysioPause, wantRule: "B-03-RAAS-SUPPRESSED",
+			potassium:               Float64Ptr(4.8),
+			wantGate:                PhysioPause, wantRule: "B-03-RAAS-SUPPRESSED",
 		},
 		{
 			name:              "RAAS explained but K+ ≥5.5 → HALT (hyperkalaemia overrides)",
 			creatinineCurrent: 110, creatinine48hAgo: 80,
 			creatinineRiseExplained: true,
-			potassium:              Float64Ptr(5.6),
-			wantGate:               PhysioHalt, wantRule: "B-03",
+			potassium:               Float64Ptr(5.6),
+			wantGate:                PhysioHalt, wantRule: "B-03",
 		},
 		{
 			name:              "RAAS explained but oliguria → HALT (clinician override)",
 			creatinineCurrent: 110, creatinine48hAgo: 80,
 			creatinineRiseExplained: true,
 			oliguriaReported:        true,
-			potassium:              Float64Ptr(4.2),
-			wantGate:               PhysioHalt, wantRule: "B-03",
+			potassium:               Float64Ptr(4.2),
+			wantGate:                PhysioHalt, wantRule: "B-03",
 		},
 		{
 			name:              "RAAS explained + nil K+ (absent) → PAUSE (nil is safe)",
 			creatinineCurrent: 110, creatinine48hAgo: 80,
 			creatinineRiseExplained: true,
-			potassium:              nil,
-			wantGate:               PhysioPause, wantRule: "B-03-RAAS-SUPPRESSED",
+			potassium:               nil,
+			wantGate:                PhysioPause, wantRule: "B-03-RAAS-SUPPRESSED",
 		},
 	}
 
@@ -499,12 +640,12 @@ func TestB14_BetaBlockerBradycardia(t *testing.T) {
 	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())
 
 	tests := []struct {
-		name            string
-		hr              float64
-		bbActive        bool
-		bbDoseChange7d  bool
-		wantGate        PhysioGate
-		wantRule        string
+		name           string
+		hr             float64
+		bbActive       bool
+		bbDoseChange7d bool
+		wantGate       PhysioGate
+		wantRule       string
 	}{
 		{"HR 52 + BB + dose change → PAUSE", 52, true, true, PhysioPause, "B-14"},
 		{"HR 52 + BB + no dose change → CLEAR", 52, true, false, PhysioClear, ""},
@@ -702,13 +843,13 @@ func TestB13_TakesPriorityOverB14(t *testing.T) {
 // safeDefaults returns RawPatientData with all values in safe ranges.
 func safeDefaults() *RawPatientData {
 	return &RawPatientData{
-		GlucoseCurrent:    Float64Ptr(6.5),  // mmol/L (normal)
+		GlucoseCurrent:    Float64Ptr(6.5), // mmol/L (normal)
 		GlucoseTimestamp:  time.Now(),
-		CreatinineCurrent: Float64Ptr(80),    // µmol/L (normal)
-		PotassiumCurrent:  Float64Ptr(4.5),   // mEq/L (normal)
-		SBPCurrent:        Float64Ptr(120),   // mmHg (normal)
-		WeightKgCurrent:   Float64Ptr(70),    // kg
-		EGFRCurrent:       Float64Ptr(75),    // mL/min/1.73m² (normal)
-		HbA1cCurrent:      Float64Ptr(7.0),   // % (controlled diabetic)
+		CreatinineCurrent: Float64Ptr(80),  // µmol/L (normal)
+		PotassiumCurrent:  Float64Ptr(4.5), // mEq/L (normal)
+		SBPCurrent:        Float64Ptr(120), // mmHg (normal)
+		WeightKgCurrent:   Float64Ptr(70),  // kg
+		EGFRCurrent:       Float64Ptr(75),  // mL/min/1.73m² (normal)
+		HbA1cCurrent:      Float64Ptr(7.0), // % (controlled diabetic)
 	}
 }
