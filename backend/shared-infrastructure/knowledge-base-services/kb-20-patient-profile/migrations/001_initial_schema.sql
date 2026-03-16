@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS adverse_reaction_profiles (
 
     onset_window VARCHAR(50),
     onset_category VARCHAR(20)
-        CHECK (onset_category IN ('IMMEDIATE','ACUTE','SUBACUTE','CHRONIC','DELAYED') OR onset_category IS NULL),
+        CHECK (onset_category IN ('IMMEDIATE','ACUTE','SUBACUTE','CHRONIC','DELAYED','IDIOSYNCRATIC') OR onset_category IS NULL),
     frequency VARCHAR(20),
     severity VARCHAR(20),
 

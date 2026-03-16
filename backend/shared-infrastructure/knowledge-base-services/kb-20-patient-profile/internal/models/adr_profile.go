@@ -27,7 +27,7 @@ type AdverseReactionProfile struct {
 
 	// Onset window
 	OnsetWindow   string `gorm:"size:50" json:"onset_window,omitempty"`
-	OnsetCategory string `gorm:"size:20;check:onset_category IN ('IMMEDIATE','ACUTE','SUBACUTE','CHRONIC','DELAYED','')" json:"onset_category,omitempty"`
+	OnsetCategory string `gorm:"size:20;check:onset_category IN ('IMMEDIATE','ACUTE','SUBACUTE','CHRONIC','DELAYED','IDIOSYNCRATIC','')" json:"onset_category,omitempty"`
 
 	// Frequency and severity
 	Frequency string `gorm:"size:20" json:"frequency,omitempty"`

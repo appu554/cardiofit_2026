@@ -230,12 +230,13 @@ class AdverseReactionProfile(BaseModel):
         description="Typical onset timeframe (e.g., '2-4 weeks', 'hours', 'days to weeks')",
     )
     onset_category: Optional[Literal[
-        "IMMEDIATE", "ACUTE", "SUBACUTE", "CHRONIC", "DELAYED"
+        "IMMEDIATE", "ACUTE", "SUBACUTE", "CHRONIC", "DELAYED", "IDIOSYNCRATIC"
     ]] = Field(
         None,
         alias="onsetCategory",
         description="Categorized onset: IMMEDIATE (<1h), ACUTE (1h-7d), "
-        "SUBACUTE (1-6wk), CHRONIC (>6wk), DELAYED (variable)",
+        "SUBACUTE (1-6wk), CHRONIC (>6wk), DELAYED (variable), "
+        "IDIOSYNCRATIC (unpredictable, not PK-determinable)",
     )
 
     # Frequency and severity
