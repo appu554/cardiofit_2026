@@ -1,0 +1,56 @@
+{
+  "template_id": "L3_CONTEXT_MODIFIER_V1",
+  "version": "1.0.0",
+  "description": "Four-element contextual modifier chain for HPI Bayesian engine",
+  "target_kb": "KB-24",
+  "physical_store": "KB-20.adverse_reaction_profiles",
+  "intake_endpoint": "/api/v1/pipeline/adr-profiles",
+  "completeness_grades": {
+    "FULL":    { "multiplier": 1.0, "requires": ["E1", "E2", "E3", "E4"], "min_confidence": 0.70 },
+    "PARTIAL": { "multiplier": 0.7, "requires": ["E1", "E2_OR_E3"] },
+    "STUB":    { "multiplier": 0.0, "requires": ["E1"] }
+  },
+  "elements": {
+    "E1_drug_symptom": {
+      "kb20_fields": ["drug_class", "reaction", "reaction_snomed", "frequency", "severity"],
+      "required": true,
+      "sources": {
+        "SPL": { "confidence": 0.95 },
+        "PIPELINE": { "confidence": 0.60 },
+        "MANUAL_CURATED": { "confidence": 0.90 }
+      },
+      "merge_rule": "SPL_WINS_OVER_PIPELINE; MANUAL_CURATED_WINS_ALL"
+    },
+    "E2_mechanism": {
+      "kb20_fields": ["mechanism"],
+      "required": false,
+      "sources": { "MANUAL_CURATED": { "confidence": 0.85 } },
+      "merge_rule": "MANUAL_CURATED_ONLY"
+    },
+    "E3_onset_window": {
+      "kb20_fields": ["onset_window", "onset_category"],
+      "required": false,
+      "sources": {
+        "SPL": { "confidence": 0.75 },
+        "MANUAL_CURATED": { "confidence": 0.90 }
+      },
+      "merge_rule": "SPL_PK_DERIVED_AS_BASELINE; MANUAL_CURATED_OVERRIDES"
+    },
+    "E4_cm_rule": {
+      "kb20_fields": ["context_modifier_rule"],
+      "required": false,
+      "field_type": "JSONB",
+      "sources": {
+        "PIPELINE": { "confidence": 0.80 },
+        "MANUAL_CURATED": { "confidence": 0.85 }
+      },
+      "merge_rule": "PIPELINE_PROVIDES_CONDITION; MANUAL_CURATED_PROVIDES_DELTA_P"
+    }
+  },
+  "onset_categories": ["IMMEDIATE", "ACUTE", "SUBACUTE", "CHRONIC", "DELAYED", "IDIOSYNCRATIC"],
+  "effect_types": ["INCREASE_PRIOR", "DECREASE_PRIOR", "HARD_BLOCK", "OVERRIDE", "SYMPTOM_MODIFICATION"],
+  "drug_classes": [
+    "ARB", "SGLT2i", "BETA_BLOCKER", "SULFONYLUREA", "INSULIN",
+    "ACEi", "CCB", "LOOP_DIURETIC", "THIAZIDE", "METFORMIN", "PDE5i"
+  ]
+}
