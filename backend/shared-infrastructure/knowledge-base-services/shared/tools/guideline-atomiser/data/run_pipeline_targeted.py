@@ -87,6 +87,12 @@ parser.add_argument(
     help="Guideline profile to use (default: kdigo). "
     "Set to 'kdigo' for built-in KDIGO 2022, or provide a path to a profile YAML."
 )
+parser.add_argument(
+    "--push-kb20",
+    action="store_true",
+    default=False,
+    help="Push contextual/ADR extraction results to KB-20 via batch API (requires KB-20 running)",
+)
 args, _ = parser.parse_known_args()
 
 
@@ -106,6 +112,7 @@ PDFS_DIR = LOCAL_PDFS_DIR if os.path.exists(LOCAL_PDFS_DIR) else DOCKER_PDFS_DIR
 # as a path to a YAML profile file.
 
 from extraction.v4.guideline_profile import GuidelineProfile
+from extraction.v4.kb20_push_client import KB20PushClient
 
 _PROFILES_DIR = os.path.join(_script_dir, "profiles")
 
@@ -522,6 +529,54 @@ def pipeline_1():
 
     total_raw = sum(len(co.spans) for co in channel_outputs)
     print(f"\n   Total raw spans: {total_raw}")
+
+    # ─── CHANNEL OUTPUT CACHE ──────────────────────────────────────────────
+    # V4.2.5: Persist channel outputs so we can resume from merger if it crashes.
+    # Cache key = job_id. Stored alongside L1 cache for co-location.
+    _channel_cache_path = os.path.join(
+        _script_dir, "l1_cache", f"_channels_{job_id}.json"
+    )
+    try:
+        _channel_cache = {
+            "job_id": str(job_id),
+            "profile_id": profile.profile_id,
+            "source": args.source,
+            "total_raw_spans": total_raw,
+            "guideline_tree_json": {
+                "total_pages": tree.total_pages,
+                "alignment_confidence": tree.alignment_confidence,
+                "structural_source": tree.structural_source,
+                "sections_count": len(tree.sections),
+                "tables_count": len(tree.tables),
+            },
+            "channels": [],
+        }
+        for co in channel_outputs:
+            _channel_cache["channels"].append({
+                "channel": co.channel,
+                "span_count": len(co.spans),
+                "error": co.error,
+                "spans": [
+                    {
+                        "channel": s.channel,
+                        "text": s.text,
+                        "start": s.start,
+                        "end": s.end,
+                        "confidence": s.confidence,
+                        "page_number": s.page_number,
+                        "section_id": s.section_id,
+                        "table_id": getattr(s, "table_id", None),
+                        "source_block_type": s.source_block_type,
+                        "channel_metadata": s.channel_metadata,
+                    }
+                    for s in co.spans
+                ],
+            })
+        with open(_channel_cache_path, "w") as f:
+            json.dump(_channel_cache, f)
+        print(f"\n   💾 Channel cache saved: {os.path.basename(_channel_cache_path)}")
+    except Exception as e:
+        print(f"\n   ⚠️ Channel cache save failed: {e}")
     print()
 
     # ─── SIGNAL MERGER ────────────────────────────────────────────────────
@@ -1161,6 +1216,23 @@ def pipeline_2():
                           f"{grade_summary.get('PARTIAL', 0)} PARTIAL, "
                           f"{grade_summary.get('STUB', 0)} STUB), "
                           f"{result.total_contextual_modifiers} modifiers")
+
+                # Push to KB-20 if flag is set and target is contextual
+                if args.push_kb20 and kb == "contextual" and result is not None:
+                    push_client = KB20PushClient()
+                    if push_client.health_check():
+                        push_result = push_client.push_extraction(
+                            result.model_dump(by_alias=True),
+                            profile,
+                            source="PIPELINE",
+                        )
+                        print(f"      📤 KB-20 push: {push_result.total_succeeded} OK, "
+                              f"{push_result.total_failed} failed")
+                        if push_result.errors:
+                            for err in push_result.errors[:3]:
+                                print(f"         ⚠️  {err}")
+                    else:
+                        print(f"      ⚠️  KB-20 not reachable — skipping push (results saved to JSON)")
             except Exception as e:
                 print(f"❌ {e}")
                 all_l3_results[dossier.drug_name][kb] = None
