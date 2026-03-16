@@ -484,7 +484,8 @@ func (s *LabService) processACR(tx *gorm.DB, patientID string, valueMgMmol float
 func (s *LabService) processFBG(tx *gorm.DB, patientID string, value float64, measuredAt time.Time) error {
 	var tracking models.FBGTracking
 	err := tx.Where("patient_id = ?", patientID).First(&tracking).Error
-	if err != nil {
+	isNew := err != nil
+	if isNew {
 		tracking = models.FBGTracking{PatientID: patientID}
 	}
 
@@ -499,12 +500,22 @@ func (s *LabService) processFBG(tx *gorm.DB, patientID string, value float64, me
 	tracking.SlopePerQ = computeFBGSlope(readings)
 	tracking.Trend = classifyFBGTrend(tracking.SlopePerQ)
 
+	// Capture previous max CV before recomputing for transition guard
+	previousMaxCV := math.Max(tracking.CV7d, math.Max(tracking.CV14d, tracking.CV30d))
+
 	tracking.CV7d = computeGlucoseCV(filterReadingsInWindow(readings, 7))
 	tracking.CV14d = computeGlucoseCV(filterReadingsInWindow(readings, 14))
 	tracking.CV30d = computeGlucoseCV(filterReadingsInWindow(readings, 30))
 
-	if err := tx.Save(&tracking).Error; err != nil {
-		return err
+	// Upsert the tracking record
+	if isNew {
+		if err := tx.Create(&tracking).Error; err != nil {
+			return err
+		}
+	} else {
+		if err := tx.Save(&tracking).Error; err != nil {
+			return err
+		}
 	}
 
 	// Emit FBG_WORSENING if trend just transitioned to WORSENING
@@ -519,9 +530,9 @@ func (s *LabService) processFBG(tx *gorm.DB, patientID string, value float64, me
 		})
 	}
 
-	// Emit GLUCOSE_VARIABILITY_HIGH if any CV window exceeds threshold
+	// Emit GLUCOSE_VARIABILITY_HIGH only on transition (previously below threshold)
 	maxCV := math.Max(tracking.CV7d, math.Max(tracking.CV14d, tracking.CV30d))
-	if maxCV > glucoseCVHighThreshold {
+	if maxCV > glucoseCVHighThreshold && previousMaxCV <= glucoseCVHighThreshold {
 		window := "30d"
 		if tracking.CV7d > glucoseCVHighThreshold {
 			window = "7d"
