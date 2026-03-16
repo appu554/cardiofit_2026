@@ -888,6 +888,11 @@ def test_all_12_seed_files_present():
 """
 Load L3 seed data into KB-20 via KB20PushClient.
 
+IMPORTANT: Seed JSON files use camelCase Pydantic aliases (drugClass, onsetWindow,
+contextualModifiers). The Go API expects snake_case (drug_class, onset_window,
+context_modifier_rule as flat JSONB). This loader handles the transform via
+KB20PushClient._transform_adr_profiles() which maps between the two formats.
+
 Usage:
     python seed_loader.py                    # dry run (validate only)
     python seed_loader.py --push             # push to KB-20
@@ -921,7 +926,7 @@ def main():
 
     print(f"📂 Found {len(seed_files)} seed files in {SEED_DIR}")
 
-    # Validate all files first
+    # Validate all files first against Pydantic schema
     valid_profiles = []
     for f in seed_files:
         try:
@@ -940,30 +945,26 @@ def main():
         print("\n🔍 Dry run complete. Use --push to write to KB-20.")
         return
 
-    # Push to KB-20
+    # Push to KB-20 as a single batch
     client = KB20PushClient(base_url=args.kb20_url)
     if not client.health_check():
         print(f"\n❌ KB-20 not reachable at {args.kb20_url}")
         sys.exit(1)
 
-    succeeded = 0
-    failed = 0
-    for name, data in valid_profiles:
-        try:
-            resp = client.session.post(
-                f"{client.base_url}/api/v1/pipeline/adr-profiles",
-                json=[data],
-                timeout=client.timeout,
-            )
-            if resp.status_code < 300:
-                succeeded += 1
-                print(f"  📤 {name}: OK")
-            else:
-                failed += 1
-                print(f"  ❌ {name}: HTTP {resp.status_code}")
-        except Exception as e:
-            failed += 1
-            print(f"  ❌ {name}: {e}")
+    # Transform from Pydantic camelCase → Go snake_case format
+    # Uses the existing _transform_adr_profiles() which builds context_modifier_rule
+    # JSONB from nested contextualModifiers and maps field names
+    all_raw = [data for _, data in valid_profiles]
+    governance = {"authority": "MANUAL_CURATED", "document": "L3 Seed Data"}
+    go_records = client._transform_adr_profiles(all_raw, governance, source="MANUAL_CURATED")
+
+    print(f"\n📤 Pushing {len(go_records)} records as single batch...")
+    result = client._post_batch("/api/v1/pipeline/adr-profiles", go_records)
+    succeeded = result.get("succeeded", 0)
+    failed = result.get("failed", 0)
+    if result.get("errors"):
+        for err in result["errors"][:5]:
+            print(f"  ⚠️  {err}")
 
     print(f"\n📊 Push complete: {succeeded} OK, {failed} failed")
 
