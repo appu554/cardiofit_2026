@@ -192,6 +192,14 @@ func (m *PhysiologySafetyMonitor) Evaluate(data *RawPatientData) PhysioResult {
 		r.RawValues = rawVals
 		return *r
 	}
+	if r := m.checkDA06(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
+	if r := m.checkDA07(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
 
 	// ── Phase 2: Critical thresholds → HALT ──
 
@@ -374,6 +382,52 @@ func (m *PhysiologySafetyMonitor) checkDA05(d *RawPatientData) *PhysioResult {
 			RuleFired:  "DA-05",
 			IsAnomaly:  true,
 			AnomalyLab: "POTASSIUM",
+		}
+	}
+	return nil
+}
+
+// DA-06: Potassium measurement >14 days old → stale safety data
+//
+// CLINICAL RATIONALE:
+// Potassium is a critical safety parameter for cardiac arrhythmia risk.
+// A K+ value older than 14 days cannot be relied upon for safe titration
+// decisions — potassium levels can shift significantly with dietary changes,
+// medication adjustments, or renal function changes. Channel B must signal
+// HOLD_DATA to prevent titration on outdated safety data.
+func (m *PhysiologySafetyMonitor) checkDA06(d *RawPatientData) *PhysioResult {
+	if d.PotassiumCurrent == nil || d.PotassiumLastMeasuredAt == nil {
+		return nil // no value or no timestamp — cannot assess staleness
+	}
+	if IsStale(d.PotassiumLastMeasuredAt, 14*24*time.Hour) {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-06",
+			IsAnomaly:  true,
+			AnomalyLab: "POTASSIUM",
+		}
+	}
+	return nil
+}
+
+// DA-07: Creatinine measurement >30 days old → stale renal data
+//
+// CLINICAL RATIONALE:
+// Creatinine is the primary marker for renal function assessment.
+// While slower-moving than potassium, a value older than 30 days is
+// unreliable for dose adjustment decisions — AKI or CKD progression
+// could have occurred in the interim. HOLD_DATA forces lab refresh
+// before any titration proceeds.
+func (m *PhysiologySafetyMonitor) checkDA07(d *RawPatientData) *PhysioResult {
+	if d.CreatinineCurrent == nil || d.CreatinineLastMeasuredAt == nil {
+		return nil // no value or no timestamp — cannot assess staleness
+	}
+	if IsStale(d.CreatinineLastMeasuredAt, 30*24*time.Hour) {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-07",
+			IsAnomaly:  true,
+			AnomalyLab: "CREATININE",
 		}
 	}
 	return nil

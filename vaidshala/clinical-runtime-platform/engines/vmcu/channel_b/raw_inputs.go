@@ -56,6 +56,7 @@ type RawPatientData struct {
 	EGFRLastMeasuredAt       *time.Time // nil if timestamp not available
 	HbA1cLastMeasuredAt      *time.Time // nil if timestamp not available
 	CreatinineLastMeasuredAt *time.Time // nil if timestamp not available
+	PotassiumLastMeasuredAt  *time.Time // nil if timestamp not available
 
 	// BP pattern and measurement uncertainty (from KB-20 BPTrajectory)
 	BPPattern              string  // matches BPPattern constants in KB-20

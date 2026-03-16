@@ -3,6 +3,7 @@ package bridge
 import (
 	"math"
 	"testing"
+	"time"
 
 	"vaidshala/clinical-runtime-platform/engines/vmcu/arbiter"
 	vt "vaidshala/clinical-runtime-platform/engines/vmcu/types"
@@ -530,6 +531,80 @@ func TestToProductionRawLabs_ContextFieldTransfer(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Arbiter compatibility test: 125 gate signal combinations
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// nilFloat64 tests
+// ---------------------------------------------------------------------------
+
+func TestNilFloat64_ZeroMapsToNil(t *testing.T) {
+	if nilFloat64(0) != nil {
+		t.Error("nilFloat64(0) should return nil")
+	}
+	p := nilFloat64(42.0)
+	if p == nil || *p != 42.0 {
+		t.Error("nilFloat64(42.0) should return pointer to 42.0")
+	}
+	// Negative value should also produce non-nil
+	n := nilFloat64(-1.5)
+	if n == nil || *n != -1.5 {
+		t.Error("nilFloat64(-1.5) should return pointer to -1.5")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stale timestamp propagation test
+// ---------------------------------------------------------------------------
+
+func TestToProductionRawLabs_StaleTimestamps(t *testing.T) {
+	staleTime := time.Now().Add(-17 * 24 * time.Hour) // 17 days ago
+	sim := &simtypes.RawPatientData{
+		PotassiumCurrent:   4.5,
+		PotassiumTimestamp: staleTime,
+		CreatinineCurrent:  90.0,
+		CreatinineTimestamp: staleTime,
+		EGFR:              45.0,
+		EGFRTimestamp:      staleTime,
+	}
+	ts := PatientTimestamps{
+		LastPotassium:  staleTime,
+		LastCreatinine: staleTime,
+		LastEGFR:       staleTime,
+	}
+	prod := ToProductionRawLabs(sim, nil, ts)
+
+	// Verify creatinine timestamp is stale, not overridden
+	if prod.CreatinineLastMeasuredAt == nil {
+		t.Fatal("CreatinineLastMeasuredAt should not be nil")
+	}
+	daysSince := time.Since(*prod.CreatinineLastMeasuredAt).Hours() / 24
+	if daysSince < 15 {
+		t.Errorf("CreatinineLastMeasuredAt appears fresh (%.0f days), want stale (17 days)", daysSince)
+	}
+
+	// Verify potassium timestamp is stale
+	if prod.PotassiumLastMeasuredAt == nil {
+		t.Fatal("PotassiumLastMeasuredAt should not be nil")
+	}
+	kDaysSince := time.Since(*prod.PotassiumLastMeasuredAt).Hours() / 24
+	if kDaysSince < 15 {
+		t.Errorf("PotassiumLastMeasuredAt appears fresh (%.0f days), want stale (17 days)", kDaysSince)
+	}
+}
+
+// TestToProductionRawLabs_ZeroCreatininePreviousIsNil verifies that
+// archetypes that don't set CreatininePrevious (= 0) get nil in
+// production, preventing B-03 from computing a false delta.
+func TestToProductionRawLabs_ZeroCreatininePreviousIsNil(t *testing.T) {
+	sim := &simtypes.RawPatientData{
+		CreatinineCurrent:  95.0,
+		CreatininePrevious: 0, // not set by archetype
+	}
+	prod := ToProductionRawLabs(sim, nil, PatientTimestamps{})
+
+	if prod.Creatinine48hAgo != nil {
+		t.Errorf("Creatinine48hAgo should be nil when CreatininePrevious=0, got %v", *prod.Creatinine48hAgo)
+	}
+}
 
 func TestArbiterCompatibility_125Combinations(t *testing.T) {
 	gates := []simtypes.GateSignal{

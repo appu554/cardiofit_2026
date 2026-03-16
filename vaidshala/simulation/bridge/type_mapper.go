@@ -61,6 +61,16 @@ func GateSignalToSimulation(prod vt.GateSignal) simtypes.GateSignal {
 func float64Ptr(v float64) *float64  { return &v }
 func timePtr(v time.Time) *time.Time { return &v }
 
+// nilFloat64 returns nil for zero (meaning "absent / no measurement"),
+// non-nil otherwise. Use this for historical lab values where a simulation
+// zero-value means "not provided" rather than "measured as 0".
+func nilFloat64(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
 func derefFloat64(p *float64) float64 {
 	if p == nil {
 		return 0
@@ -113,7 +123,7 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		HbA1cCurrent:      float64Ptr(sim.HbA1c),
 
 		// Historical values
-		Creatinine48hAgo: float64Ptr(sim.CreatininePrevious),
+		Creatinine48hAgo: nilFloat64(sim.CreatininePrevious),
 		HbA1cPrior30d:    float64Ptr(sim.HbA1c), // sim has single HbA1c; use as prior too
 		Weight72hAgo:     float64Ptr(sim.WeightPrevious),
 
@@ -121,6 +131,7 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		EGFRLastMeasuredAt:       nilTimeIfZero(ts.LastEGFR),
 		HbA1cLastMeasuredAt:      nilTimeIfZero(ts.LastHbA1c),
 		CreatinineLastMeasuredAt: nilTimeIfZero(ts.LastCreatinine),
+		PotassiumLastMeasuredAt:  nilTimeIfZero(ts.LastPotassium),
 
 		// Context flags from sim.RawPatientData
 		CreatinineRiseExplained: sim.CreatinineRiseExplained,
@@ -210,6 +221,9 @@ func ToSimulationRawLabs(prod *cb.RawPatientData) simtypes.RawPatientData {
 	}
 	if prod.CreatinineLastMeasuredAt != nil {
 		sim.CreatinineTimestamp = *prod.CreatinineLastMeasuredAt
+	}
+	if prod.PotassiumLastMeasuredAt != nil {
+		sim.PotassiumTimestamp = *prod.PotassiumLastMeasuredAt
 	}
 
 	// Glucose readings → previous value
