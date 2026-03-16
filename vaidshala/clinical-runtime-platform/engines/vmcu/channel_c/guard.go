@@ -315,6 +315,16 @@ func buildEvaluator(cond ruleCondition) (func(*TitrationContext) bool, error) {
 			return ctx.FinerenoneKMonitoring
 		}, nil
 
+	case "therapeutic_futility":
+		// PG-06: ≥12 cycles without HbA1c improvement → PAUSE
+		threshold, ok := toFloat64(cond.Value)
+		if !ok {
+			return nil, fmt.Errorf("therapeutic_futility threshold must be numeric")
+		}
+		return func(ctx *TitrationContext) bool {
+			return compareFloat(float64(ctx.CyclesSinceHbA1cImprovement), cond.Operator, threshold)
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown field %q", cond.Field)
 	}

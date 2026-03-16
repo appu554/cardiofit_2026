@@ -78,6 +78,9 @@ type TitrationContext struct {
 	// Finerenone rules (PG-18, PG-19)
 	FinerenoneEligible    bool // PG-18: eGFR ≥25, K+ <5.0, on max RAAS, ACR A2+
 	FinerenoneKMonitoring bool // PG-19: finerenone active + K+ 5.0-5.5
+
+	// PG-06: Therapeutic futility — cycles without HbA1c improvement
+	CyclesSinceHbA1cImprovement int
 }
 
 // ProtocolGate is Channel C's local gate type.

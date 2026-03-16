@@ -130,6 +130,50 @@ func TestPG05_MaxDoseDelta(t *testing.T) {
 	}
 }
 
+func TestPG06_TherapeuticFutility(t *testing.T) {
+	rulesYAML := `
+version: "test"
+rules:
+  - rule_id: PG-06
+    description: "Therapeutic futility"
+    guideline_ref: ADA-2024-SOC
+    condition:
+      field: therapeutic_futility
+      operator: gte
+      value: 12
+    gate: PAUSE
+`
+	tmpFile, _ := os.CreateTemp("", "protocol_rules_*.yaml")
+	tmpFile.WriteString(rulesYAML)
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	guard, err := LoadRules(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		cycles   int
+		wantGate ProtocolGate
+	}{
+		{"12 cycles → PAUSE", 12, ProtoPause},
+		{"15 cycles → PAUSE", 15, ProtoPause},
+		{"11 cycles → CLEAR", 11, ProtoClear},
+		{"0 cycles → CLEAR", 0, ProtoClear},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &TitrationContext{CyclesSinceHbA1cImprovement: tt.cycles}
+			result := guard.Evaluate(ctx)
+			if result.Gate != tt.wantGate {
+				t.Errorf("gate = %v, want %v", result.Gate, tt.wantGate)
+			}
+		})
+	}
+}
+
 func TestPG07_PostHypoWindow(t *testing.T) {
 	guard := setupTestRules(t)
 
@@ -195,9 +239,9 @@ func TestRulesHashStable(t *testing.T) {
 
 func TestRuleCount(t *testing.T) {
 	guard := setupTestRules(t)
-	// PG-01..PG-05, PG-07..PG-19, PG-08-DUAL-RAAS, AD-09 (PG-06 excluded) = 21 rules
-	if guard.RuleCount() != 21 {
-		t.Errorf("expected 21 rules (PG-06 excluded), got %d", guard.RuleCount())
+	// PG-01..PG-19, PG-08-DUAL-RAAS, AD-09 = 22 rules
+	if guard.RuleCount() != 22 {
+		t.Errorf("expected 22 rules, got %d", guard.RuleCount())
 	}
 }
 
