@@ -1,0 +1,23 @@
+// ClinVar nodes — clinical outcome variables mapped to KB-20 fields (spec §13.1)
+CREATE (:ClinVar {code: 'FBG', name: 'Fasting Blood Glucose', kb20_field: 'fbg_7d_mean', unit: 'mg/dL'});
+CREATE (:ClinVar {code: 'PPBG', name: 'Post-Prandial Blood Glucose', kb20_field: 'ppbg_7d_mean', unit: 'mg/dL'});
+CREATE (:ClinVar {code: 'HBA1C', name: 'HbA1c', kb20_field: 'hba1c', unit: '%'});
+CREATE (:ClinVar {code: 'SBP', name: 'Systolic Blood Pressure', kb20_field: 'sbp_14d_mean', unit: 'mmHg'});
+CREATE (:ClinVar {code: 'DBP', name: 'Diastolic Blood Pressure', kb20_field: 'dbp_14d_mean', unit: 'mmHg'});
+CREATE (:ClinVar {code: 'EGFR', name: 'Estimated GFR', kb20_field: 'egfr', unit: 'mL/min/1.73m2'});
+CREATE (:ClinVar {code: 'WEIGHT', name: 'Body Weight', kb20_field: 'weight_kg', unit: 'kg'});
+CREATE (:ClinVar {code: 'WAIST', name: 'Waist Circumference', kb20_field: 'waist_cm', unit: 'cm'});
+CREATE (:ClinVar {code: 'BMI', name: 'Body Mass Index', kb20_field: 'bmi', unit: 'kg/m2'});
+CREATE (:ClinVar {code: 'TG', name: 'Triglycerides', kb20_field: 'triglycerides', unit: 'mg/dL'});
+CREATE (:ClinVar {code: 'HDL', name: 'HDL Cholesterol', kb20_field: 'hdl', unit: 'mg/dL'});
+CREATE (:ClinVar {code: 'LDL', name: 'LDL Cholesterol', kb20_field: 'ldl', unit: 'mg/dL'});
+CREATE (:ClinVar {code: 'TC', name: 'Total Cholesterol', kb20_field: 'total_cholesterol', unit: 'mg/dL'});
+CREATE (:ClinVar {code: 'INSULIN_DEMAND', name: 'Insulin Demand', kb20_field: '', unit: 'relative'});
+CREATE (:ClinVar {code: 'IS', name: 'Insulin Sensitivity', kb20_field: 'insulin_sensitivity', unit: 'index'});
+CREATE (:ClinVar {code: 'HGO', name: 'Hepatic Glucose Output', kb20_field: 'hepatic_glucose_output', unit: 'relative'});
+CREATE (:ClinVar {code: 'VF', name: 'Visceral Fat', kb20_field: 'visceral_fat_proxy', unit: 'index'});
+CREATE (:ClinVar {code: 'MM', name: 'Muscle Mass', kb20_field: 'muscle_mass_proxy', unit: 'index'});
+CREATE (:ClinVar {code: 'VR', name: 'Vascular Resistance', kb20_field: '', unit: 'relative'});
+CREATE (:ClinVar {code: 'RR', name: 'Renal Reserve', kb20_field: '', unit: 'relative'});
+CREATE (:ClinVar {code: 'RESTING_HR', name: 'Resting Heart Rate', kb20_field: 'resting_hr', unit: 'bpm'});
+CREATE (:ClinVar {code: 'DAILY_STEPS', name: 'Daily Steps', kb20_field: 'daily_steps_7d_mean', unit: 'steps'});
