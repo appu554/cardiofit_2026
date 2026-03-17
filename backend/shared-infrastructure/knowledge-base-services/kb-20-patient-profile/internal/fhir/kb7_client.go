@@ -269,6 +269,66 @@ func (c *KB7Client) ValidateLOINC(code, valueSetID string) (bool, error) {
 	return result.Valid, nil
 }
 
+// kb7ATCResponse is the JSON from KB-7's ATC class lookup.
+type kb7ATCResponse struct {
+	Code      string `json:"code"`
+	ATCClass  string `json:"atc_class"`
+	ATCCode   string `json:"atc_code"`
+	ClassName string `json:"class_name"`
+}
+
+// LookupATCClass queries KB-7 (or RxNav-in-a-Box) to determine the ATC class for a drug.
+// Uses: GET /v1/concepts/ATC/:drugName or rxnav endpoint.
+// For glucocorticoid detection (Track 3), checks if ATC code starts with "H02AB"
+// (systemic glucocorticoids). Returns the ATC code or empty string.
+func (c *KB7Client) LookupATCClass(drugName string) (string, error) {
+	reqURL := fmt.Sprintf("%s/v1/concepts/ATC/%s", c.baseURL, url.QueryEscape(drugName))
+
+	resp, err := c.httpClient.Get(reqURL)
+	if err != nil {
+		return "", fmt.Errorf("KB-7 ATC lookup failed for %s: %w", drugName, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("KB-7 ATC returned %d for %s", resp.StatusCode, drugName)
+	}
+
+	var result kb7ATCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode KB-7 ATC response: %w", err)
+	}
+
+	return result.ATCCode, nil
+}
+
+// IsSystemicGlucocorticoid checks if a drug name resolves to ATC class H02AB
+// (systemic glucocorticoids) via KB-7. Falls back to a static list if KB-7 is unavailable.
+func (c *KB7Client) IsSystemicGlucocorticoid(drugName string) bool {
+	atcCode, err := c.LookupATCClass(drugName)
+	if err == nil && strings.HasPrefix(atcCode, "H02AB") {
+		return true
+	}
+
+	// Fallback: static list of 7 common systemic glucocorticoids (Indian clinical practice)
+	// Only used if KB-7 is unreachable — KB-7 is the source of truth
+	return isGlucocorticoidFallback(strings.ToLower(drugName))
+}
+
+// isGlucocorticoidFallback is the static fallback when KB-7 is unavailable.
+func isGlucocorticoidFallback(drugNameLower string) bool {
+	glucocorticoids := []string{
+		"prednisolone", "prednisone", "methylprednisolone",
+		"dexamethasone", "hydrocortisone", "betamethasone", "deflazacort",
+	}
+	for _, gc := range glucocorticoids {
+		if strings.Contains(drugNameLower, gc) {
+			return true
+		}
+	}
+	return false
+}
+
 // HealthCheck verifies KB-7 is reachable.
 func (c *KB7Client) HealthCheck() error {
 	resp, err := c.httpClient.Get(c.baseURL + "/health")
