@@ -377,5 +377,82 @@ func TestScenario12_ArbiterExhaustiveSweep(t *testing.T) {
 	t.Logf("PASS: Arbiter exhaustive sweep — %d/125 combinations verified, all 4 invariants hold", count)
 }
 
+// TestArbiterExhaustiveSweep is an alias so CI can match with -run TestArbiter.
+func TestArbiterExhaustiveSweep(t *testing.T) {
+	TestScenario12_ArbiterExhaustiveSweep(t)
+}
+
+// ---------------------------------------------------------------------------
+// INVARIANT 8: Every RunCycle() Produces Exactly One SafetyTrace
+// Verifies the harness always populates SafetyTrace with a non-empty TraceID,
+// the correct PatientID, and a non-zero CycleTimestamp — for every gate state.
+// ---------------------------------------------------------------------------
+func TestSimulation_SafetyTraceAlwaysProduced(t *testing.T) {
+	allSc := AllScenarios()
+
+	for _, sc := range allSc {
+		if sc.ProdOnly {
+			continue
+		}
+		t.Run(sc.Name, func(t *testing.T) {
+			engine := harness.NewVMCUEngine()
+			engine.LastDoseChangeTime = hoursAgo(200)
+			vp := sc.Archetype()
+			input := vp.ToTitrationInput(sc.ID)
+			result := engine.RunCycle(input)
+
+			if result.SafetyTrace.TraceID == "" {
+				t.Errorf("SafetyTrace.TraceID is empty for scenario %d (%s)", sc.ID, sc.Name)
+			}
+			if result.SafetyTrace.PatientID == "" {
+				t.Errorf("SafetyTrace.PatientID is empty for scenario %d (%s)", sc.ID, sc.Name)
+			}
+			if result.SafetyTrace.CycleTimestamp.IsZero() {
+				t.Errorf("SafetyTrace.CycleTimestamp is zero for scenario %d (%s)", sc.ID, sc.Name)
+			}
+			if result.SafetyTrace.FinalGate != result.FinalGate {
+				t.Errorf("SafetyTrace.FinalGate (%s) != result.FinalGate (%s) for scenario %d",
+					result.SafetyTrace.FinalGate, result.FinalGate, sc.ID)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// INVARIANT 6: Cumulative Autonomy ≤ 50%
+// Multiple dose changes that individually stay within ±20% must be blocked
+// once their cumulative drift from the physician-approved dose exceeds 50%.
+// ---------------------------------------------------------------------------
+func TestCumulativeAutonomyLimit(t *testing.T) {
+	engine := harness.NewVMCUEngine()
+	engine.LastDoseChangeTime = hoursAgo(200)                                 // Well past cooldown
+	engine.Integrator.CurrentDose = 100.0                                     // Easy base for percentage math
+	engine.Integrator.LastApprovedDose = 100.0                                // Physician-approved baseline
+	initialDose := engine.Integrator.LastApprovedDose
+
+	// Run multiple GREEN cycles; each should apply a delta ≤ 20%.
+	// After enough cycles the cumulative drift should be capped at 50%.
+	for i := 0; i < 10; i++ {
+		engine.LastDoseChangeTime = hoursAgo(200) // Reset cooldown each cycle
+		vp := patient.GreenTrajectory()
+		input := vp.ToTitrationInput(i + 100)
+		// Override labs for consistent upward pressure
+		input.RawLabs.GlucoseCurrent = 12.0 // high FBG → max upward delta
+		_ = engine.RunCycle(input)
+	}
+
+	finalDose := engine.Integrator.CurrentDose
+	cumulativePct := math.Abs(finalDose-initialDose) / initialDose * 100.0
+
+	// Spec invariant: cumulative drift must not exceed 50%
+	if cumulativePct > 50.0 {
+		t.Errorf("AUTONOMY CUMULATIVE: drift %.1f%% exceeds 50%% limit (initial=%.1f, final=%.1f)",
+			cumulativePct, initialDose, finalDose)
+	}
+
+	t.Logf("Cumulative autonomy: initial=%.1f, final=%.1f, drift=%.1f%% (limit 50%%)",
+		initialDose, finalDose, cumulativePct)
+}
+
 // helper
 func hoursAgo(h int) time.Time { return time.Now().Add(-time.Duration(h) * time.Hour) }

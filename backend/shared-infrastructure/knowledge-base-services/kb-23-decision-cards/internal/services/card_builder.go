@@ -126,6 +126,38 @@ func (b *CardBuilder) Build(
 	// 3. Compose recommendations (V-01, V-04, V-05)
 	recommendations := b.recommendComposer.Compose(tmpl, tier, isFirmMedChange)
 
+	// 3b. G5: Inject SAFETY_INSTRUCTION for each HARD_BLOCK medication contraindication.
+	// These bypass the confidence gate (V-04) and are always included regardless of tier.
+	for _, block := range event.MedicationBlocks {
+		triggerEn := fmt.Sprintf("HARD_BLOCK: %s contraindicated", block.BlockedTreatment)
+		triggerHi := fmt.Sprintf("कठोर प्रतिबंध: %s वर्जित", block.BlockedTreatment)
+		actionEn := fmt.Sprintf("Do NOT prescribe %s — contraindicated by clinical context modifier %s.", block.BlockedTreatment, block.ModifierID)
+		actionHi := fmt.Sprintf("%s न लिखें — क्लिनिकल संदर्भ संशोधक %s द्वारा वर्जित।", block.BlockedTreatment, block.ModifierID)
+		rationale := block.Reason
+		if rationale == "" {
+			rationale = "Context modifier HARD_BLOCK: " + block.ModifierID
+		}
+
+		rec := models.CardRecommendation{
+			RecType:                models.RecSafetyInstruction,
+			Urgency:               models.UrgencyImmediate,
+			Target:                block.BlockedTreatment,
+			ActionTextEn:          actionEn,
+			ActionTextHi:          actionHi,
+			RationaleEn:           rationale,
+			BypassesConfidenceGate: true,
+			TriggerConditionEn:    &triggerEn,
+			TriggerConditionHi:    &triggerHi,
+			SortOrder:             -1, // sort before template-defined recommendations
+		}
+		recommendations = append(recommendations, rec)
+
+		b.log.Info("G5: SAFETY_INSTRUCTION injected for HARD_BLOCK",
+			zap.String("blocked_treatment", block.BlockedTreatment),
+			zap.String("modifier_id", block.ModifierID),
+		)
+	}
+
 	// 4. Determine safety tier from safety flags
 	safetyTier := b.determineSafetyTier(event.SafetyFlags)
 

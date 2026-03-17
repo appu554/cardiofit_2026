@@ -20,9 +20,10 @@ const (
 
 // AdherenceService computes and manages per-drug adherence state.
 type AdherenceService struct {
-	db        *gorm.DB
-	logger    *zap.Logger
-	kb1Client KB1Client // FDC decomposition via KB-1; nil-safe (uses NoOp)
+	db               *gorm.DB
+	logger           *zap.Logger
+	kb1Client        KB1Client         // FDC decomposition via KB-1; nil-safe (uses NoOp)
+	festivalCalendar *FestivalCalendar // Festival Mode calendar; nil-safe (no adjustment when nil)
 }
 
 // NewAdherenceService creates an adherence service without KB-1 integration.
@@ -47,6 +48,13 @@ func (s *AdherenceService) SetKB1Client(kb1 KB1Client) {
 	if kb1 != nil {
 		s.kb1Client = kb1
 	}
+}
+
+// SetFestivalCalendar configures the festival calendar for adherence suppression.
+// When set, RecomputeAdherence() adjusts scores for patients who have consented
+// to festival-mode adaptation (EngagementProfile.ConsentForFestivalAdapt = true).
+func (s *AdherenceService) SetFestivalCalendar(fc *FestivalCalendar) {
+	s.festivalCalendar = fc
 }
 
 // RecordInteraction persists a patient interaction event and triggers adherence recomputation.
@@ -120,6 +128,25 @@ func (s *AdherenceService) RecomputeAdherence(patientID, drugClass string) error
 
 	// Compute trend via linear regression on weekly adherence buckets
 	trend, slope := s.computeTrend(patientID, drugClass)
+
+	// Festival Mode suppression: adjust adherence score for culturally expected dietary deviations.
+	// Only applied when: (1) festival calendar is configured, (2) patient consented to festival adaptation.
+	if s.festivalCalendar != nil {
+		var profile models.EngagementProfile
+		if err := s.db.Where("patient_id = ?", patientID).First(&profile).Error; err == nil {
+			if profile.ConsentForFestivalAdapt && profile.Region != "" {
+				windowStart := now.AddDate(0, 0, -30)
+				score30d = s.festivalCalendar.AdjustAdherenceScore(score30d, windowStart, now, profile.Region)
+
+				window7dStart := now.AddDate(0, 0, -7)
+				score7d = s.festivalCalendar.AdjustAdherenceScore(score7d, window7dStart, now, profile.Region)
+
+				s.logger.Debug("Festival Mode: adherence scores adjusted",
+					zap.String("patient_id", patientID),
+					zap.String("region", profile.Region))
+			}
+		}
+	}
 
 	// Upsert adherence state
 	state := models.AdherenceState{

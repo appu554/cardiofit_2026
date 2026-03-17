@@ -121,16 +121,27 @@ func (db *DB) connectRedis(cfg *config.Config) error {
 func (db *DB) Migrate() error {
 	db.log.Info("Running database migrations...")
 
-	// Auto-migrate core models
-	err := db.Postgres.AutoMigrate(
+	// Auto-migrate core models — skip if tables already exist from SQL migrations
+	modelsToMigrate := []interface{}{
 		&types.LabResult{},
 		&types.Interpretation{},
 		&types.PatientBaseline{},
 		&types.ResultReview{},
-	)
+	}
 
-	if err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
+	var toMigrate []interface{}
+	for _, m := range modelsToMigrate {
+		if !db.Postgres.Migrator().HasTable(m) {
+			toMigrate = append(toMigrate, m)
+		} else {
+			db.log.Infof("Table for %T exists (from SQL migrations), skipping GORM AutoMigrate", m)
+		}
+	}
+
+	if len(toMigrate) > 0 {
+		if err := db.Postgres.AutoMigrate(toMigrate...); err != nil {
+			return fmt.Errorf("failed to run migrations: %w", err)
+		}
 	}
 
 	// Create additional indexes

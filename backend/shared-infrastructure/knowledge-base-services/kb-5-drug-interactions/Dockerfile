@@ -9,14 +9,15 @@ RUN apk add --no-cache git
 # Set working directory
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod go.sum ./
+# Copy shared orchestration module (for replace directive)
+COPY orchestration/context_router/ /orchestration/context_router/
 
-# Download dependencies
+# Copy go mod files
+COPY knowledge-base-services/kb-5-drug-interactions/go.mod knowledge-base-services/kb-5-drug-interactions/go.sum ./
 RUN go mod download
 
 # Copy source code
-COPY . .
+COPY knowledge-base-services/kb-5-drug-interactions/ .
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .

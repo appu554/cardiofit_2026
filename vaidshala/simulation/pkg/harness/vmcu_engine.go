@@ -18,21 +18,23 @@ type VMCUEngine struct {
 	CycleCount int
 
 	// Configuration
-	AutonomyLimitPct   float64 // ±20% of physician-last-approved dose
-	CooldownBasalH     float64 // 48h between basal insulin changes
-	CooldownRapidH     float64 // 6h between rapid-acting changes
-	PostResumePct      float64 // 50% delta reduction post-resume
-	ReentryPhases      int     // 3 phases
-	ReentryCyclesEach  int     // 3 cycles per phase
-	LastDoseChangeTime time.Time
+	AutonomyLimitPct      float64 // ±20% of physician-last-approved dose
+	CumulativeLimitPct    float64 // ±50% cumulative from physician-approved dose
+	CooldownBasalH        float64 // 48h between basal insulin changes
+	CooldownRapidH        float64 // 6h between rapid-acting changes
+	PostResumePct         float64 // 50% delta reduction post-resume
+	ReentryPhases         int     // 3 phases
+	ReentryCyclesEach     int     // 3 cycles per phase
+	LastDoseChangeTime    time.Time
 }
 
 func NewVMCUEngine() *VMCUEngine {
 	return &VMCUEngine{
 		ChannelB:          NewPhysiologySafetyMonitor(),
 		ChannelC:          NewProtocolGuard(),
-		Integrator:        &types.IntegratorState{CurrentDose: 10.0, LastApprovedDose: 10.0},
-		AutonomyLimitPct:  20.0,
+		Integrator:         &types.IntegratorState{CurrentDose: 10.0, LastApprovedDose: 10.0},
+		AutonomyLimitPct:   20.0,
+		CumulativeLimitPct: 50.0,
 		CooldownBasalH:    48.0,
 		CooldownRapidH:    6.0,
 		PostResumePct:     50.0,
@@ -150,6 +152,24 @@ func (e *VMCUEngine) RunCycle(input types.TitrationCycleInput) types.TitrationCy
 					proposedDelta = maxDelta
 				} else {
 					proposedDelta = -maxDelta
+				}
+			}
+
+			// Step 14b: Cumulative autonomy limit (±50% from physician-approved dose)
+			if e.CumulativeLimitPct > 0 && e.Integrator.LastApprovedDose > 0 {
+				maxCumulative := e.Integrator.LastApprovedDose * (e.CumulativeLimitPct / 100.0)
+				currentDrift := e.Integrator.CurrentDose - e.Integrator.LastApprovedDose
+				newDrift := currentDrift + proposedDelta
+				if math.Abs(newDrift) > maxCumulative {
+					// Clamp delta so cumulative drift stays within limit
+					if newDrift > 0 {
+						proposedDelta = maxCumulative - currentDrift
+					} else {
+						proposedDelta = -maxCumulative - currentDrift
+					}
+					if math.Abs(proposedDelta) < 0.01 {
+						proposedDelta = 0
+					}
 				}
 			}
 

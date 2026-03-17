@@ -1,6 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -9,7 +13,8 @@ import (
 )
 
 // HPIEvent is the inbound event payload from upstream KB services.
-// Supports HPI_COMPLETE and SAFETY_ALERT (KB-22) and MCU_GATE_CHANGED (KB-23).
+// Supports HPI_COMPLETE and SAFETY_ALERT (KB-22), MCU_GATE_CHANGED (KB-23),
+// and OUTCOME_CORRELATION (KB-21).
 type HPIEvent struct {
 	EventType string    `json:"event_type" binding:"required"`
 	PatientID uuid.UUID `json:"patient_id" binding:"required"`
@@ -22,6 +27,7 @@ type HPIEvent struct {
 	TopPosterior        float64             `json:"top_posterior,omitempty"`
 	RankedDifferentials []DifferentialEntry `json:"ranked_differentials,omitempty"`
 	SafetyFlags         []SafetyFlagEntry   `json:"safety_flags,omitempty"`
+	MedicationBlocks    []MedicationBlock   `json:"medication_blocks,omitempty"`
 	ConvergenceReached  bool                `json:"convergence_reached,omitempty"`
 	CompletedAt         *time.Time          `json:"completed_at,omitempty"`
 
@@ -38,6 +44,22 @@ type HPIEvent struct {
 	PreviousGate        string     `json:"previous_gate,omitempty"`
 	ReEntryProtocol     bool       `json:"re_entry_protocol,omitempty"`
 	DoseAdjustmentNotes string     `json:"dose_adjustment_notes,omitempty"`
+
+	// OUTCOME_CORRELATION fields (from KB-21 Behavioral Intelligence — Gap #23)
+	TreatmentResponseClass string   `json:"treatment_response_class,omitempty"` // CONCORDANT|DISCORDANT|BEHAVIORAL_GAP
+	MeanAdherenceScore     float64  `json:"mean_adherence_score,omitempty"`
+	AdherenceTrend         string   `json:"adherence_trend,omitempty"`
+	CorrelationStrength    float64  `json:"correlation_strength,omitempty"`
+	ConfidenceLevel        string   `json:"confidence_level,omitempty"`
+	HbA1cDelta             *float64 `json:"hba1c_delta,omitempty"`
+}
+
+// MedicationBlock mirrors KB-22's HARD_BLOCK contraindication for treatment blocking.
+type MedicationBlock struct {
+	ModifierID       string `json:"modifier_id"`
+	BlockedTreatment string `json:"blocked_treatment"`
+	Reason           string `json:"reason,omitempty"`
+	DrugClass        string `json:"drug_class,omitempty"`
 }
 
 // DifferentialEntry mirrors KB-22's ranked differential output.
@@ -82,7 +104,17 @@ func (s *Server) handleIngestEvent(c *gin.Context) {
 			WithField("top_diagnosis", event.TopDiagnosis).
 			WithField("convergence", event.ConvergenceReached).
 			WithField("safety_flags", len(event.SafetyFlags)).
+			WithField("medication_blocks", len(event.MedicationBlocks)).
 			Info("HPI_COMPLETE event received from KB-22")
+
+		// G5: Log medication blocks for safety gatekeeper consumption.
+		// Future: feed these into the arbitration pipeline as treatment constraints.
+		for _, block := range event.MedicationBlocks {
+			s.log.WithField("blocked_treatment", block.BlockedTreatment).
+				WithField("modifier_id", block.ModifierID).
+				WithField("drug_class", block.DrugClass).
+				Warn("G5: HARD_BLOCK medication contraindication from HPI")
+		}
 
 	case "SAFETY_ALERT":
 		s.log.WithField("session_id", event.SessionID.String()).
@@ -103,10 +135,26 @@ func (s *Server) handleIngestEvent(c *gin.Context) {
 			WithField("re_entry_protocol", event.ReEntryProtocol).
 			Info("MCU_GATE_CHANGED event received from KB-23")
 
+		// Forward to V-MCU for cache invalidation (async, non-blocking).
+		go s.forwardToVMCU(event)
+
+	case "OUTCOME_CORRELATION":
+		// Gap #23: KB-21 publishes treatment response class (CONCORDANT/DISCORDANT/BEHAVIORAL_GAP)
+		// so KB-19 can inform protocol arbitration and V-MCU titration decisions.
+		s.log.WithField("session_id", event.SessionID.String()).
+			WithField("patient_id", event.PatientID.String()).
+			WithField("response_class", event.TreatmentResponseClass).
+			WithField("adherence_trend", event.AdherenceTrend).
+			WithField("confidence", event.ConfidenceLevel).
+			Info("OUTCOME_CORRELATION event received from KB-21")
+
+		// Forward to V-MCU for titration awareness (async, non-blocking).
+		go s.forwardToVMCU(event)
+
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "unknown_event_type",
-			"message": "supported event types: HPI_COMPLETE, SAFETY_ALERT, MCU_GATE_CHANGED",
+			"message": "supported event types: HPI_COMPLETE, SAFETY_ALERT, MCU_GATE_CHANGED, OUTCOME_CORRELATION",
 		})
 		return
 	}
@@ -117,4 +165,64 @@ func (s *Server) handleIngestEvent(c *gin.Context) {
 		SessionID: event.SessionID,
 		Timestamp: time.Now(),
 	})
+}
+
+// forwardToVMCU sends an MCU_GATE_CHANGED event to the V-MCU clinical runtime
+// for cache invalidation. The V-MCU's HTTPEventReceiver accepts events at
+// POST /v1/vmcu-events on the clinical runtime server (port 8090).
+//
+// This is fire-and-forget: failures are logged but do not block KB-19's
+// acknowledgement to the upstream caller (KB-23).
+func (s *Server) forwardToVMCU(event HPIEvent) {
+	vmcuURL := s.cfg.KBServices.VMCUURL
+	if vmcuURL == "" {
+		return
+	}
+
+	// Build V-MCU event payload (matches vmcu/events.Event struct)
+	vmcuEvent := map[string]interface{}{
+		"type":       "MCU_GATE_CHANGED",
+		"patient_id": event.PatientID.String(),
+		"source":     "KB-19",
+		"payload": map[string]interface{}{
+			"gate":                 event.Gate,
+			"previous_gate":       event.PreviousGate,
+			"re_entry_protocol":   event.ReEntryProtocol,
+			"dose_adjustment_notes": event.DoseAdjustmentNotes,
+		},
+	}
+
+	body, err := json.Marshal(vmcuEvent)
+	if err != nil {
+		s.log.WithError(err).Error("failed to marshal V-MCU forward event")
+		return
+	}
+
+	url := fmt.Sprintf("%s/v1/vmcu-events", vmcuURL)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		s.log.WithError(err).Error("failed to create V-MCU forward request")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		s.log.WithError(err).WithField("url", url).Warn("V-MCU forward failed (will retry on next gate change)")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		s.log.WithField("status", resp.StatusCode).
+			WithField("body", string(respBody)).
+			Warn("V-MCU forward returned non-2xx")
+		return
+	}
+
+	s.log.WithField("patient_id", event.PatientID.String()).
+		WithField("gate", event.Gate).
+		Info("MCU_GATE_CHANGED forwarded to V-MCU")
 }

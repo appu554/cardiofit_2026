@@ -212,6 +212,128 @@ func TestDA02_CreatinineAnomaly(t *testing.T) {
 	}
 }
 
+func TestDA06_StaleEGFR(t *testing.T) {
+	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())
+
+	t.Run("eGFR never measured → HOLD_DATA", func(t *testing.T) {
+		data := safeDefaults()
+		data.EGFRLastMeasuredAt = nil // never measured
+		result := m.Evaluate(data)
+		if result.Gate != PhysioHoldData || result.RuleFired != "DA-06" {
+			t.Errorf("got gate=%s rule=%s, want HOLD_DATA/DA-06", result.Gate, result.RuleFired)
+		}
+		if !result.IsAnomaly || result.AnomalyLab != "EGFR" {
+			t.Errorf("should flag EGFR anomaly, got anomaly=%v lab=%s", result.IsAnomaly, result.AnomalyLab)
+		}
+	})
+
+	t.Run("eGFR 91 days old → HOLD_DATA", func(t *testing.T) {
+		data := safeDefaults()
+		stale := time.Now().AddDate(0, 0, -91)
+		data.EGFRLastMeasuredAt = &stale
+		result := m.Evaluate(data)
+		if result.Gate != PhysioHoldData || result.RuleFired != "DA-06" {
+			t.Errorf("got gate=%s rule=%s, want HOLD_DATA/DA-06", result.Gate, result.RuleFired)
+		}
+	})
+
+	t.Run("eGFR 89 days old → no DA-06", func(t *testing.T) {
+		data := safeDefaults()
+		recent := time.Now().AddDate(0, 0, -89)
+		data.EGFRLastMeasuredAt = &recent
+		result := m.Evaluate(data)
+		if result.RuleFired == "DA-06" {
+			t.Errorf("eGFR 89 days old should not trigger DA-06, got gate=%s", result.Gate)
+		}
+	})
+}
+
+func TestDA07_StaleHbA1c(t *testing.T) {
+	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())
+
+	t.Run("HbA1c never measured → HOLD_DATA", func(t *testing.T) {
+		data := safeDefaults()
+		data.HbA1cLastMeasuredAt = nil
+		result := m.Evaluate(data)
+		if result.Gate != PhysioHoldData || result.RuleFired != "DA-07" {
+			t.Errorf("got gate=%s rule=%s, want HOLD_DATA/DA-07", result.Gate, result.RuleFired)
+		}
+		if result.AnomalyLab != "HBA1C" {
+			t.Errorf("should flag HBA1C anomaly, got lab=%s", result.AnomalyLab)
+		}
+	})
+
+	t.Run("HbA1c 121 days old → HOLD_DATA", func(t *testing.T) {
+		data := safeDefaults()
+		stale := time.Now().AddDate(0, 0, -121)
+		data.HbA1cLastMeasuredAt = &stale
+		result := m.Evaluate(data)
+		if result.Gate != PhysioHoldData || result.RuleFired != "DA-07" {
+			t.Errorf("got gate=%s rule=%s, want HOLD_DATA/DA-07", result.Gate, result.RuleFired)
+		}
+	})
+
+	t.Run("HbA1c 119 days old → no DA-07", func(t *testing.T) {
+		data := safeDefaults()
+		recent := time.Now().AddDate(0, 0, -119)
+		data.HbA1cLastMeasuredAt = &recent
+		result := m.Evaluate(data)
+		if result.RuleFired == "DA-07" {
+			t.Errorf("HbA1c 119 days old should not trigger DA-07, got gate=%s", result.Gate)
+		}
+	})
+}
+
+func TestDA08_StaleCreatinineOnRAAS(t *testing.T) {
+	m := NewPhysiologySafetyMonitor(DefaultPhysioConfig())
+
+	t.Run("on RAAS + creatinine never measured → HOLD_DATA", func(t *testing.T) {
+		data := safeDefaults()
+		data.OnRAASAgent = true
+		data.CreatinineLastMeasuredAt = nil
+		result := m.Evaluate(data)
+		if result.Gate != PhysioHoldData || result.RuleFired != "DA-08" {
+			t.Errorf("got gate=%s rule=%s, want HOLD_DATA/DA-08", result.Gate, result.RuleFired)
+		}
+		if result.AnomalyLab != "CREATININE" {
+			t.Errorf("should flag CREATININE anomaly, got lab=%s", result.AnomalyLab)
+		}
+	})
+
+	t.Run("on RAAS + creatinine 15 days old → HOLD_DATA", func(t *testing.T) {
+		data := safeDefaults()
+		data.OnRAASAgent = true
+		stale := time.Now().AddDate(0, 0, -15)
+		data.CreatinineLastMeasuredAt = &stale
+		result := m.Evaluate(data)
+		if result.Gate != PhysioHoldData || result.RuleFired != "DA-08" {
+			t.Errorf("got gate=%s rule=%s, want HOLD_DATA/DA-08", result.Gate, result.RuleFired)
+		}
+	})
+
+	t.Run("on RAAS + creatinine 13 days old → no DA-08", func(t *testing.T) {
+		data := safeDefaults()
+		data.OnRAASAgent = true
+		recent := time.Now().AddDate(0, 0, -13)
+		data.CreatinineLastMeasuredAt = &recent
+		result := m.Evaluate(data)
+		if result.RuleFired == "DA-08" {
+			t.Errorf("creatinine 13 days old on RAAS should not trigger DA-08, got gate=%s", result.Gate)
+		}
+	})
+
+	t.Run("NOT on RAAS + creatinine stale → no DA-08", func(t *testing.T) {
+		data := safeDefaults()
+		data.OnRAASAgent = false
+		stale := time.Now().AddDate(0, 0, -30)
+		data.CreatinineLastMeasuredAt = &stale
+		result := m.Evaluate(data)
+		if result.RuleFired == "DA-08" {
+			t.Errorf("creatinine staleness without RAAS should not trigger DA-08, got gate=%s", result.Gate)
+		}
+	})
+}
+
 func TestDataAnomalyPriority(t *testing.T) {
 	// DA rules fire BEFORE clinical rules. Even if glucose is < 3.9 (B-01 HALT),
 	// if glucose < 1.0 (DA-03 HOLD_DATA), the anomaly check fires first.
@@ -701,14 +823,21 @@ func TestB13_TakesPriorityOverB14(t *testing.T) {
 
 // safeDefaults returns RawPatientData with all values in safe ranges.
 func safeDefaults() *RawPatientData {
+	now := time.Now()
 	return &RawPatientData{
-		GlucoseCurrent:    Float64Ptr(6.5),  // mmol/L (normal)
-		GlucoseTimestamp:  time.Now(),
-		CreatinineCurrent: Float64Ptr(80),    // µmol/L (normal)
-		PotassiumCurrent:  Float64Ptr(4.5),   // mEq/L (normal)
-		SBPCurrent:        Float64Ptr(120),   // mmHg (normal)
-		WeightKgCurrent:   Float64Ptr(70),    // kg
-		EGFRCurrent:       Float64Ptr(75),    // mL/min/1.73m² (normal)
-		HbA1cCurrent:      Float64Ptr(7.0),   // % (controlled diabetic)
+		GlucoseCurrent:           Float64Ptr(6.5),  // mmol/L (normal)
+		GlucoseTimestamp:         now,
+		CreatinineCurrent:        Float64Ptr(80),    // µmol/L (normal)
+		PotassiumCurrent:         Float64Ptr(4.5),   // mEq/L (normal)
+		SBPCurrent:               Float64Ptr(120),   // mmHg (normal)
+		WeightKgCurrent:          Float64Ptr(70),    // kg
+		EGFRCurrent:              Float64Ptr(75),    // mL/min/1.73m² (normal)
+		HbA1cCurrent:             Float64Ptr(7.0),   // % (controlled diabetic)
+		EGFRLastMeasuredAt:       &now,              // recent (DA-06 safe)
+		HbA1cLastMeasuredAt:      &now,              // recent (DA-07 safe)
+		CreatinineLastMeasuredAt: &now,              // recent (DA-08 safe)
 	}
 }
+
+// timePtr returns a pointer to the given time.Time value.
+func timePtr(t time.Time) *time.Time { return &t }

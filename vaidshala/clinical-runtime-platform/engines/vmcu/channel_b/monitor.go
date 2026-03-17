@@ -6,10 +6,12 @@ import (
 )
 
 // PhysiologySafetyMonitor implements SA-02: raw lab threshold rules.
-// 22 rules total: 17 clinical thresholds + 5 data anomaly checks.
+// 25 rules total: 17 clinical thresholds + 8 data anomaly checks.
 //
 // Rule evaluation order (most severe first):
-//  1. Data anomaly checks (DA-01 through DA-05) → HOLD_DATA
+//  1. Data anomaly checks (DA-01 through DA-08) → HOLD_DATA
+//     DA-01..DA-05: value anomalies (implausible deltas, extreme values)
+//     DA-06..DA-08: staleness checks (lab too old for safe titration)
 //  2. Critical thresholds (B-01, B-03, B-04, B-05, B-08) → HALT
 //  3. Warning thresholds (B-02, B-09, B-10, B-06, B-07) → PAUSE
 //  4. No rule fired → CLEAR
@@ -67,6 +69,11 @@ type PhysioConfig struct {
 	GlucoseFloorHoldData    float64 // DA-03: mmol/L (default 1.0)
 	HbA1cDeltaHoldData      float64 // DA-04: % in 30d (default 2.0)
 	PotassiumCeilingHold    float64 // DA-05: mEq/L (default 8.0)
+
+	// Stale lab thresholds (DA-06, DA-07, DA-08)
+	EGFRMaxStaleDays       int // DA-06: days since last eGFR (default 90)
+	HbA1cMaxStaleDays      int // DA-07: days since last HbA1c (default 120)
+	CreatinineMaxStaleDays int // DA-08: days since last creatinine on RAAS (default 14)
 }
 
 // DefaultPhysioConfig returns production-safe threshold defaults.
@@ -101,6 +108,9 @@ func DefaultPhysioConfig() PhysioConfig {
 		GlucoseFloorHoldData:    1.0,
 		HbA1cDeltaHoldData:      2.0,
 		PotassiumCeilingHold:    8.0,
+		EGFRMaxStaleDays:       90,
+		HbA1cMaxStaleDays:      120,
+		CreatinineMaxStaleDays: 14,
 	}
 }
 
@@ -189,6 +199,18 @@ func (m *PhysiologySafetyMonitor) Evaluate(data *RawPatientData) PhysioResult {
 		return *r
 	}
 	if r := m.checkDA05(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
+	if r := m.checkDA06(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
+	if r := m.checkDA07(data); r != nil {
+		r.RawValues = rawVals
+		return *r
+	}
+	if r := m.checkDA08(data); r != nil {
 		r.RawValues = rawVals
 		return *r
 	}
@@ -374,6 +396,97 @@ func (m *PhysiologySafetyMonitor) checkDA05(d *RawPatientData) *PhysioResult {
 			RuleFired:  "DA-05",
 			IsAnomaly:  true,
 			AnomalyLab: "POTASSIUM",
+		}
+	}
+	return nil
+}
+
+// DA-06: eGFR last measured > 90 days ago → stale renal function data
+//
+// CLINICAL RATIONALE:
+// eGFR is used by Channel C rules (PG-01, PG-02) and Channel B rules
+// (B-08, B-09, B-10) to gate drug-specific and drug-independent safety.
+// An eGFR older than 90 days may not reflect current renal function —
+// the patient could have progressed from CKD 3b to CKD 4 without the
+// system knowing. Titration decisions based on stale eGFR are unsafe.
+func (m *PhysiologySafetyMonitor) checkDA06(d *RawPatientData) *PhysioResult {
+	if d.EGFRLastMeasuredAt == nil {
+		// Never measured — this IS a staleness condition
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-06",
+			IsAnomaly:  true,
+			AnomalyLab: "EGFR",
+		}
+	}
+	daysSince := int(time.Since(*d.EGFRLastMeasuredAt).Hours() / 24)
+	if daysSince > m.cfg.EGFRMaxStaleDays {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-06",
+			IsAnomaly:  true,
+			AnomalyLab: "EGFR",
+		}
+	}
+	return nil
+}
+
+// DA-07: HbA1c last measured > 120 days ago → stale glycaemic control data
+//
+// CLINICAL RATIONALE:
+// HbA1c reflects 90-day average glycaemia. A reading older than 120 days
+// is more than one full HbA1c lifecycle stale — the patient's glycaemic
+// state may have changed significantly. Dose titration without current
+// HbA1c is clinically inappropriate for chronic disease management.
+func (m *PhysiologySafetyMonitor) checkDA07(d *RawPatientData) *PhysioResult {
+	if d.HbA1cLastMeasuredAt == nil {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-07",
+			IsAnomaly:  true,
+			AnomalyLab: "HBA1C",
+		}
+	}
+	daysSince := int(time.Since(*d.HbA1cLastMeasuredAt).Hours() / 24)
+	if daysSince > m.cfg.HbA1cMaxStaleDays {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-07",
+			IsAnomaly:  true,
+			AnomalyLab: "HBA1C",
+		}
+	}
+	return nil
+}
+
+// DA-08: Creatinine last measured > 14 days ago AND on RAAS agent → stale renal monitoring
+//
+// CLINICAL RATIONALE:
+// ACEi/ARB agents reduce efferent arteriolar tone, which can cause
+// creatinine rise. KDIGO guidelines mandate creatinine monitoring
+// within 1-2 weeks of RAAS initiation/uptitration. A creatinine older
+// than 14 days on a RAAS agent means the system cannot detect AKI
+// progression. Without RAAS context, creatinine staleness is less
+// critical (eGFR staleness via DA-06 provides broader coverage).
+func (m *PhysiologySafetyMonitor) checkDA08(d *RawPatientData) *PhysioResult {
+	if !d.OnRAASAgent {
+		return nil // Only applies to patients on ACEi/ARB
+	}
+	if d.CreatinineLastMeasuredAt == nil {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-08",
+			IsAnomaly:  true,
+			AnomalyLab: "CREATININE",
+		}
+	}
+	daysSince := int(time.Since(*d.CreatinineLastMeasuredAt).Hours() / 24)
+	if daysSince > m.cfg.CreatinineMaxStaleDays {
+		return &PhysioResult{
+			Gate:       PhysioHoldData,
+			RuleFired:  "DA-08",
+			IsAnomaly:  true,
+			AnomalyLab: "CREATININE",
 		}
 	}
 	return nil

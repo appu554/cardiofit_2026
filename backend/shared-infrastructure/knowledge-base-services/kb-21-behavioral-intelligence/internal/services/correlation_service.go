@@ -12,6 +12,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// OutcomeCorrelationPublisher is satisfied by events.Publisher.
+// Defined here to avoid an import cycle (services ↔ events).
+type OutcomeCorrelationPublisher interface {
+	PublishOutcomeCorrelation(corr models.OutcomeCorrelation) error
+}
+
 // CorrelationService computes OutcomeCorrelation — the behavioral-clinical feedback loop.
 // This is the entity from Finding F-04 (Gap 5) that enables pharmacological vs. behavioral
 // differential diagnosis:
@@ -25,15 +31,17 @@ type CorrelationService struct {
 	db               *gorm.DB
 	logger           *zap.Logger
 	minEventsForCorr int
-	safetyClient     *SafetyClient // G-01: KB-23 direct fast-path
+	safetyClient     *SafetyClient                  // G-01: KB-23 direct fast-path
+	publisher        OutcomeCorrelationPublisher    // Gap #23: publish OUTCOME_CORRELATION to KB-19
 }
 
-func NewCorrelationService(db *gorm.DB, logger *zap.Logger, minEvents int, safetyClient *SafetyClient) *CorrelationService {
+func NewCorrelationService(db *gorm.DB, logger *zap.Logger, minEvents int, safetyClient *SafetyClient, publisher OutcomeCorrelationPublisher) *CorrelationService {
 	return &CorrelationService{
 		db:               db,
 		logger:           logger,
 		minEventsForCorr: minEvents,
 		safetyClient:     safetyClient,
+		publisher:        publisher,
 	}
 }
 
@@ -142,6 +150,18 @@ func (s *CorrelationService) OnLabResult(event LabResultEvent) error {
 		zap.Float64("mean_adherence", meanAdherence),
 		zap.Bool("celebration_eligible", corr.CelebrationEligible),
 	)
+
+	// Gap #23: Publish OUTCOME_CORRELATION to KB-19 for protocol-level awareness.
+	// V-MCU uses treatment_response_class to decide: escalate (CONCORDANT), hold (DISCORDANT),
+	// or behavioural intervention (BEHAVIORAL_GAP).
+	if s.publisher != nil {
+		if err := s.publisher.PublishOutcomeCorrelation(corr); err != nil {
+			s.logger.Error("failed to publish OUTCOME_CORRELATION event",
+				zap.String("patient_id", patientID),
+				zap.Error(err),
+			)
+		}
+	}
 
 	// G-01: Alert KB-23 directly for BEHAVIORAL_GAP and DISCORDANT classifications.
 	// This is the two-hop fast-path (KB-21 → KB-23) that ensures V-MCU does not

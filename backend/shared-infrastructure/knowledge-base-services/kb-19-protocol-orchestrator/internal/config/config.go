@@ -86,6 +86,9 @@ type KBServicesConfig struct {
 	// Medication Advisor Engine (V3: Risk Computer / Judge)
 	MedicationAdvisorURL string
 
+	// V-MCU Clinical Runtime (event forwarding target for MCU_GATE_CHANGED)
+	VMCUURL string
+
 	// Timeout for KB service calls
 	Timeout time.Duration
 
@@ -168,6 +171,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("KB12_URL", "http://localhost:8097")
 	viper.SetDefault("KB14_URL", "http://localhost:8099")
 	viper.SetDefault("MEDICATION_ADVISOR_URL", "http://localhost:8089") // V3: Risk Computer
+	viper.SetDefault("VMCU_URL", "http://localhost:8090")             // Clinical Runtime (V-MCU event target)
 	viper.SetDefault("KB_TIMEOUT", 30)
 	viper.SetDefault("KB_MAX_RETRIES", 3)
 	viper.SetDefault("KB_RETRY_DELAY", 1)
@@ -229,6 +233,7 @@ func Load() (*Config, error) {
 			KB12URL:              getEnv("KB12_URL", "http://localhost:8097"),
 			KB14URL:              getEnv("KB14_URL", "http://localhost:8099"),
 			MedicationAdvisorURL: getEnv("MEDICATION_ADVISOR_URL", "http://localhost:8089"),
+			VMCUURL:              getEnv("VMCU_URL", "http://localhost:8090"),
 			Timeout:              time.Duration(getEnvInt("KB_TIMEOUT", 30)) * time.Second,
 			MaxRetries:           getEnvInt("KB_MAX_RETRIES", 3),
 			RetryDelay:           time.Duration(getEnvInt("KB_RETRY_DELAY", 1)) * time.Second,

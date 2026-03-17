@@ -66,25 +66,36 @@ func main() {
 	kb1Client := services.NewKB1Client(cfg.KB1DrugRulesURL, logger)     // FDC decomposition for adherence
 	adherenceSvc := services.NewAdherenceServiceWithKB1(db.DB, logger, kb1Client)
 	engagementSvc := services.NewEngagementService(db.DB, logger, cfg.PreGatewayDefaultAdherence) // G-04
-	correlationSvc := services.NewCorrelationService(db.DB, logger, cfg.OutcomeCorrelationMinEvents, safetyClient) // G-01
+	correlationSvc := services.NewCorrelationService(db.DB, logger, cfg.OutcomeCorrelationMinEvents, safetyClient, publisher) // G-01 + Gap #23
 	hypoRiskSvc := services.NewHypoRiskService(db.DB, logger, publisher, safetyClient) // G-03
 
-	// 8. Initialize event subscriber
+	// 8. Load festival calendar (optional — graceful nil if file missing)
+	var festivalCal *services.FestivalCalendar
+	if cal, err := services.NewFestivalCalendar(cfg.FestivalCalendarPath); err != nil {
+		logger.Warn("Festival calendar not loaded — P4 perturbation data unavailable",
+			zap.String("path", cfg.FestivalCalendarPath),
+			zap.Error(err))
+	} else {
+		festivalCal = cal
+		logger.Info("Festival calendar loaded", zap.String("path", cfg.FestivalCalendarPath))
+	}
+
+	// 9. Initialize event subscriber
 	subscriber := events.NewSubscriber(logger, correlationSvc, adherenceSvc, cfg.EventBusEnabled)
 
-	// 9. Create HTTP server
+	// 10. Create HTTP server
 	server := api.NewServer(
 		cfg, db, cacheClient, metricsCollector, logger,
 		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc,
-		subscriber,
+		festivalCal, subscriber,
 	)
 
-	// 10. Start event subscriber
+	// 11. Start event subscriber
 	if err := subscriber.Start(); err != nil {
 		logger.Error("Event subscriber start failed", zap.Error(err))
 	}
 
-	// 11. Start HTTP server
+	// 12. Start HTTP server
 	go func() {
 		addr := ":" + cfg.Server.Port
 		logger.Info("HTTP server starting", zap.String("address", addr))
@@ -93,7 +104,7 @@ func main() {
 		}
 	}()
 
-	// 12. Print service info
+	// 13. Print service info
 	fmt.Println("╔══════════════════════════════════════════════════════════╗")
 	fmt.Println("║  KB-21 Behavioral Intelligence Service                  ║")
 	fmt.Println("║  Vaidshala Clinical Synthesis Hub                       ║")
@@ -103,7 +114,7 @@ func main() {
 	fmt.Printf("║  Environment: %-41s ║\n", cfg.Environment)
 	fmt.Println("╚══════════════════════════════════════════════════════════╝")
 
-	// 13. Wait for shutdown signal
+	// 14. Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

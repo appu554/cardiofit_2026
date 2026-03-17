@@ -25,10 +25,9 @@ func NewKafkaGoPublisher(bootstrap, clientID string, log *zap.Logger) (*KafkaGoP
 		return nil, fmt.Errorf("kafka bootstrap servers not configured")
 	}
 
-	dialer := &kafka.Dialer{
-		Timeout:   10 * time.Second,
-		DualStack: true,
-		ClientID:  clientID,
+	transport := &kafka.Transport{
+		DialTimeout: 10 * time.Second,
+		ClientID:    clientID,
 	}
 
 	newWriter := func(topic string) *kafka.Writer {
@@ -38,9 +37,9 @@ func NewKafkaGoPublisher(bootstrap, clientID string, log *zap.Logger) (*KafkaGoP
 			Balancer:               &kafka.Hash{},
 			AllowAutoTopicCreation: false,
 			Async:                  false,
-			Dialer:                 dialer,
+			Transport:              transport,
 			RequiredAcks:           kafka.RequireAll,
-			CompressionCodec:       kafka.Snappy,
+			Compression:            kafka.Snappy,
 		}
 	}
 

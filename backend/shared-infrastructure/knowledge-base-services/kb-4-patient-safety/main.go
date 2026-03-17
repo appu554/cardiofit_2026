@@ -260,9 +260,13 @@ func main() {
 	}
 	log.Println("✅ Database connected successfully")
 
-	// Auto-migrate models
-	if err := db.AutoMigrate(&SafetyAlert{}); err != nil {
-		log.Printf("⚠️  Auto-migration warning: %v", err)
+	// Auto-migrate models — skip if table already exists from SQL migrations
+	if !db.Migrator().HasTable(&SafetyAlert{}) {
+		if err := db.AutoMigrate(&SafetyAlert{}); err != nil {
+			log.Printf("⚠️  Auto-migration warning: %v", err)
+		}
+	} else {
+		log.Println("ℹ️  safety_alerts table exists (from SQL migrations), skipping GORM AutoMigrate")
 	}
 
 	// Initialize Gin router

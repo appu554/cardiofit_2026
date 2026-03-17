@@ -62,12 +62,26 @@ func main() {
 	logger.Info("Initializing KB-20 services...")
 
 	patientService := services.NewPatientService(db, cacheClient, logger)
+	patientService.SetEventBus(eventBus)
 	labService := services.NewLabService(db, cacheClient, logger, metricsCollector, eventBus)
 	medicationService := services.NewMedicationService(db, cacheClient, logger, eventBus)
 	adrService := services.NewADRService(db, logger)
 	pipelineService := services.NewPipelineService(db, logger, adrService)
 	cmRegistry := services.NewCMRegistry(db, logger)
 	stratumEngine := services.NewStratumEngine(db, cacheClient, logger, metricsCollector, cmRegistry, eventBus)
+
+	// Initialize LOINC registry (validates codes against KB-7 Terminology Service)
+	kb7Client := fhir.NewKB7Client(cfg.KB7, logger)
+	kb7Adapter := &kb7ConceptAdapter{client: kb7Client}
+	loincRegistry := services.NewLOINCRegistry(kb7Adapter, logger)
+	loincRegistry.Initialize(context.Background())
+	logger.Info("LOINC registry status", zap.String("summary", loincRegistry.VerificationSummary()))
+
+	// Initialize KB-21 client for festival calendar (P4 perturbation)
+	kb21Client := fhir.NewKB21Client(cfg.KB21, logger)
+	kb21Adapter := &kb21FestivalAdapter{client: kb21Client}
+
+	projectionService := services.NewProjectionService(db, cacheClient, logger, loincRegistry, cfg.PREVENT, kb21Adapter)
 
 	// Initialize HTTP server with all services
 	logger.Info("Initializing HTTP server...")
@@ -83,6 +97,8 @@ func main() {
 		cmRegistry,
 		adrService,
 		pipelineService,
+		projectionService,
+		loincRegistry,
 	)
 
 	// Start HTTP server
@@ -108,7 +124,7 @@ func main() {
 			kb7Client := fhir.NewKB7Client(cfg.KB7, logger)
 
 			// Start FHIR→KB-20 sync worker
-			syncWorker := fhir.NewSyncWorker(fhirClient, kb7Client, db.DB, logger)
+			syncWorker := fhir.NewSyncWorker(fhirClient, kb7Client, db.DB, logger, eventBus)
 			syncWorker.Start(context.Background())
 			defer syncWorker.Stop()
 			logger.Info("FHIR sync worker started")
@@ -171,6 +187,10 @@ REST Endpoints:
 - ADR Profiles:      GET  /api/v1/adr/profiles/:drug_class
 - Batch Modifiers:   POST /api/v1/pipeline/modifiers
 - Batch ADR:         POST /api/v1/pipeline/adr-profiles
+- Channel B Inputs:  GET  /api/v1/patient/:id/channel-b-inputs
+- Channel C Inputs:  GET  /api/v1/patient/:id/channel-c-inputs
+- Bust Proj Cache:   DEL  /api/v1/patient/:id/projections/cache
+- LOINC Registry:    GET  /api/v1/loinc/registry
 
 RED Findings Incorporated:
   F-01: FDC decomposition (fdc_components field)
@@ -197,4 +217,42 @@ RED Findings Incorporated:
 	}
 
 	logger.Info("KB-20 service stopped successfully")
+}
+
+// kb7ConceptAdapter adapts fhir.KB7Client to the services.KB7ConceptLookup interface,
+// breaking the import cycle between services ↔ fhir packages.
+type kb7ConceptAdapter struct {
+	client *fhir.KB7Client
+}
+
+func (a *kb7ConceptAdapter) LookupConcept(loincCode string) (*services.KB7ConceptResult, error) {
+	concept, err := a.client.LookupConcept(loincCode)
+	if err != nil {
+		return nil, err
+	}
+	if concept == nil {
+		return nil, nil
+	}
+	return &services.KB7ConceptResult{
+		Code:    concept.Code,
+		Display: concept.Display,
+	}, nil
+}
+
+// kb21FestivalAdapter adapts fhir.KB21Client to the services.KB21FestivalLookup interface,
+// breaking the import cycle between services ↔ fhir packages.
+type kb21FestivalAdapter struct {
+	client *fhir.KB21Client
+}
+
+func (a *kb21FestivalAdapter) GetFestivalStatus(region string) *services.FestivalStatusResult {
+	status := a.client.GetFestivalStatus(region)
+	if status == nil {
+		return nil
+	}
+	return &services.FestivalStatusResult{
+		Active:      status.Active,
+		FastingType: fhir.MapFestivalToPerturbationFastingType(status.FastingType),
+		End:         status.End,
+	}
 }

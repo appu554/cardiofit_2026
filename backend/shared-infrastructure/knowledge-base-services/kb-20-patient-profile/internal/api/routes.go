@@ -35,6 +35,11 @@ func (s *Server) setupRoutes() {
 
 			// Stratum
 			patient.GET("/:id/stratum/:node_id", s.getStratum)
+
+			// FactStore projections (Phase 0)
+			patient.GET("/:id/channel-b-inputs", s.getChannelBInputs)
+			patient.GET("/:id/channel-c-inputs", s.getChannelCInputs)
+			patient.DELETE("/:id/projections/cache", s.invalidateProjectionCache)
 		}
 
 		// Context modifier registry
@@ -54,6 +59,12 @@ func (s *Server) setupRoutes() {
 		{
 			pipeline.POST("/modifiers", s.batchWriteModifiers)
 			pipeline.POST("/adr-profiles", s.batchWriteADRProfiles)
+		}
+
+		// LOINC registry (KB-7 verified codes)
+		loinc := v1.Group("/loinc")
+		{
+			loinc.GET("/registry", s.getLOINCRegistry)
 		}
 	}
 }

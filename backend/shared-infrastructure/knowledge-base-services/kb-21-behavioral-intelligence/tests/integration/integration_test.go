@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	// Wire up services
 	adherenceSvc := services.NewAdherenceService(testDB.DB, logger)
 	engagementSvc := services.NewEngagementService(testDB.DB, logger, cfg.PreGatewayDefaultAdherence)
-	correlationSvc := services.NewCorrelationService(testDB.DB, logger, cfg.OutcomeCorrelationMinEvents, nil)
+	correlationSvc := services.NewCorrelationService(testDB.DB, logger, cfg.OutcomeCorrelationMinEvents, nil, nil)
 	hypoRiskSvc := services.NewHypoRiskService(testDB.DB, logger, nil, nil)
 	subscriber := events.NewSubscriber(logger, correlationSvc, adherenceSvc, false)
 

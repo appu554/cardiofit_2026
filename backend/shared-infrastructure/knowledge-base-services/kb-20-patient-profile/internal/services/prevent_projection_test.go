@@ -10,6 +10,7 @@ func TestPREVENTProjection_AssemblesInput(t *testing.T) {
 		45,        // HDL
 		160,       // SBP
 		true,      // on BP treatment
+		true,      // on statin
 		true,      // diabetes
 		false,     // smoking
 		90,        // eGFR
@@ -30,11 +31,16 @@ func TestPREVENTProjection_AssemblesInput(t *testing.T) {
 
 func TestPREVENTProjection_SouthAsianCalibration(t *testing.T) {
 	input := assemblePREVENTInput(
-		50, SexMale, 200, 45, 140, true, true, false, 90,
-		26,       // BMI 26 — in calibration range
+		50, SexMale, 200, 45, 140,
+		true,  // on BP treatment
+		false, // on statin
+		true,  // diabetes
+		false, // smoking
+		90,    // eGFR
+		26,    // BMI 26 — in calibration range
 		nil, nil,
-		true,     // south asian calibration enabled
-		3.0,      // offset
+		true, // south asian calibration enabled
+		3.0,  // offset
 	)
 
 	if input.BMI != 29.0 {

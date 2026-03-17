@@ -21,6 +21,8 @@ const (
 	CalibrationPrefix   = "kb22:cal:"
 	ReasoningPrefix     = "kb22:reasoning:"
 	ContradictionPrefix = "kb22:contradiction:"
+	CMEffectsPrefix     = "kb22:cmeffects:"
+	AcuityStatePrefix   = "kb22:acuity:"
 )
 
 // Default TTLs per data type.
@@ -160,6 +162,25 @@ func (c *CacheClient) SetContradictions(sessionID string, detected interface{}) 
 
 func (c *CacheClient) GetContradictions(sessionID string, result interface{}) error {
 	return c.GetJSON(ContradictionPrefix+sessionID, result)
+}
+
+// G5: CM effect cache — stores extracted HARD_BLOCK/OVERRIDE effects per session.
+// Persisted at session init, read on every GetPosteriors() call for override enforcement.
+func (c *CacheClient) SetCMEffects(sessionID string, effects interface{}) error {
+	return c.SetJSON(CMEffectsPrefix+sessionID, effects, SessionTTL)
+}
+
+func (c *CacheClient) GetCMEffects(sessionID string, result interface{}) error {
+	return c.GetJSON(CMEffectsPrefix+sessionID, result)
+}
+
+// G7: Acuity state cache — stores running acuity scoring state per session.
+func (c *CacheClient) SetAcuityState(sessionID string, state interface{}) error {
+	return c.SetJSON(AcuityStatePrefix+sessionID, state, SessionTTL)
+}
+
+func (c *CacheClient) GetAcuityState(sessionID string, result interface{}) error {
+	return c.GetJSON(AcuityStatePrefix+sessionID, result)
 }
 
 // Calibration cache operations.

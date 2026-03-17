@@ -31,6 +31,10 @@ type HPICompleteEvent struct {
 	// IMMEDIATE + URGENT only for KB-19
 	SafetyFlags []SafetyFlagSummary `json:"safety_flags,omitempty"`
 
+	// G5: HARD_BLOCK contraindications for KB-23 (SAFETY_INSTRUCTION injection)
+	// and KB-19 (treatment decision blocking)
+	MedicationBlocks []MedicationBlock `json:"medication_blocks,omitempty"`
+
 	// CM contributions for explainability
 	CMLogDeltasApplied map[string]float64 `json:"cm_log_deltas_applied,omitempty"`
 
@@ -39,6 +43,9 @@ type HPICompleteEvent struct {
 
 	// CTL Panel 4: Reasoning chain from Bayesian update loop
 	ReasoningChain []ReasoningStep `json:"reasoning_chain,omitempty"`
+
+	// G7: Acuity classification for KB-23 Decision Card gate evaluation
+	AcuityCategory AcuityCategory `json:"acuity_category,omitempty"`
 
 	ConvergenceReached bool `json:"convergence_reached"`
 
@@ -142,6 +149,17 @@ type SessionResponse struct {
 type CreateSessionRequest struct {
 	PatientID uuid.UUID `json:"patient_id" binding:"required"`
 	NodeID    string    `json:"node_id" binding:"required"`
+}
+
+// MedicationBlock represents a HARD_BLOCK contraindication from a context modifier.
+// Published in HPI_COMPLETE events for downstream consumption:
+//   - KB-23: injects SAFETY_INSTRUCTION recommendation bypassing confidence gate
+//   - KB-19: blocks matching treatment decisions via safety gatekeeper
+type MedicationBlock struct {
+	ModifierID       string `json:"modifier_id"`
+	BlockedTreatment string `json:"blocked_treatment"`
+	Reason           string `json:"reason,omitempty"`
+	DrugClass        string `json:"drug_class,omitempty"`
 }
 
 // SubmitAnswerRequest is the request body for POST /sessions/:id/answers.

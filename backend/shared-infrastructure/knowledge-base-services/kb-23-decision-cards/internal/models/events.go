@@ -71,11 +71,24 @@ type HPICompleteEvent struct {
 	RankedDifferentials []DifferentialEntry  `json:"ranked_differentials"`
 	SafetyFlags         []SafetyFlagEntry   `json:"safety_flags"`
 
+	// G5: HARD_BLOCK contraindications from KB-22 context modifiers.
+	// Each block triggers a SAFETY_INSTRUCTION recommendation in the decision card.
+	MedicationBlocks []MedicationBlock `json:"medication_blocks,omitempty"`
+
 	// CTL Panel 4: Reasoning chain passed through from KB-22
 	ReasoningChain json.RawMessage `json:"reasoning_chain,omitempty"`
 
 	ConvergenceReached  bool                `json:"convergence_reached"`
 	CompletedAt         *time.Time          `json:"completed_at"`
+}
+
+// MedicationBlock represents a HARD_BLOCK contraindication from KB-22 context modifiers.
+// Used by card_builder to inject SAFETY_INSTRUCTION recommendations.
+type MedicationBlock struct {
+	ModifierID       string `json:"modifier_id"`
+	BlockedTreatment string `json:"blocked_treatment"`
+	Reason           string `json:"reason,omitempty"`
+	DrugClass        string `json:"drug_class,omitempty"`
 }
 
 // DifferentialEntry represents a single ranked differential diagnosis.

@@ -38,6 +38,8 @@ type SessionService struct {
 	crossNodeSafety *CrossNodeSafety
 	contradiction   *ContradictionDetector
 	transition      *TransitionEvaluator
+	cmEffects       *CMEffectProcessor
+	acuityScorer    *AcuityScorer
 }
 
 // NewSessionService creates a new SessionService with all required dependencies.
@@ -59,6 +61,8 @@ func NewSessionService(
 	crossNodeSafety *CrossNodeSafety,
 	contradiction *ContradictionDetector,
 	transition *TransitionEvaluator,
+	cmEffects *CMEffectProcessor,
+	acuityScorer *AcuityScorer,
 ) *SessionService {
 	return &SessionService{
 		db:              db,
@@ -78,6 +82,8 @@ func NewSessionService(
 		crossNodeSafety: crossNodeSafety,
 		contradiction:   contradiction,
 		transition:      transition,
+		cmEffects:       cmEffects,
+		acuityScorer:    acuityScorer,
 	}
 }
 
@@ -199,6 +205,19 @@ func (s *SessionService) CreateSession(ctx context.Context, req models.CreateSes
 	cmDeltasJSON, _ := json.Marshal(cmDeltas)
 	session.CMLogDeltasApplied = cmDeltasJSON
 
+	// G5: Extract HARD_BLOCK/OVERRIDE effects from context modifiers.
+	// Contraindications propagate downstream via HPI_COMPLETE event.
+	// Overrides are applied after every GetPosteriors() call.
+	cmEffectResult := s.cmEffects.Extract(allModifiers)
+	if len(cmEffectResult.Contraindications) > 0 || len(cmEffectResult.Overrides) > 0 {
+		s.cache.SetCMEffects(session.SessionID.String(), &cmEffectResult)
+		s.log.Info("G5: CM effects cached for session",
+			zap.String("session_id", session.SessionID.String()),
+			zap.Int("contraindications", len(cmEffectResult.Contraindications)),
+			zap.Int("overrides", len(cmEffectResult.Overrides)),
+		)
+	}
+
 	// Persist log-odds state
 	if err := session.SetLogOdds(logOdds); err != nil {
 		return nil, fmt.Errorf("set log odds: %w", err)
@@ -263,6 +282,7 @@ func (s *SessionService) CreateSession(ctx context.Context, req models.CreateSes
 
 	// Build response
 	posteriors := s.bayesian.GetPosteriors(logOdds, ResolveFloors(node, session.StratumLabel))
+	s.applyG5Overrides(session.SessionID.String(), posteriors)
 
 	return s.buildSessionResponse(&session, firstQuestion, posteriors), nil
 }
@@ -341,6 +361,7 @@ func (s *SessionService) SubmitAnswer(ctx context.Context, sessionID uuid.UUID, 
 	if math.Abs(informationGain) > 0.01 {
 		// Get current posteriors for the reasoning step snapshot
 		stepPosteriors := s.bayesian.GetPosteriors(logOdds, ResolveFloors(node, session.StratumLabel))
+		s.applyG5Overrides(sessionID.String(), stepPosteriors)
 		topDiff := ""
 		topPost := 0.0
 		if len(stepPosteriors) > 0 {
@@ -368,6 +389,21 @@ func (s *SessionService) SubmitAnswer(ctx context.Context, sessionID uuid.UUID, 
 				zap.Error(cacheErr),
 			)
 		}
+	}
+
+	// Step 4b: G7 acuity scoring — update running acuity state if question has acuity_tag
+	if question.AcuityTag != "" {
+		var acuityState AcuityState
+		if cacheErr := s.cache.GetAcuityState(sessionID.String(), &acuityState); cacheErr != nil {
+			acuityState = *NewAcuityState()
+		}
+		if s.acuityScorer.Update(&acuityState, question.AcuityTag, req.AnswerValue) {
+			s.log.Info("G7: acuity classification updated in session",
+				zap.String("session_id", sessionID.String()),
+				zap.String("category", string(acuityState.Category)),
+			)
+		}
+		s.cache.SetAcuityState(sessionID.String(), &acuityState)
 	}
 
 	// Step 5: Record answer
@@ -421,6 +457,7 @@ func (s *SessionService) SubmitAnswer(ctx context.Context, sessionID uuid.UUID, 
 	}
 
 	posteriors := s.bayesian.GetPosteriors(logOdds, ResolveFloors(node, session.StratumLabel))
+	s.applyG5Overrides(sessionID.String(), posteriors)
 
 	// Use synchronous trigger evaluation for the answer path
 	answerChan := make(chan AnswerEvent, 1)
@@ -774,6 +811,7 @@ func (s *SessionService) GetSession(ctx context.Context, sessionID uuid.UUID) (*
 	}
 
 	posteriors := s.bayesian.GetPosteriors(logOdds, ResolveFloors(node, session.StratumLabel))
+	s.applyG5Overrides(session.SessionID.String(), posteriors)
 
 	var currentQuestion *models.QuestionDef
 	if session.CurrentQuestionID != nil && node != nil {
@@ -909,6 +947,44 @@ func (s *SessionService) ResumeSession(ctx context.Context, sessionID uuid.UUID)
 				}
 			}()
 
+			// Gap #11: Update session stratum to new value and re-extract CM effects.
+			// Stratum drift may activate different HARD_BLOCK/OVERRIDE modifiers
+			// because CMs can be stratum-conditional. Re-query KB-20 modifiers for
+			// the new stratum and refresh the cached CM effects.
+			session.StratumLabel = currentStratum
+			session.CKDSubstage = currentCKDSubstage
+
+			node := s.nodeLoader.Get(session.NodeID)
+			if node != nil {
+				// Re-fetch session context for updated stratum
+				newCtx, fetchErr := s.contextProvider.Fetch(ctx, session.PatientID, session.NodeID)
+				if fetchErr != nil {
+					s.log.Warn("G5/R-04: failed to re-fetch context on stratum drift, keeping existing CM effects",
+						zap.String("session_id", sessionID.String()),
+						zap.Error(fetchErr),
+					)
+				} else {
+					allModifiers := newCtx.ActiveModifiers
+					if len(node.ContextModifiers) > 0 {
+						nodeCMs := ExpandNodeCMs(node.ContextModifiers)
+						allModifiers = append(allModifiers, nodeCMs...)
+					}
+					cmEffectResult := s.cmEffects.Extract(allModifiers)
+					if len(cmEffectResult.Contraindications) > 0 || len(cmEffectResult.Overrides) > 0 {
+						s.cache.SetCMEffects(sessionID.String(), &cmEffectResult)
+					} else {
+						// Clear stale effects if new stratum has none
+						s.cache.Delete("kb22:cmeffects:" + sessionID.String())
+					}
+					s.log.Info("G5/R-04: CM effects re-extracted after stratum drift",
+						zap.String("session_id", sessionID.String()),
+						zap.String("new_stratum", currentStratum),
+						zap.Int("contraindications", len(cmEffectResult.Contraindications)),
+						zap.Int("overrides", len(cmEffectResult.Overrides)),
+					)
+				}
+			}
+
 			if err := s.db.DB.WithContext(ctx).Save(session).Error; err != nil {
 				return nil, fmt.Errorf("save drifted session: %w", err)
 			}
@@ -973,6 +1049,7 @@ func (s *SessionService) CompleteSession(ctx context.Context, sessionID uuid.UUI
 	}
 
 	posteriors := s.bayesian.GetPosteriors(logOdds, ResolveFloors(node, session.StratumLabel))
+	s.applyG5Overrides(sessionID.String(), posteriors)
 	if node == nil {
 		node = s.nodeLoader.Get(session.NodeID)
 	}
@@ -1010,6 +1087,66 @@ func (s *SessionService) CompleteSession(ctx context.Context, sessionID uuid.UUI
 	)
 
 	return nil
+}
+
+// ChainSession creates a follow-up HPI session for a different node, triggered
+// by a G13 node transition. The parent session must be COMPLETED or in a terminal
+// state. The new session inherits the patient context but starts fresh priors
+// from the target node's YAML definition.
+//
+// Transition modes:
+//   - CONCURRENT: parent stays completed, new session runs independently
+//   - HANDOFF: parent stays completed, new session replaces the clinical focus
+//   - FLAG: no new session created — the transition is logged for KB-19 triage
+func (s *SessionService) ChainSession(
+	ctx context.Context,
+	parentSessionID uuid.UUID,
+	transition models.TransitionEvent,
+) (*models.SessionResponse, error) {
+	// FLAG transitions don't create new sessions — they're informational
+	if transition.Mode == "FLAG" {
+		s.log.Info("G13: FLAG transition logged, no chained session created",
+			zap.String("parent_session_id", parentSessionID.String()),
+			zap.String("target_node", transition.TargetNode),
+			zap.String("reason", transition.Reason),
+		)
+		return nil, nil
+	}
+
+	parent, err := s.loadSession(ctx, parentSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load parent session: %w", err)
+	}
+
+	// Only chain from terminal states
+	if parent.Status != models.StatusCompleted &&
+		parent.Status != models.StatusPartialAssessment &&
+		parent.Status != models.StatusSafetyEscalated {
+		return nil, fmt.Errorf(
+			"cannot chain from session %s in status %s: must be in a terminal state",
+			parentSessionID, parent.Status,
+		)
+	}
+
+	// Validate target node exists
+	targetNode := s.nodeLoader.Get(transition.TargetNode)
+	if targetNode == nil {
+		return nil, fmt.Errorf("G13: target node %s not found in NodeLoader", transition.TargetNode)
+	}
+
+	s.log.Info("G13: creating chained session",
+		zap.String("parent_session_id", parentSessionID.String()),
+		zap.String("target_node", transition.TargetNode),
+		zap.String("mode", transition.Mode),
+		zap.String("transition_id", transition.TransitionID),
+	)
+
+	// Delegate to CreateSession — the same 10-step init applies.
+	// The chained session gets fresh priors from the target node's stratum config.
+	return s.CreateSession(ctx, models.CreateSessionRequest{
+		PatientID: parent.PatientID,
+		NodeID:    transition.TargetNode,
+	})
 }
 
 // GetDifferential returns the current ranked differential for a session.
@@ -1243,6 +1380,27 @@ func (s *SessionService) publishHPIComplete(
 		)
 	}
 
+	// G5: Load HARD_BLOCK contraindications from cached CM effects for downstream consumption.
+	var medicationBlocks []models.MedicationBlock
+	var cmEffects CMEffectResult
+	if cacheErr := s.cache.GetCMEffects(session.SessionID.String(), &cmEffects); cacheErr == nil {
+		for _, c := range cmEffects.Contraindications {
+			medicationBlocks = append(medicationBlocks, models.MedicationBlock{
+				ModifierID:       c.ModifierID,
+				BlockedTreatment: c.BlockedTreatment,
+				Reason:           c.Reason,
+				DrugClass:        c.DrugClass,
+			})
+		}
+	}
+
+	// G7: Load acuity classification from cache for KB-23 gate evaluation
+	var acuityCategory models.AcuityCategory
+	var acuityState AcuityState
+	if cacheErr := s.cache.GetAcuityState(session.SessionID.String(), &acuityState); cacheErr == nil && acuityState.Confident {
+		acuityCategory = acuityState.Category
+	}
+
 	event := models.HPICompleteEvent{
 		EventType:           models.EventHPIComplete,
 		PatientID:           session.PatientID,
@@ -1253,9 +1411,11 @@ func (s *SessionService) publishHPIComplete(
 		TopPosterior:        posteriors[0].PosteriorProbability,
 		RankedDifferentials: topN(posteriors, 5),
 		SafetyFlags:         flagSummaries,
+		MedicationBlocks:    medicationBlocks,
 		CMLogDeltasApplied:  cmDeltas,
 		GuidelinePriorRefs:  session.GuidelinePriorRefs,
 		ReasoningChain:      reasoningChain,
+		AcuityCategory:      acuityCategory,
 		ConvergenceReached:  converged,
 		CompletedAt:         completedAt,
 	}
@@ -1271,6 +1431,24 @@ func (s *SessionService) publishHPIComplete(
 			s.db.DB.Model(session).Update("outcome_published", true)
 		}
 	}()
+}
+
+// applyG5Overrides loads cached CM effect overrides and enforces posterior
+// minimums. Called after every GetPosteriors() to ensure OVERRIDE CMs are
+// consistently applied. Returns the loaded CMEffectResult (may be empty).
+func (s *SessionService) applyG5Overrides(sessionID string, posteriors []models.DifferentialEntry) CMEffectResult {
+	var cmEffects CMEffectResult
+	if err := s.cache.GetCMEffects(sessionID, &cmEffects); err != nil {
+		// No cached effects = no overrides to apply (normal for sessions without G5 CMs)
+		return cmEffects
+	}
+	if s.cmEffects.ApplyOverrides(posteriors, cmEffects.Overrides) {
+		s.log.Debug("G5: OVERRIDE posteriors adjusted",
+			zap.String("session_id", sessionID),
+			zap.Int("overrides_applied", len(cmEffects.Overrides)),
+		)
+	}
+	return cmEffects
 }
 
 // computeLRApplied extracts the LR values applied for a given answer.

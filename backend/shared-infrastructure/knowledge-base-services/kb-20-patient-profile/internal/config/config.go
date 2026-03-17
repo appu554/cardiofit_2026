@@ -13,9 +13,23 @@ type Config struct {
 	Redis    RedisConfig
 	FHIR     GoogleFHIRConfig
 	KB7      KB7Config
+	KB21     KB21Config
+	PREVENT  PREVENTConfig
 
 	Environment string
 	LogLevel    string
+}
+
+// PREVENTConfig holds AHA PREVENT calculator parameters.
+// Defaults match config/prevent_config.yaml; override via env vars.
+type PREVENTConfig struct {
+	IntensiveTargetThreshold float64 // PREVENT_INTENSIVE_THRESHOLD — 10yr CVD risk cutoff for intensive SBP target (default 0.075)
+
+	// South Asian BMI calibration (offset added to BMI for patients in 23-30 range)
+	SouthAsianBMICalibrationEnabled bool    // PREVENT_SA_CALIBRATION_ENABLED
+	SouthAsianBMICalibrationOffset  float64 // PREVENT_SA_BMI_OFFSET (default 3.0)
+	SouthAsianBMICalibrationLower   float64 // PREVENT_SA_BMI_LOWER (default 23.0)
+	SouthAsianBMICalibrationUpper   float64 // PREVENT_SA_BMI_UPPER (default 30.0)
 }
 
 // GoogleFHIRConfig configures the Google Cloud Healthcare FHIR Store integration.
@@ -41,6 +55,12 @@ func (f *GoogleFHIRConfig) BaseURL() string {
 // KB7Config configures the connection to KB-7 Terminology Service for LOINC lookups.
 type KB7Config struct {
 	BaseURL string // KB7_BASE_URL — default http://localhost:8092
+}
+
+// KB21Config configures the connection to KB-21 Behavioral Intelligence Service
+// for festival calendar data (P4 perturbation).
+type KB21Config struct {
+	BaseURL string // KB21_BASE_URL — default http://localhost:8133
 }
 
 type ServerConfig struct {
@@ -87,6 +107,16 @@ func Load() (*Config, error) {
 		KB7: KB7Config{
 			BaseURL: getEnv("KB7_BASE_URL", "http://localhost:8092"),
 		},
+		KB21: KB21Config{
+			BaseURL: getEnv("KB21_BASE_URL", "http://localhost:8133"),
+		},
+		PREVENT: PREVENTConfig{
+			IntensiveTargetThreshold:        getEnvAsFloat64("PREVENT_INTENSIVE_THRESHOLD", 0.075),
+			SouthAsianBMICalibrationEnabled: getEnvAsBool("PREVENT_SA_CALIBRATION_ENABLED", false),
+			SouthAsianBMICalibrationOffset:  getEnvAsFloat64("PREVENT_SA_BMI_OFFSET", 3.0),
+			SouthAsianBMICalibrationLower:   getEnvAsFloat64("PREVENT_SA_BMI_LOWER", 23.0),
+			SouthAsianBMICalibrationUpper:   getEnvAsFloat64("PREVENT_SA_BMI_UPPER", 30.0),
+		},
 		Environment: getEnv("ENVIRONMENT", "development"),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 	}, nil
@@ -111,6 +141,15 @@ func getEnvAsInt(key string, defaultValue int) int {
 	if value, exists := os.LookupEnv(key); exists {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat64(key string, defaultValue float64) float64 {
+	if value, exists := os.LookupEnv(key); exists {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
 		}
 	}
 	return defaultValue

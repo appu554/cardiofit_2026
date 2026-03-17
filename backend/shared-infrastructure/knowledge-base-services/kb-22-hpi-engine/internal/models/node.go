@@ -117,12 +117,12 @@ type DifferentialDef struct {
 // SafetyTriggerDef defines a safety condition evaluated by SafetyEngine.
 type SafetyTriggerDef struct {
 	ID        string `yaml:"id" json:"id"`
-	Type      string `yaml:"type,omitempty" json:"type,omitempty"` // R-06: BOOLEAN (default) or COMPOSITE_SCORE (stub)
+	Type      string `yaml:"type,omitempty" json:"type,omitempty"` // R-06: BOOLEAN (default) or COMPOSITE_SCORE
 	Condition string `yaml:"condition" json:"condition"`           // Boolean expression: 'Q001=YES AND Q003=YES'
 	Severity  string `yaml:"severity" json:"severity"`             // IMMEDIATE | URGENT | WARN
 	Action    string `yaml:"recommended_action" json:"action"`
 
-	// R-06: COMPOSITE_SCORE fields (stub — not implemented in Circle 1)
+	// R-06: COMPOSITE_SCORE fields (evaluated by SafetyEngine.EvaluateCompositeScore)
 	Weights   map[string]float64 `yaml:"weights,omitempty" json:"weights,omitempty"`
 	Threshold float64            `yaml:"threshold,omitempty" json:"threshold,omitempty"`
 }

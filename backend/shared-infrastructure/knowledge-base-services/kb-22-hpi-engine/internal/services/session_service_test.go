@@ -59,7 +59,7 @@ func TestNewSessionService_Constructor(t *testing.T) {
 	log := testLogger()
 	m := testMetrics()
 
-	// Verify constructor accepts all 17 params and returns non-nil
+	// Verify constructor accepts all 19 params and returns non-nil
 	svc := NewSessionService(
 		nil, nil, log, m,
 		nil, nil, nil,
@@ -68,6 +68,8 @@ func TestNewSessionService_Constructor(t *testing.T) {
 		nil, nil, nil,
 		nil,
 		nil, nil,
+		NewCMEffectProcessor(log),
+		NewAcuityScorer(log),
 	)
 	if svc == nil {
 		t.Fatal("NewSessionService returned nil")
@@ -85,6 +87,8 @@ func TestComputeLRApplied(t *testing.T) {
 		nil, nil, nil,
 		nil,
 		nil, nil,
+		NewCMEffectProcessor(log),
+		NewAcuityScorer(log),
 	)
 
 	question := &models.QuestionDef{

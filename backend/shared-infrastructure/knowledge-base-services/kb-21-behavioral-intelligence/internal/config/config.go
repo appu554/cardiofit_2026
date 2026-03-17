@@ -50,6 +50,9 @@ type Config struct {
 	NudgeMaxPerDay     int
 	NudgeCooldownHours int
 
+	// Festival calendar
+	FestivalCalendarPath string
+
 	// Event bus
 	EventBusEnabled bool
 	KafkaBrokers    string
@@ -131,6 +134,9 @@ func Load() (*Config, error) {
 		// Nudge engine
 		NudgeMaxPerDay:     getEnvAsInt("NUDGE_MAX_PER_DAY", 3),
 		NudgeCooldownHours: getEnvAsInt("NUDGE_COOLDOWN_HOURS", 4),
+
+		// Festival calendar
+		FestivalCalendarPath: getEnv("FESTIVAL_CALENDAR_PATH", "data/festivals_india_2026.yaml"),
 
 		// Event bus
 		EventBusEnabled: getEnvAsBool("EVENT_BUS_ENABLED", false),

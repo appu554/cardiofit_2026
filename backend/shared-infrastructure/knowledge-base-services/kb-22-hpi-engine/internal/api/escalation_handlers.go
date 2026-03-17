@@ -482,6 +482,84 @@ func min(a, b int) int {
 }
 
 // ---------------------------------------------------------------------------
+// G13: /v1/sessions/:id/chain — Node transition chaining
+// ---------------------------------------------------------------------------
+
+// ChainSessionRequest is the request body for POST /v1/sessions/:id/chain.
+type ChainSessionRequest struct {
+	TransitionID string `json:"transition_id" binding:"required"`
+	TargetNode   string `json:"target_node" binding:"required"`
+	Mode         string `json:"mode" binding:"required"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func (s *Server) chainSessionHandler(c *gin.Context) {
+	parentIDStr := c.Param("id")
+	parentID, err := uuid.Parse(parentIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id", "details": err.Error()})
+		return
+	}
+
+	var req ChainSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
+		return
+	}
+
+	// Validate mode
+	switch req.Mode {
+	case "CONCURRENT", "HANDOFF", "FLAG":
+		// valid
+	default:
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":          "invalid transition mode",
+			"mode":           req.Mode,
+			"allowed_values": []string{"CONCURRENT", "HANDOFF", "FLAG"},
+		})
+		return
+	}
+
+	transition := models.TransitionEvent{
+		TransitionID: req.TransitionID,
+		SourceNode:   "", // filled by ChainSession from parent
+		TargetNode:   req.TargetNode,
+		Mode:         req.Mode,
+		Reason:       req.Reason,
+	}
+
+	session, err := s.SessionService.ChainSession(c.Request.Context(), parentID, transition)
+	if err != nil {
+		s.Log.Error("G13: chain session failed",
+			zap.String("parent_session_id", parentID.String()),
+			zap.String("target_node", req.TargetNode),
+			zap.Error(err),
+		)
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+		return
+	}
+
+	// FLAG mode returns nil session (no new session created)
+	if session == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message":           "FLAG transition logged, no chained session created",
+			"parent_session_id": parentID,
+			"target_node":       req.TargetNode,
+		})
+		return
+	}
+
+	s.Log.Info("G13: chained session created via HTTP",
+		zap.String("parent_session_id", parentID.String()),
+		zap.String("new_session_id", session.SessionID.String()),
+		zap.String("target_node", req.TargetNode),
+		zap.String("mode", req.Mode),
+	)
+
+	c.JSON(http.StatusCreated, session)
+}
+
+// ---------------------------------------------------------------------------
 // E01: Expert panel calibration handlers
 // ---------------------------------------------------------------------------
 

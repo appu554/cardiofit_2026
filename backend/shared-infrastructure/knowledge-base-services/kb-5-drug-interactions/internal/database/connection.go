@@ -108,14 +108,31 @@ func autoMigrate(db *gorm.DB) error {
 	// Note: PatientInteractionAlert and InteractionAnalytics are NOT auto-migrated
 	// because their schemas are defined in SQL migrations with foreign keys.
 	// GORM auto-migrate conflicts with pre-existing SQL-defined FK constraints.
-	return db.AutoMigrate(
+	//
+	// Guard: skip AutoMigrate for models whose tables already exist from SQL migrations
+	// to avoid UNIQUE constraint naming conflicts (SQL uses default names, GORM uses uni_* names).
+	modelsToMigrate := []interface{}{
 		&models.DrugInteraction{},
 		&models.DrugSynonym{},
 		&models.InteractionPattern{},
 		&models.InteractionRule{},
 		&models.DrugFormulation{},
 		&models.CDSConfiguration{},
-	)
+	}
+
+	var toMigrate []interface{}
+	for _, m := range modelsToMigrate {
+		if !db.Migrator().HasTable(m) {
+			toMigrate = append(toMigrate, m)
+		} else {
+			log.Printf("ℹ️  Table for %T exists (from SQL migrations), skipping GORM AutoMigrate", m)
+		}
+	}
+
+	if len(toMigrate) == 0 {
+		return nil
+	}
+	return db.AutoMigrate(toMigrate...)
 }
 
 func (d *Database) Close() error {

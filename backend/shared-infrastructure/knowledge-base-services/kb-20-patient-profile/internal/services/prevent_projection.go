@@ -9,7 +9,7 @@ import (
 func assemblePREVENTInput(
 	age float64, sex Sex,
 	totalChol, hdlChol, sbp float64,
-	onBPTreatment, diabetes, smoking bool,
+	onBPTreatment, onStatin, diabetes, smoking bool,
 	egfr, bmi float64,
 	hba1c, uacr *float64,
 	southAsianCalibration bool,
@@ -27,6 +27,7 @@ func assemblePREVENTInput(
 		HDLCholesterol:   hdlChol,
 		SystolicBP:       sbp,
 		OnBPTreatment:    onBPTreatment,
+		OnStatin:         onStatin,
 		DiabetesStatus:   diabetes,
 		CurrentSmoking:   smoking,
 		EGFR:             egfr,
@@ -95,28 +96,27 @@ func (s *ProjectionService) ComputePREVENTProjection(
 	hasDiabetes := profile.DMType == "T1DM" || profile.DMType == "T2DM"
 	isSmoker := profile.SmokingStatus == "current"
 
-	// 6a. Assemble input
-	// South Asian BMI calibration is deferred to a follow-up task that loads
-	// prevent_config.yaml via Viper. For now, calibration is disabled (false, 0).
+	// 6a. Assemble input with config-driven South Asian BMI calibration
 	input := assemblePREVENTInput(
 		float64(profile.Age), sex,
 		*totalChol, *hdlChol, *sbp,
-		onBPTreatment, hasDiabetes, isSmoker,
+		onBPTreatment, proj.OnStatin, hasDiabetes, isSmoker,
 		*egfr, bmi,
 		hba1c, uacr,
-		false, 0,
+		s.preventCfg.SouthAsianBMICalibrationEnabled,
+		s.preventCfg.SouthAsianBMICalibrationOffset,
 	)
 
 	// 6b. Compute
 	result := ComputePREVENT(input)
 
 	// 7. Override SBP target using config-loaded threshold.
-	intensiveThreshold := 0.075 // TODO: load from Viper: cfg.GetFloat64("intensive_target_threshold")
+	intensiveThreshold := s.preventCfg.IntensiveTargetThreshold
 	acr := 0.0
 	if uacr != nil {
 		acr = *uacr
 	}
-	result.SBPTarget = DetermineSBPTarget(result.RiskTier, result.TenYearTotalCVD, *egfr, acr, intensiveThreshold)
+	result.SBPTarget = DetermineSBPTarget(result.TenYearTotalCVD, *egfr, acr, intensiveThreshold)
 
 	// 8. Populate projection
 	proj.PREVENTRiskTier = string(result.RiskTier)

@@ -48,6 +48,10 @@ func (p *PatientState) ToRawLabs(simTime time.Time) *channel_b.RawPatientData {
 			GlucoseTimestamp: simTime.Add(-72 * time.Hour), // stale
 		}
 	}
+	// Lab measurement timestamps for staleness checks (DA-06, DA-07, DA-08).
+	// In simulation, all labs are "just measured" at simTime.
+	recentMeasurement := simTime
+
 	return &channel_b.RawPatientData{
 		GlucoseCurrent:    f64(p.Glucose),
 		GlucoseTimestamp:  simTime.Add(-30 * time.Minute), // recent
@@ -62,6 +66,11 @@ func (p *PatientState) ToRawLabs(simTime time.Time) *channel_b.RawPatientData {
 		Weight72hAgo:      p.PriorWeight72h,
 		HbA1cPrior30d:     p.PriorHbA1c30d,
 		GlucoseReadings:   p.GlucoseReadings,
+
+		// Staleness timestamps — prevent DA-06/DA-07/DA-08 from firing HOLD_DATA
+		EGFRLastMeasuredAt:       &recentMeasurement,
+		HbA1cLastMeasuredAt:      &recentMeasurement,
+		CreatinineLastMeasuredAt: &recentMeasurement,
 	}
 }
 

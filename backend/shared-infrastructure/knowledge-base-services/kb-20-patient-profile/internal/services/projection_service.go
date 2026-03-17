@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"kb-patient-profile/internal/cache"
+	"kb-patient-profile/internal/config"
 	"kb-patient-profile/internal/database"
 	"kb-patient-profile/internal/models"
 )
@@ -20,24 +21,41 @@ const (
 	ProjectionCacheTTL  = 2 * time.Minute
 )
 
+// KB21FestivalLookup abstracts KB-21 festival status queries, breaking the
+// import cycle between services ↔ fhir packages (same pattern as KB7ConceptLookup).
+type KB21FestivalLookup interface {
+	GetFestivalStatus(region string) *FestivalStatusResult
+}
+
+// FestivalStatusResult mirrors fhir.FestivalStatus for the interface boundary.
+type FestivalStatusResult struct {
+	Active      bool
+	FastingType string
+	End         string // RFC3339
+}
+
 // ProjectionService builds typed projections for V-MCU Channel B and Channel C
 // from KB-20's existing lab and medication data. No new database tables —
 // it queries LabEntry, MedicationState, PatientProfile, and BPTrajectory.
 // LOINC code ownership is delegated to KB-7 via the LOINCRegistry.
 type ProjectionService struct {
-	db            *database.Database
-	cache         *cache.Client
-	logger        *zap.Logger
-	loincRegistry *LOINCRegistry
+	db              *database.Database
+	cache           *cache.Client
+	logger          *zap.Logger
+	loincRegistry   *LOINCRegistry
+	preventCfg      config.PREVENTConfig
+	festivalLookup  KB21FestivalLookup // nil = P4 festival data unavailable
 }
 
 // NewProjectionService creates a projection service with LOINC registry integration.
-func NewProjectionService(db *database.Database, cacheClient *cache.Client, logger *zap.Logger, loincReg *LOINCRegistry) *ProjectionService {
+func NewProjectionService(db *database.Database, cacheClient *cache.Client, logger *zap.Logger, loincReg *LOINCRegistry, preventCfg config.PREVENTConfig, festivalLookup KB21FestivalLookup) *ProjectionService {
 	return &ProjectionService{
-		db:            db,
-		cache:         cacheClient,
-		logger:        logger,
-		loincRegistry: loincReg,
+		db:             db,
+		cache:          cacheClient,
+		logger:         logger,
+		loincRegistry:  loincReg,
+		preventCfg:     preventCfg,
+		festivalLookup: festivalLookup,
 	}
 }
 
@@ -191,6 +209,26 @@ func (s *ProjectionService) buildChannelBProjection(patientID string) (*models.C
 
 	// 9. RAAS creatinine tolerance (PG-14)
 	proj.CreatinineRiseExplained = s.isCreatinineRiseExplainedByRAAS(patientID, activeMeds)
+
+	// 10. FBG trajectory from LabService cache (Track 3 / Sprint 1)
+	var trajClass string
+	if err := s.cache.Get(cache.GlucoseTrajectoryPrefix+patientID, &trajClass); err == nil && trajClass != "" {
+		proj.GlucoseTrajectory = trajClass
+	}
+
+	// 11. Glucose CV% from recent readings (≥2 required)
+	if len(proj.GlucoseReadings) >= 2 {
+		proj.GlucoseCV = computeGlucoseCV(proj.GlucoseReadings)
+		proj.GlucoseHighVariability = proj.GlucoseCV > 36.0 // B-20 threshold
+	}
+
+	// 12. Perturbation evaluation (Track 3)
+	pertInput := s.assemblePerturbationInput(patientID, activeMeds, trajClass)
+	pertCtx := EvaluatePerturbations(pertInput)
+	proj.PerturbationSuppressed = pertCtx.Suppressed
+	proj.SuppressionMode = pertCtx.Mode
+	proj.DominantPerturbation = pertCtx.DominantPerturbation
+	proj.PerturbationGainFactor = pertCtx.GainFactorMultiplier
 
 	return proj, nil
 }
@@ -544,6 +582,85 @@ func (s *ProjectionService) recentLabValuesFilteredSource(patientID, labType, ex
 		})
 	}
 	return result
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Perturbation assembly
+// ──────────────────────────────────────────────────────────────────────────
+
+// assemblePerturbationInput builds a PerturbationEvalInput from KB-20 data.
+// Festival data (P4) requires KB-21 integration — passed as zero/false until wired.
+func (s *ProjectionService) assemblePerturbationInput(patientID string, meds []models.MedicationState, trajClass string) PerturbationEvalInput {
+	input := PerturbationEvalInput{
+		TrajectoryClass: trajClass,
+	}
+
+	// P1: Glucocorticoid — active if any GLUCOCORTICOID med is prescribed
+	for _, m := range meds {
+		for _, cls := range m.EffectiveDrugClasses() {
+			if cls == models.DrugClassGlucocorticoid {
+				if m.IsActive {
+					input.ActiveSteroid = true
+					input.SteroidStartDate = m.StartDate
+				} else if m.EndDate != nil {
+					input.SteroidStopDate = m.EndDate
+					input.SteroidStartDate = m.StartDate
+				}
+				break
+			}
+		}
+	}
+
+	// P2: SGLT2i initiated within 14 days
+	for _, m := range meds {
+		for _, cls := range m.EffectiveDrugClasses() {
+			if cls == models.DrugClassSGLT2I && m.IsActive && !m.StartDate.IsZero() {
+				if time.Since(m.StartDate) <= 14*24*time.Hour {
+					input.SGLT2iStartedWithin14d = true
+				}
+				break
+			}
+		}
+	}
+
+	// P3: Insulin dose change within 5 days
+	input.InsulinDoseChangedWithin5d = s.hasMedChangeInWindow(patientID, models.DrugClassInsulin, 5*24*time.Hour)
+
+	// P4: Festival fasting — populated from KB-21 festival calendar
+	if s.festivalLookup != nil {
+		if fs := s.festivalLookup.GetFestivalStatus("ALL"); fs != nil && fs.Active {
+			input.FestivalActive = true
+			input.FastingType = fs.FastingType
+			if fs.End != "" {
+				if endTime, err := time.Parse(time.RFC3339, fs.End); err == nil {
+					input.FestivalEndDate = &endTime
+				}
+			}
+		}
+	}
+
+	// P5: Acute illness flag — from comorbidities
+	var profile models.PatientProfile
+	if err := s.db.DB.Where("patient_id = ?", patientID).First(&profile).Error; err == nil {
+		for _, c := range profile.Comorbidities {
+			if c == "ACUTE_ILLNESS" {
+				input.AcuteIllnessFlag = true
+				break
+			}
+		}
+	}
+
+	// P6: Metformin on hold — inactive metformin with recent end date
+	for _, m := range meds {
+		if m.DrugClass == models.DrugClassMetformin && !m.IsActive && m.EndDate != nil {
+			if time.Since(*m.EndDate) <= 14*24*time.Hour {
+				input.MetforminOnHold = true
+				break
+			}
+		}
+	}
+
+	return input
 }
 
 // ──────────────────────────────────────────────────────────────────────────

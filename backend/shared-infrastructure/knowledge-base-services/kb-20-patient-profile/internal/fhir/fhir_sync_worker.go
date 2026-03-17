@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"kb-patient-profile/internal/models"
+	"kb-patient-profile/internal/services"
 )
 
 // SyncWorker polls the Google FHIR Store for new/updated resources and
@@ -17,6 +18,7 @@ type SyncWorker struct {
 	kb7        *KB7Client
 	db         *gorm.DB
 	logger     *zap.Logger
+	eventBus   *services.EventBus
 	interval   time.Duration
 	lastSynced time.Time
 	cancel     context.CancelFunc
@@ -24,12 +26,13 @@ type SyncWorker struct {
 }
 
 // NewSyncWorker creates a FHIR→KB-20 sync worker.
-func NewSyncWorker(client *FHIRClient, kb7 *KB7Client, db *gorm.DB, logger *zap.Logger) *SyncWorker {
+func NewSyncWorker(client *FHIRClient, kb7 *KB7Client, db *gorm.DB, logger *zap.Logger, eventBus *services.EventBus) *SyncWorker {
 	return &SyncWorker{
 		client:     client,
 		kb7:        kb7,
 		db:         db,
 		logger:     logger,
+		eventBus:   eventBus,
 		interval:   5 * time.Minute,
 		lastSynced: time.Now().UTC().Add(-24 * time.Hour), // initial: look back 24h
 		done:       make(chan struct{}),
@@ -158,6 +161,16 @@ func (w *SyncWorker) syncObservations(since time.Time) {
 		}
 
 		w.db.Create(lab)
+		labValueF64, _ := lab.Value.Float64()
+		w.eventBus.Publish(models.EventLabResult, lab.PatientID, models.LabResultPayload{
+			LabType:          lab.LabType,
+			Value:            labValueF64,
+			Unit:             lab.Unit,
+			MeasuredAt:       lab.MeasuredAt.Format(time.RFC3339),
+			Source:           "FHIR_SYNC",
+			ValidationStatus: "ACCEPTED",
+			IsDerived:        false,
+		})
 		w.logSync("Observation", lab.FHIRObservationID, "CREATED", "")
 	}
 
@@ -192,11 +205,23 @@ func (w *SyncWorker) syncMedicationRequests(since time.Time) {
 				"is_active": state.IsActive,
 				"atc_code":  state.ATCCode,
 			})
+			w.eventBus.Publish(models.EventMedicationChange, state.PatientID, models.MedicationChangePayload{
+				ChangeType: "UPDATE",
+				DrugName:   state.DrugName,
+				DrugClass:  state.DrugClass,
+				NewDoseMg:  state.DoseMg.String(),
+			})
 			w.logSync("MedicationRequest", state.FHIRMedicationRequestID, "UPDATED", "")
 			continue
 		}
 
 		w.db.Create(state)
+		w.eventBus.Publish(models.EventMedicationChange, state.PatientID, models.MedicationChangePayload{
+			ChangeType: "ADD",
+			DrugName:   state.DrugName,
+			DrugClass:  state.DrugClass,
+			NewDoseMg:  state.DoseMg.String(),
+		})
 		w.logSync("MedicationRequest", state.FHIRMedicationRequestID, "CREATED", "")
 	}
 

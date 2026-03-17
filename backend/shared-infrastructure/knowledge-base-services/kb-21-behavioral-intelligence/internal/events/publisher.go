@@ -56,6 +56,26 @@ func (p *Publisher) PublishPhenotypeChanged(patientID string, oldPhenotype, newP
 	return p.publish("PHENOTYPE_CHANGED", payload)
 }
 
+// PublishOutcomeCorrelation publishes an OUTCOME_CORRELATION event.
+// Consumed by KB-19 (Protocol Orchestrator) and V-MCU for treatment response awareness.
+func (p *Publisher) PublishOutcomeCorrelation(corr models.OutcomeCorrelation) error {
+	payload := map[string]interface{}{
+		"patient_id":               corr.PatientID,
+		"treatment_response_class": corr.TreatmentResponseClass,
+		"mean_adherence_score":     corr.MeanAdherenceScore,
+		"adherence_trend":          corr.AdherenceTrend,
+		"correlation_strength":     corr.CorrelationStrength,
+		"confidence_level":         corr.ConfidenceLevel,
+		"celebration_eligible":     corr.CelebrationEligible,
+		"period_start":             corr.PeriodStart,
+		"period_end":               corr.PeriodEnd,
+	}
+	if corr.HbA1cDelta != nil {
+		payload["hba1c_delta"] = *corr.HbA1cDelta
+	}
+	return p.publish("OUTCOME_CORRELATION", payload)
+}
+
 // publish sends a typed event to the appropriate topic.
 func (p *Publisher) publish(eventType string, payload interface{}) error {
 	data, err := json.Marshal(payload)

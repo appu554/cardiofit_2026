@@ -73,13 +73,26 @@ func NewConnection(cfg *config.DatabaseConfig, log *logrus.Entry) (*Connection, 
 func (c *Connection) AutoMigrate() error {
 	c.logger.Info("Running database migrations...")
 
-	err := c.DB.AutoMigrate(
+	// Skip tables that already exist from SQL migrations
+	modelsToMigrate := []interface{}{
 		&models.Registry{},
 		&models.RegistryPatient{},
 		&models.EnrollmentHistory{},
-	)
-	if err != nil {
-		return fmt.Errorf("auto-migration failed: %w", err)
+	}
+
+	var toMigrate []interface{}
+	for _, m := range modelsToMigrate {
+		if !c.DB.Migrator().HasTable(m) {
+			toMigrate = append(toMigrate, m)
+		} else {
+			c.logger.Infof("Table for %T exists (from SQL migrations), skipping GORM AutoMigrate", m)
+		}
+	}
+
+	if len(toMigrate) > 0 {
+		if err := c.DB.AutoMigrate(toMigrate...); err != nil {
+			return fmt.Errorf("auto-migration failed: %w", err)
+		}
 	}
 
 	// Create indexes that GORM doesn't handle automatically

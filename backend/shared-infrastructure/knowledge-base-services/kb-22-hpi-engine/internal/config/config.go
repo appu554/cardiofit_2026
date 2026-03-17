@@ -34,6 +34,9 @@ type Config struct {
 	KB19URL string // Protocol Orchestrator
 	KB23URL string // Decision Cards
 
+	// CC-1: Safety Constraint Engine (sidecar on same host)
+	SCEURL string // KB-24 SCE (default: http://localhost:8201)
+
 	// Kafka telemetry
 	KafkaEnabled          bool
 	KafkaBootstrapServers string
@@ -45,6 +48,7 @@ type Config struct {
 	KB3TimeoutMS  int
 	KB5TimeoutMS  int
 	KB23TimeoutMS int
+	SCETimeoutMS  int
 
 	// Session
 	SessionTTLHours int
@@ -73,9 +77,10 @@ func Load() *Config {
 		KB20URL: envOrDefault("KB20_URL", "http://localhost:8131"),
 		KB21URL: envOrDefault("KB21_URL", "http://localhost:8133"),
 		KB3URL:  envOrDefault("KB3_URL", "http://localhost:8087"),
-		KB5URL:  envOrDefault("KB5_URL", "http://localhost:8089"),
+		KB5URL:  envOrDefault("KB5_URL", "http://localhost:8085"),
 		KB19URL: envOrDefault("KB19_URL", "http://localhost:8103"),
 		KB23URL: envOrDefault("KB23_URL", "http://localhost:8134"),
+		SCEURL:  envOrDefault("SCE_URL", "http://localhost:8201"),
 
 		KafkaEnabled:          envBoolOrDefault("KAFKA_ENABLED", false),
 		KafkaBootstrapServers: envOrDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
@@ -86,6 +91,7 @@ func Load() *Config {
 		KB3TimeoutMS:  envIntOrDefault("KB3_TIMEOUT_MS", 40),
 		KB5TimeoutMS:  envIntOrDefault("KB5_TIMEOUT_MS", 30),
 		KB23TimeoutMS: envIntOrDefault("KB23_TIMEOUT_MS", 40),
+		SCETimeoutMS:  envIntOrDefault("SCE_TIMEOUT_MS", 10),
 
 		SessionTTLHours: envIntOrDefault("SESSION_TTL_HOURS", 24),
 		NodesDir:        envOrDefault("NODES_DIR", "./nodes"),
@@ -110,6 +116,9 @@ func (c *Config) KB3Timeout() time.Duration { return time.Duration(c.KB3TimeoutM
 func (c *Config) KB5Timeout() time.Duration { return time.Duration(c.KB5TimeoutMS) * time.Millisecond }
 func (c *Config) KB23Timeout() time.Duration {
 	return time.Duration(c.KB23TimeoutMS) * time.Millisecond
+}
+func (c *Config) SCETimeout() time.Duration {
+	return time.Duration(c.SCETimeoutMS) * time.Millisecond
 }
 
 func (c *Config) SessionTTL() time.Duration {

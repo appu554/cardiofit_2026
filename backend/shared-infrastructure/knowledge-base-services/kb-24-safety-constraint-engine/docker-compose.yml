@@ -1,0 +1,53 @@
+# KB-24 Safety Constraint Engine - Docker Compose
+# Stateless sidecar for KB-22. Evaluates safety triggers from node definitions.
+# No database or Redis required.
+# Usage: docker-compose up -d --build
+
+services:
+  # ============================================================================
+  # KB-24 Safety Constraint Engine
+  # Evaluates safety triggers defined in HPI node YAMLs.
+  # Publishes constraint telemetry to Kafka when enabled.
+  # ============================================================================
+  kb24-sce:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb24-safety-constraint-engine
+    ports:
+      - "8201:8201"
+    environment:
+      # Server
+      SCE_PORT: "8201"
+      ENVIRONMENT: "development"
+      LOG_LEVEL: "info"
+
+      # Kafka telemetry (disabled by default in dev)
+      KAFKA_ENABLED: "false"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_CLIENT_ID: "kb24-sce"
+
+      # Node definitions (baked into image; mount to override)
+      NODE_DEFINITION_PATH: "/app/nodes"
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8201/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - kb22-network
+      - kb-network
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  kb22-network:
+    external: true
+    name: kb22-network
+  kb-network:
+    external: true
+    name: kb-network

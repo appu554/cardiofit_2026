@@ -137,6 +137,17 @@ func (se *StratumEngine) GetStratum(patientID string, nodeID string) (*models.St
 		SafetyOverrides:     safetyOverrides,
 	}
 
+	// Emit STRATUM_CHANGE when stratum transitions (Gap #21)
+	if cached.StratumLabel != "" && cached.StratumLabel != stratumLabel {
+		se.eventBus.Publish(models.EventStratumChange, patientID, models.StratumChangePayload{
+			OldStratum:     cached.StratumLabel,
+			NewStratum:     stratumLabel,
+			OldCKDSubstage: cached.CKDSubstage,
+			NewCKDSubstage: ckdSubstage,
+			Trigger:        "STRATUM_RECOMPUTATION",
+		})
+	}
+
 	se.cache.Set(cacheKey, response, cache.DefaultStratumTTL)
 	return response, nil
 }

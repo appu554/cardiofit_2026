@@ -13,6 +13,7 @@ import (
 	"time"
 
 	vmcu "vaidshala/clinical-runtime-platform/engines/vmcu"
+	"vaidshala/clinical-runtime-platform/engines/vmcu/titration"
 	vt "vaidshala/clinical-runtime-platform/engines/vmcu/types"
 	simtypes "vaidshala/simulation/pkg/types"
 )
@@ -29,6 +30,7 @@ type EngineOption func(*engineConfig)
 type engineConfig struct {
 	protocolRulesPath string
 	simTime           time.Time
+	cooldownSeeds     []titration.DoseEvent
 }
 
 // WithProtocolRulesPath overrides the default protocol_rules.yaml location.
@@ -40,6 +42,18 @@ func WithProtocolRulesPath(path string) EngineOption {
 // the simulation input does not provide explicit timestamps.
 func WithSimulatedTime(t time.Time) EngineOption {
 	return func(c *engineConfig) { c.simTime = t }
+}
+
+// WithLastDoseChangeTime seeds the engine's cooldown tracker with a
+// historical dose event, allowing simulation scenarios to start mid-cooldown.
+func WithLastDoseChangeTime(patientID string, medClass titration.MedicationClass, t time.Time) EngineOption {
+	return func(c *engineConfig) {
+		c.cooldownSeeds = append(c.cooldownSeeds, titration.DoseEvent{
+			PatientID: patientID,
+			MedClass:  medClass,
+			AppliedAt: t,
+		})
+	}
 }
 
 // NewProductionEngine constructs a ProductionEngine backed by a real VMCUEngine.
@@ -59,6 +73,12 @@ func NewProductionEngine(opts ...EngineOption) (*ProductionEngine, error) {
 	engine, err := vmcu.NewVMCUEngine(vmcuCfg)
 	if err != nil {
 		return nil, fmt.Errorf("bridge: failed to create production engine: %w", err)
+	}
+
+	// Seed cooldown tracker with historical dose events so scenarios
+	// can start with the engine already in a cooldown state.
+	for _, seed := range cfg.cooldownSeeds {
+		engine.SeedCooldownEvent(seed)
 	}
 
 	return &ProductionEngine{
@@ -108,6 +128,19 @@ func (pe *ProductionEngine) RunCycle(input simtypes.TitrationCycleInput) simtype
 		CurrentDose:      input.TitrationContext.CurrentDose,
 		ProposedDelta:    input.TitrationContext.ProposedDoseDelta,
 		// MedClass and MetabolicInput left at zero values — safe defaults.
+	}
+
+	// Propagate lab values from RawLabs into TitrationContext so that
+	// Channel C PG rules comparing potassium/SBP/sodium can fire.
+	if input.RawLabs != nil && prodInput.TitrationContext != nil {
+		prodInput.TitrationContext.PotassiumCurrent = input.RawLabs.PotassiumCurrent
+		prodInput.TitrationContext.SBPCurrent = float64(input.RawLabs.SBP)
+		prodInput.TitrationContext.SodiumCurrent = input.RawLabs.SodiumCurrent
+
+		// PG-14 RAAS tolerance: CreatinineRiseExplained must be mapped to BOTH
+		// prod.RawPatientData.CreatinineRiseExplained (done in type_mapper.go)
+		// AND prod.TitrationContext.RAASCreatinineTolerant (done here).
+		prodInput.TitrationContext.RAASCreatinineTolerant = input.RawLabs.CreatinineRiseExplained
 	}
 
 	// RunCycle returns (*TitrationCycleResult, *SafetyTrace).

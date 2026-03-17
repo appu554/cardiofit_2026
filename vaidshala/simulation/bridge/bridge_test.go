@@ -2,9 +2,11 @@ package bridge
 
 import (
 	"math"
+	"reflect"
 	"testing"
 
 	"vaidshala/clinical-runtime-platform/engines/vmcu/arbiter"
+	cb "vaidshala/clinical-runtime-platform/engines/vmcu/channel_b"
 	vt "vaidshala/clinical-runtime-platform/engines/vmcu/types"
 	"vaidshala/simulation/pkg/patient"
 	simtypes "vaidshala/simulation/pkg/types"
@@ -543,4 +545,102 @@ func TestArbiterCompatibility_125Combinations(t *testing.T) {
 		t.Fatalf("Arbiter: %d/125 passed", passed)
 	}
 	t.Logf("Arbiter: 125/125 combinations verified")
+}
+
+// ---------------------------------------------------------------------------
+// G4: Reflection-based field coverage test
+// ---------------------------------------------------------------------------
+
+// TestFieldCoverage_ProductionRawPatientData verifies that every non-timestamp
+// field on the production RawPatientData struct is either set by
+// ToProductionRawLabs or explicitly listed as intentionally skipped.
+func TestFieldCoverage_ProductionRawPatientData(t *testing.T) {
+	// Fields that are intentionally not set by the bridge because they
+	// come from production-only systems (KB-20 cache, BPTrajectory, etc.)
+	intentionallySkipped := map[string]bool{
+		// Production-only fields from KB-20 cache / BPTrajectory:
+		"EGFRSlope":                     true,
+		"EGFRPrior48h":                  true,
+		"SBPLowerLimit":                 true,
+		"BPPattern":                     true,
+		"MeasurementUncertainty":        true,
+		"HRContext":                     true,
+		"HeartRateConfirmed":            true,
+		"BetaBlockerDoseChangeIn7d":     true,
+		"BetaBlockerPerturbationActive": true,
+		"ActivePerturbations":           true,
+		// Fields that are correctly set by the bridge but are legitimately
+		// zero/false for the GreenTrajectory archetype (no prior HbA1c,
+		// no RAAS agent, no clinical flags active):
+		"HbA1cPrior30d":          true, // nilFloat64(0) → nil (absent prior)
+		"HbA1cLastMeasuredAt":    true, // zero time → nil
+		"OnRAASAgent":            true, // GreenTrajectory has no ACEi/ARB
+		"CreatinineRiseExplained": true, // false for this archetype
+		"OliguriaReported":       true, // false for this archetype
+		"BetaBlockerActive":      true, // false for this archetype
+		"ThiazideActive":         true, // false for this archetype
+		"Season":                 true, // empty string for this archetype
+		"CKDStage":               true, // empty string for this archetype
+		"RecentDoseIncrease":     true, // false for this archetype
+	}
+
+	// Build a fully-populated simulation input
+	vp := patient.GreenTrajectory()
+	ts := PatientTimestamps{
+		LastGlucose:    vp.Labs.GlucoseTimestamp,
+		LastCreatinine: vp.Labs.CreatinineTimestamp,
+		LastPotassium:  vp.Labs.PotassiumTimestamp,
+		LastHbA1c:      vp.Labs.HbA1cTimestamp,
+		LastEGFR:       vp.Labs.EGFRTimestamp,
+	}
+
+	prod := ToProductionRawLabs(&vp.Labs, &vp.Context, ts)
+
+	rv := reflect.ValueOf(*prod)
+	rt := rv.Type()
+
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		if intentionallySkipped[field.Name] {
+			continue
+		}
+
+		fv := rv.Field(i)
+		// Check if field is at its zero value
+		if fv.IsZero() {
+			t.Errorf("production RawPatientData.%s is zero-value — bridge may not be setting it. "+
+				"If intentionally skipped, add to intentionallySkipped map.", field.Name)
+		}
+	}
+
+	// Also verify the intentionally-skipped list doesn't contain phantom fields
+	for name := range intentionallySkipped {
+		if _, ok := rt.FieldByName(name); !ok {
+			t.Errorf("intentionallySkipped contains %q which is not a field on RawPatientData — stale entry?", name)
+		}
+	}
+
+	// Verify production struct type is correct
+	_ = cb.RawPatientData{} // compile-time check that we imported the right type
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark tests
+// ---------------------------------------------------------------------------
+
+func BenchmarkRunCycle(b *testing.B) {
+	engine, err := NewProductionEngine(
+		WithProtocolRulesPath("testdata/protocol_rules.yaml"),
+	)
+	if err != nil {
+		b.Fatalf("failed to create engine: %v", err)
+	}
+
+	vp := patient.GreenTrajectory()
+	input := vp.ToTitrationInput(1)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		engine.RunCycle(input)
+	}
 }

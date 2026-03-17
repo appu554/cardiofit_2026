@@ -56,9 +56,15 @@ type kb20StratumResponse struct {
 	PatientAge      int                     `json:"patient_age,omitempty"` // G2: age in years
 }
 
+// kb21AdherenceWeight is a single drug-class adherence weight from KB-21.
+type kb21AdherenceWeight struct {
+	AdjustedWeight float64 `json:"adjusted_weight"`
+}
+
 // kb21AdherenceResponse is the expected response from KB-21 adherence endpoint.
+// KB-21 returns {"weights": {"DRUG_CLASS": {"adjusted_weight": 0.85, ...}, ...}}.
 type kb21AdherenceResponse struct {
-	Weights map[string]float64 `json:"weights"`
+	Weights map[string]kb21AdherenceWeight `json:"weights"`
 }
 
 // kb21ReliabilityResponse is the expected response from KB-21 reliability endpoint.
@@ -227,7 +233,12 @@ func (p *SessionContextProvider) Fetch(ctx context.Context, patientID uuid.UUID,
 			return nil
 		}
 
-		result.AdherenceWeights = adherenceResp.Weights
+		// Flatten KB-21's per-class struct response to map[string]float64
+		flatWeights := make(map[string]float64, len(adherenceResp.Weights))
+		for drugClass, w := range adherenceResp.Weights {
+			flatWeights[drugClass] = w.AdjustedWeight
+		}
+		result.AdherenceWeights = flatWeights
 
 		p.log.Debug("kb-21 adherence weights fetched",
 			zap.String("patient_id", patientID.String()),

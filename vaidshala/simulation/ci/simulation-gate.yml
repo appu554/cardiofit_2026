@@ -1,0 +1,63 @@
+# Simulation Safety Gate — CI workflow
+#
+# Canonical location: vaidshala/simulation/ci/simulation-gate.yml
+# Also deployed at: .github/workflows/simulation-gate.yml
+#
+# Triggers on PRs touching V-MCU or simulation code.
+# All test steps use -count=1 to disable Go test caching.
+
+name: Simulation Safety Gate
+
+on:
+  pull_request:
+    paths:
+      - 'vaidshala/clinical-runtime-platform/engines/vmcu/**'
+      - 'vaidshala/simulation/**'
+  push:
+    branches: [main]
+    paths:
+      - 'vaidshala/clinical-runtime-platform/engines/vmcu/**'
+      - 'vaidshala/simulation/**'
+
+jobs:
+  simulation-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Verify protocol_rules.yaml is current
+        run: |
+          cd vaidshala/simulation
+          PROD_SHA=$(sha256sum ../clinical-runtime-platform/engines/vmcu/protocol_rules.yaml | cut -d' ' -f1)
+          TEST_SHA=$(sha256sum bridge/testdata/protocol_rules.yaml | cut -d' ' -f1)
+          if [ "$PROD_SHA" != "$TEST_SHA" ]; then
+            echo "ERROR: bridge/testdata/protocol_rules.yaml is stale"
+            echo "Production: $PROD_SHA"
+            echo "Testdata:   $TEST_SHA"
+            exit 1
+          fi
+
+      - name: Bridge compile check
+        run: cd vaidshala/simulation && go build ./bridge/...
+
+      - name: Bridge round-trip tests
+        run: cd vaidshala/simulation && go test ./bridge/ -v -count=1
+
+      - name: Layer 1 - Simulation scenarios
+        run: cd vaidshala/simulation && go test ./pkg/scenarios/ -run TestSimulation -v -count=1
+
+      - name: Layer 1 - Production scenarios
+        run: cd vaidshala/simulation && go test ./pkg/scenarios/ -run TestProduction -v -count=1
+
+      - name: Layer 1 - Arbiter sweep
+        run: cd vaidshala/simulation && go test ./pkg/scenarios/ -run TestArbiter -v -count=1
+
+      - name: Layer 2 - Trajectory tests
+        run: cd vaidshala/simulation && go test ./pkg/physiology/ -v -count=1 -timeout=300s
+
+      - name: Performance benchmark
+        run: cd vaidshala/simulation && go test ./bridge/ -bench=BenchmarkRunCycle -benchmem -count=1

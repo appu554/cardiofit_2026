@@ -28,6 +28,7 @@ type Server struct {
 	engagementService  *services.EngagementService
 	correlationService *services.CorrelationService
 	hypoRiskService    *services.HypoRiskService
+	festivalCalendar   *services.FestivalCalendar
 	eventSubscriber    *events.Subscriber
 }
 
@@ -42,6 +43,7 @@ func NewServer(
 	engagementSvc *services.EngagementService,
 	correlationSvc *services.CorrelationService,
 	hypoRiskSvc *services.HypoRiskService,
+	festivalCal *services.FestivalCalendar,
 	subscriber *events.Subscriber,
 ) *Server {
 	if cfg.IsProduction() {
@@ -62,6 +64,7 @@ func NewServer(
 		engagementService:  engagementSvc,
 		correlationService: correlationSvc,
 		hypoRiskService:    hypoRiskSvc,
+		festivalCalendar:   festivalCal,
 		eventSubscriber:    subscriber,
 	}
 
@@ -88,6 +91,9 @@ func (s *Server) setupRoutes() {
 	// so these routes must exist without the /api/v1 prefix.
 	s.Router.GET("/patient/:patient_id/adherence/htn", s.getHTNAdherence)
 	s.Router.GET("/patient/:patient_id/adherence/htn/gate", s.getHTNAdherenceGate)
+
+	// Festival status — root-level for KB-20 perturbation integration (P4)
+	s.Router.GET("/festival-status", s.getFestivalStatus)
 
 	// API v1
 	v1 := s.Router.Group("/api/v1")
@@ -139,6 +145,9 @@ func (s *Server) setupRoutes() {
 			webhooks.POST("/lab-result", s.webhookLabResult)
 			webhooks.POST("/medication-changed", s.webhookMedicationChanged)
 		}
+
+		// Festival status (P4 perturbation integration for KB-20)
+		v1.GET("/festival-status", s.getFestivalStatus)
 
 		// Analytics endpoints (Finding F-11)
 		analytics := v1.Group("/analytics")
@@ -249,5 +258,40 @@ func sendError(c *gin.Context, statusCode int, message, code string, details map
 			"message": message,
 			"details": details,
 		},
+	})
+}
+
+// --- Festival status handler (P4 perturbation) ---
+
+// getFestivalStatus returns the active festival window for a region, if any.
+// Used by KB-20 to populate P4 (festival fasting) perturbation fields.
+// GET /festival-status?region=NORTH (default: ALL)
+func (s *Server) getFestivalStatus(c *gin.Context) {
+	if s.festivalCalendar == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"active": false,
+		})
+		return
+	}
+
+	region := c.DefaultQuery("region", "ALL")
+	now := time.Now().UTC()
+
+	window := s.festivalCalendar.GetActiveFestival(now, region)
+	if window == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"active": false,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"active":       true,
+		"name":         window.Name,
+		"fasting_type": string(window.FastingType),
+		"start":        window.Start.Format(time.RFC3339),
+		"end":          window.End.Format(time.RFC3339),
+		"core_start":   window.CoreStart.Format(time.RFC3339),
+		"core_end":     window.CoreEnd.Format(time.RFC3339),
 	})
 }

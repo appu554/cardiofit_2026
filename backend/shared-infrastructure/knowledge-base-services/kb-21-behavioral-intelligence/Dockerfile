@@ -29,9 +29,9 @@ COPY --from=builder /app/migrations ./migrations
 RUN chown -R appuser:appgroup /app
 USER appuser
 
-EXPOSE 8093
+EXPOSE 8133
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8093/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8133/health || exit 1
 
 CMD ["./main"]

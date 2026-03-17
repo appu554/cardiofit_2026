@@ -1460,3 +1460,177 @@ Four architectural conflicts between the M2 Bayesian Engine Counter-Proposal and
 The Dizziness Evidence Harvest V2 contains three outdated claims:
 - **C-1**: "Drug ADR data → KB-6 (Formulary)" — **RESOLVED**: ADR profiles live in KB-20 `adverse_reaction_profiles` per codebase verification. KB-6 is formulary only.
 - **C-2/C-3**: "HPI Engine / Bayesian Posterior Engine NOT YET BUILT" — **RESOLVED**: KB-22's `bayesian_engine.go`, `safety_engine.go`, `node_loader.go`, `cm_applicator.go` are running Go code per Section 1.1. The Dizziness doc predates KB-22 implementation.
+
+---
+
+## 13. Gap Analysis: Plan vs Codebase (2026-03-13 Audit, Revised 2026-03-13 Second Pass)
+
+This section documents gaps identified by cross-referencing the plan against the running codebase. **Two rounds of audit** were performed: the initial audit identified 12 gaps (Gaps #1 and #2 implemented immediately), and the second-pass cross-check corrected several gap assessments and added 3 new gaps. All G-series Go changes (G1-G19) are now verified as **implemented in code**.
+
+### Gap Status Summary
+
+| # | Gap | Severity | Status |
+|---|---|---|---|
+| 1 | HARD_BLOCK/OVERRIDE CM effects passthrough (G5) | **HIGH** | **IMPLEMENTED** |
+| 2 | SCE not extracted to separate service (CC-1) | **MEDIUM** | **IMPLEMENTED** |
+| 3 | Plan timeline outdated (Section 4) | **LOW** | DOCUMENTED |
+| 4 | G-series status table completely outdated — ALL G1-G19 implemented | **LOW** | DOCUMENTED |
+| 5 | Plan says G5 not implemented — code says otherwise | **LOW** | **RESOLVED** (by Gap #1) |
+| 6 | COMPOSITE_SCORE: SafetyEngine implements it, NodeLoader guard blocks it | **LOW** | CORRECTED (second pass) |
+| 7 | Plan claims "KB-19 routes answers to SCE" — KB-19 is not in answer path | **LOW** | DOCUMENTED |
+| 8 | No SYMPTOM_MODIFICATION CM effect implementation | **LOW** | DEFERRED |
+| 9 | AcuityScorer fully built but not wired into SessionService | **MEDIUM** | CORRECTED (second pass) |
+| 10 | Node transitions fully evaluate but can't chain sessions | **MEDIUM** | CORRECTED (second pass) |
+| 11 | ResumeSession stratum drift — CM effects not re-extracted | **LOW** | DOCUMENTED |
+| 12 | ExpertPanelService fully implemented (NOT stubbed); TierCService needs re-check | **LOW** | **CORRECTED** (second pass) |
+| 13 | Shared CM Registry is DB-driven (KB-20), not YAML file per plan B01 spec | **LOW** | NEW (second pass) |
+| 14 | Plan infrastructure items (BAY-7, BAY-10, BAY-11, Clinical Source Registry, Provenance) all implemented | **LOW** | NEW (second pass) |
+| 15 | G8 (CM active state in safety triggers) implemented — plan says "deferred" | **LOW** | NEW (second pass) |
+
+### Gap #1: HARD_BLOCK/OVERRIDE CM Effects — IMPLEMENTED
+
+**Problem**: `CMApplicator.Apply()` recorded HARD_BLOCK, OVERRIDE, and SYMPTOM_MODIFICATION with `delta=0.0` (passthrough). `CMEffectProcessor` existed with full Extract/ApplyOverrides logic but was never wired into `SessionService`.
+
+**Fix Applied (2026-03-13)**:
+1. **Constructor**: Added `cmEffects *CMEffectProcessor` as 18th parameter to `NewSessionService()`
+2. **Session Init**: After `cmApplicator.Apply()`, calls `cmEffects.Extract(allModifiers)` and caches the `CMEffectResult` in Redis (`kb22:cmeffects:<session_id>`)
+3. **Override Enforcement**: Added `applyG5Overrides()` helper called after all 5 `GetPosteriors()` sites (CreateSession, SubmitAnswer reasoning step, SubmitAnswer main posteriors, GetSession, ForceComplete)
+4. **Event Propagation**: Added `MedicationBlocks []MedicationBlock` field to `HPICompleteEvent` in KB-22, KB-23, and KB-19 models. `publishHPIComplete()` loads cached contraindications and includes them in the event
+5. **KB-23 Consumption**: `CardBuilder.Build()` injects `SAFETY_INSTRUCTION` recommendations (V-04 bypass) for each `MedicationBlock`, with IMMEDIATE urgency and sort_order=-1
+6. **KB-19 Consumption**: `handleIngestEvent()` logs each medication block with structured fields for future safety gatekeeper integration
+
+**Files Modified**:
+- `kb-22-hpi-engine/internal/services/session_service.go` — constructor, session flow, publishHPIComplete, applyG5Overrides helper
+- `kb-22-hpi-engine/internal/models/events.go` — MedicationBlock type, HPICompleteEvent field
+- `kb-22-hpi-engine/internal/cache/redis.go` — SetCMEffects/GetCMEffects methods
+- `kb-22-hpi-engine/internal/api/server.go` — CMEffectProcessor creation and wiring
+- `kb-22-hpi-engine/internal/services/session_service_test.go` — 18-param constructor
+- `kb-23-decision-cards/internal/models/events.go` — MedicationBlock type, HPICompleteEvent field
+- `kb-23-decision-cards/internal/services/card_builder.go` — SAFETY_INSTRUCTION injection loop
+- `kb-19-protocol-orchestrator/internal/api/event_handlers.go` — MedicationBlock type, HPI_COMPLETE logging
+
+### Gap #2: SCE Extraction to Standalone Service — IMPLEMENTED
+
+**Problem**: Plan Section CC-1 specifies SCE as a separate service on port 8201 with independent health checks. Code had `SCEService` running in-process within KB-22.
+
+**Fix Applied (2026-03-13)**:
+1. **New Service**: Created `kb-24-safety-constraint-engine/` as standalone Go service on port 8201
+   - `POST /api/v1/evaluate` — per-answer safety trigger evaluation with CM awareness (G8)
+   - `POST /api/v1/sessions/:id/clear` — release session state
+   - `GET /health` — health check
+   - In-memory per-session answer accumulation with RWMutex
+   - Kafka escalation publishing to `sce.escalation.events`
+   - Reads KB-22 YAML node definitions for safety triggers (shared via `NODE_DEFINITION_PATH`)
+2. **HTTP Client**: Created `sce_client.go` in KB-22 with circuit breaker fallback to in-process SCEService
+3. **Config**: Added `SCE_URL` (default `http://localhost:8201`) and `SCE_TIMEOUT_MS` (default 10ms) to KB-22 config
+4. **Server Wiring**: `SCEClient` initialized in `server.go` after `SCEService` (fallback)
+
+**Files Created**:
+- `kb-24-safety-constraint-engine/` — complete Go service (go.mod, Dockerfile, cmd/server/main.go, internal/{api,config,models,services}/*)
+- `kb-22-hpi-engine/internal/services/sce_client.go` — HTTP client with fallback
+
+**Files Modified**:
+- `kb-22-hpi-engine/internal/config/config.go` — SCEURL, SCETimeoutMS fields
+- `kb-22-hpi-engine/internal/api/server.go` — SCEClient field + initialization
+
+### Gap #3: Plan Timeline Outdated
+
+Section 4 "Execution Timeline" references relative dates ("Month 0", "Week 1-2") that are no longer meaningful. Most G-series items (G1-G8, G13-G19) are already implemented. The timeline should be updated to reflect actual completion dates and remaining work.
+
+### Gap #4: G-Series Status Table Completely Outdated
+
+Section 7 "Go Change Summary" lists G1-G19 with estimated effort as if they are future work. **Second-pass audit (2026-03-13) confirms ALL 19 Go changes are implemented in the codebase:**
+
+| Go Change | Verified Location |
+|---|---|
+| G1 Safety floors | `bayesian_engine.go:598-672` — clamping + re-normalization |
+| G2 Sex modifiers | `bayesian_engine.go:201-240` — OR-based log-odds deltas |
+| G3 Med-conditional dx | `bayesian_engine.go:39-103` — activation condition + prior redistribution |
+| G4 DM_HTN_CKD_HF stratum | `stratum_engine.go:144-175` (KB-20) |
+| G5 HARD_BLOCK/OVERRIDE | `cm_effect_processor.go` + wired via Gap #1 fix |
+| G6 Stratum-conditional LR | `bayesian_engine.go:375-450` — lr_positive_by_stratum fallback |
+| G7 AcuityScorer | `acuity_scorer.go` — Update, classify, ComputeLRScale (NOT wired — see Gap #9) |
+| G8 CM in safety triggers | `safety_engine.go:296-361` — `EvaluateTriggersWithCMs()` |
+| G9 Conditional priors | `bayesian_engine.go` — conditional prior branch |
+| G10 CATEGORICAL answers | `bayesian_engine.go` — categorical LR lookup |
+| G11 Action thresholds | Downstream in KB-23 |
+| G12 COMPOSITE_SCORE | `safety_engine.go:363-414` — `EvaluateCompositeScore()` (NodeLoader guard blocks — see Gap #6) |
+| G13 Node transitions | `transition_evaluator.go` (234 lines) — priority-based evaluation (no ChainSession — see Gap #10) |
+| G14 Log-odds CM composition | `cm_applicator.go:57-61, 153-157` — logit-shift + ±2.0 cap |
+| G15 Other bucket | `bayesian_engine.go:30-31, 110-121, 501-557` — geometric mean inverse LR, 0.15 default |
+| G16 Pata-nahi cascade | `patanahi_tracker.go` (129 lines) — graduated response |
+| G17 Contradiction detection | `contradiction_detector.go` (74 lines) — pair tracking + re-ask |
+| G18 Closure multi-criteria | `bayesian_engine.go:771-902` — `CheckConvergenceMultiCriteria()` |
+| G19 Skip-redundancy | `question_orchestrator.go:315-364` — `GetEligibleQuestionsWithCMs()` |
+
+Section 7 should add a "Status: IMPLEMENTED" column to all rows.
+
+### Gap #5: Plan Claims "G5 Not Implemented" — Resolved by Gap #1
+
+Section 1.2 row G5 states "CMApplicator.Apply() only handles INCREASE_PRIOR / DECREASE_PRIOR". This was true at plan-write time but the `CMEffectProcessor` was subsequently built (just not wired). Gap #1 fix completes the G5 implementation.
+
+### Gap #6: COMPOSITE_SCORE — Implemented in SafetyEngine, Blocked by NodeLoader Guard
+
+**Second-pass correction (2026-03-13)**: `SafetyEngine.EvaluateCompositeScore()` at `safety_engine.go:363-414` is fully implemented with weighted scoring logic. However, `NodeLoader.validate()` still rejects `COMPOSITE_SCORE` trigger type, and a code comment at `node.go:120` marks it as "R-06: COMPOSITE_SCORE (stub)" which is stale — the implementation exists. To enable: (1) remove the NodeLoader guard, (2) update the stale comment, (3) author COMPOSITE_SCORE triggers in node YAMLs.
+
+### Gap #7: Plan Says "KB-19 Routes Answers to SCE"
+
+Section CC-1 states: "KB-19 routes answers to both M2 and SCE". In reality, KB-19 is NOT in the answer submission path — patients submit answers directly to KB-22. The correct architecture (now implemented) is: KB-22 calls SCE as HTTP sidecar during `SubmitAnswer()`.
+
+### Gap #8: No SYMPTOM_MODIFICATION CM Effect Implementation
+
+`CMApplicator.Apply()` records SYMPTOM_MODIFICATION with `delta=0.0` (passthrough), same as HARD_BLOCK/OVERRIDE were before Gap #1 fix. SYMPTOM_MODIFICATION would modify how symptoms are interpreted (e.g., beta-blocker masking tachycardia). This requires a new mechanism beyond log-odds or posterior clamping — likely a question-level LR modifier. Deferred to P5+ nodes.
+
+### Gap #9: AcuityScorer Fully Built but Not Wired into SessionService
+
+**Second-pass correction (2026-03-13)**: `AcuityScorer` is more complete than initially documented. It has full methods: `Update()`, `classify()` (ACUTE/SUBACUTE/CHRONIC after 2+ tagged questions), `IsConfident()`, and `ComputeLRScale()` with tag mapping for ONSET/DURATION/PROGRESSION/PATTERN answers. Code comments reference "for KB-23 Decision Card rendering" suggesting deferred LR scaling integration. However, `SessionService` still never calls it. Integration needed: call `AcuityScorer.Update()` in `SubmitAnswer()` for acuity-tagged questions, include acuity classification in `HPICompleteEvent` for KB-23 gate evaluation.
+
+### Gap #10: Node Transitions Fully Evaluate but Can't Chain Sessions
+
+**Second-pass correction (2026-03-13)**: `TransitionEvaluator` at `transition_evaluator.go` (234 lines) is more complete than initially documented. It supports multiple condition types (posterior thresholds, question count, convergence, safety flags) with priority-based triggering per target node. Transition events correctly appear in `AnswerResponse.Transitions`. The gap is narrower than stated: only the `ChainSession()` method in `SessionService` is missing — the evaluation infrastructure is production-ready. `ChainSession()` needs to: (1) create a follow-up session for the target node, (2) carry over patient context and CM state, (3) link sessions for Conflict Arbiter correlation.
+
+### Gap #11: ResumeSession Stratum Drift Doesn't Re-Extract CM Effects
+
+When a session is resumed and KB-20 reports a stratum drift (R-04), the `StratumDriftEvent` is published but CM effects are not re-extracted for the new stratum. HARD_BLOCK/OVERRIDE modifiers may be stratum-dependent. Fix: after stratum drift detection in `ResumeSession()`, re-fetch context modifiers and call `cmEffects.Extract()` + update cache.
+
+### Gap #12: ExpertPanelService Fully Implemented — NOT Stubbed (Corrected)
+
+**Second-pass correction (2026-03-13)**: Initial audit incorrectly stated `ExpertPanelService` was a minimal stub. Code review reveals it is **fully implemented** (218 lines) with:
+- 2/3 panel consensus enforcement (lines 66-74)
+- ±30% max LR adjustment per review cycle constraint (lines 87-96)
+- Full `CalibrationEvent` logging with `source='EXPERT_PANEL'`, panel members, and rationale
+- Version bump on each adjustment cycle
+
+`TierCService` (E03) status needs independent verification — may also be more complete than assumed. The remaining calibration gap is primarily operational (appointing the 3-clinician panel, scheduling quarterly reviews) rather than engineering.
+
+### Gap #13: Shared CM Registry is DB-Driven, Not YAML (NEW — Second Pass)
+
+Plan Section B01 specifies a `shared_cm_registry.yaml` file with canonical CM IDs, triggers, effects, consuming nodes, and versions. The actual implementation uses a **database-driven** CM registry in KB-20 (`cm_registry.go`) querying `models.ContextModifier` from PostgreSQL. This is functionally equivalent and arguably superior (runtime queryable, version-controlled in DB, supports the dual-path merge strategy). However, the plan's references to "shared_cm_registry.yaml" are misleading — there is no YAML file. Plan should be updated to reflect the DB-driven architecture.
+
+### Gap #14: Plan Infrastructure Items All Implemented (NEW — Second Pass)
+
+**Second-pass audit (2026-03-13)** verified that the following plan items, previously assumed to be future work, are **already implemented**:
+
+| Plan Item | Verified Location |
+|---|---|
+| Conflict Arbiter (BAY-7/B02) | `kb-19-protocol-orchestrator/internal/arbitration/hpi_conflict_arbiter.go` — BOOST/FLAG/REPORT/RED_FLAG_WINS |
+| API endpoints (BAY-10) | `kb-22-hpi-engine/internal/api/escalation_handlers.go` — `/v1/session/escalate`, `/v1/session/multi-init`, `/v1/node/validate` |
+| Kafka topics (BAY-11) | `kb-22-hpi-engine/internal/services/kafka_publisher.go` — `hpi.session.events`, `hpi.escalation.events`, `hpi.calibration.data` |
+| KB-23 Confidence Tiers | `kb-23-decision-cards/internal/services/confidence_tier_service.go` — `ComputeTier()` with FIRM/PROBABLE/POSSIBLE/UNCERTAIN |
+| Clinical Source Registry (§11.12) | `kb-22-hpi-engine/migrations/004_clinical_source_registry.sql` — `clinical_sources`, `element_attributions`, `calibration_events` tables |
+| Provenance Logging (BAY-12) | `kb-22-hpi-engine/migrations/005_session_provenance.sql` — per-update audit trail with before/after log-odds |
+
+Sections 4 (timeline) and 7 (Go changes) should mark these as complete.
+
+### Gap #15: G8 Implemented — Plan Says "Deferred" (NEW — Second Pass)
+
+Section 7 row G8 and Section 4 "Week 14+" list G8 (CM active state in safety trigger conditions) as "Deferred." Code review confirms `SafetyEngine.EvaluateTriggersWithCMs()` at `safety_engine.go:296-361` is fully implemented: trigger conditions can reference `CM_ID=FIRED` atoms, and the evaluator receives fired CM state alongside answer state. The SCE client (`sce_client.go`) also passes `firedCMs` to KB-24 for CM-aware safety evaluation. Plan should update G8 status to IMPLEMENTED.
+
+### Second-Pass Summary
+
+The codebase is **significantly ahead** of the plan document. Of the original 12 gaps, 4 were corrected (Gaps #6, #9, #10, #12 were less severe than documented or already resolved). 3 new informational gaps were added (#13-#15). The only **MEDIUM** severity gaps remaining are:
+
+- **Gap #9**: AcuityScorer wiring into SessionService — fully built, needs ~20 lines of integration code
+- **Gap #10**: ChainSession() for node transitions — evaluation infrastructure ready, needs session lifecycle method
+
+All other gaps are LOW severity documentation corrections. No new HIGH severity gaps were found.

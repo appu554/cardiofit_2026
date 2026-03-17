@@ -43,7 +43,7 @@ func NewOutcomePublisher(cfg *config.Config, log *zap.Logger, m *metrics.Collect
 }
 
 // PublishHPIComplete sends the HPI_COMPLETE event to KB-23 (/api/v1/decision-cards)
-// and KB-19 (/api/v1/events). Both targets receive the same payload.
+// and KB-19 (/api/v1/execute). Both targets receive the same payload.
 //
 // Retry policy: up to 3 attempts with OutcomeRetryDelay (default 30s) between
 // retries. Each target is retried independently; failure on one does not block
@@ -72,7 +72,7 @@ func (p *OutcomePublisher) PublishHPIComplete(ctx context.Context, event models.
 
 	// Publish to KB-19 Protocol Orchestrator
 	go func() {
-		url := fmt.Sprintf("%s/api/v1/events", p.config.KB19URL)
+		url := fmt.Sprintf("%s/api/v1/execute", p.config.KB19URL)
 		err := p.postWithRetry(ctx, url, body, 3, p.config.OutcomeRetryDelay)
 		results <- publishResult{target: "KB-19", err: err}
 	}()
@@ -118,7 +118,7 @@ func (p *OutcomePublisher) PublishSafetyAlert(ctx context.Context, event models.
 		return fmt.Errorf("marshal SAFETY_ALERT event: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/events", p.config.KB19URL)
+	url := fmt.Sprintf("%s/api/v1/execute", p.config.KB19URL)
 
 	if err := p.postWithRetry(ctx, url, body, 3, p.config.SafetyAlertRetryDelay); err != nil {
 		p.log.Error("SAFETY_ALERT publish failed after retries",

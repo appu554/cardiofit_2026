@@ -74,6 +74,7 @@ const (
 	DrugClassDiuretic      = "DIURETIC"
 	DrugClassGLP1RA        = "GLP1RA"
 	DrugClassThiazolidinedione = "THIAZOLIDINEDIONE"
+	DrugClassGlucocorticoid    = "GLUCOCORTICOID" // Track 3 perturbation detection
 
 	// India-specific agents (F-01)
 	DrugClassTeneligliptin = "TENELIGLIPTIN"

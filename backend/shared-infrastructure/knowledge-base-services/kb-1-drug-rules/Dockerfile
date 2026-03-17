@@ -1,17 +1,20 @@
 # Build stage
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
 # Install build dependencies
 RUN apk add --no-cache git
 
+# Copy shared module first (for replace directive)
+COPY shared/ /shared/
+
 # Copy go mod files
-COPY go.mod go.sum ./
+COPY kb-1-drug-rules/go.mod kb-1-drug-rules/go.sum ./
 RUN go mod download
 
 # Copy source code
-COPY . .
+COPY kb-1-drug-rules/ .
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o kb-1-drug-rules ./cmd/server

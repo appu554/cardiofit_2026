@@ -388,6 +388,16 @@ func (e *VMCUEngine) RunCycle(input TitrationCycleInput) (*vt.TitrationCycleResu
 	// Apply BP-status velocity multiplier (computed above, after arbiter)
 	effectiveGainFactor *= bpVelocityMultiplier
 
+	// ── Perturbation suppression (Track 3): external clinical override ──
+	// Steroid courses, festival fasting, or other transient perturbations set
+	// PerturbationGainFactor via KB-21. FULL suppression (0.0) zeroes dose
+	// changes; DAMPENED (0.5) halves them. Applied last so it overrides all
+	// internal gain adjustments. Safety rules (B-01..B-09) are NOT affected —
+	// they fire on raw lab values before this gain pipeline.
+	if input.RawLabs != nil && input.RawLabs.PerturbationSuppressed {
+		effectiveGainFactor *= input.RawLabs.PerturbationGainFactor
+	}
+
 	// ── Deprescribing escalation suppression ──
 	// If a drug class is being deprescribed, suppress any proposed escalation
 	// for that class. This prevents the titration engine from fighting the
@@ -562,6 +572,12 @@ func (e *VMCUEngine) GetReentryPhase(patientID string) titration.ReentryPhase {
 // IsOnCooldown checks if a patient's medication class is within cooldown.
 func (e *VMCUEngine) IsOnCooldown(patientID string, medClass titration.MedicationClass) bool {
 	return e.cooldown.IsOnCooldown(patientID, medClass)
+}
+
+// SeedCooldownEvent records a historical dose event for cooldown tracking.
+// Used by the simulation bridge to set cooldown state before running scenarios.
+func (e *VMCUEngine) SeedCooldownEvent(event titration.DoseEvent) {
+	e.cooldown.RecordDoseChange(event)
 }
 
 // ── Internal helpers ──

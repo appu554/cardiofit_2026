@@ -43,6 +43,7 @@ type Server struct {
 
 	// Gap-fix additions (CC-1, BAY-10, BAY-11, E01, E03)
 	SCEService         *services.SCEService
+	SCEClient          *services.SCEClient
 	ExpertPanelService *services.ExpertPanelService
 	EventPublisher     *services.EventPublisherFacade
 	KafkaPublisher     services.KafkaPublisher
@@ -96,14 +97,18 @@ func (s *Server) InitServices() {
 	s.KafkaPublisher = s.initKafkaPublisher()
 	s.EventPublisher = services.NewEventPublisherFacade(s.KafkaPublisher, s.Log)
 
-	// CC-1: Safety Constraint Engine (in-process sidecar)
+	// CC-1: Safety Constraint Engine (in-process fallback + HTTP client to KB-24)
 	s.SCEService = services.NewSCEService(s.SafetyEngine, s.NodeLoader, s.KafkaPublisher, s.Log)
+	s.SCEClient = services.NewSCEClient(s.Config.SCEURL, s.Config.SCETimeout(), s.SCEService, s.Log)
 
 	// E01: Expert Panel calibration workflow
 	s.ExpertPanelService = services.NewExpertPanelService(s.DB, s.Cache, s.Log, s.Metrics)
 
 	// E03: Tier C data-driven calibration (Month 18+, N≥200)
 	s.TierCService = services.NewTierCService(s.DB, s.Cache, s.Log, s.Metrics)
+
+	// G5: CM effect processor for HARD_BLOCK/OVERRIDE enforcement
+	cmEffectProcessor := services.NewCMEffectProcessor(s.Log)
 
 	s.SessionService = services.NewSessionService(
 		s.DB, s.Cache, s.Log, s.Metrics,
@@ -113,6 +118,8 @@ func (s *Server) InitServices() {
 		s.MedicationSafety, s.TelemetryWriter, s.OutcomePublisher,
 		s.CrossNodeSafety,
 		s.ContradictionDetector, s.TransitionEvaluator,
+		cmEffectProcessor,
+		s.AcuityScorer,
 	)
 }
 
@@ -153,6 +160,7 @@ func (s *Server) RegisterRoutes() {
 		v1.POST("/sessions/:id/suspend", s.suspendSessionHandler)
 		v1.POST("/sessions/:id/resume", s.resumeSessionHandler)
 		v1.POST("/sessions/:id/complete", s.completeSessionHandler)
+		v1.POST("/sessions/:id/chain", s.chainSessionHandler)
 		v1.GET("/sessions/:id/differential", s.getDifferentialHandler)
 		v1.GET("/sessions/:id/safety", s.getSafetyFlagsHandler)
 		v1.GET("/snapshots/:session_id", s.getSnapshotHandler)

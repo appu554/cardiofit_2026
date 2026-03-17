@@ -247,6 +247,7 @@ type EngagementProfile struct {
 
 	// Retention policy (Finding F-10 — DPDPA)
 	ConsentForFestivalAdapt bool   `gorm:"default:false" json:"consent_for_festival_adapt"`
+	Region                  string `gorm:"default:''" json:"region"` // NORTH|SOUTH|EAST|WEST — for festival calendar region matching
 	RetentionPolicyMonths   int    `gorm:"default:24" json:"retention_policy_months"`
 
 	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`

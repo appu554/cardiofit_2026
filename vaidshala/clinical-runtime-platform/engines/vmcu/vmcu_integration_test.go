@@ -34,6 +34,16 @@ func newTestEngine(t *testing.T) *VMCUEngine {
 	return engine
 }
 
+// withFreshTimestamps adds non-nil lab measurement timestamps to RawPatientData
+// so that DA-06/DA-07/DA-08 staleness rules don't fire HOLD_DATA on every test.
+func withFreshTimestamps(d *channel_b.RawPatientData) *channel_b.RawPatientData {
+	now := time.Now()
+	d.EGFRLastMeasuredAt = &now
+	d.HbA1cLastMeasuredAt = &now
+	d.CreatinineLastMeasuredAt = &now
+	return d
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Phase 7.1: Full Titration Cycle Integration Test
 // ═══════════════════════════════════════════════════════════════════════
@@ -48,7 +58,7 @@ func TestFullCycle_AllClear_DoseApplied(t *testing.T) {
 			CardID:     "card-123",
 			GainFactor: 0.8,
 		},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -57,7 +67,7 @@ func TestFullCycle_AllClear_DoseApplied(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(75),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:              75,
 			ActiveMedications: []string{"METFORMIN"},
@@ -127,7 +137,7 @@ func TestScenario_Glucose35_ChannelBHalt(t *testing.T) {
 	result, trace := engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-002",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(3.5),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -136,7 +146,7 @@ func TestScenario_Glucose35_ChannelBHalt(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(75),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:           75,
 			ProposedAction: "dose_increase",
@@ -168,7 +178,7 @@ func TestScenario_EGFR25_Metformin_ChannelCHalt(t *testing.T) {
 	result, _ := engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-003",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(7.0),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -177,7 +187,7 @@ func TestScenario_EGFR25_Metformin_ChannelCHalt(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(25),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:              25,
 			ActiveMedications: []string{"METFORMIN"},
@@ -208,7 +218,7 @@ func TestScenario_KB23Pause_AcuteIllness(t *testing.T) {
 			Gate:      vt.GatePause,
 			Rationale: "Acute illness perturbation active",
 		},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -217,7 +227,7 @@ func TestScenario_KB23Pause_AcuteIllness(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(75),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:           75,
 			ProposedAction: "dose_increase",
@@ -244,7 +254,7 @@ func TestScenario_EGFRDrop45pct_HoldData(t *testing.T) {
 	result, trace := engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-005",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -254,7 +264,7 @@ func TestScenario_EGFRDrop45pct_HoldData(t *testing.T) {
 			EGFRCurrent:       channel_b.Float64Ptr(28),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
 			EGFRPrior48h:      &prior,
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:           28,
 			ProposedAction: "dose_increase",
@@ -286,7 +296,7 @@ func TestScenario_Potassium28_InsulinIncrease_BothChannelsHalt(t *testing.T) {
 	result, _ := engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-006",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(3.5), // B-01 HALT (also sets ActiveHypoglycaemia for C)
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -295,7 +305,7 @@ func TestScenario_Potassium28_InsulinIncrease_BothChannelsHalt(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(75),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:           75,
 			ProposedAction: "insulin_increase",
@@ -327,7 +337,7 @@ func TestScenario_AllThreeChannelsHalt(t *testing.T) {
 	result, trace := engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-007",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateHalt, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(3.0), // B-01 HALT
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -336,7 +346,7 @@ func TestScenario_AllThreeChannelsHalt(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(25),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR:              25,
 			ActiveMedications: []string{"METFORMIN"}, // PG-01 HALT
@@ -376,7 +386,7 @@ func TestFlushTraces_AccumulatesAndClears(t *testing.T) {
 	input := TitrationCycleInput{
 		PatientID:      "patient-flush",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80),
@@ -385,7 +395,7 @@ func TestFlushTraces_AccumulatesAndClears(t *testing.T) {
 			WeightKgCurrent:   channel_b.Float64Ptr(70),
 			EGFRCurrent:       channel_b.Float64Ptr(75),
 			HbA1cCurrent:      channel_b.Float64Ptr(7.0),
-		},
+		}),
 		CurrentDose:   100.0,
 		ProposedDelta: 5.0,
 	}
@@ -417,13 +427,13 @@ func TestWiring_IntegratorFreezesOnHalt(t *testing.T) {
 	engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-freeze",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateHalt, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 			GlucoseTimestamp:  time.Now(),
 			CreatinineCurrent: channel_b.Float64Ptr(80), PotassiumCurrent: channel_b.Float64Ptr(4.5),
 			SBPCurrent: channel_b.Float64Ptr(120), WeightKgCurrent: channel_b.Float64Ptr(70),
 			EGFRCurrent: channel_b.Float64Ptr(75), HbA1cCurrent: channel_b.Float64Ptr(7.0),
-		},
+		}),
 		CurrentDose:   100.0,
 		ProposedDelta: 10.0,
 	})
@@ -440,13 +450,13 @@ func TestWiring_IntegratorFreezesOnHalt(t *testing.T) {
 func TestWiring_IntegratorResumesOnClear(t *testing.T) {
 	engine := newTestEngine(t)
 
-	normalLabs := &channel_b.RawPatientData{
+	normalLabs := withFreshTimestamps(&channel_b.RawPatientData{
 		GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 		GlucoseTimestamp:  time.Now(),
 		CreatinineCurrent: channel_b.Float64Ptr(80), PotassiumCurrent: channel_b.Float64Ptr(4.5),
 		SBPCurrent: channel_b.Float64Ptr(120), WeightKgCurrent: channel_b.Float64Ptr(70),
 		EGFRCurrent: channel_b.Float64Ptr(75), HbA1cCurrent: channel_b.Float64Ptr(7.0),
-	}
+	})
 
 	// Cycle 1: HALT → freeze
 	engine.RunCycle(TitrationCycleInput{
@@ -493,13 +503,13 @@ func TestWiring_IntegratorResumesOnClear(t *testing.T) {
 func TestWiring_ReentryProtocolActivatesAfterResume(t *testing.T) {
 	engine := newTestEngine(t)
 
-	normalLabs := &channel_b.RawPatientData{
+	normalLabs := withFreshTimestamps(&channel_b.RawPatientData{
 		GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 		GlucoseTimestamp:  time.Now(),
 		CreatinineCurrent: channel_b.Float64Ptr(80), PotassiumCurrent: channel_b.Float64Ptr(4.5),
 		SBPCurrent: channel_b.Float64Ptr(120), WeightKgCurrent: channel_b.Float64Ptr(70),
 		EGFRCurrent: channel_b.Float64Ptr(75), HbA1cCurrent: channel_b.Float64Ptr(7.0),
-	}
+	})
 
 	// Cycle 1: HALT → freeze
 	engine.RunCycle(TitrationCycleInput{
@@ -532,13 +542,13 @@ func TestWiring_ReentryProtocolActivatesAfterResume(t *testing.T) {
 func TestWiring_CooldownBlocksSecondDose(t *testing.T) {
 	engine := newTestEngine(t)
 
-	normalLabs := &channel_b.RawPatientData{
+	normalLabs := withFreshTimestamps(&channel_b.RawPatientData{
 		GlucoseCurrent:    channel_b.Float64Ptr(6.5),
 		GlucoseTimestamp:  time.Now(),
 		CreatinineCurrent: channel_b.Float64Ptr(80), PotassiumCurrent: channel_b.Float64Ptr(4.5),
 		SBPCurrent: channel_b.Float64Ptr(120), WeightKgCurrent: channel_b.Float64Ptr(70),
 		EGFRCurrent: channel_b.Float64Ptr(75), HbA1cCurrent: channel_b.Float64Ptr(7.0),
-	}
+	})
 	ctx := &channel_c.TitrationContext{
 		EGFR: 75, ProposedAction: "dose_increase", DoseDeltaPercent: 10,
 	}
@@ -596,13 +606,13 @@ func TestWiring_MetabolicEngineReducesGainDuringDawn(t *testing.T) {
 	result, _ := engine.RunCycle(TitrationCycleInput{
 		PatientID:      "patient-dawn",
 		ChannelAResult: vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
-		RawLabs: &channel_b.RawPatientData{
+		RawLabs: withFreshTimestamps(&channel_b.RawPatientData{
 			GlucoseCurrent:    channel_b.Float64Ptr(8.0), // elevated fasting glucose
 			GlucoseTimestamp:  dawnTime,
 			CreatinineCurrent: channel_b.Float64Ptr(80), PotassiumCurrent: channel_b.Float64Ptr(4.5),
 			SBPCurrent: channel_b.Float64Ptr(120), WeightKgCurrent: channel_b.Float64Ptr(70),
 			EGFRCurrent: channel_b.Float64Ptr(75), HbA1cCurrent: channel_b.Float64Ptr(7.0),
-		},
+		}),
 		TitrationContext: &channel_c.TitrationContext{
 			EGFR: 75, ProposedAction: "dose_increase", DoseDeltaPercent: 10,
 		},

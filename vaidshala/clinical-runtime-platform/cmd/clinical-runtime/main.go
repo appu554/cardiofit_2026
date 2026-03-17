@@ -34,6 +34,7 @@ import (
 	"vaidshala/clinical-runtime-platform/clients"
 	"vaidshala/clinical-runtime-platform/contracts"
 	"vaidshala/clinical-runtime-platform/engines"
+	vmcuevents "vaidshala/clinical-runtime-platform/engines/vmcu/events"
 	"vaidshala/clinical-runtime-platform/factory"
 )
 
@@ -82,9 +83,10 @@ func main() {
 	log.Printf("    - Medication Engine (drug recommendations)")
 	log.Printf("============================================================")
 	log.Printf("  3-PHASE API ENDPOINTS:")
-	log.Printf("    POST /v1/calculate  - Run all engines")
-	log.Printf("    POST /v1/validate   - Clinician approval")
-	log.Printf("    POST /v1/commit     - Execute actions")
+	log.Printf("    POST /v1/calculate    - Run all engines")
+	log.Printf("    POST /v1/validate     - Clinician approval")
+	log.Printf("    POST /v1/commit       - Execute actions")
+	log.Printf("    POST /v1/vmcu-events  - V-MCU event receiver (KB-19 → cache invalidation)")
 	log.Printf("============================================================")
 
 	// Wait for interrupt signal
@@ -219,6 +221,15 @@ func setupRouter(orchestrator *RuntimeOrchestrator, sessionStore *SessionStore, 
 		v1.POST("/validate", handleValidate(sessionStore))
 		v1.POST("/commit", handleCommit(sessionStore))
 	}
+
+	// V-MCU event receiver: KB-19 forwards MCU_GATE_CHANGED here for cache invalidation.
+	// CacheInvalidator logs the invalidation; actual SafetyCache wiring happens when
+	// V-MCU is instantiated by the orchestrator (future: wire safetyCache.Invalidate).
+	invalidator := vmcuevents.NewCacheInvalidator(func(patientID string) {
+		log.Printf("V-MCU cache invalidated for patient %s", patientID)
+	})
+	eventReceiver := vmcuevents.NewHTTPEventReceiver(invalidator)
+	eventReceiver.RegisterRoutes(v1)
 
 	// Session management
 	router.GET("/v1/session/:id", handleGetSession(sessionStore))

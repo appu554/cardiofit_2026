@@ -8,11 +8,6 @@ import (
 // Reference values from Khan et al., Circulation 2024;149:430-449, Table S25.
 // Each case must match within ±0.005 absolute risk.
 func TestPREVENT_TableS25_Female_Base(t *testing.T) {
-	// Skip until real coefficients from Khan et al. Supplemental Tables S1-S24
-	// are inserted into getCoefficients(). This test is the validation gate —
-	// it MUST pass (±0.005) before clinical deployment.
-	t.Skip("blocked: placeholder coefficients — replace with Khan et al. S1-S24 then remove this skip")
-
 	input := PREVENTInput{
 		Age:              50,
 		Sex:              SexFemale,
@@ -105,23 +100,22 @@ func TestPREVENT_SBPTarget(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		tier       PREVENTRiskTier
 		tenYearCVD float64
 		egfr       float64
 		acr        float64
 		expected   float64
 	}{
-		{"HIGH tier (25%)", RiskTierHigh, 0.25, 90, 10, 120},
-		{"LOW tier (3%)", RiskTierLow, 0.03, 90, 10, 130},
-		{"LOW tier but eGFR<60", RiskTierLow, 0.03, 45, 10, 120},
-		{"LOW tier but ACR≥300", RiskTierLow, 0.03, 90, 350, 120},
-		{"BORDERLINE (6%)", RiskTierBorderline, 0.06, 90, 10, 130},
-		{"INTERMEDIATE (12%)", RiskTierIntermediate, 0.12, 90, 10, 120},
+		{"HIGH tier (25%)", 0.25, 90, 10, 120},
+		{"LOW tier (3%)", 0.03, 90, 10, 130},
+		{"LOW tier but eGFR<60", 0.03, 45, 10, 120},
+		{"LOW tier but ACR≥300", 0.03, 90, 350, 120},
+		{"BORDERLINE (6%)", 0.06, 90, 10, 130},
+		{"INTERMEDIATE (12%)", 0.12, 90, 10, 120},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := DetermineSBPTarget(tt.tier, tt.tenYearCVD, tt.egfr, tt.acr, threshold)
+			got := DetermineSBPTarget(tt.tenYearCVD, tt.egfr, tt.acr, threshold)
 			if got != tt.expected {
 				t.Errorf("expected SBP target %.0f, got %.0f", tt.expected, got)
 			}
@@ -133,13 +127,13 @@ func TestPREVENT_SBPTarget_CustomThreshold(t *testing.T) {
 	// Clinical team lowers threshold to 5% — BORDERLINE patients now get intensive
 	customThreshold := 0.05
 
-	got := DetermineSBPTarget(RiskTierBorderline, 0.06, 90, 10, customThreshold)
+	got := DetermineSBPTarget(0.06, 90, 10, customThreshold)
 	if got != 120 {
 		t.Errorf("with threshold 0.05, 6%% risk should get intensive target 120, got %.0f", got)
 	}
 
 	// 3% risk still below even the lowered threshold
-	got = DetermineSBPTarget(RiskTierLow, 0.03, 90, 10, customThreshold)
+	got = DetermineSBPTarget(0.03, 90, 10, customThreshold)
 	if got != 130 {
 		t.Errorf("with threshold 0.05, 3%% risk should get standard target 130, got %.0f", got)
 	}
