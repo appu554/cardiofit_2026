@@ -38,6 +38,13 @@ type RawPatientData struct {
 	HbA1cPrior30d    *float64 // %, nil if unavailable
 	Weight72hAgo     *float64 // kg, nil if unavailable
 
+	// Lab measurement timestamps (for staleness detection — DA-06, DA-07, DA-08)
+	// nil means "never measured" which is also a staleness condition.
+	EGFRLastMeasuredAt       *time.Time // when eGFR was last measured
+	HbA1cLastMeasuredAt      *time.Time // when HbA1c was last measured
+	CreatinineLastMeasuredAt *time.Time // when creatinine was last measured
+	OnRAASAgent              bool       // true if patient is on ACEi/ARB (DA-08 guard)
+
 	// ── HTN co-management extensions (Wave 1) ──
 
 	// BP extensions
@@ -83,6 +90,13 @@ type RawPatientData struct {
 	// pharmacodynamic shift window. Channel B uses these to dampen
 	// false safety gates on expected signal movements.
 	ActivePerturbations []TreatmentPerturbation
+
+	// ── FBG trajectory perturbation suppression (Track 3) ──
+	// Populated by the orchestrator from ChannelBProjection.
+	// V-MCU RunCycle reads these to dampen gain_factor during perturbation windows.
+	PerturbationSuppressed bool    // true if a perturbation window is active
+	SuppressionMode        string  // FULL | DAMPENED | TAGGED | NONE
+	PerturbationGainFactor float64 // 0.0 (FULL), 0.5 (DAMPENED), 1.0 (NONE)
 }
 
 // TimestampedValue pairs a measurement with its timestamp.

@@ -72,6 +72,17 @@ type ChannelBProjection struct {
 	// ── Active treatment perturbations ──
 	ActivePerturbations []PerturbationWindow `json:"active_perturbations"`
 
+	// ── FBG Trajectory (Sprint 1 + Track 3) ──
+	GlucoseTrajectory     string  `json:"glucose_trajectory,omitempty"`  // STABLE | RISING | RAPID_RISING | DECLINING | IMPROVING
+	GlucoseCV             float64 `json:"glucose_cv_pct,omitempty"`     // coefficient of variation %
+	GlucoseHighVariability bool   `json:"glucose_high_variability"`     // true if CV > 36% (B-20)
+
+	// ── Perturbation suppression (Track 3) ──
+	PerturbationSuppressed bool    `json:"perturbation_suppressed"`
+	SuppressionMode        string  `json:"suppression_mode,omitempty"`    // FULL | DAMPENED | TAGGED | NONE
+	DominantPerturbation   string  `json:"dominant_perturbation,omitempty"`
+	PerturbationGainFactor float64 `json:"perturbation_gain_factor"`     // 0.0 (FULL), 0.5 (DAMPENED), 1.0 (NONE)
+
 	// ── Projection metadata ──
 	ProjectedAt time.Time `json:"projected_at"`
 }

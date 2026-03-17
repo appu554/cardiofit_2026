@@ -61,6 +61,17 @@ func GateSignalToSimulation(prod vt.GateSignal) simtypes.GateSignal {
 func float64Ptr(v float64) *float64   { return &v }
 func timePtr(v time.Time) *time.Time   { return &v }
 
+// nilFloat64 returns nil when v == 0 (absent data), otherwise a pointer.
+// Use this for historical lab values where 0 means "no prior measurement"
+// rather than "measured zero". Production interprets nil as absent and
+// *0 as a valid measurement, so getting this wrong causes false HALTs.
+func nilFloat64(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
 func derefFloat64(p *float64) float64 {
 	if p == nil {
 		return 0
@@ -112,10 +123,13 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		EGFRCurrent:       float64Ptr(sim.EGFR),
 		HbA1cCurrent:      float64Ptr(sim.HbA1c),
 
-		// Historical values
-		Creatinine48hAgo: float64Ptr(sim.CreatininePrevious),
-		HbA1cPrior30d:    float64Ptr(sim.HbA1c), // sim has single HbA1c; use as prior too
-		Weight72hAgo:     float64Ptr(sim.WeightPrevious),
+		// Historical values — use nilFloat64 so zero means "absent" (nil), not
+		// "measured zero" (*0). Production B-03 computes delta from Creatinine48hAgo;
+		// sending *0 instead of nil causes spurious HALT on every patient with
+		// creatinine > 26 µmol/L.
+		Creatinine48hAgo: nilFloat64(sim.CreatininePrevious),
+		HbA1cPrior30d:    nilFloat64(sim.HbA1c),
+		Weight72hAgo:     nilFloat64(sim.WeightPrevious),
 
 		// Measurement timestamps
 		EGFRLastMeasuredAt:      nilTimeIfZero(ts.LastEGFR),
@@ -159,6 +173,11 @@ func ToProductionRawLabs(sim *simtypes.RawPatientData, ctx *simtypes.TitrationCo
 		}
 		prod.GlucoseReadings = readings
 	}
+
+	// ── Perturbation suppression fields (Track 3) ──
+	prod.PerturbationSuppressed = sim.PerturbationSuppressed
+	prod.SuppressionMode = sim.SuppressionMode
+	prod.PerturbationGainFactor = sim.PerturbationGainFactor
 
 	return prod
 }
@@ -217,6 +236,11 @@ func ToSimulationRawLabs(prod *cb.RawPatientData) simtypes.RawPatientData {
 		sim.GlucosePrevious = prod.GlucoseReadings[1].Value
 	}
 
+	// Perturbation suppression (Track 3)
+	sim.PerturbationSuppressed = prod.PerturbationSuppressed
+	sim.SuppressionMode = prod.SuppressionMode
+	sim.PerturbationGainFactor = prod.PerturbationGainFactor
+
 	return sim
 }
 
@@ -267,11 +291,11 @@ func ToProductionContext(sim *simtypes.TitrationContext) *cc.TitrationContext {
 		// exist on the simulation TitrationContext.
 		HypoglycaemiaWithin7d: sim.HypoWithin7d,
 
-		// Numeric values for PG threshold comparisons
-		// (production gets these from cache; simulation has them in Labs,
-		// but Channel C's context carries its own copies).
-		PotassiumCurrent: 0, // Caller should set from Labs if needed
-		SBPCurrent:       0, // Caller should set from Labs if needed
-		SodiumCurrent:    0, // Caller should set from Labs if needed
+		// Numeric values for PG threshold comparisons — initialized to zero here.
+		// engine_adapter.go RunCycle() overwrites these from RawLabs after
+		// constructing both prodInput.RawLabs and prodInput.TitrationContext.
+		PotassiumCurrent: 0,
+		SBPCurrent:       0,
+		SodiumCurrent:    0,
 	}
 }

@@ -127,6 +127,12 @@ type RawPatientData struct {
 	// Renal
 	CreatinineCurrent  float64 // µmol/L
 	CreatininePrevious float64 // µmol/L (48h prior)
+
+	// Perturbation suppression (Track 3 — mapped from ChannelBProjection)
+	PerturbationSuppressed bool
+	SuppressionMode        string
+	PerturbationGainFactor float64
+
 	CreatinineTimestamp time.Time
 	EGFR               float64 // mL/min/1.73m²
 	EGFRTimestamp       time.Time
