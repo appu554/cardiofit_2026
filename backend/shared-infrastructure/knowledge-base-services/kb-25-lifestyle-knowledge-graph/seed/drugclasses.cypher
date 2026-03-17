@@ -1,0 +1,18 @@
+CREATE (:DrugClass {code: 'DC_METFORMIN', name: 'Metformin', atc_prefix: 'A10BA02'});
+CREATE (:DrugClass {code: 'DC_SU', name: 'Sulfonylureas', atc_prefix: 'A10BB'});
+CREATE (:DrugClass {code: 'DC_INSULIN', name: 'Insulin (all forms)', atc_prefix: 'A10A'});
+CREATE (:DrugClass {code: 'DC_SGLT2I', name: 'SGLT2 Inhibitors', atc_prefix: 'A10BK'});
+CREATE (:DrugClass {code: 'DC_GLP1RA', name: 'GLP-1 Receptor Agonists', atc_prefix: 'A10BJ'});
+CREATE (:DrugClass {code: 'DC_DPP4I', name: 'DPP-4 Inhibitors', atc_prefix: 'A10BH'});
+CREATE (:DrugClass {code: 'DC_TZD', name: 'Thiazolidinediones', atc_prefix: 'A10BG'});
+CREATE (:DrugClass {code: 'DC_AGI', name: 'Alpha-Glucosidase Inhibitors', atc_prefix: 'A10BF'});
+CREATE (:DrugClass {code: 'DC_ACEI', name: 'ACE Inhibitors', atc_prefix: 'C09A'});
+CREATE (:DrugClass {code: 'DC_ARB', name: 'Angiotensin II Receptor Blockers', atc_prefix: 'C09C'});
+CREATE (:DrugClass {code: 'DC_BB', name: 'Beta Blockers', atc_prefix: 'C07'});
+CREATE (:DrugClass {code: 'DC_CCB', name: 'Calcium Channel Blockers', atc_prefix: 'C08'});
+CREATE (:DrugClass {code: 'DC_THIAZIDE', name: 'Thiazide Diuretics', atc_prefix: 'C03A'});
+CREATE (:DrugClass {code: 'DC_LOOP', name: 'Loop Diuretics', atc_prefix: 'C03C'});
+CREATE (:DrugClass {code: 'DC_STATIN', name: 'Statins', atc_prefix: 'C10AA'});
+CREATE (:DrugClass {code: 'DC_ANTICOAG', name: 'Anticoagulants', atc_prefix: 'B01A'});
+CREATE (:DrugClass {code: 'DC_ASPIRIN', name: 'Aspirin/Antiplatelet', atc_prefix: 'B01AC'});
+CREATE (:DrugClass {code: 'DC_MRA', name: 'Mineralocorticoid Receptor Antagonists', atc_prefix: 'C03DA'});
