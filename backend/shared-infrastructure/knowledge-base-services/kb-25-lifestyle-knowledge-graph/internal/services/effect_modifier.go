@@ -24,9 +24,9 @@ func evaluateCondition(condition string, patient *clients.PatientSnapshot) bool 
 	case "age > 65":
 		return patient.Age > 65
 	case "eGFR < 30":
-		return patient.EGFR < 30
+		return patient.EGFR > 0 && patient.EGFR < 30
 	case "eGFR < 60":
-		return patient.EGFR < 60
+		return patient.EGFR > 0 && patient.EGFR < 60
 	case "BMI > 35":
 		return patient.BMI > 35
 	case "HbA1c > 9":

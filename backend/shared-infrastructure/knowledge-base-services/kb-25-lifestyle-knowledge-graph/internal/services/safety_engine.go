@@ -129,7 +129,7 @@ func GetAllLSRules() []models.LSRule {
 		{Code: "LS-01", Condition: "eGFR < 30", Blocked: "Protein > 0.6 g/kg/day", Severity: "HARD_STOP", Description: "CKD 4-5: high protein blocked"},
 		{Code: "LS-02", Condition: "SBP > 180 OR DBP > 110", Blocked: "Vigorous exercise (MET > 6)", Severity: "HARD_STOP", Description: "Hypertensive crisis: vigorous exercise blocked"},
 		{Code: "LS-09", Condition: "potassium > 5.5", Blocked: "High-potassium foods", Severity: "HARD_STOP", Description: "Hyperkalemia: high-K foods blocked"},
-		{Code: "LS-10", Condition: "cardiac_event_30d", Blocked: "All exercise", Severity: "HARD_STOP", Description: "Recent cardiac event: all exercise blocked"},
+		// LS-10 (cardiac_event_30d) deferred until PatientSnapshot supports boolean cardiac event field
 		{Code: "LS-11", Condition: "HbA1c > 13", Blocked: "Lifestyle-only treatment", Severity: "HARD_STOP", Description: "Extreme HbA1c: lifestyle-only not allowed"},
 	}
 }
