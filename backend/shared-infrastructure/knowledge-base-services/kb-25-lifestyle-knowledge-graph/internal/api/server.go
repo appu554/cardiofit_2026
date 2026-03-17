@@ -9,22 +9,21 @@ import (
 	"kb-25-lifestyle-knowledge-graph/internal/config"
 	"kb-25-lifestyle-knowledge-graph/internal/graph"
 	"kb-25-lifestyle-knowledge-graph/internal/metrics"
+	"kb-25-lifestyle-knowledge-graph/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
-// Server — infrastructure-only at this stage. Service dependencies (chainTraversal,
-// safetyEngine, comparator, kb20Client, kb21Client) are added in Task 20 after
-// the services and clients packages exist.
 type Server struct {
-	Router  *gin.Engine
-	config  *config.Config
-	graph   graph.GraphClient
-	cache   *cache.RedisClient
-	metrics *metrics.Collector
-	logger  *zap.Logger
+	Router         *gin.Engine
+	config         *config.Config
+	graph          graph.GraphClient
+	cache          *cache.RedisClient
+	metrics        *metrics.Collector
+	logger         *zap.Logger
+	chainTraversal *services.ChainTraversalService
 }
 
 func NewServer(
@@ -33,6 +32,7 @@ func NewServer(
 	cacheClient *cache.RedisClient,
 	metricsCollector *metrics.Collector,
 	logger *zap.Logger,
+	chainSvc *services.ChainTraversalService,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -42,12 +42,13 @@ func NewServer(
 	router.Use(gin.Recovery())
 
 	s := &Server{
-		Router:  router,
-		config:  cfg,
-		graph:   graphClient,
-		cache:   cacheClient,
-		metrics: metricsCollector,
-		logger:  logger,
+		Router:         router,
+		config:         cfg,
+		graph:          graphClient,
+		cache:          cacheClient,
+		metrics:        metricsCollector,
+		logger:         logger,
+		chainTraversal: chainSvc,
 	}
 
 	s.setupMiddleware()
@@ -65,8 +66,8 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/health", s.healthCheck)
 	s.Router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	// API v1 — endpoints added in later tasks
-	_ = s.Router.Group("/api/v1/kb25")
+	v1 := s.Router.Group("/api/v1/kb25")
+	v1.GET("/causal-chain/:target", s.getCausalChain)
 }
 
 func (s *Server) healthCheck(c *gin.Context) {

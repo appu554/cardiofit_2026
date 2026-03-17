@@ -12,6 +12,7 @@ import (
 	"kb-25-lifestyle-knowledge-graph/internal/config"
 	"kb-25-lifestyle-knowledge-graph/internal/graph"
 	"kb-25-lifestyle-knowledge-graph/internal/metrics"
+	"kb-25-lifestyle-knowledge-graph/internal/services"
 
 	"go.uber.org/zap"
 )
@@ -52,7 +53,9 @@ func main() {
 
 	metricsCollector := metrics.NewCollector()
 
-	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger)
+	chainSvc := services.NewChainTraversalService(graphClient, logger)
+
+	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc)
 
 	go func() {
 		addr := ":" + cfg.Server.Port
