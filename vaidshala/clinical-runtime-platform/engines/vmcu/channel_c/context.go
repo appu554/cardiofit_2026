@@ -65,6 +65,15 @@ type TitrationContext struct {
 
 	// CKD Stage 4 deprescribing hard block (AD-09)
 	CKDStage4DeprescribingBlocked bool // true = eGFR <30 + attempting to deprescribe renoprotective agent
+
+	// ── PREVENT risk stratification (Track 2 — PG-20, PG-21, PG-22) ──
+	PREVENTRiskTier  string  // LOW | BORDERLINE | INTERMEDIATE | HIGH
+	PREVENTSBPTarget float64 // 120 or 130 mmHg (personalised target)
+	PREVENT10yrASCVD float64 // for PG-22 statin gap detection
+	OnStatin         bool    // for PG-22
+
+	// Patient age (for PG-21 elderly safety gate)
+	PatientAge int
 }
 
 // ProtocolGate is Channel C's local gate type.
