@@ -28,6 +28,8 @@ const (
 	EventBPControlled      = "BP_CONTROLLED"          // bp_status transitions to AT_TARGET (first time or after ABOVE_TARGET)
 	EventOrthostaticAlert  = "ORTHOSTATIC_ALERT"      // orthostatic_drop < -20 mmHg confirmed 2 readings
 	EventMaskedHTNDetected = "MASKED_HTN_DETECTED"    // bp_pattern = MASKED confirmed over 4+ paired readings
+
+	EventGlucoseTrajectoryChange = "GLUCOSE_TRAJECTORY_CHANGE"  // FBG trajectory classification changed
 )
 
 // Event is the base envelope for all KB-20 events.
@@ -90,6 +92,14 @@ type RAASMonitoringEscalatePayload struct {
 	DaysSinceRAASChange int     `json:"days_since_raas_change"`
 	PotassiumCurrent    float64 `json:"potassium_current"`
 	RequiredAction      string  `json:"required_action"` // "RECHECK_48H" | "HOLD_AND_REFER"
+}
+
+// RAASMonitoringResolvedPayload fires when creatinine has stabilised after a
+// prior RAAS_MONITORING_ESCALATE event — the rise resolved within tolerance.
+type RAASMonitoringResolvedPayload struct {
+	CreatinineCurrentPct float64 `json:"creatinine_current_pct"` // current rise % from baseline (should be <10%)
+	DaysSinceEscalation  int     `json:"days_since_escalation"`
+	Resolution           string  `json:"resolution"` // "STABILISED" | "RETURNED_TO_BASELINE"
 }
 
 // BPTrajectoryConcernPayload fires when BP trajectory crosses concern thresholds (EW-04).
@@ -186,6 +196,21 @@ type MaskedHTNPayload struct {
 	ClinicSBPMean     float64 `json:"clinic_sbp_mean"`
 	HomeDeviceSBPMean float64 `json:"home_device_sbp_mean"`
 	PairedReadings    int     `json:"paired_readings_count"`
+}
+
+// GlucoseTrajectoryPayload is published when FBG trajectory classification changes.
+type GlucoseTrajectoryPayload struct {
+	PatientID              string  `json:"patient_id"`
+	Classification         string  `json:"classification"`            // STABLE | RISING | RAPID_RISING | DECLINING | IMPROVING
+	PreviousClassification string  `json:"previous_classification"`
+	FBGSlope               float64 `json:"fbg_slope_mg_dl_per_week"` // mg/dL per week
+	GlucoseCV              float64 `json:"glucose_cv_pct"`           // coefficient of variation %
+	ReadingsUsed           int     `json:"readings_used"`
+
+	// Perturbation suppression fields (Track 3)
+	PerturbationSuppressed bool   `json:"perturbation_suppressed"`
+	SuppressionMode        string `json:"suppression_mode,omitempty"` // FULL | DAMPENED | TAGGED | NONE
+	DominantPerturbation   string `json:"dominant_perturbation,omitempty"`
 }
 
 // LabResultPayload is published when a lab result is ingested.
