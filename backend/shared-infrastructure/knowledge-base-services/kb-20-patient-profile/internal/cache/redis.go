@@ -15,7 +15,8 @@ const (
 	PatientProfilePrefix = "kb20:patient:"
 	StratumPrefix        = "kb20:stratum:"
 	ModifierPrefix       = "kb20:modifier:"
-	ADRProfilePrefix     = "kb20:adr:"
+	ADRProfilePrefix          = "kb20:adr:"
+	GlucoseTrajectoryPrefix   = "kb20:glucose_traj:"
 
 	DefaultProfileTTL  = 15 * time.Minute
 	DefaultStratumTTL  = 5 * time.Minute

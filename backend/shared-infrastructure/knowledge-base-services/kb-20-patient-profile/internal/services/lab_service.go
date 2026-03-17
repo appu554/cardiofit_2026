@@ -107,6 +107,76 @@ func (s *LabService) AddLab(patientID string, req models.AddLabRequest) (*models
 			s.processACR(tx, patientID, req.Value, measuredAt)
 		}
 
+		// FBG trajectory classification (Track 3 — Sprint 1 prerequisite)
+		if req.LabType == models.LabTypeFBG {
+			s.updateGlucoseTrajectory(tx, patientID)
+		}
+
+		// BP_URGENCY_ALERT: single SBP reading >= 180 mmHg → immediate notification.
+		// This is a point-in-time urgency check, independent of 28-day trajectory.
+		if req.LabType == models.LabTypeSBP && req.Value >= 180 {
+			triggerVal := req.Value
+			s.eventBus.PublishTx(tx, models.EventBPUrgencyAlert, patientID,
+				models.BPAlertPayload{
+					PatientID:      patientID,
+					BPStatus:       "URGENCY",
+					TargetSBP:      130,
+					TriggerReading: &triggerVal,
+				})
+			s.logger.Warn("BP_URGENCY_ALERT: single SBP reading >= 180 mmHg",
+				zap.String("patient_id", patientID),
+				zap.Float64("sbp", req.Value))
+		}
+
+		// SAFETY_ALERT: critical potassium levels (life-threatening arrhythmia risk)
+		if req.LabType == models.LabTypePotassium && (req.Value < 3.0 || req.Value > 6.0) {
+			severity := "CRITICAL"
+			alertType := "HYPOKALAEMIA_CRITICAL"
+			desc := fmt.Sprintf("Potassium %.1f mEq/L < 3.0 — life-threatening hypokalaemia", req.Value)
+			if req.Value > 6.0 {
+				alertType = "HYPERKALAEMIA_CRITICAL"
+				desc = fmt.Sprintf("Potassium %.1f mEq/L > 6.0 — life-threatening hyperkalaemia", req.Value)
+			}
+			s.eventBus.PublishTx(tx, models.EventSafetyAlert, patientID, models.SafetyAlertPayload{
+				Severity:    severity,
+				AlertType:   alertType,
+				Description: desc,
+				LabType:     models.LabTypePotassium,
+				NewValue:    fmt.Sprintf("%.1f", req.Value),
+			})
+			s.logger.Warn("SAFETY_ALERT: critical potassium",
+				zap.String("patient_id", patientID),
+				zap.Float64("potassium", req.Value))
+		}
+
+		// ORTHOSTATIC_ALERT: SBP drop > 20 mmHg between SEATED and STANDING readings.
+		// When a STANDING SBP is received, look for the most recent SEATED SBP within 10 min.
+		if req.LabType == models.LabTypeSBP && req.Source == "STANDING" {
+			var seatedEntry models.LabEntry
+			cutoff := measuredAt.Add(-10 * time.Minute)
+			err := tx.Where("patient_id = ? AND lab_type = ? AND source = ? AND measured_at >= ? AND measured_at < ?",
+				patientID, models.LabTypeSBP, "SEATED", cutoff, measuredAt).
+				Order("measured_at DESC").First(&seatedEntry).Error
+			if err == nil {
+				seatedSBP, _ := seatedEntry.Value.Float64()
+				drop := ComputeOrthostaticDrop(seatedSBP, req.Value)
+				if drop < -20 {
+					s.eventBus.PublishTx(tx, models.EventOrthostaticAlert, patientID,
+						models.OrthostaticAlertPayload{
+							PatientID:       patientID,
+							OrthostaticDrop: drop,
+							SeatedSBP:       seatedSBP,
+							StandingSBP:     req.Value,
+						})
+					s.logger.Warn("ORTHOSTATIC_ALERT: SBP drop > 20 mmHg on standing",
+						zap.String("patient_id", patientID),
+						zap.Float64("drop", drop),
+						zap.Float64("seated_sbp", seatedSBP),
+						zap.Float64("standing_sbp", req.Value))
+				}
+			}
+		}
+
 		return nil
 	})
 
@@ -155,8 +225,82 @@ func (s *LabService) deriveEGFR(tx *gorm.DB, patientID string, creatinine float6
 	// F-03: Check medication threshold crossings (event written to outbox in same tx)
 	s.checkThresholdCrossings(tx, patientID, egfr)
 
+	// RAAS monitoring: detect concerning creatinine rise post-ACEi/ARB
+	s.checkRAASCreatinineMonitoring(tx, patientID, creatinine, measuredAt)
+
+	// SAFETY_ALERT: critically low eGFR (<15) or rapid decline warrants immediate notification
+	if egfr < 15 {
+		s.eventBus.PublishTx(tx, models.EventSafetyAlert, patientID, models.SafetyAlertPayload{
+			Severity:    "CRITICAL",
+			AlertType:   "EGFR_CRITICAL",
+			Description: "eGFR < 15 mL/min/1.73m² — CKD Stage 5, possible dialysis requirement",
+			LabType:     models.LabTypeEGFR,
+			NewValue:    fmt.Sprintf("%.1f", egfr),
+		})
+		s.logger.Warn("SAFETY_ALERT: critically low eGFR",
+			zap.String("patient_id", patientID),
+			zap.Float64("egfr", egfr))
+	}
+
 	// Update CKD status on patient profile
 	s.updateCKDStatus(tx, patientID, egfr, stage)
+}
+
+// updateGlucoseTrajectory classifies the patient's FBG trajectory from the
+// last 28 days of FBG readings and publishes GLUCOSE_TRAJECTORY_CHANGE when
+// the classification changes. Called on each new FBG lab write.
+// Follows the same pattern as UpdateEarlyWarning() for BP trajectory.
+func (s *LabService) updateGlucoseTrajectory(tx *gorm.DB, patientID string) {
+	cutoff := time.Now().AddDate(0, 0, -28)
+
+	var fbgEntries []models.LabEntry
+	if err := tx.Where("patient_id = ? AND lab_type = ? AND validation_status = ? AND measured_at >= ?",
+		patientID, models.LabTypeFBG, models.ValidationAccepted, cutoff).
+		Order("measured_at ASC").Find(&fbgEntries).Error; err != nil {
+		s.logger.Warn("failed to query FBG readings for trajectory",
+			zap.String("patient_id", patientID), zap.Error(err))
+		return
+	}
+
+	// Convert to TimestampedLabValue for the trajectory engine
+	readings := make([]models.TimestampedLabValue, len(fbgEntries))
+	for i, e := range fbgEntries {
+		val, _ := e.Value.Float64()
+		readings[i] = models.TimestampedLabValue{Value: val, Timestamp: e.MeasuredAt}
+	}
+
+	result := ClassifyGlucoseTrajectory(readings)
+
+	// Check if classification changed from previous (stored in cache)
+	prevClass := s.getPreviousTrajectoryClass(patientID)
+	if result.Classification != prevClass && prevClass != "" {
+		s.eventBus.PublishTx(tx, models.EventGlucoseTrajectoryChange, patientID,
+			models.GlucoseTrajectoryPayload{
+				PatientID:              patientID,
+				Classification:         result.Classification,
+				PreviousClassification: prevClass,
+				FBGSlope:               result.FBGSlope,
+				GlucoseCV:              result.GlucoseCV,
+				ReadingsUsed:           result.ReadingsUsed,
+			})
+		s.logger.Info("FBG trajectory classification changed",
+			zap.String("patient_id", patientID),
+			zap.String("from", prevClass),
+			zap.String("to", result.Classification),
+			zap.Float64("slope_mg_dl_per_week", result.FBGSlope))
+	}
+
+	// Store current classification for next comparison
+	s.cache.Set(cache.GlucoseTrajectoryPrefix+patientID, result.Classification, 24*time.Hour)
+}
+
+// getPreviousTrajectoryClass retrieves the last known trajectory classification from cache.
+func (s *LabService) getPreviousTrajectoryClass(patientID string) string {
+	var prev string
+	if err := s.cache.Get(cache.GlucoseTrajectoryPrefix+patientID, &prev); err != nil {
+		return ""
+	}
+	return prev
 }
 
 // checkThresholdCrossings detects when eGFR crosses medication-relevant boundaries (F-03 RED).
@@ -316,6 +460,26 @@ func (s *LabService) ComputeBPTrajectory(patientID string) (*models.BPTrajectory
 
 	// Pattern detection
 	traj.Pattern = s.detectBPPattern(sbpEntries, meanSBP, inTarget)
+
+	// Emit MASKED_HTN_DETECTED when masked hypertension pattern is detected (Gap #21)
+	if traj.Pattern == models.BPPatternMasked {
+		var clinicReadings, homeReadings []float64
+		for _, e := range sbpEntries {
+			v, _ := e.Value.Float64()
+			switch e.Source {
+			case "CLINIC":
+				clinicReadings = append(clinicReadings, v)
+			case "HOME", "AMBULATORY":
+				homeReadings = append(homeReadings, v)
+			}
+		}
+		s.eventBus.Publish(models.EventMaskedHTNDetected, patientID, models.MaskedHTNPayload{
+			PatientID:         patientID,
+			ClinicSBPMean:     sliceMean(clinicReadings),
+			HomeDeviceSBPMean: sliceMean(homeReadings),
+			PairedReadings:    min(len(clinicReadings), len(homeReadings)),
+		})
+	}
 
 	return traj, nil
 }
@@ -566,6 +730,152 @@ func (s *LabService) SetACRRecheckDue(ctx context.Context, patientID string) err
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// RAAS Creatinine Monitoring (RAAS_MONITORING_ESCALATE / RESOLVED)
+// ---------------------------------------------------------------------------
+
+// checkRAASCreatinineMonitoring detects concerning creatinine changes after
+// ACEi/ARB initiation or titration. KDIGO recommends monitoring creatinine
+// within 2-4 weeks of RAAS blockade changes:
+//   - Rise >30% from pre-RAAS baseline → RAAS_MONITORING_ESCALATE
+//   - Rise >20% with concurrent hyperkalaemia → RAAS_MONITORING_ESCALATE
+//   - Previously escalated + rise settled to <10% → RAAS_MONITORING_RESOLVED
+//
+// The 30% threshold aligns with KDIGO 2024 §4.2 guidance: a rise up to 30%
+// is pharmacodynamically expected post-ACEi/ARB and should not trigger alarm.
+// Beyond 30%, the risk of true RAAS-induced renal injury requires action.
+func (s *LabService) checkRAASCreatinineMonitoring(tx *gorm.DB, patientID string, creatinine float64, measuredAt time.Time) {
+	if !s.patientOnRAAS(tx, patientID) {
+		return
+	}
+
+	// Get the pre-RAAS baseline creatinine: the most recent creatinine BEFORE
+	// the latest ACEi/ARB change date.
+	var raasChangeAt time.Time
+	var raasMed models.MedicationState
+	err := tx.Where("patient_id = ? AND is_active = true AND drug_class IN ?",
+		patientID, []string{models.DrugClassACEInhibitor, models.DrugClassARB}).
+		Order("updated_at DESC").First(&raasMed).Error
+	if err != nil {
+		return
+	}
+	raasChangeAt = raasMed.UpdatedAt
+	daysSinceRAAS := int(measuredAt.Sub(raasChangeAt).Hours() / 24)
+
+	// Only monitor within 60-day post-RAAS window
+	if daysSinceRAAS > 60 {
+		return
+	}
+
+	// Find baseline creatinine (last value before RAAS change)
+	var baselineEntry models.LabEntry
+	err = tx.Where("patient_id = ? AND lab_type = ? AND validation_status = ? AND measured_at < ?",
+		patientID, models.LabTypeCreatinine, models.ValidationAccepted, raasChangeAt).
+		Order("measured_at DESC").First(&baselineEntry).Error
+	if err != nil {
+		return // No baseline — cannot compute rise
+	}
+
+	baseline, _ := baselineEntry.Value.Float64()
+	if baseline <= 0 {
+		return
+	}
+
+	risePct := ((creatinine - baseline) / baseline) * 100
+
+	// Get current potassium for hyperkalaemia assessment
+	var kEntry models.LabEntry
+	potassium := 0.0
+	err = tx.Where("patient_id = ? AND lab_type = ? AND validation_status = ?",
+		patientID, models.LabTypePotassium, models.ValidationAccepted).
+		Order("measured_at DESC").First(&kEntry).Error
+	if err == nil {
+		potassium, _ = kEntry.Value.Float64()
+	}
+
+	// Escalation criteria:
+	// 1. Creatinine rise >30% (beyond expected RAAS pharmacodynamics)
+	// 2. Rise >20% WITH hyperkalaemia (K+ >5.5)
+	escalate := false
+	action := "RECHECK_48H"
+	if risePct > 30 {
+		escalate = true
+		if risePct > 50 || potassium > 6.0 {
+			action = "HOLD_AND_REFER"
+		}
+	} else if risePct > 20 && potassium > 5.5 {
+		escalate = true
+		action = "RECHECK_48H"
+	}
+
+	if escalate {
+		s.eventBus.PublishTx(tx, models.EventRAASMonitoringEscalate, patientID,
+			models.RAASMonitoringEscalatePayload{
+				CreatinineRisePct:   math.Round(risePct*10) / 10,
+				DaysSinceRAASChange: daysSinceRAAS,
+				PotassiumCurrent:    potassium,
+				RequiredAction:      action,
+			})
+		s.logger.Warn("RAAS_MONITORING_ESCALATE: creatinine rise exceeds tolerance",
+			zap.String("patient_id", patientID),
+			zap.Float64("rise_pct", risePct),
+			zap.Float64("potassium", potassium),
+			zap.String("action", action))
+		return
+	}
+
+	// Resolution check: if rise has settled to <10%, check for prior escalation.
+	// We detect prior escalation by looking for a recent RAAS_MONITORING_ESCALATE
+	// event in the outbox for this patient.
+	if risePct < 10 {
+		var escalationEvent models.EventOutboxEntry
+		err = tx.Where("patient_id = ? AND event_type = ? AND created_at > ?",
+			patientID, models.EventRAASMonitoringEscalate, raasChangeAt).
+			First(&escalationEvent).Error
+		if err == nil {
+			// Prior escalation exists and creatinine has stabilised
+			resolution := "STABILISED"
+			if risePct < 2 {
+				resolution = "RETURNED_TO_BASELINE"
+			}
+			daysSinceEscalation := int(measuredAt.Sub(escalationEvent.CreatedAt).Hours() / 24)
+			s.eventBus.PublishTx(tx, models.EventRAASMonitoringResolved, patientID,
+				models.RAASMonitoringResolvedPayload{
+					CreatinineCurrentPct: math.Round(risePct*10) / 10,
+					DaysSinceEscalation:  daysSinceEscalation,
+					Resolution:           resolution,
+				})
+			s.logger.Info("RAAS_MONITORING_RESOLVED: creatinine rise settled",
+				zap.String("patient_id", patientID),
+				zap.Float64("rise_pct", risePct),
+				zap.String("resolution", resolution))
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SAFETY_ALERT — Generic Safety Event
+// ---------------------------------------------------------------------------
+
+// PublishSafetyAlert emits a SAFETY_ALERT event for clinically significant
+// safety conditions that don't map to a more specific event type.
+// Called from various detection points across KB-20 when a patient's
+// lab values indicate immediate clinical attention is needed.
+func (s *LabService) PublishSafetyAlert(patientID string, severity string, alertType string, description string, labType string, oldVal string, newVal string) {
+	s.eventBus.Publish(models.EventSafetyAlert, patientID, models.SafetyAlertPayload{
+		Severity:    severity,
+		AlertType:   alertType,
+		Description: description,
+		LabType:     labType,
+		OldValue:    oldVal,
+		NewValue:    newVal,
+	})
+	s.logger.Warn("SAFETY_ALERT published",
+		zap.String("patient_id", patientID),
+		zap.String("severity", severity),
+		zap.String("alert_type", alertType))
+}
+
 // EvaluateACRAfterStepDown checks the current ACR category at the end of
 // the 6-week monitoring window for an ACEi/ARB dose reduction.
 //
@@ -773,6 +1083,8 @@ func (s *LabService) UpdateEarlyWarning(ctx context.Context, patientID string, t
 		meanSBP = *traj.MeanSBP28d
 	}
 
+	oldStatus := traj.Status
+
 	switch {
 	case meanSBP >= models.SBPSevereThreshold:
 		traj.Status = models.BPStatusSevere
@@ -793,6 +1105,53 @@ func (s *LabService) UpdateEarlyWarning(ctx context.Context, patientID string, t
 	default:
 		traj.Status = models.BPStatusAtTarget
 		traj.ConsecutiveEarlyWatchWeeks = 0
+	}
+
+	// Emit BP status transition events (Gap #21 wiring)
+	if traj.Status != oldStatus {
+		bpPayload := models.BPAlertPayload{
+			PatientID:  patientID,
+			BPStatus:   string(traj.Status),
+			SBP7dMean:  func() float64 { if traj.SBP7dMean != nil { return *traj.SBP7dMean }; return 0 }(),
+			DBP7dMean:  0, // DBP 7d mean not tracked in trajectory
+			SBP4wSlope: slope,
+			TargetSBP:  130,
+		}
+		switch traj.Status {
+		case models.BPStatusSevere:
+			s.eventBus.Publish(models.EventBPSevereAlert, patientID, bpPayload)
+		case models.BPStatusAboveTarget, models.BPStatusDeclining:
+			s.eventBus.Publish(models.EventBPAlert, patientID, bpPayload)
+		case models.BPStatusAtTarget:
+			if oldStatus == models.BPStatusAboveTarget || oldStatus == models.BPStatusSevere || oldStatus == models.BPStatusDeclining {
+				s.eventBus.Publish(models.EventBPControlled, patientID, bpPayload)
+			}
+		}
+	}
+
+	// 5b. BP_VARIABILITY_ALERT: emit when visit-to-visit SBP variability is HIGH (SD > 15 mmHg).
+	// Uses the sbpEntries already fetched in step 3 above.
+	if len(sbpEntries) >= 2 {
+		var dbpEntries []models.LabEntry
+		s.db.DB.WithContext(ctx).Where(
+			"patient_id = ? AND lab_type = ? AND validation_status = ? AND measured_at >= ?",
+			patientID, models.LabTypeDBP, models.ValidationAccepted, cutoff,
+		).Order("measured_at ASC").Find(&dbpEntries)
+
+		sbpSD, dbpSD, varStatus := s.ComputeBPVariability(sbpEntries, dbpEntries)
+		if varStatus == models.VariabilityHigh {
+			s.eventBus.Publish(models.EventBPVariabilityAlert, patientID,
+				models.BPVariabilityAlertPayload{
+					PatientID:         patientID,
+					SBPSD:             sbpSD,
+					DBPSD:             dbpSD,
+					VariabilityStatus: varStatus,
+					ReadingCount:      len(sbpEntries),
+				})
+			s.logger.Warn("BP_VARIABILITY_ALERT: SBP SD > 15 mmHg (HIGH variability)",
+				zap.String("patient_id", patientID),
+				zap.Float64("sbp_sd", sbpSD))
+		}
 	}
 
 	// 6. Emit BP_TRAJECTORY_CONCERN when EARLY_WATCH exceeds stratum threshold
