@@ -1,0 +1,378 @@
+# ports.yaml — Canonical CardioFit Service Port Registry
+# Generated: 2026-03-13
+# Purpose: Single source of truth for all service port assignments.
+# Rule: Before assigning a new port, check this file for conflicts.
+
+# ═══════════════════════════════════════════════════════════════════
+# PORT RANGES (reserved)
+# ═══════════════════════════════════════════════════════════════════
+# 3000       : Grafana
+# 4000       : Apollo Federation (GraphQL)
+# 5432-5499  : PostgreSQL instances
+# 6379-6399  : Redis instances
+# 8001-8020  : Python microservices (core)
+# 8027-8057  : Python microservices (extended + stream projectors)
+# 8080-8099  : KB services (KB-0 through KB-9, KB-16)
+# 8103       : KB-19 Protocol Orchestrator
+# 8111-8113  : KB services (KB-11, KB-13)
+# 8131-8134  : Vaidshala clinical runtime (KB-20 through KB-23)
+# 8201+      : Extended engines (KB-24 SCE)
+# 9090-9092  : Kafka, Prometheus
+# 50051      : gRPC services
+
+# ═══════════════════════════════════════════════════════════════════
+# KNOWLEDGE BASE SERVICES — Core (Go)
+# ═══════════════════════════════════════════════════════════════════
+kb_services_core:
+  kb-0-governance-platform:
+    port: 8080
+    protocol: http
+    source: kb-0-governance-platform/cmd/server/main.go
+    notes: Governance/approval workflows
+
+  kb-1-drug-rules:
+    port: 8081
+    protocol: http
+    source: kb-1-drug-rules/internal/config/config.go
+    db_port: 5481
+    notes: Drug calculation rules, dosing
+
+  kb-2-clinical-context:
+    port: 8082
+    protocol: http
+    source: kb-2-clinical-context/internal/config/config.go
+    notes: Clinical context management
+    conflict: "WARN: Adminer also uses 8082 in dev"
+
+  kb-3-guidelines:
+    port: 8083
+    protocol: http
+    source: kb-3-guidelines/pkg/config/config.go
+    notes: Comprehensive guidelines repository
+
+  kb-4-patient-safety:
+    port: 8088
+    protocol: http
+    source: kb-4-patient-safety/main.go
+    notes: Patient safety protocols, alerts
+
+  kb-5-drug-interactions:
+    http_port: 8085
+    grpc_port: 8086
+    protocol: http+grpc
+    source: kb-5-drug-interactions/internal/config/config.go
+    notes: Drug-drug interaction rules
+    conflict: "CONFLICT: gRPC 8086 clashes with KB-6 HTTP 8086"
+
+  kb-6-formulary:
+    port: 8086
+    protocol: http
+    source: kb-6-formulary/internal/config/config.go
+    notes: Institutional formulary management
+    conflict: "CONFLICT: clashes with KB-5 gRPC 8086"
+
+  kb-7-terminology:
+    port: 8087
+    protocol: http
+    source: kb-7-terminology/internal/config/config.go
+    notes: Medical terminology, RxNorm, LOINC
+
+  kb-8-calculator-service:
+    port: 8080
+    protocol: http
+    source: kb-8-calculator-service/internal/config/config.go
+    notes: Clinical calculators
+    conflict: "CONFLICT: clashes with KB-0 on 8080 — reassign to 8093"
+
+  kb-9-care-gaps:
+    port: 8089
+    protocol: http
+    source: kb-9-care-gaps/internal/config/config.go
+    notes: Care gap detection
+
+# ═══════════════════════════════════════════════════════════════════
+# KNOWLEDGE BASE SERVICES — Extended (Go)
+# ═══════════════════════════════════════════════════════════════════
+kb_services_extended:
+  kb-11-population-health:
+    port: 8111
+    protocol: http
+    source: kb-11-population-health/internal/config/config.go
+
+  kb-12-ordersets-careplans:
+    port: 8090
+    protocol: http
+    source: kb-12-ordersets-careplans/internal/config/config.go
+    db_port: 5437
+    redis_port: 6385
+    conflict: "CONFLICT: clashes with clinical runtime on 8090 — reassign to 8094"
+
+  kb-13-quality-measures:
+    port: 8113
+    protocol: http
+    source: kb-13-quality-measures/internal/config/config.go
+    db_port: 5450
+
+  kb-14-care-navigator:
+    port: 8091
+    protocol: http
+    source: kb-14-care-navigator (inferred from tests)
+
+  kb-16-lab-interpretation:
+    port: 8095
+    protocol: http
+    source: kb-16-lab-interpretation/internal/config/config.go
+    conflict: "WARN: KB-cross-dependency-manager also defaults to 8095"
+
+  kb-17-population-registry:
+    port: 8017
+    protocol: http
+    source: kb-17-population-registry/internal/config/config.go
+
+  kb-18-governance-engine:
+    port: 8018
+    protocol: http
+    source: kb-18-governance-engine/internal/config/config.go
+
+  kb-cross-dependency-manager:
+    port: 8095
+    health_port: 8080
+    metrics_port: 9090
+    protocol: http
+    source: kb-cross-dependency-manager/internal/config/config.go
+    conflict: "CONFLICT: primary 8095 clashes with KB-16; health 8080 clashes with KB-0/KB-8"
+
+# ═══════════════════════════════════════════════════════════════════
+# VAIDSHALA CLINICAL RUNTIME (Go)
+# ═══════════════════════════════════════════════════════════════════
+vaidshala_runtime:
+  kb-19-protocol-orchestrator:
+    port: 8103
+    protocol: http
+    source: kb-19-protocol-orchestrator/internal/config/config.go
+
+  kb-20-patient-profile:
+    port: 8131
+    protocol: http
+    source: kb-20-patient-profile/internal/config/config.go
+
+  kb-22-hpi-engine:
+    port: 8132
+    protocol: http
+    source: kb-22-hpi-engine/internal/config/config.go
+    redis_port: 6386
+
+  kb-21-behavioral-intelligence:
+    port: 8133
+    protocol: http
+    source: kb-21-behavioral-intelligence/internal/config/config.go
+
+  kb-23-decision-cards:
+    port: 8134
+    protocol: http
+    source: kb-23-decision-cards/internal/config/config.go
+
+  kb-24-safety-constraint-engine:
+    port: 8201
+    protocol: http
+    source: kb-24-safety-constraint-engine/internal/config/config.go
+    notes: SCE sidecar for KB-22
+
+  kb-25-lifestyle-knowledge-graph:
+    port: 8136
+    protocol: http
+    source: kb-25-lifestyle-knowledge-graph/internal/config/config.go
+    neo4j_http: 7476
+    neo4j_bolt: 7689
+    redis: 6389
+    notes: Lifestyle Knowledge Graph (Neo4j), causal chains, safety rules, comparator
+
+  clinical-runtime-platform:
+    port: 8090
+    protocol: http
+    source: vaidshala/clinical-runtime-platform/cmd/clinical-runtime/main.go
+    notes: V-MCU host, 3-phase API, vmcu-events endpoint
+    conflict: "CONFLICT: clashes with KB-12 on 8090"
+
+# ═══════════════════════════════════════════════════════════════════
+# PYTHON MICROSERVICES
+# ═══════════════════════════════════════════════════════════════════
+python_services:
+  auth-service:
+    port: 8001
+    protocol: http
+
+  patient-service:
+    port: 8003
+    protocol: http
+
+  medication-service:
+    port: 8004
+    protocol: http
+
+  graphql-gateway:
+    port: 8005
+    protocol: http
+
+  observation-service:
+    port: 8007
+    protocol: http
+
+  condition-service:
+    port: 8010
+    protocol: http
+
+  organization-service:
+    port: 8012
+    protocol: http
+    conflict: "CONFLICT: clashes with timeline-service on 8012"
+
+  timeline-service:
+    port: 8012
+    protocol: http
+    conflict: "CONFLICT: clashes with organization-service on 8012"
+
+  order-management-service:
+    port: 8013
+    protocol: http
+
+  scheduling-service:
+    port: 8014
+    protocol: http
+    conflict: "CONFLICT: clashes with fhir-service on 8014"
+
+  fhir-service:
+    port: 8014
+    protocol: http
+    conflict: "CONFLICT: clashes with scheduling-service on 8014"
+
+  workflow-engine-service:
+    port: 8015
+    protocol: http
+
+  device-data-service:
+    port: 8016
+    protocol: http
+
+  encounter-service:
+    port: 8020
+    protocol: http
+
+  clinical-reasoning-service:
+    port: 8027
+    protocol: http+grpc
+
+  device-data-ingestion-service:
+    port: 8030
+    protocol: http
+
+  knowledge-pipeline-service:
+    port: 8031
+    protocol: http
+
+  global-outbox-service:
+    http_port: 8040
+    grpc_port: 50051
+    protocol: http+grpc
+
+# ═══════════════════════════════════════════════════════════════════
+# STREAM PROCESSING / PROJECTORS
+# ═══════════════════════════════════════════════════════════════════
+stream_services:
+  stage2-storage-fanout:
+    port: 8042
+    protocol: http
+
+  module8-postgresql-projector:
+    port: 8050
+    protocol: http
+    conflict: "WARN: clashes with sla-monitoring-service on 8050"
+
+  sla-monitoring-service:
+    port: 8050
+    protocol: http
+    conflict: "WARN: clashes with postgresql-projector on 8050"
+
+  module8-mongodb-projector:
+    port: 8051
+    protocol: http
+
+  module8-elasticsearch-projector:
+    port: 8052
+    protocol: http
+
+  module8-influxdb-projector:
+    port: 8054
+    protocol: http
+
+  module8-ups-projector:
+    port: 8055
+    protocol: http
+
+  module8-fhir-store-projector:
+    port: 8056
+    protocol: http
+
+  module8-neo4j-graph-projector:
+    port: 8057
+    protocol: http
+
+# ═══════════════════════════════════════════════════════════════════
+# NODE.JS
+# ═══════════════════════════════════════════════════════════════════
+node_services:
+  apollo-federation:
+    port: 4000
+    protocol: http
+    notes: GraphQL federation gateway
+
+# ═══════════════════════════════════════════════════════════════════
+# INFRASTRUCTURE
+# ═══════════════════════════════════════════════════════════════════
+infrastructure:
+  postgresql_local:
+    port: 5432
+    protocol: tcp
+
+  postgresql_docker:
+    port: 5433
+    protocol: tcp
+    notes: Shared KB services (Docker)
+
+  redis_local:
+    port: 6379
+    protocol: tcp
+
+  redis_docker:
+    port: 6380
+    protocol: tcp
+    notes: Shared KB services (Docker)
+
+  kafka:
+    port: 9092
+    protocol: tcp
+
+  prometheus:
+    port: 9090
+    protocol: http
+
+  grafana:
+    port: 3000
+    protocol: http
+
+  adminer:
+    port: 8082
+    protocol: http
+    conflict: "WARN: KB-2 also uses 8082"
+
+# ═══════════════════════════════════════════════════════════════════
+# CONFLICT SUMMARY (7 confirmed)
+# ═══════════════════════════════════════════════════════════════════
+# 1. 8080: KB-0 vs KB-8 vs KB-cross-dependency (health)
+# 2. 8082: KB-2 vs Adminer
+# 3. 8086: KB-5 gRPC vs KB-6 HTTP
+# 4. 8090: Clinical Runtime vs KB-12
+# 5. 8095: KB-16 vs KB-cross-dependency
+# 6. 8012: Organization Service vs Timeline Service
+# 7. 8014: Scheduling Service vs FHIR Service
+# 8. 8050: PostgreSQL Projector vs SLA Monitoring
