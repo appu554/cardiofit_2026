@@ -57,12 +57,18 @@ func (s *ProjectionService) ComputePREVENTProjection(
 	// UACR from ACR lab type
 	uacr, _ := s.latestLabValue(patientID, models.LabTypeACR)
 
-	// BMI: derive from weight + height, or use profile
+	// BMI: derive from weight + height (not profile.BMI — avoids stale stored values).
+	// bmi == 0 means weight or height is missing; physically valid BMI is always > 0.
 	var bmi float64
 	if profile.WeightKg > 0 && profile.HeightCm > 0 {
 		heightM := profile.HeightCm / 100.0
 		bmi = profile.WeightKg / (heightM * heightM)
 	}
+
+	// OnStatin is a medication fact independent of PREVENT eligibility.
+	// Set it before early-return gates so PG-22 statin gap detection works
+	// even for patients outside the PREVENT age range.
+	proj.OnStatin = hasDrugClass(activeMeds, models.DrugClassStatin)
 
 	// 2. Check minimum required inputs (age, sex, SBP, TC, HDL, eGFR, BMI)
 	if profile.Age < 30 || profile.Age > 79 {
@@ -78,7 +84,6 @@ func (s *ProjectionService) ComputePREVENTProjection(
 		hasDrugClass(activeMeds, models.DrugClassCCB) ||
 		hasDrugClass(activeMeds, models.DrugClassBetaBlocker) ||
 		hasDrugClass(activeMeds, models.DrugClassDiuretic)
-	onStatin := hasDrugClass(activeMeds, models.DrugClassStatin)
 
 	// 4. Sex mapping
 	sex := SexMale
@@ -120,5 +125,4 @@ func (s *ProjectionService) ComputePREVENTProjection(
 	proj.PREVENT10yrASCVD = result.TenYearASCVD
 	proj.PREVENT10yrHF = result.TenYearHF
 	proj.PREVENTModelUsed = string(result.ModelUsed)
-	proj.OnStatin = onStatin
 }
