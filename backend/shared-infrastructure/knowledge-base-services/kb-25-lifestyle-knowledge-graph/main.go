@@ -9,6 +9,7 @@ import (
 
 	"kb-25-lifestyle-knowledge-graph/internal/api"
 	"kb-25-lifestyle-knowledge-graph/internal/cache"
+	"kb-25-lifestyle-knowledge-graph/internal/clients"
 	"kb-25-lifestyle-knowledge-graph/internal/config"
 	"kb-25-lifestyle-knowledge-graph/internal/graph"
 	"kb-25-lifestyle-knowledge-graph/internal/metrics"
@@ -55,7 +56,14 @@ func main() {
 
 	chainSvc := services.NewChainTraversalService(graphClient, logger)
 
-	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc)
+	kb4Client := clients.NewKB4Client(cfg.KB4PatientSafetyURL, logger)
+	safetyEng := services.NewSafetyEngine(graphClient, kb4Client, logger)
+
+	kb20Client := clients.NewKB20Client(cfg.KB20PatientProfileURL, logger)
+
+	comparatorEng := services.NewComparatorEngine(chainSvc, logger)
+
+	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc, safetyEng, kb20Client, comparatorEng)
 
 	go func() {
 		addr := ":" + cfg.Server.Port

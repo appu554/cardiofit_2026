@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"kb-25-lifestyle-knowledge-graph/internal/cache"
+	"kb-25-lifestyle-knowledge-graph/internal/clients"
 	"kb-25-lifestyle-knowledge-graph/internal/config"
 	"kb-25-lifestyle-knowledge-graph/internal/graph"
 	"kb-25-lifestyle-knowledge-graph/internal/metrics"
@@ -24,6 +25,9 @@ type Server struct {
 	metrics        *metrics.Collector
 	logger         *zap.Logger
 	chainTraversal *services.ChainTraversalService
+	safetyEngine   *services.SafetyEngine
+	kb20Client     *clients.KB20Client
+	comparator     *services.ComparatorEngine
 }
 
 func NewServer(
@@ -33,6 +37,9 @@ func NewServer(
 	metricsCollector *metrics.Collector,
 	logger *zap.Logger,
 	chainSvc *services.ChainTraversalService,
+	safetyEng *services.SafetyEngine,
+	kb20 *clients.KB20Client,
+	comparatorEng *services.ComparatorEngine,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -49,6 +56,9 @@ func NewServer(
 		metrics:        metricsCollector,
 		logger:         logger,
 		chainTraversal: chainSvc,
+		safetyEngine:   safetyEng,
+		kb20Client:     kb20,
+		comparator:     comparatorEng,
 	}
 
 	s.setupMiddleware()
@@ -68,6 +78,14 @@ func (s *Server) setupRoutes() {
 
 	v1 := s.Router.Group("/api/v1/kb25")
 	v1.GET("/causal-chain/:target", s.getCausalChain)
+	v1.POST("/check-safety", s.checkSafety)
+	v1.POST("/compare-interventions", s.compareInterventions)
+	v1.POST("/project-combined", s.projectCombined)
+	v1.POST("/recommend-lifestyle", s.recommendLifestyle)
+	v1.POST("/attribute-outcome", s.attributeOutcome)
+	v1.GET("/diet-quality/:patientId", s.getDietQuality)
+	v1.GET("/exercise-rx/:patientId", s.getExerciseRx)
+	v1.GET("/food-search", s.searchFood)
 }
 
 func (s *Server) healthCheck(c *gin.Context) {
