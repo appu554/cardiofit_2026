@@ -281,6 +281,29 @@ func buildEvaluator(cond ruleCondition) (func(*TitrationContext) bool, error) {
 			return ctx.CKDStage4DeprescribingBlocked
 		}, nil
 
+	// ── PREVENT risk-stratified rules (Track 2) ──
+
+	case "prevent_risk_tier_set":
+		// PG-20: True when PREVENT risk tier has been computed (any non-empty tier).
+		// CLEAR gate — records the risk-stratified target for audit trail only.
+		return func(ctx *TitrationContext) bool {
+			return ctx.PREVENTRiskTier != ""
+		}, nil
+
+	case "elderly_intensive_bp_target":
+		// PG-21: True when intensive target (120) AND patient age ≥75.
+		// MODIFY gate — dampens gain factor for cautious elderly titration.
+		return func(ctx *TitrationContext) bool {
+			return ctx.PREVENTSBPTarget == 120 && ctx.PatientAge >= 75
+		}, nil
+
+	case "statin_gap_detected":
+		// PG-22: True when PREVENT 10yr ASCVD ≥7.5% AND no statin active.
+		// MODIFY gate — generates STATIN_REVIEW card (not a titration action).
+		return func(ctx *TitrationContext) bool {
+			return ctx.PREVENT10yrASCVD >= 0.075 && !ctx.OnStatin
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown field %q", cond.Field)
 	}

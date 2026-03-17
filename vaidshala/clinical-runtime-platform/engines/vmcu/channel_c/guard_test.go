@@ -195,9 +195,9 @@ func TestRulesHashStable(t *testing.T) {
 
 func TestRuleCount(t *testing.T) {
 	guard := setupTestRules(t)
-	// PG-01..PG-05, PG-07..PG-16, AD-09 (PG-06 excluded) = 16 rules
-	if guard.RuleCount() != 16 {
-		t.Errorf("expected 16 rules (PG-06 excluded), got %d", guard.RuleCount())
+	// PG-01..PG-05, PG-07..PG-16, AD-09, PG-20..PG-22 (PG-06 excluded) = 19 rules
+	if guard.RuleCount() != 19 {
+		t.Errorf("expected 19 rules (PG-06 excluded), got %d", guard.RuleCount())
 	}
 }
 
@@ -442,5 +442,108 @@ func TestAD09_CKDStage4DeprescribingBlock(t *testing.T) {
 	})
 	if result.RuleID == "AD-09" {
 		t.Error("AD-09 should not fire when deprescribing is not blocked")
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// PREVENT RISK-STRATIFIED RULES (PG-20, PG-21, PG-22)
+// ════════════════════════════════════════════════════════════════════════
+
+func TestPG20_PREVENTStratifiedBPTarget(t *testing.T) {
+	guard, err := LoadRules("../protocol_rules.yaml")
+	if err != nil {
+		t.Fatalf("failed to load rules: %v", err)
+	}
+
+	ctx := &TitrationContext{
+		PREVENTRiskTier:  "HIGH",
+		PREVENTSBPTarget: 120,
+		SBPCurrent:       135,
+		ProposedAction:   "dose_increase",
+	}
+
+	result := guard.Evaluate(ctx)
+	// PG-20 is CLEAR — it records the risk-stratified target, not a safety gate.
+	// The SBP target is consumed directly from TitrationContext by the titration engine.
+	if result.Gate != ProtoClear {
+		t.Errorf("PG-20 should be CLEAR (target-setting rule), got %s", result.Gate)
+	}
+}
+
+func TestPG21_ElderlyIntensiveSafetyGate(t *testing.T) {
+	guard, err := LoadRules("../protocol_rules.yaml")
+	if err != nil {
+		t.Fatalf("failed to load rules: %v", err)
+	}
+
+	ctx := &TitrationContext{
+		PREVENTRiskTier:  "HIGH",
+		PREVENTSBPTarget: 120,
+		PatientAge:       78, // ≥75 triggers PG-21
+		ProposedAction:   "dose_increase",
+	}
+
+	result := guard.Evaluate(ctx)
+	if result.Gate != ProtoModify {
+		t.Errorf("PG-21 should fire MODIFY for age ≥75 with intensive target, got %s", result.Gate)
+	}
+	if result.RuleID != "PG-21" {
+		t.Errorf("expected PG-21, got %s", result.RuleID)
+	}
+}
+
+func TestPG21_YoungPatientNotFiring(t *testing.T) {
+	guard, err := LoadRules("../protocol_rules.yaml")
+	if err != nil {
+		t.Fatalf("failed to load rules: %v", err)
+	}
+
+	ctx := &TitrationContext{
+		PREVENTRiskTier:  "HIGH",
+		PREVENTSBPTarget: 120,
+		PatientAge:       55, // <75, PG-21 should NOT fire
+		ProposedAction:   "dose_increase",
+	}
+
+	result := guard.Evaluate(ctx)
+	if result.RuleID == "PG-21" {
+		t.Error("PG-21 should NOT fire for age <75")
+	}
+}
+
+func TestPG22_StatinGapFlag(t *testing.T) {
+	guard, err := LoadRules("../protocol_rules.yaml")
+	if err != nil {
+		t.Fatalf("failed to load rules: %v", err)
+	}
+
+	ctx := &TitrationContext{
+		PREVENT10yrASCVD: 0.12, // 12% — above 7.5% threshold
+		OnStatin:         false,
+	}
+
+	result := guard.Evaluate(ctx)
+	if result.Gate != ProtoModify {
+		t.Errorf("PG-22 should fire MODIFY for ASCVD ≥7.5%% without statin, got %s", result.Gate)
+	}
+	if result.RuleID != "PG-22" {
+		t.Errorf("expected PG-22, got %s", result.RuleID)
+	}
+}
+
+func TestPG22_OnStatinNoFire(t *testing.T) {
+	guard, err := LoadRules("../protocol_rules.yaml")
+	if err != nil {
+		t.Fatalf("failed to load rules: %v", err)
+	}
+
+	ctx := &TitrationContext{
+		PREVENT10yrASCVD: 0.12,
+		OnStatin:         true, // already on statin — PG-22 should NOT fire
+	}
+
+	result := guard.Evaluate(ctx)
+	if result.RuleID == "PG-22" {
+		t.Error("PG-22 should NOT fire when patient is already on statin")
 	}
 }
