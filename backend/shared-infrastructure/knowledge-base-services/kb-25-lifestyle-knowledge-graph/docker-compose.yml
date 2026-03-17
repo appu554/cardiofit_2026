@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  kb-25-lkg:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kb-25-lkg
+    restart: unless-stopped
+    ports:
+      - "8136:8136"
+    environment:
+      - PORT=8136
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+      - NEO4J_URI=bolt://kb25-neo4j:7687
+      - NEO4J_DATABASE=lkg
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=kb25_lkg_password
+      - REDIS_URL=redis://kb25-redis:6379
+      - KB20_URL=http://kb-20-patient-profile:8131
+      - KB21_URL=http://kb-21-behavioral-intelligence:8133
+      - KB1_URL=http://kb-1-drug-rules:8081
+      - KB4_URL=http://kb-4-patient-safety:8088
+      - CACHE_TTL_CHAINS=3600s
+      - CACHE_TTL_PATIENT=300s
+    depends_on:
+      kb25-neo4j:
+        condition: service_healthy
+      kb25-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:8136/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks:
+      - kb25-network
+      - kb-network
+
+  kb25-neo4j:
+    image: neo4j:5-community
+    container_name: kb25-neo4j
+    environment:
+      NEO4J_AUTH: "neo4j/kb25_lkg_password"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_default__database: "lkg"
+    ports:
+      - "7476:7474"
+      - "7689:7687"
+    volumes:
+      - kb25_neo4j_data:/data
+      - ./migrations:/migrations:ro
+      - ./seed:/seed:ro
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p kb25_lkg_password 'RETURN 1'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - kb25-network
+
+  kb25-redis:
+    image: redis:7-alpine
+    container_name: kb25-redis
+    ports:
+      - "6389:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - kb25_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    networks:
+      - kb25-network
+
+volumes:
+  kb25_neo4j_data:
+  kb25_redis_data:
+
+networks:
+  kb25-network:
+    driver: bridge
+  kb-network:
+    external: true
+    name: kb-network
