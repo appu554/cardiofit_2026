@@ -39,7 +39,7 @@ func TestScenario1_StableImprovement(t *testing.T) {
 		}
 
 		chA := vt.ChannelAResult{
-			Gate:       vt.GateSafe,
+			Gate:       vt.GateClear,
 			CardID:     "card-stable-001",
 			GainFactor: 0.8 - (0.3 * progress), // decreasing gain as patient improves
 		}

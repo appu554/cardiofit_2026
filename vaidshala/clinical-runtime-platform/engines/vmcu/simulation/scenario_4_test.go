@@ -49,7 +49,7 @@ func TestScenario4_MissingData(t *testing.T) {
 		}
 
 		chA := vt.ChannelAResult{
-			Gate:       vt.GateSafe,
+			Gate:       vt.GateClear,
 			CardID:     "card-missing-004",
 			GainFactor: 0.7,
 		}

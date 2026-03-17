@@ -45,7 +45,7 @@ func TestScenario7_ChannelDisagreement(t *testing.T) {
 
 		switch {
 		case day < 10:
-			chAGate = vt.GateSafe
+			chAGate = vt.GateClear
 			note = "ALL_CLEAR"
 
 		case day >= 10 && day < 15:
@@ -64,13 +64,13 @@ func TestScenario7_ChannelDisagreement(t *testing.T) {
 		case day >= 20 && day < 30:
 			// Channel B: HALT via severe hypoglycaemia
 			p.Glucose = 3.2
-			chAGate = vt.GateSafe
+			chAGate = vt.GateClear
 			note = "B_HALT_A_SAFE"
 
 		default:
 			// Recovery
 			p.Glucose = 6.5
-			chAGate = vt.GateSafe
+			chAGate = vt.GateClear
 		}
 
 		if day > 0 && cycleInDay == 0 && day%2 == 0 {

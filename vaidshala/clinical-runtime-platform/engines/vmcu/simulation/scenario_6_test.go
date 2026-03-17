@@ -66,7 +66,7 @@ func TestScenario6_ConcurrentDeprescribing(t *testing.T) {
 		}
 
 		chA := vt.ChannelAResult{
-			Gate:       vt.GateSafe,
+			Gate:       vt.GateClear,
 			CardID:     "card-deprescribe-006",
 			GainFactor: 0.5,
 		}

@@ -66,7 +66,7 @@ func TestScenario5_PlausibilityFailure(t *testing.T) {
 		}
 
 		chA := vt.ChannelAResult{
-			Gate:       vt.GateSafe,
+			Gate:       vt.GateClear,
 			CardID:     "card-plausibility-005",
 			GainFactor: 0.7,
 		}

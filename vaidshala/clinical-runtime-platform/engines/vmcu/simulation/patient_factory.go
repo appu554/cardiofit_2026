@@ -80,7 +80,7 @@ func NewStableDiabetic() *PatientState {
 		ID:            "SIM-STABLE-001",
 		InitialDose:   1000, // mg metformin
 		ProposedDelta: 50,
-		MedClass:      titration.OralAgent,
+		MedClass:      titration.MedClassOralAgent,
 		Glucose:       7.5,
 		Creatinine:    85,
 		Potassium:     4.2,
@@ -100,7 +100,7 @@ func NewAKIRiskPatient() *PatientState {
 		ID:            "SIM-AKI-002",
 		InitialDose:   1500,
 		ProposedDelta: 50,
-		MedClass:      titration.OralAgent,
+		MedClass:      titration.MedClassOralAgent,
 		Glucose:       8.0,
 		Creatinine:    110,
 		Potassium:     4.5,
@@ -120,7 +120,7 @@ func NewHypoPronePatient() *PatientState {
 		ID:            "SIM-HYPO-003",
 		InitialDose:   30, // units basal insulin
 		ProposedDelta: 2,
-		MedClass:      titration.BasalInsulin,
+		MedClass:      titration.MedClassBasalInsulin,
 		Glucose:       5.5,
 		Creatinine:    75,
 		Potassium:     4.0,
@@ -140,7 +140,7 @@ func NewMissingDataPatient() *PatientState {
 		ID:            "SIM-MISSING-004",
 		InitialDose:   1000,
 		ProposedDelta: 50,
-		MedClass:      titration.OralAgent,
+		MedClass:      titration.MedClassOralAgent,
 		Glucose:       7.0,
 		Creatinine:    90,
 		Potassium:     4.3,
@@ -160,7 +160,7 @@ func NewDeprescribingPatient() *PatientState {
 		ID:            "SIM-DEPRESCRIBE-006",
 		InitialDose:   2000, // mg metformin at max
 		ProposedDelta: 0,    // no increases during deprescribing
-		MedClass:      titration.OralAgent,
+		MedClass:      titration.MedClassOralAgent,
 		Glucose:       5.8,
 		Creatinine:    80,
 		Potassium:     4.1,
@@ -180,7 +180,7 @@ func NewChannelDisagreementPatient() *PatientState {
 		ID:            "SIM-DISAGREE-007",
 		InitialDose:   20,
 		ProposedDelta: 2,
-		MedClass:      titration.BasalInsulin,
+		MedClass:      titration.MedClassBasalInsulin,
 		Glucose:       9.0,
 		Creatinine:    95,
 		Potassium:     4.4,
@@ -200,7 +200,7 @@ func NewAutonomyLimitPatient() *PatientState {
 		ID:            "SIM-AUTONOMY-008",
 		InitialDose:   500,
 		ProposedDelta: 100, // aggressive delta to hit limits
-		MedClass:      titration.OralAgent,
+		MedClass:      titration.MedClassOralAgent,
 		Glucose:       10.0,
 		Creatinine:    75,
 		Potassium:     4.2,
