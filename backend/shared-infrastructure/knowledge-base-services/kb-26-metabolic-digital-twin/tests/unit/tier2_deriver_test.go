@@ -60,10 +60,11 @@ func TestComputeGlycemicVariability(t *testing.T) {
 		t.Errorf("ComputeGlycemicVariability(constant) = %f, want 0", cv)
 	}
 
-	// Known values: [100, 200] => mean=150, SD=50, CV%=33.33...
+	// Known values: [100, 200] => mean=150, sample SD=sqrt(5000)=70.71, CV%=47.14...
 	readings := []float64{100, 200}
 	cv2 := services.ComputeGlycemicVariability(readings)
-	expected := (50.0 / 150.0) * 100.0
+	sampleSD := math.Sqrt(5000.0) // sqrt(((100-150)^2 + (200-150)^2) / (2-1))
+	expected := (sampleSD / 150.0) * 100.0
 	if math.Abs(cv2-expected) > 0.01 {
 		t.Errorf("ComputeGlycemicVariability([100,200]) = %f, want ~%f", cv2, expected)
 	}

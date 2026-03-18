@@ -60,7 +60,7 @@ func ComputeGlycemicVariability(readings []float64) float64 {
 		d := v - mean
 		sumSq += d * d
 	}
-	sd := math.Sqrt(sumSq / float64(n))
+	sd := math.Sqrt(sumSq / float64(n-1))
 
 	return (sd / mean) * 100.0
 }

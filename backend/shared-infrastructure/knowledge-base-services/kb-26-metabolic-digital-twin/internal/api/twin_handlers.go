@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"time"
 
-	"kb-26-metabolic-digital-twin/internal/models"
 	"kb-26-metabolic-digital-twin/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -98,6 +97,3 @@ func (s *Server) syncTwin(c *gin.Context) {
 		"source":        "sync",
 	})
 }
-
-// Ensure models package is used (prevents import cycle issues).
-var _ = models.TwinState{}
