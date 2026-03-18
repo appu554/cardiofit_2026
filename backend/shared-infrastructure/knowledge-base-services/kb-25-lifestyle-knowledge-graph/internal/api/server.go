@@ -29,6 +29,7 @@ type Server struct {
 	kb20Client           *clients.KB20Client
 	comparator           *services.ComparatorEngine
 	recommendationEngine *services.RecommendationEngine
+	projectionEngine     *services.ProjectionEngine
 }
 
 func NewServer(
@@ -42,6 +43,7 @@ func NewServer(
 	kb20 *clients.KB20Client,
 	comparatorEng *services.ComparatorEngine,
 	recommendEngine *services.RecommendationEngine,
+	projectionEng *services.ProjectionEngine,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -62,6 +64,7 @@ func NewServer(
 		kb20Client:           kb20,
 		comparator:           comparatorEng,
 		recommendationEngine: recommendEngine,
+		projectionEngine:     projectionEng,
 	}
 
 	s.setupMiddleware()

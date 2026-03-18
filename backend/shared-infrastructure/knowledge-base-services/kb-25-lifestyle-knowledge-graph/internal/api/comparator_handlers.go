@@ -51,25 +51,12 @@ func (s *Server) compareInterventions(c *gin.Context) {
 }
 
 func (s *Server) projectCombined(c *gin.Context) {
-	var req struct {
-		PatientID     string `json:"patient_id" binding:"required"`
-		LifestyleCode string `json:"lifestyle_code" binding:"required"`
-		MedChange     string `json:"med_change" binding:"required"`
-		Days          int    `json:"days"`
-	}
+	var req models.CombinedProjectionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		sendError(c, http.StatusBadRequest, "invalid request", "INVALID_REQUEST", nil)
+		sendError(c, 400, "invalid request", "INVALID_REQUEST", nil)
 		return
 	}
-	if req.Days == 0 {
-		req.Days = 90
-	}
 
-	sendSuccess(c, gin.H{
-		"patient_id":      req.PatientID,
-		"lifestyle_code":  req.LifestyleCode,
-		"med_change":      req.MedChange,
-		"projection_days": req.Days,
-		"status":          "projection_engine_pending",
-	}, nil)
+	result := s.projectionEngine.ProjectCombined(req)
+	sendSuccess(c, result, nil)
 }

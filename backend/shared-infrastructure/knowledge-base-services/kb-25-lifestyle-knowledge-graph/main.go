@@ -65,7 +65,9 @@ func main() {
 
 	recommendEngine := services.NewRecommendationEngine(graphClient, logger)
 
-	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc, safetyEng, kb20Client, comparatorEng, recommendEngine)
+	projectionEng := services.NewProjectionEngine(graphClient, logger)
+
+	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc, safetyEng, kb20Client, comparatorEng, recommendEngine, projectionEng)
 
 	go func() {
 		addr := ":" + cfg.Server.Port
