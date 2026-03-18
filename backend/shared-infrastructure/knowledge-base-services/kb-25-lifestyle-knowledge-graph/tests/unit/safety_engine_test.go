@@ -50,3 +50,33 @@ func TestEvaluateSafetyRules_HypertensiveCrisis(t *testing.T) {
 		t.Errorf("expected HARD_STOP, got %s", violations[0].Severity)
 	}
 }
+
+func TestEvaluateSafetyRules_LS15_UnderweightSuppressVFRP(t *testing.T) {
+	patient := &clients.PatientSnapshot{BMI: 21.5}
+	rules := []models.LSRule{
+		{Code: "LS-15", Condition: "BMI < 22", Blocked: "Visceral Fat Reduction Protocol", Severity: "HARD_STOP", Description: "Underweight (South Asian threshold): VFRP blocked to prevent muscle wasting"},
+	}
+
+	violations := services.EvaluateSafetyRules(patient, rules)
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation for BMI 21.5, got %d", len(violations))
+	}
+	if violations[0].RuleCode != "LS-15" {
+		t.Errorf("expected LS-15, got %s", violations[0].RuleCode)
+	}
+	if violations[0].Severity != "HARD_STOP" {
+		t.Errorf("expected HARD_STOP, got %s", violations[0].Severity)
+	}
+}
+
+func TestEvaluateSafetyRules_LS15_NormalBMI_NoViolation(t *testing.T) {
+	patient := &clients.PatientSnapshot{BMI: 24.0}
+	rules := []models.LSRule{
+		{Code: "LS-15", Condition: "BMI < 22", Blocked: "Visceral Fat Reduction Protocol", Severity: "HARD_STOP"},
+	}
+
+	violations := services.EvaluateSafetyRules(patient, rules)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for BMI 24.0, got %d", len(violations))
+	}
+}
