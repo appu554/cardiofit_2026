@@ -26,8 +26,9 @@ type Server struct {
 	logger         *zap.Logger
 	chainTraversal *services.ChainTraversalService
 	safetyEngine   *services.SafetyEngine
-	kb20Client     *clients.KB20Client
-	comparator     *services.ComparatorEngine
+	kb20Client           *clients.KB20Client
+	comparator           *services.ComparatorEngine
+	recommendationEngine *services.RecommendationEngine
 }
 
 func NewServer(
@@ -40,6 +41,7 @@ func NewServer(
 	safetyEng *services.SafetyEngine,
 	kb20 *clients.KB20Client,
 	comparatorEng *services.ComparatorEngine,
+	recommendEngine *services.RecommendationEngine,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -57,8 +59,9 @@ func NewServer(
 		logger:         logger,
 		chainTraversal: chainSvc,
 		safetyEngine:   safetyEng,
-		kb20Client:     kb20,
-		comparator:     comparatorEng,
+		kb20Client:           kb20,
+		comparator:           comparatorEng,
+		recommendationEngine: recommendEngine,
 	}
 
 	s.setupMiddleware()

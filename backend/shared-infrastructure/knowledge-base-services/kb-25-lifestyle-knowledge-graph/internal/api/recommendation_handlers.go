@@ -1,13 +1,21 @@
 package api
 
 import (
+	"kb-25-lifestyle-knowledge-graph/internal/models"
 	"kb-25-lifestyle-knowledge-graph/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
 
 func (s *Server) recommendLifestyle(c *gin.Context) {
-	sendSuccess(c, gin.H{"status": "recommendation_engine_pending"}, nil)
+	var req models.LifestyleRecommendationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		sendError(c, 400, "invalid request", "INVALID_REQUEST", nil)
+		return
+	}
+
+	result := s.recommendationEngine.GenerateRecommendation(req)
+	sendSuccess(c, result, nil)
 }
 
 func (s *Server) searchFood(c *gin.Context) {

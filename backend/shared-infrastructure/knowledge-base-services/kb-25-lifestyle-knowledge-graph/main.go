@@ -63,7 +63,9 @@ func main() {
 
 	comparatorEng := services.NewComparatorEngine(chainSvc, logger)
 
-	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc, safetyEng, kb20Client, comparatorEng)
+	recommendEngine := services.NewRecommendationEngine(graphClient, logger)
+
+	server := api.NewServer(cfg, graphClient, cacheClient, metricsCollector, logger, chainSvc, safetyEng, kb20Client, comparatorEng, recommendEngine)
 
 	go func() {
 		addr := ":" + cfg.Server.Port
