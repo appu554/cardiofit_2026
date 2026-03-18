@@ -40,6 +40,7 @@ type Server struct {
 	hysteresisEngine    *services.HysteresisEngine
 	cardLifecycle       *services.CardLifecycle
 	compositeService    *services.CompositeCardService
+	signalCardBuilder   *services.SignalCardBuilder
 }
 
 func NewServer(
@@ -99,6 +100,7 @@ func (s *Server) InitServices() {
 	s.behavioralHandler = services.NewBehavioralGapHandler(s.db, s.mcuGateCache, s.kb19Publisher, s.metrics, s.log)
 	s.cardLifecycle = services.NewCardLifecycle(s.db, s.mcuGateCache, s.kb19Publisher, s.log)
 	s.compositeService = services.NewCompositeCardService(s.db, s.metrics, s.log)
+	s.signalCardBuilder = services.NewSignalCardBuilder(s.log)
 
 	s.log.Info("all services initialized")
 }

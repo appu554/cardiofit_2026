@@ -77,6 +77,7 @@ const (
 	SourceHypoglycaemiaFast CardSource = "HYPOGLYCAEMIA_FAST_PATH"
 	SourcePerturbationDecay CardSource = "PERTURBATION_DECAY"
 	SourceBehavioralGap     CardSource = "BEHAVIORAL_GAP"
+	SourceClinicalSignal    CardSource = "CLINICAL_SIGNAL"
 )
 
 // CardStatus represents the lifecycle status of a decision card.
