@@ -72,6 +72,8 @@ func autoMigrate(db *gorm.DB) error {
 		&models.AdverseReactionProfile{},
 		&models.EventOutboxEntry{},
 		&models.FHIRSyncLog{},
+		&models.ProtocolState{},
+		&models.ProtocolMetrics{},
 	)
 }
 
