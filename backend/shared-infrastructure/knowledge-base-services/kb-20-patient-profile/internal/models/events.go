@@ -30,6 +30,11 @@ const (
 	EventMaskedHTNDetected = "MASKED_HTN_DETECTED"    // bp_pattern = MASKED confirmed over 4+ paired readings
 
 	EventGlucoseTrajectoryChange = "GLUCOSE_TRAJECTORY_CHANGE"  // FBG trajectory classification changed
+
+	EventProtocolActivated    = "PROTOCOL_ACTIVATED"
+	EventProtocolTransitioned = "PROTOCOL_PHASE_TRANSITIONED"
+	EventProtocolGraduated    = "PROTOCOL_GRADUATED"
+	EventProtocolEscalated    = "PROTOCOL_ESCALATED"
 )
 
 // Event is the base envelope for all KB-20 events.

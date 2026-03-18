@@ -83,6 +83,9 @@ func main() {
 
 	projectionService := services.NewProjectionService(db, cacheClient, logger, loincRegistry, cfg.PREVENT, kb21Adapter)
 
+	protocolRegistry := services.NewProtocolRegistry()
+	protocolService := services.NewProtocolService(db, protocolRegistry, eventBus, logger)
+
 	// Initialize HTTP server with all services
 	logger.Info("Initializing HTTP server...")
 	httpServer := api.NewServer(
@@ -99,6 +102,7 @@ func main() {
 		pipelineService,
 		projectionService,
 		loincRegistry,
+		protocolService,
 	)
 
 	// Start HTTP server

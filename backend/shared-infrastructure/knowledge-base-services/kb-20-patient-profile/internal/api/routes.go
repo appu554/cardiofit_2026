@@ -40,6 +40,11 @@ func (s *Server) setupRoutes() {
 			patient.GET("/:id/channel-b-inputs", s.getChannelBInputs)
 			patient.GET("/:id/channel-c-inputs", s.getChannelCInputs)
 			patient.DELETE("/:id/projections/cache", s.invalidateProjectionCache)
+
+			// M3 Protocol lifecycle
+			patient.POST("/:id/protocols", s.activateProtocol)
+			patient.GET("/:id/protocols", s.getActiveProtocols)
+			patient.PUT("/:id/protocols/:protocol_id/transition", s.transitionProtocolPhase)
 		}
 
 		// Context modifier registry
