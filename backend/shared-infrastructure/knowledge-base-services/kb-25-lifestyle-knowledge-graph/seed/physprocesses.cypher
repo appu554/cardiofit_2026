@@ -19,3 +19,7 @@ CREATE (:PhysProcess {code: 'INFLAMMATORY_RESPONSE', name: 'Inflammatory Respons
 CREATE (:PhysProcess {code: 'OXIDATIVE_STRESS', name: 'Oxidative Stress', description: 'ROS production and antioxidant balance'});
 CREATE (:PhysProcess {code: 'SYMPATHETIC_TONE', name: 'Sympathetic Tone', description: 'Autonomic nervous system activation'});
 CREATE (:PhysProcess {code: 'ADIPONECTIN_SECRETION', name: 'Adiponectin Secretion', description: 'Anti-inflammatory adipokine'});
+
+// E-02: Triglyceride causal chain intermediate processes
+CREATE (:PhysProcess {code: 'VLDL_PRODUCTION', name: 'Hepatic VLDL Production', description: 'Liver synthesis and secretion of very-low-density lipoproteins'});
+CREATE (:PhysProcess {code: 'BILE_ACID_BINDING', name: 'Bile Acid Binding', description: 'Intestinal bile acid sequestration increasing hepatic cholesterol uptake'});

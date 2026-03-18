@@ -54,3 +54,18 @@ CREATE (st)-[:STIMULATES {effect_size: 0.10, effect_unit: 'fraction_increase', e
 
 MATCH (mw:Exercise {code: 'EX_MICRO_WALK'}), (glut4:PhysProcess {code: 'GLUT4_TRANSLOCATION'})
 CREATE (mw)-[:STIMULATES {effect_size: 0.06, effect_unit: 'fraction_increase', evidence_grade: 'C', onset_days: 0, peak_effect_days: 1, steady_state_days: 14}]->(glut4);
+
+// E-02: Visceral Fat Reduction → Hepatic VLDL Production ↓ → Serum Triglycerides ↓
+// Chain: VF ↓ → VLDL ↓ → TG ↓
+MATCH (vf:ClinVar {code: 'VF'}), (vldl:PhysProcess {code: 'VLDL_PRODUCTION'})
+CREATE (vf)-[:STIMULATES {effect_size: 0.6, effect_unit: 'correlation', evidence_grade: 'B', onset_days: 14, peak_effect_days: 42, steady_state_days: 60}]->(vldl);
+
+MATCH (vldl:PhysProcess {code: 'VLDL_PRODUCTION'}), (tg:ClinVar {code: 'TG'})
+CREATE (vldl)-[:CAUSES_CHANGE {effect_size: -35.0, effect_unit: 'mg/dL', evidence_grade: 'B', onset_days: 21, peak_effect_days: 60, steady_state_days: 90}]->(tg);
+
+// E-02 secondary: Fiber Intake ↑ → Bile Acid Binding ↑ → Triglycerides ↓
+MATCH (fiber:Nutrient {code: 'NUT_FIBER'}), (bab:PhysProcess {code: 'BILE_ACID_BINDING'})
+CREATE (fiber)-[:STIMULATES {effect_size: 0.3, effect_unit: 'fraction_increase', evidence_grade: 'B', onset_days: 7, peak_effect_days: 28, steady_state_days: 60}]->(bab);
+
+MATCH (bab:PhysProcess {code: 'BILE_ACID_BINDING'}), (tg:ClinVar {code: 'TG'})
+CREATE (bab)-[:CAUSES_CHANGE {effect_size: -15.0, effect_unit: 'mg/dL', evidence_grade: 'B', onset_days: 14, peak_effect_days: 42, steady_state_days: 60}]->(tg);
