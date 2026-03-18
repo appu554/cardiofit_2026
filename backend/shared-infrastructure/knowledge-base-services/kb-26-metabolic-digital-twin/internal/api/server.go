@@ -23,6 +23,7 @@ type Server struct {
 	metrics      *metrics.Collector
 	logger       *zap.Logger
 	twinUpdater  *services.TwinUpdater
+	calibrator   *services.BayesianCalibrator
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -33,6 +34,7 @@ func NewServer(
 	metricsCollector *metrics.Collector,
 	logger *zap.Logger,
 	twinUpdater *services.TwinUpdater,
+	calibrator *services.BayesianCalibrator,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -49,6 +51,7 @@ func NewServer(
 		metrics:     metricsCollector,
 		logger:      logger,
 		twinUpdater: twinUpdater,
+		calibrator:  calibrator,
 	}
 
 	s.setupMiddleware()

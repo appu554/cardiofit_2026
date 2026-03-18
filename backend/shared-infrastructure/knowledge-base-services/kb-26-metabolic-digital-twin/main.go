@@ -70,9 +70,10 @@ func main() {
 
 	// 7. Initialize domain services
 	twinUpdater := services.NewTwinUpdater(db.DB, logger)
+	calibrator := services.NewBayesianCalibrator(db.DB, logger)
 
 	// 8. Create HTTP server
-	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater)
+	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator)
 
 	// 9. Start HTTP server
 	go func() {

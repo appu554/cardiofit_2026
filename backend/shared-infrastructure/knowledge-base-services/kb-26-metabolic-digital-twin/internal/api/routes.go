@@ -23,5 +23,16 @@ func (s *Server) setupRoutes() {
 		// Simulation
 		v1.POST("/simulate", s.simulate)
 		v1.POST("/simulate-comparison", s.simulateComparison)
+
+		// Calibration
+		v1.POST("/calibrate", s.calibrate)
+
+		// Confidence
+		v1.GET("/twin/:patientId/confidence", s.getTwinConfidence)
+
+		// Webhooks
+		v1.POST("/events/observation", s.webhookObservation)
+		v1.POST("/events/checkin", s.webhookCheckin)
+		v1.POST("/events/med-change", s.webhookMedChange)
 	}
 }
