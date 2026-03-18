@@ -189,6 +189,8 @@ Most services include Dockerfile and docker-compose configurations. The shared i
 - KB-22-HPI-Engine: 8132
 - KB-21-Behavioral-Intelligence: 8133
 - KB-23-Decision-Cards: 8134
+- KB-25-Lifestyle-Knowledge-Graph: 8136
+- KB-26-Metabolic-Digital-Twin: 8137
 - V-MCU Engine: embedded (no port — runs within clinical runtime)
 
 ### Go/Rust Services

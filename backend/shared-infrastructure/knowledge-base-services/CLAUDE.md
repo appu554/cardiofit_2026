@@ -32,6 +32,8 @@ Current services:
 - **KB-21-Behavioral-Intelligence** (`kb-21-behavioral-intelligence/`): Adherence scoring, answer reliability, behavioural gap detection (port 8133)
 - **KB-22-HPI-Engine** (`kb-22-hpi-engine/`): History of Present Illness session engine with Bayesian differential diagnosis (port 8132)
 - **KB-23-Decision-Cards** (`kb-23-decision-cards/`): Decision card rendering with MCU gate, confidence tiers, SLA monitoring (port 8134)
+- **KB-25-Lifestyle-Knowledge-Graph** (`kb-25-lifestyle-knowledge-graph/`): Causal reasoning graph for food/exercise interventions with EffectDescriptors, safety hard-stops, comparator engine (port 8136)
+- **KB-26-Metabolic-Digital-Twin** (`kb-26-metabolic-digital-twin/`): Persisted derived twin state, coupled forward simulation, Bayesian patient-specific calibration (port 8137)
 
 ## Common Development Commands
 
@@ -182,6 +184,8 @@ KB services implement sophisticated TOML-based rule engines:
 - KB-21-Behavioral-Intelligence: http://localhost:8133
 - KB-22-HPI-Engine: http://localhost:8132
 - KB-23-Decision-Cards: http://localhost:8134
+- KB-25-Lifestyle-Knowledge-Graph: http://localhost:8136
+- KB-26-Metabolic-Digital-Twin: http://localhost:8137
 
 ### Infrastructure Services
 - PostgreSQL: localhost:5433 (Docker) / localhost:5432 (local)
