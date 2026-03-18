@@ -14,3 +14,11 @@ CREATE (:Exercise {code: 'EX012', name: 'Stair Climbing', category: 'AEROBIC', m
 CREATE (:Exercise {code: 'EX013', name: 'Stretching', category: 'FLEXIBILITY', met_value: 2.3, safety_tier: 'T1_SAFE', min_duration_min: 10, max_duration_min: 20, freq_per_week: 7});
 CREATE (:Exercise {code: 'EX014', name: 'Chair Exercises', category: 'BALANCE', met_value: 2.0, safety_tier: 'T1_SAFE', min_duration_min: 15, max_duration_min: 30, freq_per_week: 5});
 CREATE (:Exercise {code: 'EX015', name: 'Heavy Deadlift/Squat', category: 'RESISTANCE', met_value: 6.0, safety_tier: 'T3_SUPERVISED', min_duration_min: 30, max_duration_min: 60, freq_per_week: 2});
+
+// E-06: Resistance band seated row
+CREATE (:Exercise {code: 'EX_RESISTANCE_BAND_ROW', name: 'Resistance band seated row', category: 'RESISTANCE', met_value: 3.5, safety_tier: 'T2_CONDITIONAL', min_duration_min: 10, max_duration_min: 20, freq_per_week: 3, equipment: ['resistance_band'], contraindications: []});
+
+// E-07: Micro-workout nodes for baseline <2000 steps
+CREATE (:Exercise {code: 'EX_MICRO_SQUAT', name: 'Micro-workout bodyweight squats', category: 'RESISTANCE', met_value: 4.0, safety_tier: 'T1_SAFE', min_duration_min: 1, max_duration_min: 3, freq_per_week: 7, equipment: [], contraindications: []});
+CREATE (:Exercise {code: 'EX_MICRO_STAIR', name: 'Micro-workout stair climbing', category: 'AEROBIC', met_value: 6.0, safety_tier: 'T2_CONDITIONAL', min_duration_min: 1, max_duration_min: 3, freq_per_week: 7, equipment: [], contraindications: []});
+CREATE (:Exercise {code: 'EX_MICRO_WALK', name: 'Micro-workout brisk walking', category: 'AEROBIC', met_value: 4.3, safety_tier: 'T1_SAFE', min_duration_min: 2, max_duration_min: 5, freq_per_week: 7, equipment: [], contraindications: []});

@@ -40,3 +40,17 @@ CREATE (f)-[:IMPROVES {effect_size: 0.12, effect_unit: 'fold_increase', evidence
 
 MATCH (p:PhysProcess {code: 'ENDOTHELIAL_FUNCTION'}), (c:ClinVar {code: 'SBP'})
 CREATE (p)-[:REDUCES {effect_size: -7.0, effect_unit: 'mmHg', evidence_grade: 'A', onset_days: 30, peak_effect_days: 90, steady_state_days: 180, source_pmids: ['PMID:24126178']}]->(c);
+
+// E-06: Resistance band row → MPS → Insulin Sensitivity
+MATCH (ex:Exercise {code: 'EX_RESISTANCE_BAND_ROW'}), (mps:PhysProcess {code: 'MUSCLE_PROTEIN_SYNTHESIS'})
+CREATE (ex)-[:STIMULATES {effect_size: 0.15, effect_unit: 'fraction_increase', evidence_grade: 'C', onset_days: 7, peak_effect_days: 28, steady_state_days: 60}]->(mps);
+
+// E-07: Micro-workouts → GLUT4 translocation (acute glucose disposal)
+MATCH (sq:Exercise {code: 'EX_MICRO_SQUAT'}), (glut4:PhysProcess {code: 'GLUT4_TRANSLOCATION'})
+CREATE (sq)-[:STIMULATES {effect_size: 0.08, effect_unit: 'fraction_increase', evidence_grade: 'C', onset_days: 0, peak_effect_days: 1, steady_state_days: 14}]->(glut4);
+
+MATCH (st:Exercise {code: 'EX_MICRO_STAIR'}), (glut4:PhysProcess {code: 'GLUT4_TRANSLOCATION'})
+CREATE (st)-[:STIMULATES {effect_size: 0.10, effect_unit: 'fraction_increase', evidence_grade: 'C', onset_days: 0, peak_effect_days: 1, steady_state_days: 14}]->(glut4);
+
+MATCH (mw:Exercise {code: 'EX_MICRO_WALK'}), (glut4:PhysProcess {code: 'GLUT4_TRANSLOCATION'})
+CREATE (mw)-[:STIMULATES {effect_size: 0.06, effect_unit: 'fraction_increase', evidence_grade: 'C', onset_days: 0, peak_effect_days: 1, steady_state_days: 14}]->(glut4);
