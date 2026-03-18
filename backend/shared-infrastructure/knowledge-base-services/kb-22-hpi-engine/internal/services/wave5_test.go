@@ -759,11 +759,7 @@ func TestWave5_Integration(t *testing.T) {
 	}
 }
 
-// helper for substring matching
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && containsSubstring(s, sub)
-}
-
+// containsSubstring checks if s contains sub as a substring.
 func containsSubstring(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {
