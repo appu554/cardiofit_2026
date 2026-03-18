@@ -49,6 +49,9 @@ type Server struct {
 	KafkaPublisher     services.KafkaPublisher
 	AcuityScorer       *services.AcuityScorer
 	TierCService       *services.TierCService
+
+	// KB-22 PM/MD signal nodes (Task 13)
+	SignalGroup *SignalHandlerGroup
 }
 
 func NewServer(
@@ -96,6 +99,9 @@ func (s *Server) InitServices() {
 	// BAY-11: Kafka publishing
 	s.KafkaPublisher = s.initKafkaPublisher()
 	s.EventPublisher = services.NewEventPublisherFacade(s.KafkaPublisher, s.Log)
+
+	// Task 13: PM/MD signal node handler group
+	s.SignalGroup = NewSignalHandlerGroup(s.Config, s.DB, s.Cache, s.KafkaPublisher, s.Log, s.Metrics)
 
 	// CC-1: Safety Constraint Engine (in-process fallback + HTTP client to KB-24)
 	s.SCEService = services.NewSCEService(s.SafetyEngine, s.NodeLoader, s.KafkaPublisher, s.Log)
@@ -154,6 +160,10 @@ func (s *Server) RegisterRoutes() {
 
 	v1 := s.Router.Group("/api/v1")
 	{
+		if s.SignalGroup != nil {
+			s.SignalGroup.RegisterRoutes(v1)
+		}
+
 		v1.POST("/sessions", s.createSessionHandler)
 		v1.GET("/sessions/:id", s.getSessionHandler)
 		v1.POST("/sessions/:id/answers", s.submitAnswerHandler)
@@ -223,6 +233,14 @@ func (s *Server) reloadNodesHandler(c *gin.Context) {
 	}
 	if err := s.CrossNodeSafety.Load(); err != nil {
 		s.Log.Warn("failed to reload cross-node triggers", zap.Error(err))
+	}
+	if s.SignalGroup != nil {
+		if err := s.SignalGroup.monitoringLoader.Reload(); err != nil {
+			s.Log.Warn("failed to reload monitoring nodes", zap.Error(err))
+		}
+		if err := s.SignalGroup.deteriorationLoader.Reload(); err != nil {
+			s.Log.Warn("failed to reload deterioration nodes", zap.Error(err))
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "nodes reloaded", "count": len(s.NodeLoader.List())})
 }
