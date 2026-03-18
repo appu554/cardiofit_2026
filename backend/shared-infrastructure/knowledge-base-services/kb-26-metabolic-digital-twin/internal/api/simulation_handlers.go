@@ -20,8 +20,10 @@ func (s *Server) simulate(c *gin.Context) {
 		sendError(c, http.StatusBadRequest, "invalid request", "INVALID_REQUEST", nil)
 		return
 	}
-	if req.Days == 0 {
+	if req.Days <= 0 {
 		req.Days = 90
+	} else if req.Days > 3650 {
+		req.Days = 3650
 	}
 
 	patientID, err := uuid.Parse(req.PatientID)
@@ -56,8 +58,14 @@ func (s *Server) simulateComparison(c *gin.Context) {
 		sendError(c, http.StatusBadRequest, "invalid request", "INVALID_REQUEST", nil)
 		return
 	}
-	if req.Days == 0 {
+	if req.Days <= 0 {
 		req.Days = 90
+	} else if req.Days > 3650 {
+		req.Days = 3650
+	}
+	if len(req.Interventions) > 10 {
+		sendError(c, http.StatusBadRequest, "maximum 10 interventions allowed", "TOO_MANY_INTERVENTIONS", nil)
+		return
 	}
 
 	patientID, err := uuid.Parse(req.PatientID)

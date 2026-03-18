@@ -8,7 +8,7 @@ import (
 
 // EstimateInsulinSensitivity computes IS via HOMA-IR (if insulin available) or trajectory fallback.
 func EstimateInsulinSensitivity(fbg, fastingInsulin float64, insulinAvailable bool) models.EstimatedVariable {
-	if insulinAvailable && fastingInsulin > 0 {
+	if insulinAvailable && fastingInsulin > 0 && fbg > 0 {
 		homaIR := (fbg * fastingInsulin) / 405.0
 		class := "NORMAL"
 		switch {
