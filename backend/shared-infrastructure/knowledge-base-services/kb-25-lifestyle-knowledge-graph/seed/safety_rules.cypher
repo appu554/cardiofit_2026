@@ -33,3 +33,9 @@ CREATE (e)-[:CONTRAINDICATED_FOR {rule_code: 'LS-10', severity: 'HARD_STOP', des
 MATCH (f:Food), (ctx:PatientCtx {code: 'CTX_HYPERKALEMIA'})
 WHERE f.potassium_mg > 400
 CREATE (f)-[:CONTRAINDICATED_FOR {rule_code: 'LS-09', severity: 'HARD_STOP', description: 'High-potassium foods blocked when K+ > 5.5'}]->(ctx);
+
+// LS-15: Underweight (South Asian BMI < 22) — VFRP blocked
+CREATE (ctx_underweight:PatientCtx {code: 'CTX_UNDERWEIGHT_SA', name: 'South Asian Underweight', condition: 'BMI < 22', description: 'BMI below South Asian underweight threshold'})
+WITH ctx_underweight
+MATCH (vfrp_exercise:Exercise) WHERE vfrp_exercise.code STARTS WITH 'EX_'
+CREATE (vfrp_exercise)-[:CONTRAINDICATED_FOR {rule_code: 'LS-15', severity: 'HARD_STOP', description: 'Underweight patients: caloric deficit protocols blocked'}]->(ctx_underweight);
