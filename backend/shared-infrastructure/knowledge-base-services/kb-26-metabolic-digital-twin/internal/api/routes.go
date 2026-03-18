@@ -19,5 +19,9 @@ func (s *Server) setupRoutes() {
 
 		// Sync / re-derive
 		v1.POST("/sync/:patientId", s.syncTwin)
+
+		// Simulation
+		v1.POST("/simulate", s.simulate)
+		v1.POST("/simulate-comparison", s.simulateComparison)
 	}
 }
