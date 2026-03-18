@@ -12,8 +12,8 @@ func (s *Server) calibrate(c *gin.Context) {
 		PatientID        string  `json:"patient_id" binding:"required"`
 		InterventionCode string  `json:"intervention_code" binding:"required"`
 		TargetVariable   string  `json:"target_variable" binding:"required"`
-		PopulationEffect float64 `json:"population_effect" binding:"required"`
-		ObservedEffect   float64 `json:"observed_effect" binding:"required"`
+		PopulationEffect float64 `json:"population_effect"`
+		ObservedEffect   float64 `json:"observed_effect"`
 		ObservationSD    float64 `json:"observation_sd"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {

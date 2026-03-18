@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"math"
 
 	"kb-26-metabolic-digital-twin/internal/models"
@@ -59,6 +60,10 @@ func (bc *BayesianCalibrator) Calibrate(
 		"patient_id = ? AND intervention_code = ? AND target_variable = ?",
 		patientID, interventionCode, targetVariable,
 	).First(&existing)
+
+	if result.Error != nil && !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil, result.Error
+	}
 
 	if result.Error != nil {
 		// No existing record — create new with population prior.

@@ -12,7 +12,7 @@ import (
 type CalibratedEffect struct {
 	ID               uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	PatientID        uuid.UUID `gorm:"type:uuid;not null;index:idx_calibrated_patient" json:"patient_id"`
-	KB25EdgeType     string    `gorm:"size:50;not null" json:"kb25_edge_type"`
+	KB25EdgeType     string    `gorm:"size:50" json:"kb25_edge_type,omitempty"`
 	InterventionCode string    `gorm:"size:50;not null" json:"intervention_code"`
 	TargetVariable   string    `gorm:"size:50;not null" json:"target_variable"`
 	PopulationEffect float64   `gorm:"not null" json:"population_effect"`
