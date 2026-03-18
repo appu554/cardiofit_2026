@@ -59,6 +59,22 @@ type Config struct {
 	TelemetryRetryDelay   time.Duration
 	OutcomeRetryDelay     time.Duration
 	SafetyAlertRetryDelay time.Duration
+
+	// KB-26 Metabolic Digital Twin
+	KB26URL string
+
+	// PM/MD Node directories
+	MonitoringNodesDir    string
+	DeteriorationNodesDir string
+
+	// Signal evaluation
+	KB26TimeoutMS               int
+	KB20ObservationTimeoutMS    int
+	SignalDebounceTTLSec        int
+	SignalPublisherRetryCount   int
+	SignalPublisherRetryDelaySec int
+	KafkaSignalTopic            string
+	KB26StalenessDays           int
 }
 
 func Load() *Config {
@@ -100,6 +116,17 @@ func Load() *Config {
 		TelemetryRetryDelay:   envDurationOrDefault("TELEMETRY_RETRY_DELAY", 30*time.Second),
 		OutcomeRetryDelay:     envDurationOrDefault("OUTCOME_RETRY_DELAY", 30*time.Second),
 		SafetyAlertRetryDelay: envDurationOrDefault("SAFETY_ALERT_RETRY_DELAY", 5*time.Second),
+
+		KB26URL:                    envOrDefault("KB26_URL", "http://localhost:8137"),
+		MonitoringNodesDir:         envOrDefault("MONITORING_NODES_DIR", "./monitoring"),
+		DeteriorationNodesDir:      envOrDefault("DETERIORATION_NODES_DIR", "./deterioration"),
+		KB26TimeoutMS:              envIntOrDefault("KB26_TIMEOUT_MS", 5000),
+		KB20ObservationTimeoutMS:   envIntOrDefault("KB20_OBSERVATION_TIMEOUT_MS", 10000),
+		SignalDebounceTTLSec:       envIntOrDefault("SIGNAL_DEBOUNCE_TTL_SEC", 300),
+		SignalPublisherRetryCount:     envIntOrDefault("SIGNAL_PUBLISHER_RETRY_COUNT", 3),
+		SignalPublisherRetryDelaySec:  envIntOrDefault("SIGNAL_PUBLISHER_RETRY_DELAY_SEC", 30),
+		KafkaSignalTopic:           envOrDefault("KAFKA_SIGNAL_TOPIC", "clinical.signal.events"),
+		KB26StalenessDays:          envIntOrDefault("KB26_STALENESS_DAYS", 21),
 	}
 }
 
@@ -119,6 +146,16 @@ func (c *Config) KB23Timeout() time.Duration {
 }
 func (c *Config) SCETimeout() time.Duration {
 	return time.Duration(c.SCETimeoutMS) * time.Millisecond
+}
+
+func (c *Config) KB26Timeout() time.Duration {
+	return time.Duration(c.KB26TimeoutMS) * time.Millisecond
+}
+func (c *Config) KB20ObservationTimeout() time.Duration {
+	return time.Duration(c.KB20ObservationTimeoutMS) * time.Millisecond
+}
+func (c *Config) KB26StalenessThreshold() time.Duration {
+	return time.Duration(c.KB26StalenessDays) * 24 * time.Hour
 }
 
 func (c *Config) SessionTTL() time.Duration {
