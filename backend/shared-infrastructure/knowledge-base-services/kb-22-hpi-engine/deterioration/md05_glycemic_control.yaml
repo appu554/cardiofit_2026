@@ -1,0 +1,95 @@
+node_id: MD-05
+version: "1.0.0"
+type: DETERIORATION
+title_en: "Glycemic Control Deterioration"
+title_hi: "Glycemic Niyantran Bigadna"
+
+state_variable: HGO
+state_variable_label: "Hepatic Glucose Output"
+
+trigger_on:
+  - event: "OBSERVATION:FBG"
+  - event: "OBSERVATION:PPBG"
+  - event: "OBSERVATION:HBA1C"
+  - event: "TWIN_STATE_UPDATE"
+  - event: "SIGNAL:PM-04"
+  - event: "SIGNAL:PM-05"
+  - event: "SIGNAL:PM-06"
+
+required_inputs:
+  - field: hba1c
+    source: KB-20
+    unit: percent
+    min_observations: 1
+    lookback_days: 90
+  - field: fbg
+    source: KB-20
+    unit: mg/dL
+    min_observations: 3
+    lookback_days: 14
+  - field: hgo_value
+    source: KB-26
+    unit: dimensionless
+    min_observations: 1
+    lookback_days: 1
+
+computed_fields:
+  - name: glycemic_composite
+    formula: "0.35 * normalize(hba1c, 6, 12) + 0.30 * normalize(fbg, 90, 250) + 0.20 * pm_04 + 0.15 * pm_05"
+
+trajectory:
+  method: LINEAR_REGRESSION
+  window_days: 90
+  min_data_points: 4
+  rate_unit: per_month
+  data_source: KB-26
+
+thresholds:
+  - signal: GLYCEMIC_CRITICAL
+    condition: "glycemic_composite > 0.80 AND rate_of_change > 0"
+    severity: CRITICAL
+    trajectory: DECLINING
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-md05-critical-v1"
+    actions:
+      - action: "Review oral hypoglycemic regimen"
+        priority: HIGH
+      - action: "Assess insulin initiation criteria"
+        priority: HIGH
+  - signal: GLYCEMIC_WORSENING
+    condition: "glycemic_composite > 0.60"
+    severity: MODERATE
+    trajectory: DECLINING
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-md05-worsening-v1"
+    actions:
+      - action: "Intensify M3-PRP dietary protocol"
+        priority: MEDIUM
+      - action: "Consider metformin dose optimization"
+        priority: MEDIUM
+  - signal: GLYCEMIC_SUBOPTIMAL
+    condition: "glycemic_composite > 0.40"
+    severity: MILD
+    trajectory: DECLINING
+    mcu_gate_suggestion: SAFE
+  - signal: GLYCEMIC_CONTROLLED
+    condition: ""
+    severity: NONE
+    trajectory: STABLE
+    mcu_gate_suggestion: SAFE
+
+projections:
+  - name: hgo_critical_projection
+    variable: HGO
+    threshold: 0.80
+    method: LINEAR_EXTRAPOLATION
+    confidence_required: 0.70
+
+contributing_signals:
+  - PM-04
+  - PM-05
+  - PM-06
+
+insufficient_data:
+  action: FLAG_FOR_REVIEW
+  note_en: "Insufficient glycemic data points for composite and trajectory analysis"

@@ -1,6 +1,8 @@
 package services
 
 import (
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -388,4 +390,91 @@ insufficient_data:
 			t.Error("MD-05 should be loaded")
 		}
 	})
+}
+
+// ── TestDeteriorationNodeLoader_LoadAll ──────────────────────────────────────
+// Load all 6 production MD node YAMLs from the deterioration/ directory and
+// verify each node is present with expected metadata.
+func TestDeteriorationNodeLoader_LoadAll(t *testing.T) {
+	// Resolve path: this file is in internal/services/, deterioration/ is at ../../deterioration/
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	deteriorationDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "deterioration")
+
+	loader := NewDeteriorationNodeLoader(deteriorationDir, testLogger())
+	if err := loader.Load(); err != nil {
+		t.Fatalf("Load() failed on production YAML files: %v", err)
+	}
+
+	all := loader.All()
+	if len(all) != 6 {
+		t.Fatalf("expected 6 deterioration nodes, got %d", len(all))
+	}
+
+	expectedNodes := []struct {
+		id            string
+		stateVar      string
+		hasTrajectory bool
+		hasVariants   bool
+	}{
+		{id: "MD-01", stateVar: "IS", hasTrajectory: true},
+		{id: "MD-02", stateVar: "VR", hasTrajectory: true},
+		{id: "MD-03", stateVar: "RR", hasTrajectory: false},
+		{id: "MD-04", stateVar: "", hasTrajectory: false, hasVariants: true},
+		{id: "MD-05", stateVar: "HGO", hasTrajectory: true},
+		{id: "MD-06", stateVar: "CV_RISK", hasTrajectory: false},
+	}
+
+	for _, exp := range expectedNodes {
+		node := loader.Get(exp.id)
+		if node == nil {
+			t.Errorf("%s: not loaded", exp.id)
+			continue
+		}
+		if node.Type != "DETERIORATION" {
+			t.Errorf("%s: type = %q, want DETERIORATION", exp.id, node.Type)
+		}
+		if node.Version != "1.0.0" {
+			t.Errorf("%s: version = %q, want 1.0.0", exp.id, node.Version)
+		}
+		if node.StateVariable != exp.stateVar {
+			t.Errorf("%s: state_variable = %q, want %q", exp.id, node.StateVariable, exp.stateVar)
+		}
+		if exp.hasTrajectory && node.Trajectory == nil {
+			t.Errorf("%s: expected trajectory, got nil", exp.id)
+		}
+		if !exp.hasTrajectory && node.Trajectory != nil {
+			t.Errorf("%s: expected no trajectory, got %+v", exp.id, node.Trajectory)
+		}
+		if exp.hasVariants && len(node.ComputedFieldVariants) == 0 {
+			t.Errorf("%s: expected computed_field_variants, got none", exp.id)
+		}
+		if len(node.Thresholds) == 0 {
+			t.Errorf("%s: expected at least one threshold", exp.id)
+		}
+		if len(node.TriggerOn) == 0 {
+			t.Errorf("%s: expected at least one trigger", exp.id)
+		}
+		if node.TitleEN == "" {
+			t.Errorf("%s: title_en is empty", exp.id)
+		}
+	}
+
+	// Verify MD-06 contributing_signals includes upstream MD nodes
+	md06 := loader.Get("MD-06")
+	if md06 != nil {
+		if len(md06.ContributingSignals) != 3 {
+			t.Errorf("MD-06: expected 3 contributing_signals, got %d", len(md06.ContributingSignals))
+		}
+	}
+
+	// Verify MD-04 has 4 computed_field_variants (adaptive weights)
+	md04 := loader.Get("MD-04")
+	if md04 != nil {
+		if len(md04.ComputedFieldVariants) != 4 {
+			t.Errorf("MD-04: expected 4 computed_field_variants, got %d", len(md04.ComputedFieldVariants))
+		}
+	}
 }

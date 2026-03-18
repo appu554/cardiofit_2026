@@ -1,0 +1,78 @@
+node_id: MD-02
+version: "1.0.0"
+type: DETERIORATION
+title_en: "Vascular Compliance Decline"
+title_hi: "Vascular Anupalana Giraavat"
+
+state_variable: VR
+state_variable_label: "Vascular Resistance"
+
+trigger_on:
+  - event: "OBSERVATION:SBP"
+  - event: "OBSERVATION:DBP"
+  - event: "TWIN_STATE_UPDATE"
+  - event: "SIGNAL:PM-01"
+  - event: "SIGNAL:PM-03"
+
+required_inputs:
+  - field: vr_value
+    source: KB-26
+    unit: dimensionless
+    min_observations: 1
+    lookback_days: 1
+
+trajectory:
+  method: LINEAR_REGRESSION
+  window_days: 90
+  min_data_points: 4
+  rate_unit: per_month
+  data_source: KB-26
+
+thresholds:
+  - signal: VR_CRITICAL_RISE
+    condition: "rate_of_change > 0.08 AND vr_value > 0.70"
+    severity: CRITICAL
+    trajectory: DECLINING
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-md02-critical-rise-v1"
+    actions:
+      - action: "Review antihypertensive regimen"
+        priority: HIGH
+      - action: "Assess end-organ damage markers"
+        priority: HIGH
+  - signal: VR_MODERATE_RISE
+    condition: "rate_of_change > 0.04"
+    severity: MODERATE
+    trajectory: DECLINING
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-md02-moderate-rise-v1"
+    actions:
+      - action: "Consider sodium restriction intensification"
+        priority: MEDIUM
+      - action: "Evaluate medication adherence"
+        priority: MEDIUM
+  - signal: VR_IMPROVING
+    condition: "rate_of_change < -0.04"
+    severity: NONE
+    trajectory: IMPROVING
+    mcu_gate_suggestion: SAFE
+  - signal: VR_STABLE
+    condition: ""
+    severity: NONE
+    trajectory: STABLE
+    mcu_gate_suggestion: SAFE
+
+projections:
+  - name: vr_critical_projection
+    variable: VR
+    threshold: 0.85
+    method: LINEAR_EXTRAPOLATION
+    confidence_required: 0.70
+
+contributing_signals:
+  - PM-01
+  - PM-03
+
+insufficient_data:
+  action: FLAG_FOR_REVIEW
+  note_en: "Insufficient VR data points for trajectory analysis"

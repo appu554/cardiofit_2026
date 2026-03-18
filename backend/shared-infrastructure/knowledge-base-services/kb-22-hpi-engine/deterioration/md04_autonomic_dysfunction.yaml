@@ -1,0 +1,83 @@
+node_id: MD-04
+version: "1.0.0"
+type: DETERIORATION
+title_en: "Autonomic Dysfunction Progression"
+title_hi: "Swayatt Tantra Vikriti Pragati"
+
+trigger_on:
+  - event: "SIGNAL:PM-03"
+  - event: "SIGNAL:PM-07"
+  - event: "SIGNAL:PM-08"
+  - event: "SIGNAL:PM-09"
+  - event: "TWIN_STATE_UPDATE"
+  - event: "PROTOCOL:M3-VFRP:ACTIVITY"
+
+required_inputs:
+  - field: orthostatic_delta
+    source: KB-20
+    unit: mmHg
+    min_observations: 1
+    lookback_days: 7
+  - field: m3_vfrp_activity
+    source: KB-20
+    unit: dimensionless
+    min_observations: 1
+    lookback_days: 7
+
+computed_field_variants:
+  - condition: "pm_08 >= 0 AND pm_09 >= 0"
+    name: autonomic_score
+    formula: "0.30 * pm_03 + 0.15 * pm_08 + 0.20 * pm_07 + 0.15 * pm_09 + 0.10 * orthostatic_delta + 0.10 * m3_vfrp_activity"
+  - condition: "pm_09 >= 0"
+    name: autonomic_score
+    formula: "0.30 * pm_03 + 0.30 * pm_09 + 0.20 * pm_07 + 0.10 * orthostatic_delta + 0.10 * m3_vfrp_activity"
+  - condition: "pm_08 >= 0"
+    name: autonomic_score
+    formula: "0.30 * pm_03 + 0.30 * pm_08 + 0.20 * pm_07 + 0.10 * orthostatic_delta + 0.10 * m3_vfrp_activity"
+  - condition: ""
+    name: autonomic_score
+    formula: "0.40 * pm_03 + 0.30 * pm_07 + 0.15 * orthostatic_delta + 0.15 * m3_vfrp_activity"
+
+thresholds:
+  - signal: AUTONOMIC_SEVERE
+    condition: "autonomic_score >= 2.5"
+    severity: CRITICAL
+    trajectory: DECLINING
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-md04-severe-v1"
+    actions:
+      - action: "Comprehensive autonomic assessment"
+        priority: HIGH
+      - action: "Review medications affecting autonomic function"
+        priority: HIGH
+  - signal: AUTONOMIC_MODERATE
+    condition: "autonomic_score >= 1.5"
+    severity: MODERATE
+    trajectory: DECLINING
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-md04-moderate-v1"
+    actions:
+      - action: "Monitor orthostatic symptoms closely"
+        priority: MEDIUM
+      - action: "Adjust M3-VFRP activity targets"
+        priority: MEDIUM
+  - signal: AUTONOMIC_MILD
+    condition: "autonomic_score >= 0.5"
+    severity: MILD
+    trajectory: DECLINING
+    mcu_gate_suggestion: SAFE
+  - signal: AUTONOMIC_NORMAL
+    condition: ""
+    severity: NONE
+    trajectory: STABLE
+    mcu_gate_suggestion: SAFE
+
+contributing_signals:
+  - PM-03
+  - PM-07
+  - PM-08
+  - PM-09
+
+insufficient_data:
+  action: USE_SNAPSHOT
+  note_en: "Using adaptive weight variants for available PM signals"

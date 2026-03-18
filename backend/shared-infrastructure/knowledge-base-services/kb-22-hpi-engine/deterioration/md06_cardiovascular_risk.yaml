@@ -1,0 +1,71 @@
+node_id: MD-06
+version: "1.0.0"
+type: DETERIORATION
+title_en: "Cardiovascular Risk Emergence"
+title_hi: "Hridaya Vaahika Jokhim Utpatti"
+
+state_variable: CV_RISK
+state_variable_label: "Cardiovascular Risk Score"
+
+trigger_on:
+  - event: "SIGNAL:MD-01"
+  - event: "SIGNAL:MD-02"
+  - event: "SIGNAL:MD-03"
+  - event: "SIGNAL:PM-01"
+  - event: "SIGNAL:PM-02"
+  - event: "TWIN_STATE_UPDATE"
+  - event: "PROTOCOL:M3-VFRP:ACTIVITY"
+
+required_inputs:
+  - field: vf_proxy
+    source: KB-26
+    unit: dimensionless
+    min_observations: 1
+    lookback_days: 1
+
+computed_fields:
+  - name: cv_risk_score
+    formula: "0.25 * md_01 + 0.25 * md_02 + 0.20 * md_03 + 0.15 * pm_01 + 0.15 * (vf_proxy * 3)"
+
+thresholds:
+  - signal: CV_RISK_CRITICAL
+    condition: "cv_risk_score >= 2.5"
+    severity: CRITICAL
+    trajectory: DECLINING
+    mcu_gate_suggestion: HALT
+    card_template: "dc-md06-critical-v1"
+    actions:
+      - action: "Immediate cardiology consultation"
+        priority: HIGH
+      - action: "Comprehensive cardiovascular risk workup"
+        priority: HIGH
+  - signal: CV_RISK_HIGH
+    condition: "cv_risk_score >= 1.8"
+    severity: MODERATE
+    trajectory: DECLINING
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-md06-high-v1"
+    actions:
+      - action: "Expedite cardiovascular assessment"
+        priority: HIGH
+      - action: "Review statin and antiplatelet therapy"
+        priority: MEDIUM
+  - signal: CV_RISK_ELEVATED
+    condition: "cv_risk_score >= 1.0"
+    severity: MILD
+    trajectory: DECLINING
+    mcu_gate_suggestion: MODIFY
+  - signal: CV_RISK_LOW
+    condition: ""
+    severity: NONE
+    trajectory: STABLE
+    mcu_gate_suggestion: SAFE
+
+contributing_signals:
+  - MD-01
+  - MD-02
+  - MD-03
+
+insufficient_data:
+  action: FLAG_FOR_REVIEW
+  note_en: "Insufficient upstream MD/PM signals for cardiovascular risk computation"

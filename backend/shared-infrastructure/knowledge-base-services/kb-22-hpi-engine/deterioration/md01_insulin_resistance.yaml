@@ -1,0 +1,79 @@
+node_id: MD-01
+version: "1.0.0"
+type: DETERIORATION
+title_en: "Insulin Resistance Trajectory Monitor"
+title_hi: "Insulin Pratirodh Pravrutti Monitor"
+
+state_variable: IS
+state_variable_label: "Insulin Sensitivity"
+
+trigger_on:
+  - event: "OBSERVATION:FBG"
+  - event: "OBSERVATION:PPBG"
+  - event: "TWIN_STATE_UPDATE"
+  - event: "SIGNAL:PM-04"
+  - event: "SIGNAL:PM-05"
+  - event: "SIGNAL:PM-06"
+  - event: "PROTOCOL:M3-PRP:ADHERENCE"
+
+required_inputs:
+  - field: is_value
+    source: KB-26
+    unit: dimensionless
+    min_observations: 1
+    lookback_days: 1
+
+trajectory:
+  method: LINEAR_REGRESSION
+  window_days: 90
+  min_data_points: 4
+  rate_unit: per_month
+  data_source: KB-26
+
+thresholds:
+  - signal: IS_CRITICAL_DECLINE
+    condition: "rate_of_change < -0.08 AND is_value < 0.30"
+    severity: CRITICAL
+    trajectory: DECLINING
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-md01-critical-decline-v1"
+    actions:
+      - action: "Review insulin sensitizer dosing"
+        priority: HIGH
+      - action: "Reassess M3-PRP protocol adherence"
+        priority: HIGH
+  - signal: IS_MODERATE_DECLINE
+    condition: "rate_of_change < -0.04"
+    severity: MODERATE
+    trajectory: DECLINING
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-md01-moderate-decline-v1"
+    actions:
+      - action: "Consider lifestyle modification intensification"
+        priority: MEDIUM
+  - signal: IS_IMPROVING
+    condition: "rate_of_change > 0.04"
+    severity: NONE
+    trajectory: IMPROVING
+    mcu_gate_suggestion: SAFE
+  - signal: IS_STABLE
+    condition: ""
+    severity: NONE
+    trajectory: STABLE
+    mcu_gate_suggestion: SAFE
+
+projections:
+  - name: is_critical_projection
+    variable: IS
+    threshold: 0.20
+    method: LINEAR_EXTRAPOLATION
+    confidence_required: 0.70
+
+contributing_signals:
+  - PM-04
+  - PM-05
+  - PM-06
+
+insufficient_data:
+  action: FLAG_FOR_REVIEW
+  note_en: "Insufficient IS data points for trajectory analysis"

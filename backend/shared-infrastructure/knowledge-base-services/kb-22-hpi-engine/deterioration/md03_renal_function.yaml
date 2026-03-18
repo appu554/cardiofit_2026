@@ -1,0 +1,79 @@
+node_id: MD-03
+version: "1.0.0"
+type: DETERIORATION
+title_en: "Renal Function Trajectory"
+title_hi: "Gurdey Kriya Pravrutti"
+
+state_variable: RR
+state_variable_label: "Renal Reserve"
+
+trigger_on:
+  - event: "OBSERVATION:EGFR"
+  - event: "OBSERVATION:CREATININE"
+  - event: "TWIN_STATE_UPDATE"
+
+required_inputs:
+  - field: rr_value
+    source: KB-26
+    unit: dimensionless
+    min_observations: 1
+    lookback_days: 1
+  - field: renal_slope
+    source: KB-26
+    unit: mL/min/yr
+    min_observations: 1
+    lookback_days: 1
+  - field: egfr
+    source: KB-26
+    unit: mL/min
+    min_observations: 1
+    lookback_days: 1
+
+computed_fields:
+  - name: rate_of_change
+    formula: "renal_slope"
+
+thresholds:
+  - signal: RR_RAPID_DECLINE
+    condition: "renal_slope < -5"
+    severity: CRITICAL
+    trajectory: DECLINING
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-md03-rapid-decline-v1"
+    actions:
+      - action: "Urgent nephrology referral"
+        priority: HIGH
+      - action: "Review nephrotoxic medications"
+        priority: HIGH
+  - signal: RR_PROGRESSIVE_DECLINE
+    condition: "renal_slope < -3"
+    severity: MODERATE
+    trajectory: DECLINING
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-md03-progressive-decline-v1"
+    actions:
+      - action: "Intensify renoprotective therapy"
+        priority: MEDIUM
+      - action: "Adjust RAAS inhibitor dosing"
+        priority: MEDIUM
+  - signal: RR_SLOW_DECLINE
+    condition: "renal_slope < -1"
+    severity: MILD
+    trajectory: DECLINING
+    mcu_gate_suggestion: SAFE
+  - signal: RR_STABLE
+    condition: ""
+    severity: NONE
+    trajectory: STABLE
+    mcu_gate_suggestion: SAFE
+
+projections:
+  - name: rr_ckd4_projection
+    variable: RR
+    threshold: 0.25
+    method: LINEAR_EXTRAPOLATION
+    confidence_required: 0.70
+
+insufficient_data:
+  action: FLAG_FOR_REVIEW
+  note_en: "Insufficient renal data points for trajectory analysis"
