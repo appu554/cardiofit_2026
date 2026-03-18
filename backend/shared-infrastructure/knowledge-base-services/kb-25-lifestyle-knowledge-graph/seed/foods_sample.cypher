@@ -19,3 +19,18 @@ CREATE (:Food {code: 'F017', name: 'Chana Dal', name_local: 'चना दाल
 CREATE (:Food {code: 'F018', name: 'Spinach (Palak)', name_local: 'पालक', region: 'ALL', diet_type: 'VEG', category: 'LEAFY_GREEN', food_group: 'VEGETABLES', gi: 15, gl: 1, serving_size_g: 100, fiber_g: 2.2, sodium_mg: 79, potassium_mg: 558});
 CREATE (:Food {code: 'F019', name: 'Guava (Amrood)', name_local: 'अमरूद', region: 'ALL', diet_type: 'VEG', category: 'FRUIT', food_group: 'FRUITS', gi: 12, gl: 2, serving_size_g: 100, fiber_g: 5.4, sodium_mg: 2, potassium_mg: 417});
 CREATE (:Food {code: 'F020', name: 'Egg (Whole)', name_local: 'अंडा', region: 'ALL', diet_type: 'EGG', category: 'EGG', food_group: 'EGGS', gi: 0, gl: 0, serving_size_g: 50, fiber_g: 0, sodium_mg: 124, potassium_mg: 126});
+
+// Add leucine_g property to high-protein foods (from IFCT-2017 amino acid tables + FAO/INFOODS)
+// Egg whole: 1.09g/100g, Paneer: 0.98g/100g, Chicken breast: 1.73g/100g
+// Moong dal: 0.82g/100g, Dahi/curd: 0.45g/100g, Mackerel: 1.42g/100g
+// Chana dal: 0.89g/100g, Almonds: 1.01g/100g
+MATCH (f:Food) WHERE f.code IN ['egg_whole', 'paneer', 'moong_dal', 'dahi', 'mackerel', 'chana_dal', 'almonds']
+SET f.leucine_g = CASE f.code
+  WHEN 'egg_whole' THEN 1.09
+  WHEN 'paneer' THEN 0.98
+  WHEN 'moong_dal' THEN 0.82
+  WHEN 'dahi' THEN 0.45
+  WHEN 'mackerel' THEN 1.42
+  WHEN 'chana_dal' THEN 0.89
+  WHEN 'almonds' THEN 1.01
+END;

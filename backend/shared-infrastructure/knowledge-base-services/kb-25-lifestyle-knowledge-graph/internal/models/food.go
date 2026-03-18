@@ -16,3 +16,17 @@ type Food struct {
 	Sodium      float64            `json:"sodium_mg"`
 	Potassium   float64            `json:"potassium_mg"`
 }
+
+// LeucinePerServing returns leucine grams for a given serving weight in grams.
+// Returns 0 if leucine data is not available in the nutrient map.
+// MPS threshold: >= 2.5g leucine per meal for Grade A MPS stimulation.
+func (f *Food) LeucinePerServing(servingGrams float64) float64 {
+	leucinePer100g, ok := f.Nutrients["leucine"]
+	if !ok || f.ServingSize == 0 {
+		return 0
+	}
+	return leucinePer100g * servingGrams / 100.0
+}
+
+// MPSThresholdG is the leucine threshold for Grade A muscle protein synthesis stimulation.
+const MPSThresholdG = 2.5
