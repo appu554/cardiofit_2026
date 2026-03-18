@@ -3,16 +3,26 @@
 **Date**: 2026-03-18
 **Status**: Draft
 **Service**: KB-22 HPI Engine (port 8132)
-**Scope**: Add 14 new clinical nodes (8 PM + 6 MD) to KB-22 with new engine types
+**Scope**: Add 15 new clinical nodes (9 PM + 6 MD) to KB-22 with new engine types
 
 ## 1. Problem Statement
 
 KB-22 currently has 26 Layer 1 symptom presentation nodes (Bayesian differential diagnosis). These detect disease that has already declared itself clinically. The system needs two additional layers:
 
-- **Layer 2 (Physiological Monitoring)**: 8 PM nodes that classify structured physiological data (BP patterns, glucose trends, HRV, exercise capacity) — detects changes weeks before symptoms.
+- **Layer 2 (Physiological Monitoring)**: 9 PM nodes that classify structured physiological data (BP patterns, glucose trends, HRV, exercise capacity, sleep quality) — detects changes weeks before symptoms.
 - **Layer 3 (Metabolic Deterioration)**: 6 MD nodes that compute deterioration trajectory signals from KB-20 longitudinal data and KB-26 twin state — detects metabolic shifts months before physiological changes become clinically obvious.
 
 Together, the three layers shift KB-22 from reactive disease detection to predictive metabolic intelligence.
+
+### 1.1 PM Node Numbering: Relationship to Conceptual Specification
+
+The conceptual KB-22 Clinical Node Taxonomy document defined PM-01 through PM-08 with different assignments (PM-01 Protein Intake, PM-02 Activity Score, etc.). This engineering spec renumbers PM nodes based on engineering readiness and coupling to the MD deterioration cascade. The conceptual spec's PM-01 (Protein Intake) and PM-02 (Activity Score) are already operational via M3-PRP and M3-VFRP protocols — they are not re-implemented as KB-22 PM nodes.
+
+**M3 protocol signals enter the cascade as external trigger events**, not as PM nodes:
+- `PROTOCOL:M3-PRP:ADHERENCE` — protein intake adherence signal from M3-PRP, consumed by MD-01 (Insulin Resistance) and MD-04 (Autonomic Dysfunction) as a contributing lifestyle factor
+- `PROTOCOL:M3-VFRP:ACTIVITY` — activity/exercise signal from M3-VFRP, consumed by MD-04 (Autonomic Dysfunction) and MD-06 (Cardiovascular Risk)
+
+These are listed in the `trigger_on` fields of the relevant MD node YAML definitions (see Section 11.2).
 
 ## 2. Design Decisions
 
@@ -83,9 +93,26 @@ type SignalSafetyFlag struct {
 }
 ```
 
-**Note**: `SignalBayesianDifferential` is intentionally omitted from the `SignalType` enum. Layer 1 continues using `HPICompleteEvent` via the existing `POST /api/v1/decision-cards` endpoint. Migration to `ClinicalSignalEvent` is deferred (Section 13).
+**Note**: `SignalBayesianDifferential` is intentionally omitted from the `SignalType` enum. Layer 1 continues using `HPICompleteEvent` via the existing `POST /api/v1/decision-cards` endpoint. Migration to `ClinicalSignalEvent` is deferred (Section 16).
 
-### 3.2 Sub-types
+### 3.2 MRI (Metabolic Risk Index) Integration
+
+The Metabolic Risk Index (KB-26 computed module) consumes KB-22 Layer 2/3 outputs to recompute domain risk scores. PM node classifications (e.g., REVERSE_DIPPER, SEVERE_EXCURSION) are not twin state updates — they are clinical signals that should trigger MRI recomputation.
+
+**Approach**: KB-26 subscribes to the `clinical.signal.events` Kafka topic. When a relevant PM/MD signal arrives, KB-26's MRI module recomputes the affected domain score. KB-22 does not call KB-26 directly for MRI — KB-26 decides which signals affect which MRI domains.
+
+```
+KB-22 PM/MD evaluation
+  → SignalPublisher
+    → KB-23 (POST /api/v1/clinical-signals)     — card generation
+    → Kafka topic: clinical.signal.events        — event bus
+        → KB-26 MRI module (consumer)            — risk score recomputation
+        → KB-19 (consumer, if needed)            — orchestration
+```
+
+This keeps KB-22 unaware of MRI internals. KB-26's Kafka consumer filters by `signal_type` and `node_id` to decide which signals affect which MRI domain (e.g., PM-03 REVERSE_DIPPER → cardiovascular domain, PM-05 HIGHLY_VARIABLE → glycemic domain).
+
+### 3.3 Sub-types
 
 ```go
 type ClassificationResult struct {
@@ -310,7 +337,31 @@ type TwinStateView struct {
     GlycemicVar      float64
     DailySteps       *float64
     RestingHR        *float64
+    LastUpdated      time.Time        // from TwinState.UpdatedAt — staleness check
 }
+```
+
+### 5.5 Twin State Staleness Handling
+
+If KB-26's twin state hasn't been updated recently, derived values no longer reflect the patient's metabolic state. The DataResolver enforces a staleness check:
+
+```go
+const DefaultStalenessTreshold = 21 * 24 * time.Hour  // 21 days, configurable via KB26_STALENESS_DAYS
+
+func (r *DataResolverImpl) checkStaleness(view *TwinStateView, resolved *ResolvedData) {
+    age := time.Since(view.LastUpdated)
+    if age > r.stalenessThreshold {
+        // Downgrade to PARTIAL — MD nodes will still evaluate but with reduced confidence
+        if resolved.Sufficiency == DataSufficient {
+            resolved.Sufficiency = DataPartial
+        }
+        resolved.MissingFields = append(resolved.MissingFields,
+            fmt.Sprintf("KB-26 twin state stale (last updated %d days ago)", int(age.Hours()/24)))
+    }
+}
+```
+
+This aligns with the Strategic Review's missing data degradation rules. MD nodes receiving PARTIAL sufficiency still evaluate (using the stale snapshot) but the `data_sufficiency` field in the emitted `ClinicalSignalEvent` signals to KB-23 that confidence should be reduced.
 ```
 
 ### 5.5 Trajectory Data: Twin State History
@@ -585,7 +636,7 @@ internal/
 │   ├── signal_query_handlers.go    # Query latest signals per patient
 │   └── signal_handler_group.go     # Sub-router for PM/MD endpoints (isolates DI)
 │
-monitoring/                         # PM node YAML files (8 files)
+monitoring/                         # PM node YAML files (9 files)
 deterioration/                      # MD node YAML files (6 files)
 ```
 
@@ -931,11 +982,23 @@ CREATE TABLE signal_evaluation_log (
 - **Cascade**: MD-04
 - **Insufficient data**: SKIP (many patients lack wearable HRV)
 
+#### PM-09: Sleep Quality Screen
+- **Purpose**: Weekly 3-question sleep quality assessment as autonomic health proxy (replaces HRV when wearable data unavailable)
+- **Inputs**: `sleep_difficulty` (TIER1_CHECKIN, LIKERT_5), `sleep_duration_hrs` (TIER1_CHECKIN, numeric), `sleep_disruptions` (TIER1_CHECKIN, BOOLEAN — "Did you wake up more than twice last night?")
+- **Computed**: `sleep_score = 0.40 * normalize(sleep_difficulty, 1, 5) + 0.35 * (1 - normalize(sleep_duration_hrs, 4, 9)) + 0.25 * sleep_disruptions` (where normalize maps to 0-1, higher = worse)
+- **Classifications**: SEVERELY_DISRUPTED (sleep_score > 0.75, MODERATE/MODIFY) → POOR_QUALITY (0.50-0.75, MILD/SAFE) → ADEQUATE (0.25-0.50, NONE/SAFE) → GOOD (sleep_score < 0.25, NONE/SAFE)
+- **Safety**: None (trend indicator, not acute)
+- **Cascade**: MD-04 (Autonomic Dysfunction)
+- **Checkin**: 3 weekly questions: "How difficult was it to fall asleep this week?" (Likert 1-5), "How many hours of sleep did you get last night?" (numeric), "Did you wake up more than twice last night?" (Y/N)
+- **Evidence**: Sleep quality correlates with BP dipping (PM-03), autonomic dysfunction (MD-04), and glycemic variability (PM-05). The 2025 digital biomarker review (van den Brink et al., SAGE Journals) identifies sleep as a window into cardiometabolic health. PM-09 provides the autonomic proxy signal that MD-04 needs when PM-08 HRV data is unavailable.
+- **Min observations**: 1 weekly check-in
+- **Insufficient data**: SKIP (falls back to PM-08 HRV if available, or MD-04 evaluates with remaining signals)
+
 ### 11.2 Layer 3: Metabolic Deterioration Nodes
 
 #### MD-01: Insulin Resistance Trajectory
 - **KB-26 field**: `InsulinSensitivity` (JSONB EstimatedVariable → extract `.Value`)
-- **Trigger**: OBSERVATION:FBG, OBSERVATION:PPBG, TWIN_STATE_UPDATE, SIGNAL:PM-04/05/06
+- **Trigger**: OBSERVATION:FBG, OBSERVATION:PPBG, TWIN_STATE_UPDATE, SIGNAL:PM-04/05/06, PROTOCOL:M3-PRP:ADHERENCE
 - **Trajectory**: Linear regression on IS history (KB-26 `/history`) over 90d
 - **Thresholds**: IS_CRITICAL_DECLINE (rate<-0.08 AND IS<0.30, CRITICAL/PAUSE) → IS_MODERATE_DECLINE (rate<-0.04, MODERATE/MODIFY) → IS_STABLE (|rate|<=0.04, SAFE) → IS_IMPROVING (rate>0.04, SAFE)
 - **Projection**: When will IS cross 0.20?
@@ -960,10 +1023,13 @@ CREATE TABLE signal_evaluation_log (
 
 #### MD-04: Autonomic Dysfunction Progression
 - **KB-26 field**: None — composite signal from PM nodes
-- **Trigger**: SIGNAL:PM-03, SIGNAL:PM-07, SIGNAL:PM-08, TWIN_STATE_UPDATE
-- **Computed**: `autonomic_score = 0.35*pm03 + 0.30*pm08 + 0.20*pm07 + 0.15*orthostatic`
+- **Trigger**: SIGNAL:PM-03, SIGNAL:PM-07, SIGNAL:PM-08, SIGNAL:PM-09, TWIN_STATE_UPDATE, PROTOCOL:M3-VFRP:ACTIVITY
+- **Computed**: `autonomic_score = 0.30*pm03 + 0.15*pm08 + 0.20*pm07 + 0.15*pm09 + 0.10*orthostatic + 0.10*m3_vfrp_activity`
+  - When PM-08 (HRV) unavailable: redistribute weight to PM-09 (sleep): `0.30*pm03 + 0.30*pm09 + 0.20*pm07 + 0.10*orthostatic + 0.10*m3_vfrp`
+  - When PM-09 (sleep) unavailable: redistribute to PM-08: `0.30*pm03 + 0.30*pm08 + 0.20*pm07 + 0.10*orthostatic + 0.10*m3_vfrp`
+  - When both PM-08 and PM-09 unavailable: `0.40*pm03 + 0.30*pm07 + 0.15*orthostatic + 0.15*m3_vfrp`
 - **Thresholds**: AUTONOMIC_SEVERE (>=2.5, CRITICAL/PAUSE) → AUTONOMIC_MODERATE (1.5-2.5, MODERATE/MODIFY) → AUTONOMIC_MILD (0.5-1.5, MILD/SAFE) → AUTONOMIC_NORMAL (<0.5, SAFE)
-- **Contributing**: PM-03, PM-07, PM-08
+- **Contributing**: PM-03, PM-07, PM-08, PM-09, M3-VFRP
 
 #### MD-05: Glycemic Control Deterioration
 - **KB-26 field**: `HepaticGlucoseOutput` (JSONB EstimatedVariable → extract `.Value`)
@@ -975,7 +1041,7 @@ CREATE TABLE signal_evaluation_log (
 
 #### MD-06: Cardiovascular Risk Emergence
 - **KB-26 fields**: `VisceralFatProxy` (Tier 2 float), `InsulinSensitivity` (JSONB), `VascularResistance` (JSONB or fallback)
-- **Trigger**: SIGNAL:MD-01/02/03, SIGNAL:PM-01/02, TWIN_STATE_UPDATE
+- **Trigger**: SIGNAL:MD-01/02/03, SIGNAL:PM-01/02, TWIN_STATE_UPDATE, PROTOCOL:M3-VFRP:ACTIVITY
 - **Computed**: `cv_risk_score = 0.25*md01 + 0.25*md02 + 0.20*md03 + 0.15*pm01 + 0.15*(VF*3)`
 - **Thresholds**: CV_RISK_CRITICAL (>=2.5, CRITICAL/HALT) → CV_RISK_HIGH (1.8-2.5, MODERATE/PAUSE) → CV_RISK_ELEVATED (1.0-1.8, MILD/MODIFY) → CV_RISK_LOW (<1.0, SAFE)
 - **Note**: Only node that can suggest HALT. KB-23 hysteresis must handle HALT (always requires clinician reaffirmation, cannot auto-downgrade). Second-order cascade (MD→MD).
@@ -984,29 +1050,30 @@ CREATE TABLE signal_evaluation_log (
 ## 12. Cascade Dependency Graph
 
 ```
-Layer 2 (PM)              Layer 3 (MD)
-────────────              ──────────────
-PM-01 (Home BP)     ──→   MD-02 (Vascular)    ──┐
-                    ──→   MD-06 (CV Risk)    ◄──┤
-PM-02 (Symptoms)    ──→   MD-04 (Autonomic)    │
-                    ──→   MD-06               ◄──┤
-PM-03 (Dipping)     ──→   MD-02               ──┤
-                    ──→   MD-04                  │
-PM-04 (PPBG)        ──→   MD-01 (Insulin Res)──┤
-                    ──→   MD-05 (Glycemic)   ──┤
-PM-05 (Glyc Var)    ──→   MD-01              ──┤
-                    ──→   MD-05              ──┤
-PM-06 (FBG Trend)   ──→   MD-01              ──┤
-                    ──→   MD-05              ──┤
-PM-07 (Exercise)    ──→   MD-04                │
-PM-08 (HRV)         ──→   MD-04                │
-                                               │
-                    MD-01 ──→ MD-06 ◄──────────┘
-                    MD-02 ──→ MD-06
-                    MD-03 ──→ MD-06
+Layer 2 (PM)               Layer 3 (MD)             External Protocols
+────────────               ──────────────           ──────────────────
+PM-01 (Home BP)      ──→   MD-02 (Vascular)    ──┐
+                     ──→   MD-06 (CV Risk)    ◄──┤
+PM-02 (Symptoms)     ──→   MD-04 (Autonomic)    │
+                     ──→   MD-06               ◄──┤
+PM-03 (Dipping)      ──→   MD-02               ──┤
+                     ──→   MD-04                  │
+PM-04 (PPBG)         ──→   MD-01 (Insulin Res)──┤  M3-PRP ──→ MD-01
+                     ──→   MD-05 (Glycemic)   ──┤
+PM-05 (Glyc Var)     ──→   MD-01              ──┤
+                     ──→   MD-05              ──┤
+PM-06 (FBG Trend)    ──→   MD-01              ──┤
+                     ──→   MD-05              ──┤
+PM-07 (Exercise)     ──→   MD-04                │
+PM-08 (HRV)          ──→   MD-04                │  M3-VFRP ──→ MD-04
+PM-09 (Sleep)        ──→   MD-04                │  M3-VFRP ──→ MD-06
+                                                │
+                     MD-01 ──→ MD-06 ◄──────────┘
+                     MD-02 ──→ MD-06
+                     MD-03 ──→ MD-06
 ```
 
-Two-pass cascade: Pass 1 evaluates PM→MD (MD-01 through MD-05). Pass 2 evaluates MD→MD-06.
+Two-pass cascade: Pass 1 evaluates PM→MD (MD-01 through MD-05). Pass 2 evaluates MD→MD-06. M3 protocol signals enter as external triggers alongside KB-20 observations — they do not pass through PM nodes.
 
 ## 13. Configuration
 
@@ -1022,6 +1089,7 @@ SIGNAL_DEBOUNCE_TTL_SEC=300
 SIGNAL_PUBLISHER_RETRY_COUNT=3
 SIGNAL_PUBLISHER_RETRY_DELAY_SEC=30
 KAFKA_SIGNAL_TOPIC=clinical.signal.events  # new Kafka topic
+KB26_STALENESS_DAYS=21                     # twin state staleness threshold
 ```
 
 Note: KB-20's existing timeout of 40ms (`KB20TimeoutMS` in config.go) is insufficient for DataResolver lookback queries (90 days of observations). The new `KB20_OBSERVATION_TIMEOUT_MS` provides a separate, longer timeout for PM/MD data resolution.
@@ -1072,6 +1140,19 @@ New `SignalCardBuilder` service (separate from existing `CardBuilder`):
 5. **KB-20 enrichment**: best-effort patient context, same as existing path.
 6. **Card persistence + KB-19 publishing**: reuses existing `CardLifecycle` and `KB19Publisher`.
 
+### 4.4 HALT Gate Rules for HysteresisEngine Extension
+
+HALT is not a "more severe PAUSE" — it means stop all automated medication adjustments until a physician explicitly resumes. The existing `HysteresisEngine` handles SAFE→MODIFY→PAUSE transitions with cooldown timers. HALT requires different semantics:
+
+1. **Source restriction**: HALT can only be set by MD-06 (CV Risk Emergence) or by manual physician action. PM nodes and MD-01 through MD-05 can suggest at most PAUSE — never HALT.
+2. **No automatic downgrade**: HALT cannot be downgraded by hysteresis timer expiry. Only explicit physician action via `POST /api/v1/cards/:id/mcu-gate-resume` can transition from HALT to a lower gate.
+3. **V-MCU enforcement**: While HALT is active, every `GET /patients/:id/mcu-gate` query returns `HALT`. This is consistent with V-MCU's Three-Channel Safety Architecture (SA-01) where `final_gate = MostRestrictive(MCU_GATE, PHYSIO_GATE, PROTOCOL_GATE)`.
+4. **Mandatory clinician card**: HALT triggers an URGENT KB-23 Decision Card with `pending_reaffirmation = true` that cannot be auto-acknowledged. The SLA scanner monitors unacknowledged HALT cards.
+5. **Gate transition rules**:
+   - `* → HALT`: Only from MD-06 signal or physician manual action
+   - `HALT → PAUSE`: Only via physician resume action
+   - `HALT → MODIFY/SAFE`: Not allowed — must step through PAUSE first
+
 ### 15.3 New Template Categories
 
 - `templates/monitoring/dc-pm01-*.yaml` through `dc-pm08-*.yaml`
@@ -1097,8 +1178,10 @@ Future Layer 1 migration (optional, deferred):
 | KB-20 | Add `LabTypePPBG` constant + storage | HIGH | PM-04, PM-05 |
 | KB-20 | Add timestamped BP entry support (for nocturnal/daytime derivation) | MEDIUM | PM-03 (can derive from timestamps if entries have time) |
 | KB-23 | Add `POST /api/v1/clinical-signals` + `SignalCardBuilder` | HIGH | All PM/MD card generation |
-| KB-23 | Add HALT gate handling to HysteresisEngine | MEDIUM | MD-06 HALT suggestion |
+| KB-23 | Add HALT gate rules to HysteresisEngine (Section 4.4) | HIGH | MD-06 HALT suggestion |
+| KB-23 | Add `CLINICAL_SIGNAL` to `CardSource` enum (`enums.go`) | LOW | Signal-generated cards |
 | KB-23 | Author monitoring + deterioration card templates | MEDIUM | Card content (engine works without, just no cards generated) |
+| KB-26 | Add Kafka consumer for `clinical.signal.events` → MRI recomputation (Section 3.2) | MEDIUM | MRI domain scores won't reflect PM/MD signals until built |
 
 ## 18. Risk Assessment
 
