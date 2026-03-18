@@ -118,7 +118,7 @@ func Load() *Config {
 		SafetyAlertRetryDelay: envDurationOrDefault("SAFETY_ALERT_RETRY_DELAY", 5*time.Second),
 
 		KB26URL:                    envOrDefault("KB26_URL", "http://localhost:8137"),
-		MonitoringNodesDir:         envOrDefault("MONITORING_NODES_DIR", "./monitoring"),
+		MonitoringNodesDir:         envOrDefault("MONITORING_NODES_DIR", "./pm-nodes"),
 		DeteriorationNodesDir:      envOrDefault("DETERIORATION_NODES_DIR", "./deterioration"),
 		KB26TimeoutMS:              envIntOrDefault("KB26_TIMEOUT_MS", 5000),
 		KB20ObservationTimeoutMS:   envIntOrDefault("KB20_OBSERVATION_TIMEOUT_MS", 10000),

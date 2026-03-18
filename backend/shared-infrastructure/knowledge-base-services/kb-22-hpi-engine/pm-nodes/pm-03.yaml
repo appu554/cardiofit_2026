@@ -1,0 +1,63 @@
+node_id: PM-03
+version: "1.0.0"
+type: MONITORING
+title_en: "Nocturnal BP Dipping Classification"
+title_hi: "Raat ka BP Dipping Vargikaran"
+
+required_inputs:
+  - field: sbp_nocturnal_mean
+    source: KB-20
+    unit: mmHg
+    min_observations: 3
+    lookback_days: 14
+  - field: sbp_daytime_mean
+    source: KB-20
+    unit: mmHg
+    min_observations: 3
+    lookback_days: 14
+
+computed_fields:
+  - name: dipping_ratio
+    formula: "(sbp_nocturnal_mean - sbp_daytime_mean) / sbp_daytime_mean"
+
+classifications:
+  - category: REVERSE_DIPPER
+    condition: "dipping_ratio > 0.0"
+    severity: CRITICAL
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-pm03-reverse-dipper-v1"
+  - category: NON_DIPPER
+    condition: "dipping_ratio >= -0.10"
+    severity: MODERATE
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-pm03-non-dipper-v1"
+  - category: EXTREME_DIPPER
+    condition: "dipping_ratio < -0.20"
+    severity: MODERATE
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-pm03-extreme-dipper-v1"
+  - category: NORMAL_DIPPER
+    condition: "dipping_ratio >= -0.20 AND dipping_ratio < -0.10"
+    severity: NONE
+    mcu_gate_suggestion: SAFE
+
+insufficient_data:
+  action: SKIP
+  note_en: "Insufficient BP readings for dipping classification"
+
+safety_triggers:
+  - id: PM03_ST01
+    condition: "sbp_nocturnal_mean > 160"
+    severity: URGENT
+    action: "Nocturnal hypertension. Review evening antihypertensive timing."
+
+cascade_to:
+  - MD-02
+  - MD-04
+
+checkin_prompts:
+  - prompt_id: PM03_CK01
+    text_en: "Did you wear your BP monitor while sleeping last night?"
+    text_hi: "Kya aapne raat mein sote samay BP monitor pehna tha?"
+    response_type: BOOLEAN
+    maps_to: nocturnal_monitoring_compliance

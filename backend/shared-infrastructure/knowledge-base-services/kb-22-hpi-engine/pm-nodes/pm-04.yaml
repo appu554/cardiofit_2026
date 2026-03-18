@@ -1,0 +1,63 @@
+node_id: PM-04
+version: "1.0.0"
+type: MONITORING
+title_en: "Postprandial Blood Glucose Pattern"
+title_hi: "Khane ke Baad Blood Glucose Pattern"
+
+required_inputs:
+  - field: ppbg_mean
+    source: KB-20
+    unit: mg/dL
+    min_observations: 3
+    lookback_days: 14
+  - field: fbg_7d_mean
+    source: KB-20
+    unit: mg/dL
+    min_observations: 3
+    lookback_days: 7
+
+aggregated_inputs:
+  - field: ppbg_values
+    source: KB-20
+    aggregation: RAW
+    lookback_days: 14
+    description: "Raw postprandial glucose values for safety trigger checking"
+
+computed_fields:
+  - name: excursion
+    formula: "ppbg_mean - fbg_7d_mean"
+
+classifications:
+  - category: SEVERE_EXCURSION
+    condition: "excursion > 80"
+    severity: CRITICAL
+    mcu_gate_suggestion: PAUSE
+    card_template: "dc-pm04-severe-excursion-v1"
+  - category: HIGH_EXCURSION
+    condition: "excursion > 50"
+    severity: MODERATE
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-pm04-high-excursion-v1"
+  - category: MODERATE_EXCURSION
+    condition: "excursion > 30"
+    severity: MILD
+    mcu_gate_suggestion: SAFE
+    card_template: "dc-pm04-moderate-excursion-v1"
+  - category: NORMAL_EXCURSION
+    condition: ""
+    severity: NONE
+    mcu_gate_suggestion: SAFE
+
+insufficient_data:
+  action: SKIP
+  note_en: "Insufficient postprandial glucose readings"
+
+safety_triggers:
+  - id: PM04_ST01
+    condition: "ppbg_mean > 300"
+    severity: URGENT
+    action: "Severe postprandial hyperglycemia. Review carbohydrate intake and medication timing."
+
+cascade_to:
+  - MD-01
+  - MD-05

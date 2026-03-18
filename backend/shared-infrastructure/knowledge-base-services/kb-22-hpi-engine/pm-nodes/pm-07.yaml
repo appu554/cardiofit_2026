@@ -1,0 +1,67 @@
+node_id: PM-07
+version: "1.0.0"
+type: MONITORING
+title_en: "Exercise Capacity"
+title_hi: "Vyaayaam Kshamata"
+
+required_inputs:
+  - field: daily_steps_7d_mean
+    source: KB-26
+    unit: steps
+    min_observations: 1
+    lookback_days: 7
+  - field: daily_steps_30d_mean
+    source: KB-26
+    unit: steps
+    min_observations: 1
+    lookback_days: 30
+  - field: exercise_tolerance_self
+    source: TIER1_CHECKIN
+    unit: likert_5
+    min_observations: 1
+    lookback_days: 7
+
+computed_fields:
+  - name: steps_trend
+    formula: "(daily_steps_7d_mean - daily_steps_30d_mean) / daily_steps_30d_mean"
+
+classifications:
+  - category: DECLINING_RAPIDLY
+    condition: "steps_trend < -0.25"
+    severity: MODERATE
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-pm07-declining-rapidly-v1"
+  - category: DECLINING
+    condition: "steps_trend < -0.10"
+    severity: MILD
+    mcu_gate_suggestion: SAFE
+    card_template: "dc-pm07-declining-v1"
+  - category: IMPROVING
+    condition: "steps_trend > 0.10"
+    severity: NONE
+    mcu_gate_suggestion: SAFE
+  - category: STABLE
+    condition: ""
+    severity: NONE
+    mcu_gate_suggestion: SAFE
+
+insufficient_data:
+  action: SKIP
+  note_en: "Insufficient step count data for exercise capacity assessment"
+
+safety_triggers:
+  - id: PM07_ST01
+    condition: "daily_steps_7d_mean < 500 AND exercise_tolerance_self <= 2"
+    severity: URGENT
+    action: "Very low activity with poor exercise tolerance. Evaluate for deconditioning or cardiac limitation."
+
+cascade_to:
+  - MD-04
+  - MD-06
+
+checkin_prompts:
+  - prompt_id: PM07_CK01
+    text_en: "How would you rate your exercise tolerance this week? (1=very poor, 5=excellent)"
+    text_hi: "Is hafte aapki vyaayaam kshamata kaisi rahi? (1=bahut kharab, 5=bahut acchi)"
+    response_type: SCALE
+    maps_to: exercise_tolerance_self

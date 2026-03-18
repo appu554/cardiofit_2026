@@ -242,6 +242,55 @@ insufficient_data:
 	}
 }
 
+// ── TestMonitoringNodeLoader_LoadAll ─────────────────────────────────────────
+// Load all 9 PM node YAML definitions from the monitoring/ directory and verify
+// each node is parsed and validated successfully.
+func TestMonitoringNodeLoader_LoadAll(t *testing.T) {
+	// The pm-nodes/ directory is at ../../pm-nodes/ relative to this test file.
+	dir := filepath.Join("..", "..", "pm-nodes")
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Skipf("pm-nodes directory not found at %s — skipping", dir)
+	}
+
+	loader := NewMonitoringNodeLoader(dir, testLogger())
+	if err := loader.Load(); err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	allNodes := loader.All()
+	expectedIDs := []string{"PM-01", "PM-02", "PM-03", "PM-04", "PM-05", "PM-06", "PM-07", "PM-08", "PM-09"}
+
+	if len(allNodes) != len(expectedIDs) {
+		t.Errorf("expected %d nodes, got %d", len(expectedIDs), len(allNodes))
+	}
+
+	for _, id := range expectedIDs {
+		node := loader.Get(id)
+		if node == nil {
+			t.Errorf("node %s not loaded", id)
+			continue
+		}
+		if node.Type != "MONITORING" {
+			t.Errorf("node %s: type should be MONITORING, got %q", id, node.Type)
+		}
+		if node.Version != "1.0.0" {
+			t.Errorf("node %s: version should be 1.0.0, got %q", id, node.Version)
+		}
+		if len(node.Classifications) == 0 {
+			t.Errorf("node %s: must have at least one classification", id)
+		}
+		if node.TitleEN == "" {
+			t.Errorf("node %s: title_en must not be empty", id)
+		}
+		if node.TitleHI == "" {
+			t.Errorf("node %s: title_hi must not be empty", id)
+		}
+		if node.InsufficientData.Action == "" {
+			t.Errorf("node %s: insufficient_data.action must not be empty", id)
+		}
+	}
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 func writeYAML(t *testing.T, dir, name, content string) {

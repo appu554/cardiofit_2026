@@ -1,0 +1,70 @@
+node_id: PM-09
+version: "1.0.0"
+type: MONITORING
+title_en: "Sleep Quality Screen"
+title_hi: "Neend Gunvatta Jaanch"
+
+required_inputs:
+  - field: sleep_difficulty
+    source: TIER1_CHECKIN
+    unit: likert_5
+    min_observations: 1
+    lookback_days: 7
+  - field: sleep_duration_hrs
+    source: TIER1_CHECKIN
+    unit: hours
+    min_observations: 1
+    lookback_days: 7
+  - field: sleep_disruptions
+    source: TIER1_CHECKIN
+    unit: boolean
+    min_observations: 1
+    lookback_days: 7
+
+computed_fields:
+  - name: sleep_score
+    formula: "0.40 * normalize(sleep_difficulty, 1, 5) + 0.35 * (1 - normalize(sleep_duration_hrs, 4, 9)) + 0.25 * sleep_disruptions"
+
+classifications:
+  - category: SEVERELY_DISRUPTED
+    condition: "sleep_score > 0.75"
+    severity: MODERATE
+    mcu_gate_suggestion: MODIFY
+    card_template: "dc-pm09-severely-disrupted-v1"
+  - category: POOR_QUALITY
+    condition: "sleep_score > 0.50"
+    severity: MILD
+    mcu_gate_suggestion: SAFE
+    card_template: "dc-pm09-poor-quality-v1"
+  - category: ADEQUATE
+    condition: "sleep_score > 0.25"
+    severity: NONE
+    mcu_gate_suggestion: SAFE
+  - category: GOOD
+    condition: ""
+    severity: NONE
+    mcu_gate_suggestion: SAFE
+
+insufficient_data:
+  action: SKIP
+  note_en: "Sleep quality check-in not completed this week"
+
+cascade_to:
+  - MD-04
+
+checkin_prompts:
+  - prompt_id: PM09_CK01
+    text_en: "How difficult was it to fall or stay asleep this week? (1=not at all, 5=extremely)"
+    text_hi: "Is hafte neend aana ya bani rehna kitna mushkil tha? (1=bilkul nahi, 5=bahut zyada)"
+    response_type: SCALE
+    maps_to: sleep_difficulty
+  - prompt_id: PM09_CK02
+    text_en: "On average, how many hours did you sleep per night this week?"
+    text_hi: "Is hafte aap raat mein kitne ghante soye?"
+    response_type: NUMERIC
+    maps_to: sleep_duration_hrs
+  - prompt_id: PM09_CK03
+    text_en: "Did you experience frequent nighttime awakenings this week?"
+    text_hi: "Kya is hafte aap raat mein baar baar jaage?"
+    response_type: BOOLEAN
+    maps_to: sleep_disruptions
