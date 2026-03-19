@@ -6,9 +6,17 @@ import (
 
 	"go.uber.org/zap"
 
+	"kb-patient-profile/internal/clients"
 	"kb-patient-profile/internal/database"
 	"kb-patient-profile/internal/models"
 )
+
+// EventPublisher is the interface used by ProtocolService to publish events.
+// Using an interface allows test doubles (spies) to be injected without
+// requiring a real EventBus backed by a database.
+type EventPublisher interface {
+	Publish(eventType string, patientID string, payload interface{})
+}
 
 // TransitionEvaluation holds the inputs for phase transition evaluation.
 type TransitionEvaluation struct {
@@ -23,6 +31,25 @@ type TransitionEvaluation struct {
 	FBGWorsening         bool
 	WeightLossKg         float64
 	BMI                  float64
+	// EGFRDelta is the change in eGFR (mL/min) since phase entry.
+	// A positive value indicates decline (eGFR fell by this amount).
+	EGFRDelta float64
+
+	// Medication protocol fields
+	HbA1cAboveTarget bool // true if current HbA1c exceeds protocol target
+	SBPAboveTarget   bool // true if current SBP exceeds protocol target
+	ACRNotImproving  bool // true if ACR not improving after intervention
+
+	// M3-MAINTAIN fields
+	MRIScore              float64 `json:"mri_score,omitempty"`
+	MRISustainedDays      int     `json:"mri_sustained_days,omitempty"`
+	AdherencePct          float64 `json:"adherence_pct,omitempty"`
+	ConsecutiveCheckins   int     `json:"consecutive_checkins,omitempty"`
+	NoRelapseDays         int     `json:"no_relapse_days,omitempty"`
+	HbA1cAtTarget         bool    `json:"hba1c_at_target,omitempty"`
+	HbA1cAtTargetReadings int     `json:"hba1c_at_target_readings,omitempty"`
+	YearReviewComplete    bool    `json:"year_review_complete,omitempty"`
+	PhysicianGradApproval bool    `json:"physician_grad_approval,omitempty"`
 }
 
 // TransitionDecision is the output of a phase transition evaluation.
@@ -49,6 +76,10 @@ func EvaluatePRPTransition(eval TransitionEvaluation) TransitionDecision {
 		return TransitionDecision{Action: "HOLD", Reason: fmt.Sprintf("day %d, adherence %.0f%% — extend Phase 1", eval.DaysInPhase, eval.ProteinAdherence*100)}
 
 	case "RESTORATION":
+		// G-9: Safety-first — check eGFR decline before any advancement logic.
+		if eval.EGFRDelta > 5 {
+			return TransitionDecision{Action: "ESCALATE", Reason: "eGFR declined >5 during restoration"}
+		}
 		if eval.DaysInPhase >= 28 && eval.ProteinAdherence >= 0.50 && eval.ExerciseAdherence >= 0.50 {
 			return TransitionDecision{Action: "ADVANCE", NextPhase: "OPTIMIZATION", Reason: "day >= 42 with adequate adherence"}
 		}
@@ -121,23 +152,56 @@ func EvaluateVFRPTransition(eval TransitionEvaluation) TransitionDecision {
 
 // ProtocolService manages protocol lifecycle (activate, transition, evaluate).
 type ProtocolService struct {
-	db       *database.Database
-	registry *ProtocolRegistry
-	eventBus *EventBus
-	logger   *zap.Logger
+	db        *database.Database
+	registry  *ProtocolRegistry
+	eventBus  EventPublisher
+	logger    *zap.Logger
+	kb25      *clients.KB25Client // optional — nil disables KB-25 integration
 }
 
 // NewProtocolService creates a new protocol service.
-func NewProtocolService(db *database.Database, registry *ProtocolRegistry, eventBus *EventBus, logger *zap.Logger) *ProtocolService {
+func NewProtocolService(db *database.Database, registry *ProtocolRegistry, eventBus EventPublisher, logger *zap.Logger) *ProtocolService {
 	return &ProtocolService{db: db, registry: registry, eventBus: eventBus, logger: logger}
 }
 
+// SetKB25Client attaches the KB-25 Lifestyle Knowledge Graph client to the service.
+// When set, ActivateProtocol will call KB-25 for a pre-activation safety check and
+// TransitionPhase will call KB-25 for projected outcomes (best-effort, non-blocking).
+func (ps *ProtocolService) SetKB25Client(c *clients.KB25Client) {
+	ps.kb25 = c
+}
+
 // ActivateProtocol starts a protocol for a patient.
+//
+// If a KB-25 client is configured, a safety check is performed before the protocol
+// state is written. KB-25 hard-stop rules (e.g. LS-01: eGFR < 15) cause the
+// activation to be rejected with a descriptive error. If KB-25 is unreachable the
+// safety check is skipped and activation proceeds (fail-open to avoid blocking
+// clinical workflows when KB-25 is temporarily down).
 func (ps *ProtocolService) ActivateProtocol(patientID string, protocolID string) (*models.ProtocolState, error) {
 	var existing models.ProtocolState
 	err := ps.db.DB.Where("patient_id = ? AND protocol_id = ? AND status = ?", patientID, protocolID, "ACTIVE").First(&existing).Error
 	if err == nil {
 		return nil, fmt.Errorf("protocol %s already active for patient %s", protocolID, patientID)
+	}
+
+	// G-6: KB-25 lifestyle safety check before activation.
+	if ps.kb25 != nil {
+		safetyResp, safetyErr := ps.kb25.CheckSafety(clients.SafetyCheckRequest{
+			PatientID:  patientID,
+			ProtocolID: protocolID,
+		})
+		if safetyErr != nil {
+			// KB-25 unreachable — log and proceed (fail-open).
+			ps.logger.Warn("KB-25 safety check unavailable — proceeding with activation",
+				zap.String("patient_id", patientID),
+				zap.String("protocol_id", protocolID),
+				zap.Error(safetyErr),
+			)
+		} else if !safetyResp.Safe {
+			return nil, fmt.Errorf("KB-25 safety rule %s blocked activation of %s for patient %s: %s",
+				safetyResp.RuleCode, protocolID, patientID, safetyResp.Reason)
+		}
 	}
 
 	state := models.ProtocolState{
@@ -160,10 +224,26 @@ func (ps *ProtocolService) ActivateProtocol(patientID string, protocolID string)
 		zap.String("protocol_id", protocolID),
 	)
 
+	// G-8: Publish activation event after the record is persisted.
+	ps.eventBus.Publish(models.EventProtocolActivated, patientID, map[string]interface{}{
+		"protocol_id": protocolID,
+		"phase":       "BASELINE",
+	})
+
 	return &state, nil
 }
 
 // TransitionPhase advances a protocol to the next phase.
+//
+// The method evaluates the transition using the protocol-specific evaluator.
+// If the evaluator returns ESCALATE or ABORT the event is published to the
+// event bus (G-7) before returning an error to the caller so that downstream
+// consumers (e.g. KB-23) can react regardless of whether the HTTP handler
+// acts on the error.
+//
+// On a successful DB write the appropriate phase transition event is published
+// (G-8): EventProtocolGraduated when the protocol reaches GRADUATED status,
+// EventProtocolTransitioned for all other phases.
 func (ps *ProtocolService) TransitionPhase(patientID string, protocolID string, nextPhase string) (*models.ProtocolState, error) {
 	var state models.ProtocolState
 	err := ps.db.DB.Where("patient_id = ? AND protocol_id = ? AND status = ?", patientID, protocolID, "ACTIVE").First(&state).Error
@@ -174,6 +254,8 @@ func (ps *ProtocolService) TransitionPhase(patientID string, protocolID string, 
 	if !state.CanTransition(nextPhase) {
 		return nil, fmt.Errorf("invalid transition from %s to %s", state.CurrentPhase, nextPhase)
 	}
+
+	fromPhase := state.CurrentPhase
 
 	state.CurrentPhase = nextPhase
 	state.PhaseStartDate = time.Now().UTC()
@@ -187,7 +269,95 @@ func (ps *ProtocolService) TransitionPhase(patientID string, protocolID string, 
 		return nil, fmt.Errorf("failed to transition phase: %w", err)
 	}
 
+	// G-8: Publish the appropriate phase transition event.
+	if state.Status == "GRADUATED" {
+		ps.eventBus.Publish(models.EventProtocolGraduated, patientID, map[string]interface{}{
+			"protocol_id": protocolID,
+			"from_phase":  fromPhase,
+			"to_phase":    nextPhase,
+			"patient_id":  patientID,
+		})
+	} else {
+		ps.eventBus.Publish(models.EventProtocolTransitioned, patientID, map[string]interface{}{
+			"protocol_id": protocolID,
+			"from_phase":  fromPhase,
+			"to_phase":    nextPhase,
+			"patient_id":  patientID,
+		})
+	}
+
+	// G-6: Best-effort KB-25 projection after a successful phase transition.
+	// Errors are logged but do not fail the transition — the mechanical write has
+	// already been committed and the event published.
+	if ps.kb25 != nil {
+		projResp, projErr := ps.kb25.ProjectCombined(clients.ProjectionRequest{
+			PatientID:   patientID,
+			ProtocolIDs: []string{protocolID},
+			HorizonDays: 90,
+		})
+		if projErr != nil {
+			ps.logger.Warn("KB-25 projection unavailable after phase transition",
+				zap.String("patient_id", patientID),
+				zap.String("protocol_id", protocolID),
+				zap.String("to_phase", nextPhase),
+				zap.Error(projErr),
+			)
+		} else {
+			ps.logger.Info("KB-25 projected outcomes for new phase",
+				zap.String("patient_id", patientID),
+				zap.String("protocol_id", protocolID),
+				zap.String("to_phase", nextPhase),
+				zap.Int("projections", len(projResp.Projections)),
+				zap.Float64("synergy_multiplier", projResp.Synergy),
+			)
+		}
+	}
+
 	return &state, nil
+}
+
+// EvaluateAndTransition evaluates a PRP or VFRP transition and, if the evaluator
+// signals ESCALATE or ABORT, publishes an escalation event (G-7) before returning
+// the decision to the caller.
+//
+// This is the preferred entry point when the caller has a full TransitionEvaluation
+// struct (e.g. from an API handler that receives lab context). TransitionPhase
+// performs the mechanical DB write; this method performs the clinical guard.
+func (ps *ProtocolService) EvaluateAndTransition(patientID string, eval TransitionEvaluation) (TransitionDecision, error) {
+	var decision TransitionDecision
+	switch eval.ProtocolID {
+	case "M3-PRP":
+		decision = EvaluatePRPTransition(eval)
+	case "M3-VFRP":
+		decision = EvaluateVFRPTransition(eval)
+	case "GLYC-1":
+		decision = EvaluateGLYC1Transition(eval)
+	case "HTN-1":
+		decision = EvaluateHTN1Transition(eval)
+	case "RENAL-1":
+		decision = EvaluateRENAL1Transition(eval)
+	case "DEPRESC-1":
+		decision = EvaluateDEPRESC1Transition(eval)
+	case "LIPID-1":
+		// LIPID-1 is card-only — no phase transitions
+		return TransitionDecision{Action: "HOLD", Reason: "LIPID-1 is card-only, no phase transitions"}, nil
+	default:
+		return TransitionDecision{Action: "HOLD", Reason: "unknown protocol"}, nil
+	}
+
+	// G-7: Publish escalation event before returning so KB-23 receives it
+	// regardless of how the caller handles the error.
+	if decision.Action == "ESCALATE" || decision.Action == "ABORT" {
+		ps.eventBus.Publish(models.EventProtocolEscalated, patientID, map[string]interface{}{
+			"protocol_id":   eval.ProtocolID,
+			"current_phase": eval.CurrentPhase,
+			"action":        decision.Action,
+			"reason":        decision.Reason,
+		})
+		return decision, fmt.Errorf("protocol %s: %s — %s", eval.ProtocolID, decision.Action, decision.Reason)
+	}
+
+	return decision, nil
 }
 
 // GetActiveProtocols returns all active protocols for a patient.
