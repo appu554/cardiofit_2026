@@ -1,6 +1,7 @@
 package services
 
 import (
+	"sort"
 	"testing"
 )
 
@@ -176,3 +177,134 @@ func TestProtocolRegistry_CheckSuccess_VFRP_NoneMet(t *testing.T) {
 		t.Errorf("expected NO_SUCCESS_CRITERIA_MET, got %s", unmet)
 	}
 }
+
+// Task 11: Comprehensive registry validation tests
+
+func TestProtocolRegistry_AllProtocolsRegistered(t *testing.T) {
+	r := NewProtocolRegistry()
+	expected := []string{"M3-PRP", "M3-VFRP", "GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1", "M3-MAINTAIN"}
+	for _, id := range expected {
+		tmpl, err := r.GetTemplate(id)
+		if err != nil {
+			t.Errorf("protocol %s not registered: %v", id, err)
+			continue
+		}
+		if tmpl.ProtocolID != id {
+			t.Errorf("protocol %s has mismatched ID %s", id, tmpl.ProtocolID)
+		}
+		if len(tmpl.Phases) == 0 {
+			t.Errorf("protocol %s has no phases defined", id)
+		}
+	}
+}
+
+func TestProtocolRegistry_ConcurrentWithReferencesAreValid(t *testing.T) {
+	r := NewProtocolRegistry()
+	expected := []string{"M3-PRP", "M3-VFRP", "GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1", "M3-MAINTAIN"}
+
+	// Build set of all registered IDs
+	registered := make(map[string]bool)
+	for _, id := range expected {
+		registered[id] = true
+	}
+	// V-MCU is a runtime component, not a registry protocol — allow it
+	registered["V-MCU"] = true
+
+	for _, id := range expected {
+		tmpl, err := r.GetTemplate(id)
+		if err != nil {
+			t.Errorf("protocol %s not registered: %v", id, err)
+			continue
+		}
+		for _, concurrent := range tmpl.ConcurrentWith {
+			if !registered[concurrent] {
+				t.Errorf("%s declares ConcurrentWith %q which is not a registered protocol or V-MCU", id, concurrent)
+			}
+		}
+	}
+
+	// Verify no duplicates in any ConcurrentWith list
+	for _, id := range expected {
+		tmpl, _ := r.GetTemplate(id)
+		seen := make(map[string]bool)
+		for _, concurrent := range tmpl.ConcurrentWith {
+			if seen[concurrent] {
+				t.Errorf("%s has duplicate ConcurrentWith entry: %s", id, concurrent)
+			}
+			seen[concurrent] = true
+		}
+	}
+}
+
+func TestProtocolRegistry_DrugSequenceOrdering(t *testing.T) {
+	r := NewProtocolRegistry()
+	protocolsWithDrugs := []string{"GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1"}
+
+	for _, id := range protocolsWithDrugs {
+		tmpl, _ := r.GetTemplate(id)
+		if len(tmpl.DrugSequence) == 0 {
+			t.Errorf("protocol %s has no drug sequence", id)
+			continue
+		}
+		// Verify step orders are sequential starting from 1
+		orders := make([]int, len(tmpl.DrugSequence))
+		for i, step := range tmpl.DrugSequence {
+			orders[i] = step.StepOrder
+		}
+		sorted := make([]int, len(orders))
+		copy(sorted, orders)
+		sort.Ints(sorted)
+		for i, o := range sorted {
+			if o != i+1 {
+				t.Errorf("%s: drug sequence step orders not sequential starting from 1: %v", id, orders)
+				break
+			}
+		}
+	}
+}
+
+func TestProtocolRegistry_SuccessModeAssigned(t *testing.T) {
+	r := NewProtocolRegistry()
+	expectedModes := map[string]SuccessMode{
+		"M3-PRP":      SuccessModeAll,
+		"M3-VFRP":     SuccessModeAny,
+		"GLYC-1":      SuccessModeNever,
+		"HTN-1":       SuccessModeNever,
+		"RENAL-1":     SuccessModeNever,
+		"LIPID-1":     SuccessModeCardOnly,
+		"DEPRESC-1":   SuccessModeAll,
+		"M3-MAINTAIN": SuccessModeNever,
+	}
+
+	for id, want := range expectedModes {
+		tmpl, err := r.GetTemplate(id)
+		if err != nil {
+			t.Errorf("protocol %s not registered: %v", id, err)
+			continue
+		}
+		if tmpl.SuccessMode != want {
+			t.Errorf("%s: expected SuccessMode %q, got %q", id, want, tmpl.SuccessMode)
+		}
+	}
+}
+
+func TestProtocolRegistry_GetTemplate_MAINTAIN(t *testing.T) {
+	r := NewProtocolRegistry()
+	tmpl, err := r.GetTemplate("M3-MAINTAIN")
+	if err != nil {
+		t.Fatalf("M3-MAINTAIN not registered: %v", err)
+	}
+	if tmpl.Category != "lifecycle" {
+		t.Errorf("category = %q, want lifecycle", tmpl.Category)
+	}
+	if len(tmpl.Phases) != 4 {
+		t.Errorf("phases = %d, want 4 (CONSOLIDATION, INDEPENDENCE, STABILITY, PARTNERSHIP)", len(tmpl.Phases))
+	}
+	if tmpl.Phases[3].DurationDays != -1 {
+		t.Errorf("PARTNERSHIP duration = %d, want -1 (indefinite)", tmpl.Phases[3].DurationDays)
+	}
+	if tmpl.SuccessMode != SuccessModeNever {
+		t.Errorf("success_mode = %q, want NEVER (lifecycle protocol)", tmpl.SuccessMode)
+	}
+}
+
