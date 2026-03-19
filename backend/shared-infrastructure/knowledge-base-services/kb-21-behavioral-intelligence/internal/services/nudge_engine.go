@@ -23,6 +23,7 @@ type NudgeEngine struct {
 	bayesian         *BayesianEngine
 	phaseEngine      *PhaseEngine
 	barrierDiag      *BarrierDiagnostic
+	coldStart        *ColdStartEngine
 	maxNudgesPerDay  int
 	cooldownDuration time.Duration
 }
@@ -33,6 +34,7 @@ func NewNudgeEngine(
 	bayesian *BayesianEngine,
 	phaseEngine *PhaseEngine,
 	barrierDiag *BarrierDiagnostic,
+	coldStart *ColdStartEngine,
 	maxPerDay int,
 	cooldownHours int,
 ) *NudgeEngine {
@@ -45,12 +47,16 @@ func NewNudgeEngine(
 	if barrierDiag == nil {
 		barrierDiag = NewBarrierDiagnostic(db, logger)
 	}
+	if coldStart == nil {
+		coldStart = NewColdStartEngine(db, logger)
+	}
 	return &NudgeEngine{
 		db:               db,
 		logger:           logger,
 		bayesian:         bayesian,
 		phaseEngine:      phaseEngine,
 		barrierDiag:      barrierDiag,
+		coldStart:        coldStart,
 		maxNudgesPerDay:  maxPerDay,
 		cooldownDuration: time.Duration(cooldownHours) * time.Hour,
 	}
@@ -121,16 +127,24 @@ func (ne *NudgeEngine) SelectNudge(req NudgeRequest) (*NudgeResult, error) {
 	// 5. Diagnose barriers
 	barriers := ne.barrierDiag.Diagnose(req.Signals)
 
-	// 6. Get technique records
+	// 6. Get technique records (with cold-start phenotype priors if available)
 	records, err := ne.bayesian.EnsurePatientRecords(req.PatientID)
 	if err != nil {
 		return nil, fmt.Errorf("technique records: %w", err)
 	}
 	if len(records) == 0 {
-		// Fallback: build in-memory defaults
-		defaults := ne.bayesian.BuildDefaultRecords(req.PatientID)
-		for i := range defaults {
-			records = append(records, &defaults[i])
+		// Cold-start: use phenotype-calibrated priors if engine available
+		if ne.coldStart != nil {
+			phenotype, _ := ne.coldStart.GetOrAssignPhenotype(req.PatientID)
+			defaults := ne.bayesian.BuildPhenotypeRecords(req.PatientID, phenotype)
+			for i := range defaults {
+				records = append(records, &defaults[i])
+			}
+		} else {
+			defaults := ne.bayesian.BuildDefaultRecords(req.PatientID)
+			for i := range defaults {
+				records = append(records, &defaults[i])
+			}
 		}
 	}
 

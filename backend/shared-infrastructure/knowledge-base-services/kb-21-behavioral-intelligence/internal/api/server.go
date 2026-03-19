@@ -30,6 +30,7 @@ type Server struct {
 	hypoRiskService    *services.HypoRiskService
 	festivalCalendar   *services.FestivalCalendar
 	nudgeEngine        *services.NudgeEngine
+	coldStartEngine    *services.ColdStartEngine
 	eventSubscriber    *events.Subscriber
 }
 
@@ -46,6 +47,7 @@ func NewServer(
 	hypoRiskSvc *services.HypoRiskService,
 	festivalCal *services.FestivalCalendar,
 	nudgeEngine *services.NudgeEngine,
+	coldStartEngine *services.ColdStartEngine,
 	subscriber *events.Subscriber,
 ) *Server {
 	if cfg.IsProduction() {
@@ -68,6 +70,7 @@ func NewServer(
 		hypoRiskService:    hypoRiskSvc,
 		festivalCalendar:   festivalCal,
 		nudgeEngine:        nudgeEngine,
+		coldStartEngine:    coldStartEngine,
 		eventSubscriber:    subscriber,
 	}
 
@@ -168,6 +171,10 @@ func (s *Server) setupRoutes() {
 		}
 		v1.GET("/patient/:patient_id/techniques", s.getTechniqueEffectiveness)
 		v1.GET("/patient/:patient_id/motivation-phase", s.getMotivationPhase)
+
+		// Cold-start phenotype (E1)
+		v1.POST("/patient/:patient_id/intake-profile", s.submitIntakeProfile)
+		v1.GET("/patient/:patient_id/cold-start-phenotype", s.getColdStartPhenotype)
 	}
 }
 

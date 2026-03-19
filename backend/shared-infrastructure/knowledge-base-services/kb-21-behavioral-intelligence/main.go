@@ -73,9 +73,17 @@ func main() {
 	bayesianEngine := services.NewBayesianEngine(db.DB, logger)
 	phaseEngine := services.NewPhaseEngine(db.DB, logger)
 	barrierDiag := services.NewBarrierDiagnostic(db.DB, logger)
+
+	// BCE v2.0 E1: Cold-Start Profiling
+	var coldStartEngine *services.ColdStartEngine
+	if cfg.ColdStartEnabled {
+		coldStartEngine = services.NewColdStartEngine(db.DB, logger)
+		logger.Info("BCE v2.0 E1: Cold-start profiling enabled")
+	}
+
 	nudgeEngine := services.NewNudgeEngine(
 		db.DB, logger, bayesianEngine, phaseEngine, barrierDiag,
-		cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
+		coldStartEngine, cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
 	)
 
 	// 8. Load festival calendar (optional — graceful nil if file missing)
@@ -96,7 +104,7 @@ func main() {
 	server := api.NewServer(
 		cfg, db, cacheClient, metricsCollector, logger,
 		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc,
-		festivalCal, nudgeEngine, subscriber,
+		festivalCal, nudgeEngine, coldStartEngine, subscriber,
 	)
 
 	// 11. Start event subscriber

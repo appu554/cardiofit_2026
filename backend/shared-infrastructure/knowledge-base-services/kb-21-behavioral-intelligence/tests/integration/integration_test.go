@@ -78,15 +78,16 @@ func TestMain(m *testing.M) {
 	bayesianEngine := services.NewBayesianEngine(testDB.DB, logger)
 	phaseEngine := services.NewPhaseEngine(testDB.DB, logger)
 	barrierDiag := services.NewBarrierDiagnostic(testDB.DB, logger)
-	nudgeEngine := services.NewNudgeEngine(testDB.DB, logger, bayesianEngine, phaseEngine, barrierDiag, 3, 4)
+	nudgeEngine := services.NewNudgeEngine(testDB.DB, logger, bayesianEngine, phaseEngine, barrierDiag, nil, 3, 4)
 
 	metricsCollector := metrics.NewCollector()
 
 	testServer = api.NewServer(
 		cfg, testDB, nil, metricsCollector, logger,
 		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc,
-		nil,          // festivalCal (not needed for integration tests)
+		nil,              // festivalCal
 		nudgeEngine,
+		nil,              // coldStartEngine (E1)
 		subscriber,
 	)
 

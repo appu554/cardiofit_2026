@@ -50,6 +50,9 @@ type Config struct {
 	NudgeMaxPerDay     int
 	NudgeCooldownHours int
 
+	// BCE v2.0 feature flags
+	ColdStartEnabled bool
+
 	// Festival calendar
 	FestivalCalendarPath string
 
@@ -134,6 +137,9 @@ func Load() (*Config, error) {
 		// Nudge engine
 		NudgeMaxPerDay:     getEnvAsInt("NUDGE_MAX_PER_DAY", 3),
 		NudgeCooldownHours: getEnvAsInt("NUDGE_COOLDOWN_HOURS", 4),
+
+		// BCE v2.0 feature flags
+		ColdStartEnabled: getEnvAsBool("BCE_COLD_START_ENABLED", true),
 
 		// Festival calendar
 		FestivalCalendarPath: getEnv("FESTIVAL_CALENDAR_PATH", "data/festivals_india_2026.yaml"),
