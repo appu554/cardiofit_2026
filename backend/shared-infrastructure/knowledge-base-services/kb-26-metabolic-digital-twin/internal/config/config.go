@@ -22,6 +22,7 @@ type Config struct {
 	KB20PatientProfileURL string
 	KB21BehavioralURL     string
 	KB25LifestyleURL      string
+	KB22HPIURL            string
 
 	// Twin computation
 	ObservationWindowDays int
@@ -61,22 +62,23 @@ func Load() (*Config, error) {
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 
 		Database: DatabaseConfig{
-			URL:             getEnv("DATABASE_URL", "postgres://kb_user:kb26_password@localhost:5440/kb26_mdt?sslmode=disable"),
+			URL:             getEnv("DATABASE_URL", "postgres://kb_user:kb26_password@localhost:5443/kb26_mdt?sslmode=disable"),
 			Password:        getEnv("DATABASE_PASSWORD", ""),
 			MaxConnections:  getEnvAsInt("DB_MAX_CONNECTIONS", 25),
 			ConnMaxLifetime: getEnvAsDuration("DB_CONN_MAX_LIFETIME", "5m"),
 		},
 
 		Redis: RedisConfig{
-			URL:      getEnv("REDIS_URL", "redis://localhost:6391"),
+			URL:      getEnv("REDIS_URL", "redis://localhost:6394"),
 			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       getEnvAsInt("REDIS_DB", 26),
+			DB:       getEnvAsInt("REDIS_DB", 0),
 		},
 
 		// Cross-KB URLs
 		KB20PatientProfileURL: getEnv("KB20_URL", "http://localhost:8131"),
 		KB21BehavioralURL:     getEnv("KB21_URL", "http://localhost:8133"),
 		KB25LifestyleURL:      getEnv("KB25_URL", "http://localhost:8136"),
+		KB22HPIURL:            getEnv("KB22_URL", "http://localhost:8132"),
 
 		// Twin computation defaults
 		ObservationWindowDays: getEnvAsInt("OBSERVATION_WINDOW_DAYS", 14),
