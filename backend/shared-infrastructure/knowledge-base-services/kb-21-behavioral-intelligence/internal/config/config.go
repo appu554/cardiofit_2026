@@ -51,7 +51,11 @@ type Config struct {
 	NudgeCooldownHours int
 
 	// BCE v2.0 feature flags
-	ColdStartEnabled bool
+	ColdStartEnabled            bool
+	GamificationEnabled         bool
+	PopulationLearningEnabled   bool
+	PopulationLearningMinCohort int  // minimum patients for population learning cycle (default 50)
+	TimingOptimizationEnabled   bool
 
 	// Festival calendar
 	FestivalCalendarPath string
@@ -139,7 +143,11 @@ func Load() (*Config, error) {
 		NudgeCooldownHours: getEnvAsInt("NUDGE_COOLDOWN_HOURS", 4),
 
 		// BCE v2.0 feature flags
-		ColdStartEnabled: getEnvAsBool("BCE_COLD_START_ENABLED", true),
+		ColdStartEnabled:            getEnvAsBool("BCE_COLD_START_ENABLED", true),
+		GamificationEnabled:         getEnvAsBool("BCE_GAMIFICATION_ENABLED", false),
+		PopulationLearningEnabled:   getEnvAsBool("BCE_POPULATION_LEARNING_ENABLED", false),
+		PopulationLearningMinCohort: getEnvAsInt("BCE_POPULATION_LEARNING_MIN_COHORT", 50),
+		TimingOptimizationEnabled:   getEnvAsBool("BCE_TIMING_OPTIMIZATION_ENABLED", false),
 
 		// Festival calendar
 		FestivalCalendarPath: getEnv("FESTIVAL_CALENDAR_PATH", "data/festivals_india_2026.yaml"),
