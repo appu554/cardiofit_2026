@@ -27,6 +27,9 @@ func (s *Server) setupRoutes() {
 		// Calibration
 		v1.POST("/calibrate", s.calibrate)
 
+		// Perturbation analysis
+		v1.POST("/perturbation", s.perturbationAnalysis)
+
 		// Confidence
 		v1.GET("/twin/:patientId/confidence", s.getTwinConfidence)
 
@@ -34,5 +37,11 @@ func (s *Server) setupRoutes() {
 		v1.POST("/events/observation", s.webhookObservation)
 		v1.POST("/events/checkin", s.webhookCheckin)
 		v1.POST("/events/med-change", s.webhookMedChange)
+
+		// MRI (Metabolic Risk Index)
+		v1.GET("/mri/:patientId", s.getMRI)
+		v1.GET("/mri/:patientId/history", s.getMRIHistory)
+		v1.GET("/mri/:patientId/decomposition", s.getMRIDecomposition)
+		v1.POST("/mri/simulate", s.simulateMRI)
 	}
 }

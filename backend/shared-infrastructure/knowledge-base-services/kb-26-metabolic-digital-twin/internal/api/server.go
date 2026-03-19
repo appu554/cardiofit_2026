@@ -16,14 +16,16 @@ import (
 
 // Server is the HTTP server for KB-26 Metabolic Digital Twin Service.
 type Server struct {
-	Router       *gin.Engine
-	config       *config.Config
-	db           *database.Database
-	cache        *cache.RedisClient
-	metrics      *metrics.Collector
-	logger       *zap.Logger
-	twinUpdater  *services.TwinUpdater
-	calibrator   *services.BayesianCalibrator
+	Router         *gin.Engine
+	config         *config.Config
+	db             *database.Database
+	cache          *cache.RedisClient
+	metrics        *metrics.Collector
+	logger         *zap.Logger
+	twinUpdater    *services.TwinUpdater
+	calibrator     *services.BayesianCalibrator
+	eventProcessor *services.EventProcessor
+	mriScorer      *services.MRIScorer
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -35,6 +37,8 @@ func NewServer(
 	logger *zap.Logger,
 	twinUpdater *services.TwinUpdater,
 	calibrator *services.BayesianCalibrator,
+	eventProcessor *services.EventProcessor,
+	mriScorer *services.MRIScorer,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -44,14 +48,16 @@ func NewServer(
 	router.Use(gin.Recovery())
 
 	s := &Server{
-		Router:      router,
-		config:      cfg,
-		db:          db,
-		cache:       cacheClient,
-		metrics:     metricsCollector,
-		logger:      logger,
-		twinUpdater: twinUpdater,
-		calibrator:  calibrator,
+		Router:         router,
+		config:         cfg,
+		db:             db,
+		cache:          cacheClient,
+		metrics:        metricsCollector,
+		logger:         logger,
+		twinUpdater:    twinUpdater,
+		calibrator:     calibrator,
+		eventProcessor: eventProcessor,
+		mriScorer:      mriScorer,
 	}
 
 	s.setupMiddleware()
