@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"kb-26-metabolic-digital-twin/internal/clients"
 	"kb-26-metabolic-digital-twin/internal/models"
 
 	"github.com/google/uuid"
@@ -17,13 +18,15 @@ import (
 type EventProcessor struct {
 	twinUpdater *TwinUpdater
 	mriScorer   *MRIScorer
+	kb22Client  *clients.KB22Client
 	logger      *zap.Logger
 }
 
-func NewEventProcessor(twinUpdater *TwinUpdater, mriScorer *MRIScorer, logger *zap.Logger) *EventProcessor {
+func NewEventProcessor(twinUpdater *TwinUpdater, mriScorer *MRIScorer, kb22Client *clients.KB22Client, logger *zap.Logger) *EventProcessor {
 	return &EventProcessor{
 		twinUpdater: twinUpdater,
 		mriScorer:   mriScorer,
+		kb22Client:  kb22Client,
 		logger:      logger,
 	}
 }
@@ -98,8 +101,10 @@ func (ep *EventProcessor) ProcessObservation(ctx context.Context, event models.O
 	// Capture values by parameter to avoid data race on stack variables.
 	if ep.mriScorer != nil {
 		twinCopy := newTwin
+		pidStr := event.PatientID
 		go func(pid uuid.UUID, twin models.TwinState) {
 			input := TwinToMRIScorerInput(&twin)
+			ep.enrichMRIInputFromKB22(context.Background(), pidStr, &input)
 			history := ep.mriScorer.GetHistoryScores(pid)
 			result := ep.mriScorer.ComputeMRI(input, history)
 			if _, err := ep.mriScorer.PersistScore(pid, result, &twin.ID); err != nil {
@@ -167,6 +172,24 @@ func (ep *EventProcessor) ProcessMedChange(ctx context.Context, event models.Med
 	// Med changes don't directly update twin fields, but we snapshot the state
 	// with the new source so the timeline reflects the change point.
 	return ep.twinUpdater.CreateSnapshot(&newTwin)
+}
+
+// enrichMRIInputFromKB22 overlays KB-22 authoritative PM-04/PM-07 values
+// onto an MRIScorerInput. Falls back to existing values if KB-22 unavailable.
+func (ep *EventProcessor) enrichMRIInputFromKB22(ctx context.Context, patientID string, input *MRIScorerInput) {
+	if ep.kb22Client == nil {
+		return
+	}
+
+	// PM-04: BP dipping classification (authoritative source)
+	if dipping := ep.kb22Client.GetBPDipping(ctx, patientID); dipping != "" {
+		input.BPDipping = dipping
+	}
+
+	// PM-07: Sleep quality score (authoritative source)
+	if sleepQ := ep.kb22Client.GetSleepQuality(ctx, patientID); sleepQ >= 0 {
+		input.SleepScore = sleepQ
+	}
 }
 
 // MarshalEstimated serializes an EstimatedVariable to JSONB.

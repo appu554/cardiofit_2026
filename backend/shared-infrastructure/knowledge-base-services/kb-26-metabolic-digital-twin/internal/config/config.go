@@ -23,6 +23,7 @@ type Config struct {
 	KB21BehavioralURL     string
 	KB25LifestyleURL      string
 	KB22HPIURL            string
+	KB22SignalTimeoutMS   int
 
 	// Twin computation
 	ObservationWindowDays int
@@ -79,6 +80,7 @@ func Load() (*Config, error) {
 		KB21BehavioralURL:     getEnv("KB21_URL", "http://localhost:8133"),
 		KB25LifestyleURL:      getEnv("KB25_URL", "http://localhost:8136"),
 		KB22HPIURL:            getEnv("KB22_URL", "http://localhost:8132"),
+		KB22SignalTimeoutMS:   getEnvAsInt("KB22_SIGNAL_TIMEOUT_MS", 500),
 
 		// Twin computation defaults
 		ObservationWindowDays: getEnvAsInt("OBSERVATION_WINDOW_DAYS", 14),

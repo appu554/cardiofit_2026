@@ -52,7 +52,7 @@ func testServer(t *testing.T) (*api.Server, *database.Database) {
 	twinUpdater := services.NewTwinUpdater(db.DB, logger)
 	calibrator := services.NewBayesianCalibratorWithConfig(db.DB, logger, 0, 14) // 0-week burn-in for tests
 	mriScorer := services.NewMRIScorer(db.DB, logger)
-	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, logger)
+	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, nil, logger)
 
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer)
 	return server, db

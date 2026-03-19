@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"kb-26-metabolic-digital-twin/internal/api"
 	"kb-26-metabolic-digital-twin/internal/cache"
+	"kb-26-metabolic-digital-twin/internal/clients"
 	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/database"
 	"kb-26-metabolic-digital-twin/internal/metrics"
@@ -73,7 +75,12 @@ func main() {
 	twinUpdater := services.NewTwinUpdater(db.DB, logger)
 	calibrator := services.NewBayesianCalibratorWithConfig(db.DB, logger, cfg.BurnInWeeks, cfg.ObservationWindowDays)
 	mriScorer := services.NewMRIScorer(db.DB, logger)
-	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, logger)
+	kb22Client := clients.NewKB22Client(
+		cfg.KB22HPIURL,
+		time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond,
+		logger,
+	)
+	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, kb22Client, logger)
 
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer)
