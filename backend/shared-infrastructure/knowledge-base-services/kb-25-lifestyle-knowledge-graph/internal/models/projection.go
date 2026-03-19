@@ -5,6 +5,15 @@ type CombinedProjectionRequest struct {
 	PatientID       string   `json:"patient_id" binding:"required"`
 	ActiveProtocols []string `json:"active_protocols" binding:"required"`
 	Days            int      `json:"days"`
+
+	// Patient context for effect modification (optional — population defaults if nil).
+	// When Age == 0, all modifier fields are ignored and population-level constants apply.
+	Age      int     `json:"age,omitempty"`
+	EGFR     float64 `json:"egfr,omitempty"`
+	BMI      float64 `json:"bmi,omitempty"`
+	HbA1c    float64 `json:"hba1c,omitempty"`
+	SBP      float64 `json:"sbp,omitempty"`
+	Adherence float64 `json:"adherence,omitempty"` // 0–1; default 1.0 when omitted
 }
 
 // CombinedProjectionResult is the forward projection output.
