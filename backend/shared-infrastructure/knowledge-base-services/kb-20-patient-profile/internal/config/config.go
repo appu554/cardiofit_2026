@@ -14,6 +14,8 @@ type Config struct {
 	FHIR     GoogleFHIRConfig
 	KB7      KB7Config
 	KB21     KB21Config
+	KB25     KB25Config
+	KB26     KB26Config
 	PREVENT  PREVENTConfig
 
 	Environment string
@@ -63,6 +65,20 @@ type KB21Config struct {
 	BaseURL string // KB21_BASE_URL — default http://localhost:8133
 }
 
+// KB25Config configures the connection to KB-25 Lifestyle Knowledge Graph service.
+// Used by ProtocolService to validate safety rules before activation and to
+// obtain projected outcomes after phase transitions.
+type KB25Config struct {
+	BaseURL string // KB25_BASE_URL — default http://localhost:8136
+}
+
+// KB26Config configures the connection to KB-26 Metabolic Digital Twin service.
+// Used by callers that populate TrajectoryInput to fetch MRI (Metabolic Risk Index)
+// data for the MRI forcing rules (Spec §7).
+type KB26Config struct {
+	BaseURL string // KB26_BASE_URL — default http://localhost:8137
+}
+
 type ServerConfig struct {
 	Port string
 }
@@ -109,6 +125,12 @@ func Load() (*Config, error) {
 		},
 		KB21: KB21Config{
 			BaseURL: getEnv("KB21_BASE_URL", "http://localhost:8133"),
+		},
+		KB25: KB25Config{
+			BaseURL: getEnv("KB25_BASE_URL", "http://localhost:8136"),
+		},
+		KB26: KB26Config{
+			BaseURL: getEnv("KB26_BASE_URL", "http://localhost:8137"),
 		},
 		PREVENT: PREVENTConfig{
 			IntensiveTargetThreshold:        getEnvAsFloat64("PREVENT_INTENSIVE_THRESHOLD", 0.075),

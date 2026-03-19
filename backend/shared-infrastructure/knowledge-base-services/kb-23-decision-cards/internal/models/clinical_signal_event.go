@@ -2,12 +2,13 @@ package models
 
 // ClinicalSignalEvent is the inbound event from KB-22 SignalPublisher.
 // Mirrors KB-22's event model for deserialization.
+// Also accepts MRI_DETERIORATION events published directly by KB-26.
 type ClinicalSignalEvent struct {
 	EventID             string                `json:"event_id"`
 	PatientID           string                `json:"patient_id"`
 	NodeID              string                `json:"node_id"`
 	StratumLabel        string                `json:"stratum_label"`
-	SignalType          string                `json:"signal_type"` // MONITORING_CLASSIFICATION or DETERIORATION_SIGNAL
+	SignalType          string                `json:"signal_type"` // MONITORING_CLASSIFICATION, DETERIORATION_SIGNAL, or MRI_DETERIORATION
 	EvaluatedAt         string                `json:"evaluated_at"`
 	Classification      *ClassificationResult `json:"classification,omitempty"`
 	DeteriorationSignal *DeteriorationResult  `json:"deterioration_signal,omitempty"`
@@ -15,6 +16,14 @@ type ClinicalSignalEvent struct {
 	SafetyFlags         []SignalSafetyFlag    `json:"safety_flags,omitempty"`
 	ContributingSignals map[string]float64    `json:"contributing_signals,omitempty"`
 	ProjectedThreshold  *ThresholdProjection  `json:"projected_threshold,omitempty"`
+
+	// MRI_DETERIORATION fields — top-level fields sent by KB-26 MRIEventPublisher.
+	// Populated when SignalType == "MRI_DETERIORATION".
+	MRICategory  string  `json:"category,omitempty"`
+	MRISeverity  string  `json:"severity,omitempty"`
+	MRIScore     float64 `json:"score,omitempty"`
+	MRITopDriver string  `json:"top_driver,omitempty"`
+	MRITrend     string  `json:"trend,omitempty"`
 }
 
 // ClassificationResult holds a monitoring classification from a PM node.

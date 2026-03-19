@@ -42,6 +42,12 @@ func (b *SignalCardBuilder) Build(ctx context.Context, event *models.ClinicalSig
 	gate := b.evaluateGate(event)
 	safetyTier := b.deriveSafetyTier(event)
 
+	rationale := fmt.Sprintf("signal event %s from node %s", event.EventID, event.NodeID)
+	if event.SignalType == "MRI_DETERIORATION" {
+		rationale = fmt.Sprintf("MRI score %.1f (%s) — %s; gate per MRI spec §7 table 8",
+			event.MRIScore, event.MRICategory, event.MRISeverity)
+	}
+
 	card := &models.DecisionCard{
 		CardID:                   uuid.New(),
 		PatientID:                patientID,
@@ -50,7 +56,7 @@ func (b *SignalCardBuilder) Build(ctx context.Context, event *models.ClinicalSig
 		CardSource:               models.SourceClinicalSignal,
 		DiagnosticConfidenceTier: confidenceTier,
 		MCUGate:                  gate,
-		MCUGateRationale:         fmt.Sprintf("signal event %s from node %s", event.EventID, event.NodeID),
+		MCUGateRationale:         rationale,
 		SafetyTier:               safetyTier,
 		Status:                   models.StatusActive,
 		CreatedAt:                time.Now().UTC(),
@@ -100,11 +106,26 @@ func (b *SignalCardBuilder) resolveTemplate(event *models.ClinicalSignalEvent) s
 		return fmt.Sprintf("dc-md%s-%s-v1", nodeNum, signal)
 	}
 
+	if event.SignalType == "MRI_DETERIORATION" {
+		// MRI_DETERIORATION events from KB-26 always use the fixed template ID.
+		// OPTIMAL / MILD_DYSREGULATION don't generate cards (no worsening boundary crossed).
+		if event.MRICategory == "OPTIMAL" || event.MRICategory == "MILD_DYSREGULATION" || event.MRICategory == "" {
+			return ""
+		}
+		return "MRI_DETERIORATION_01"
+	}
+
 	return ""
 }
 
 // deriveConfidenceTier maps data sufficiency + severity -> confidence tier.
 func (b *SignalCardBuilder) deriveConfidenceTier(event *models.ClinicalSignalEvent) models.ConfidenceTier {
+	// MRI_DETERIORATION: score-derived — always FIRM when a card is generated
+	// (PublishDeteriorationEvent only fires on category boundary crossings).
+	if event.SignalType == "MRI_DETERIORATION" {
+		return models.TierFirm
+	}
+
 	sufficiency := ""
 	severity := ""
 
@@ -139,6 +160,19 @@ func (b *SignalCardBuilder) deriveConfidenceTier(event *models.ClinicalSignalEve
 
 // evaluateGate extracts the MCU gate suggestion from the event.
 func (b *SignalCardBuilder) evaluateGate(event *models.ClinicalSignalEvent) models.MCUGate {
+	// MRI_DETERIORATION events carry MCUGateSuggestion as a top-level string (not pointer).
+	if event.SignalType == "MRI_DETERIORATION" {
+		if event.MCUGateSuggestion != nil {
+			return parseMCUGate(*event.MCUGateSuggestion)
+		}
+		// Fallback: derive from severity field sent by KB-26.
+		switch event.MRISeverity {
+		case "IMMEDIATE":
+			return models.GateModify
+		default:
+			return models.GateSafe
+		}
+	}
 	if event.MCUGateSuggestion != nil {
 		return parseMCUGate(*event.MCUGateSuggestion)
 	}
@@ -150,6 +184,17 @@ func (b *SignalCardBuilder) evaluateGate(event *models.ClinicalSignalEvent) mode
 
 // deriveSafetyTier determines the safety tier from the event's safety flags.
 func (b *SignalCardBuilder) deriveSafetyTier(event *models.ClinicalSignalEvent) models.SafetyTier {
+	// MRI_DETERIORATION: safety tier from the MRISeverity field.
+	if event.SignalType == "MRI_DETERIORATION" {
+		switch event.MRISeverity {
+		case "IMMEDIATE":
+			return models.SafetyImmediate
+		case "URGENT":
+			return models.SafetyUrgent
+		default:
+			return models.SafetyRoutine
+		}
+	}
 	for _, flag := range event.SafetyFlags {
 		if flag.Severity == "IMMEDIATE" {
 			return models.SafetyImmediate

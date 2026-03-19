@@ -12,6 +12,7 @@ import (
 
 	"kb-patient-profile/internal/api"
 	"kb-patient-profile/internal/cache"
+	"kb-patient-profile/internal/clients"
 	"kb-patient-profile/internal/config"
 	"kb-patient-profile/internal/database"
 	"kb-patient-profile/internal/fhir"
@@ -86,6 +87,18 @@ func main() {
 	protocolRegistry := services.NewProtocolRegistry()
 	protocolService := services.NewProtocolService(db, protocolRegistry, eventBus, logger)
 
+	// G-6: Attach KB-25 Lifestyle Knowledge Graph client for protocol safety checks
+	// and post-transition projections.
+	kb25Client := clients.NewKB25Client(cfg.KB25, logger)
+	protocolService.SetKB25Client(kb25Client)
+
+	// G-5 (MRI): Create KB-26 Metabolic Digital Twin client.
+	// The caller that populates TrajectoryInput uses this client to fetch MRI data
+	// (score and 14-day delta) for the MRI forcing rules (Spec §7).
+	// The TrajectoryEngine itself remains a pure computation engine.
+	kb26Client := clients.NewKB26Client(cfg.KB26.BaseURL, logger)
+	_ = kb26Client // available for injection into handlers/services that build TrajectoryInput
+
 	// Initialize HTTP server with all services
 	logger.Info("Initializing HTTP server...")
 	httpServer := api.NewServer(
@@ -103,6 +116,7 @@ func main() {
 		projectionService,
 		loincRegistry,
 		protocolService,
+		protocolRegistry,
 	)
 
 	// Start HTTP server
