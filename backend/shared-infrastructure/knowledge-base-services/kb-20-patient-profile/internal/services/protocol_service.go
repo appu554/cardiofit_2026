@@ -204,10 +204,29 @@ func (ps *ProtocolService) ActivateProtocol(patientID string, protocolID string)
 		}
 	}
 
+	// M3-MAINTAIN requires M3-PRP + M3-VFRP to be GRADUATED (Spec Section 7)
+	if protocolID == "M3-MAINTAIN" {
+		var graduatedCount int64
+		ps.db.DB.Model(&models.ProtocolState{}).
+			Where("patient_id = ? AND protocol_id IN (?, ?) AND status = ?",
+				patientID, "M3-PRP", "M3-VFRP", "GRADUATED").
+			Count(&graduatedCount)
+		if graduatedCount < 2 {
+			return nil, fmt.Errorf("M3-MAINTAIN requires M3-PRP and M3-VFRP to be GRADUATED (found %d)", graduatedCount)
+		}
+	}
+
+	// Resolve initial phase from template (fixes hardcoded BASELINE for M3-MAINTAIN which starts at CONSOLIDATION)
+	tmpl, tmplErr := ps.registry.GetTemplate(protocolID)
+	initialPhase := "BASELINE"
+	if tmplErr == nil && len(tmpl.Phases) > 0 {
+		initialPhase = tmpl.Phases[0].ID
+	}
+
 	state := models.ProtocolState{
 		PatientID:      patientID,
 		ProtocolID:     protocolID,
-		CurrentPhase:   "BASELINE",
+		CurrentPhase:   initialPhase,
 		Status:         "ACTIVE",
 		PhaseStartDate: time.Now().UTC(),
 		ProtocolStart:  time.Now().UTC(),
@@ -227,7 +246,7 @@ func (ps *ProtocolService) ActivateProtocol(patientID string, protocolID string)
 	// G-8: Publish activation event after the record is persisted.
 	ps.eventBus.Publish(models.EventProtocolActivated, patientID, map[string]interface{}{
 		"protocol_id": protocolID,
-		"phase":       "BASELINE",
+		"phase":       initialPhase,
 	})
 
 	return &state, nil
