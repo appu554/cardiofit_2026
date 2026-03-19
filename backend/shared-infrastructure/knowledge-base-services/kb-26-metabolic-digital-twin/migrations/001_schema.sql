@@ -37,7 +37,17 @@ CREATE TABLE IF NOT EXISTS twin_states (
     map_value             DOUBLE PRECISION,
     glycemic_variability  DOUBLE PRECISION,
     dawn_phenomenon       BOOLEAN,
+    protein_adequacy      DOUBLE PRECISION,
+    diet_quality_score    DOUBLE PRECISION,
+    exercise_compliance   DOUBLE PRECISION,
     trig_hdl_ratio        DOUBLE PRECISION,
+
+    -- Tier 2: MRI-specific derived fields
+    sbp_trend             DOUBLE PRECISION,
+    weight_trend          DOUBLE PRECISION,
+    hba1c_trend           DOUBLE PRECISION,
+    bp_dipping_pattern    VARCHAR(255),
+    sleep_quality         DOUBLE PRECISION,
 
     -- Tier 3: Estimated (JSONB)
     insulin_sensitivity   JSONB,
@@ -72,6 +82,9 @@ CREATE TABLE IF NOT EXISTS calibrated_effects (
 
 CREATE INDEX IF NOT EXISTS idx_calibrated_patient
     ON calibrated_effects (patient_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calibrated_unique
+    ON calibrated_effects (patient_id, intervention_code, target_variable);
 
 -- =============================================================================
 -- simulation_runs: recorded simulation results for audit and comparison

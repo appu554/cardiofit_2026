@@ -40,7 +40,17 @@ type TwinState struct {
 	MAPValue            *float64 `json:"map_value,omitempty"`
 	GlycemicVariability *float64 `json:"glycemic_variability,omitempty"`
 	DawnPhenomenon      *bool    `json:"dawn_phenomenon,omitempty"`
+	ProteinAdequacy     *float64 `json:"protein_adequacy,omitempty"`
+	DietQualityScore    *float64 `json:"diet_quality_score,omitempty"`
+	ExerciseCompliance  *float64 `json:"exercise_compliance,omitempty"`
 	TrigHDLRatio        *float64 `json:"trig_hdl_ratio,omitempty"`
+
+	// Tier 2: MRI-specific derived fields
+	SBPTrend         *float64 `json:"sbp_trend,omitempty"`          // mmHg change over 4 weeks
+	WeightTrend      *float64 `json:"weight_trend,omitempty"`       // kg/month change
+	HbA1cTrend       *float64 `json:"hba1c_trend,omitempty"`        // %/quarter change
+	BPDippingPattern *string  `json:"bp_dipping_pattern,omitempty"` // DIPPER, NON_DIPPER, REVERSE_DIPPER
+	SleepQuality     *float64 `json:"sleep_quality,omitempty"`      // 0-1 score from PM-07
 
 	// Tier 3: Estimated (JSONB)
 	InsulinSensitivity   datatypes.JSON `gorm:"type:jsonb" json:"insulin_sensitivity,omitempty"`
