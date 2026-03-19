@@ -27,6 +27,8 @@ WORKDIR /app
 COPY --from=builder /app/main .
 COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/nodes ./nodes
+COPY --from=builder /app/pm-nodes ./pm-nodes
+COPY --from=builder /app/deterioration ./deterioration
 
 RUN chown -R appuser:appgroup /app
 
