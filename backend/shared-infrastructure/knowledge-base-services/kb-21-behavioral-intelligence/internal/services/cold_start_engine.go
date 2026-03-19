@@ -42,11 +42,26 @@ func (cs *ColdStartEngine) AssignPhenotype(intake models.IntakeProfile) models.C
 }
 
 // GetPhenotypePriors returns calibrated Alpha/Beta priors for a phenotype cluster.
+// Checks population-learned priors (E3) first, then falls back to static library.
 func (cs *ColdStartEngine) GetPhenotypePriors(phenotype models.ColdStartPhenotype) map[models.TechniqueID]models.TechniquePrior {
+	// E3: Check for population-learned priors in DB
+	if cs.db != nil {
+		var popPriors []models.PopulationPrior
+		cs.db.Where("phenotype = ?", phenotype).Find(&popPriors)
+		if len(popPriors) >= 12 { // all 12 techniques must be present
+			result := make(map[models.TechniqueID]models.TechniquePrior, len(popPriors))
+			for _, p := range popPriors {
+				result[p.Technique] = models.TechniquePrior{Alpha: p.Alpha, Beta: p.Beta}
+			}
+			return result
+		}
+	}
+
+	// Fall back to static phenotype prior library
 	if priors, ok := phenotypePriorLibrary[phenotype]; ok {
 		return priors
 	}
-	// Fallback: return uniform population priors
+	// Final fallback: uniform population priors
 	result := make(map[models.TechniqueID]models.TechniquePrior)
 	for _, tech := range models.AllTechniques() {
 		alpha, beta := GetDefaultPriors(tech)
