@@ -40,6 +40,20 @@ type ProtocolMetrics struct {
 var prpPhaseOrder = []string{"BASELINE", "STABILIZATION", "RESTORATION", "OPTIMIZATION", "GRADUATED"}
 var vfrpPhaseOrder = []string{"BASELINE", "METABOLIC_STABILIZATION", "FAT_MOBILIZATION", "SUSTAINED_REDUCTION", "GRADUATED"}
 
+// Medication protocol phase orders (lifelong protocols have no GRADUATED terminal state).
+var glyc1PhaseOrder = []string{"BASELINE", "MONOTHERAPY", "COMBINATION", "OPTIMIZATION"}
+var htn1PhaseOrder = []string{"BASELINE", "MONOTHERAPY", "DUAL_THERAPY", "TRIPLE_THERAPY", "RESISTANT_HTN"}
+var renal1PhaseOrder = []string{"BASELINE", "RAAS_OPTIMISATION", "SGLT2I_ADDITION", "FINERENONE_ADDITION", "MONITORING"}
+var lipid1PhaseOrder = []string{"ASSESSMENT"} // single phase, card-only
+var depresc1PhaseOrder = []string{"ASSESSMENT", "STEPDOWN", "MONITORING"}
+
+// M3 lifestyle protocol phase orders.
+// M3-MAINTAIN: indefinite maintenance — PARTNERSHIP has no GRADUATED terminal state.
+var maintainPhaseOrder = []string{"CONSOLIDATION", "INDEPENDENCE", "STABILITY", "PARTNERSHIP"}
+
+// M3-RECORRECTION: short correction cycle with GRADUATED terminal state.
+var recorrectionPhaseOrder = []string{"ASSESSMENT", "CORRECTION", "GRADUATED"}
+
 // CanTransition checks if a phase transition is valid (must be sequential).
 func (p *ProtocolState) CanTransition(nextPhase string) bool {
 	order := p.phaseOrder()
@@ -73,6 +87,20 @@ func (p *ProtocolState) phaseOrder() []string {
 		return prpPhaseOrder
 	case "M3-VFRP":
 		return vfrpPhaseOrder
+	case "GLYC-1":
+		return glyc1PhaseOrder
+	case "HTN-1":
+		return htn1PhaseOrder
+	case "RENAL-1":
+		return renal1PhaseOrder
+	case "LIPID-1":
+		return lipid1PhaseOrder
+	case "DEPRESC-1":
+		return depresc1PhaseOrder
+	case "M3-MAINTAIN":
+		return maintainPhaseOrder
+	case "M3-RECORRECTION":
+		return recorrectionPhaseOrder
 	default:
 		return nil
 	}

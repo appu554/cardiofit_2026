@@ -29,6 +29,23 @@ func TestProtocolState_CanTransition_InvalidPhase(t *testing.T) {
 	}
 }
 
+func TestProtocolState_MAINTAIN_CanTransition(t *testing.T) {
+	state := &ProtocolState{ProtocolID: "M3-MAINTAIN", CurrentPhase: "CONSOLIDATION"}
+	if !state.CanTransition("INDEPENDENCE") {
+		t.Error("CONSOLIDATION → INDEPENDENCE should be valid")
+	}
+	if state.CanTransition("PARTNERSHIP") {
+		t.Error("CONSOLIDATION → PARTNERSHIP should be invalid (skip)")
+	}
+}
+
+func TestProtocolState_RECORRECTION_CanTransition(t *testing.T) {
+	state := &ProtocolState{ProtocolID: "M3-RECORRECTION", CurrentPhase: "ASSESSMENT"}
+	if !state.CanTransition("CORRECTION") {
+		t.Error("ASSESSMENT → CORRECTION should be valid")
+	}
+}
+
 func TestProtocolState_DaysInPhase(t *testing.T) {
 	state := ProtocolState{
 		PhaseStartDate: time.Now().AddDate(0, 0, -10),
