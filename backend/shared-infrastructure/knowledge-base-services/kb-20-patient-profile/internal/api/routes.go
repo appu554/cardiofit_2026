@@ -45,6 +45,9 @@ func (s *Server) setupRoutes() {
 			patient.POST("/:id/protocols", s.activateProtocol)
 			patient.GET("/:id/protocols", s.getActiveProtocols)
 			patient.PUT("/:id/protocols/:protocol_id/transition", s.transitionProtocolPhase)
+
+			// Engagement season (Patient Engagement Loop)
+			patient.GET("/:id/engagement-season", s.getEngagementSeason)
 		}
 
 		// Context modifier registry
