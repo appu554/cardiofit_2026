@@ -212,6 +212,9 @@ func TwinToMRIScorerInput(twin *models.TwinState) MRIScorerInput {
 	if twin.SleepQuality != nil {
 		input.SleepScore = *twin.SleepQuality
 	}
+	if twin.BMI != nil {
+		input.BMI = *twin.BMI
+	}
 
 	if len(twin.MuscleMassProxy) > 0 {
 		var ev models.EstimatedVariable

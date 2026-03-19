@@ -31,6 +31,8 @@ type Server struct {
 	festivalCalendar   *services.FestivalCalendar
 	nudgeEngine        *services.NudgeEngine
 	coldStartEngine    *services.ColdStartEngine
+	gamificationEngine *services.GamificationEngine
+	timingBandit       *services.TimingBandit
 	eventSubscriber    *events.Subscriber
 }
 
@@ -48,6 +50,8 @@ func NewServer(
 	festivalCal *services.FestivalCalendar,
 	nudgeEngine *services.NudgeEngine,
 	coldStartEngine *services.ColdStartEngine,
+	gamificationEngine *services.GamificationEngine,
+	timingBandit *services.TimingBandit,
 	subscriber *events.Subscriber,
 ) *Server {
 	if cfg.IsProduction() {
@@ -71,6 +75,8 @@ func NewServer(
 		festivalCalendar:   festivalCal,
 		nudgeEngine:        nudgeEngine,
 		coldStartEngine:    coldStartEngine,
+		gamificationEngine: gamificationEngine,
+		timingBandit:       timingBandit,
 		eventSubscriber:    subscriber,
 	}
 
@@ -175,6 +181,13 @@ func (s *Server) setupRoutes() {
 		// Cold-start phenotype (E1)
 		v1.POST("/patient/:patient_id/intake-profile", s.submitIntakeProfile)
 		v1.GET("/patient/:patient_id/cold-start-phenotype", s.getColdStartPhenotype)
+
+		// Gamification (E2)
+		v1.GET("/patient/:patient_id/streaks", s.getPatientStreaks)
+		v1.GET("/patient/:patient_id/milestones", s.getPatientMilestones)
+
+		// Timing optimization (E4)
+		v1.GET("/patient/:patient_id/optimal-timing", s.getOptimalDeliveryTime)
 	}
 }
 

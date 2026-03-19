@@ -72,6 +72,18 @@ func NormalizeWeightTrend(trend float64) float64 {
 	return NormalizeTrend(trend, paramsWeightTrend[0], paramsWeightTrend[1])
 }
 
+// NormalizeWeightTrendBMI converts weight trend to risk z-score with BMI awareness.
+// Spec Table 2: "Weight loss in BMI <22 is penalized, not rewarded (LS-15 alignment)."
+// For BMI >= 22: positive trend (gaining) = positive z (bad), negative trend (losing) = negative z (good).
+// For BMI < 22: polarity is INVERTED — losing weight when underweight is penalized.
+func NormalizeWeightTrendBMI(trendKgPerMonth float64, bmi float64) float64 {
+	z := NormalizeTrend(trendKgPerMonth, paramsWeightTrend[0], paramsWeightTrend[1])
+	if bmi > 0 && bmi < 22.0 {
+		return -z // invert: weight loss becomes risk, weight gain becomes benefit
+	}
+	return z
+}
+
 // NormalizeMuscleFunction converts 30s sit-to-stand count to risk z-score.
 // INVERTED: higher count = lower risk (negative z).
 func NormalizeMuscleFunction(stsCount float64) float64 {

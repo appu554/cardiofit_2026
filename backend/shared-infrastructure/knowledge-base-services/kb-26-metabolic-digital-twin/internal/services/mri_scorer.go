@@ -36,6 +36,7 @@ type MRIScorerInput struct {
 	ProteinGKg  float64 // g/kg/day
 	SleepScore  float64 // 0-1 quality score
 	Sex         string  // M or F
+	BMI         float64 // kg/m² — used for BMI-aware weight trend penalty (LS-15)
 }
 
 // MRIScorer computes MRI scores and persists them.
@@ -69,9 +70,10 @@ func (s *MRIScorer) ComputeGlucoseDomain(fbg, ppbg, hba1cTrend float64) models.D
 
 // ComputeBodyCompDomain computes the body composition domain sub-score.
 // Spec §4.2: 0.50*waist + 0.25*weightTrend + 0.25*(-muscle)
-func (s *MRIScorer) ComputeBodyCompDomain(waist, weightTrend, muscleSTS float64, sex string) models.DomainScore {
+// bmi is used to apply the LS-15 BMI-aware weight trend penalty (spec Table 2).
+func (s *MRIScorer) ComputeBodyCompDomain(waist, weightTrend, muscleSTS float64, sex string, bmi float64) models.DomainScore {
 	waistZ := NormalizeWaistSexSpecific(waist, sex)
-	weightZ := NormalizeWeightTrend(weightTrend)
+	weightZ := NormalizeWeightTrendBMI(weightTrend, bmi)
 	muscleZ := NormalizeMuscleFunction(muscleSTS)
 
 	return models.DomainScore{
@@ -187,7 +189,7 @@ func HighestDomainContributor(domains []models.DomainScore) string {
 // historyScores: previous MRI scores for trend computation (newest last), can be nil.
 func (s *MRIScorer) ComputeMRI(input MRIScorerInput, historyScores []float64) models.MRIResult {
 	glucose := s.ComputeGlucoseDomain(input.FBG, input.PPBG, input.HbA1cTrend)
-	bodyComp := s.ComputeBodyCompDomain(input.WaistCm, input.WeightTrend, input.MuscleSTS, input.Sex)
+	bodyComp := s.ComputeBodyCompDomain(input.WaistCm, input.WeightTrend, input.MuscleSTS, input.Sex, input.BMI)
 	cardio := s.ComputeCardioDomain(input.SBP, input.SBPTrend, input.BPDipping)
 	behavioral := s.ComputeBehavioralDomain(input.Steps, input.ProteinGKg, input.SleepScore)
 

@@ -81,11 +81,34 @@ func main() {
 		logger.Info("BCE v2.0 E1: Cold-start profiling enabled")
 	}
 
+	// BCE v2.0 E2: Gamification
+	var gamificationEngine *services.GamificationEngine
+	if cfg.GamificationEnabled {
+		gamificationEngine = services.NewGamificationEngine(db.DB, logger)
+		logger.Info("BCE v2.0 E2: Gamification enabled")
+	}
+
+	// BCE v2.0 E3: Population Learning
+	var populationEngine *services.PopulationLearningEngine
+	if cfg.PopulationLearningEnabled {
+		populationEngine = services.NewPopulationLearningEngine(db.DB, logger, cfg.PopulationLearningMinCohort)
+		logger.Info("BCE v2.0 E3: Population learning enabled",
+			zap.Int("min_cohort", cfg.PopulationLearningMinCohort))
+	}
+	_ = populationEngine // E3 runs as a scheduled calibration job, not wired into request pipeline
+
+	// BCE v2.0 E4: Timing Optimization
+	var timingBandit *services.TimingBandit
+	if cfg.TimingOptimizationEnabled {
+		timingBandit = services.NewTimingBandit(db.DB, logger)
+		logger.Info("BCE v2.0 E4: Timing optimization enabled")
+	}
+
 	nudgeEngine := services.NewNudgeEngine(
 		db.DB, logger, bayesianEngine, phaseEngine, barrierDiag,
 		coldStartEngine,    // E1
-		nil,                // E2: gamificationEngine — wired in Task 11
-		nil,                // E4: timingBandit — wired in Task 11
+		gamificationEngine, // E2
+		timingBandit,       // E4
 		cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
 	)
 
@@ -107,7 +130,12 @@ func main() {
 	server := api.NewServer(
 		cfg, db, cacheClient, metricsCollector, logger,
 		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc,
-		festivalCal, nudgeEngine, coldStartEngine, subscriber,
+		festivalCal,
+		nudgeEngine,
+		coldStartEngine,    // E1
+		gamificationEngine, // E2
+		timingBandit,       // E4
+		subscriber,
 	)
 
 	// 11. Start event subscriber

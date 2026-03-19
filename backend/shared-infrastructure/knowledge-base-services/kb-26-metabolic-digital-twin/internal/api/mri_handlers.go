@@ -190,5 +190,6 @@ func biomarkersToMRIInput(projected models.ProjectedState, current services.MRIS
 		ProteinGKg:  current.ProteinGKg,
 		SleepScore:  current.SleepScore,
 		Sex:         current.Sex,
+		BMI:         current.BMI,
 	}
 }

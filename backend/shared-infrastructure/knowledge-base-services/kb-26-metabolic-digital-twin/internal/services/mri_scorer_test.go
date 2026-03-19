@@ -29,8 +29,8 @@ func TestComputeGlucoseDomain_HighRisk(t *testing.T) {
 
 func TestComputeBodyCompDomain(t *testing.T) {
 	scorer := NewMRIScorer(nil, nil)
-	domain := scorer.ComputeBodyCompDomain(100, 1.5, 0.3, "M")
-	// Waist 100cm male (above threshold) + weight gaining + low muscle
+	domain := scorer.ComputeBodyCompDomain(100, 1.5, 0.3, "M", 25.0)
+	// Waist 100cm male (above threshold) + weight gaining + low muscle, normal BMI
 	if domain.Score < 0.5 {
 		t.Errorf("elevated body comp domain should be > 0.5, got %f", domain.Score)
 	}

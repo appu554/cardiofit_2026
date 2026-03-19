@@ -122,3 +122,29 @@ func TestComputeSleepZScore(t *testing.T) {
 		t.Errorf("expected positive z for poor sleep, got %f", z)
 	}
 }
+
+func TestNormalizeWeightTrendBMIAware(t *testing.T) {
+	// Normal BMI (25): weight loss = good (negative z)
+	z := NormalizeWeightTrendBMI(-0.5, 25.0)
+	if z >= 0 {
+		t.Errorf("normal BMI weight loss should be negative z, got %f", z)
+	}
+
+	// Low BMI (<22): weight loss = BAD (positive z, penalized)
+	z = NormalizeWeightTrendBMI(-0.5, 20.0)
+	if z <= 0 {
+		t.Errorf("low BMI weight loss should be penalized (positive z), got %f", z)
+	}
+
+	// Low BMI (<22): weight gain = good (negative z)
+	z = NormalizeWeightTrendBMI(0.5, 20.0)
+	if z >= 0 {
+		t.Errorf("low BMI weight gain should be beneficial (negative z), got %f", z)
+	}
+
+	// Normal BMI: weight gain = bad (positive z)
+	z = NormalizeWeightTrendBMI(0.5, 25.0)
+	if z <= 0 {
+		t.Errorf("normal BMI weight gain should be positive z, got %f", z)
+	}
+}

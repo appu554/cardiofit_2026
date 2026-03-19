@@ -88,6 +88,8 @@ func TestMain(m *testing.M) {
 		nil,              // festivalCal
 		nudgeEngine,
 		nil,              // coldStartEngine (E1)
+		nil,              // gamificationEngine (E2)
+		nil,              // timingBandit (E4)
 		subscriber,
 	)
 
