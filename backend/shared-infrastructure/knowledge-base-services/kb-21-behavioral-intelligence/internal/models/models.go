@@ -250,6 +250,9 @@ type EngagementProfile struct {
 	Region                  string `gorm:"default:''" json:"region"` // NORTH|SOUTH|EAST|WEST — for festival calendar region matching
 	RetentionPolicyMonths   int    `gorm:"default:24" json:"retention_policy_months"`
 
+	// BCE v1.0: Current motivation phase (E5 — Temporal Dynamics)
+	MotivationPhase MotivationPhase `gorm:"type:varchar(20);default:'INITIATION'" json:"motivation_phase"`
+
 	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
 }
