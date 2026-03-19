@@ -8,7 +8,7 @@ import (
 )
 
 func TestNudgeEngine_SelectTechnique_RespectsPhase(t *testing.T) {
-	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, 3, 4)
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 3, 4)
 
 	// In RECOVERY phase, T-11 should be selected overwhelmingly
 	records := ne.bayesian.BuildDefaultRecords("patient-1")
@@ -36,7 +36,7 @@ func TestNudgeEngine_SelectTechnique_RespectsPhase(t *testing.T) {
 }
 
 func TestNudgeEngine_FatigueCheck_BlocksRecentTechnique(t *testing.T) {
-	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, 3, 4)
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 3, 4)
 
 	recent := time.Now().Add(-2 * time.Hour) // 2 hours ago
 	rec := &models.TechniqueEffectiveness{
@@ -50,7 +50,7 @@ func TestNudgeEngine_FatigueCheck_BlocksRecentTechnique(t *testing.T) {
 }
 
 func TestNudgeEngine_FatigueCheck_AllowsOldTechnique(t *testing.T) {
-	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, 3, 4)
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 3, 4)
 
 	old := time.Now().Add(-6 * time.Hour) // 6 hours ago
 	rec := &models.TechniqueEffectiveness{
@@ -64,7 +64,7 @@ func TestNudgeEngine_FatigueCheck_AllowsOldTechnique(t *testing.T) {
 }
 
 func TestNudgeEngine_DailyLimit(t *testing.T) {
-	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, 3, 4)
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 3, 4)
 	if ne.maxNudgesPerDay != 3 {
 		t.Errorf("max nudges per day: got %d, want 3", ne.maxNudgesPerDay)
 	}

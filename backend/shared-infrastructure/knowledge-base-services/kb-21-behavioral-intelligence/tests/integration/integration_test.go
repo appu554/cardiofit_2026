@@ -78,7 +78,7 @@ func TestMain(m *testing.M) {
 	bayesianEngine := services.NewBayesianEngine(testDB.DB, logger)
 	phaseEngine := services.NewPhaseEngine(testDB.DB, logger)
 	barrierDiag := services.NewBarrierDiagnostic(testDB.DB, logger)
-	nudgeEngine := services.NewNudgeEngine(testDB.DB, logger, bayesianEngine, phaseEngine, barrierDiag, nil, 3, 4)
+	nudgeEngine := services.NewNudgeEngine(testDB.DB, logger, bayesianEngine, phaseEngine, barrierDiag, nil, nil, nil, 3, 4)
 
 	metricsCollector := metrics.NewCollector()
 

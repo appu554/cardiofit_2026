@@ -24,6 +24,8 @@ type NudgeEngine struct {
 	phaseEngine      *PhaseEngine
 	barrierDiag      *BarrierDiagnostic
 	coldStart        *ColdStartEngine
+	gamification     *GamificationEngine
+	timing           *TimingBandit
 	maxNudgesPerDay  int
 	cooldownDuration time.Duration
 }
@@ -35,6 +37,8 @@ func NewNudgeEngine(
 	phaseEngine *PhaseEngine,
 	barrierDiag *BarrierDiagnostic,
 	coldStart *ColdStartEngine,
+	gamification *GamificationEngine,
+	timing *TimingBandit,
 	maxPerDay int,
 	cooldownHours int,
 ) *NudgeEngine {
@@ -50,6 +54,12 @@ func NewNudgeEngine(
 	if coldStart == nil {
 		coldStart = NewColdStartEngine(db, logger)
 	}
+	if gamification == nil {
+		gamification = NewGamificationEngine(db, logger)
+	}
+	if timing == nil {
+		timing = NewTimingBandit(db, logger)
+	}
 	return &NudgeEngine{
 		db:               db,
 		logger:           logger,
@@ -57,6 +67,8 @@ func NewNudgeEngine(
 		phaseEngine:      phaseEngine,
 		barrierDiag:      barrierDiag,
 		coldStart:        coldStart,
+		gamification:     gamification,
+		timing:           timing,
 		maxNudgesPerDay:  maxPerDay,
 		cooldownDuration: time.Duration(cooldownHours) * time.Hour,
 	}
@@ -78,6 +90,13 @@ type NudgeRequest struct {
 	Signals BarrierSignals
 }
 
+// StreakContext provides streak data to include in nudge messages.
+type StreakContext struct {
+	Behavior      string `json:"behavior"`
+	CurrentStreak int    `json:"current_streak"`
+	AtRisk        bool   `json:"at_risk"` // streak will break tomorrow if no action
+}
+
 // NudgeResult is the selected nudge ready for delivery.
 type NudgeResult struct {
 	Technique     models.TechniqueID
@@ -86,6 +105,12 @@ type NudgeResult struct {
 	Phase         models.MotivationPhase
 	Barrier       *models.BarrierCode // nil if no barrier detected
 	Reason        string
+
+	// E2: Gamification context (nil if gamification not active for this patient)
+	StreakInfo *StreakContext `json:"streak_info,omitempty"`
+
+	// E4: Optimal delivery time
+	OptimalSlot models.TimingSlot `json:"optimal_slot,omitempty"`
 }
 
 // SelectNudge chooses the best technique for a patient at this moment.
@@ -160,6 +185,40 @@ func (ne *NudgeEngine) SelectNudge(req NudgeRequest) (*NudgeResult, error) {
 		return nil, nil
 	}
 
+	// 8a. Gamification context (E2) — only if active for this patient
+	var streakCtx *StreakContext
+	if ne.gamification != nil {
+		// Determine activation from cold-start phenotype and T-06 posterior
+		phenotype := models.PhenotypeRoutineBuilder // default
+		if ne.coldStart != nil {
+			phenotype, _ = ne.coldStart.GetOrAssignPhenotype(req.PatientID)
+		}
+		var t06Posterior float64
+		for _, r := range records {
+			if r.Technique == models.TechProgressVisualization {
+				t06Posterior = r.PosteriorMean
+				break
+			}
+		}
+		if ne.gamification.ShouldActivate(phenotype, t06Posterior) {
+			streak, _ := ne.gamification.GetOrCreateStreak(req.PatientID, "MEDICATION_TAKEN")
+			if streak != nil && streak.CurrentStreak > 0 {
+				streakCtx = &StreakContext{
+					Behavior:      streak.Behavior,
+					CurrentStreak: streak.CurrentStreak,
+					AtRisk:        true, // streak active means it's at risk each day
+				}
+			}
+		}
+	}
+
+	// 8b. Optimal delivery time (E4)
+	var optimalSlot models.TimingSlot
+	if ne.timing != nil {
+		slot, _ := ne.timing.GetOptimalTime(req.PatientID)
+		optimalSlot = slot
+	}
+
 	// 9. Build result
 	result := &NudgeResult{
 		Technique:     selected.Technique,
@@ -167,6 +226,8 @@ func (ne *NudgeEngine) SelectNudge(req NudgeRequest) (*NudgeResult, error) {
 		NudgeType:     ne.mapToNudgeType(selected.Technique, barriers),
 		Phase:         phase.Phase,
 		Reason:        fmt.Sprintf("phase=%s, posterior_mean=%.3f", phase.Phase, selected.PosteriorMean),
+		StreakInfo:    streakCtx,
+		OptimalSlot:   optimalSlot,
 	}
 
 	if len(barriers) > 0 {

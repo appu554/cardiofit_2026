@@ -83,7 +83,10 @@ func main() {
 
 	nudgeEngine := services.NewNudgeEngine(
 		db.DB, logger, bayesianEngine, phaseEngine, barrierDiag,
-		coldStartEngine, cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
+		coldStartEngine,    // E1
+		nil,                // E2: gamificationEngine — wired in Task 11
+		nil,                // E4: timingBandit — wired in Task 11
+		cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
 	)
 
 	// 8. Load festival calendar (optional — graceful nil if file missing)
