@@ -139,3 +139,66 @@ func clamp(v, min, max float64) float64 {
 	}
 	return v
 }
+
+// ComputeLinearTrend returns slope in units/day via OLS regression.
+// Returns 0 if fewer than 2 readings.
+func ComputeLinearTrend(readings []TimedValue) float64 {
+	n := len(readings)
+	if n < 2 {
+		return 0
+	}
+
+	var sumX, sumY, sumXX, sumXY float64
+	for _, r := range readings {
+		x := r.DaysSinceFirst
+		y := r.Value
+		sumX += x
+		sumY += y
+		sumXX += x * x
+		sumXY += x * y
+	}
+
+	nf := float64(n)
+	denom := nf*sumXX - sumX*sumX
+	if denom == 0 {
+		return 0
+	}
+
+	return (nf*sumXY - sumX*sumY) / denom
+}
+
+// ComputeWeightTrendPerMonth returns kg/month slope from weight readings.
+func ComputeWeightTrendPerMonth(readings []TimedValue) float64 {
+	slopePerDay := ComputeLinearTrend(readings)
+	return slopePerDay * 30.44 // average days per month
+}
+
+// ComputeHbA1cTrendPerQuarter returns %/quarter slope from HbA1c readings.
+func ComputeHbA1cTrendPerQuarter(readings []TimedValue) float64 {
+	slopePerDay := ComputeLinearTrend(readings)
+	return slopePerDay * 91.3 // average days per quarter
+}
+
+// ComputeSBPTrend4Weeks returns mmHg change over 4 weeks from SBP readings.
+func ComputeSBPTrend4Weeks(readings []TimedValue) float64 {
+	slopePerDay := ComputeLinearTrend(readings)
+	return slopePerDay * 28
+}
+
+// ClassifyBPDipping classifies BP dipping from evening and morning SBP means.
+// Spec §4.1: Dipper=10-20% dip, Non-dipper=0-10%, Reverse=<0%
+func ClassifyBPDipping(eveningSBP, morningSBP float64) string {
+	if eveningSBP <= 0 {
+		return "UNKNOWN"
+	}
+	dipPercent := ((eveningSBP - morningSBP) / eveningSBP) * 100.0
+
+	switch {
+	case dipPercent < 0:
+		return "REVERSE_DIPPER"
+	case dipPercent < 10:
+		return "NON_DIPPER"
+	default:
+		return "DIPPER"
+	}
+}
