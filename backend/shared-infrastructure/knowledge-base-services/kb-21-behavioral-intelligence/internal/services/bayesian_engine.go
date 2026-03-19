@@ -45,6 +45,30 @@ func (be *BayesianEngine) BuildDefaultRecords(patientID string) []models.Techniq
 	return records
 }
 
+// BuildPhenotypeRecords creates 12 TechniqueEffectiveness records using phenotype-calibrated priors (E1).
+// Falls back to population priors if phenotype is unknown.
+func (be *BayesianEngine) BuildPhenotypeRecords(patientID string, phenotype models.ColdStartPhenotype) []models.TechniqueEffectiveness {
+	cs := NewColdStartEngine(nil, nil)
+	priors := cs.GetPhenotypePriors(phenotype)
+
+	techniques := models.AllTechniques()
+	records := make([]models.TechniqueEffectiveness, 0, len(techniques))
+	for _, tech := range techniques {
+		alpha, beta := priors[tech].Alpha, priors[tech].Beta
+		if alpha == 0 {
+			alpha, beta = GetDefaultPriors(tech) // fallback
+		}
+		records = append(records, models.TechniqueEffectiveness{
+			PatientID:     patientID,
+			Technique:     tech,
+			Alpha:         alpha,
+			Beta:          beta,
+			PosteriorMean: be.PosteriorMean(alpha, beta),
+		})
+	}
+	return records
+}
+
 // PosteriorMean returns α / (α + β).
 func (be *BayesianEngine) PosteriorMean(alpha, beta float64) float64 {
 	if alpha+beta == 0 {
