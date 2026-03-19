@@ -81,3 +81,98 @@ func TestProtocolRegistry_CheckEntry_VFRP_ExcludedByBMI(t *testing.T) {
 		t.Errorf("expected LS-15, got %s", reason)
 	}
 }
+
+// G-2: nephrotic syndrome exclusion for PRP
+func TestProtocolRegistry_CheckEntry_PRP_ExcludedByNephroticSyndrome(t *testing.T) {
+	registry := NewProtocolRegistry()
+	eligible, reason := registry.CheckEntry("M3-PRP", map[string]float64{
+		"protein_gap":        25,
+		"egfr":               55,
+		"nephrotic_syndrome": 1,
+	}, map[string]bool{})
+	if eligible {
+		t.Error("expected ineligible due to nephrotic syndrome")
+	}
+	if reason != "NEPHRO-EXCL" {
+		t.Errorf("expected NEPHRO-EXCL, got %s", reason)
+	}
+}
+
+// G-1: VFRP female waist threshold (80 cm)
+func TestProtocolRegistry_CheckEntry_VFRP_FemaleWaist80(t *testing.T) {
+	registry := NewProtocolRegistry()
+	eligible, reason := registry.CheckEntry("M3-VFRP", map[string]float64{
+		"waist_cm_female": 82,
+	}, map[string]bool{})
+	if !eligible {
+		t.Errorf("expected eligible via female waist threshold, got ineligible: %s", reason)
+	}
+}
+
+// G-1: VFRP waist trend trigger
+func TestProtocolRegistry_CheckEntry_VFRP_WaistTrend(t *testing.T) {
+	registry := NewProtocolRegistry()
+	eligible, reason := registry.CheckEntry("M3-VFRP", map[string]float64{
+		"waist_trend_8wk_delta": 3,
+	}, map[string]bool{})
+	if !eligible {
+		t.Errorf("expected eligible via waist trend trigger, got ineligible: %s", reason)
+	}
+}
+
+// G-3: CheckSuccess PRP — all criteria met → graduated
+func TestProtocolRegistry_CheckSuccess_PRP_AllMet(t *testing.T) {
+	registry := NewProtocolRegistry()
+	graduated, unmet := registry.CheckSuccess("M3-PRP", map[string]float64{
+		"protein_intake_gkg":        0.95,
+		"lifestyle_attribution_pct": 20,
+	})
+	if !graduated {
+		t.Errorf("expected graduated, got unmet: %s", unmet)
+	}
+	if unmet != "" {
+		t.Errorf("expected empty unmet, got %s", unmet)
+	}
+}
+
+// G-3: CheckSuccess PRP — one criterion missing → not graduated
+func TestProtocolRegistry_CheckSuccess_PRP_PartialFail(t *testing.T) {
+	registry := NewProtocolRegistry()
+	graduated, unmet := registry.CheckSuccess("M3-PRP", map[string]float64{
+		"protein_intake_gkg": 0.95,
+		// lifestyle_attribution_pct missing
+	})
+	if graduated {
+		t.Error("expected not graduated when lifestyle_attribution_pct is missing")
+	}
+	if unmet == "" {
+		t.Error("expected non-empty unmet criteria field")
+	}
+}
+
+// G-3: CheckSuccess VFRP — waist met but not TG → graduated (any_of)
+func TestProtocolRegistry_CheckSuccess_VFRP_AnyMet(t *testing.T) {
+	registry := NewProtocolRegistry()
+	graduated, unmet := registry.CheckSuccess("M3-VFRP", map[string]float64{
+		"waist_delta_cm": 4,
+		// tg_reduction_pct not met
+	})
+	if !graduated {
+		t.Errorf("expected graduated via waist_delta_cm, got unmet: %s", unmet)
+	}
+}
+
+// G-3: CheckSuccess VFRP — neither criterion met → not graduated
+func TestProtocolRegistry_CheckSuccess_VFRP_NoneMet(t *testing.T) {
+	registry := NewProtocolRegistry()
+	graduated, unmet := registry.CheckSuccess("M3-VFRP", map[string]float64{
+		"waist_delta_cm":  1,
+		"tg_reduction_pct": 5,
+	})
+	if graduated {
+		t.Error("expected not graduated when neither VFRP success criterion is met")
+	}
+	if unmet != "NO_SUCCESS_CRITERIA_MET" {
+		t.Errorf("expected NO_SUCCESS_CRITERIA_MET, got %s", unmet)
+	}
+}

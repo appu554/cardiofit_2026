@@ -122,6 +122,38 @@ func evaluateNumeric(actual float64, operator string, threshold float64) bool {
 	}
 }
 
+// CheckSuccess evaluates if graduation criteria are met.
+// Returns (graduated, unmetCriteria). For PRP: ALL criteria must be met. For VFRP: ANY criterion suffices.
+func (r *ProtocolRegistry) CheckSuccess(protocolID string, numericFields map[string]float64) (bool, string) {
+	tmpl, err := r.GetTemplate(protocolID)
+	if err != nil {
+		return false, "UNKNOWN_PROTOCOL"
+	}
+	if len(tmpl.SuccessCriteria) == 0 {
+		return false, "NO_SUCCESS_CRITERIA"
+	}
+
+	// PRP requires ALL criteria met (strict graduation)
+	if protocolID == "M3-PRP" {
+		for _, c := range tmpl.SuccessCriteria {
+			val, ok := numericFields[c.Field]
+			if !ok || !evaluateNumeric(val, c.Operator, c.Value) {
+				return false, c.Field
+			}
+		}
+		return true, ""
+	}
+
+	// VFRP requires ANY criterion met (flexible graduation)
+	for _, c := range tmpl.SuccessCriteria {
+		val, ok := numericFields[c.Field]
+		if ok && evaluateNumeric(val, c.Operator, c.Value) {
+			return true, ""
+		}
+	}
+	return false, "NO_SUCCESS_CRITERIA_MET"
+}
+
 func (r *ProtocolRegistry) registerPRP() {
 	r.templates["M3-PRP"] = &ProtocolTemplate{
 		ProtocolID:   "M3-PRP",
@@ -142,8 +174,13 @@ func (r *ProtocolRegistry) registerPRP() {
 		ExclusionCriteria: []ExclusionRule{
 			{Field: "egfr", Operator: "<", Value: 30, RuleCode: "LS-01"},
 			{Field: "eating_disorder_flag", Operator: "==", Value: 1, RuleCode: "LS-14"},
+			{Field: "nephrotic_syndrome", Operator: "==", Value: 1, RuleCode: "NEPHRO-EXCL"},
 		},
-		ConcurrentWith:    []string{"M3-VFRP", "PROTOCOL-A", "PROTOCOL-B", "PROTOCOL-C", "V-MCU"},
+		ConcurrentWith: []string{"M3-VFRP", "PROTOCOL-A", "PROTOCOL-B", "PROTOCOL-C", "V-MCU"},
+		SuccessCriteria: []Criterion{
+			{Field: "protein_intake_gkg", Operator: ">=", Value: 0.9},
+			{Field: "lifestyle_attribution_pct", Operator: ">=", Value: 15},
+		},
 		EscalationTrigger: "trajectory_RED_at_day_63",
 	}
 }
@@ -163,6 +200,8 @@ func (r *ProtocolRegistry) registerVFRP() {
 		},
 		EntryCriteria: []Criterion{
 			{Field: "waist_cm", Operator: ">=", Value: 90},
+			{Field: "waist_cm_female", Operator: ">=", Value: 80},
+			{Field: "waist_trend_8wk_delta", Operator: ">", Value: 2},
 			{Field: "triglycerides", Operator: ">", Value: 200},
 		},
 		ExclusionCriteria: []ExclusionRule{
@@ -171,7 +210,11 @@ func (r *ProtocolRegistry) registerVFRP() {
 			{Field: "eating_disorder_flag", Operator: "==", Value: 1, RuleCode: "LS-14"},
 			{Field: "pregnancy_status", Operator: "==", Value: 1, RuleCode: "LS-08"},
 		},
-		ConcurrentWith:    []string{"M3-PRP", "PROTOCOL-A", "PROTOCOL-B", "PROTOCOL-C", "V-MCU"},
+		ConcurrentWith: []string{"M3-PRP", "PROTOCOL-A", "PROTOCOL-B", "PROTOCOL-C", "V-MCU"},
+		SuccessCriteria: []Criterion{
+			{Field: "waist_delta_cm", Operator: ">=", Value: 3},
+			{Field: "tg_reduction_pct", Operator: ">=", Value: 15},
+		},
 		EscalationTrigger: "trajectory_RED_at_day_63",
 	}
 }
