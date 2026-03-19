@@ -188,6 +188,9 @@ func (s *Server) setupRoutes() {
 
 		// Timing optimization (E4)
 		v1.GET("/patient/:patient_id/optimal-timing", s.getOptimalDeliveryTime)
+
+		// BCE MRI patient messaging (GAP 4, Spec §6.2 Table 7)
+		v1.GET("/patient/:patient_id/mri-message", s.getMRIMessage)
 	}
 }
 

@@ -20,6 +20,7 @@ type Config struct {
 	KB21BehavioralURL     string
 	KB1DrugRulesURL       string
 	KB4PatientSafetyURL   string
+	KB26MetabolicTwinURL  string
 
 	// Cache TTLs
 	CacheTTLChains  time.Duration
@@ -72,6 +73,7 @@ func Load() (*Config, error) {
 		KB21BehavioralURL:     getEnv("KB21_URL", "http://localhost:8133"),
 		KB1DrugRulesURL:       getEnv("KB1_URL", "http://localhost:8081"),
 		KB4PatientSafetyURL:   getEnv("KB4_URL", "http://localhost:8088"),
+		KB26MetabolicTwinURL:  getEnv("KB26_URL", "http://localhost:8137"),
 
 		CacheTTLChains:  getEnvAsDuration("CACHE_TTL_CHAINS", "3600s"),
 		CacheTTLPatient: getEnvAsDuration("CACHE_TTL_PATIENT", "300s"),

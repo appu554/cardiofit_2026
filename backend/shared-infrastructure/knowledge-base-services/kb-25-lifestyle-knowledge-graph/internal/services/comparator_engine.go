@@ -61,3 +61,45 @@ func RankOptions(options []models.ComparedOption) []models.ComparedOption {
 	}
 	return options
 }
+
+// MRIDomainTargets maps intervention codes to the MRI domains they affect.
+var MRIDomainTargets = map[string]string{
+	"post_meal_walking":   "Glucose Control",
+	"carb_quality":        "Glucose Control",
+	"metformin_titration": "Glucose Control",
+	"exercise_rx":         "Body Composition",
+	"protein_increase":    "Body Composition",
+	"weight_management":   "Body Composition",
+	"bp_medication":       "Cardiovascular Regulation",
+	"sodium_reduction":    "Cardiovascular Regulation",
+	"sleep_hygiene":       "Behavioral Metabolism",
+	"step_increase":       "Behavioral Metabolism",
+}
+
+// PrioritizeByMRIDomain reorders ranked options to prioritize interventions
+// targeting the highest-scoring MRI domain.
+func PrioritizeByMRIDomain(options []models.ComparedOption, topDriver string) []models.ComparedOption {
+	if topDriver == "" || len(options) == 0 {
+		return options
+	}
+
+	for i := range options {
+		targetDomain, exists := MRIDomainTargets[options[i].Option.Code]
+		if exists && targetDomain == topDriver {
+			options[i].MRIBoost = true
+		}
+	}
+
+	sort.SliceStable(options, func(i, j int) bool {
+		if options[i].MRIBoost != options[j].MRIBoost {
+			return options[i].MRIBoost
+		}
+		return options[i].Rank < options[j].Rank
+	})
+
+	for i := range options {
+		options[i].Rank = i + 1
+	}
+
+	return options
+}

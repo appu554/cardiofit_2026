@@ -31,4 +31,5 @@ type ComparedOption struct {
 	EvidenceGrade   string            `json:"evidence_grade"`
 	SafetyScore     float64           `json:"safety_score"`
 	Rank            int               `json:"rank"`
+	MRIBoost        bool              `json:"mri_boost,omitempty"` // true if targeting top MRI driver domain
 }
