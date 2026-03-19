@@ -1,10 +1,13 @@
 package services
 
 import (
+	"fmt"
 	"math"
+	"time"
 
 	"kb-26-metabolic-digital-twin/internal/models"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -209,4 +212,88 @@ func (s *MRIScorer) ComputeMRI(input MRIScorerInput, historyScores []float64) mo
 		TopDriver: HighestDomainContributor(domains),
 		Domains:   domains,
 	}
+}
+
+// PersistScore stores an MRI score in the database.
+func (s *MRIScorer) PersistScore(patientID uuid.UUID, result models.MRIResult, twinStateID *uuid.UUID) (*models.MRIScore, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+
+	// Collect all signal z-scores into a flat map
+	signalZ := make(map[string]float64)
+	for _, d := range result.Domains {
+		for k, v := range d.Signals {
+			signalZ[k] = v
+		}
+	}
+
+	score := &models.MRIScore{
+		PatientID:        patientID,
+		Score:            result.Score,
+		Category:         result.Category,
+		Trend:            result.Trend,
+		TopDriver:        result.TopDriver,
+		GlucoseDomain:    result.Domains[0].Scaled,
+		BodyCompDomain:   result.Domains[1].Scaled,
+		CardioDomain:     result.Domains[2].Scaled,
+		BehavioralDomain: result.Domains[3].Scaled,
+		SignalZScores:    signalZ,
+		TwinStateID:      twinStateID,
+		ComputedAt:       time.Now().UTC(),
+	}
+
+	if err := s.db.Create(score).Error; err != nil {
+		return nil, err
+	}
+	return score, nil
+}
+
+// GetHistoryScores returns recent MRI score values for trend computation.
+func (s *MRIScorer) GetHistoryScores(patientID uuid.UUID) []float64 {
+	if s.db == nil {
+		return nil
+	}
+
+	var scores []models.MRIScore
+	s.db.Where("patient_id = ?", patientID).
+		Order("computed_at DESC").
+		Limit(10).
+		Select("score").
+		Find(&scores)
+
+	result := make([]float64, len(scores))
+	// Reverse so oldest is first
+	for i, sc := range scores {
+		result[len(scores)-1-i] = sc.Score
+	}
+	return result
+}
+
+// GetHistory returns recent MRI score records for the history endpoint.
+func (s *MRIScorer) GetHistory(patientID uuid.UUID, limit int) ([]models.MRIScore, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	var scores []models.MRIScore
+	result := s.db.Where("patient_id = ?", patientID).
+		Order("computed_at DESC").
+		Limit(limit).
+		Find(&scores)
+	return scores, result.Error
+}
+
+// GetLatest returns the most recent MRI score for a patient.
+func (s *MRIScorer) GetLatest(patientID uuid.UUID) (*models.MRIScore, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("no database")
+	}
+	var score models.MRIScore
+	result := s.db.Where("patient_id = ?", patientID).
+		Order("computed_at DESC").
+		First(&score)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &score, nil
 }

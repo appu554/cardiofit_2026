@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"kb-26-metabolic-digital-twin/internal/models"
+
+	"github.com/google/uuid"
 )
 
 func TestComputeGlucoseDomain_Optimal(t *testing.T) {
@@ -124,6 +126,15 @@ func TestComputeTrend_NoHistory(t *testing.T) {
 	trend := ComputeMRITrend(50, nil)
 	if trend != "STABLE" {
 		t.Errorf("no history should default to STABLE, got %s", trend)
+	}
+}
+
+func TestMRIScorer_GetHistoryScores_NoData(t *testing.T) {
+	// Without a DB, GetHistoryScores should return empty slice, no error
+	scorer := NewMRIScorer(nil, nil)
+	scores := scorer.GetHistoryScores(uuid.New())
+	if len(scores) != 0 {
+		t.Errorf("expected empty history without DB, got %d", len(scores))
 	}
 }
 
