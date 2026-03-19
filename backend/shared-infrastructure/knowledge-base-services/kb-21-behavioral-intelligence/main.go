@@ -69,6 +69,15 @@ func main() {
 	correlationSvc := services.NewCorrelationService(db.DB, logger, cfg.OutcomeCorrelationMinEvents, safetyClient, publisher) // G-01 + Gap #23
 	hypoRiskSvc := services.NewHypoRiskService(db.DB, logger, publisher, safetyClient) // G-03
 
+	// BCE v1.0 Nudge Engine
+	bayesianEngine := services.NewBayesianEngine(db.DB, logger)
+	phaseEngine := services.NewPhaseEngine(db.DB, logger)
+	barrierDiag := services.NewBarrierDiagnostic(db.DB, logger)
+	nudgeEngine := services.NewNudgeEngine(
+		db.DB, logger, bayesianEngine, phaseEngine, barrierDiag,
+		cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
+	)
+
 	// 8. Load festival calendar (optional — graceful nil if file missing)
 	var festivalCal *services.FestivalCalendar
 	if cal, err := services.NewFestivalCalendar(cfg.FestivalCalendarPath); err != nil {
@@ -87,7 +96,7 @@ func main() {
 	server := api.NewServer(
 		cfg, db, cacheClient, metricsCollector, logger,
 		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc,
-		festivalCal, subscriber,
+		festivalCal, nudgeEngine, subscriber,
 	)
 
 	// 11. Start event subscriber

@@ -29,6 +29,7 @@ type Server struct {
 	correlationService *services.CorrelationService
 	hypoRiskService    *services.HypoRiskService
 	festivalCalendar   *services.FestivalCalendar
+	nudgeEngine        *services.NudgeEngine
 	eventSubscriber    *events.Subscriber
 }
 
@@ -44,6 +45,7 @@ func NewServer(
 	correlationSvc *services.CorrelationService,
 	hypoRiskSvc *services.HypoRiskService,
 	festivalCal *services.FestivalCalendar,
+	nudgeEngine *services.NudgeEngine,
 	subscriber *events.Subscriber,
 ) *Server {
 	if cfg.IsProduction() {
@@ -65,6 +67,7 @@ func NewServer(
 		correlationService: correlationSvc,
 		hypoRiskService:    hypoRiskSvc,
 		festivalCalendar:   festivalCal,
+		nudgeEngine:        nudgeEngine,
 		eventSubscriber:    subscriber,
 	}
 
@@ -156,6 +159,15 @@ func (s *Server) setupRoutes() {
 			analytics.GET("/question-effectiveness", s.getQuestionEffectiveness)
 			analytics.GET("/cohort", s.getCohortSnapshots)
 		}
+
+		// BCE v1.0 Nudge Engine
+		nudge := v1.Group("/patient/:patient_id/nudge")
+		{
+			nudge.POST("/select", s.selectNudge)
+			nudge.POST("/outcome", s.observeNudgeOutcome)
+		}
+		v1.GET("/patient/:patient_id/techniques", s.getTechniqueEffectiveness)
+		v1.GET("/patient/:patient_id/motivation-phase", s.getMotivationPhase)
 	}
 }
 
