@@ -320,7 +320,8 @@ type QuestionTelemetry struct {
 type NudgeRecord struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	PatientID string    `gorm:"index;not null" json:"patient_id"`
-	NudgeType NudgeType `gorm:"type:varchar(40);not null" json:"nudge_type"`
+	NudgeType NudgeType  `gorm:"type:varchar(40);not null" json:"nudge_type"`
+	Technique TechniqueID `gorm:"type:varchar(10)" json:"technique"`
 
 	// Content
 	Channel     InteractionChannel `gorm:"type:varchar(20);not null" json:"channel"`
