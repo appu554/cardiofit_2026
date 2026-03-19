@@ -90,6 +90,51 @@ func TestMRI_HighDeterioration(t *testing.T) {
 	t.Logf("High deterioration patient MRI: %.1f (%s)", result.Score, result.Category)
 }
 
+// TestMRI_BMIAwareWeightTrend validates that low-BMI weight loss is penalized (LS-15).
+// Normal BMI + weight loss → good (lower MRI); low BMI + weight loss → penalized (higher MRI).
+func TestMRI_BMIAwareWeightTrend(t *testing.T) {
+	scorer := services.NewMRIScorer(nil, nil)
+
+	// Normal BMI patient losing weight — weight loss is rewarded
+	inputNormal := services.MRIScorerInput{
+		FBG: 95, PPBG: 130, WaistCm: 85, WeightTrend: -0.5, MuscleSTS: 12,
+		SBP: 125, Steps: 5000, ProteinGKg: 0.8, SleepScore: 0.5,
+		Sex: "M", BMI: 25.0,
+	}
+	resultNormal := scorer.ComputeMRI(inputNormal, nil)
+
+	// Low BMI patient losing weight — weight loss is penalized (LS-15 inversion)
+	inputLow := services.MRIScorerInput{
+		FBG: 95, PPBG: 130, WaistCm: 85, WeightTrend: -0.5, MuscleSTS: 12,
+		SBP: 125, Steps: 5000, ProteinGKg: 0.8, SleepScore: 0.5,
+		Sex: "M", BMI: 20.0,
+	}
+	resultLow := scorer.ComputeMRI(inputLow, nil)
+
+	// Low BMI patient should have higher (worse) MRI than normal BMI patient
+	if resultLow.Score <= resultNormal.Score {
+		t.Errorf("low BMI weight loss should produce higher MRI (%.2f) than normal BMI (%.2f)",
+			resultLow.Score, resultNormal.Score)
+	}
+	t.Logf("Normal BMI MRI: %.2f, Low BMI MRI: %.2f", resultNormal.Score, resultLow.Score)
+}
+
+// TestMRI_CalibratorConfidence validates the CalibrationConfidence function boundary values.
+func TestMRI_CalibratorConfidence(t *testing.T) {
+	// CalibrationConfidence(0) = 1 - exp(-0.3*0) = 1 - 1 = 0
+	conf := services.CalibrationConfidence(0)
+	if conf != 0.0 {
+		t.Errorf("expected 0.0 confidence with 0 observations, got %f", conf)
+	}
+
+	// CalibrationConfidence(10) = 1 - exp(-3) ≈ 0.950
+	conf = services.CalibrationConfidence(10)
+	if conf < 0.9 || conf > 1.0 {
+		t.Errorf("expected confidence ~0.95 with 10 observations, got %f", conf)
+	}
+	t.Logf("CalibrationConfidence(10) = %.4f", conf)
+}
+
 // TestMRI_DomainDriverDetection validates the masked behavioral decline scenario
 // from spec §5.2: MRI stable but behavioral domain deteriorating while glucose improving.
 func TestMRI_DomainDriverDetection(t *testing.T) {

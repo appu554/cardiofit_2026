@@ -40,6 +40,8 @@ func newMockKB7() *mockKB7Lookup {
 			"8867-4":  {Code: "8867-4", Display: "Heart rate"},
 			"29463-7": {Code: "29463-7", Display: "Body weight"},
 			"9318-7":  {Code: "9318-7", Display: "Albumin/Creatinine [Mass Ratio] in Urine"},
+		"2093-3":  {Code: "2093-3", Display: "Cholesterol [Mass/volume] in Serum or Plasma"},
+		"2085-9":  {Code: "2085-9", Display: "Cholesterol in HDL [Mass/volume] in Serum or Plasma"},
 		},
 	}
 }
@@ -56,7 +58,7 @@ func TestLOINCRegistry_Initialize(t *testing.T) {
 	reg.Initialize(context.Background())
 
 	assert.True(t, reg.IsReady())
-	assert.Contains(t, reg.VerificationSummary(), "11/11")
+	assert.Contains(t, reg.VerificationSummary(), "13/13")
 }
 
 func TestLOINCRegistry_LOINCForLabType(t *testing.T) {
@@ -108,7 +110,7 @@ func TestLOINCRegistry_AllMappingsVerified(t *testing.T) {
 	reg.Initialize(context.Background())
 
 	mappings := reg.AllMappings()
-	assert.Len(t, mappings, 11)
+	assert.Len(t, mappings, 13)
 
 	for _, m := range mappings {
 		assert.True(t, m.Verified, "Expected %s (%s) to be verified", m.LabType, m.LOINCCode)
@@ -124,7 +126,7 @@ func TestLOINCRegistry_GracefulDegradation(t *testing.T) {
 	reg.Initialize(context.Background())
 
 	assert.True(t, reg.IsReady())
-	assert.Contains(t, reg.VerificationSummary(), "0/11")
+	assert.Contains(t, reg.VerificationSummary(), "0/13")
 
 	// Codes should still be available (unverified)
 	assert.Equal(t, "2160-0", reg.LOINCForLabType(models.LabTypeCreatinine))
