@@ -84,31 +84,30 @@ func TestBayesianEngine_SelectTechnique_ReturnsHighestSample(t *testing.T) {
 	}
 }
 
-// TestBayesianEngine_PhaseMultipliers_Applied requires PhaseMultipliers from phase_engine.go (Task 4).
-// Uncomment when Task 4 is implemented.
-//
-// func TestBayesianEngine_PhaseMultipliers_Applied(t *testing.T) {
-// 	be := NewBayesianEngine(nil, nil)
-// 	// T-01 (Micro-Commitment) has 1.5x multiplier in INITIATION phase
-// 	// T-03 (Loss Aversion) has 0.3x multiplier in INITIATION phase
-// 	records := []*models.TechniqueEffectiveness{
-// 		{Technique: models.TechMicroCommitment, Alpha: 2.0, Beta: 2.0},
-// 		{Technique: models.TechLossAversion, Alpha: 2.0, Beta: 2.0},
-// 	}
-// 	multipliers := PhaseMultipliers[models.PhaseInitiation]
-//
-// 	t01Wins, t03Wins := 0, 0
-// 	for i := 0; i < 1000; i++ {
-// 		selected := be.ThompsonSelect(records, multipliers)
-// 		switch selected.Technique {
-// 		case models.TechMicroCommitment:
-// 			t01Wins++
-// 		case models.TechLossAversion:
-// 			t03Wins++
-// 		}
-// 	}
-// 	// With 1.5x vs 0.3x multiplier on equal priors, T-01 should dominate
-// 	if t01Wins <= t03Wins {
-// 		t.Errorf("T-01 (1.5x) should beat T-03 (0.3x) in INITIATION: T-01=%d T-03=%d", t01Wins, t03Wins)
-// 	}
-// }
+// TestBayesianEngine_PhaseMultipliers_Applied verifies that phase multipliers from PhaseMultipliers
+// (phase_engine.go) are correctly applied during Thompson Sampling selection.
+func TestBayesianEngine_PhaseMultipliers_Applied(t *testing.T) {
+	be := NewBayesianEngine(nil, nil)
+	// T-01 (Micro-Commitment) has 1.5x multiplier in INITIATION phase
+	// T-03 (Loss Aversion) has 0.3x multiplier in INITIATION phase
+	records := []*models.TechniqueEffectiveness{
+		{Technique: models.TechMicroCommitment, Alpha: 2.0, Beta: 2.0},
+		{Technique: models.TechLossAversion, Alpha: 2.0, Beta: 2.0},
+	}
+	multipliers := PhaseMultipliers[models.PhaseInitiation]
+
+	t01Wins, t03Wins := 0, 0
+	for i := 0; i < 1000; i++ {
+		selected := be.ThompsonSelect(records, multipliers)
+		switch selected.Technique {
+		case models.TechMicroCommitment:
+			t01Wins++
+		case models.TechLossAversion:
+			t03Wins++
+		}
+	}
+	// With 1.5x vs 0.3x multiplier on equal priors, T-01 should dominate
+	if t01Wins <= t03Wins {
+		t.Errorf("T-01 (1.5x) should beat T-03 (0.3x) in INITIATION: T-01=%d T-03=%d", t01Wins, t03Wins)
+	}
+}
