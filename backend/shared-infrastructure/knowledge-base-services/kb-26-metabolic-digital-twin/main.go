@@ -51,6 +51,7 @@ func main() {
 		&models.TwinState{},
 		&models.CalibratedEffect{},
 		&models.SimulationRun{},
+		&models.MRIScore{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -70,10 +71,12 @@ func main() {
 
 	// 7. Initialize domain services
 	twinUpdater := services.NewTwinUpdater(db.DB, logger)
-	calibrator := services.NewBayesianCalibrator(db.DB, logger)
+	calibrator := services.NewBayesianCalibratorWithConfig(db.DB, logger, cfg.BurnInWeeks, cfg.ObservationWindowDays)
+	mriScorer := services.NewMRIScorer(db.DB, logger)
+	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, logger)
 
 	// 8. Create HTTP server
-	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator)
+	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer)
 
 	// 9. Start HTTP server
 	go func() {
