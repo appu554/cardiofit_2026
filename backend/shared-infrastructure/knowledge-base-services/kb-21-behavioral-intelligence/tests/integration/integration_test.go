@@ -74,11 +74,20 @@ func TestMain(m *testing.M) {
 	hypoRiskSvc := services.NewHypoRiskService(testDB.DB, logger, nil, nil)
 	subscriber := events.NewSubscriber(logger, correlationSvc, adherenceSvc, false)
 
+	// BCE v1.0 Nudge Engine
+	bayesianEngine := services.NewBayesianEngine(testDB.DB, logger)
+	phaseEngine := services.NewPhaseEngine(testDB.DB, logger)
+	barrierDiag := services.NewBarrierDiagnostic(testDB.DB, logger)
+	nudgeEngine := services.NewNudgeEngine(testDB.DB, logger, bayesianEngine, phaseEngine, barrierDiag, 3, 4)
+
 	metricsCollector := metrics.NewCollector()
 
 	testServer = api.NewServer(
 		cfg, testDB, nil, metricsCollector, logger,
-		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc, subscriber,
+		adherenceSvc, engagementSvc, correlationSvc, hypoRiskSvc,
+		nil,          // festivalCal (not needed for integration tests)
+		nudgeEngine,
+		subscriber,
 	)
 
 	code := m.Run()
@@ -115,6 +124,9 @@ func cleanDB() {
 		"engagement_profiles",
 		"adherence_states",
 		"antihypertensive_adherence_states",
+		"technique_effectiveness",
+		"patient_motivation_phases",
+		"intake_profiles",
 		"interaction_events",
 	}
 	for _, t := range tables {
