@@ -182,7 +182,7 @@ func TestProtocolRegistry_CheckSuccess_VFRP_NoneMet(t *testing.T) {
 
 func TestProtocolRegistry_AllProtocolsRegistered(t *testing.T) {
 	r := NewProtocolRegistry()
-	expected := []string{"M3-PRP", "M3-VFRP", "GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1", "M3-MAINTAIN"}
+	expected := []string{"M3-PRP", "M3-VFRP", "GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1", "M3-MAINTAIN", "M3-RECORRECTION"}
 	for _, id := range expected {
 		tmpl, err := r.GetTemplate(id)
 		if err != nil {
@@ -200,7 +200,7 @@ func TestProtocolRegistry_AllProtocolsRegistered(t *testing.T) {
 
 func TestProtocolRegistry_ConcurrentWithReferencesAreValid(t *testing.T) {
 	r := NewProtocolRegistry()
-	expected := []string{"M3-PRP", "M3-VFRP", "GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1", "M3-MAINTAIN"}
+	expected := []string{"M3-PRP", "M3-VFRP", "GLYC-1", "HTN-1", "RENAL-1", "LIPID-1", "DEPRESC-1", "M3-MAINTAIN", "M3-RECORRECTION"}
 
 	// Build set of all registered IDs
 	registered := make(map[string]bool)
@@ -266,14 +266,15 @@ func TestProtocolRegistry_DrugSequenceOrdering(t *testing.T) {
 func TestProtocolRegistry_SuccessModeAssigned(t *testing.T) {
 	r := NewProtocolRegistry()
 	expectedModes := map[string]SuccessMode{
-		"M3-PRP":      SuccessModeAll,
-		"M3-VFRP":     SuccessModeAny,
-		"GLYC-1":      SuccessModeNever,
-		"HTN-1":       SuccessModeNever,
-		"RENAL-1":     SuccessModeNever,
-		"LIPID-1":     SuccessModeCardOnly,
-		"DEPRESC-1":   SuccessModeAll,
-		"M3-MAINTAIN": SuccessModeNever,
+		"M3-PRP":          SuccessModeAll,
+		"M3-VFRP":         SuccessModeAny,
+		"GLYC-1":          SuccessModeNever,
+		"HTN-1":           SuccessModeNever,
+		"RENAL-1":         SuccessModeNever,
+		"LIPID-1":         SuccessModeCardOnly,
+		"DEPRESC-1":       SuccessModeAll,
+		"M3-MAINTAIN":     SuccessModeNever,
+		"M3-RECORRECTION": SuccessModeAll,
 	}
 
 	for id, want := range expectedModes {
@@ -308,3 +309,22 @@ func TestProtocolRegistry_GetTemplate_MAINTAIN(t *testing.T) {
 	}
 }
 
+func TestProtocolRegistry_GetTemplate_RECORRECTION(t *testing.T) {
+	r := NewProtocolRegistry()
+	tmpl, err := r.GetTemplate("M3-RECORRECTION")
+	if err != nil {
+		t.Fatalf("M3-RECORRECTION not registered: %v", err)
+	}
+	if tmpl.Category != "lifecycle" {
+		t.Errorf("category = %q, want lifecycle", tmpl.Category)
+	}
+	if len(tmpl.Phases) != 2 {
+		t.Errorf("phases = %d, want 2 (ASSESSMENT, CORRECTION)", len(tmpl.Phases))
+	}
+	if tmpl.Phases[1].DurationDays != 45 {
+		t.Errorf("CORRECTION duration = %d, want 45", tmpl.Phases[1].DurationDays)
+	}
+	if tmpl.SuccessMode != SuccessModeAll {
+		t.Errorf("success_mode = %q, want ALL", tmpl.SuccessMode)
+	}
+}

@@ -64,6 +64,7 @@ func NewProtocolRegistry() *ProtocolRegistry {
 	r.registerLIPID1()
 	r.registerDEPRESC1()
 	r.registerMAINTAIN()
+	r.registerRECORRECTION()
 	return r
 }
 
@@ -283,6 +284,30 @@ func (r *ProtocolRegistry) registerMAINTAIN() {
 		IsLifelong:      true,
 		SuccessMode:     SuccessModeNever,
 		GuidelineRef:    "Patient_Engagement_Loop_Specification_v1.0",
+	}
+}
+
+func (r *ProtocolRegistry) registerRECORRECTION() {
+	r.templates["M3-RECORRECTION"] = &ProtocolTemplate{
+		ProtocolID:   "M3-RECORRECTION",
+		ProtocolName: "Metabolic Re-Correction (Abbreviated Cycle)",
+		Version:      "1.0.0",
+		Category:     "lifecycle",
+		Subcategory:  "re-engagement",
+		Phases: []PhaseDefinition{
+			{ID: "ASSESSMENT", DurationDays: 3, AutoAdvance: true},
+			{ID: "CORRECTION", DurationDays: 45, ExtendableTo: 60, AutoAdvance: false},
+		},
+		EntryCriteria: []Criterion{
+			{Field: "relapse_detected", Operator: "==", Value: 1},
+		},
+		ConcurrentWith: []string{"GLYC-1", "HTN-1", "RENAL-1", "DEPRESC-1"},
+		SuccessCriteria: []Criterion{
+			{Field: "mri_score", Operator: "<", Value: 50},
+		},
+		IsLifelong:   false,
+		SuccessMode:  SuccessModeAll,
+		GuidelineRef: "Patient_Engagement_Loop_Specification_v1.0_Section8",
 	}
 }
 
