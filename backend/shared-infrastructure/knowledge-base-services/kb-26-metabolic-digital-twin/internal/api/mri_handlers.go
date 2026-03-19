@@ -164,7 +164,7 @@ func (s *Server) simulateMRI(c *gin.Context) {
 				"cardiovascular":   projectedResult.Domains[2].Scaled - currentResult.Domains[2].Scaled,
 				"behavioral":       projectedResult.Domains[3].Scaled - currentResult.Domains[3].Scaled,
 			},
-			"confidence": 0.65,
+			"confidence": s.calibrator.GetPatientConfidence(patientID),
 		}, nil)
 		return
 	}
