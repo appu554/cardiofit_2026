@@ -441,3 +441,165 @@ func TestProtocolService_EvaluateAndTransition_PublishesEscalationEvent(t *testi
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Task 6: M3-MAINTAIN and M3-RECORRECTION wired into EvaluateAndTransition
+// ---------------------------------------------------------------------------
+
+func TestProtocolService_EvaluateAndTransition_MAINTAIN_Advance(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:          "M3-MAINTAIN",
+		CurrentPhase:        "CONSOLIDATION",
+		DaysInPhase:         95,
+		MRIScore:            42,
+		MRISustainedDays:    30,
+		AdherencePct:        0.60,
+		ConsecutiveCheckins: 5,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-maintain-1", eval)
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.Action != "ADVANCE" {
+		t.Errorf("action = %q, want ADVANCE", decision.Action)
+	}
+	if decision.NextPhase != "INDEPENDENCE" {
+		t.Errorf("next = %q, want INDEPENDENCE", decision.NextPhase)
+	}
+}
+
+func TestProtocolService_EvaluateAndTransition_MAINTAIN_Hold(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:          "M3-MAINTAIN",
+		CurrentPhase:        "CONSOLIDATION",
+		DaysInPhase:         30,
+		MRIScore:            55,
+		MRISustainedDays:    10,
+		AdherencePct:        0.40,
+		ConsecutiveCheckins: 2,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-maintain-2", eval)
+	if err != nil {
+		t.Fatalf("unexpected error for HOLD: %v", err)
+	}
+	if decision.Action != "HOLD" {
+		t.Errorf("action = %q, want HOLD", decision.Action)
+	}
+}
+
+func TestProtocolService_EvaluateAndTransition_MAINTAIN_Escalate_PublishesEvent(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:   "M3-MAINTAIN",
+		CurrentPhase: "CONSOLIDATION",
+		DaysInPhase:  125, // > 120 → ESCALATE
+		MRIScore:     60,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-maintain-esc", eval)
+	if decision.Action != "ESCALATE" {
+		t.Fatalf("expected ESCALATE for CONSOLIDATION > 120 days, got %s", decision.Action)
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error for ESCALATE")
+	}
+	_, ok := spy.firstOfType(models.EventProtocolEscalated)
+	if !ok {
+		t.Fatal("EventProtocolEscalated was not published for MAINTAIN ESCALATE")
+	}
+}
+
+func TestProtocolService_EvaluateAndTransition_RECORRECTION_Graduate(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:       "M3-RECORRECTION",
+		CurrentPhase:     "CORRECTION",
+		DaysInPhase:      30,
+		MRIScore:         45,
+		MRISustainedDays: 16,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-recorr-1", eval)
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.Action != "ADVANCE" {
+		t.Errorf("action = %q, want ADVANCE", decision.Action)
+	}
+	if decision.NextPhase != "GRADUATED" {
+		t.Errorf("next = %q, want GRADUATED", decision.NextPhase)
+	}
+}
+
+func TestProtocolService_EvaluateAndTransition_RECORRECTION_Hold(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:       "M3-RECORRECTION",
+		CurrentPhase:     "CORRECTION",
+		DaysInPhase:      20,
+		MRIScore:         55, // above 50 threshold
+		MRISustainedDays: 5,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-recorr-2", eval)
+	if err != nil {
+		t.Fatalf("unexpected error for HOLD: %v", err)
+	}
+	if decision.Action != "HOLD" {
+		t.Errorf("action = %q, want HOLD", decision.Action)
+	}
+}
+
+func TestProtocolService_EvaluateAndTransition_RECORRECTION_Assessment_Advance(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:   "M3-RECORRECTION",
+		CurrentPhase: "ASSESSMENT",
+		DaysInPhase:  3,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-recorr-3", eval)
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.Action != "ADVANCE" {
+		t.Errorf("action = %q, want ADVANCE", decision.Action)
+	}
+	if decision.NextPhase != "CORRECTION" {
+		t.Errorf("next = %q, want CORRECTION", decision.NextPhase)
+	}
+}
+
+func TestProtocolService_EvaluateAndTransition_RECORRECTION_Escalate_PublishesEvent(t *testing.T) {
+	spy := &spyEventBus{}
+	svc := &ProtocolService{eventBus: spy}
+
+	eval := TransitionEvaluation{
+		ProtocolID:       "M3-RECORRECTION",
+		CurrentPhase:     "CORRECTION",
+		DaysInPhase:      65, // > 60 → ESCALATE
+		MRIScore:         55,
+		MRISustainedDays: 5,
+	}
+	decision, err := svc.EvaluateAndTransition("patient-recorr-esc", eval)
+	if decision.Action != "ESCALATE" {
+		t.Fatalf("expected ESCALATE for CORRECTION > 60 days, got %s", decision.Action)
+	}
+	if err == nil {
+		t.Fatal("expected non-nil error for ESCALATE")
+	}
+	_, ok := spy.firstOfType(models.EventProtocolEscalated)
+	if !ok {
+		t.Fatal("EventProtocolEscalated was not published for RECORRECTION ESCALATE")
+	}
+}

@@ -53,3 +53,29 @@ func EvaluateMAINTAINTransition(eval TransitionEvaluation) TransitionDecision {
 
 	return TransitionDecision{Action: "HOLD", Reason: "unknown M3-MAINTAIN phase"}
 }
+
+// EvaluateRECORRECTIONTransition applies the 45-day abbreviated re-correction cycle.
+// Uses prior calibration from KB-26 (passed via MRIScore field).
+func EvaluateRECORRECTIONTransition(eval TransitionEvaluation) TransitionDecision {
+	switch eval.CurrentPhase {
+	case "ASSESSMENT":
+		if eval.DaysInPhase >= 3 {
+			return TransitionDecision{Action: "ADVANCE", NextPhase: "CORRECTION",
+				Reason: "assessment complete — entering 45-day re-correction with prior calibration"}
+		}
+		return TransitionDecision{Action: "HOLD", Reason: "ASSESSMENT in progress"}
+	case "CORRECTION":
+		if eval.MRIScore < 50 && eval.MRISustainedDays >= 14 {
+			return TransitionDecision{Action: "ADVANCE", NextPhase: "GRADUATED",
+				Reason: fmt.Sprintf("MRI %.1f < 50 sustained %dd — re-correction complete, return to MAINTAIN",
+					eval.MRIScore, eval.MRISustainedDays)}
+		}
+		if eval.DaysInPhase >= 60 {
+			return TransitionDecision{Action: "ESCALATE",
+				Reason: "CORRECTION exceeded 60 days — clinical review required"}
+		}
+		return TransitionDecision{Action: "HOLD",
+			Reason: fmt.Sprintf("CORRECTION day %d — MRI %.1f", eval.DaysInPhase, eval.MRIScore)}
+	}
+	return TransitionDecision{Action: "HOLD", Reason: "unknown M3-RECORRECTION phase"}
+}

@@ -357,6 +357,10 @@ func (ps *ProtocolService) EvaluateAndTransition(patientID string, eval Transiti
 		decision = EvaluateRENAL1Transition(eval)
 	case "DEPRESC-1":
 		decision = EvaluateDEPRESC1Transition(eval)
+	case "M3-MAINTAIN":
+		decision = EvaluateMAINTAINTransition(eval)
+	case "M3-RECORRECTION":
+		decision = EvaluateRECORRECTIONTransition(eval)
 	case "LIPID-1":
 		// LIPID-1 is card-only — no phase transitions
 		return TransitionDecision{Action: "HOLD", Reason: "LIPID-1 is card-only, no phase transitions"}, nil
