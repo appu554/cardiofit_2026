@@ -131,6 +131,12 @@ func cleanDB() {
 		"patient_motivation_phases",
 		"intake_profiles",
 		"interaction_events",
+		"patient_streaks",
+		"patient_milestones",
+		"weekly_challenges",
+		"population_priors",
+		"prior_calibration_logs",
+		"patient_timing_profiles",
 	}
 	for _, t := range tables {
 		testDB.DB.Exec(fmt.Sprintf("DELETE FROM %s", t))

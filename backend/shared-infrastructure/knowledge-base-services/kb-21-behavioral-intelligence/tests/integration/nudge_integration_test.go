@@ -72,3 +72,42 @@ func TestNudgeSelection_EndToEnd(t *testing.T) {
 		t.Fatalf("motivation-phase: status=%d body=%s", w.Code, w.Body.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// E1 cold-start phenotype — endpoints reachable; return 503 when engine is nil
+// ---------------------------------------------------------------------------
+
+func TestColdStartPhenotype_EndToEnd(t *testing.T) {
+	if testServer == nil {
+		t.Skip("test server not initialized (no test database)")
+	}
+	cleanDB()
+
+	testPatientID := "test-cold-start-patient"
+
+	// 1. Submit intake profile — coldStartEngine is nil in integration suite,
+	//    so the endpoint should return 503 FEATURE_DISABLED.
+	priorSuccess := true
+	intakeBody := map[string]interface{}{
+		"age_band":                  "30-45",
+		"education_level":           "HIGH",
+		"smartphone_literacy":       "HIGH",
+		"self_efficacy":             0.85,
+		"family_structure":          "NUCLEAR",
+		"employment_status":         "WORKING",
+		"prior_program_success":     priorSuccess,
+		"first_response_latency_ms": 600000,
+	}
+	w := doRequest("POST", fmt.Sprintf("/api/v1/patient/%s/intake-profile", testPatientID), intakeBody)
+	if w.Code != 200 && w.Code != 503 {
+		t.Fatalf("intake-profile: unexpected status=%d body=%s", w.Code, w.Body.String())
+	}
+	t.Logf("intake-profile: status=%d (200=wired, 503=feature-disabled)", w.Code)
+
+	// 2. Get cold-start phenotype — same expectation: 200 or 503.
+	w = doRequest("GET", fmt.Sprintf("/api/v1/patient/%s/cold-start-phenotype", testPatientID), nil)
+	if w.Code != 200 && w.Code != 503 {
+		t.Fatalf("cold-start-phenotype: unexpected status=%d body=%s", w.Code, w.Body.String())
+	}
+	t.Logf("cold-start-phenotype: status=%d (200=wired, 503=feature-disabled)", w.Code)
+}
