@@ -16,18 +16,20 @@ import (
 // EventProcessor handles incoming events from KB-20, KB-21, and V-MCU,
 // updating the twin state accordingly.
 type EventProcessor struct {
-	twinUpdater *TwinUpdater
-	mriScorer   *MRIScorer
-	kb22Client  *clients.KB22Client
-	logger      *zap.Logger
+	twinUpdater  *TwinUpdater
+	mriScorer    *MRIScorer
+	kb22Client   *clients.KB22Client
+	mriPublisher *MRIEventPublisher
+	logger       *zap.Logger
 }
 
-func NewEventProcessor(twinUpdater *TwinUpdater, mriScorer *MRIScorer, kb22Client *clients.KB22Client, logger *zap.Logger) *EventProcessor {
+func NewEventProcessor(twinUpdater *TwinUpdater, mriScorer *MRIScorer, kb22Client *clients.KB22Client, mriPublisher *MRIEventPublisher, logger *zap.Logger) *EventProcessor {
 	return &EventProcessor{
-		twinUpdater: twinUpdater,
-		mriScorer:   mriScorer,
-		kb22Client:  kb22Client,
-		logger:      logger,
+		twinUpdater:  twinUpdater,
+		mriScorer:    mriScorer,
+		kb22Client:   kb22Client,
+		mriPublisher: mriPublisher,
+		logger:       logger,
 	}
 }
 
@@ -109,6 +111,14 @@ func (ep *EventProcessor) ProcessObservation(ctx context.Context, event models.O
 			result := ep.mriScorer.ComputeMRI(input, history)
 			if _, err := ep.mriScorer.PersistScore(pid, result, &twin.ID); err != nil {
 				ep.logger.Error("failed to recompute MRI on observation", zap.Error(err))
+			}
+			if ep.mriPublisher != nil {
+				prevScores, _ := ep.mriScorer.GetHistory(pid, 2)
+				var prev *models.MRIScore
+				if len(prevScores) >= 2 {
+					prev = &prevScores[1] // [0] is current just-persisted, [1] is previous
+				}
+				ep.mriPublisher.PublishDeteriorationEvent(context.Background(), pid, result, prev)
 			}
 		}(patientID, twinCopy)
 	}

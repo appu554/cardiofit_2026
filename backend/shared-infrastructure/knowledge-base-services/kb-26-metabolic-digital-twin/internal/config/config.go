@@ -19,11 +19,12 @@ type Config struct {
 	LogLevel    string
 
 	// Cross-KB integration
-	KB20PatientProfileURL string
-	KB21BehavioralURL     string
-	KB25LifestyleURL      string
-	KB22HPIURL            string
-	KB22SignalTimeoutMS   int
+	KB20PatientProfileURL  string
+	KB21BehavioralURL      string
+	KB25LifestyleURL       string
+	KB22HPIURL             string
+	KB22SignalTimeoutMS    int
+	KB23DecisionCardsURL   string
 
 	// Twin computation
 	ObservationWindowDays int
@@ -79,8 +80,9 @@ func Load() (*Config, error) {
 		KB20PatientProfileURL: getEnv("KB20_URL", "http://localhost:8131"),
 		KB21BehavioralURL:     getEnv("KB21_URL", "http://localhost:8133"),
 		KB25LifestyleURL:      getEnv("KB25_URL", "http://localhost:8136"),
-		KB22HPIURL:            getEnv("KB22_URL", "http://localhost:8132"),
-		KB22SignalTimeoutMS:   getEnvAsInt("KB22_SIGNAL_TIMEOUT_MS", 500),
+		KB22HPIURL:           getEnv("KB22_URL", "http://localhost:8132"),
+		KB22SignalTimeoutMS:  getEnvAsInt("KB22_SIGNAL_TIMEOUT_MS", 500),
+		KB23DecisionCardsURL: getEnv("KB23_URL", "http://localhost:8134"),
 
 		// Twin computation defaults
 		ObservationWindowDays: getEnvAsInt("OBSERVATION_WINDOW_DAYS", 14),

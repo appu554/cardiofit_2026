@@ -80,7 +80,8 @@ func main() {
 		time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond,
 		logger,
 	)
-	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, kb22Client, logger)
+	mriPublisher := services.NewMRIEventPublisher(cfg.KB22HPIURL, cfg.KB23DecisionCardsURL, logger)
+	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, kb22Client, mriPublisher, logger)
 
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer)
