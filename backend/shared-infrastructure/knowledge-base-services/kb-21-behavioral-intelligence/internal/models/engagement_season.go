@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // EngagementSeason represents the patient's current lifecycle season (Spec Section 2).
@@ -64,4 +65,12 @@ type CeremonyRecord struct {
 	Channel      InteractionChannel `gorm:"type:varchar(20)" json:"channel"`
 	Acknowledged bool               `gorm:"default:false" json:"acknowledged"`
 	CreatedAt    time.Time          `gorm:"autoCreateTime" json:"created_at"`
+}
+
+// BeforeCreate ensures a UUID is set for CeremonyRecord (SQLite compat).
+func (c *CeremonyRecord) BeforeCreate(tx *gorm.DB) error {
+	if c.ID == uuid.Nil {
+		c.ID = uuid.New()
+	}
+	return nil
 }
