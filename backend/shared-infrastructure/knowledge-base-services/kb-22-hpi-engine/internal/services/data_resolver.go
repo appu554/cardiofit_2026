@@ -310,6 +310,30 @@ func (r *DataResolverImpl) Resolve(
 		resolved.Sufficiency = models.DataSufficient
 	}
 
+	// Per-field staleness check: downgrade SUFFICIENT → PARTIAL if any required field is stale
+	if resolved.Sufficiency == models.DataSufficient || resolved.Sufficiency == models.DataPartial {
+		// Build set of required field names (non-optional inputs only)
+		requiredFields := make(map[string]struct{}, len(inputs))
+		for _, inp := range inputs {
+			if !inp.Optional {
+				requiredFields[inp.Field] = struct{}{}
+			}
+		}
+		for field, ts := range resolved.FieldTimestamps {
+			if _, isRequired := requiredFields[field]; !isRequired {
+				continue
+			}
+			if defaultStalenessRules.Check(field, ts) == models.DataPartial {
+				resolved.Sufficiency = models.DataPartial
+				r.log.Info("field data stale",
+					zap.String("patient_id", patientID),
+					zap.String("field", field),
+					zap.Time("timestamp", ts),
+				)
+			}
+		}
+	}
+
 	r.log.Debug("resolve complete",
 		zap.String("patient_id", patientID),
 		zap.String("sufficiency", string(resolved.Sufficiency)),
@@ -318,6 +342,73 @@ func (r *DataResolverImpl) Resolve(
 	)
 
 	return resolved, nil
+}
+
+// ---------------------------------------------------------------------------
+// Per-field staleness rules
+// ---------------------------------------------------------------------------
+
+// defaultStalenessRules is the package-level singleton to avoid re-allocation on every Resolve() call.
+var defaultStalenessRules = DefaultStalenessRules()
+
+// StalenessRules holds per-field staleness thresholds.
+type StalenessRules struct {
+	rules      []models.StalenessRule
+	defaultMax time.Duration
+}
+
+// DefaultStalenessRules returns clinically-appropriate staleness thresholds.
+func DefaultStalenessRules() *StalenessRules {
+	return &StalenessRules{
+		defaultMax: 30 * 24 * time.Hour, // 30 days default
+		rules: []models.StalenessRule{
+			// Glucose — 24h (daily measurement expected)
+			{FieldPattern: "fbg", MaxAge: 24 * time.Hour},
+			{FieldPattern: "ppbg", MaxAge: 24 * time.Hour},
+			{FieldPattern: "fasting_glucose", MaxAge: 24 * time.Hour},
+			{FieldPattern: "postprandial_glucose", MaxAge: 24 * time.Hour},
+			// BP — 7 days (weekly measurement expected)
+			{FieldPattern: "sbp", MaxAge: 7 * 24 * time.Hour},
+			{FieldPattern: "dbp", MaxAge: 7 * 24 * time.Hour},
+			// Labs — 90 days (quarterly measurement)
+			{FieldPattern: "egfr", MaxAge: 90 * 24 * time.Hour},
+			{FieldPattern: "hba1c", MaxAge: 90 * 24 * time.Hour},
+			{FieldPattern: "creatinine", MaxAge: 90 * 24 * time.Hour},
+			{FieldPattern: "acr", MaxAge: 90 * 24 * time.Hour},
+			{FieldPattern: "potassium", MaxAge: 90 * 24 * time.Hour},
+			// Weight — 14 days
+			{FieldPattern: "weight", MaxAge: 14 * 24 * time.Hour},
+			// Twin state — 24h
+			{FieldPattern: "rr_value", MaxAge: 24 * time.Hour},
+			{FieldPattern: "renal_slope", MaxAge: 24 * time.Hour},
+		},
+	}
+}
+
+// matchMaxAge returns the staleness threshold for a field by exact match first,
+// then prefix match, falling back to the default.
+func (s *StalenessRules) matchMaxAge(fieldLower string) time.Duration {
+	for _, rule := range s.rules {
+		if fieldLower == strings.ToLower(rule.FieldPattern) {
+			return rule.MaxAge
+		}
+	}
+	for _, rule := range s.rules {
+		if strings.HasPrefix(fieldLower, strings.ToLower(rule.FieldPattern)) {
+			return rule.MaxAge
+		}
+	}
+	return s.defaultMax
+}
+
+// Check returns DataSufficient if the field timestamp is within the staleness threshold,
+// or DataPartial if the data is stale. Matching is by exact field name first, then
+// prefix match (e.g., "sbp" matches "sbp_home_mean").
+func (s *StalenessRules) Check(field string, timestamp time.Time) models.DataSufficiency {
+	if time.Since(timestamp) > s.matchMaxAge(strings.ToLower(field)) {
+		return models.DataPartial
+	}
+	return models.DataSufficient
 }
 
 // ---------------------------------------------------------------------------

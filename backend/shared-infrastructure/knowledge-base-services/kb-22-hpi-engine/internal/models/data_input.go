@@ -76,3 +76,9 @@ type TimeSeriesPoint struct {
 	Timestamp time.Time `json:"timestamp"`
 	Value     float64   `json:"value"`
 }
+
+// StalenessRule defines the maximum age of a data field before it is considered stale.
+type StalenessRule struct {
+	FieldPattern string        // field name or prefix for HasPrefix matching (e.g. "fbg", "sbp", "egfr")
+	MaxAge       time.Duration // data older than this → DataPartial
+}
