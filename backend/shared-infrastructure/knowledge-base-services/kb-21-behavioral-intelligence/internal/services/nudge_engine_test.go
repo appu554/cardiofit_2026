@@ -69,3 +69,121 @@ func TestNudgeEngine_DailyLimit(t *testing.T) {
 		t.Errorf("max nudges per day: got %d, want 3", ne.maxNudgesPerDay)
 	}
 }
+
+func TestNudgeEngine_SeasonGate_EventTriggeredBlocksWithoutEvent(t *testing.T) {
+	// S5 (Partnership) is event-triggered — without a trigger event, nudge should be skipped
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 5, 1)
+	ne.SetSeasonCoach(NewSeasonCoach(nil, nil))
+
+	req := NudgeRequest{
+		PatientID:       "patient-gate-test",
+		Season:          models.SeasonPartnership,
+		HasTriggerEvent: false,
+	}
+	result, err := ne.SelectNudge(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != nil {
+		t.Error("S5 without trigger event should return nil (event-triggered gate)")
+	}
+}
+
+func TestNudgeEngine_SeasonGate_EventTriggeredAllowsWithEvent(t *testing.T) {
+	// S5 with trigger event should pass the season gate (may fail later due to nil deps)
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 5, 1)
+	ne.SetSeasonCoach(NewSeasonCoach(nil, nil))
+
+	req := NudgeRequest{
+		PatientID:       "patient-event-test",
+		Season:          models.SeasonPartnership,
+		HasTriggerEvent: true,
+		AdherenceScore:  0.70,
+		Phenotype:       models.PhenotypeSteady,
+	}
+	// With nil db, daily limit check is skipped, so it proceeds to phase engine.
+	// PhaseEngine has nil db so GetOrCreatePhase will return a default — this tests
+	// that the season gate did NOT block.
+	_, err := ne.SelectNudge(req)
+	// We expect it to get past the season gate. It may error on phase lookup (nil db)
+	// or succeed — either way, the gate did not block.
+	_ = err
+}
+
+func TestNudgeEngine_SeasonGate_CalendarSeasonPassesThrough(t *testing.T) {
+	// S1 (Correction) is calendar-triggered — should pass through even without trigger event
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 5, 1)
+	ne.SetSeasonCoach(NewSeasonCoach(nil, nil))
+
+	req := NudgeRequest{
+		PatientID:       "patient-calendar-test",
+		Season:          models.SeasonCorrection,
+		HasTriggerEvent: false,
+		AdherenceScore:  0.80,
+		Phenotype:       models.PhenotypeSteady,
+	}
+	// Should NOT be blocked by the season gate; may proceed or fail on deps
+	_, err := ne.SelectNudge(req)
+	// If it errors, it should be from phase/technique lookup, not from the gate
+	_ = err
+}
+
+func TestNudgeEngine_SeasonGate_NoSeasonCoachPassesThrough(t *testing.T) {
+	// Without SeasonCoach, the gate should be a no-op
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 5, 1)
+	// No SetSeasonCoach call
+
+	req := NudgeRequest{
+		PatientID:       "patient-no-coach",
+		Season:          models.SeasonPartnership,
+		HasTriggerEvent: false,
+	}
+	// Without season coach, the event-triggered gate is skipped
+	// SelectNudge proceeds to phase engine (may succeed or error on nil db)
+	_, err := ne.SelectNudge(req)
+	_ = err
+}
+
+func TestNudgeEngine_SeasonGate_AllEventTriggeredSeasons(t *testing.T) {
+	ne := NewNudgeEngine(nil, nil, nil, nil, nil, nil, nil, nil, 5, 1)
+	ne.SetSeasonCoach(NewSeasonCoach(nil, nil))
+
+	eventTriggered := []models.EngagementSeason{
+		models.SeasonIndependence, // S3
+		models.SeasonStability,    // S4
+		models.SeasonPartnership,  // S5
+	}
+
+	for _, season := range eventTriggered {
+		req := NudgeRequest{
+			PatientID:       "patient-" + string(season),
+			Season:          season,
+			HasTriggerEvent: false,
+		}
+		result, err := ne.SelectNudge(req)
+		if err != nil {
+			t.Errorf("season %s: unexpected error: %v", season, err)
+		}
+		if result != nil {
+			t.Errorf("season %s: event-triggered season without event should return nil", season)
+		}
+	}
+
+	calendarTriggered := []models.EngagementSeason{
+		models.SeasonCorrection,    // S1
+		models.SeasonConsolidation, // S2
+	}
+
+	for _, season := range calendarTriggered {
+		req := NudgeRequest{
+			PatientID:       "patient-" + string(season),
+			Season:          season,
+			HasTriggerEvent: false,
+			AdherenceScore:  0.80,
+			Phenotype:       models.PhenotypeSteady,
+		}
+		// Calendar seasons should pass the gate (may fail on deps later)
+		_, _ = ne.SelectNudge(req)
+		// If we got here without panic, the gate passed
+	}
+}

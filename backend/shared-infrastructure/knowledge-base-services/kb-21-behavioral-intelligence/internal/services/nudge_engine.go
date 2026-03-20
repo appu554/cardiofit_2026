@@ -26,6 +26,7 @@ type NudgeEngine struct {
 	coldStart        *ColdStartEngine
 	gamification     *GamificationEngine
 	timing           *TimingBandit
+	seasonCoach      *SeasonCoach
 	maxNudgesPerDay  int
 	cooldownDuration time.Duration
 }
@@ -74,6 +75,11 @@ func NewNudgeEngine(
 	}
 }
 
+// SetSeasonCoach injects a SeasonCoach for season-aware cadence modulation.
+func (ne *NudgeEngine) SetSeasonCoach(sc *SeasonCoach) {
+	ne.seasonCoach = sc
+}
+
 // NudgeRequest contains the context for selecting a nudge.
 type NudgeRequest struct {
 	PatientID string
@@ -88,6 +94,10 @@ type NudgeRequest struct {
 
 	// Barrier signals
 	Signals BarrierSignals
+
+	// Engagement season context (Patient Engagement Loop)
+	Season          models.EngagementSeason `json:"season,omitempty"`
+	HasTriggerEvent bool                    `json:"has_trigger_event,omitempty"`
 }
 
 // StreakContext provides streak data to include in nudge messages.
@@ -115,13 +125,25 @@ type NudgeResult struct {
 
 // SelectNudge chooses the best technique for a patient at this moment.
 func (ne *NudgeEngine) SelectNudge(req NudgeRequest) (*NudgeResult, error) {
-	// 1. Check daily nudge limit
+	// 0. Season-aware event trigger gate: in event-triggered seasons (S3-S5),
+	// skip nudge entirely unless a trigger event occurred
+	if ne.seasonCoach != nil && req.Season != "" {
+		if ne.seasonCoach.IsEventTriggered(req.Season) && !req.HasTriggerEvent {
+			return nil, nil // event-triggered season without event — skip
+		}
+	}
+
+	// 1. Check daily nudge limit (season-aware)
 	if ne.db != nil {
 		todayCount, err := ne.nudgesToday(req.PatientID)
 		if err != nil {
 			return nil, fmt.Errorf("nudge count check: %w", err)
 		}
-		if todayCount >= ne.maxNudgesPerDay {
+		maxNudges := ne.maxNudgesPerDay
+		if ne.seasonCoach != nil && req.Season != "" {
+			maxNudges = ne.seasonCoach.GetMaxNudgesPerDay(req.Season)
+		}
+		if todayCount >= maxNudges {
 			return nil, nil // daily limit reached — no nudge
 		}
 	}
