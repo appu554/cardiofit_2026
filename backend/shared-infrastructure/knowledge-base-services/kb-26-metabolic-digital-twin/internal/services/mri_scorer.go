@@ -41,8 +41,15 @@ type MRIScorerInput struct {
 
 // MRIScorer computes MRI scores and persists them.
 type MRIScorer struct {
-	db     *gorm.DB
-	logger *zap.Logger
+	db              *gorm.DB
+	logger          *zap.Logger
+	relapseDetector *RelapseDetector
+}
+
+// SetRelapseDetector wires the relapse detector so that every PersistScore
+// call automatically updates the patient's nadir tracker.
+func (s *MRIScorer) SetRelapseDetector(rd *RelapseDetector) {
+	s.relapseDetector = rd
 }
 
 // NewMRIScorer creates a new MRIScorer.
@@ -248,6 +255,14 @@ func (s *MRIScorer) PersistScore(patientID uuid.UUID, result models.MRIResult, t
 	if err := s.db.Create(score).Error; err != nil {
 		return nil, err
 	}
+
+	// Automatically update the nadir tracker after every successful persist.
+	if s.relapseDetector != nil {
+		if err := s.relapseDetector.UpdateNadir(patientID, result.Score, nil); err != nil {
+			s.logger.Warn("failed to update nadir after MRI persist", zap.Error(err))
+		}
+	}
+
 	return score, nil
 }
 

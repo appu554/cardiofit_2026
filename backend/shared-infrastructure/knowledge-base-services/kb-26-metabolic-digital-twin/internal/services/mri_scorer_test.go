@@ -7,6 +7,7 @@ import (
 	"kb-26-metabolic-digital-twin/internal/models"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 func TestComputeGlucoseDomain_Optimal(t *testing.T) {
@@ -166,5 +167,61 @@ func TestBorderlineEverythingPatient(t *testing.T) {
 	}
 	if result.Score < 45 || result.Score > 75 {
 		t.Errorf("borderline patient MRI should be 45-75, got %f", result.Score)
+	}
+}
+
+func TestMRIScorer_PersistScore_UpdatesNadir(t *testing.T) {
+	db := setupTestDB(t)
+	// mri_scores table needs to be created for PersistScore
+	sqlDB, _ := db.DB()
+	sqlDB.Exec(`CREATE TABLE IF NOT EXISTS mri_scores (
+		id TEXT PRIMARY KEY,
+		patient_id TEXT NOT NULL,
+		score REAL NOT NULL,
+		category TEXT NOT NULL,
+		trend TEXT,
+		top_driver TEXT,
+		glucose_domain REAL,
+		body_comp_domain REAL,
+		cardio_domain REAL,
+		behavioral_domain REAL,
+		signal_z_scores TEXT,
+		twin_state_id TEXT,
+		computed_at DATETIME NOT NULL
+	)`)
+
+	det := NewRelapseDetector(db, zap.NewNop())
+	scorer := NewMRIScorer(db, zap.NewNop())
+	scorer.SetRelapseDetector(det)
+
+	pid := uuid.New()
+
+	// First score
+	result1 := models.MRIResult{
+		Score: 55.0, Category: "MODERATE_DETERIORATION", Trend: "STABLE", TopDriver: "Glucose Control",
+		Domains: []models.DomainScore{
+			{Name: "Glucose Control", Scaled: 55, Signals: map[string]float64{"FBG": 0.5}},
+			{Name: "Body Composition", Scaled: 50, Signals: map[string]float64{"waist": 0.3}},
+			{Name: "Cardiovascular Regulation", Scaled: 50, Signals: map[string]float64{"SBP": 0.4}},
+			{Name: "Behavioral Metabolism", Scaled: 50, Signals: map[string]float64{"activity": 0.2}},
+		},
+	}
+	if _, err := scorer.PersistScore(pid, result1, nil); err != nil {
+		t.Fatalf("PersistScore(1): %v", err)
+	}
+
+	// Second score (lower — should become the nadir)
+	result2 := result1
+	result2.Score = 42.0
+	if _, err := scorer.PersistScore(pid, result2, nil); err != nil {
+		t.Fatalf("PersistScore(2): %v", err)
+	}
+
+	nadir, err := det.GetNadir(pid)
+	if err != nil {
+		t.Fatalf("GetNadir: %v", err)
+	}
+	if nadir.NadirScore != 42.0 {
+		t.Errorf("nadir = %.1f, want 42.0", nadir.NadirScore)
 	}
 }
