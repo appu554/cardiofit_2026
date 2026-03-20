@@ -229,7 +229,18 @@ KafkaOutboxRelay struct {
 | `EventStratumChange` | KB-22, KB-26 | Risk stratum context for downstream engines |
 | `EventProtocolActivated/Transitioned/Graduated/Escalated` | KB-22, KB-26 | Protocol lifecycle events |
 
-State change events use a separate envelope type (`ClinicalStateChangeEnvelope`) published to a third topic `clinical.state-changes.v1` (6 partitions, 7 days retention, partition by `patient_id`). This keeps the signal topics clean for observation data while ensuring downstream consumers don't lose medication/protocol context during webhook deprecation.
+State change events use a separate envelope type published to a third topic `clinical.state-changes.v1` (6 partitions, 7 days retention, partition by `patient_id`). This keeps the signal topics clean for observation data while ensuring downstream consumers don't lose medication/protocol context during webhook deprecation.
+
+```go
+type ClinicalStateChangeEnvelope struct {
+    EventID    uuid.UUID       `json:"event_id"`
+    PatientID  string          `json:"patient_id"`
+    ChangeType string          `json:"change_type"`  // MEDICATION_CHANGE, STRATUM_CHANGE, PROTOCOL_ACTIVATED, etc.
+    Timestamp  time.Time       `json:"timestamp"`
+    Payload    json.RawMessage `json:"payload"`      // Event-specific data (medication details, stratum info, etc.)
+    CreatedAt  time.Time       `json:"created_at"`
+}
+```
 
 ### Outbox table changes
 
@@ -299,7 +310,9 @@ TotalCholesterol *float64 `json:"total_cholesterol" gorm:"column:total_cholester
 HDL             *float64  `json:"hdl" gorm:"column:hdl"`                         // S17
 LDL             *float64  `json:"ldl" gorm:"column:ldl"`                         // S17
 Triglycerides   *float64  `json:"triglycerides" gorm:"column:triglycerides"`      // S17
-ComplianceScore *float64  `json:"compliance_score" gorm:"column:compliance_score"` // S20 (0.0-1.0)
+ComplianceScore  *float64 `json:"compliance_score" gorm:"column:compliance_score"`  // S20 (0.0-1.0)
+OrthostaticAlert bool     `json:"orthostatic_alert" gorm:"column:orthostatic_alert"` // S10 flag
+OrthostaticDrop  *float64 `json:"orthostatic_drop" gorm:"column:orthostatic_drop"`   // S10 SBP drop magnitude (mmHg, negative)
 ```
 
 These require a PostgreSQL migration for the `twin_states` table.
@@ -335,7 +348,6 @@ These require a PostgreSQL migration for the `twin_states` table.
 | S4 Meal Log | Update checkin state (diet quality) — existing via ProcessCheckin |
 | S20 Adherence | Update `twin_state.compliance_score` (Tier 1, **new field**) |
 | S6 Hypo Event | Flag in twin state, trigger MRI recompute |
-| S10 Orthostatic | Flag in twin state, record drop magnitude |
 | S19 Adverse Event | Flag, pause affected drug simulation |
 | S22 Hospitalisation | Flag, suspend MRI trending |
 
