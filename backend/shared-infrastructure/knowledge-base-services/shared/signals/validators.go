@@ -29,12 +29,17 @@ func ValidateSignal(st SignalType, value float64) ValidationResult {
 		}
 	}
 	priority := false
+	reason := ""
 	if rule.priorityCheck != nil {
 		priority = rule.priorityCheck(value)
+		if priority {
+			reason = "priority threshold breached"
+		}
 	}
 	return ValidationResult{
 		Status:   ValidationAccepted,
 		Priority: priority,
+		Reason:   reason,
 	}
 }
 
@@ -45,15 +50,15 @@ type validationRule struct {
 }
 
 var validationRules = map[SignalType]validationRule{
-	SignalFBG:        {0.5, 50.0, func(v float64) bool { return v < 4.0 || v > 20.0 }},
-	SignalPPBG:       {0.5, 50.0, func(v float64) bool { return v < 4.0 }},
-	SignalHbA1c:      {3.0, 20.0, nil},
-	SignalSBP:        {40, 300, func(v float64) bool { return v > 180 || v < 90 }},
-	SignalDBP:        {20, 200, nil},
-	SignalHR:         {20, 300, func(v float64) bool { return v < 40 || v > 150 }},
-	SignalCreatinine: {0.1, 30.0, func(v float64) bool { return v > 10.0 }},
-	SignalACR:        {0, 5000, func(v float64) bool { return v > 300 }},
-	SignalPotassium:  {1.0, 10.0, func(v float64) bool { return v > 5.5 || v < 3.0 }},
-	SignalWeight:     {1.0, 500.0, nil},
-	SignalWaist:      {20.0, 250.0, nil},
+	SignalFBG:        {minPlausible: 0.5, maxPlausible: 50.0, priorityCheck: func(v float64) bool { return v < 4.0 || v > 20.0 }},
+	SignalPPBG:       {minPlausible: 0.5, maxPlausible: 50.0, priorityCheck: func(v float64) bool { return v < 4.0 }},
+	SignalHbA1c:      {minPlausible: 3.0, maxPlausible: 20.0},
+	SignalSBP:        {minPlausible: 40, maxPlausible: 300, priorityCheck: func(v float64) bool { return v > 180 || v < 90 }},
+	SignalDBP:        {minPlausible: 20, maxPlausible: 200},
+	SignalHR:         {minPlausible: 20, maxPlausible: 300, priorityCheck: func(v float64) bool { return v < 40 || v > 150 }},
+	SignalCreatinine: {minPlausible: 0.1, maxPlausible: 30.0, priorityCheck: func(v float64) bool { return v > 10.0 }},
+	SignalACR:        {minPlausible: 0, maxPlausible: 5000, priorityCheck: func(v float64) bool { return v > 300 }},
+	SignalPotassium:  {minPlausible: 1.0, maxPlausible: 10.0, priorityCheck: func(v float64) bool { return v > 5.5 || v < 3.0 }},
+	SignalWeight:     {minPlausible: 1.0, maxPlausible: 500.0},
+	SignalWaist:      {minPlausible: 20.0, maxPlausible: 250.0},
 }
