@@ -112,6 +112,12 @@ func main() {
 		cfg.NudgeMaxPerDay, cfg.NudgeCooldownHours,
 	)
 
+	// Patient Engagement Loop: season-aware coaching cadence
+	seasonCoach := services.NewSeasonCoach(db.DB, logger)
+	nudgeEngine.SetSeasonCoach(seasonCoach)
+	ceremonyEngine := services.NewCeremonyEngine(db.DB, logger)
+	_ = ceremonyEngine // available for season transition handlers
+
 	// 8. Load festival calendar (optional — graceful nil if file missing)
 	var festivalCal *services.FestivalCalendar
 	if cal, err := services.NewFestivalCalendar(cfg.FestivalCalendarPath); err != nil {

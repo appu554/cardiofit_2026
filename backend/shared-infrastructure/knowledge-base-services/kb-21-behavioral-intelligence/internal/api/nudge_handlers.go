@@ -21,8 +21,10 @@ func (s *Server) selectNudge(c *gin.Context) {
 
 	// Build nudge request from patient's current state
 	var body struct {
-		Channel  models.InteractionChannel `json:"channel"`
-		Language string                    `json:"language"`
+		Channel         models.InteractionChannel `json:"channel"`
+		Language        string                    `json:"language"`
+		Season          models.EngagementSeason   `json:"season,omitempty"`
+		HasTriggerEvent bool                      `json:"has_trigger_event,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		body.Channel = models.ChannelWhatsApp
@@ -60,6 +62,8 @@ func (s *Server) selectNudge(c *gin.Context) {
 		AdherenceScore7d: adherenceScore7d,
 		AdherenceTrend:   adherenceTrend,
 		Phenotype:        phenotype,
+		Season:           body.Season,
+		HasTriggerEvent:  body.HasTriggerEvent,
 		Signals: services.BarrierSignals{
 			DrugClassCount: len(states),
 		},

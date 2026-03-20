@@ -54,6 +54,9 @@ func main() {
 		&models.CalibratedEffect{},
 		&models.SimulationRun{},
 		&models.MRIScore{},
+		&models.MRINadir{},
+		&models.RelapseEvent{},
+		&models.QuarterlySummary{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -83,6 +86,9 @@ func main() {
 	mriPublisher := services.NewMRIEventPublisher(cfg.KB22HPIURL, cfg.KB23DecisionCardsURL, logger)
 	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, kb22Client, mriPublisher, logger)
 	relapseDetector := services.NewRelapseDetector(db.DB, logger)
+	mriScorer.SetRelapseDetector(relapseDetector) // auto-update nadir on every MRI persist
+	quarterlyAggregator := services.NewQuarterlyAggregator(db.DB, logger)
+	_ = quarterlyAggregator // available for scheduled jobs; not wired into request pipeline
 
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer, relapseDetector)
