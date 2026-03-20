@@ -16,7 +16,8 @@ type EventOutboxEntry struct {
 	PatientID   string          `gorm:"type:text;not null"`
 	Payload     json.RawMessage `gorm:"type:jsonb;not null"`
 	CreatedAt   time.Time       `gorm:"not null;default:now()"`
-	PublishedAt *time.Time
+	PublishedAt       *time.Time
+	KafkaPublishedAt  *time.Time `gorm:"column:kafka_published_at"`
 }
 
 // TableName returns the database table name for GORM.
