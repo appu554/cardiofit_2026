@@ -86,7 +86,8 @@ func (b *SignalCardBuilder) resolveTemplate(event *models.ClinicalSignalEvent) s
 		category := strings.ToLower(strings.ReplaceAll(event.Classification.Category, "_", "-"))
 		if category == "" || category == "normal-dipper" || category == "at-target" ||
 			category == "asymptomatic" || category == "stable" || category == "normal-excursion" ||
-			category == "improving" || category == "good" || category == "adequate" {
+			category == "improving" || category == "good" || category == "adequate" ||
+			category == "negative-screen" {
 			return "" // Normal/safe classifications don't need cards
 		}
 		nodeNum := strings.TrimPrefix(strings.ToLower(event.NodeID), "pm-")

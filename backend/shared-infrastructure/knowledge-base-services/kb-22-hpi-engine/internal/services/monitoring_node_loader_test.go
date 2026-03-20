@@ -243,7 +243,7 @@ insufficient_data:
 }
 
 // ── TestMonitoringNodeLoader_LoadAll ─────────────────────────────────────────
-// Load all 9 PM node YAML definitions from the monitoring/ directory and verify
+// Load all 10 PM node YAML definitions from the monitoring/ directory and verify
 // each node is parsed and validated successfully.
 func TestMonitoringNodeLoader_LoadAll(t *testing.T) {
 	// The pm-nodes/ directory is at ../../pm-nodes/ relative to this test file.
@@ -258,7 +258,7 @@ func TestMonitoringNodeLoader_LoadAll(t *testing.T) {
 	}
 
 	allNodes := loader.All()
-	expectedIDs := []string{"PM-01", "PM-02", "PM-03", "PM-04", "PM-05", "PM-06", "PM-07", "PM-08", "PM-09"}
+	expectedIDs := []string{"PM-01", "PM-02", "PM-03", "PM-04", "PM-05", "PM-06", "PM-07", "PM-08", "PM-09", "PM-10"}
 
 	if len(allNodes) != len(expectedIDs) {
 		t.Errorf("expected %d nodes, got %d", len(expectedIDs), len(allNodes))
