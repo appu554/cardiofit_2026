@@ -43,5 +43,13 @@ func (s *Server) setupRoutes() {
 		v1.GET("/mri/:patientId/history", s.getMRIHistory)
 		v1.GET("/mri/:patientId/decomposition", s.getMRIDecomposition)
 		v1.POST("/mri/simulate", s.simulateMRI)
+
+		// Relapse detection (Patient Engagement Loop)
+		relapse := v1.Group("/relapse/:patientId")
+		{
+			relapse.GET("/nadir", s.getNadir)
+			relapse.POST("/check", s.checkRelapse)
+			relapse.GET("/history", s.getRelapseHistory)
+		}
 	}
 }

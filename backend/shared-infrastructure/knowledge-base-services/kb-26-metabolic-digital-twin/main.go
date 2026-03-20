@@ -82,9 +82,10 @@ func main() {
 	)
 	mriPublisher := services.NewMRIEventPublisher(cfg.KB22HPIURL, cfg.KB23DecisionCardsURL, logger)
 	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, kb22Client, mriPublisher, logger)
+	relapseDetector := services.NewRelapseDetector(db.DB, logger)
 
 	// 8. Create HTTP server
-	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer)
+	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer, relapseDetector)
 
 	// 9. Start HTTP server
 	go func() {

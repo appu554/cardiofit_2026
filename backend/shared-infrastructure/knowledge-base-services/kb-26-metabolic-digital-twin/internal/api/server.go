@@ -24,8 +24,9 @@ type Server struct {
 	logger         *zap.Logger
 	twinUpdater    *services.TwinUpdater
 	calibrator     *services.BayesianCalibrator
-	eventProcessor *services.EventProcessor
-	mriScorer      *services.MRIScorer
+	eventProcessor  *services.EventProcessor
+	mriScorer       *services.MRIScorer
+	relapseDetector *services.RelapseDetector
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -39,6 +40,7 @@ func NewServer(
 	calibrator *services.BayesianCalibrator,
 	eventProcessor *services.EventProcessor,
 	mriScorer *services.MRIScorer,
+	relapseDetector *services.RelapseDetector,
 ) *Server {
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
@@ -57,7 +59,8 @@ func NewServer(
 		twinUpdater:    twinUpdater,
 		calibrator:     calibrator,
 		eventProcessor: eventProcessor,
-		mriScorer:      mriScorer,
+		mriScorer:       mriScorer,
+		relapseDetector: relapseDetector,
 	}
 
 	s.setupMiddleware()
