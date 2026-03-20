@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,6 +59,16 @@ func main() {
 	eventBus := services.NewEventBus(db.DB, logger, metricsCollector)
 	eventBus.StartPoller(context.Background())
 	defer eventBus.Stop()
+
+	// Kafka outbox relay (feature-flagged)
+	if os.Getenv("KAFKA_RELAY_ENABLED") == "true" {
+		brokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
+		kafkaWriter := services.NewKafkaGoWriter(brokers, "kb20-outbox-relay")
+		kafkaRelay := services.NewKafkaOutboxRelay(db.DB, kafkaWriter, metricsCollector, logger)
+		kafkaRelay.Start(context.Background())
+		defer kafkaRelay.Stop()
+		defer kafkaWriter.Close()
+	}
 
 	// Initialize services
 	logger.Info("Initializing KB-20 services...")
