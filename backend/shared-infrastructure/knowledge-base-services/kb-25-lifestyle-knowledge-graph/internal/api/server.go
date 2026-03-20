@@ -92,6 +92,7 @@ func (s *Server) setupRoutes() {
 	v1.GET("/diet-quality/:patientId", s.getDietQuality)
 	v1.GET("/exercise-rx/:patientId", s.getExerciseRx)
 	v1.GET("/food-search", s.searchFood)
+	v1.GET("/annual-narrative/:patientId", s.getAnnualNarrative)
 }
 
 func (s *Server) healthCheck(c *gin.Context) {
