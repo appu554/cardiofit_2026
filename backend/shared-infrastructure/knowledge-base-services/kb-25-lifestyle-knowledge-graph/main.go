@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"kb-25-lifestyle-knowledge-graph/internal/api"
@@ -76,6 +77,28 @@ func main() {
 			logger.Fatal("HTTP server failed", zap.Error(err))
 		}
 	}()
+
+	// Feature-flagged Kafka signal consumer
+	if os.Getenv("KB25_KAFKA_ENABLED") == "true" {
+		brokerEnv := os.Getenv("KAFKA_BROKERS")
+		if brokerEnv == "" {
+			logger.Fatal("KB25_KAFKA_ENABLED is set but KAFKA_BROKERS is not configured")
+		}
+		brokers := strings.Split(brokerEnv, ",")
+
+		signalHandler := services.NewSignalHandler(chainSvc, graphClient, cfg.KB26MetabolicTwinURL, logger)
+		signalConsumer := services.NewSignalConsumer(brokers, logger)
+
+		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		defer consumerCancel()
+
+		signalConsumer.Start(consumerCtx, signalHandler.HandleSignal)
+		defer signalConsumer.Stop()
+
+		logger.Info("KB-25 Kafka signal consumer started",
+			zap.Strings("brokers", brokers),
+		)
+	}
 
 	fmt.Println("╔══════════════════════════════════════════════════════════╗")
 	fmt.Println("║  KB-25 Lifestyle Knowledge Graph Service                ║")
