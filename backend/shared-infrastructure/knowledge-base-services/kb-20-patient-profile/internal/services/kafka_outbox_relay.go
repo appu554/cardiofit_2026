@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/cardiofit/shared/signals"
 	"kb-patient-profile/internal/metrics"
 	"kb-patient-profile/internal/models"
 )
@@ -77,15 +78,16 @@ func (w *KafkaGoWriter) Close() error {
 // KafkaOutboxRelay polls the event_outbox table for Kafka-unpublished rows,
 // maps them to signal/state-change envelopes, and publishes to Kafka.
 type KafkaOutboxRelay struct {
-	db           *gorm.DB
-	mapper       *EventSignalMapper
-	writer       KafkaWriter
-	metrics      *metrics.Collector
-	pollInterval time.Duration
-	batchSize    int
-	log          *zap.Logger
-	cancel       context.CancelFunc
-	done         chan struct{}
+	db            *gorm.DB
+	mapper        *EventSignalMapper
+	writer        KafkaWriter
+	metrics       *metrics.Collector
+	signalMetrics *signals.SignalMetrics
+	pollInterval  time.Duration
+	batchSize     int
+	log           *zap.Logger
+	cancel        context.CancelFunc
+	done          chan struct{}
 }
 
 // NewKafkaOutboxRelay creates a relay that bridges the KB-20 outbox to Kafka.
@@ -105,6 +107,11 @@ func NewKafkaOutboxRelay(
 		log:          log,
 		done:         make(chan struct{}),
 	}
+}
+
+// SetSignalMetrics attaches optional shared signal pipeline metrics to the relay.
+func (r *KafkaOutboxRelay) SetSignalMetrics(m *signals.SignalMetrics) {
+	r.signalMetrics = m
 }
 
 // Start launches the background polling goroutine.
@@ -154,6 +161,9 @@ func (r *KafkaOutboxRelay) pollAndPublish(ctx context.Context) {
 	}
 	if len(entries) == 0 {
 		return
+	}
+	if r.signalMetrics != nil {
+		r.signalMetrics.OutboxRelayPendingCount.Set(float64(len(entries)))
 	}
 
 	published := r.processEntries(ctx, entries)
@@ -244,7 +254,13 @@ func (r *KafkaOutboxRelay) publishSignal(ctx context.Context, sig *MappedSignal)
 		return err
 	}
 
-	return r.writer.WriteMessage(ctx, topic, sig.PatientID, value)
+	if err := r.writer.WriteMessage(ctx, topic, sig.PatientID, value); err != nil {
+		return err
+	}
+	if r.signalMetrics != nil {
+		r.signalMetrics.OutboxRelayPublishedTotal.WithLabelValues(topic).Inc()
+	}
+	return nil
 }
 
 func (r *KafkaOutboxRelay) publishStateChange(ctx context.Context, sc *MappedStateChange) error {
@@ -262,5 +278,11 @@ func (r *KafkaOutboxRelay) publishStateChange(ctx context.Context, sc *MappedSta
 		return err
 	}
 
-	return r.writer.WriteMessage(ctx, "clinical.state-changes.v1", sc.PatientID, value)
+	if err := r.writer.WriteMessage(ctx, "clinical.state-changes.v1", sc.PatientID, value); err != nil {
+		return err
+	}
+	if r.signalMetrics != nil {
+		r.signalMetrics.OutboxRelayPublishedTotal.WithLabelValues("clinical.state-changes.v1").Inc()
+	}
+	return nil
 }
