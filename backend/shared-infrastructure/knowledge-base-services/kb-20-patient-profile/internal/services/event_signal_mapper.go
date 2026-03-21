@@ -145,6 +145,25 @@ func (m *EventSignalMapper) Map(entry models.EventOutboxEntry) (*MappedEvent, er
 		return m.mapStateChange(entry, "PROTOCOL_ESCALATED")
 	case models.EventMedicationThresholdCrossed:
 		return m.mapAlertSignal(entry, signals.SignalCreatinine, true)
+
+	// Patient-reported signal events (S4, S15, S16, S18-S22)
+	case models.EventMealLog:
+		return m.mapAlertSignal(entry, signals.SignalMealLog, false)
+	case models.EventActivityLog:
+		return m.mapAlertSignal(entry, signals.SignalActivity, false)
+	case models.EventWaistMeasurement:
+		return m.mapAlertSignal(entry, signals.SignalWaist, false)
+	case models.EventAdherenceReport:
+		return m.mapAlertSignal(entry, signals.SignalAdherence, false)
+	case models.EventSymptomReport:
+		return m.mapAlertSignal(entry, signals.SignalSymptom, false)
+	case models.EventAdverseEvent:
+		return m.mapAlertSignal(entry, signals.SignalAdverseEvent, true) // priority
+	case models.EventResolutionReport:
+		return m.mapAlertSignal(entry, signals.SignalResolution, false)
+	case models.EventHospitalisation:
+		return m.mapAlertSignal(entry, signals.SignalHospitalisation, true) // priority
+
 	default:
 		return nil, nil
 	}

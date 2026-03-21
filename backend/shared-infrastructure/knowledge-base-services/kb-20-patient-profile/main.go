@@ -128,6 +128,8 @@ func main() {
 		loincRegistry,
 		protocolService,
 		protocolRegistry,
+		eventBus,
+		logger,
 	)
 
 	// Start HTTP server

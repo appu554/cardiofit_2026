@@ -48,6 +48,19 @@ func (s *Server) setupRoutes() {
 
 			// Engagement season (Patient Engagement Loop)
 			patient.GET("/:id/engagement-season", s.getEngagementSeason)
+
+			// Signals — patient-reported signal ingestion (S4, S15, S16, S18-S22)
+			signals := patient.Group("/:id/signals")
+			{
+				signals.POST("/meal", s.submitMealSignal)
+				signals.POST("/activity", s.submitActivitySignal)
+				signals.POST("/waist", s.submitWaistSignal)
+				signals.POST("/adherence", s.submitAdherenceSignal)
+				signals.POST("/symptom", s.submitSymptomSignal)
+				signals.POST("/adverse-event", s.submitAdverseEventSignal)
+				signals.POST("/resolution", s.submitResolutionSignal)
+				signals.POST("/hospitalisation", s.submitHospitalisationSignal)
+			}
 		}
 
 		// Context modifier registry

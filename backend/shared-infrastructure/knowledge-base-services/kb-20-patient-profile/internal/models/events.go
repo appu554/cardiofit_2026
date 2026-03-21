@@ -31,6 +31,16 @@ const (
 
 	EventGlucoseTrajectoryChange = "GLUCOSE_TRAJECTORY_CHANGE"  // FBG trajectory classification changed
 
+	// Patient-reported signal event types (S4, S15, S16, S18-S22)
+	EventMealLog          = "MEAL_LOG"
+	EventActivityLog      = "ACTIVITY_LOG"
+	EventWaistMeasurement = "WAIST_MEASUREMENT"
+	EventAdherenceReport  = "ADHERENCE_REPORT"
+	EventSymptomReport    = "SYMPTOM_REPORT"
+	EventAdverseEvent     = "ADVERSE_EVENT"
+	EventResolutionReport = "RESOLUTION_REPORT"
+	EventHospitalisation  = "HOSPITALISATION"
+
 	EventProtocolActivated    = "PROTOCOL_ACTIVATED"
 	EventProtocolTransitioned = "PROTOCOL_PHASE_TRANSITIONED"
 	EventProtocolGraduated    = "PROTOCOL_GRADUATED"

@@ -12,6 +12,8 @@ import (
 	"kb-patient-profile/internal/database"
 	"kb-patient-profile/internal/metrics"
 	"kb-patient-profile/internal/services"
+
+	"go.uber.org/zap"
 )
 
 // Server holds the HTTP server and all injected dependencies.
@@ -32,6 +34,9 @@ type Server struct {
 	projectionService *services.ProjectionService
 	loincRegistry     *services.LOINCRegistry
 	protocolService   *services.ProtocolService
+	protocolRegistry  *services.ProtocolRegistry
+	eventBus          services.EventPublisher
+	logger            *zap.Logger
 }
 
 // NewServer constructs the HTTP server with all dependencies injected.
@@ -50,6 +55,9 @@ func NewServer(
 	projectionSvc *services.ProjectionService,
 	loincReg *services.LOINCRegistry,
 	protocolSvc *services.ProtocolService,
+	protocolReg *services.ProtocolRegistry,
+	eventBus *services.EventBus,
+	logger *zap.Logger,
 ) *Server {
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -73,6 +81,9 @@ func NewServer(
 		projectionService: projectionSvc,
 		loincRegistry:     loincReg,
 		protocolService:   protocolSvc,
+		protocolRegistry:  protocolReg,
+		eventBus:          eventBus,
+		logger:            logger,
 	}
 
 	s.Router.Use(s.metricsMiddleware())
