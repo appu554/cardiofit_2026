@@ -5,6 +5,7 @@ import '../providers/symptom_entry_provider.dart';
 import '../theme.dart';
 import 'severity_selector.dart';
 import 'symptom_chip_grid.dart';
+import 'animations/animations.dart';
 
 class SymptomLoggerSheet extends ConsumerWidget {
   const SymptomLoggerSheet({super.key});
@@ -30,11 +31,8 @@ class SymptomLoggerSheet extends ConsumerWidget {
       maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
+        return GlassmorphicContainer(
+          borderRadius: 20,
           child: Column(
             children: [
               // Drag handle
@@ -60,71 +58,103 @@ class SymptomLoggerSheet extends ConsumerWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   children: [
                     // Symptom chips
-                    const Text('What are you feeling?',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 8),
-                    SymptomChipGrid(
-                      symptoms: _symptoms,
-                      selected: state.selectedSymptoms,
-                      onToggle: notifier.toggleSymptom,
+                    StaggeredItem(
+                      index: 0,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('What are you feeling?',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 8),
+                          SymptomChipGrid(
+                            symptoms: _symptoms,
+                            selected: state.selectedSymptoms,
+                            onToggle: notifier.toggleSymptom,
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 20),
 
                     // Severity
-                    const Text('How severe?',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 8),
-                    SeveritySelector(
-                      value: state.severity,
-                      onChanged: notifier.setSeverity,
+                    StaggeredItem(
+                      index: 1,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('How severe?',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 8),
+                          SeveritySelector(
+                            value: state.severity,
+                            onChanged: notifier.setSeverity,
+                          ),
+                          const SizedBox(height: 20),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 20),
 
                     // Free text
-                    TextFormField(
-                      decoration: const InputDecoration(
-                        labelText: 'Tell us more (optional)',
-                        border: OutlineInputBorder(),
-                        counterText: '',
+                    StaggeredItem(
+                      index: 2,
+                      child: Column(
+                        children: [
+                          TextFormField(
+                            decoration: const InputDecoration(
+                              labelText: 'Tell us more (optional)',
+                              border: OutlineInputBorder(),
+                              counterText: '',
+                            ),
+                            maxLength: 200,
+                            maxLines: 3,
+                            onChanged: notifier.setNotes,
+                          ),
+                          const SizedBox(height: 20),
+                        ],
                       ),
-                      maxLength: 200,
-                      maxLines: 3,
-                      onChanged: notifier.setNotes,
                     ),
-                    const SizedBox(height: 20),
 
                     // Time selector
-                    ListTile(
-                      leading: const Icon(Icons.access_time),
-                      title: const Text('When did this happen?'),
-                      subtitle: Text(
-                        _formatTime(state.timestamp),
-                        style: const TextStyle(color: AppColors.primaryTeal),
+                    StaggeredItem(
+                      index: 3,
+                      child: Column(
+                        children: [
+                          ListTile(
+                            leading: const Icon(Icons.access_time),
+                            title: const Text('When did this happen?'),
+                            subtitle: Text(
+                              _formatTime(state.timestamp),
+                              style:
+                                  const TextStyle(color: AppColors.primaryTeal),
+                            ),
+                            onTap: () async {
+                              final time = await showTimePicker(
+                                context: context,
+                                initialTime:
+                                    TimeOfDay.fromDateTime(state.timestamp),
+                              );
+                              if (time != null) {
+                                final now = DateTime.now();
+                                notifier.setTimestamp(DateTime(
+                                  now.year, now.month, now.day,
+                                  time.hour, time.minute,
+                                ));
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                       ),
-                      onTap: () async {
-                        final time = await showTimePicker(
-                          context: context,
-                          initialTime: TimeOfDay.fromDateTime(state.timestamp),
-                        );
-                        if (time != null) {
-                          final now = DateTime.now();
-                          notifier.setTimestamp(DateTime(
-                            now.year, now.month, now.day,
-                            time.hour, time.minute,
-                          ));
-                        }
-                      },
                     ),
-                    const SizedBox(height: 16),
 
                     // Save button
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
-                        onPressed: state.canSave
-                            ? () async {
+                    StaggeredItem(
+                      index: 4,
+                      child: state.canSave
+                          ? SpringTapCard(
+                              onTap: () async {
                                 final saved = await notifier.save();
                                 if (saved && context.mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
@@ -133,10 +163,22 @@ class SymptomLoggerSheet extends ConsumerWidget {
                                   );
                                   Navigator.pop(context);
                                 }
-                              }
-                            : null,
-                        child: const Text('Save'),
-                      ),
+                              },
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: FilledButton(
+                                  onPressed: () {},
+                                  child: const Text('Save'),
+                                ),
+                              ),
+                            )
+                          : SizedBox(
+                              width: double.infinity,
+                              child: FilledButton(
+                                onPressed: null,
+                                child: const Text('Save'),
+                              ),
+                            ),
                     ),
                     const SizedBox(height: 32),
                   ],
