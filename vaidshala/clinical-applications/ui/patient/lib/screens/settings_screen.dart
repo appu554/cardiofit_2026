@@ -159,7 +159,7 @@ class SettingsScreen extends ConsumerWidget {
                   context.go('/login');
                 },
                 child: OutlinedButton.icon(
-                  onPressed: null,
+                  onPressed: () {},
                   icon: const Icon(Icons.logout, color: AppColors.scoreRed),
                   label: const Text('Log Out',
                       style: TextStyle(color: AppColors.scoreRed)),

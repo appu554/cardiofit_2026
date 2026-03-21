@@ -26,7 +26,17 @@ class NotificationDateGroup extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: FadeSlideTransition(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 400),
+            curve: const Cubic(0.25, 0.46, 0.45, 0.94),
+            builder: (context, value, child) => Opacity(
+              opacity: value,
+              child: Transform.translate(
+                offset: Offset(0, 12 * (1.0 - value)),
+                child: child,
+              ),
+            ),
             child: Text(
               label,
               style: const TextStyle(
