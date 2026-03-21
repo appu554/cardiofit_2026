@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/actions_provider.dart';
 import '../providers/timeline_provider.dart';
 import '../theme.dart';
+import '../widgets/animations/animations.dart';
 import '../widgets/did_you_know_card.dart';
 import '../widgets/skeleton_card.dart';
 import '../widgets/timeline_entry_widget.dart';
@@ -35,86 +36,105 @@ class MyDayTab extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Header
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-                        child: Text(
-                          'My Day',
-                          style: TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.bold),
+                      StaggeredItem(
+                        index: 0,
+                        keepAlive: true,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Padding(
+                              padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+                              child: Text(
+                                'My Day',
+                                style: TextStyle(
+                                    fontSize: 24, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 16),
+                              child: Text(
+                                'Your daily health routine',
+                                style: TextStyle(
+                                    fontSize: 14, color: AppColors.textSecondary),
+                              ),
+                            ),
+                            SizedBox(height: 16),
+                          ],
                         ),
                       ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          'Your daily health routine',
-                          style: TextStyle(
-                              fontSize: 14, color: AppColors.textSecondary),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
 
-                      // Timeline
-                      if (myDay.entries.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(32),
-                          child: Center(
-                            child: Text(
-                              'No activities scheduled for today',
-                              style:
-                                  TextStyle(color: AppColors.textSecondary),
-                            ),
-                          ),
-                        )
-                      else
-                        Card(
-                          margin:
-                              const EdgeInsets.symmetric(horizontal: 16),
-                          child: Padding(
-                            padding:
-                                const EdgeInsets.symmetric(vertical: 16),
-                            child: Column(
-                              children: [
-                                for (var i = 0;
-                                    i < myDay.entries.length;
-                                    i++)
-                                  TimelineEntryWidget(
-                                    entry: myDay.entries[i],
-                                    isLast:
-                                        i == myDay.entries.length - 1,
+                      // Timeline card / empty state
+                      StaggeredItem(
+                        index: 1,
+                        keepAlive: true,
+                        child: myDay.entries.isEmpty
+                            ? const Padding(
+                                padding: EdgeInsets.all(32),
+                                child: Center(
+                                  child: Text(
+                                    'No activities scheduled for today',
+                                    style: TextStyle(
+                                        color: AppColors.textSecondary),
                                   ),
-                              ],
-                            ),
-                          ),
-                        ),
+                                ),
+                              )
+                            : Card(
+                                margin:
+                                    const EdgeInsets.symmetric(horizontal: 16),
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                  child: Column(
+                                    children: [
+                                      for (var i = 0;
+                                          i < myDay.entries.length;
+                                          i++)
+                                        TimelineEntryWidget(
+                                          entry: myDay.entries[i],
+                                          isLast: i == myDay.entries.length - 1,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                      ),
 
                       // Completion footer
                       if (myDay.entries.isNotEmpty &&
                           myDay.entries.every((e) => e.done))
-                        const Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Center(
-                            child: Column(
-                              children: [
-                                Icon(Icons.celebration,
-                                    size: 48,
-                                    color: AppColors.scoreGreen),
-                                SizedBox(height: 8),
-                                Text(
-                                  'All done for today! Great work!',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.scoreGreen,
+                        StaggeredItem(
+                          index: 2,
+                          keepAlive: true,
+                          child: const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  Icon(Icons.celebration,
+                                      size: 48,
+                                      color: AppColors.scoreGreen),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'All done for today! Great work!',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.scoreGreen,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
 
                       // Did You Know
                       if (myDay.tipOfTheDay != null)
-                        DidYouKnowCard(tip: myDay.tipOfTheDay!),
+                        StaggeredItem(
+                          index: 3,
+                          keepAlive: true,
+                          child: DidYouKnowCard(tip: myDay.tipOfTheDay!),
+                        ),
                     ],
                   ),
                 ),
@@ -169,77 +189,79 @@ class _SpeedDialFabState extends State<_SpeedDialFab>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        // Sub-buttons
-        ScaleTransition(
-          scale: _expandAnimation,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(4),
+        // Sub-buttons (shown only when open)
+        if (_isOpen)
+          StaggeredItem(
+            index: 0,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text('Log Reading',
+                        style: TextStyle(color: Colors.white, fontSize: 12)),
                   ),
-                  child: const Text('Log Reading',
-                      style: TextStyle(color: Colors.white, fontSize: 12)),
-                ),
-                const SizedBox(width: 8),
-                FloatingActionButton.small(
-                  heroTag: 'fab_vitals',
-                  onPressed: () {
-                    _toggle();
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) => const VitalsEntrySheet(),
-                    );
-                  },
-                  child: const Icon(Icons.monitor_heart, size: 20),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'fab_vitals',
+                    onPressed: () {
+                      _toggle();
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (_) => const VitalsEntrySheet(),
+                      );
+                    },
+                    child: const Icon(Icons.monitor_heart, size: 20),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        ScaleTransition(
-          scale: _expandAnimation,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.black87,
-                    borderRadius: BorderRadius.circular(4),
+        if (_isOpen)
+          StaggeredItem(
+            index: 1,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text('Log Symptom',
+                        style: TextStyle(color: Colors.white, fontSize: 12)),
                   ),
-                  child: const Text('Log Symptom',
-                      style: TextStyle(color: Colors.white, fontSize: 12)),
-                ),
-                const SizedBox(width: 8),
-                FloatingActionButton.small(
-                  heroTag: 'fab_symptom',
-                  onPressed: () {
-                    _toggle();
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      builder: (_) => const SymptomEntrySheet(),
-                    );
-                  },
-                  child: const Icon(Icons.edit_note, size: 20),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'fab_symptom',
+                    onPressed: () {
+                      _toggle();
+                      showModalBottomSheet(
+                        context: context,
+                        isScrollControlled: true,
+                        backgroundColor: Colors.transparent,
+                        builder: (_) => const SymptomEntrySheet(),
+                      );
+                    },
+                    child: const Icon(Icons.edit_note, size: 20),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
 
         // Main FAB
         FloatingActionButton(
