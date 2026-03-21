@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/medication_adherence_provider.dart';
 import '../providers/progress_provider.dart';
 import '../theme.dart';
+import '../widgets/animations/animations.dart';
 import '../widgets/cause_effect_card.dart';
 import '../widgets/medication_adherence_section.dart';
 import '../widgets/milestone_item.dart';
@@ -52,83 +53,120 @@ class _ProgressContent extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-            child: Text(
-              'Your Progress',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              'Track how your health is changing over time',
-              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
-            ),
-          ),
-
-          // Key Metrics Card
-          if (state.metrics.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
-              child: Text(
-                'Key Metrics',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            Card(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                children: state.metrics
-                    .map((m) => ProgressMetricRow(metric: m))
-                    .toList(),
-              ),
-            ),
-          ],
-
-          // Cause & Effect Section
-          if (state.causeEffects.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
-              child: Text(
-                'How Your Actions Help',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            ...state.causeEffects
-                .map((ce) => CauseEffectCard(causeEffect: ce)),
-          ],
-
-          // Milestones Section
-          if (state.milestones.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
-              child: Text(
-                'Milestones',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            ...state.milestones.map((m) => MilestoneItem(milestone: m)),
-          ],
-
-          // Medication Adherence Section
-          ref.watch(medicationAdherenceProvider).when(
-            data: (adherence) => Column(
+          // Header — index 0
+          StaggeredItem(
+            index: 0,
+            keepAlive: true,
+            child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
                   child: Text(
-                    'Medication Adherence',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    'Your Progress',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                   ),
                 ),
-                MedicationAdherenceSection(adherence: adherence),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'Track how your health is changing over time',
+                    style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  ),
+                ),
               ],
             ),
-            loading: () => const SizedBox.shrink(),
-            error: (_, __) => const SizedBox.shrink(),
+          ),
+
+          // Key Metrics Card — index 1
+          if (state.metrics.isNotEmpty)
+            StaggeredItem(
+              index: 1,
+              keepAlive: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+                    child: Text(
+                      'Key Metrics',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      children: state.metrics
+                          .map((m) => ProgressMetricRow(metric: m))
+                          .toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // Cause & Effect Section — index 2
+          if (state.causeEffects.isNotEmpty)
+            StaggeredItem(
+              index: 2,
+              keepAlive: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+                    child: Text(
+                      'How Your Actions Help',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  ...state.causeEffects
+                      .map((ce) => CauseEffectCard(causeEffect: ce)),
+                ],
+              ),
+            ),
+
+          // Milestones Section — index 3
+          if (state.milestones.isNotEmpty)
+            StaggeredItem(
+              index: 3,
+              keepAlive: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+                    child: Text(
+                      'Milestones',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  ...state.milestones.map((m) => MilestoneItem(milestone: m)),
+                ],
+              ),
+            ),
+
+          // Medication Adherence Section — index 4
+          StaggeredItem(
+            index: 4,
+            keepAlive: true,
+            child: ref.watch(medicationAdherenceProvider).when(
+              data: (adherence) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+                    child: Text(
+                      'Medication Adherence',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  MedicationAdherenceSection(adherence: adherence),
+                ],
+              ),
+              loading: () => const SizedBox.shrink(),
+              error: (_, __) => const SizedBox.shrink(),
+            ),
           ),
         ],
       ),
