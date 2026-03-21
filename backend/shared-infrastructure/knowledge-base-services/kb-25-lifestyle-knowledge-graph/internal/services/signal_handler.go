@@ -74,6 +74,10 @@ type calibrationRequest struct {
 	ObservationSD    float64 `json:"observation_sd"`
 }
 
+// defaultObservationSD is the assumed standard deviation for Bayesian calibration
+// observations. Used as a prior uncertainty estimate when posting attribution to KB-26.
+const defaultObservationSD = 2.0
+
 // clinicalTargets are the clinical variables we compute attribution for.
 var clinicalTargets = []string{"HBA1C", "SBP", "LDL"}
 
@@ -140,7 +144,7 @@ func (h *SignalHandler) handleMealLog(ctx context.Context, patientID string, raw
 					TargetVariable:   target,
 					PopulationEffect: chain.NetEffect.EffectSize,
 					ObservedEffect:   chain.NetEffect.EffectSize * attr.LifestyleFrac,
-					ObservationSD:    2.0,
+					ObservationSD:    defaultObservationSD,
 				}); err != nil {
 					h.logger.Warn("Failed to post calibration to KB-26",
 						zap.String("food_code", foodCode),
@@ -216,7 +220,7 @@ func (h *SignalHandler) handleActivity(ctx context.Context, patientID string, ra
 				TargetVariable:   target,
 				PopulationEffect: chain.NetEffect.EffectSize,
 				ObservedEffect:   chain.NetEffect.EffectSize * attr.LifestyleFrac,
-				ObservationSD:    2.0,
+				ObservationSD:    defaultObservationSD,
 			}); err != nil {
 				h.logger.Warn("Failed to post calibration to KB-26",
 					zap.String("exercise_code", exerciseCode),
@@ -244,7 +248,7 @@ func (h *SignalHandler) handleWeight(_ context.Context, patientID string, rawMsg
 		return fmt.Errorf("unmarshal weight payload: %w", err)
 	}
 
-	h.logger.Info("Weight signal received — body composition context updated",
+	h.logger.Info("Weight signal received",
 		zap.String("patient_id", patientID),
 		zap.Float64("weight_value", payload.Value),
 		zap.String("unit", payload.Unit),
@@ -267,7 +271,7 @@ func (h *SignalHandler) handleWaist(_ context.Context, patientID string, rawMsg 
 		return fmt.Errorf("unmarshal waist payload: %w", err)
 	}
 
-	h.logger.Info("Waist signal received — metabolic risk context updated",
+	h.logger.Info("Waist signal received",
 		zap.String("patient_id", patientID),
 		zap.Float64("waist_value", payload.Value),
 		zap.String("unit", payload.Unit),
