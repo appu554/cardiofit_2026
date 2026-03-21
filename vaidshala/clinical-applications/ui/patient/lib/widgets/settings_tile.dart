@@ -1,6 +1,7 @@
 // lib/widgets/settings_tile.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import 'animations/animations.dart';
 
 class SettingsTile extends StatelessWidget {
   final IconData icon;
@@ -18,11 +19,16 @@ class SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
+    final tile = ListTile(
       leading: Icon(icon, color: AppColors.primaryTeal),
       title: Text(title),
       trailing: trailing ?? (onTap != null ? const Icon(Icons.chevron_right) : null),
-      onTap: onTap,
+      onTap: onTap != null ? null : null,
     );
+
+    if (onTap != null) {
+      return SpringTapCard(onTap: onTap!, child: tile);
+    }
+    return tile;
   }
 }
