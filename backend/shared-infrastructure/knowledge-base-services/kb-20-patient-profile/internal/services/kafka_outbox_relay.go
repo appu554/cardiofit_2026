@@ -159,11 +159,11 @@ func (r *KafkaOutboxRelay) pollAndPublish(ctx context.Context) {
 		r.log.Error("Failed to poll outbox for Kafka relay", zap.Error(err))
 		return
 	}
-	if len(entries) == 0 {
-		return
-	}
 	if r.signalMetrics != nil {
 		r.signalMetrics.OutboxRelayPendingCount.Set(float64(len(entries)))
+	}
+	if len(entries) == 0 {
+		return
 	}
 
 	published := r.processEntries(ctx, entries)
