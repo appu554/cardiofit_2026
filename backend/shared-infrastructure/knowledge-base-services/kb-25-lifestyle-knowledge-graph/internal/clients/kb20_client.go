@@ -24,6 +24,17 @@ type PatientSnapshot struct {
 	RestingHR     float64  `json:"resting_hr"`
 	Medications   []string `json:"current_medications,omitempty"`
 	Comorbidities []string `json:"comorbidities,omitempty"`
+
+	// Safety-engine fields (sourced from KB-20 patient state)
+	FBGMin7d         float64 `json:"fbg_min_7d,omitempty"`
+	Retinopathy      string  `json:"retinopathy,omitempty"`
+	Neuropathy       bool    `json:"neuropathy,omitempty"`
+	Pregnant         bool    `json:"pregnant,omitempty"`
+	HasDiabetes      bool    `json:"has_diabetes,omitempty"`
+	CardiacEvent30d  bool    `json:"cardiac_event_30d,omitempty"`
+	BMR              float64 `json:"bmr,omitempty"`
+	Gastroparesis    bool    `json:"gastroparesis,omitempty"`
+	EatingDisorderHx bool    `json:"eating_disorder_hx,omitempty"`
 }
 
 type KB20Client struct {
