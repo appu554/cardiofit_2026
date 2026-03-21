@@ -1,7 +1,7 @@
 # Ingestion Service + Intake-Onboarding Service + API Gateway Design
 
 **Date:** 2026-03-21
-**Status:** Draft
+**Status:** Draft → Reviewed (rev 2)
 **Approach:** Thin Gateway Proxy (Approach A)
 
 ---
@@ -20,6 +20,7 @@ Two new Go microservices under `vaidshala/clinical-runtime-platform/services/` w
 - Ingestion: NEVER makes clinical decisions — normalizes, validates, maps, routes
 - Intake M0: ZERO LLM clinical decisions — safety engine is deterministic compiled Go, <5ms
 - Both: Event-sourced, FHIR R4 compliant (ABDM IG v7.0), Google FHIR Store as patient record store
+- ABDM FHIR profiles used: `https://nrces.in/ndhm/fhir/r4/StructureDefinition/Patient` (PatientIN), `ObservationVitalSignsIN`, `DiagnosticReportLabIN`, `MedicationStatementIN`, `ConditionIN`, `EncounterIN`
 
 ---
 
@@ -126,8 +127,8 @@ vaidshala/clinical-runtime-platform/services/intake-onboarding-service/
 │   │   └── view.go              # current_slots view (latest event per slot)
 │   ├── safety/
 │   │   ├── engine.go            # Synchronous evaluation, <5ms, zero external deps
-│   │   ├── hard_stops.go        # 11 rules: H1-H11
-│   │   ├── soft_flags.go        # 8 rules: SF-01 to SF-08
+│   │   ├── hard_stops.go        # 11 rules (see §3.3 Safety Rules below)
+│   │   ├── soft_flags.go        # 8 rules (see §3.3 Safety Rules below)
 │   │   └── rules_registry.go
 │   ├── flow/
 │   │   ├── engine.go            # Generic graph traversal engine
@@ -193,7 +194,32 @@ vaidshala/clinical-runtime-platform/pkg/
     └── config.go       # GoogleFHIRConfig struct
 ```
 
-Reused from KB-20's proven `fhir_client.go` pattern. Both services import `pkg/fhirclient`.
+New implementation inspired by KB-20's `fhir_client.go` pattern (same OAuth2 + retry approach). KB-20's client is in `internal/` and cannot be imported outside its module per Go visibility rules, so `pkg/fhirclient` is a new shared package. Both services import it as `vaidshala/clinical-runtime-platform/pkg/fhirclient`.
+
+### 2.4 Go Module Strategy
+
+Both services live within the **existing single Go module** (`vaidshala/clinical-runtime-platform`, defined in the root `go.mod`). No separate `go.mod` per service — this avoids Go workspace complexity and matches the existing pattern where `engines/vmcu/`, `services/medication-advisor-engine/`, etc. share the root module.
+
+**Import paths:**
+```
+vaidshala/clinical-runtime-platform/services/ingestion-service/internal/...
+vaidshala/clinical-runtime-platform/services/intake-onboarding-service/internal/...
+vaidshala/clinical-runtime-platform/pkg/fhirclient
+```
+
+**New dependencies to add to root `go.mod`** (the existing module already has `gin`, `uuid`, `yaml.v3`, `validator/v10`):
+```
+github.com/samply/golang-fhir-models   # FHIR R4 Go structs
+github.com/segmentio/kafka-go           # Kafka producer
+github.com/jackc/pgx/v5                 # PostgreSQL (pgxpool)
+github.com/redis/go-redis/v9            # Redis
+github.com/prometheus/client_golang     # Prometheus metrics
+go.opentelemetry.io/otel                # Distributed tracing
+golang.org/x/oauth2                     # Google FHIR Store auth
+go.uber.org/zap                         # Structured logging
+```
+
+Note: `golang.org/x/crypto` (for ABDM X25519) is already an indirect dependency.
 
 ---
 
@@ -277,6 +303,14 @@ POST   /ingest/wearables/{provider}                    → Wearable (Open mHealt
 POST   /ingest/abdm/data-push                          → ABDM HIU callback (encrypted)
 ```
 
+**Internal (service-to-service, not gateway-exposed):**
+
+```
+POST   /internal/hpi                                    → HPI slot data from Intake M0 (FHIR Observation bundle)
+```
+
+The Intake service calls `http://ingestion-service:8140/internal/hpi` directly (service mesh / k8s DNS) to forward HPI slot data for FHIR mapping and Kafka publishing to `ingestion.hpi`. This endpoint is NOT exposed through the API gateway — it uses the `/internal/` prefix which the gateway does not proxy.
+
 **Admin/Dashboard:**
 
 ```
@@ -284,6 +318,37 @@ GET    /fhir/OperationOutcome?category=dlq             → DLQ entries
 POST   /fhir/OperationOutcome/{id}/$replay             → Replay DLQ message
 GET    /$source-status                                  → Source freshness & health
 ```
+
+### 3.3 Safety Rules — Deterministic Engine (Intake M0)
+
+**HARD_STOPs** (block enrollment, require physician escalation — mapped to FHIR `DetectedIssue` with severity `high`):
+
+| ID | Rule | Condition | Action |
+|----|------|-----------|--------|
+| H1 | Type 1 DM | diabetes_type = "T1DM" | STOP — T1DM protocol differs |
+| H2 | Pregnancy | pregnant = true | STOP — obstetric care required |
+| H3 | Dialysis | dialysis = true OR eGFR < 15 | STOP — nephrology management |
+| H4 | Active cancer | active_cancer = true | STOP — oncology priority |
+| H5 | eGFR critical | eGFR < 15 | STOP — CKD stage 5 |
+| H6 | Recent MI/stroke | mi_stroke_days < 90 | STOP — acute cardiac event |
+| H7 | Heart failure severe | nyha_class >= 3 | STOP — HF specialist |
+| H8 | Child (age) | age < 18 | STOP — pediatric protocol |
+| H9 | Bariatric surgery | bariatric_surgery_months < 12 | STOP — surgical follow-up |
+| H10 | Organ transplant | organ_transplant = true | STOP — transplant immunosuppression |
+| H11 | Active substance abuse | active_substance_abuse = true | STOP — addiction medicine |
+
+**SOFT_FLAGs** (pharmacist awareness, intake continues — mapped to FHIR `DetectedIssue` with severity `moderate`):
+
+| ID | Rule | Condition | Action |
+|----|------|-----------|--------|
+| SF-01 | Elderly | age >= 75 | FLAG — dose adjustment awareness |
+| SF-02 | CKD moderate | eGFR 15-44 | FLAG — renal dose adjustment |
+| SF-03 | Polypharmacy | medication_count >= 5 | FLAG — interaction review |
+| SF-04 | Low BMI | bmi < 18.5 | FLAG — malnutrition risk |
+| SF-05 | Insulin use | insulin = true | FLAG — hypoglycemia monitoring |
+| SF-06 | Falls risk | falls_history = true OR age >= 70 | FLAG — balance assessment |
+| SF-07 | Cognitive impairment | cognitive_impairment = true | FLAG — caregiver involvement |
+| SF-08 | Non-adherent history | adherence_score < 0.5 | FLAG — enhanced follow-up |
 
 ---
 
@@ -293,7 +358,10 @@ Target: `backend/services/api-gateway/`
 
 ### 4.1 New SERVICE_ROUTES in proxy.py
 
+**Migration note:** The existing `device_ingestion` route (`proxy.py:101-107`) uses prefix `/api/v1/ingest` targeting `settings.DEVICE_INGESTION_SERVICE_URL`. This entry will be **replaced** (not duplicated) by the new `ingestion` entry below, since the new Ingestion Service subsumes the old device-data ingestion path. The old `DEVICE_INGESTION_SERVICE_URL` setting (referenced in `proxy.py` but currently **missing from `config.py`**) will be removed in favor of `INGESTION_SERVICE_URL`.
+
 ```python
+# Replace existing "device_ingestion" entry with these four entries:
 "ingestion":          { "url": INGESTION_SERVICE_URL,   "prefix": "/api/v1/ingest" }
 "intake_onboarding":  { "url": INTAKE_SERVICE_URL,      "prefix": "/api/v1/intake" }
 "intake_fhir":        { "url": INTAKE_SERVICE_URL,      "prefix": "/api/v1/intake/fhir" }
@@ -329,8 +397,9 @@ ROUTE_PERMISSIONS = {
     r"^/api/v1/intake/fhir/Patient":                     { "GET": ["patient:read"], "POST": ["patient:write"] },
 
     # Intake/Onboarding — Dashboard (Pharmacist + Physician)
-    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$approve":   { "POST": ["intake:review"] },
-    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$escalate":  { "POST": ["intake:review"] },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$approve":                  { "POST": ["intake:review"] },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$escalate":                 { "POST": ["intake:review"] },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$request-clarification":    { "POST": ["intake:review"] },
     r"^/api/v1/intake/fhir/DetectedIssue":               { "GET": ["safety:read"] },
 
     # Ingestion — App (self-reports, devices)
@@ -351,17 +420,28 @@ ROUTE_PERMISSIONS = {
 
 ```python
 ROLE_ROUTE_RESTRICTIONS = {
-    # Intake — Pharmacist AND Physician
+    # Intake — Patient self-service (enroll self, fill own slots, check-in)
+    r"^/api/v1/intake/fhir/Patient/\$enroll":
+        ["patient", "pharmacist", "physician", "asha"],
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$fill-slot":
+        ["patient", "pharmacist", "physician", "asha"],
+    r"^/api/v1/intake/fhir/Patient/[^/]+/\$checkin":
+        ["patient"],
+
+    # Intake — Review actions (Pharmacist AND Physician only)
     r"^/api/v1/intake/fhir/Encounter/[^/]+/\$(approve|escalate|request-clarification)":
         ["pharmacist", "physician"],
-    r"^/api/v1/intake/fhir/Patient/\$enroll":
-        ["pharmacist", "physician", "asha"],
     r"^/api/v1/intake/fhir/DetectedIssue":
         ["pharmacist", "physician"],
     r"^/api/v1/intake/fhir/Encounter":
         ["pharmacist", "physician"],
 
-    # Ingestion — Physician can view and submit
+    # Ingestion — Patient self-report and device submissions
+    r"^/api/v1/ingest/fhir/Observation":        ["patient", "asha", "physician"],
+    r"^/api/v1/ingest/devices":                 ["patient"],
+    r"^/api/v1/ingest/wearables":               ["patient"],
+
+    # Ingestion — Admin/system routes
     r"^/api/v1/ingest/\$source-status":         ["admin", "pharmacist", "physician"],
     r"^/api/v1/ingest/fhir/OperationOutcome":   ["admin", "physician"],
     r"^/api/v1/ingest/labs":                    ["system", "physician"],
@@ -370,7 +450,38 @@ ROLE_ROUTE_RESTRICTIONS = {
 }
 ```
 
-### 4.5 Role Access Matrix
+### 4.5 Auth Service Schema Changes
+
+The existing RBAC system (`rbac.py`) uses `resource:action` permissions (e.g., `patient:read`, `observation:write`) and has 3 role restrictions (`doctor`, `admin`, `doctor/pharmacist`). The new services introduce:
+
+**New permission strings** (follow existing `resource:action` convention):
+```
+intake:enroll    — create enrollment encounters
+intake:write     — fill slots, update intake data
+intake:read      — view intake observations/encounters
+intake:checkin   — start biweekly check-in
+intake:review    — pharmacist/physician approve/reject/escalate
+safety:read      — view DetectedIssue resources (HARD_STOPs/SOFT_FLAGs)
+ingest:write     — submit observations/self-reports
+ingest:device    — submit device/wearable readings
+ingest:lab       — submit lab results (system webhook)
+ingest:ehr       — submit EHR data (system webhook)
+ingest:abdm      — submit ABDM records (system callback)
+ingest:admin     — view DLQ, source status
+```
+
+**New roles** requiring Auth Service provisioning:
+| Role | Description | Auth Service change |
+|------|-------------|-------------------|
+| `asha` | ASHA community health worker (government channel) | Add to `roles` table, assign `intake:enroll`, `intake:write`, `ingest:write` |
+| `system` | Machine-to-machine (lab webhooks, ABDM callbacks, EHR) | Add to `roles` table, assign `ingest:lab`, `ingest:ehr`, `ingest:abdm` |
+| `patient` | Already exists but needs new permissions | Add `intake:enroll`, `intake:write`, `intake:checkin`, `intake:read`, `ingest:write`, `ingest:device` |
+| `pharmacist` | Already exists but needs new permissions | Add `intake:review`, `intake:read`, `safety:read`, `ingest:admin` |
+| `physician` | Maps to existing `doctor` role | Add `intake:enroll`, `intake:review`, `intake:read`, `safety:read`, `ingest:write`, `ingest:admin`, `ingest:lab`, `ingest:ehr` |
+
+**Implementation:** Phase 1 adds the permission strings and role mappings to the Auth Service's seed data / migration. The RBAC middleware already supports regex pattern matching and permission checking — no middleware code changes needed.
+
+### 4.6 Role Access Matrix
 
 | Role | Intake Access | Ingestion Access |
 |------|--------------|-----------------|
@@ -436,6 +547,15 @@ Lab result (Thyrocare, eGFR = 42)
 
 ## 6. Kafka Topics & Event Flow
 
+### 6.0 Naming Convention
+
+All Kafka topics follow the pattern `{service}.{domain}` using lowercase dot-separated names:
+- **Prefix** = service name (`ingestion`, `intake`)
+- **Suffix** = domain/entity type (e.g., `labs`, `vitals`, `slot-events`)
+- **Partition key** = `patientId` (UUID) for all patient-scoped topics, ensuring ordered processing per patient
+- **Retention** = 7 days default, 30 days for `*.dlq` topics
+- **Replication** = 3 (Confluent Cloud managed)
+
 ### 6.1 Ingestion Service Topics
 
 | Topic | Consumers | Content |
@@ -495,10 +615,11 @@ Lab result (Thyrocare, eGFR = 42)
   ASHA tablet      │  :8141       │──→ Google FHIR Store
                     └──────────────┘
                            │
-                           │ HPI slots forwarded for FHIR mapping
+                           │ HPI slots forwarded via POST /internal/hpi
+                           │ (service-to-service, not gateway-exposed)
                            ▼
                     ┌──────────────┐
-                    │  Ingestion   │
+                    │  Ingestion   │──→ Kafka ingestion.hpi ──→ KB-20/23
                     │  :8140       │
                     └──────────────┘
 ```
@@ -578,10 +699,123 @@ resources:
   requests: { cpu: 500m, memory: 256Mi }
   limits:   { cpu: 1, memory: 512Mi }
 
-# Database isolation
+# Database isolation — uses port 5433 (Docker/KB shared PostgreSQL instance)
+# Same PostgreSQL instance as KB services but separate databases + users
 ingestion_service: postgres://ingestion_user:***@postgres:5433/ingestion_service
 intake_service:    postgres://intake_user:***@postgres:5433/intake_service
-redis:             shared instance, DB 2 (ingestion), DB 3 (intake)
+redis:             shared instance (port 6380), DB 2 (ingestion), DB 3 (intake)
+```
+
+### 7.7 PostgreSQL Migration Schemas
+
+**Ingestion Service** (`migrations/001_init.sql`):
+```sql
+-- Lab code mappings (per-lab LOINC mapping)
+CREATE TABLE lab_code_mappings (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lab_id          TEXT NOT NULL,        -- e.g., "thyrocare", "redcliffe"
+    lab_code        TEXT NOT NULL,
+    loinc_code      TEXT NOT NULL,
+    display_name    TEXT,
+    unit            TEXT,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (lab_id, lab_code)
+);
+
+-- DLQ entries
+CREATE TABLE dlq_messages (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    error_class     TEXT NOT NULL,        -- PARSE, NORMALIZATION, VALIDATION, etc.
+    source_type     TEXT NOT NULL,
+    source_id       TEXT,
+    raw_payload     BYTEA NOT NULL,
+    error_message   TEXT,
+    retry_count     INT DEFAULT 0,
+    status          TEXT DEFAULT 'PENDING',  -- PENDING, REPLAYED, DISCARDED
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    resolved_at     TIMESTAMPTZ
+);
+
+-- Patient resolution pending queue
+CREATE TABLE patient_pending_queue (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    identifier_type TEXT NOT NULL,        -- ABHA, PHONE, MRN
+    identifier_value TEXT NOT NULL,
+    raw_payload     JSONB NOT NULL,
+    source_type     TEXT NOT NULL,
+    expires_at      TIMESTAMPTZ NOT NULL, -- 24hr hold
+    resolved_at     TIMESTAMPTZ,
+    patient_id      UUID,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_dlq_status ON dlq_messages(status);
+CREATE INDEX idx_pending_expires ON patient_pending_queue(expires_at) WHERE resolved_at IS NULL;
+```
+
+**Intake-Onboarding Service** (`migrations/001_init.sql`):
+```sql
+-- Enrollment state machine
+CREATE TABLE enrollments (
+    patient_id      UUID PRIMARY KEY,
+    tenant_id       UUID NOT NULL,
+    channel_type    TEXT NOT NULL,         -- CORPORATE, INSURANCE, GOVERNMENT
+    state           TEXT NOT NULL DEFAULT 'CREATED',
+    encounter_id    UUID,                  -- FHIR Encounter ID
+    assigned_pharmacist UUID,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- Event-sourced slot storage (immutable append-only)
+CREATE TABLE slot_events (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id      UUID NOT NULL REFERENCES enrollments(patient_id),
+    slot_name       TEXT NOT NULL,          -- e.g., "fbg", "hba1c", "current_meds"
+    domain          TEXT NOT NULL,          -- e.g., "glycemic", "renal", "cardiac"
+    value           JSONB NOT NULL,
+    extraction_mode TEXT NOT NULL,          -- BUTTON, REGEX, NLU, DEVICE
+    confidence      REAL,
+    safety_result   JSONB,                  -- {hard_stops: [...], soft_flags: [...]}
+    source_channel  TEXT NOT NULL,          -- APP, WHATSAPP, ASHA
+    fhir_resource_id TEXT,                  -- FHIR Observation ID in Google FHIR Store
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+-- Current slot view (materialized from latest event per slot)
+CREATE VIEW current_slots AS
+SELECT DISTINCT ON (patient_id, slot_name)
+    patient_id, slot_name, domain, value, extraction_mode,
+    confidence, safety_result, fhir_resource_id, created_at
+FROM slot_events
+ORDER BY patient_id, slot_name, created_at DESC;
+
+-- Flow graph position
+CREATE TABLE flow_positions (
+    patient_id      UUID NOT NULL REFERENCES enrollments(patient_id),
+    flow_type       TEXT NOT NULL,          -- INTAKE_FULL, CHECKIN_14DAY, etc.
+    current_node    TEXT NOT NULL,
+    state           TEXT DEFAULT 'ACTIVE',  -- ACTIVE, PAUSED, COMPLETED, ABANDONED
+    started_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (patient_id, flow_type)
+);
+
+-- Pharmacist review queue
+CREATE TABLE review_queue (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id      UUID NOT NULL REFERENCES enrollments(patient_id),
+    encounter_id    UUID NOT NULL,
+    risk_stratum    TEXT NOT NULL,           -- HIGH, MEDIUM, LOW
+    status          TEXT DEFAULT 'PENDING',  -- PENDING, APPROVED, CLARIFICATION, ESCALATED
+    reviewer_id     UUID,
+    reviewed_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_slot_events_patient ON slot_events(patient_id, slot_name);
+CREATE INDEX idx_enrollments_state ON enrollments(state);
+CREATE INDEX idx_review_queue_status ON review_queue(status, risk_stratum);
 ```
 
 ---
