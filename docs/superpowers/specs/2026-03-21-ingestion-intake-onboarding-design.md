@@ -1,7 +1,7 @@
 # Ingestion Service + Intake-Onboarding Service + API Gateway Design
 
 **Date:** 2026-03-21
-**Status:** Draft → Reviewed (rev 2)
+**Status:** Draft → Reviewed (rev 3)
 **Approach:** Thin Gateway Proxy (Approach A)
 
 ---
@@ -198,16 +198,37 @@ New implementation inspired by KB-20's `fhir_client.go` pattern (same OAuth2 + r
 
 ### 2.4 Go Module Strategy
 
-Both services live within the **existing single Go module** (`vaidshala/clinical-runtime-platform`, defined in the root `go.mod`). No separate `go.mod` per service — this avoids Go workspace complexity and matches the existing pattern where `engines/vmcu/`, `services/medication-advisor-engine/`, etc. share the root module.
+Each service gets its **own `go.mod`** with a `replace` directive pointing to the root module — matching the existing pattern used by `services/medication-advisor-engine/go.mod`:
 
-**Import paths:**
-```
-vaidshala/clinical-runtime-platform/services/ingestion-service/internal/...
-vaidshala/clinical-runtime-platform/services/intake-onboarding-service/internal/...
-vaidshala/clinical-runtime-platform/pkg/fhirclient
+```go
+// services/ingestion-service/go.mod
+module github.com/cardiofit/ingestion-service
+go 1.25.1
+
+require (
+    vaidshala/clinical-runtime-platform v0.0.0
+    // ... service-specific deps
+)
+replace vaidshala/clinical-runtime-platform => ../../
 ```
 
-**New dependencies to add to root `go.mod`** (the existing module already has `gin`, `uuid`, `yaml.v3`, `validator/v10`):
+```go
+// services/intake-onboarding-service/go.mod
+module github.com/cardiofit/intake-onboarding-service
+go 1.25.1
+
+require (
+    vaidshala/clinical-runtime-platform v0.0.0
+    // ... service-specific deps
+)
+replace vaidshala/clinical-runtime-platform => ../../
+```
+
+This allows each service to manage its own dependency tree while importing shared packages (like `pkg/fhirclient`) from the root module via the `replace` directive.
+
+**Shared package** (`pkg/fhirclient`) lives in the root module and is imported by both services as `vaidshala/clinical-runtime-platform/pkg/fhirclient`.
+
+**New dependencies** (added to each service's `go.mod` as needed):
 ```
 github.com/samply/golang-fhir-models   # FHIR R4 Go structs
 github.com/segmentio/kafka-go           # Kafka producer
@@ -219,7 +240,7 @@ golang.org/x/oauth2                     # Google FHIR Store auth
 go.uber.org/zap                         # Structured logging
 ```
 
-Note: `golang.org/x/crypto` (for ABDM X25519) is already an indirect dependency.
+Note: `golang.org/x/crypto` (for ABDM X25519) is already an indirect dependency in the root module.
 
 ---
 
@@ -358,14 +379,16 @@ Target: `backend/services/api-gateway/`
 
 ### 4.1 New SERVICE_ROUTES in proxy.py
 
-**Migration note:** The existing `device_ingestion` route (`proxy.py:101-107`) uses prefix `/api/v1/ingest` targeting `settings.DEVICE_INGESTION_SERVICE_URL`. This entry will be **replaced** (not duplicated) by the new `ingestion` entry below, since the new Ingestion Service subsumes the old device-data ingestion path. The old `DEVICE_INGESTION_SERVICE_URL` setting (referenced in `proxy.py` but currently **missing from `config.py`**) will be removed in favor of `INGESTION_SERVICE_URL`.
+**Migration note:** The existing `device_ingestion` route (`proxy.py:101-107`) uses prefix `/api/v1/ingest` targeting `settings.DEVICE_INGESTION_SERVICE_URL`. This entry will be **replaced** (not duplicated) by the new `ingestion` entry below, since the new Ingestion Service subsumes the old device-data ingestion path. The `DEVICE_INGESTION_SERVICE_URL` reference in `proxy.py` is a bug — it was never added to `config.py`. No removal from `config.py` needed; only the `proxy.py` route entry gets replaced.
+
+**Ordering matters:** `SERVICE_ROUTES` is iterated with `startswith()` matching (`proxy.py:533`). More-specific prefixes **must appear before** broader ones to avoid `/api/v1/ingest/fhir/Observation` matching the plain `/api/v1/ingest` entry.
 
 ```python
-# Replace existing "device_ingestion" entry with these four entries:
-"ingestion":          { "url": INGESTION_SERVICE_URL,   "prefix": "/api/v1/ingest" }
-"intake_onboarding":  { "url": INTAKE_SERVICE_URL,      "prefix": "/api/v1/intake" }
-"intake_fhir":        { "url": INTAKE_SERVICE_URL,      "prefix": "/api/v1/intake/fhir" }
+# Replace existing "device_ingestion" entry with these four entries (ORDER MATTERS):
 "ingestion_fhir":     { "url": INGESTION_SERVICE_URL,   "prefix": "/api/v1/ingest/fhir" }
+"ingestion":          { "url": INGESTION_SERVICE_URL,   "prefix": "/api/v1/ingest" }
+"intake_fhir":        { "url": INTAKE_SERVICE_URL,      "prefix": "/api/v1/intake/fhir" }
+"intake_onboarding":  { "url": INTAKE_SERVICE_URL,      "prefix": "/api/v1/intake" }
 ```
 
 **Routing examples:**
@@ -479,7 +502,10 @@ ingest:admin     — view DLQ, source status
 | `pharmacist` | Already exists but needs new permissions | Add `intake:review`, `intake:read`, `safety:read`, `ingest:admin` |
 | `physician` | Maps to existing `doctor` role | Add `intake:enroll`, `intake:review`, `intake:read`, `safety:read`, `ingest:write`, `ingest:admin`, `ingest:lab`, `ingest:ehr` |
 
-**Implementation:** Phase 1 adds the permission strings and role mappings to the Auth Service's seed data / migration. The RBAC middleware already supports regex pattern matching and permission checking — no middleware code changes needed.
+**Implementation (Phase 1):**
+1. Add permission strings and role mappings to Auth Service seed data / migration.
+2. The `RBACMiddleware` class (`rbac.py`) already uses regex matching on `ROUTE_PERMISSIONS` — adding new entries to the dict is sufficient for middleware-level enforcement.
+3. **CRITICAL:** The inline `check_permissions_with_auth_service()` function in `proxy.py:302-376` uses **hardcoded `if/elif path.startswith()` checks**, NOT the `ROUTE_PERMISSIONS` dict. New `/api/v1/intake/...` and `/api/v1/ingest/...` paths would fall through to the catch-all "Permission denied" (line 375). This function must be extended with new `elif` branches for intake and ingestion routes, OR refactored to use the `ROUTE_PERMISSIONS` regex dict instead of hardcoded paths. The refactor approach is preferred — it eliminates the maintenance burden of keeping two permission systems in sync.
 
 ### 4.6 Role Access Matrix
 
@@ -549,9 +575,9 @@ Lab result (Thyrocare, eGFR = 42)
 
 ### 6.0 Naming Convention
 
-All Kafka topics follow the pattern `{service}.{domain}` using lowercase dot-separated names:
-- **Prefix** = service name (`ingestion`, `intake`)
-- **Suffix** = domain/entity type (e.g., `labs`, `vitals`, `slot-events`)
+All Kafka topics follow the pattern `{service}.{domain}` using lowercase names:
+- **Prefix** = service name (`ingestion`, `intake`), dot-separated from domain
+- **Suffix** = domain/entity type using kebab-case (e.g., `labs`, `vitals`, `slot-events`, `patient-reported`)
 - **Partition key** = `patientId` (UUID) for all patient-scoped topics, ensuring ordered processing per patient
 - **Retention** = 7 days default, 30 days for `*.dlq` topics
 - **Replication** = 3 (Confluent Cloud managed)
