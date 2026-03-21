@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/app_notification.dart';
 import '../theme.dart';
 import 'notification_item.dart';
+import 'animations/animations.dart';
 
 class NotificationDateGroup extends StatelessWidget {
   final String label;
@@ -25,20 +26,25 @@ class NotificationDateGroup extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary,
-              letterSpacing: 1.0,
+          child: FadeSlideTransition(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
+                letterSpacing: 1.0,
+              ),
             ),
           ),
         ),
-        ...items.map((n) => NotificationItem(
-              notification: n,
-              onTap: () => onTap(n),
-              onDismiss: () => onDismiss(n.id),
+        ...items.asMap().entries.map((entry) => StaggeredItem(
+              index: entry.key,
+              child: NotificationItem(
+                notification: entry.value,
+                onTap: () => onTap(entry.value),
+                onDismiss: () => onDismiss(entry.value.id),
+              ),
             )),
       ],
     );

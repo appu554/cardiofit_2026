@@ -6,6 +6,7 @@ import '../models/app_notification.dart';
 import '../providers/notifications_provider.dart';
 import '../theme.dart';
 import '../widgets/notification_date_group.dart';
+import '../widgets/animations/animations.dart';
 
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
@@ -50,20 +51,26 @@ class NotificationsScreen extends ConsumerWidget {
           final grouped = _groupByDate(notifications);
           return ListView(
             children: grouped.entries
-                .map((entry) => NotificationDateGroup(
-                      label: entry.key,
-                      items: entry.value,
-                      onTap: (n) {
-                        ref
+                .toList()
+                .asMap()
+                .entries
+                .map((mapEntry) => StaggeredItem(
+                      index: mapEntry.key,
+                      child: NotificationDateGroup(
+                        label: mapEntry.value.key,
+                        items: mapEntry.value.value,
+                        onTap: (n) {
+                          ref
+                              .read(notificationsProvider.notifier)
+                              .markRead(n.id);
+                          if (n.deepLink != null) {
+                            context.go(n.deepLink!);
+                          }
+                        },
+                        onDismiss: (id) => ref
                             .read(notificationsProvider.notifier)
-                            .markRead(n.id);
-                        if (n.deepLink != null) {
-                          context.go(n.deepLink!);
-                        }
-                      },
-                      onDismiss: (id) => ref
-                          .read(notificationsProvider.notifier)
-                          .dismiss(id),
+                            .dismiss(id),
+                      ),
                     ))
                 .toList(),
           );

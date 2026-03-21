@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import '../models/app_notification.dart';
 import '../theme.dart';
+import 'animations/animations.dart';
 
 class NotificationItem extends StatelessWidget {
   final AppNotification notification;
@@ -53,12 +54,12 @@ class NotificationItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Dismissible(
       key: Key(notification.id),
-      direction: DismissDirection.endToStart,
+      direction: DismissDirection.startToEnd,
       onDismissed: (_) => onDismiss(),
       background: Container(
         color: AppColors.scoreRed,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 16),
         child: const Icon(Icons.delete, color: Colors.white),
       ),
       child: ListTile(
@@ -83,12 +84,14 @@ class NotificationItem extends StatelessWidget {
         ),
         trailing: notification.read
             ? null
-            : Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: Colors.blue,
-                  shape: BoxShape.circle,
+            : PulsingWidget(
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: Colors.blue,
+                    shape: BoxShape.circle,
+                  ),
                 ),
               ),
         onTap: onTap,
