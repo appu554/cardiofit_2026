@@ -2,7 +2,7 @@
 
 > **Goal:** Transform the Vaidshala Patient App from a clean Material 3 MVP into a premium, CRED-inspired experience where every interaction feels alive — spring physics, staggered entrances, glassmorphic sheets, count-up numbers — while keeping the clinical light theme.
 
-> **Scope:** Full app retrofit. All 9 screens (Home, My Day, Progress, Settings, Score Detail, Notifications, Add Vitals, Medication Adherence, Symptom Logger) plus shell (AppBar, bottom nav, FAB).
+> **Scope:** Full app retrofit. All post-login screens (Home, My Day, Progress, Learn, Settings, Score Detail, Notifications, Add Vitals, Medication Adherence, Symptom Logger) plus shell (AppBar, bottom nav, FAB). Auth/onboarding screens (splash, login, OTP, onboarding, ABHA verification) and family view are out of scope for this sprint — they can be retrofitted later using the same animation toolkit.
 
 > **Approach:** Custom animation system built from Flutter primitives. Single new dependency: `google_fonts` for Poppins. Zero animation packages — full control over spring curves and timing.
 
@@ -42,9 +42,9 @@ Central file for all animation parameters. Every animation in the app references
 
 #### `StaggeredItem`
 - **Purpose:** Wraps any child widget. On first build, slides up 30px + fades in over 400ms, delayed by `index × 80ms`
-- **Props:** `index` (int), `child` (Widget), `duration` (default 400ms), `delay` (default 80ms per index)
-- **Behavior:** Uses `AnimationController` + `CurvedAnimation` with `kDecelerate`. The delay is computed as `index * delay` via a `Future.delayed` that triggers `controller.forward()`. Disposes controller properly.
-- **State:** `AutomaticKeepAliveClientMixin` to prevent re-animation on tab switch
+- **Props:** `index` (int), `child` (Widget), `duration` (default 400ms), `delay` (default 80ms per index), `keepAlive` (bool, default `false`)
+- **Behavior:** Uses a single `AnimationController` with total duration = `duration + (index * delay)`. The child's actual animation is driven by a `CurvedAnimation` wrapping an `Interval(startFraction, 1.0, curve: kDecelerate)` where `startFraction = (index * delay) / totalDuration`. This ensures all stagger timing is synchronized with the animation frame loop — no `Future.delayed`. Controller calls `forward()` immediately on `initState`.
+- **State:** When `keepAlive: true`, uses `AutomaticKeepAliveClientMixin` to prevent re-animation on tab switch. Default `false` — scrollable list items (e.g., notifications) should NOT use keepAlive to allow Flutter's lazy rendering to reclaim memory.
 
 #### `StaggeredColumn`
 - **Purpose:** Drop-in replacement for `Column` that auto-wraps each child in `StaggeredItem` with sequential indices
@@ -55,17 +55,22 @@ Central file for all animation parameters. Every animation in the app references
 - **Purpose:** Card that responds to tap with spring-physics scale bounce
 - **Props:** `child`, `onTap`, `borderRadius` (default 12), `elevation` (default 1)
 - **Behavior:**
-  - `onTapDown`: Animate scale to `kSpringScaleMin` (0.96) using `SpringSimulation`
-  - `onTapUp` / `onTapCancel`: Animate scale back to 1.0 using spring (overshoot bounce)
-  - Wraps child in `Transform.scale` driven by spring animation
+  - Uses a **single** `AnimationController` (unbound, 0.0–1.0 range represents scale)
+  - `onTapDown`: Calls `controller.animateWith(SpringSimulation(kCreditSpring, controller.value, kSpringScaleMin, controller.velocity))` — animates toward 0.96 from current position with current velocity
+  - `onTapUp` / `onTapCancel`: Calls `controller.animateWith(SpringSimulation(kCreditSpring, controller.value, 1.0, controller.velocity))` — springs back to 1.0 from wherever it currently is
+  - This single-controller pattern means rapid tap-release sequences are seamlessly interrupted — no jump or restart
+  - Wraps child in `Transform.scale(scale: controller.value)` via `AnimatedBuilder`
   - Applies `Material` with elevation and borderRadius for card appearance
-- **Feel:** The spring overshoot (damping 0.6) creates a subtle bounce-back — the signature CRED "alive" feeling
+- **Spring config:** Uses `kCreditSpring` (damping ratio ~0.635 — underdamped, produces subtle overshoot bounce on release). This is the signature CRED "alive" feeling.
 
 #### `GlassmorphicContainer`
 - **Purpose:** Frosted glass effect for bottom sheets and overlays
 - **Props:** `child`, `borderRadius` (default 24 top), `blurSigma` (default 20), `opacity` (default 0.15), `borderColor` (default white30)
 - **Behavior:** `ClipRRect` → `BackdropFilter(filter: ImageFilter.blur)` → semi-transparent `Container` with subtle white border
-- **Note:** On Flutter web, `BackdropFilter` performance is acceptable for sheets (not full-screen). Falls back gracefully to solid color if blur not supported.
+- **Web platform handling:** On Flutter web (detected via `kIsWeb`), `BackdropFilter` has unreliable support on the HTML renderer and high compositing cost on CanvasKit. The widget checks `kIsWeb` at build time:
+  - **Web:** Falls back to a semi-transparent solid container (`Colors.white.withOpacity(0.85)`) with a subtle 1px border (`Colors.white30`). No blur. This still looks premium — the opacity + border creates a frosted-panel feel without the performance cost.
+  - **Native (future):** Uses full `BackdropFilter` with blur sigma.
+- **Usage constraint:** Only used on bottom sheets and overlays (small area), never as a full-screen scrim.
 
 #### `CountUpText`
 - **Purpose:** Animates a number from 0 → target value on first build
@@ -142,7 +147,7 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 | AppBar | Static, flat | Elevation transitions 0→2 on scroll via `ScrollController` listener. "Vaidshala" title uses `headlineMedium` Poppins. |
 | Bottom Nav | Standard `NavigationBar` | Active tab icon wrapped in `TweenAnimationBuilder` scale 1.0→1.2 with spring. Inactive icons at 1.0. Label uses `labelSmall` Poppins. |
 | Notification badge | Static dot | Wrapped in `PulsingWidget`. Badge count uses `CountUpText`. |
-| FAB (Speed Dial) | ScaleTransition, 250ms | Spring curves from `kCreditSpring`. Sub-buttons wrapped in `StaggeredItem(index: 0)`, `StaggeredItem(index: 1)`. Glassmorphic scrim on open. |
+| FAB (Speed Dial) | ScaleTransition, 250ms (in `my_day_tab.dart` `_SpeedDialFab`) | Spring curves from `kCreditSpring`. Sub-buttons wrapped in `StaggeredItem(index: 0)`, `StaggeredItem(index: 1)`. Semi-transparent scrim (`Colors.black54`) on open — no `BackdropFilter` since it's full-screen. |
 
 ### 3.2 Home Tab (`home_tab.dart`)
 
@@ -173,7 +178,15 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 | Lab trend cards | `StaggeredItem` + `SpringTapCard`. |
 | Medication Adherence section | Adherence ring uses `CountUpText` for "85%". Streak rows stagger in. `AnimatedProgressBar` for overall bar. |
 
-### 3.5 Settings Screen (`settings_screen.dart`) — S11
+### 3.5 Learn Tab (`learn_tab.dart`)
+
+| Element | Animation |
+|---------|-----------|
+| Content cards | `StaggeredColumn` — each article/resource card slides in. |
+| Cards | `SpringTapCard` on each tappable card. |
+| Any progress indicators | Replace with `AnimatedProgressBar`. |
+
+### 3.6 Settings Screen (`settings_screen.dart`) — S11
 
 | Element | Animation |
 |---------|-----------|
@@ -183,7 +196,7 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 | Toggle switches | Keep Material `Switch` but add haptic-style visual flash (brief opacity pulse on toggle). |
 | Logout button | `SpringTapCard` with red accent. |
 
-### 3.6 Score Detail Screen (`score_detail_screen.dart`) — S12
+### 3.7 Score Detail Screen (`score_detail_screen.dart`) — S12
 
 | Element | Animation |
 |---------|-----------|
@@ -192,17 +205,17 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 | Domain breakdown bars | Each bar width animates 0→value% with `AnimatedProgressBar`, staggered 100ms apart. |
 | Explanation card | `StaggeredItem` — last element to appear, subtle fade-slide. |
 
-### 3.7 Notifications Screen (`notifications_screen.dart`) — S13
+### 3.8 Notifications Screen (`notifications_screen.dart`) — S13
 
 | Element | Animation |
 |---------|-----------|
 | Date group headers | `FadeSlideTransition` (fade + slight slide-down). |
-| Notification items | `StaggeredColumn` within each group. Items slide in from right (slide-left + fade) — unique direction for notifications. |
-| Swipe to dismiss | Keep `Dismissible` but add spring snap-back on cancelled swipe (DismissDirection with `movementDuration`). |
+| Notification items | `StaggeredColumn` within each group. Standard slide-up + fade entrance (same as other screens). |
+| Swipe to dismiss | Keep `Dismissible` with `DismissDirection.startToEnd` (swipe right to dismiss). Spring snap-back on cancelled swipe. |
 | Unread dot | `PulsingWidget` — single pulse on first appear, then static. |
 | Mark All Read | Button press triggers all unread dots to scale down simultaneously (batch animation). |
 
-### 3.8 Add Vitals Sheet (`vitals_entry_sheet.dart`) — S14
+### 3.9 Add Vitals Sheet (`vitals_entry_sheet.dart`) — S14
 
 | Element | Animation |
 |---------|-----------|
@@ -212,7 +225,7 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 | Validation errors | `ShakeWidget` on invalid fields (horizontal shake on submit attempt). |
 | Save button | `SpringTapCard`. On success: brief green flash + sheet dismisses with slide-down. |
 
-### 3.9 Medication Adherence (`medication_adherence_section.dart`) — S15
+### 3.10 Medication Adherence (`medication_adherence_section.dart`) — S15
 
 | Element | Animation |
 |---------|-----------|
@@ -220,7 +233,7 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 | Streak rows | `StaggeredColumn`. Each row uses `AnimatedProgressBar` for the streak bar. |
 | Missed dose items | Slide in from left (contrasts with right-side streaks) with subtle red-tinted entrance. |
 
-### 3.10 Symptom Logger Sheet (`symptom_logger_sheet.dart`) — S16
+### 3.11 Symptom Logger Sheet (`symptom_logger_sheet.dart`) — S16
 
 | Element | Animation |
 |---------|-----------|
@@ -239,6 +252,7 @@ Update `buildAppTheme()` in `lib/theme.dart` to use Poppins for all text styles:
 
 ```
 lib/theme/motion.dart                          # Motion constants
+lib/widgets/animations/animations.dart         # Barrel export file
 lib/widgets/animations/fade_slide_transition.dart
 lib/widgets/animations/staggered_item.dart
 lib/widgets/animations/staggered_column.dart
@@ -249,6 +263,8 @@ lib/widgets/animations/animated_progress_bar.dart
 lib/widgets/animations/pulsing_widget.dart
 lib/widgets/animations/shake_widget.dart
 ```
+
+The barrel file `animations.dart` exports all 9 animation widgets so screens only need one import: `import '../widgets/animations/animations.dart';`
 
 ### Modified Files (update)
 
@@ -275,10 +291,10 @@ lib/widgets/glucose_entry_card.dart            # ShakeWidget on validation
 lib/widgets/weight_entry_card.dart             # ShakeWidget on validation
 lib/widgets/settings_tile.dart                 # SpringTapCard wrap
 lib/widgets/settings_group.dart                # StaggeredItem wrap
-lib/widgets/speed_dial_fab.dart                # Spring + glassmorphic scrim (if extracted)
+lib/screens/learn_tab.dart                     # StaggeredColumn + SpringTapCard
 ```
 
-### Total: 9 new files, ~22 modified files
+### Total: 11 new files, ~22 modified files
 
 ---
 
@@ -294,11 +310,12 @@ No other new packages. All animations built from Flutter primitives (`AnimationC
 
 ## 6. Testing Strategy
 
-- **Animation widgets:** Unit tests verify controller lifecycle (init, forward, dispose). Verify `StaggeredItem` computes correct delay. Verify `CountUpText` re-animates on value change.
-- **SpringTapCard:** Widget test with `tester.press()` verifying scale transform changes.
-- **GlassmorphicContainer:** Widget test verifying `BackdropFilter` is in tree.
-- **Screen integration:** Existing screen tests continue to pass — animation widgets wrap existing content without changing structure.
+- **Animation widgets:** Unit tests verify controller lifecycle (init, forward, dispose). Verify `StaggeredItem` computes correct `Interval` fractions for a given index. Verify `CountUpText` re-animates on value change via `didUpdateWidget`.
+- **SpringTapCard:** Widget test using `tester.press()` then `tester.pump(Duration(milliseconds: 100))` — verify `Transform.scale` value has changed from 1.0. Use explicit `pump(duration)` calls, NOT `pumpAndSettle()`, because spring simulations have no fixed end time and `pumpAndSettle` can be slow/flaky in CI.
+- **GlassmorphicContainer:** Widget test verifying correct fallback on web — check for `Container` with opacity (not `BackdropFilter`) when `kIsWeb` is true.
+- **Screen integration:** Existing screen tests continue to pass — animation widgets wrap existing content without changing structure. New animation wrappers are transparent to `find.text()` and `find.byType()` finders.
 - **Visual regression:** Manual Chrome testing for smooth 60fps on all screens.
+- **Spring test pattern:** For all spring-physics widgets, use `tester.pump(const Duration(milliseconds: 50))` in a loop to advance frames, then assert on intermediate transform values. Define `kTestSettleDuration = Duration(milliseconds: 500)` for tests that need the spring to settle.
 
 ---
 
@@ -306,9 +323,9 @@ No other new packages. All animations built from Flutter primitives (`AnimationC
 
 - **Stagger limit:** Max 8 staggered items per screen (640ms total entrance). Beyond 8, items appear instantly.
 - **Spring simulation:** `SpringSimulation` is computed per frame — lightweight on web.
-- **BackdropFilter on web:** Acceptable for bottom sheets (small area). Not used full-screen. Falls back to solid color on low-end devices.
+- **BackdropFilter on web:** Not used. `GlassmorphicContainer` detects `kIsWeb` and falls back to semi-transparent solid container. No compositing cost on web.
 - **AnimationController disposal:** Every widget with a controller uses `SingleTickerProviderStateMixin` and disposes in `dispose()`.
-- **AutomaticKeepAlive:** `StaggeredItem` uses keepalive to prevent re-animation on tab switch.
+- **AutomaticKeepAlive:** `StaggeredItem` has `keepAlive` prop (default `false`). Only set `true` for top-level tab content in `MainShell`. Scrollable list items (notifications, settings tiles) use default `false` to allow Flutter's lazy rendering.
 
 ---
 
