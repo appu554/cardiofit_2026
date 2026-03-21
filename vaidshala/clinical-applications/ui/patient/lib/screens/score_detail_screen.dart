@@ -8,6 +8,7 @@ import '../widgets/domain_breakdown_bar.dart';
 import '../widgets/full_sparkline_chart.dart';
 import '../widgets/score_explanation_card.dart';
 import '../widgets/score_ring.dart';
+import '../widgets/animations/animations.dart';
 
 IconData mapIcon(String name) => IconMapper.fromString(name);
 
@@ -25,58 +26,82 @@ class ScoreDetailScreen extends ConsumerWidget {
         child: Column(
           children: [
             // Hero ScoreRing (large)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Hero(
-                  tag: 'score-ring',
-                  child: ScoreRing(score: detail.score, size: 180),
+            StaggeredItem(
+              index: 0,
+              keepAlive: true,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Hero(
+                    tag: 'score-ring',
+                    child: ScoreRing(score: detail.score, size: 180),
+                  ),
                 ),
               ),
             ),
 
             // 12-week sparkline
-            if (detail.scoreHistory.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Text(
-                  '12-Week Trend',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            if (detail.scoreHistory.isNotEmpty)
+              StaggeredItem(
+                index: 1,
+                keepAlive: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+                      child: Text(
+                        '12-Week Trend',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    FullSparklineChart(
+                      data: detail.scoreHistory,
+                      targetLine: 60,
+                      height: 120,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                 ),
               ),
-              FullSparklineChart(
-                data: detail.scoreHistory,
-                targetLine: 60,
-                height: 120,
-              ),
-              const SizedBox(height: 16),
-            ],
 
             // Domain breakdown
-            if (detail.domains.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  'Score Breakdown',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            if (detail.domains.isNotEmpty)
+              StaggeredItem(
+                index: 2,
+                keepAlive: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      child: Text(
+                        'Score Breakdown',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    ...detail.domains.map(
+                      (d) => DomainBreakdownBar(
+                        label: d.name,
+                        score: d.score,
+                        target: d.target,
+                        icon: mapIcon(d.icon),
+                        color: AppColors.scoreColor(d.score),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              ...detail.domains.map(
-                (d) => DomainBreakdownBar(
-                  label: d.name,
-                  score: d.score,
-                  target: d.target,
-                  icon: mapIcon(d.icon),
-                  color: AppColors.scoreColor(d.score),
-                ),
-              ),
-            ],
 
             // Explanation card
             if (detail.explanation.isNotEmpty)
-              ScoreExplanationCard(
-                score: detail.score ?? 0,
-                explanation: detail.explanation,
+              StaggeredItem(
+                index: 3,
+                keepAlive: true,
+                child: ScoreExplanationCard(
+                  score: detail.score ?? 0,
+                  explanation: detail.explanation,
+                ),
               ),
           ],
         ),

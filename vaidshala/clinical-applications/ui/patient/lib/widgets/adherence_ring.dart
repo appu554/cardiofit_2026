@@ -1,6 +1,7 @@
 // lib/widgets/adherence_ring.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import 'animations/animations.dart';
 
 /// Small circular progress indicator showing an adherence percentage.
 class AdherenceRing extends StatelessWidget {
@@ -27,8 +28,9 @@ class AdherenceRing extends StatelessWidget {
             backgroundColor: Colors.grey.shade200,
             valueColor: const AlwaysStoppedAnimation(AppColors.scoreGreen),
           ),
-          Text(
-            '$percentage%',
+          CountUpText(
+            value: percentage.toDouble(),
+            suffix: '%',
             style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.bold,

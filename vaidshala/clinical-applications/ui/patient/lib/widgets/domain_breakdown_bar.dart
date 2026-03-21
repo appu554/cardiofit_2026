@@ -1,6 +1,7 @@
 // lib/widgets/domain_breakdown_bar.dart
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import 'animations/animations.dart';
 
 class DomainBreakdownBar extends StatelessWidget {
   final String label;
@@ -68,20 +69,11 @@ class DomainBreakdownBar extends StatelessWidget {
                 ),
               ),
               // Score bar (animated)
-              TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0, end: score / 100),
-                duration: const Duration(milliseconds: 800),
-                curve: Curves.easeOutCubic,
-                builder: (_, value, __) => FractionallySizedBox(
-                  widthFactor: value.clamp(0, 1),
-                  child: Container(
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: color,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
+              AnimatedProgressBar(
+                value: score / 100,
+                color: color,
+                height: 8,
+                borderRadius: 4,
               ),
             ],
           ),
