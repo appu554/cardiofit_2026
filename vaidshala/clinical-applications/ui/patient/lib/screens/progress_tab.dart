@@ -1,7 +1,6 @@
 // lib/screens/progress_tab.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../models/milestone.dart';
 import '../providers/progress_provider.dart';
 import '../theme.dart';
 import '../widgets/cause_effect_card.dart';

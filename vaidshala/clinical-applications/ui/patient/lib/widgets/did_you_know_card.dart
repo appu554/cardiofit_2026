@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../theme.dart';
 
 class DidYouKnowCard extends StatelessWidget {
   final String tip;
