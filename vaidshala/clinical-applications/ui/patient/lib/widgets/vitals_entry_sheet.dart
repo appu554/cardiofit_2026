@@ -1,5 +1,6 @@
 // lib/widgets/vitals_entry_sheet.dart
 import 'package:flutter/material.dart';
+import 'animations/animations.dart';
 import 'bp_entry_card.dart';
 import 'glucose_entry_card.dart';
 import 'weight_entry_card.dart';
@@ -15,11 +16,8 @@ class VitalsEntrySheet extends StatelessWidget {
       maxChildSize: 0.95,
       expand: false,
       builder: (context, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
+        return GlassmorphicContainer(
+          borderRadius: 20,
           child: Column(
             children: [
               // Drag handle
@@ -43,9 +41,9 @@ class VitalsEntrySheet extends StatelessWidget {
                 child: ListView(
                   controller: scrollController,
                   children: [
-                    BpEntryCard(onSaved: () => Navigator.pop(context)),
-                    GlucoseEntryCard(onSaved: () => Navigator.pop(context)),
-                    WeightEntryCard(onSaved: () => Navigator.pop(context)),
+                    StaggeredItem(index: 0, child: BpEntryCard(onSaved: () => Navigator.pop(context))),
+                    StaggeredItem(index: 1, child: GlucoseEntryCard(onSaved: () => Navigator.pop(context))),
+                    StaggeredItem(index: 2, child: WeightEntryCard(onSaved: () => Navigator.pop(context))),
                     const SizedBox(height: 32),
                   ],
                 ),
