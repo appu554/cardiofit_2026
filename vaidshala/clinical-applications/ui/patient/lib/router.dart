@@ -13,6 +13,9 @@ import 'screens/my_day_tab.dart';
 import 'screens/learn_tab.dart';
 import 'screens/abha_verification_screen.dart';
 import 'screens/family_view_screen.dart';
+import 'screens/settings_screen.dart';
+import 'screens/score_detail_screen.dart';
+import 'screens/notifications_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authStateProvider);
@@ -76,6 +79,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => FamilyViewScreen(
           token: state.pathParameters['token']!,
         ),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/score-detail',
+        builder: (context, state) => const ScoreDetailScreen(),
+      ),
+      GoRoute(
+        path: '/notifications',
+        builder: (context, state) => const NotificationsScreen(),
       ),
       ShellRoute(
         builder: (context, state, child) => MainShell(child: child),
