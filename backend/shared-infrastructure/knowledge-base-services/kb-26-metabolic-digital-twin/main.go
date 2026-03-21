@@ -115,7 +115,14 @@ func main() {
 		signalConsumer := services.NewSignalConsumer(brokers, logger)
 		consumerCtx, consumerCancel := context.WithCancel(context.Background())
 		defer consumerCancel()
+		// NOTE: No-op handler — routing validates the pipeline end-to-end but
+		// does not process signals yet. Wire eventProcessor.HandleSignal here
+		// when Phase 2 signal processing is implemented. Do NOT enable
+		// KB26_KAFKA_ENABLED in staging/production until this is wired.
 		signalConsumer.Start(consumerCtx, func(ctx context.Context, action services.RouteAction, patientID string, payload json.RawMessage) error {
+			logger.Debug("KB-26 signal received (not yet wired)",
+				zap.String("action", string(action)),
+				zap.String("patient_id", patientID))
 			return nil
 		})
 		defer signalConsumer.Stop()

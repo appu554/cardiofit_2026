@@ -145,12 +145,16 @@ func (c *SignalConsumer) consumeLoop(ctx context.Context, reader *kafka.Reader, 
 
 		if err != nil {
 			c.log.Warn("Signal routing error", zap.Error(err))
-			reader.CommitMessages(ctx, msg)
+			if commitErr := reader.CommitMessages(ctx, msg); commitErr != nil {
+				c.log.Warn("Failed to commit message after routing error", zap.Error(commitErr))
+			}
 			continue
 		}
 
 		if action == RouteSkip {
-			reader.CommitMessages(ctx, msg)
+			if commitErr := reader.CommitMessages(ctx, msg); commitErr != nil {
+				c.log.Warn("Failed to commit skipped message", zap.Error(commitErr))
+			}
 			continue
 		}
 
@@ -161,7 +165,9 @@ func (c *SignalConsumer) consumeLoop(ctx context.Context, reader *kafka.Reader, 
 				zap.Error(handlerErr))
 		}
 
-		reader.CommitMessages(ctx, msg)
+		if commitErr := reader.CommitMessages(ctx, msg); commitErr != nil {
+			c.log.Warn("Failed to commit message", zap.Error(commitErr))
+		}
 	}
 }
 
