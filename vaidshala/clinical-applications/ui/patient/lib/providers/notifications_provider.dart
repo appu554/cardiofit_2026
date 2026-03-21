@@ -1,6 +1,7 @@
 // lib/providers/notifications_provider.dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/app_notification.dart';
+import '../services/drift_database.dart';
 import 'database_provider.dart';
 
 final notificationsProvider =
@@ -114,6 +115,6 @@ List<AppNotification> _mockSeedData() {
 }
 
 // Drift companions for seed data — only used if Drift DB is available
-List<dynamic> _seedCompanions() {
+List<NotificationsCompanion> _seedCompanions() {
   return [];
 }

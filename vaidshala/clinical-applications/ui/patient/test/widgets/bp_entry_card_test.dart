@@ -13,7 +13,7 @@ import 'package:vaidshala_patient/providers/vitals_entry_provider.dart';
 
 /// In-memory notifier that skips database access — safe for widget tests.
 class _FakeVitalsNotifier extends VitalsEntryNotifier {
-  _FakeVitalsNotifier() : super(_FakeRef());
+  _FakeVitalsNotifier(super.ref);
 
   @override
   Future<bool> saveBp() async {
@@ -22,15 +22,10 @@ class _FakeVitalsNotifier extends VitalsEntryNotifier {
   }
 }
 
-class _FakeRef implements Ref {
-  @override
-  dynamic noSuchMethod(Invocation invocation) => null;
-}
-
 void main() {
   Widget buildWidget(Widget child) => ProviderScope(
         overrides: [
-          vitalsEntryProvider.overrideWith(() => _FakeVitalsNotifier()),
+          vitalsEntryProvider.overrideWith((ref) => _FakeVitalsNotifier(ref)),
         ],
         child: MaterialApp(home: Scaffold(body: child)),
       );

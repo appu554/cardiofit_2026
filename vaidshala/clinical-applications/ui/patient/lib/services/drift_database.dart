@@ -164,7 +164,7 @@ class AppDatabase extends _$AppDatabase {
         type: type,
         value: value,
         unit: unit,
-        timestamp: Value(DateTime.now().millisecondsSinceEpoch),
+        timestamp: DateTime.now().millisecondsSinceEpoch,
       ));
 
   Future<List<ObservationQueueData>> recentObservations(String type) =>
@@ -186,7 +186,7 @@ class AppDatabase extends _$AppDatabase {
         actionId: actionId,
         medicationName: medicationName,
         completed: completed,
-        timestamp: Value(DateTime.now().millisecondsSinceEpoch),
+        timestamp: DateTime.now().millisecondsSinceEpoch,
       ));
 
   Future<List<MedicationLogData>> medicationHistory({int days = 14}) {
@@ -209,7 +209,7 @@ class AppDatabase extends _$AppDatabase {
         symptom: symptom,
         severity: severity,
         notes: Value(notes),
-        timestamp: Value(DateTime.now().millisecondsSinceEpoch),
+        timestamp: DateTime.now().millisecondsSinceEpoch,
       ));
 
   Future<List<SymptomLogData>> recentSymptoms({int days = 30}) {
