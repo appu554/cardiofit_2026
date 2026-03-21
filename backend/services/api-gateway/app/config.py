@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     WORKFLOW_ENGINE_SERVICE_URL: str = os.getenv("WORKFLOW_ENGINE_SERVICE_URL", "http://localhost:8015")
     GRAPHQL_SERVICE_URL: str = os.getenv("GRAPHQL_SERVICE_URL", "http://localhost:8005")
 
+    # Vaidshala Clinical Runtime Services
+    INGESTION_SERVICE_URL: str = os.getenv("INGESTION_SERVICE_URL", "http://localhost:8140")
+    INTAKE_SERVICE_URL: str = os.getenv("INTAKE_SERVICE_URL", "http://localhost:8141")
+
     # Apollo Federation Gateway URL
     APOLLO_FEDERATION_URL: str = os.getenv("APOLLO_FEDERATION_URL", "http://localhost:4000/graphql")
 

@@ -98,10 +98,31 @@ SERVICE_ROUTES = {
         "strip_prefix": False,
         "public_paths": []
     },
-    # Device Data Ingestion service routes (with outbox pattern)
-    "device_ingestion": {
+    # Ingestion Service — FHIR inbound (must be before broader /ingest prefix)
+    "ingestion_fhir": {
+        "prefix": "/api/v1/ingest/fhir",
+        "target": settings.INGESTION_SERVICE_URL,
+        "strip_prefix": False,
+        "public_paths": []
+    },
+    # Ingestion Service — source-specific receivers
+    "ingestion": {
         "prefix": "/api/v1/ingest",
-        "target": settings.DEVICE_INGESTION_SERVICE_URL,
+        "target": settings.INGESTION_SERVICE_URL,
+        "strip_prefix": False,
+        "public_paths": []
+    },
+    # Intake-Onboarding Service — FHIR CRUD + $operations
+    "intake_fhir": {
+        "prefix": "/api/v1/intake/fhir",
+        "target": settings.INTAKE_SERVICE_URL,
+        "strip_prefix": False,
+        "public_paths": []
+    },
+    # Intake-Onboarding Service
+    "intake_onboarding": {
+        "prefix": "/api/v1/intake",
+        "target": settings.INTAKE_SERVICE_URL,
         "strip_prefix": False,
         "public_paths": []
     }
@@ -369,6 +390,38 @@ async def check_permissions_with_auth_service(request: Request, path: str) -> tu
         elif request.method in ["POST", "PUT"] and "timeline:write" in user_permissions:
             return True, status.HTTP_200_OK, ""
         elif request.method == "DELETE" and ("timeline:delete" in user_permissions or "timeline:write" in user_permissions):
+            return True, status.HTTP_200_OK, ""
+    elif path.startswith("/api/v1/intake"):
+        if "$approve" in path or "$escalate" in path or "$request-clarification" in path:
+            if request.method == "POST" and "intake:review" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+        elif "DetectedIssue" in path:
+            if request.method == "GET" and "safety:read" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+        elif "$enroll" in path or "$verify" in path or "$link-abha" in path:
+            if request.method == "POST" and "intake:enroll" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+        elif "$checkin" in path:
+            if request.method == "POST" and "intake:checkin" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+        else:
+            if request.method == "GET" and "intake:read" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+            elif request.method in ["POST", "PUT"] and "intake:write" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+    elif path.startswith("/api/v1/ingest"):
+        if "$source-status" in path or "OperationOutcome" in path:
+            if request.method == "GET" and "ingest:admin" in user_permissions:
+                return True, status.HTTP_200_OK, ""
+        elif "/labs" in path and request.method == "POST" and "ingest:lab" in user_permissions:
+            return True, status.HTTP_200_OK, ""
+        elif "/ehr" in path and request.method == "POST" and "ingest:ehr" in user_permissions:
+            return True, status.HTTP_200_OK, ""
+        elif "/abdm" in path and request.method == "POST" and "ingest:abdm" in user_permissions:
+            return True, status.HTTP_200_OK, ""
+        elif ("/devices" in path or "/wearables" in path) and request.method == "POST" and "ingest:device" in user_permissions:
+            return True, status.HTTP_200_OK, ""
+        elif request.method == "POST" and "ingest:write" in user_permissions:
             return True, status.HTTP_200_OK, ""
 
     # If no specific rule matches, deny access

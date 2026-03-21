@@ -88,6 +88,64 @@ ROUTE_PERMISSIONS = {
         "POST": ["admin:access"],
         "PUT": ["admin:access"],
         "DELETE": ["admin:access"]
+    },
+    # === Intake-Onboarding Service ===
+    r"^/api/v1/intake/fhir/Patient/\$enroll": {
+        "POST": ["intake:enroll"]
+    },
+    r"^/api/v1/intake/fhir/Patient/[^/]+/\$verify": {
+        "POST": ["intake:enroll"]
+    },
+    r"^/api/v1/intake/fhir/Patient/[^/]+/\$checkin": {
+        "POST": ["intake:checkin"]
+    },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$fill-slot": {
+        "POST": ["intake:write"]
+    },
+    r"^/api/v1/intake/fhir/Observation": {
+        "POST": ["intake:write"],
+        "GET": ["intake:read"]
+    },
+    r"^/api/v1/intake/fhir/Patient": {
+        "GET": ["patient:read"],
+        "POST": ["patient:write"]
+    },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$approve": {
+        "POST": ["intake:review"]
+    },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$escalate": {
+        "POST": ["intake:review"]
+    },
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$request-clarification": {
+        "POST": ["intake:review"]
+    },
+    r"^/api/v1/intake/fhir/DetectedIssue": {
+        "GET": ["safety:read"]
+    },
+    # === Ingestion Service ===
+    r"^/api/v1/ingest/fhir/Observation": {
+        "POST": ["ingest:write"]
+    },
+    r"^/api/v1/ingest/devices": {
+        "POST": ["ingest:device"]
+    },
+    r"^/api/v1/ingest/wearables": {
+        "POST": ["ingest:device"]
+    },
+    r"^/api/v1/ingest/fhir/OperationOutcome": {
+        "GET": ["ingest:admin"]
+    },
+    r"^/api/v1/ingest/\$source-status": {
+        "GET": ["ingest:admin"]
+    },
+    r"^/api/v1/ingest/labs": {
+        "POST": ["ingest:lab"]
+    },
+    r"^/api/v1/ingest/ehr": {
+        "POST": ["ingest:ehr"]
+    },
+    r"^/api/v1/ingest/abdm": {
+        "POST": ["ingest:abdm"]
     }
 }
 
@@ -100,7 +158,37 @@ ROLE_ROUTE_RESTRICTIONS = {
     r"^/api/admin": ["admin"],
 
     # Routes that require specific roles
-    r"^/api/prescriptions": ["doctor", "pharmacist"]
+    r"^/api/prescriptions": ["doctor", "pharmacist"],
+    # === Intake-Onboarding ===
+    r"^/api/v1/intake/fhir/Patient/\$enroll":
+        ["patient", "pharmacist", "physician", "asha"],
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$fill-slot":
+        ["patient", "pharmacist", "physician", "asha"],
+    r"^/api/v1/intake/fhir/Patient/[^/]+/\$checkin":
+        ["patient"],
+    r"^/api/v1/intake/fhir/Encounter/[^/]+/\$(approve|escalate|request-clarification)":
+        ["pharmacist", "physician"],
+    r"^/api/v1/intake/fhir/DetectedIssue":
+        ["pharmacist", "physician"],
+    r"^/api/v1/intake/fhir/Encounter":
+        ["pharmacist", "physician"],
+    # === Ingestion ===
+    r"^/api/v1/ingest/fhir/Observation":
+        ["patient", "asha", "physician"],
+    r"^/api/v1/ingest/devices":
+        ["patient"],
+    r"^/api/v1/ingest/wearables":
+        ["patient"],
+    r"^/api/v1/ingest/\$source-status":
+        ["admin", "pharmacist", "physician"],
+    r"^/api/v1/ingest/fhir/OperationOutcome":
+        ["admin", "physician"],
+    r"^/api/v1/ingest/labs":
+        ["system", "physician"],
+    r"^/api/v1/ingest/ehr":
+        ["system", "physician"],
+    r"^/api/v1/ingest/abdm":
+        ["system"]
 }
 
 class RBACMiddleware(BaseHTTPMiddleware):
