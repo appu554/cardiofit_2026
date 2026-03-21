@@ -1,6 +1,10 @@
 package signals
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"errors"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // SignalMetrics holds Prometheus metrics for the clinical signal pipeline.
 type SignalMetrics struct {
@@ -46,8 +50,20 @@ func NewSignalMetrics(reg prometheus.Registerer) *SignalMetrics {
 			Help: "Unpublished outbox rows awaiting Kafka relay",
 		}),
 	}
-	reg.MustRegister(m.ConsumerMessagesTotal, m.ConsumerProcessingDuration,
+	collectors := []prometheus.Collector{
+		m.ConsumerMessagesTotal, m.ConsumerProcessingDuration,
 		m.ConsumerErrorsTotal, m.ConsumerLag, m.DLQMessagesTotal,
-		m.OutboxRelayPublishedTotal, m.OutboxRelayPendingCount)
+		m.OutboxRelayPublishedTotal, m.OutboxRelayPendingCount,
+	}
+	for _, c := range collectors {
+		if err := reg.Register(c); err != nil {
+			var are prometheus.AlreadyRegisteredError
+			if errors.As(err, &are) {
+				// Re-use the previously registered collector (safe in tests).
+				continue
+			}
+			panic(err)
+		}
+	}
 	return m
 }

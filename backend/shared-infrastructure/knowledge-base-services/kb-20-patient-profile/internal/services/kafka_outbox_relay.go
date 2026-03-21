@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -69,10 +70,13 @@ func (w *KafkaGoWriter) WriteMessage(ctx context.Context, topic, key string, val
 }
 
 func (w *KafkaGoWriter) Close() error {
+	var errs []error
 	for _, wr := range w.writers {
-		wr.Close()
+		if err := wr.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // KafkaOutboxRelay polls the event_outbox table for Kafka-unpublished rows,

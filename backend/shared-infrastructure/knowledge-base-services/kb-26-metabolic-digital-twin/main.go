@@ -107,7 +107,11 @@ func main() {
 
 	// 9b. Start Kafka signal consumer (feature-flagged)
 	if os.Getenv("KB26_KAFKA_ENABLED") == "true" {
-		brokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
+		brokerEnv := os.Getenv("KAFKA_BROKERS")
+		if brokerEnv == "" {
+			logger.Fatal("KB26_KAFKA_ENABLED is set but KAFKA_BROKERS is not configured")
+		}
+		brokers := strings.Split(brokerEnv, ",")
 		signalConsumer := services.NewSignalConsumer(brokers, logger)
 		consumerCtx, consumerCancel := context.WithCancel(context.Background())
 		defer consumerCancel()
