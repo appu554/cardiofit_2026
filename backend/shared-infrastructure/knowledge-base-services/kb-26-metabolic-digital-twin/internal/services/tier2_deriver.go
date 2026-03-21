@@ -15,6 +15,34 @@ func ComputeMAP(sbp, dbp float64) float64 {
 	return dbp + (sbp-dbp)/3.0
 }
 
+// ComputeEGFR_CKDEPI2021 computes eGFR using the CKD-EPI 2021 race-free equation.
+// Sex: "M" or "F". Creatinine in mg/dL. Age in years.
+// Returns eGFR in mL/min/1.73m².
+func ComputeEGFR_CKDEPI2021(creatinine float64, sex string, age int) float64 {
+	if creatinine <= 0 {
+		return 0
+	}
+
+	var kappa, alpha float64
+	var sexCoeff float64
+
+	if sex == "F" {
+		kappa = 0.7
+		alpha = -0.241
+		sexCoeff = 1.012
+	} else {
+		kappa = 0.9
+		alpha = -0.302
+		sexCoeff = 1.0
+	}
+
+	ratio := creatinine / kappa
+	minRatio := math.Min(ratio, 1.0)
+	maxRatio := math.Max(ratio, 1.0)
+
+	return 142 * math.Pow(minRatio, alpha) * math.Pow(maxRatio, -1.200) * math.Pow(0.9938, float64(age)) * sexCoeff
+}
+
 // ComputeVisceralFatProxy returns a composite 0-1 score estimating visceral
 // adiposity from waist circumference, height, triglycerides, and HDL.
 //

@@ -32,6 +32,22 @@ type TwinState struct {
 	DailySteps7dMean *float64   `json:"daily_steps_7d_mean,omitempty"`
 	RestingHR        *float64   `json:"resting_hr,omitempty"`
 
+	// Tier 1: Renal domain
+	Creatinine       *float64 `json:"creatinine,omitempty" gorm:"column:creatinine"`              // S11 (mg/dL)
+	ACR              *float64 `json:"acr,omitempty" gorm:"column:acr"`                            // S12 (mg/mmol)
+	Potassium        *float64 `json:"potassium,omitempty" gorm:"column:potassium"`                // S13 (mEq/L)
+
+	// Tier 1: Lipid panel
+	TotalCholesterol *float64 `json:"total_cholesterol,omitempty" gorm:"column:total_cholesterol"` // S17
+	HDL              *float64 `json:"hdl,omitempty" gorm:"column:hdl"`                            // S17
+	LDL              *float64 `json:"ldl,omitempty" gorm:"column:ldl"`                            // S17
+	Triglycerides    *float64 `json:"triglycerides,omitempty" gorm:"column:triglycerides"`         // S17
+
+	// Tier 1: Compliance and orthostatic
+	ComplianceScore  *float64 `json:"compliance_score,omitempty" gorm:"column:compliance_score"`   // S20 (0.0-1.0)
+	OrthostaticAlert bool     `json:"orthostatic_alert" gorm:"column:orthostatic_alert;default:false"` // S10
+	OrthostaticDrop  *float64 `json:"orthostatic_drop,omitempty" gorm:"column:orthostatic_drop"`   // S10 mmHg
+
 	// Tier 2: Reliably Derived
 	VisceralFatProxy    *float64 `json:"visceral_fat_proxy,omitempty"`
 	VisceralFatTrend    *string  `json:"visceral_fat_trend,omitempty"`

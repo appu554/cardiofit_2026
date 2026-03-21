@@ -1,0 +1,13 @@
+-- 004_twin_state_expansion.sql
+-- Add renal, lipid, compliance, and orthostatic fields to twin_states
+
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS creatinine DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS acr DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS potassium DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS total_cholesterol DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS hdl DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS ldl DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS triglycerides DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS compliance_score DOUBLE PRECISION;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS orthostatic_alert BOOLEAN DEFAULT FALSE;
+ALTER TABLE twin_states ADD COLUMN IF NOT EXISTS orthostatic_drop DOUBLE PRECISION;

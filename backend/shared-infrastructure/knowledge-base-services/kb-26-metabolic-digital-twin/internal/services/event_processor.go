@@ -83,6 +83,31 @@ func (ep *EventProcessor) ProcessObservation(ctx context.Context, event models.O
 		newTwin.DailySteps7dMean = &event.Value
 	case "sleep_quality", "sleep_score":
 		newTwin.SleepQuality = &event.Value
+	case "CREATININE", "creatinine":
+		newTwin.Creatinine = &event.Value
+		// Derive eGFR (Tier 2) using CKD-EPI 2021 — requires patient age and sex.
+		// For now, use defaults; full demographic lookup comes with KB-20 client integration.
+		egfr := ComputeEGFR_CKDEPI2021(event.Value, "M", 55)
+		newTwin.EGFR = &egfr
+		ts := event.Timestamp
+		newTwin.EGFRDate = &ts
+	case "ACR", "acr":
+		newTwin.ACR = &event.Value
+	case "POTASSIUM", "potassium":
+		newTwin.Potassium = &event.Value
+	case "TOTAL_CHOLESTEROL", "total_cholesterol":
+		newTwin.TotalCholesterol = &event.Value
+	case "HDL", "hdl":
+		newTwin.HDL = &event.Value
+	case "LDL", "ldl":
+		newTwin.LDL = &event.Value
+	case "TRIGLYCERIDES", "triglycerides":
+		newTwin.Triglycerides = &event.Value
+	case "COMPLIANCE", "compliance", "adherence_score":
+		newTwin.ComplianceScore = &event.Value
+	case "ORTHOSTATIC", "orthostatic":
+		newTwin.OrthostaticAlert = true
+		newTwin.OrthostaticDrop = &event.Value
 	default:
 		ep.logger.Debug("unrecognised observation code — skipping twin update",
 			zap.String("code", event.Code))
@@ -93,6 +118,14 @@ func (ep *EventProcessor) ProcessObservation(ctx context.Context, event models.O
 	if newTwin.SBP14dMean != nil && newTwin.DBP14dMean != nil {
 		mapVal := ComputeMAP(*newTwin.SBP14dMean, *newTwin.DBP14dMean)
 		newTwin.MAPValue = &mapVal
+	}
+
+	// Re-derive Trig:HDL ratio if both present
+	if newTwin.Triglycerides != nil && newTwin.HDL != nil {
+		ratio := ComputeTrigHDLRatio(*newTwin.Triglycerides, *newTwin.HDL)
+		if ratio > 0 {
+			newTwin.TrigHDLRatio = &ratio
+		}
 	}
 
 	if err := ep.twinUpdater.CreateSnapshot(&newTwin); err != nil {
