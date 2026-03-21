@@ -1,6 +1,8 @@
 // lib/router.dart
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'theme/motion.dart';
 import 'providers/auth_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/onboarding_screen.dart';
@@ -82,15 +84,30 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/settings',
-        builder: (context, state) => const SettingsScreen(),
+        pageBuilder: (context, state) => CustomTransitionPage(
+          key: state.pageKey,
+          child: const SettingsScreen(),
+          transitionsBuilder: _fadeThrough,
+          transitionDuration: AppMotion.kPageTransitionDuration,
+        ),
       ),
       GoRoute(
         path: '/score-detail',
-        builder: (context, state) => const ScoreDetailScreen(),
+        pageBuilder: (context, state) => CustomTransitionPage(
+          key: state.pageKey,
+          child: const ScoreDetailScreen(),
+          transitionsBuilder: _sharedAxisVertical,
+          transitionDuration: AppMotion.kPageTransitionDuration,
+        ),
       ),
       GoRoute(
         path: '/notifications',
-        builder: (context, state) => const NotificationsScreen(),
+        pageBuilder: (context, state) => CustomTransitionPage(
+          key: state.pageKey,
+          child: const NotificationsScreen(),
+          transitionsBuilder: _fadeThrough,
+          transitionDuration: AppMotion.kPageTransitionDuration,
+        ),
       ),
       ShellRoute(
         builder: (context, state, child) => MainShell(child: child),
@@ -124,3 +141,32 @@ final routerProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+Widget _fadeThrough(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child) {
+  return FadeTransition(
+    opacity: CurvedAnimation(parent: animation, curve: AppMotion.kDecelerate),
+    child: child,
+  );
+}
+
+Widget _sharedAxisVertical(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child) {
+  return AnimatedBuilder(
+    animation: animation,
+    builder: (context, child) => Transform.translate(
+      offset: Offset(0, 20.0 * (1.0 - animation.value)),
+      child: Opacity(
+        opacity: animation.value,
+        child: child,
+      ),
+    ),
+    child: child,
+  );
+}
