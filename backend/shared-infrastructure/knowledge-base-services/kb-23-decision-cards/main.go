@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -85,6 +86,32 @@ func main() {
 	// 10. Register HTTP routes
 	server.RegisterRoutes()
 
+	// 10b. Feature-flagged Kafka priority signal consumer
+	var priorityConsumer *services.PrioritySignalConsumer
+	if os.Getenv("KB23_KAFKA_ENABLED") == "true" {
+		brokerEnv := os.Getenv("KAFKA_BROKERS")
+		if brokerEnv == "" {
+			logger.Fatal("KB23_KAFKA_ENABLED is set but KAFKA_BROKERS is not configured")
+		}
+		brokers := strings.Split(brokerEnv, ",")
+
+		priorityHandler := services.NewPrioritySignalHandler(
+			server.Database(),
+			server.MCUGateCache(),
+			server.KB19Publisher(),
+			server.HypoHandler(),
+			server.MetricsCollector(),
+			logger,
+		)
+		priorityConsumer = services.NewPrioritySignalConsumer(brokers, logger)
+
+		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		defer consumerCancel()
+
+		priorityConsumer.Start(consumerCtx, priorityHandler.Handle)
+		logger.Info("KB-23 priority signal consumer started")
+	}
+
 	// 11. Log startup banner
 	fmt.Printf(`
 ========================================
@@ -155,6 +182,11 @@ API Endpoints:
 
 	logger.Info("Shutdown signal received", zap.String("signal", sig.String()))
 	logger.Info("Shutting down KB-23 Decision Cards Engine...")
+
+	if priorityConsumer != nil {
+		priorityConsumer.Stop()
+		logger.Info("Priority signal consumer stopped")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

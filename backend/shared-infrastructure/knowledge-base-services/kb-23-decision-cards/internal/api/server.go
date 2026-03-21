@@ -105,6 +105,21 @@ func (s *Server) InitServices() {
 	s.log.Info("all services initialized")
 }
 
+// MCUGateCache returns the gate cache (used by Kafka consumer wiring in main).
+func (s *Server) MCUGateCache() *services.MCUGateCache { return s.mcuGateCache }
+
+// KB19Publisher returns the KB-19 publisher (used by Kafka consumer wiring in main).
+func (s *Server) KB19Publisher() *services.KB19Publisher { return s.kb19Publisher }
+
+// HypoHandler returns the hypoglycaemia handler (used by Kafka consumer wiring in main).
+func (s *Server) HypoHandler() *services.HypoglycaemiaHandler { return s.hypoHandler }
+
+// MetricsCollector returns the metrics collector (used by Kafka consumer wiring in main).
+func (s *Server) MetricsCollector() *metrics.Collector { return s.metrics }
+
+// Database returns the database connection (used by Kafka consumer wiring in main).
+func (s *Server) Database() *database.Database { return s.db }
+
 // requestLogger middleware logs each request.
 func requestLogger(log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
