@@ -40,7 +40,7 @@ type AdherenceSignalRequest struct {
 // SymptomSignalRequest represents a patient-reported symptom (S18).
 type SymptomSignalRequest struct {
 	SymptomCode string    `json:"symptom_code" binding:"required"` // headache, dizziness, fatigue, etc.
-	Severity    int       `json:"severity" binding:"required"`     // 1-10 scale
+	Severity    int       `json:"severity" binding:"required,min=1,max=10"` // 1-10 scale
 	Duration    string    `json:"duration"`                        // "2 hours", "3 days"
 	Description string    `json:"description"`
 	MeasuredAt  time.Time `json:"measured_at" binding:"required"`
