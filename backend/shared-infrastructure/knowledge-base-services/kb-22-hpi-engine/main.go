@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -144,6 +145,19 @@ API Endpoints:
 			logger.Fatal("HTTP server failed", zap.Error(err))
 		}
 	}()
+
+	// 12b. Start Kafka signal consumer (feature-flagged)
+	if os.Getenv("KB22_KAFKA_ENABLED") == "true" {
+		brokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
+		signalConsumer := services.NewKB22SignalConsumer(brokers, logger)
+		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		defer consumerCancel()
+		signalConsumer.Start(consumerCtx, func(ctx context.Context, action services.KB22RouteAction, data []byte) error {
+			return nil
+		})
+		defer signalConsumer.Stop()
+		logger.Info("KB-22 Kafka signal consumer started")
+	}
 
 	logger.Info("KB-22 HPI Engine started successfully",
 		zap.String("port", cfg.Port),

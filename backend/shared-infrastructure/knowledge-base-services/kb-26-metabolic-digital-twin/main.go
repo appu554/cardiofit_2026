@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -101,6 +104,19 @@ func main() {
 			logger.Fatal("HTTP server failed", zap.Error(err))
 		}
 	}()
+
+	// 9b. Start Kafka signal consumer (feature-flagged)
+	if os.Getenv("KB26_KAFKA_ENABLED") == "true" {
+		brokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
+		signalConsumer := services.NewSignalConsumer(brokers, logger)
+		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		defer consumerCancel()
+		signalConsumer.Start(consumerCtx, func(ctx context.Context, action services.RouteAction, patientID string, payload json.RawMessage) error {
+			return nil
+		})
+		defer signalConsumer.Stop()
+		logger.Info("KB-26 Kafka signal consumer started")
+	}
 
 	// 10. Print service info
 	fmt.Println("╔══════════════════════════════════════════════════════════╗")
