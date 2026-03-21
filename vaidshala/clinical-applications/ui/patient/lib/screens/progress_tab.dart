@@ -1,9 +1,11 @@
 // lib/screens/progress_tab.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/medication_adherence_provider.dart';
 import '../providers/progress_provider.dart';
 import '../theme.dart';
 import '../widgets/cause_effect_card.dart';
+import '../widgets/medication_adherence_section.dart';
 import '../widgets/milestone_item.dart';
 import '../widgets/progress_metric_row.dart';
 import '../widgets/skeleton_card.dart';
@@ -38,12 +40,12 @@ class ProgressTab extends ConsumerWidget {
   }
 }
 
-class _ProgressContent extends StatelessWidget {
+class _ProgressContent extends ConsumerWidget {
   final ProgressState state;
   const _ProgressContent({required this.state});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 80),
@@ -109,6 +111,25 @@ class _ProgressContent extends StatelessWidget {
             ),
             ...state.milestones.map((m) => MilestoneItem(milestone: m)),
           ],
+
+          // Medication Adherence Section
+          ref.watch(medicationAdherenceProvider).when(
+            data: (adherence) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+                  child: Text(
+                    'Medication Adherence',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                MedicationAdherenceSection(adherence: adherence),
+              ],
+            ),
+            loading: () => const SizedBox.shrink(),
+            error: (_, __) => const SizedBox.shrink(),
+          ),
         ],
       ),
     );
