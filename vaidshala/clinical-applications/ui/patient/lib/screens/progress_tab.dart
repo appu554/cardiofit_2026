@@ -1,0 +1,117 @@
+// lib/screens/progress_tab.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../models/milestone.dart';
+import '../providers/progress_provider.dart';
+import '../theme.dart';
+import '../widgets/cause_effect_card.dart';
+import '../widgets/milestone_item.dart';
+import '../widgets/progress_metric_row.dart';
+import '../widgets/skeleton_card.dart';
+
+class ProgressTab extends ConsumerWidget {
+  const ProgressTab({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final progressAsync = ref.watch(progressProvider);
+
+    return SafeArea(
+      child: RefreshIndicator(
+        onRefresh: () => ref.read(progressProvider.notifier).refresh(),
+        child: progressAsync.when(
+          data: (state) => _ProgressContent(state: state),
+          loading: () => const SingleChildScrollView(
+            child: Column(
+              children: [
+                SkeletonCard(height: 200),
+                SkeletonCard(height: 150),
+                SkeletonCard(height: 120),
+              ],
+            ),
+          ),
+          error: (_, __) => const Center(
+            child: Text('Unable to load progress data'),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProgressContent extends StatelessWidget {
+  final ProgressState state;
+  const _ProgressContent({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 80),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text(
+              'Your Progress',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              'Track how your health is changing over time',
+              style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+            ),
+          ),
+
+          // Key Metrics Card
+          if (state.metrics.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+              child: Text(
+                'Key Metrics',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                children: state.metrics
+                    .map((m) => ProgressMetricRow(metric: m))
+                    .toList(),
+              ),
+            ),
+          ],
+
+          // Cause & Effect Section
+          if (state.causeEffects.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+              child: Text(
+                'How Your Actions Help',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            ...state.causeEffects
+                .map((ce) => CauseEffectCard(causeEffect: ce)),
+          ],
+
+          // Milestones Section
+          if (state.milestones.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+              child: Text(
+                'Milestones',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            ...state.milestones.map((m) => MilestoneItem(milestone: m)),
+          ],
+        ],
+      ),
+    );
+  }
+}
