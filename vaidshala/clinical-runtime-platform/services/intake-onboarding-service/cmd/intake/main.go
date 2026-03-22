@@ -15,24 +15,21 @@ import (
 
 	"github.com/cardiofit/intake-onboarding-service/internal/api"
 	"github.com/cardiofit/intake-onboarding-service/internal/config"
+	"github.com/cardiofit/intake-onboarding-service/internal/flow"
+	intakekafka "github.com/cardiofit/intake-onboarding-service/internal/kafka"
+	"github.com/cardiofit/intake-onboarding-service/internal/safety"
 	"vaidshala/clinical-runtime-platform/pkg/fhirclient"
 )
 
 func main() {
-	logger, err := zap.NewProduction()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create logger: %v\n", err)
-		os.Exit(1)
-	}
+	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
-	cfg := config.Load()
-	logger.Info("Intake-Onboarding Service starting",
-		zap.String("port", cfg.Server.Port),
-		zap.String("environment", cfg.Environment),
-	)
+	logger.Info("Starting Intake-Onboarding Service...")
 
-	// ---- PostgreSQL ----
+	cfg := config.Load()
+
+	// Connect PostgreSQL
 	poolCfg, err := pgxpool.ParseConfig(cfg.Database.URL)
 	if err != nil {
 		logger.Fatal("invalid database URL", zap.Error(err))
@@ -40,68 +37,83 @@ func main() {
 	poolCfg.MaxConns = cfg.Database.MaxConnections
 	poolCfg.MaxConnLifetime = cfg.Database.ConnMaxLifetime
 
-	db, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
+	dbPool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
-		logger.Fatal("failed to create database pool", zap.Error(err))
+		logger.Fatal("Failed to connect to PostgreSQL", zap.Error(err))
 	}
-	defer db.Close()
+	defer dbPool.Close()
+	logger.Info("Connected to PostgreSQL")
 
-	// ---- Redis ----
-	redisOpts, err := redis.ParseURL(cfg.Redis.URL)
+	// Connect Redis
+	opt, err := redis.ParseURL(cfg.Redis.URL)
 	if err != nil {
-		logger.Fatal("invalid Redis URL", zap.Error(err))
+		logger.Fatal("Failed to parse Redis URL", zap.Error(err))
 	}
-	redisOpts.Password = cfg.Redis.Password
-	redisOpts.DB = cfg.Redis.DB
-	redisClient := redis.NewClient(redisOpts)
+	opt.Password = cfg.Redis.Password
+	opt.DB = cfg.Redis.DB
+	redisClient := redis.NewClient(opt)
 	defer redisClient.Close()
+	logger.Info("Connected to Redis")
 
-	// ---- FHIR Client (optional) ----
-	var fc *fhirclient.Client
+	// Create FHIR client (optional -- disabled in dev if no credentials)
+	var fhirClient *fhirclient.Client
 	if cfg.FHIR.Enabled {
-		fc, err = fhirclient.New(cfg.FHIR, logger)
+		fhirClient, err = fhirclient.New(cfg.FHIR, logger)
 		if err != nil {
-			logger.Warn("FHIR client initialization failed; FHIR endpoints will be unavailable",
-				zap.Error(err),
-			)
+			logger.Warn("FHIR Store client disabled — no credentials", zap.Error(err))
+		} else {
+			logger.Info("FHIR Store client initialized")
 		}
+	}
+
+	// Initialize safety engine (deterministic, no external deps)
+	safetyEngine := safety.NewEngine()
+	logger.Info("Safety engine initialized", zap.Int("hard_stops", 11), zap.Int("soft_flags", 8))
+
+	// Load flow graph
+	var flowEngine *flow.Engine
+	flowPath := "configs/flows/intake_full.yaml"
+	if graph, err := flow.LoadGraph(flowPath); err != nil {
+		logger.Warn("Flow graph not loaded — using stub mode", zap.Error(err))
 	} else {
-		logger.Info("FHIR client disabled; set FHIR_ENABLED=true to enable")
+		flowEngine = flow.NewEngine(graph)
+		logger.Info("Flow graph loaded", zap.String("id", graph.ID), zap.Int("nodes", len(graph.Nodes)))
 	}
 
-	// ---- HTTP Server ----
-	srv := api.NewServer(cfg, db, redisClient, fc, logger)
-
-	httpServer := &http.Server{
-		Addr:         ":" + cfg.Server.Port,
-		Handler:      srv.Router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+	// Initialize Kafka producer
+	var producer *intakekafka.Producer
+	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Brokers[0] != "" {
+		producer = intakekafka.NewProducer(cfg.Kafka.Brokers, logger)
+		defer producer.Close()
+		logger.Info("Kafka producer initialized", zap.Int("topics", len(intakekafka.AllTopics())))
 	}
 
-	// Start listening in a goroutine.
+	// Create HTTP server with all dependencies
+	server := api.NewServer(cfg, dbPool, redisClient, fhirClient, logger,
+		safetyEngine, flowEngine, producer)
+
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%s", cfg.Server.Port),
+		Handler: server.Router,
+	}
+
 	go func() {
-		logger.Info("Intake-Onboarding Service listening",
-			zap.String("addr", httpServer.Addr),
-		)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("HTTP server error", zap.Error(err))
+		logger.Info("Intake-Onboarding Service listening", zap.String("port", cfg.Server.Port))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatal("Failed to start HTTP server", zap.Error(err))
 		}
 	}()
 
-	// ---- Graceful Shutdown ----
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-quit
-	logger.Info("Intake-Onboarding Service shutting down", zap.String("signal", sig.String()))
+	<-quit
 
+	logger.Info("Shutting down Intake-Onboarding Service...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := httpServer.Shutdown(ctx); err != nil {
-		logger.Error("HTTP server forced shutdown", zap.Error(err))
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Fatal("Server forced to shutdown", zap.Error(err))
 	}
-
 	logger.Info("Intake-Onboarding Service stopped")
 }

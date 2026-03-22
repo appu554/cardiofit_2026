@@ -13,9 +13,10 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/startupz", s.handleStartupz)
 	s.Router.GET("/metrics", s.prometheusHandler())
 
+	// FHIR CRUD (passthrough to FHIR Store -- Phase 4 for full implementation)
 	fhir := s.Router.Group("/fhir")
 	{
-		// Patient CRUD
+		// Patient
 		fhir.POST("/Patient", s.stubHandler("Create Patient"))
 		fhir.GET("/Patient/:id", s.stubHandler("Read Patient"))
 		fhir.PUT("/Patient/:id", s.stubHandler("Update Patient"))
@@ -38,26 +39,30 @@ func (s *Server) setupRoutes() {
 		fhir.GET("/Condition", s.stubHandler("Search Condition"))
 		fhir.POST("", s.stubHandler("FHIR Transaction Bundle"))
 
-		// $operations - Enrollment
-		fhir.POST("/Patient/$enroll", s.stubHandler("Enroll Patient"))
+		// -- LIVE $operations (Phase 3 -- wired to real handlers) --
+
+		// Enrollment
+		fhir.POST("/Patient/$enroll", s.appHandler.HandleEnroll)
+
+		// Safety engine
+		fhir.POST("/Patient/:id/$evaluate-safety", s.appHandler.HandleEvaluateSafety)
+		fhir.POST("/Encounter/:id/$fill-slot", s.appHandler.HandleFillSlot)
+
+		// -- STUB $operations (Phase 4-5) --
 		fhir.POST("/Patient/:id/$verify-otp", s.stubHandler("Verify OTP"))
 		fhir.POST("/Patient/:id/$link-abha", s.stubHandler("Link ABHA"))
 
-		// $operations - Safety
-		fhir.POST("/Patient/:id/$evaluate-safety", s.stubHandler("Evaluate Safety"))
-		fhir.POST("/Encounter/:id/$fill-slot", s.stubHandler("Fill Slot"))
-
-		// $operations - Review
+		// Review
 		fhir.POST("/Encounter/:id/$submit-review", s.stubHandler("Submit Review"))
 		fhir.POST("/Encounter/:id/$approve", s.stubHandler("Approve"))
 		fhir.POST("/Encounter/:id/$request-clarification", s.stubHandler("Request Clarification"))
 		fhir.POST("/Encounter/:id/$escalate", s.stubHandler("Escalate"))
 
-		// $operations - Check-in
+		// Check-in
 		fhir.POST("/Patient/:id/$checkin", s.stubHandler("Start Checkin"))
 		fhir.POST("/Encounter/:id/$checkin-slot", s.stubHandler("Fill Checkin Slot"))
 
-		// $operations - Co-enrollee
+		// Co-enrollee
 		fhir.POST("/Patient/:id/$register-co-enrollee", s.stubHandler("Register Co-enrollee"))
 	}
 }
@@ -67,7 +72,7 @@ func (s *Server) stubHandler(name string) gin.HandlerFunc {
 		c.JSON(http.StatusNotImplemented, gin.H{
 			"status":   "not_implemented",
 			"endpoint": name,
-			"message":  "This endpoint will be implemented in Phase 3",
+			"message":  "This endpoint will be implemented in Phase 4-5",
 		})
 	}
 }
