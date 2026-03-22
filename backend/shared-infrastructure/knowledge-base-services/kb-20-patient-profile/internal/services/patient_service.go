@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"kb-patient-profile/internal/cache"
+	"kb-patient-profile/internal/clients"
 	"kb-patient-profile/internal/database"
 	"kb-patient-profile/internal/models"
 )
@@ -38,10 +39,11 @@ const MinAdherenceScore = 0.85
 
 // PatientService handles patient profile CRUD and comorbidity derivation.
 type PatientService struct {
-	db       *database.Database
-	cache    *cache.Client
-	logger   *zap.Logger
-	eventBus *EventBus
+	db         *database.Database
+	cache      *cache.Client
+	logger     *zap.Logger
+	eventBus   *EventBus
+	kb21Client *clients.KB21Client // optional: for adherence score enrichment
 }
 
 // NewPatientService creates a patient service.
@@ -53,6 +55,13 @@ func NewPatientService(db *database.Database, cacheClient *cache.Client, logger 
 // after construction to avoid circular dependency during service wiring.
 func (s *PatientService) SetEventBus(eb *EventBus) {
 	s.eventBus = eb
+}
+
+// SetKB21Client attaches the KB-21 adherence client. When set, GetFullProfile
+// enriches the response with AdherenceScore from KB-21. If not set or KB-21 is
+// unreachable, AdherenceScore is nil (graceful degradation).
+func (s *PatientService) SetKB21Client(client *clients.KB21Client) {
+	s.kb21Client = client
 }
 
 // Create stores a new patient profile.
@@ -121,12 +130,19 @@ func (s *PatientService) GetFullProfile(patientID string) (*models.PatientProfil
 		}
 	}
 
+	// Fetch adherence score from KB-21 (best-effort, nil if unavailable)
+	var adherenceScore *float64
+	if s.kb21Client != nil {
+		adherenceScore, _ = s.kb21Client.FetchAdherence(context.Background(), patientID)
+	}
+
 	return &models.PatientProfileResponse{
-		Profile:     *profile,
-		Labs:        labs,
-		Medications: medications,
-		LatestEGFR:  latestEGFR,
-		CKDSubstage: ckdSubstage,
+		Profile:        *profile,
+		Labs:           labs,
+		Medications:    medications,
+		LatestEGFR:     latestEGFR,
+		CKDSubstage:    ckdSubstage,
+		AdherenceScore: adherenceScore,
 	}, nil
 }
 

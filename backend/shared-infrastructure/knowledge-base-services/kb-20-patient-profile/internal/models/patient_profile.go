@@ -80,6 +80,7 @@ type PatientProfileResponse struct {
 	Profile     PatientProfile  `json:"profile"`
 	Labs        []LabEntry      `json:"labs"`
 	Medications []MedicationState `json:"medications"`
-	LatestEGFR  *float64        `json:"latest_egfr,omitempty"`
-	CKDSubstage string          `json:"ckd_substage,omitempty"`
+	LatestEGFR     *float64        `json:"latest_egfr,omitempty"`
+	CKDSubstage    string          `json:"ckd_substage,omitempty"`
+	AdherenceScore *float64        `json:"adherence_score,omitempty"` // from KB-21 (0.0–1.0, 30-day aggregate)
 }

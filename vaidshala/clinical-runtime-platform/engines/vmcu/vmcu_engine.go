@@ -363,6 +363,15 @@ func (e *VMCUEngine) RunCycle(input TitrationCycleInput) (*vt.TitrationCycleResu
 		effectiveGainFactor = 1.0
 	}
 
+	// ── KB-21 adherence modulation via KB-20 snapshot (Task 19) ──
+	// Secondary path to KB-23's cache-based adherence enrichment.
+	// If KB-20 snapshot provides an adherence score, apply gain factor modulation:
+	//   adherence >= 0.70 → 1.0 (normal), 0.40–0.70 → 0.5 (dampened), < 0.40 → 0.0 (suppress)
+	if input.RawLabs != nil && input.RawLabs.AdherenceScore != nil {
+		adherenceGain := AdherenceToGainFactor(*input.RawLabs.AdherenceScore)
+		effectiveGainFactor *= adherenceGain
+	}
+
 	// ── Metabolic Engine (KB-24): enrich gain factor ──
 	if input.MetabolicInput != nil {
 		metaOutput := e.metabolicEngine.Classify(*input.MetabolicInput)

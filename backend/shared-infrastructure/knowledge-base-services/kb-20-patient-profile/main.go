@@ -75,6 +75,10 @@ func main() {
 
 	patientService := services.NewPatientService(db, cacheClient, logger)
 	patientService.SetEventBus(eventBus)
+
+	// Wire KB-21 adherence client into PatientService (Task 19: V-MCU adherence wiring)
+	kb21AdherenceClient := clients.NewKB21Client(cfg.KB21, logger)
+	patientService.SetKB21Client(kb21AdherenceClient)
 	labService := services.NewLabService(db, cacheClient, logger, metricsCollector, eventBus)
 	medicationService := services.NewMedicationService(db, cacheClient, logger, eventBus)
 	adrService := services.NewADRService(db, logger)

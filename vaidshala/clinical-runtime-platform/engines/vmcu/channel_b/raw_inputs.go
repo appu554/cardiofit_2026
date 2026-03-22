@@ -97,6 +97,9 @@ type RawPatientData struct {
 	PerturbationSuppressed bool    // true if a perturbation window is active
 	SuppressionMode        string  // FULL | DAMPENED | TAGGED | NONE
 	PerturbationGainFactor float64 // 0.0 (FULL), 0.5 (DAMPENED), 1.0 (NONE)
+
+	// ── KB-21 adherence integration (Clinical Signal Layer Task 19) ──
+	AdherenceScore *float64 // from KB-20 snapshot, nil if unavailable (0.0-1.0)
 }
 
 // TimestampedValue pairs a measurement with its timestamp.
