@@ -60,6 +60,7 @@ func main() {
 		&models.MRINadir{},
 		&models.RelapseEvent{},
 		&models.QuarterlySummary{},
+		&models.PREVENTScore{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -81,20 +82,21 @@ func main() {
 	twinUpdater := services.NewTwinUpdater(db.DB, logger)
 	calibrator := services.NewBayesianCalibratorWithConfig(db.DB, logger, cfg.BurnInWeeks, cfg.ObservationWindowDays)
 	mriScorer := services.NewMRIScorer(db.DB, logger)
+	preventScorer := services.NewPREVENTScorer(db.DB, logger)
 	kb22Client := clients.NewKB22Client(
 		cfg.KB22HPIURL,
 		time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond,
 		logger,
 	)
 	mriPublisher := services.NewMRIEventPublisher(cfg.KB22HPIURL, cfg.KB23DecisionCardsURL, logger)
-	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, kb22Client, mriPublisher, logger)
+	eventProcessor := services.NewEventProcessor(twinUpdater, mriScorer, preventScorer, kb22Client, mriPublisher, logger)
 	relapseDetector := services.NewRelapseDetector(db.DB, logger)
 	mriScorer.SetRelapseDetector(relapseDetector) // auto-update nadir on every MRI persist
 	quarterlyAggregator := services.NewQuarterlyAggregator(db.DB, logger)
 	_ = quarterlyAggregator // available for scheduled jobs; not wired into request pipeline
 
 	// 8. Create HTTP server
-	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer, relapseDetector)
+	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
 
 	// 9. Start HTTP server
 	go func() {

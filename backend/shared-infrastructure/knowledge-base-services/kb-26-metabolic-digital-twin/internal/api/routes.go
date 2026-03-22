@@ -44,6 +44,9 @@ func (s *Server) setupRoutes() {
 		v1.GET("/mri/:patientId/decomposition", s.getMRIDecomposition)
 		v1.POST("/mri/simulate", s.simulateMRI)
 
+		// PREVENT (10-year CVD risk)
+		v1.GET("/prevent/:patientId", s.getPREVENT)
+
 		// Relapse detection (Patient Engagement Loop)
 		relapse := v1.Group("/relapse/:patientId")
 		{

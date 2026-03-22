@@ -16,20 +16,22 @@ import (
 // EventProcessor handles incoming events from KB-20, KB-21, and V-MCU,
 // updating the twin state accordingly.
 type EventProcessor struct {
-	twinUpdater  *TwinUpdater
-	mriScorer    *MRIScorer
-	kb22Client   *clients.KB22Client
-	mriPublisher *MRIEventPublisher
-	logger       *zap.Logger
+	twinUpdater    *TwinUpdater
+	mriScorer      *MRIScorer
+	preventScorer  *PREVENTScorer
+	kb22Client     *clients.KB22Client
+	mriPublisher   *MRIEventPublisher
+	logger         *zap.Logger
 }
 
-func NewEventProcessor(twinUpdater *TwinUpdater, mriScorer *MRIScorer, kb22Client *clients.KB22Client, mriPublisher *MRIEventPublisher, logger *zap.Logger) *EventProcessor {
+func NewEventProcessor(twinUpdater *TwinUpdater, mriScorer *MRIScorer, preventScorer *PREVENTScorer, kb22Client *clients.KB22Client, mriPublisher *MRIEventPublisher, logger *zap.Logger) *EventProcessor {
 	return &EventProcessor{
-		twinUpdater:  twinUpdater,
-		mriScorer:    mriScorer,
-		kb22Client:   kb22Client,
-		mriPublisher: mriPublisher,
-		logger:       logger,
+		twinUpdater:   twinUpdater,
+		mriScorer:     mriScorer,
+		preventScorer: preventScorer,
+		kb22Client:    kb22Client,
+		mriPublisher:  mriPublisher,
+		logger:        logger,
 	}
 }
 
@@ -154,6 +156,29 @@ func (ep *EventProcessor) ProcessObservation(ctx context.Context, event models.O
 				ep.mriPublisher.PublishDeteriorationEvent(context.Background(), pid, result, prev)
 			}
 		}(patientID, twinCopy)
+	}
+
+	// Recompute PREVENT score on signals that affect 10-year CVD risk.
+	if ep.preventScorer != nil {
+		preventCodes := map[string]bool{
+			"HbA1c": true, "hba1c": true,
+			"SBP": true, "sbp": true, "systolic_bp": true,
+			"eGFR": true, "egfr": true,
+			"CREATININE": true, "creatinine": true,
+			"TOTAL_CHOLESTEROL": true, "total_cholesterol": true,
+			"HDL": true, "hdl": true,
+			"LDL": true, "ldl": true,
+		}
+		if preventCodes[event.Code] {
+			twinCopy2 := newTwin
+			go func(pid uuid.UUID, twin models.TwinState) {
+				input := TwinToPREVENTInput(&twin)
+				result := ep.preventScorer.ComputePREVENT(input)
+				if _, err := ep.preventScorer.PersistScore(pid, input, result, &twin.ID); err != nil {
+					ep.logger.Error("failed to recompute PREVENT on observation", zap.Error(err))
+				}
+			}(patientID, twinCopy2)
+		}
 	}
 	return nil
 }

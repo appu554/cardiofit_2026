@@ -22,10 +22,11 @@ type Server struct {
 	cache          *cache.RedisClient
 	metrics        *metrics.Collector
 	logger         *zap.Logger
-	twinUpdater    *services.TwinUpdater
-	calibrator     *services.BayesianCalibrator
+	twinUpdater     *services.TwinUpdater
+	calibrator      *services.BayesianCalibrator
 	eventProcessor  *services.EventProcessor
 	mriScorer       *services.MRIScorer
+	preventScorer   *services.PREVENTScorer
 	relapseDetector *services.RelapseDetector
 }
 
@@ -40,6 +41,7 @@ func NewServer(
 	calibrator *services.BayesianCalibrator,
 	eventProcessor *services.EventProcessor,
 	mriScorer *services.MRIScorer,
+	preventScorer *services.PREVENTScorer,
 	relapseDetector *services.RelapseDetector,
 ) *Server {
 	if cfg.IsProduction() {
@@ -58,8 +60,9 @@ func NewServer(
 		logger:         logger,
 		twinUpdater:    twinUpdater,
 		calibrator:     calibrator,
-		eventProcessor: eventProcessor,
+		eventProcessor:  eventProcessor,
 		mriScorer:       mriScorer,
+		preventScorer:   preventScorer,
 		relapseDetector: relapseDetector,
 	}
 
