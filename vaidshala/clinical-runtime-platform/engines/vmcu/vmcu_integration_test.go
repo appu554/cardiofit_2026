@@ -544,12 +544,14 @@ func TestWiring_CooldownBlocksSecondDose(t *testing.T) {
 	}
 
 	// Cycle 1: dose applied with MedClass → cooldown starts
+	// CurrentDose must be below BASAL_INSULIN autonomy ceiling (100 units)
+	// so the proposed dose (80+10=90) clears the absolute ceiling check.
 	result1, _ := engine.RunCycle(TitrationCycleInput{
 		PatientID:        "patient-cd",
 		ChannelAResult:   vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
 		RawLabs:          normalLabs,
 		TitrationContext: ctx,
-		CurrentDose:      100.0,
+		CurrentDose:      80.0,
 		ProposedDelta:    10.0,
 		MedClass:         titration.MedClassBasalInsulin,
 	})
@@ -563,7 +565,7 @@ func TestWiring_CooldownBlocksSecondDose(t *testing.T) {
 		ChannelAResult:   vt.ChannelAResult{Gate: vt.GateClear, GainFactor: 1.0},
 		RawLabs:          normalLabs,
 		TitrationContext: ctx,
-		CurrentDose:      110.0,
+		CurrentDose:      90.0,
 		ProposedDelta:    10.0,
 		MedClass:         titration.MedClassBasalInsulin,
 	})
