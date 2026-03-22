@@ -320,7 +320,7 @@ func (h *PrioritySignalHandler) handleAdverseEvent(ctx context.Context, env prio
 		RecommendationID:       uuid.New(),
 		CardID:                 card.CardID,
 		RecType:                models.RecMedicationReview,
-		Urgency:                models.Urgency(safetyTier),
+		Urgency:                safetyTierToUrgency(safetyTier),
 		Target:                 payload.DrugClass,
 		ActionTextEn:           fmt.Sprintf("Review %s therapy due to adverse event: %s.", payload.DrugClass, payload.EventType),
 		RationaleEn:            fmt.Sprintf("Patient-reported adverse event (%s) requires clinician validation.", payload.Description),
@@ -434,4 +434,19 @@ func (h *PrioritySignalHandler) handleHospitalisation(ctx context.Context, env p
 		zap.String("reason", payload.Reason),
 	)
 	return nil
+}
+
+// safetyTierToUrgency maps a SafetyTier to the corresponding Urgency value.
+// This avoids an unsafe direct type cast between two independent string enums.
+func safetyTierToUrgency(tier models.SafetyTier) models.Urgency {
+	switch tier {
+	case models.SafetyImmediate:
+		return models.UrgencyImmediate
+	case models.SafetyUrgent:
+		return models.UrgencyUrgent
+	case models.SafetyRoutine:
+		return models.UrgencyRoutine
+	default:
+		return models.UrgencyUrgent
+	}
 }

@@ -130,7 +130,15 @@ func (c *PrioritySignalConsumer) consumeLoop(ctx context.Context, handler func(c
 
 		// Extract patient ID from envelope
 		var env priorityEnvelope
-		json.Unmarshal(msg.Value, &env)
+		if err := json.Unmarshal(msg.Value, &env); err != nil {
+			c.log.Error("Failed to unmarshal priority envelope",
+				zap.Error(err),
+			)
+			if commitErr := c.reader.CommitMessages(ctx, msg); commitErr != nil {
+				c.log.Warn("Failed to commit bad message", zap.Error(commitErr))
+			}
+			continue
+		}
 
 		if handlerErr := handler(ctx, action, env.PatientID, msg.Value); handlerErr != nil {
 			c.log.Error("Priority signal handler failed",
