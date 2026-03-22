@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
@@ -20,32 +25,124 @@ type Client struct {
 	logger     *zap.Logger
 }
 
-// New creates a FHIR client with OAuth2 service account auth.
+// gcloudTokenSource obtains OAuth2 tokens via the gcloud CLI.
+// It shells out to `gcloud auth print-access-token` and caches the result.
+type gcloudTokenSource struct {
+	mu    sync.Mutex
+	token *oauth2.Token
+}
+
+func (g *gcloudTokenSource) Token() (*oauth2.Token, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Return cached token if still valid (with 2-min margin).
+	if g.token != nil && g.token.Valid() {
+		return g.token, nil
+	}
+
+	cmd := exec.Command("gcloud", "auth", "print-access-token")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("gcloud auth print-access-token: %w", err)
+	}
+
+	accessToken := strings.TrimSpace(string(out))
+	if accessToken == "" {
+		return nil, fmt.Errorf("gcloud returned empty access token — run 'gcloud auth login' first")
+	}
+
+	g.token = &oauth2.Token{
+		AccessToken: accessToken,
+		TokenType:   "Bearer",
+		Expiry:      time.Now().Add(55 * time.Minute), // gcloud tokens last ~60 min
+	}
+	return g.token, nil
+}
+
+// New creates a FHIR client with proper GCP authentication.
+// Auth priority: SA key file → Application Default Credentials → gcloud CLI.
+// Each method is validated with a health check before accepting it.
 func New(cfg GoogleFHIRConfig, logger *zap.Logger) (*Client, error) {
 	ctx := context.Background()
 	scopes := []string{"https://www.googleapis.com/auth/cloud-healthcare"}
+	baseURL := cfg.BaseURL()
 
-	var httpClient *http.Client
-	if cfg.CredentialsPath != "" {
-		creds, err := google.FindDefaultCredentials(ctx, scopes...)
-		if err != nil {
-			return nil, fmt.Errorf("find google credentials: %w", err)
-		}
-		httpClient = oauth2Transport(creds)
-	} else {
-		client, err := google.DefaultClient(ctx, scopes...)
-		if err != nil {
-			return nil, fmt.Errorf("default google client: %w", err)
-		}
-		httpClient = client
+	type authAttempt struct {
+		name   string
+		client *http.Client
 	}
-	httpClient.Timeout = 30 * time.Second
 
-	return &Client{
-		baseURL:    cfg.BaseURL(),
-		httpClient: httpClient,
-		logger:     logger,
-	}, nil
+	var candidates []authAttempt
+
+	// 1. Try service account key file if configured and exists.
+	if cfg.CredentialsPath != "" {
+		if _, err := os.Stat(cfg.CredentialsPath); err == nil {
+			os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", cfg.CredentialsPath)
+			creds, err := google.FindDefaultCredentials(ctx, scopes...)
+			if err == nil {
+				candidates = append(candidates, authAttempt{
+					name:   "service account key (" + cfg.CredentialsPath + ")",
+					client: oauth2Transport(creds),
+				})
+			} else {
+				logger.Warn("SA key file found but unusable", zap.Error(err))
+			}
+			os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
+		}
+	}
+
+	// 2. Application Default Credentials.
+	{
+		os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
+		creds, err := google.FindDefaultCredentials(ctx, scopes...)
+		if err == nil {
+			candidates = append(candidates, authAttempt{
+				name:   "Application Default Credentials",
+				client: oauth2Transport(creds),
+			})
+		}
+	}
+
+	// 3. gcloud CLI token source.
+	if _, err := exec.LookPath("gcloud"); err == nil {
+		ts := &gcloudTokenSource{}
+		if _, err := ts.Token(); err == nil {
+			candidates = append(candidates, authAttempt{
+				name: "gcloud CLI",
+				client: &http.Client{
+					Transport: &oauth2.Transport{
+						Source: ts,
+						Base:   http.DefaultTransport,
+					},
+				},
+			})
+		}
+	}
+
+	// Validate each candidate with a real health check against the FHIR Store.
+	metadataURL := baseURL + "/metadata"
+	for _, cand := range candidates {
+		cand.client.Timeout = 10 * time.Second
+		resp, err := cand.client.Get(metadataURL)
+		if err != nil {
+			logger.Warn("FHIR auth probe failed", zap.String("method", cand.name), zap.Error(err))
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			cand.client.Timeout = 30 * time.Second
+			logger.Info("FHIR auth: using "+cand.name, zap.Int("status", resp.StatusCode))
+			return &Client{
+				baseURL:    baseURL,
+				httpClient: cand.client,
+				logger:     logger,
+			}, nil
+		}
+		logger.Warn("FHIR auth probe rejected", zap.String("method", cand.name), zap.Int("status", resp.StatusCode))
+	}
+
+	return nil, fmt.Errorf("no GCP auth method succeeded for FHIR Store at %s", baseURL)
 }
 
 // NewWithHTTPClient creates a FHIR client with a custom http.Client (for testing).

@@ -98,32 +98,21 @@ SERVICE_ROUTES = {
         "strip_prefix": False,
         "public_paths": []
     },
-    # Ingestion Service — FHIR inbound (must be before broader /ingest prefix)
-    "ingestion_fhir": {
-        "prefix": "/api/v1/ingest/fhir",
-        "target": settings.INGESTION_SERVICE_URL,
-        "strip_prefix": False,
-        "public_paths": []
-    },
-    # Ingestion Service — source-specific receivers
+    # Ingestion Service — strips /api/v1/ingest prefix, forwards remainder to :8140
+    # e.g. /api/v1/ingest/fhir/Observation → /fhir/Observation
+    #      /api/v1/ingest/devices          → /devices
     "ingestion": {
         "prefix": "/api/v1/ingest",
         "target": settings.INGESTION_SERVICE_URL,
-        "strip_prefix": False,
+        "strip_prefix": True,
         "public_paths": []
     },
-    # Intake-Onboarding Service — FHIR CRUD + $operations
-    "intake_fhir": {
-        "prefix": "/api/v1/intake/fhir",
-        "target": settings.INTAKE_SERVICE_URL,
-        "strip_prefix": False,
-        "public_paths": []
-    },
-    # Intake-Onboarding Service
+    # Intake-Onboarding Service — strips /api/v1/intake prefix, forwards remainder to :8141
+    # e.g. /api/v1/intake/fhir/Patient/$enroll → /fhir/Patient/$enroll
     "intake_onboarding": {
         "prefix": "/api/v1/intake",
         "target": settings.INTAKE_SERVICE_URL,
-        "strip_prefix": False,
+        "strip_prefix": True,
         "public_paths": []
     }
 }

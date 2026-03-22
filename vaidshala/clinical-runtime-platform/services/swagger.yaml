@@ -1,0 +1,1513 @@
+openapi: 3.0.3
+info:
+  title: Vaidshala Clinical Runtime Platform API
+  description: |
+    OpenAPI specification for the Vaidshala Clinical Runtime Platform services:
+    - **Intake-Onboarding Service** (port 8141): Patient enrollment, safety screening, review queue, biweekly check-in
+    - **Ingestion Service** (port 8140): Multi-source clinical data ingestion (FHIR, devices, labs, wearables, WhatsApp, EHR, ABDM)
+
+    All endpoints are accessible via the API Gateway (port 8000) under `/api/v1/intake` and `/api/v1/ingest` prefixes.
+    The gateway strips the prefix before forwarding and injects `X-User-ID`, `X-User-Role`, and `X-User-Permissions` headers.
+  version: 1.0.0
+  contact:
+    name: Vaidshala Engineering
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: API Gateway (production path)
+  - url: http://localhost:8141
+    description: Intake-Onboarding Service (direct)
+  - url: http://localhost:8140
+    description: Ingestion Service (direct)
+
+tags:
+  - name: Intake — Enrollment
+    description: Patient enrollment and safety screening
+  - name: Intake — Slots
+    description: Intake slot collection during enrollment
+  - name: Intake — Review
+    description: Pharmacist review queue management
+  - name: Intake — Check-in
+    description: Biweekly M0-CI check-in sessions
+  - name: Intake — Channels
+    description: WhatsApp and ASHA tablet channel adapters
+  - name: Ingestion — FHIR
+    description: FHIR-compliant observation ingest
+  - name: Ingestion — Sources
+    description: Device, app, WhatsApp, and EHR source receivers
+  - name: Ingestion — Labs
+    description: Lab provider webhook receivers (7 providers)
+  - name: Ingestion — Wearables
+    description: Wearable device data (Health Connect, Ultrahuman, Apple HealthKit)
+  - name: Ingestion — ABDM
+    description: Ayushman Bharat Digital Mission data push
+  - name: Ingestion — Admin
+    description: Dead-letter queue management and admin endpoints
+  - name: Infrastructure
+    description: Health checks and observability
+
+paths:
+  # ═══════════════════════════════════════════════════════════════════
+  # INTAKE-ONBOARDING SERVICE
+  # ═══════════════════════════════════════════════════════════════════
+
+  /intake/fhir/Patient/$enroll:
+    post:
+      tags: [Intake — Enrollment]
+      summary: Start patient enrollment
+      description: |
+        Creates a Patient and Encounter in the FHIR Store, persists enrollment to PostgreSQL,
+        and returns the first flow node (demographics_basic) with its required slots.
+      operationId: enrollPatient
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollRequest'
+            example:
+              given_name: Rajesh
+              family_name: Kumar
+              phone: "+919876543210"
+              channel_type: CORPORATE
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+      responses:
+        '201':
+          description: Patient enrolled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Patient/{patientId}/$evaluate-safety:
+    post:
+      tags: [Intake — Enrollment]
+      summary: Run safety evaluation
+      description: |
+        Evaluates the patient's current slot values against 11 hard-stop rules and 8 soft-flag rules.
+        Hard stops block enrollment; soft flags contribute to review queue risk stratification.
+      operationId: evaluateSafety
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      responses:
+        '200':
+          description: Safety evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyEvaluationResponse'
+        '400':
+          description: Invalid patient ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Encounter/{encounterId}/$fill-slot:
+    post:
+      tags: [Intake — Slots]
+      summary: Fill an intake slot
+      description: |
+        Accepts a slot value, validates it against the 50-slot registry, runs the safety engine,
+        writes a FHIR Observation, and publishes to Kafka. Returns safety result and progress.
+        If a hard stop is triggered, the response status will be `hard_stopped`.
+      operationId: fillSlot
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EncounterId'
+        - name: X-Patient-ID
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Patient UUID for this encounter
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FillSlotRequest'
+            example:
+              slot_name: systolic_bp
+              value: 145
+              extraction_mode: DEVICE
+              source_channel: APP
+      responses:
+        '200':
+          description: Slot accepted (check status for hard_stopped)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillSlotResponse'
+        '400':
+          description: Invalid slot name or missing fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Encounter/{encounterId}/$submit-review:
+    post:
+      tags: [Intake — Review]
+      summary: Submit intake for pharmacist review
+      description: |
+        Submits a completed intake for pharmacist review. Requires enrollment to be in
+        `INTAKE_COMPLETED` state. The request provides risk classification inputs;
+        the server computes the risk stratum (HIGH/MEDIUM/LOW) and queues the entry.
+      operationId: submitReview
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EncounterId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitReviewRequest'
+            example:
+              hard_stop_count: 0
+              soft_flag_count: 1
+              age: 58
+              med_count: 5
+              egfr_value: 52
+      responses:
+        '201':
+          description: Review entry created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewEntry'
+        '409':
+          description: Enrollment not in INTAKE_COMPLETED state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/ReviewEntry/{entryId}/$approve:
+    post:
+      tags: [Intake — Review]
+      summary: Approve a review entry
+      description: |
+        Approves a pending review entry and transitions the enrollment to `ENROLLED` state.
+        Requires `X-User-ID` header with the reviewing pharmacist's UUID.
+      operationId: approveReview
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EntryId'
+        - $ref: '#/components/parameters/XUserId'
+      responses:
+        '200':
+          description: Review approved
+          content:
+            application/json:
+              example:
+                status: approved
+        '400':
+          description: Missing or invalid X-User-ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/ReviewEntry/{entryId}/$request-clarification:
+    post:
+      tags: [Intake — Review]
+      summary: Request clarification on a review entry
+      description: |
+        Requests clarification for a pending review entry. Reverts the enrollment
+        to `INTAKE_IN_PROGRESS` so the patient can re-submit affected slots.
+      operationId: requestClarification
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EntryId'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClarificationRequest'
+            example:
+              slot_names: [serum_creatinine, egfr]
+              notes: "Creatinine value seems inconsistent with reported eGFR"
+      responses:
+        '200':
+          description: Clarification requested
+          content:
+            application/json:
+              example:
+                status: clarification_requested
+
+  /intake/fhir/ReviewEntry/{entryId}/$escalate:
+    post:
+      tags: [Intake — Review]
+      summary: Escalate a review entry
+      description: Escalates a review entry to a senior pharmacist for additional review.
+      operationId: escalateReview
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/EntryId'
+        - $ref: '#/components/parameters/XUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EscalateRequest'
+            example:
+              reason: "Complex polypharmacy with CKD stage 3a"
+              notes: "Requires nephrologist input before enrollment"
+      responses:
+        '200':
+          description: Review escalated
+          content:
+            application/json:
+              example:
+                status: escalated
+
+  /intake/fhir/Patient/{patientId}/$checkin:
+    post:
+      tags: [Intake — Check-in]
+      summary: Start a biweekly check-in session
+      description: |
+        Creates a new M0-CI biweekly check-in session. The patient must be in `ENROLLED` state.
+        The session immediately transitions from CS1_SCHEDULED → CS2_REMINDED → CS3_COLLECTING.
+        Returns 12 check-in slot definitions (8 required).
+      operationId: startCheckin
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartCheckinRequest'
+            example:
+              cycle_number: 1
+      responses:
+        '201':
+          description: Check-in session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckinSessionResponse'
+        '409':
+          description: Patient not enrolled or session conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/CheckinSession/{sessionId}/$checkin-slot:
+    post:
+      tags: [Intake — Check-in]
+      summary: Fill a check-in slot
+      description: |
+        Records a slot value for an active check-in session. The session must be in
+        `CS3_COLLECTING` state. Increments the filled count on success.
+      operationId: fillCheckinSlot
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Check-in session UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckinFillSlotRequest'
+            example:
+              slot_name: systolic_bp
+              value: 138
+              extraction_mode: DEVICE
+      responses:
+        '200':
+          description: Slot recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckinFillSlotResponse'
+        '409':
+          description: Session not in COLLECTING state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/webhook/whatsapp:
+    get:
+      tags: [Intake — Channels]
+      summary: WhatsApp webhook verification
+      description: Handles Meta's webhook verification challenge for WhatsApp Business API.
+      operationId: whatsappVerify
+      parameters:
+        - name: hub.mode
+          in: query
+          schema:
+            type: string
+        - name: hub.verify_token
+          in: query
+          schema:
+            type: string
+        - name: hub.challenge
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Challenge echoed back
+    post:
+      tags: [Intake — Channels]
+      summary: WhatsApp incoming message handler
+      description: |
+        Receives and processes incoming WhatsApp messages. Validates webhook signature
+        using the app secret, parses messages, and routes to the intake flow engine.
+      operationId: whatsappIncoming
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Message processed
+
+  /intake/channel/asha/submit:
+    post:
+      tags: [Intake — Channels]
+      summary: ASHA tablet batch submission
+      description: |
+        Accepts a batch of intake data collected offline by ASHA workers on tablets.
+        Processes all records and returns per-record results.
+      operationId: ashaBatchSubmit
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Batch processed
+
+  /intake/channel/asha/sync/{deviceId}:
+    get:
+      tags: [Intake — Channels]
+      summary: ASHA tablet sync status
+      description: Returns the sync status for an ASHA tablet device.
+      operationId: ashaSyncStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Sync status returned
+
+  # ═══════════════════════════════════════════════════════════════════
+  # INGESTION SERVICE
+  # ═══════════════════════════════════════════════════════════════════
+
+  /ingest/fhir/Observation:
+    post:
+      tags: [Ingestion — FHIR]
+      summary: Ingest a FHIR Observation
+      description: |
+        Accepts a clinical observation in FHIR-compatible format. Validates the data,
+        computes a quality score, writes to the FHIR Store, and publishes to Kafka.
+      operationId: ingestFHIRObservation
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestObservationRequest'
+            example:
+              patient_id: "cb883b04-3aaa-449c-b25e-97bf21ee0dee"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              loinc_code: "2339-0"
+              value: 145.5
+              unit: "mg/dL"
+              timestamp: "2026-03-22T10:30:00Z"
+      responses:
+        '201':
+          description: Observation accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestObservationResponse'
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ingest/devices:
+    post:
+      tags: [Ingestion — Sources]
+      summary: Ingest BLE device readings
+      description: |
+        Accepts readings from BLE medical devices (glucometers, BP monitors, pulse oximeters)
+        via the Flutter app. Each reading is validated and mapped to a FHIR Observation.
+      operationId: ingestDeviceReadings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceIngestRequest'
+            example:
+              patient_id: "cb883b04-3aaa-449c-b25e-97bf21ee0dee"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              timestamp: "2026-03-22T10:30:00Z"
+              device:
+                device_id: "GLU-BLE-001"
+                device_type: glucometer
+                manufacturer: "Accu-Chek"
+                model: "Guide"
+              readings:
+                - analyte: glucose
+                  value: 145.5
+                  unit: "mg/dL"
+      responses:
+        '201':
+          description: Device readings accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceIngestResponse'
+
+  /ingest/app-checkin:
+    post:
+      tags: [Ingestion — Sources]
+      summary: Ingest patient self-reported check-in data
+      description: |
+        Accepts patient-reported readings from the Flutter app (vitals, symptoms, lifestyle).
+        Each reading is validated and forwarded to the ingestion pipeline.
+      operationId: ingestAppCheckin
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppCheckinRequest'
+            example:
+              patient_id: "cb883b04-3aaa-449c-b25e-97bf21ee0dee"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              timestamp: "2026-03-22T10:30:00Z"
+              readings:
+                - analyte: systolic_bp
+                  value: 140
+                  unit: mmHg
+                - analyte: weight
+                  value: 75.5
+                  unit: kg
+      responses:
+        '201':
+          description: Check-in data accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppCheckinResponse'
+
+  /ingest/whatsapp:
+    post:
+      tags: [Ingestion — Sources]
+      summary: Ingest NLU-parsed WhatsApp message
+      description: |
+        Accepts NLU-parsed clinical data extracted from WhatsApp conversations.
+        The NLU layer (upstream) parses the raw text into structured entities.
+      operationId: ingestWhatsApp
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhatsAppIngestRequest'
+            example:
+              patient_id: "cb883b04-3aaa-449c-b25e-97bf21ee0dee"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              message_id: "wamid.abc123"
+              timestamp: "2026-03-22T10:30:00Z"
+              intent: report_glucose
+              entities:
+                - type: glucose_value
+                  value: 150
+                  unit: "mg/dL"
+              confidence: 0.85
+              raw_text: "Mere glucose 150 hai aaj"
+      responses:
+        '201':
+          description: Message data accepted
+          content:
+            application/json:
+              example:
+                status: accepted
+                processed: 1
+
+  /ingest/labs/{labId}:
+    post:
+      tags: [Ingestion — Labs]
+      summary: Lab provider webhook receiver
+      description: |
+        Receives lab results from external lab providers. Each provider has its own
+        data format; the service normalises all to FHIR Observations.
+
+        **Supported providers**: `thyrocare`, `redcliffe`, `srl_agilus`, `dr_lal`, `metropolis`, `orange_health`, `generic_csv`
+      operationId: ingestLabWebhook
+      parameters:
+        - name: labId
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [thyrocare, redcliffe, srl_agilus, dr_lal, metropolis, orange_health, generic_csv]
+          description: Lab provider identifier
+        - name: X-API-Key
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Lab-specific API key for authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Lab-provider-specific format (varies by provider)
+      responses:
+        '202':
+          description: Lab results accepted
+          content:
+            application/json:
+              example:
+                status: accepted
+                observation_count: 8
+        '401':
+          description: Invalid API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /ingest/wearables/{provider}:
+    post:
+      tags: [Ingestion — Wearables]
+      summary: Ingest wearable device data
+      description: |
+        Accepts data from wearable health devices and platforms.
+
+        **Supported providers**: `health_connect` (Android), `ultrahuman` (CGM), `apple_health` (HealthKit)
+      operationId: ingestWearable
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [health_connect, ultrahuman, apple_health]
+          description: Wearable platform identifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Provider-specific payload format
+      responses:
+        '200':
+          description: Wearable data accepted
+          content:
+            application/json:
+              example:
+                status: accepted
+                observation_count: 5
+
+  /ingest/ehr/fhir:
+    post:
+      tags: [Ingestion — Sources]
+      summary: EHR FHIR R4 Bundle passthrough
+      description: |
+        Accepts a FHIR R4 Bundle from an external EHR system. Extracts Observations
+        and forwards them through the ingestion pipeline.
+      operationId: ingestEHRFHIR
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: FHIR R4 Bundle resource
+      responses:
+        '202':
+          description: Bundle accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationOutcome'
+
+  /ingest/ehr/hl7v2:
+    post:
+      tags: [Ingestion — Sources]
+      summary: EHR HL7v2 MLLP receiver (stub)
+      description: HL7v2 MLLP parser — not yet implemented. Returns 501.
+      operationId: ingestEHRHL7v2
+      responses:
+        '501':
+          description: Not implemented
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationOutcome'
+
+  /ingest/abdm/data-push:
+    post:
+      tags: [Ingestion — ABDM]
+      summary: ABDM encrypted data push
+      description: |
+        Receives X25519-encrypted FHIR bundles from the Ayushman Bharat Digital Mission (ABDM).
+        Decrypts using the key material, extracts Observations, and ingests them.
+      operationId: ingestABDMDataPush
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ABDMDataPushRequest'
+      responses:
+        '202':
+          description: ABDM data accepted
+          content:
+            application/json:
+              example:
+                status: accepted
+                transaction_id: "txn-abc-123"
+                observation_count: 3
+
+  /ingest/internal/hpi:
+    post:
+      tags: [Ingestion — Sources]
+      summary: Internal HPI data forwarding
+      description: |
+        Service-to-service endpoint for forwarding canonical observations from
+        the intake service to the ingestion pipeline.
+      operationId: ingestInternalHPI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/CanonicalObservation'
+      responses:
+        '201':
+          description: Observations accepted
+          content:
+            application/json:
+              example:
+                status: accepted
+                processed: 1
+
+  /ingest/admin/dlq:
+    get:
+      tags: [Ingestion — Admin]
+      summary: List dead-letter queue entries
+      description: Returns pending DLQ entries with optional filtering.
+      operationId: listDLQ
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending_retry, failed, discarded]
+        - name: error_class
+          in: query
+          schema:
+            type: string
+        - name: source_type
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: DLQ entries returned
+          content:
+            application/json:
+              example:
+                entries: []
+                count: 0
+
+  /ingest/admin/dlq/{id}/$discard:
+    post:
+      tags: [Ingestion — Admin]
+      summary: Discard a DLQ entry
+      description: Marks a dead-letter queue entry as discarded (will not be retried).
+      operationId: discardDLQ
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Entry discarded
+
+  /ingest/admin/dlq/$count:
+    get:
+      tags: [Ingestion — Admin]
+      summary: DLQ entry counts by status
+      description: Returns dead-letter queue counts grouped by status.
+      operationId: countDLQ
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Counts returned
+          content:
+            application/json:
+              example:
+                counts:
+                  pending_retry: 0
+                  failed: 0
+                  discarded: 0
+
+  # ═══════════════════════════════════════════════════════════════════
+  # INFRASTRUCTURE (both services)
+  # ═══════════════════════════════════════════════════════════════════
+
+  /intake/healthz:
+    get:
+      tags: [Infrastructure]
+      summary: Intake service liveness probe
+      operationId: intakeHealthz
+      responses:
+        '200':
+          description: Service alive
+          content:
+            application/json:
+              example:
+                service: intake-onboarding-service
+                status: ok
+
+  /intake/readyz:
+    get:
+      tags: [Infrastructure]
+      summary: Intake service readiness probe
+      operationId: intakeReadyz
+      responses:
+        '200':
+          description: Service ready
+          content:
+            application/json:
+              example:
+                service: intake-onboarding-service
+                status: ok
+                checks:
+                  postgres: ok
+                  redis: ok
+
+  /intake/metrics:
+    get:
+      tags: [Infrastructure]
+      summary: Intake Prometheus metrics
+      operationId: intakeMetrics
+      responses:
+        '200':
+          description: Prometheus text format
+
+  /ingest/healthz:
+    get:
+      tags: [Infrastructure]
+      summary: Ingestion service liveness probe
+      operationId: ingestHealthz
+      responses:
+        '200':
+          description: Service alive
+          content:
+            application/json:
+              example:
+                service: ingestion-service
+                status: ok
+
+  /ingest/readyz:
+    get:
+      tags: [Infrastructure]
+      summary: Ingestion service readiness probe
+      operationId: ingestReadyz
+      responses:
+        '200':
+          description: Service ready
+
+  /ingest/metrics:
+    get:
+      tags: [Infrastructure]
+      summary: Ingestion Prometheus metrics
+      operationId: ingestMetrics
+      responses:
+        '200':
+          description: Prometheus text format
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token from the Auth Service (port 8001)
+
+  parameters:
+    PatientId:
+      name: patientId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Patient UUID
+    EncounterId:
+      name: encounterId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Encounter UUID
+    EntryId:
+      name: entryId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Review queue entry UUID
+    XUserId:
+      name: X-User-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Reviewer/pharmacist UUID
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    # ── Intake Schemas ──
+
+    EnrollRequest:
+      type: object
+      required: [given_name, family_name, phone]
+      properties:
+        given_name:
+          type: string
+          example: Rajesh
+        family_name:
+          type: string
+          example: Kumar
+        phone:
+          type: string
+          pattern: '^\+\d{10,15}$'
+          example: "+919876543210"
+        abha_id:
+          type: string
+          description: Ayushman Bharat Health Account ID (optional)
+        channel_type:
+          type: string
+          enum: [CORPORATE, INSURANCE, GOVERNMENT]
+          default: CORPORATE
+        tenant_id:
+          type: string
+          format: uuid
+
+    EnrollResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [enrolled]
+        patient_id:
+          type: string
+          format: uuid
+        encounter_id:
+          type: string
+          format: uuid
+        next_node:
+          type: object
+          properties:
+            node_id:
+              type: string
+              example: demographics_basic
+            slots:
+              type: array
+              items:
+                type: string
+              example: [age, sex, height, weight, bmi, pregnant]
+
+    FillSlotRequest:
+      type: object
+      required: [slot_name, value]
+      properties:
+        slot_name:
+          type: string
+          description: |
+            One of the 50 intake slots. Domains: demographics (8), glycemic (7),
+            renal (5), cardiac (7), lipid (5), medications (5), lifestyle (7), symptoms (6).
+          example: systolic_bp
+        value:
+          description: Slot value (type depends on slot — numeric, boolean, string, list, or JSON)
+        extraction_mode:
+          type: string
+          enum: [BUTTON, REGEX, NLU, DEVICE]
+          default: BUTTON
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        source_channel:
+          type: string
+          enum: [APP, WHATSAPP, ASHA]
+          default: APP
+
+    FillSlotResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, hard_stopped, error]
+        slot_name:
+          type: string
+        fhir_resource_id:
+          type: string
+        safety_result:
+          type: object
+          nullable: true
+          properties:
+            hard_stops:
+              type: array
+              items:
+                $ref: '#/components/schemas/RuleResult'
+            soft_flags:
+              type: array
+              items:
+                $ref: '#/components/schemas/RuleResult'
+        next_node:
+          type: object
+          nullable: true
+          properties:
+            node_id:
+              type: string
+            label:
+              type: string
+            slots:
+              type: array
+              items:
+                type: string
+        progress:
+          $ref: '#/components/schemas/Progress'
+
+    RuleResult:
+      type: object
+      properties:
+        rule_id:
+          type: string
+          example: SF-03
+        reason:
+          type: string
+          example: "Polypharmacy (>= 5 medications) — drug interaction review required"
+
+    Progress:
+      type: object
+      properties:
+        filled:
+          type: integer
+        total:
+          type: integer
+        percent:
+          type: number
+          format: float
+        complete:
+          type: boolean
+
+    SafetyEvaluationResponse:
+      type: object
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        hard_stops:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuleResult'
+        soft_flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/RuleResult'
+        has_hard_stop:
+          type: boolean
+
+    SubmitReviewRequest:
+      type: object
+      required: [hard_stop_count, soft_flag_count, age, med_count, egfr_value]
+      properties:
+        hard_stop_count:
+          type: integer
+          description: Number of hard stops from safety evaluation
+        soft_flag_count:
+          type: integer
+          description: Number of soft flags from safety evaluation
+        age:
+          type: integer
+          description: Patient age in years
+        med_count:
+          type: integer
+          description: Total medication count
+        egfr_value:
+          type: number
+          format: float
+          description: eGFR value (mL/min/1.73m²)
+
+    ReviewEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        encounter_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        risk_stratum:
+          type: string
+          enum: [HIGH, MEDIUM, LOW]
+          description: |
+            Risk classification:
+            - **HIGH**: hardStops > 0 OR softFlags ≥ 3 OR eGFR < 30
+            - **MEDIUM**: softFlags ≥ 1 OR meds ≥ 5 OR age ≥ 75
+            - **LOW**: everything else
+        status:
+          type: string
+          enum: [PENDING, APPROVED, CLARIFICATION, ESCALATED]
+        reviewer_id:
+          type: string
+          format: uuid
+          nullable: true
+        reviewed_at:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ClarificationRequest:
+      type: object
+      properties:
+        slot_names:
+          type: array
+          items:
+            type: string
+          description: Slot names requiring re-entry
+        notes:
+          type: string
+          description: Pharmacist notes for the patient/ASHA worker
+
+    EscalateRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+        notes:
+          type: string
+
+    StartCheckinRequest:
+      type: object
+      required: [cycle_number]
+      properties:
+        cycle_number:
+          type: integer
+          minimum: 1
+          description: Biweekly cycle number (1, 2, 3, ...)
+
+    CheckinSessionResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [CS1_SCHEDULED, CS2_REMINDED, CS3_COLLECTING, CS4_PAUSED, CS5_SCORING, CS6_DISPATCHED, CS7_CLOSED]
+        slots_total:
+          type: integer
+          example: 12
+        slots_filled:
+          type: integer
+          example: 0
+        slots:
+          type: array
+          description: |
+            12 check-in slots (8 required):
+            fbg, ppbg, hba1c, systolic_bp, diastolic_bp, egfr, weight,
+            medication_adherence, physical_activity_minutes, sleep_hours,
+            symptom_severity, side_effects
+          items:
+            type: object
+            properties:
+              Name:
+                type: string
+              Domain:
+                type: string
+              LOINCCode:
+                type: string
+              Unit:
+                type: string
+              Required:
+                type: boolean
+
+    CheckinFillSlotRequest:
+      type: object
+      required: [slot_name, value]
+      properties:
+        slot_name:
+          type: string
+          enum: [fbg, ppbg, hba1c, systolic_bp, diastolic_bp, egfr, weight, medication_adherence, physical_activity_minutes, sleep_hours, symptom_severity, side_effects]
+        value:
+          type: number
+          format: float
+        extraction_mode:
+          type: string
+          default: PATIENT_REPORTED
+
+    CheckinFillSlotResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        slot_name:
+          type: string
+        slots_filled:
+          type: integer
+
+    # ── Ingestion Schemas ──
+
+    IngestObservationRequest:
+      type: object
+      required: [patient_id, loinc_code, value, unit]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        loinc_code:
+          type: string
+          description: LOINC code for the observation (e.g., 2339-0 for glucose)
+        value:
+          type: number
+          format: float
+        unit:
+          type: string
+          example: mg/dL
+        timestamp:
+          type: string
+          format: date-time
+
+    IngestObservationResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        observation_id:
+          type: string
+          format: uuid
+        fhir_resource_id:
+          type: string
+        quality_score:
+          type: number
+          format: float
+          description: Data quality score (0.0–1.0)
+        flags:
+          type: array
+          items:
+            type: string
+          description: Quality/safety flags (e.g., critical_value, low_quality)
+
+    DeviceIngestRequest:
+      type: object
+      required: [patient_id, device, readings]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        device:
+          type: object
+          required: [device_id, device_type]
+          properties:
+            device_id:
+              type: string
+            device_type:
+              type: string
+              enum: [glucometer, bp_monitor, pulse_oximeter, scale, thermometer]
+            manufacturer:
+              type: string
+            model:
+              type: string
+            firmware_version:
+              type: string
+        readings:
+          type: array
+          items:
+            type: object
+            required: [analyte, value, unit]
+            properties:
+              analyte:
+                type: string
+              value:
+                type: number
+                format: float
+              unit:
+                type: string
+
+    DeviceIngestResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        processed:
+          type: integer
+        total:
+          type: integer
+        rejected:
+          type: integer
+
+    AppCheckinRequest:
+      type: object
+      required: [patient_id, readings]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        readings:
+          type: array
+          items:
+            type: object
+            required: [analyte, value, unit]
+            properties:
+              analyte:
+                type: string
+              value:
+                type: number
+                format: float
+              unit:
+                type: string
+
+    AppCheckinResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        processed:
+          type: integer
+        total:
+          type: integer
+
+    WhatsAppIngestRequest:
+      type: object
+      required: [patient_id, message_id, intent, entities]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        intent:
+          type: string
+          example: report_glucose
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              value:
+                type: number
+                format: float
+              unit:
+                type: string
+              text:
+                type: string
+        confidence:
+          type: number
+          format: float
+        raw_text:
+          type: string
+
+    ABDMDataPushRequest:
+      type: object
+      required: [transaction_id, consent_id, key_material, entries]
+      properties:
+        transaction_id:
+          type: string
+        consent_id:
+          type: string
+        key_material:
+          type: object
+          properties:
+            sender_public_key:
+              type: string
+              format: byte
+              description: Base64-encoded X25519 public key (32 bytes)
+            nonce:
+              type: string
+              format: byte
+              description: Base64-encoded nonce (24 bytes)
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              care_context_ref:
+                type: string
+              content:
+                type: string
+                format: byte
+                description: Base64-encoded encrypted FHIR Bundle
+
+    CanonicalObservation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        loinc_code:
+          type: string
+        value:
+          type: number
+          format: float
+        unit:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    OperationOutcome:
+      type: object
+      description: FHIR R4 OperationOutcome resource
+      properties:
+        resourceType:
+          type: string
+          enum: [OperationOutcome]
+        issue:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                enum: [fatal, error, warning, information]
+              code:
+                type: string
+              diagnostics:
+                type: string
+              details:
+                type: object

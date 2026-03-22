@@ -1,0 +1,1164 @@
+{
+  "info": {
+    "name": "CardioFit Intake-Onboarding Service",
+    "description": "Full E2E collection for the Intake-Onboarding Service.\n\nFlow: Enroll → Fill Slots (50) → Safety → Submit Review → Approve → Check-in → Check-in Slots\n\n**Setup**: Run \"1. Enroll Patient\" first — it auto-sets `patient_id` and `encounter_id` variables for subsequent requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8141" },
+    { "key": "patient_id", "value": "" },
+    { "key": "encounter_id", "value": "" },
+    { "key": "review_entry_id", "value": "" },
+    { "key": "checkin_session_id", "value": "" },
+    { "key": "reviewer_id", "value": "00000000-0000-0000-0000-000000000099" },
+    { "key": "tenant_id", "value": "00000000-0000-0000-0000-000000000001" }
+  ],
+  "item": [
+    {
+      "name": "Infrastructure",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/healthz"
+          }
+        },
+        {
+          "name": "Readiness Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/readyz"
+          }
+        },
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/metrics"
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Enrollment",
+      "item": [
+        {
+          "name": "1.1 Enroll Patient",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('patient_id', json.patient_id);",
+                  "    pm.collectionVariables.set('encounter_id', json.encounter_id);",
+                  "    pm.test('Patient enrolled', function() {",
+                  "        pm.expect(json.status).to.eql('enrolled');",
+                  "    });",
+                  "    pm.test('Has patient_id', function() {",
+                  "        pm.expect(json.patient_id).to.be.a('string');",
+                  "    });",
+                  "    pm.test('Has encounter_id', function() {",
+                  "        pm.expect(json.encounter_id).to.be.a('string');",
+                  "    });",
+                  "    pm.test('Returns next_node', function() {",
+                  "        pm.expect(json.next_node.node_id).to.eql('demographics_basic');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/$enroll",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"given_name\": \"Ravi\",\n  \"family_name\": \"Kumar\",\n  \"phone\": \"+919876543210\",\n  \"abha_id\": \"91-2345-6789-0123\",\n  \"channel_type\": \"CORPORATE\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Fill Slots — Demographics",
+      "item": [
+        {
+          "name": "2.1 age",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"age\",\n  \"value\": 58,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.2 sex",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"sex\",\n  \"value\": \"male\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.3 height",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"height\",\n  \"value\": 172,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.4 weight",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"weight\",\n  \"value\": 82.5,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.5 bmi",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"bmi\",\n  \"value\": 27.9,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.6 pregnant",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"pregnant\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.7 ethnicity (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"ethnicity\",\n  \"value\": \"south_asian\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2.8 primary_language (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"primary_language\",\n  \"value\": \"hindi\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Fill Slots — Glycemic",
+      "item": [
+        {
+          "name": "3.1 diabetes_type",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"diabetes_type\",\n  \"value\": \"type2\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3.2 fbg",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"fbg\",\n  \"value\": 145,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3.3 hba1c",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"hba1c\",\n  \"value\": 8.2,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3.4 ppbg (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"ppbg\",\n  \"value\": 210,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3.5 diabetes_duration_years (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"diabetes_duration_years\",\n  \"value\": 12,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3.6 insulin",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"insulin\",\n  \"value\": true,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3.7 hypoglycemia_episodes (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"hypoglycemia_episodes\",\n  \"value\": 2,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Fill Slots — Renal",
+      "item": [
+        {
+          "name": "4.1 egfr",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"egfr\",\n  \"value\": 55,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4.2 serum_creatinine",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"serum_creatinine\",\n  \"value\": 1.4,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4.3 uacr (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"uacr\",\n  \"value\": 150,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4.4 dialysis",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"dialysis\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "4.5 serum_potassium (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"serum_potassium\",\n  \"value\": 4.2,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Fill Slots — Cardiac",
+      "item": [
+        {
+          "name": "5.1 systolic_bp",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"systolic_bp\",\n  \"value\": 142,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5.2 diastolic_bp",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"diastolic_bp\",\n  \"value\": 88,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5.3 heart_rate (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"heart_rate\",\n  \"value\": 76,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5.4 nyha_class (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"nyha_class\",\n  \"value\": 2,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5.5 mi_stroke_days (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"mi_stroke_days\",\n  \"value\": 0,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5.6 lvef (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"lvef\",\n  \"value\": 45,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "5.7 atrial_fibrillation (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"atrial_fibrillation\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Fill Slots — Lipid",
+      "item": [
+        {
+          "name": "6.1 total_cholesterol",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"total_cholesterol\",\n  \"value\": 220,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "6.2 ldl",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"ldl\",\n  \"value\": 140,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "6.3 hdl",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"hdl\",\n  \"value\": 38,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "6.4 triglycerides",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"triglycerides\",\n  \"value\": 195,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "6.5 on_statin (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"on_statin\",\n  \"value\": true,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Fill Slots — Medications",
+      "item": [
+        {
+          "name": "7.1 current_medications",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"current_medications\",\n  \"value\": [\"metformin 1000mg BD\", \"glimepiride 2mg OD\", \"insulin glargine 20U\", \"atorvastatin 20mg\", \"telmisartan 40mg\", \"aspirin 75mg\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "7.2 medication_count",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"medication_count\",\n  \"value\": 6,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "7.3 adherence_score (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"adherence_score\",\n  \"value\": 0.7,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "7.4 allergies",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"allergies\",\n  \"value\": [\"sulfonamides\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "7.5 supplement_list (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"supplement_list\",\n  \"value\": [\"vitamin D3\", \"omega-3\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Fill Slots — Lifestyle",
+      "item": [
+        {
+          "name": "8.1 smoking_status",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"smoking_status\",\n  \"value\": \"former\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "8.2 alcohol_use",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"alcohol_use\",\n  \"value\": \"occasional\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "8.3 exercise_minutes_week (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"exercise_minutes_week\",\n  \"value\": 90,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "8.4 diet_type (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"diet_type\",\n  \"value\": \"vegetarian\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "8.5 sleep_hours (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"sleep_hours\",\n  \"value\": 6.5,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "8.6 active_substance_abuse",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"active_substance_abuse\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "8.7 falls_history (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"falls_history\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Fill Slots — Symptoms",
+      "item": [
+        {
+          "name": "9.1 active_cancer",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"active_cancer\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "9.2 organ_transplant",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"organ_transplant\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "9.3 cognitive_impairment (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"cognitive_impairment\",\n  \"value\": false,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "9.4 bariatric_surgery_months (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"bariatric_surgery_months\",\n  \"value\": 0,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "9.5 primary_complaint (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"primary_complaint\",\n  \"value\": \"Uncontrolled blood sugar and fatigue\",\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.8,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        },
+        {
+          "name": "9.6 comorbidities (optional)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"comorbidities\",\n  \"value\": [\"hypertension\", \"dyslipidemia\", \"CKD stage 3a\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Safety Evaluation",
+      "item": [
+        {
+          "name": "10.1 Evaluate Safety",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}/$evaluate-safety"
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Review Queue",
+      "description": "Before submitting review, manually update enrollment state:\n\n```sql\nUPDATE enrollments SET state = 'INTAKE_COMPLETED' WHERE encounter_id = '<encounter_id>';\n```",
+      "item": [
+        {
+          "name": "11.1 Submit for Review",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('review_entry_id', json.id);",
+                  "    pm.test('Review entry created', function() {",
+                  "        pm.expect(json.id).to.be.a('string');",
+                  "    });",
+                  "    pm.test('Has risk_stratum', function() {",
+                  "        pm.expect(json.risk_stratum).to.be.oneOf(['LOW', 'MEDIUM', 'HIGH']);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$submit-review",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hard_stop_count\": 0,\n  \"soft_flag_count\": 1,\n  \"age\": 58,\n  \"med_count\": 6,\n  \"egfr_value\": 55\n}"
+            }
+          }
+        },
+        {
+          "name": "11.2 Approve Review",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/ReviewEntry/{{review_entry_id}}/$approve",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-ID", "value": "{{reviewer_id}}" }
+            ]
+          }
+        },
+        {
+          "name": "11.3 Request Clarification (alt)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/ReviewEntry/{{review_entry_id}}/$request-clarification",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-ID", "value": "{{reviewer_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_names\": [\"egfr\", \"serum_creatinine\"],\n  \"notes\": \"Please recheck renal values — eGFR and creatinine seem inconsistent\"\n}"
+            }
+          }
+        },
+        {
+          "name": "11.4 Escalate (alt)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/ReviewEntry/{{review_entry_id}}/$escalate",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-User-ID", "value": "{{reviewer_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Complex comorbidities requiring senior physician review\",\n  \"notes\": \"CKD 3a + uncontrolled diabetes + 6 medications — needs specialist review\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "12. Check-in (M0-CI)",
+      "description": "Requires patient to be in ENROLLED state (run Approve first).",
+      "item": [
+        {
+          "name": "12.1 Start Check-in Session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('checkin_session_id', json.session_id);",
+                  "    pm.test('Session created', function() {",
+                  "        pm.expect(json.session_id).to.be.a('string');",
+                  "    });",
+                  "    pm.test('State is COLLECTING', function() {",
+                  "        pm.expect(json.state).to.eql('CS3_COLLECTING');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}/$checkin",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cycle_number\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "12.2 Fill fbg",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"fbg\",\n  \"value\": 138,\n  \"extraction_mode\": \"DEVICE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.3 Fill ppbg",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"ppbg\",\n  \"value\": 198,\n  \"extraction_mode\": \"DEVICE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.4 Fill hba1c",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"hba1c\",\n  \"value\": 7.9,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.5 Fill systolic_bp",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"systolic_bp\",\n  \"value\": 136,\n  \"extraction_mode\": \"DEVICE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.6 Fill diastolic_bp",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"diastolic_bp\",\n  \"value\": 84,\n  \"extraction_mode\": \"DEVICE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.7 Fill weight",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"weight\",\n  \"value\": 81.8,\n  \"extraction_mode\": \"DEVICE\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.8 Fill egfr",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"egfr\",\n  \"value\": 57,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.9 Fill medication_adherence",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"medication_adherence\",\n  \"value\": 0.8,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.10 Fill physical_activity_minutes (opt)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"physical_activity_minutes\",\n  \"value\": 120,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.11 Fill sleep_hours (opt)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"sleep_hours\",\n  \"value\": 7,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+            }
+          }
+        },
+        {
+          "name": "12.12 Fill symptom_severity (opt)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_name\": \"symptom_severity\",\n  \"value\": 3,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

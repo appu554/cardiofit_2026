@@ -1,12 +1,59 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"vaidshala/clinical-runtime-platform/pkg/fhirclient"
 )
+
+func init() {
+	loadDotEnv(".env")
+}
+
+// loadDotEnv reads a .env file and sets vars not already in the environment.
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return // .env is optional
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, val)
+		}
+	}
+}
+
+// WhatsAppConfig holds WhatsApp Business API settings.
+type WhatsAppConfig struct {
+	PhoneNumberID string
+	AccessToken   string
+	AppSecret     string
+	VerifyToken   string
+}
+
+// ABDMConfig holds ABDM (Ayushman Bharat Digital Mission) settings.
+type ABDMConfig struct {
+	BaseURL      string
+	ClientID     string
+	ClientSecret string
+	IsSandbox    bool
+}
 
 // Config holds all configuration for the Intake-Onboarding Service.
 type Config struct {
@@ -15,6 +62,8 @@ type Config struct {
 	Redis               RedisConfig
 	FHIR                fhirclient.GoogleFHIRConfig
 	Kafka               KafkaConfig
+	WhatsApp            WhatsAppConfig
+	ABDM                ABDMConfig
 	IngestionServiceURL string
 	Environment         string
 	LogLevel            string
@@ -63,15 +112,27 @@ func Load() *Config {
 		},
 		FHIR: fhirclient.GoogleFHIRConfig{
 			Enabled:         getEnvAsBool("FHIR_ENABLED", false),
-			ProjectID:       getEnv("FHIR_PROJECT_ID", ""),
-			Location:        getEnv("FHIR_LOCATION", ""),
-			DatasetID:       getEnv("FHIR_DATASET_ID", ""),
-			FhirStoreID:     getEnv("FHIR_STORE_ID", ""),
-			CredentialsPath: getEnv("GOOGLE_APPLICATION_CREDENTIALS", ""),
+			ProjectID:       getEnv("FHIR_PROJECT_ID", "project-2bbef9ac-174b-4b59-8fe"),
+			Location:        getEnv("FHIR_LOCATION", "asia-south1"),
+			DatasetID:       getEnv("FHIR_DATASET_ID", "vaidshala-clinical"),
+			FhirStoreID:     getEnv("FHIR_STORE_ID", "cardiofit-fhir-r4"),
+			CredentialsPath: getEnv("GOOGLE_APPLICATION_CREDENTIALS", "credentials/google-credentials.json"),
 		},
 		Kafka: KafkaConfig{
 			Brokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
 			GroupID: getEnv("KAFKA_GROUP_ID", "intake-onboarding-service"),
+		},
+		WhatsApp: WhatsAppConfig{
+			PhoneNumberID: getEnv("WHATSAPP_PHONE_NUMBER_ID", ""),
+			AccessToken:   getEnv("WHATSAPP_ACCESS_TOKEN", ""),
+			AppSecret:     getEnv("WHATSAPP_APP_SECRET", ""),
+			VerifyToken:   getEnv("WHATSAPP_VERIFY_TOKEN", "cardiofit-intake-verify"),
+		},
+		ABDM: ABDMConfig{
+			BaseURL:      getEnv("ABDM_BASE_URL", "https://abdm.gov.in"),
+			ClientID:     getEnv("ABDM_CLIENT_ID", ""),
+			ClientSecret: getEnv("ABDM_CLIENT_SECRET", ""),
+			IsSandbox:    getEnvAsBool("ABDM_SANDBOX", true),
 		},
 		IngestionServiceURL: getEnv("INGESTION_SERVICE_URL", "http://localhost:8140"),
 		Environment:         getEnv("ENVIRONMENT", "development"),

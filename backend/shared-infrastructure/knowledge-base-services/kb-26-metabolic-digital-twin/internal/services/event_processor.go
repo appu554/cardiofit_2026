@@ -13,6 +13,16 @@ import (
 	"gorm.io/datatypes"
 )
 
+// preventTriggerCodes lists observation codes that should trigger PREVENT score recomputation.
+var preventTriggerCodes = map[string]bool{
+	"HbA1c": true, "hba1c": true,
+	"SBP": true, "sbp": true, "systolic_bp": true,
+	"eGFR": true, "egfr": true,
+	"CREATININE": true, "creatinine": true,
+	"TOTAL_CHOLESTEROL": true, "total_cholesterol": true,
+	"HDL": true, "hdl": true,
+}
+
 // EventProcessor handles incoming events from KB-20, KB-21, and V-MCU,
 // updating the twin state accordingly.
 type EventProcessor struct {
@@ -159,26 +169,15 @@ func (ep *EventProcessor) ProcessObservation(ctx context.Context, event models.O
 	}
 
 	// Recompute PREVENT score on signals that affect 10-year CVD risk.
-	if ep.preventScorer != nil {
-		preventCodes := map[string]bool{
-			"HbA1c": true, "hba1c": true,
-			"SBP": true, "sbp": true, "systolic_bp": true,
-			"eGFR": true, "egfr": true,
-			"CREATININE": true, "creatinine": true,
-			"TOTAL_CHOLESTEROL": true, "total_cholesterol": true,
-			"HDL": true, "hdl": true,
-			"LDL": true, "ldl": true,
-		}
-		if preventCodes[event.Code] {
-			twinCopy2 := newTwin
-			go func(pid uuid.UUID, twin models.TwinState) {
-				input := TwinToPREVENTInput(&twin)
-				result := ep.preventScorer.ComputePREVENT(input)
-				if _, err := ep.preventScorer.PersistScore(pid, input, result, &twin.ID); err != nil {
-					ep.logger.Error("failed to recompute PREVENT on observation", zap.Error(err))
-				}
-			}(patientID, twinCopy2)
-		}
+	if ep.preventScorer != nil && preventTriggerCodes[event.Code] {
+		twinCopy2 := newTwin
+		go func(pid uuid.UUID, twin models.TwinState) {
+			input := TwinToPREVENTInput(&twin)
+			result := ep.preventScorer.ComputePREVENT(input)
+			if _, err := ep.preventScorer.PersistScore(pid, input, result, &twin.ID); err != nil {
+				ep.logger.Error("failed to recompute PREVENT on observation", zap.Error(err))
+			}
+		}(patientID, twinCopy2)
 	}
 	return nil
 }

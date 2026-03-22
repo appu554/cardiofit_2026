@@ -11,6 +11,12 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	ingestmetrics "github.com/cardiofit/ingestion-service/internal/metrics"
+
+	abdmadapter "github.com/cardiofit/ingestion-service/internal/adapters/abdm"
+	"github.com/cardiofit/ingestion-service/internal/adapters/ehr"
+	"github.com/cardiofit/ingestion-service/internal/adapters/labs"
+	"github.com/cardiofit/ingestion-service/internal/adapters/wearables"
 	"github.com/cardiofit/ingestion-service/internal/config"
 	"github.com/cardiofit/ingestion-service/internal/dlq"
 	fhirmapper "github.com/cardiofit/ingestion-service/internal/fhir"
@@ -32,6 +38,11 @@ type Server struct {
 	topicRouter   *kafkapkg.TopicRouter
 	dlqPublisher  dlq.Publisher
 	dlqReplay     *dlq.ReplayHandler
+	labHandler    *labs.Handler
+	ehrHandler    *ehr.Handler
+	abdmHandler     *abdmadapter.HIUHandler
+	wearableHandler *wearables.Handler
+	dlqResolver     *dlq.Resolver
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -78,6 +89,30 @@ func NewServer(
 
 	dlqReplay := dlq.NewReplayHandler(dlqPub, logger)
 
+	// Phase 4: Lab adapter handler with all registered lab adapters
+	labHandler := labs.NewHandler(logger,
+		labs.NewThyrocareAdapter(cfg.GetLabAPIKey("thyrocare"), nil, logger),
+		labs.NewRedcliffeAdapter(cfg.GetLabAPIKey("redcliffe"), nil, logger),
+		labs.NewSRLAgilusAdapter(cfg.GetLabAPIKey("srl_agilus"), nil, logger),
+		labs.NewDrLalAdapter(cfg.GetLabAPIKey("dr_lal"), nil, logger),
+		labs.NewMetropolisAdapter(cfg.GetLabAPIKey("metropolis"), nil, logger),
+		labs.NewOrangeHealthAdapter(cfg.GetLabAPIKey("orange_health"), nil, logger),
+		labs.NewGenericCSVAdapter("generic_csv", nil, logger),
+	)
+
+	// Phase 4: EHR adapter handler
+	fhirRestAdapter := ehr.NewFHIRRestAdapter(logger)
+	ehrHandler := ehr.NewHandler(fhirRestAdapter, nil, logger) // SFTPAdapter wired when SFTP configs are loaded
+
+	// Phase 4: ABDM HIU handler — nil until X25519 crypto keys are configured
+	// abdmHandler will be initialized when ABDM_PRIVATE_KEY env is set
+
+	// Phase 5: Wearable ingest handler (Health Connect, Ultrahuman, Apple HealthKit)
+	wearableHandler := wearables.NewHandler(logger)
+
+	// Phase 5: DLQ resolver for admin query/discard operations
+	dlqResolver := dlq.NewResolver(db, logger)
+
 	s := &Server{
 		Router:        router,
 		config:        cfg,
@@ -90,10 +125,15 @@ func NewServer(
 		topicRouter:   topicRouter,
 		dlqPublisher:  dlqPub,
 		dlqReplay:     dlqReplay,
+		labHandler:    labHandler,
+		ehrHandler:      ehrHandler,
+		wearableHandler: wearableHandler,
+		dlqResolver:     dlqResolver,
 	}
 
 	router.Use(s.metricsMiddleware())
 	router.Use(s.corsMiddleware())
+	router.Use(ingestmetrics.TracingMiddleware(ingestmetrics.IngestionServiceName))
 	s.setupRoutes()
 
 	return s

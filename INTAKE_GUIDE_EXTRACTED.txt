@@ -1,0 +1,271 @@
+
+Vaidshala Intake & Onboarding Service
+Patient Enrollment, Clinical History Collection & Safety Screening Engine
+Implementation Guidelines for Go Microservice (M0)
+50 Clinical Slots · 8 Domains · 3 Enrollment Channels · 11 HARD_STOPs · 8 SOFT_FLAGs · Hindi-First Conversational UX
+Channels: WhatsApp Business API (Primary) | Flutter App (Secondary) | ASHA Field Enrollment (Government)
+Version 1.0  |  March 2026  |  ENGINEERING CONFIDENTIAL
+
+1. Service Overview & Design Principles
+The Intake & Onboarding Service (M0) is the clinical front door of the Vaidshala metabolic correction engine. It handles three critical functions: patient enrollment (identity creation, ABHA linking, consent collection, tenant assignment, co-enrollee registration), structured clinical history collection (50 slots across 8 clinical domains via conversational WhatsApp flow or app-based structured forms), and real-time safety screening (11 HARD_STOP rules and 8 SOFT_FLAG rules evaluated deterministically as each slot is filled). The service also manages biweekly check-in sessions (M0-CI) that reuse the same slot infrastructure with a reduced 12-slot subset.
+
+1.1 Why Go for M0
+M0’s core workload is state machine traversal, deterministic safety rule evaluation, and event-sourced slot storage. These are CPU-bound, branching-heavy operations where Go’s compiled performance, predictable latency (no GC pauses in hot paths), and goroutine-per-session model excel. Each active WhatsApp conversation is a goroutine with ~2KB stack. At peak enrollment (corporate wellness program launch: 500 patients enrolling in one day), M0 handles 500 concurrent stateful sessions without thread pool exhaustion. The safety engine must evaluate rules in under 5ms per slot fill — Go’s compiled code delivers this consistently. Python would require careful optimization to hit these latencies under concurrent load.
+
+1.2 Immutable Design Principles
+1. ZERO LLM CLINICAL DECISIONS. The LLM handles Hindi language understanding only (extracting medication names from free text, parsing numeric values from conversational sentences). Every safety rule, slot validation, state transition, and clinical threshold is deterministic compiled Go code. The LLM is never in the decision path for patient safety.
+2. EVENT-SOURCED SLOT STORAGE. Every slot fill creates a new immutable event row (patient_id, slot_name, value, confidence, source, timestamp). No updates. No deletes. A current_slots view returns the latest event per slot. This gives the audit trail the Clinical Protocol demands and the temporal reconstruction the Knowledge OS requires.
+3. SAFETY ENGINE RUNS SYNCHRONOUSLY ON EVERY SLOT FILL. There is no batch safety check. When slot S04 (fbg_recent) is filled with value 380, the safety engine evaluates HARD_STOP H2 (FBG > 300) within the same goroutine, within the same request. The patient receives the safety message before the next question is asked. Latency budget: <5ms for safety evaluation.
+4. PROTOCOL AUTHORITY RULE. Where M0 Technical Spec and Clinical Protocol conflict on any clinical threshold, safety trigger, or drug interaction rule, the Clinical Protocol is authoritative. M0 is engineering implementation. The Protocol is clinical authority.
+
+2. Three Enrollment Channels
+The intake service handles three distinct enrollment journeys, each with different acquisition triggers, identity verification, consent flows, and onboarding UX. All three converge on the same 50-slot clinical history collection and safety screening engine.
+
+
+3. Enrollment State Machine
+The enrollment process is a finite state machine with 8 states. Each state has entry conditions, actions, and transition rules. The state machine is the same for all three channels — the channel affects which states are mandatory and the medium of interaction, not the state logic itself.
+
+
+4. Clinical Slot Table: 50 Slots Across 8 Domains
+Every data point collected during intake maps to a named slot. Slots are typed, classified (mandatory/conditional/optional), safety-evaluated, and protocol-referenced. The slot table is the contract between M0 and all downstream KB services. KB-20 stores slot events. KB-22 uses slot values for monitoring node initialization. KB-23 uses slots for initial decision card generation. KB-26 uses slots for twin state initialization.
+
+SLOT COMPLETION RULE: Intake session CANNOT transition to INTAKE_COMPLETED until: (1) All mandatory (M=Y) slots filled with confidence HIGH, (2) All safety (S=Y) slots pass Safety Engine evaluation, (3) Any HARD_STOP triggered → session enters HARD_STOPPED, physician alerted. Slots marked ‘Derived’ in source column are extracted programmatically from other slots, not asked directly.
+
+Domain 1: Medication Status (8 Slots)
+
+Domain 2: Glycemic Status (6 Slots)
+
+Domain 3: Cardiovascular Status (6 Slots)
+
+Domain 4: Renal & Metabolic Status (5 Slots)
+
+Domain 5: Neurological & Ophthalmic (4 Slots)
+
+Domain 6: Body Composition & Lifestyle (8 Slots)
+
+Domain 7: Social & Behavioral Context (5 Slots)
+
+Domain 8: Protocol Extensions (8 Slots)
+
+5. Safety Engine (Deterministic, No LLM)
+The Safety Engine evaluates every slot fill synchronously. It is compiled Go code with zero external dependencies. No LLM, no ML model, no network call. Rule evaluation must complete within 5ms. Rules are organized into two tiers: HARD_STOPs (session paused, physician alerted) and SOFT_FLAGs (documented, pharmacist aware, session continues).
+
+5.1 HARD_STOP Rules (11 Rules)
+HARD_STOP = Session pauses immediately. Patient receives standardized safety message in their language. Physician alerted via FCM push + SMS within 30 minutes. Session cannot resume without physician clearance.
+
+
+5.2 SOFT_FLAG Rules (8 Rules)
+SOFT_FLAG = Documented in pharmacist review. Session continues. Pharmacist addresses during review. No patient message (patient is not alarmed).
+
+
+6. WhatsApp Conversational Flow Architecture
+M0’s conversational flow is defined as a directed graph of nodes (questions) and edges (transitions). The graph is loaded from a YAML definition file — adding new slots means adding nodes and edges to the definition, not writing new traversal logic. The State Manager is a generic graph traversal engine.
+
+6.1 Flow Types
+
+6.2 Message Extraction Modes
+Each node in the flow graph specifies an extraction mode that determines how the patient’s response is processed:
+
+6.3 NLU Confidence Handling
+Confidence ≥ 0.90: Accept value. Fill slot. Proceed to next node.
+Confidence 0.70–0.89: Accept value but ask confirmation: ‘Aapne [value] bataya. Sahi hai?’ [Haan | Nahi]. If Nahi: re-ask slot.
+Confidence < 0.70: Do not fill slot. Re-ask with simplified phrasing. If second attempt also < 0.70: escalate to pharmacist for manual extraction from raw message.
+The LLM is NEVER trusted blindly. Every LLM extraction is confidence-scored. Below 0.70, the system does not guess — it asks again or escalates to a human. This is the fundamental safety boundary between AI language understanding and clinical data entry.
+
+7. Biweekly Check-in State Machine (M0-CI)
+The 14-day lifestyle clock (Protocol §10) triggers a biweekly check-in that collects 12 slots in 7 states. M0-CI reuses M0’s slot infrastructure, NLU pipeline, Safety Engine, and WhatsApp delivery. It does NOT duplicate any component. M0-CI produces a Trajectory Signal (not a Decision Card) that feeds M4’s correction loop classification.
+
+
+7.1 M0-CI Output: Trajectory Signal
+The check-in produces a Trajectory Signal consumed by M4 (Correction Loop Orchestrator). The signal classifies the patient into one of four trajectories:
+STABLE_IMPROVEMENT: FBG trending down, adherence >60% across behaviors, no safety flags. Action: continue current protocol.
+FRAGILE_IMPROVEMENT: FBG improving but adherence inconsistent (<60% in one or more behaviors). Action: BCE adjusts coaching technique, no protocol change.
+PROTOCOL_FAILURE: FBG not improving or worsening despite adequate adherence (>60%). Action: lifestyle ceiling may be reached. KB-23 generates Decision Card for physician (medication escalation review).
+DISENGAGEMENT: Missed check-in, adherence <30%, or multiple missed actions. Action: pharmacist outreach call. If continued: escalation to physician for re-engagement decision.
+
+8. Go Service Architecture
+
+8.1 Module Structure
+cmd/intake/main.go — Entry point. Initializes config, WhatsApp adapter, state machine engine, safety engine, Kafka producer.
+internal/enrollment/ — Enrollment state machine (states.go, transitions.go, channel_variants.go)
+internal/slots/ — Slot table definition, event store, current state view (table.go, events.go, view.go)
+internal/safety/ — Safety engine: HARD_STOP rules, SOFT_FLAG rules (engine.go, hard_stops.go, soft_flags.go, rules_registry.go)
+internal/flow/ — Conversational flow engine: graph loader, node traversal, transition resolver (engine.go, graph.go, nodes.go)
+internal/extraction/ — Value extraction: button handler, regex extractor, NLU client, device parser (buttons.go, regex.go, nlu_client.go, device.go)
+internal/whatsapp/ — WhatsApp Business API adapter: webhook handler, message sender, template manager, media handler (webhook.go, sender.go, templates.go)
+internal/app/ — Flutter app adapter: REST handler for structured form submissions (handler.go, form_validator.go)
+internal/asha/ — ASHA tablet adapter: offline-capable enrollment handler (handler.go, sync.go, offline_queue.go)
+internal/abdm/ — ABHA creation/linking client (abha_client.go, consent_collector.go)
+internal/checkin/ — M0-CI biweekly check-in: state machine, trajectory signal generator (machine.go, trajectory.go)
+internal/review/ — Pharmacist review queue: submission, approval, clarification, escalation (queue.go, reviewer.go)
+internal/kafka/ — Event publishing: PATIENT_ENROLLED, SLOT_FILLED, HARD_STOP_TRIGGERED, CHECKIN_COMPLETED (producer.go, topics.go)
+internal/fhir/ — FHIR resource generation from slot values: Patient, Observation, Condition, MedicationStatement (generator.go)
+internal/session/ — Session management: creation, locking, timeout, resumption, idempotency (manager.go, lock.go, timeout.go, dedup.go)
+internal/config/ — Flow graph YAML definitions, safety threshold config, slot table schema (config.go, flows/, thresholds.go)
+configs/flows/ — YAML flow definitions: intake_full.yaml, intake_sprint1.yaml, checkin_14day.yaml, meal_test.yaml, re_intake_90day.yaml
+
+8.2 Key Go Libraries
+
+8.3 Concurrency Model
+Each active enrollment session (patient actively answering questions) runs as a goroutine. Session state is persisted in PostgreSQL (crash-safe) with a Redis distributed lock (prevents concurrent message processing for the same patient). WhatsApp webhooks are retry-prone — the idempotency layer (Redis hash: messageId → processed, 24hr TTL) ensures the same message is never processed twice. At peak corporate enrollment (500 patients in one day), the service handles ~500 concurrent goroutines with ~1MB total goroutine stack overhead. Each slot fill involves: Redis dedup check (1ms) → Redis session lock acquire (1ms) → PostgreSQL slot event insert (5ms) → safety engine evaluation (1–5ms) → next question determination (1ms) → WhatsApp message send (50–200ms, external). Total per-slot latency: ~60–210ms, dominated by the external WhatsApp API call.
+
+8.4 Offline Enrollment (Government Channel)
+ASHA field enrollment must work without internet connectivity. The ASHA tablet adapter (internal/asha/) implements a local SQLite queue that stores enrollment sessions offline. When connectivity returns, the sync module replays queued sessions to the server. Conflict resolution: server-side slot events are authoritative. If the same patient was partially enrolled by ASHA offline and a pharmacist entered data online (unlikely but possible), the server merges by taking the most recent slot event per slot. ABHA verification (requires ABDM API) is deferred until connectivity is available — the patient can proceed through intake offline, but ENROLLED state requires ABHA verification for government channel.
+
+8.5 Deployment
+Container: Single Go binary in Alpine Docker image (~20MB). Stateless except for Redis session locks.
+Kubernetes: Deployment with HPA (min 2, max 10 replicas). Memory-based scaling (each concurrent session ~4KB).
+Dependencies: PostgreSQL (slot events, sessions), Redis (locks, dedup, NLU cache), Kafka (event publishing), WhatsApp Cloud API, ABDM Sandbox/Prod API, Anthropic API (NLU, via ingestion service proxy for rate limiting).
+
+9. Kafka Events Published by M0
+
+
+10. Observability & Metrics
+
+
+FINAL ARCHITECTURAL NOTE: M0 is the clinical front door. Every patient who enters the correction loop passes through M0’s safety engine. If M0 misses a HARD_STOP, the patient enters the protocol with an undetected safety risk. If M0’s slot extraction is inaccurate, KB-26 initializes the twin with wrong data. If M0’s session management drops a patient, they disappear from the funnel. Build M0 with the same rigor as the safety engine it contains: deterministic, auditable, zero-tolerance for silent failures.
+Dimension | Corporate (Employee Benefits) | Insurance (Claims-Triggered) | Government (ASHA Field Enrollment)
+Trigger | HR uploads employee roster CSV via admin portal. Employee receives WhatsApp invite with enrollment link. Or: employee downloads app and enters corporate code. | Insurer identifies high-risk diabetic/hypertensive members from claims data. System sends WhatsApp invite to eligible members. Or: member is referred by insurer’s care manager after hospitalization. | ASHA (Accredited Social Health Activist) worker visits household during routine survey. Identifies diabetic/hypertensive patient. Enrolls on government-issued tablet or patient’s phone via field enrollment mode.
+Identity Verification | Phone number (from HR roster) + OTP verification. Optional: corporate email verification for SSO-linked accounts. ABHA linking: optional (encouraged, not required). | Phone number + OTP. Insurance policy number verification against insurer’s member database via API. ABHA linking: strongly encouraged (enables claims data sharing). | Phone number + OTP (patient’s phone) OR Aadhaar-based ABHA creation (using ASHA’s tablet with biometric reader). ABHA linking: MANDATORY for government channel. Offline enrollment supported (sync when connectivity available).
+Consent Collection | DPDPA consent for data processing (app/WhatsApp). Employer-specific wellness program consent. Consent for data sharing with employer (de-identified aggregate only). Consent for WhatsApp messaging. | DPDPA consent. Insurer-specific consent for health data sharing (individual-level for care coordination, aggregate for reporting). ABDM consent for pulling health records from other providers. Consent for WhatsApp + app communication. | DPDPA consent (simplified Hindi/regional language). ABDM consent (mandatory, integrated with ABHA creation). Government program consent (NHM format). Consent captured on ASHA tablet with patient’s thumbprint or digital signature. Offline consent form as fallback.
+Onboarding Medium | WhatsApp (primary) or App (secondary). Hindi + English. Total time: 7–8 minutes for full intake. Urban, literate population. Can self-serve. | WhatsApp (primary). Regional language (Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada). Total time: 8–10 minutes. May need pharmacist phone call assistance for low-digital-literacy members. | ASHA-assisted on tablet (primary) or patient’s phone (secondary). Regional language. ASHA reads questions aloud, enters responses. Total time: 10–15 minutes (includes physical measurements: weight, waist, BP). Offline mode essential — rural areas with intermittent 2G/3G.
+Physical Measurements | Self-reported initially. Lab orders triggered post-enrollment for baseline HbA1c, lipid panel, eGFR. | Self-reported initially. Recent lab data may be available from insurer’s claims (auto-populated if consent given). Lab orders for missing baseline values. | ASHA measures directly: weight (portable scale), waist circumference (tape), BP (portable monitor). Values entered on tablet. Lab orders placed with nearest PHC or empanelled lab for blood work.
+Post-Enrollment | Pharmacist reviews intake within 24 hours. If GREEN: patient enters Protocol Phase 1 automatically. If YELLOW: pharmacist calls patient for clarification. If RED (HARD_STOP): physician alerted immediately. | Same pharmacist review workflow. Insurance care manager notified of enrollment. Initial care plan shared with insurer’s care coordination team. | ASHA submits enrollment. District health officer notified. Pharmacist reviews within 48 hours (longer SLA for government). ASHA receives confirmation to inform patient of next steps on next household visit.
+Co-Enrollee | Optional. App-based family view link. Employee can share meal guidance with spouse/family. | Optional. Encouraged for meal preparers in traditional households where patient doesn’t cook. | ASHA identifies meal preparer during enrollment (slot S15). Co-enrollee registered with phone number. Receives simplified meal guidance via WhatsApp.
+State | Description | Entry Condition | Actions | Transitions | Channel Variants
+CREATED | Patient record created in KB-20 with minimal identity (phone, tenantId, channelType). No clinical data yet. | Enrollment trigger received (HR roster upload, insurer referral, ASHA field entry) | Create patient record in KB-20. Generate internal patientId (UUID). Set session status CREATED. Send welcome WhatsApp message (or display on app/tablet). | Phone verified → IDENTITY_VERIFIED. Offline (govt) → IDENTITY_PENDING. | Corporate: auto-created from CSV. Insurance: created from referral API. Government: ASHA creates on tablet.
+IDENTITY_VERIFIED | Phone OTP verified. Patient identity confirmed. ABHA linking initiated if required. | OTP verification successful | Store verified phone. If ABHA required (govt channel): initiate ABHA creation/linking flow via ABDM API. If optional: present ABHA linking as a choice. Record consent acceptance (DPDPA + channel-specific). | ABHA linked (or skipped) + consent accepted → INTAKE_READY. ABHA mandatory but failed → IDENTITY_BLOCKED (govt only). | Corporate: ABHA optional. Insurance: ABHA encouraged. Government: ABHA mandatory (blocks if not completed).
+INTAKE_READY | Patient is ready for clinical history collection. Session state machine initialized with 50 empty slots. | Identity verified + consent accepted | Initialize slot table (50 slots, all UNFILLED). Load intake flow graph (15-node Sprint 1 subset or full 50-slot graph depending on sprint). Send first intake question. | First slot filled → INTAKE_IN_PROGRESS. Session timeout (no response 4 hours) → INTAKE_PAUSED. | Same across channels. WhatsApp/app question format differs but slot schema is identical.
+INTAKE_IN_PROGRESS | Patient is actively filling clinical history slots. Safety engine evaluating each fill. | At least one slot filled | Process each incoming message: parse → extract value → fill slot → evaluate safety rules → determine next question. Maintain session state (current node in flow graph, filled slots, pending safety flags). | All mandatory slots filled + safety passed → INTAKE_COMPLETED. HARD_STOP triggered → HARD_STOPPED. No response 4 hours → INTAKE_PAUSED. | Government: ASHA fills slots on tablet (faster, fewer messages). WhatsApp: conversational, one question at a time. App: structured form, multiple slots per screen.
+HARD_STOPPED | Safety engine triggered a HARD_STOP. Session paused. Patient receives safety message. Physician alerted immediately. | Any HARD_STOP rule evaluates to true (H1–H11) | Send standardized safety message to patient in their language. Create URGENT alert for assigned physician (FCM push + SMS). Log HARD_STOP event with full context. Session cannot resume without physician clearance. | Physician clears → INTAKE_IN_PROGRESS (resume from where stopped). Physician excludes patient → EXCLUDED. No clearance 72 hours → escalate to medical director. | Same across channels. Government: ASHA also notified to check on patient physically.
+INTAKE_PAUSED | Patient stopped responding mid-intake. Session preserved for resumption. | No response for 4 hours during INTAKE_IN_PROGRESS | Save session state (all filled slots preserved). After 24h: send reminder WhatsApp. After 48h: second reminder. After 72h: pharmacist outreach call. After 7 days: mark ABANDONED. | Patient responds → INTAKE_IN_PROGRESS (resume from last slot). Pharmacist re-engages → INTAKE_IN_PROGRESS. 7 days no response → ABANDONED. | Government: ASHA visits household after 48h instead of pharmacist call.
+INTAKE_COMPLETED | All mandatory slots filled, safety screening passed. Awaiting pharmacist review. | All mandatory HIGH-confidence slots filled + no unresolved HARD_STOPs + all SOFT_FLAGs documented | Generate intake summary (JSON + FHIR Bundle). Submit to pharmacist review queue. Calculate initial risk stratification (Green/Yellow/Red). Trigger baseline lab orders if missing values. Register co-enrollee if meal preparer identified. | Pharmacist approves → ENROLLED. Pharmacist requests clarification → INTAKE_IN_PROGRESS (re-open specific slots). Pharmacist escalates → PHYSICIAN_REVIEW. | Same across channels.
+ENROLLED | Patient fully enrolled. Enters Protocol Phase 1. First coaching message scheduled. | Pharmacist approval received | Publish PATIENT_ENROLLED event to Kafka. KB-20 creates longitudinal record. KB-21 initializes behavioral profile. KB-23 schedules first structured meal testing. BCE schedules welcome + first coaching message. Patient app activated. First biweekly check-in (M0-CI) scheduled for Day 14. | Ongoing → Protocol Phase 1 (managed by M3/M4, not M0). Day 14 → M0-CI biweekly check-in triggered. | Same across channels.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+1.1 | current_medications | array | Y | Y | Ask (NLU free text) | NLU Mode 2: LLM extracts medication names + dosages from Hindi free text. Example: ‘Metformin 500 subah shaam, BP ki goli ek’. Validated against RxNorm/ATC drug database. Unrecognized drugs flagged for pharmacist review.
+1.2 | sulfonylurea_present | bool | Y | Y | Derived from 1.1 | Deterministic lookup: if any medication in 1.1 matches SU list (Glimepiride, Gliclazide, Glipizide, Glibenclamide) → true. Triggers specific safety rules (hypoglycemia risk, deprescribing priority).
+1.3 | insulin_present | bool | Y | Y | Derived from 1.1 | If any medication matches insulin list → true. Triggers HARD_STOP HS-INSULIN: insulin patients excluded from v1 (require specialized protocol). Session paused, physician decides inclusion/exclusion.
+1.4 | sglt2i_present | bool | Y | Y | Derived from 1.1 | If Dapagliflozin, Empagliflozin, Canagliflozin detected. Impacts BP axis calculation (§3.3: SGLT2i provides 3–5 mmHg SBP reduction, factored into remaining BP gap). Also triggers hydration monitoring.
+1.5 | raas_blocker_present | bool | Y | Y | Derived from 1.1 | ACEi or ARB detected. Relevant for: Triple Whammy screening (RAAS + diuretic + NSAID), potassium monitoring (if eGFR < 60), UACR benefit tracking.
+1.6 | diuretic_present | bool | Y | Y | Derived from 1.1 | Thiazide or loop diuretic detected. Triple Whammy screening input. If SGLT2i + loop diuretic → HARD_STOP (dehydration risk).
+1.7 | medication_count | int | Y | N | Derived from 1.1 | Total medication count. Polypharmacy indicator. >5 medications → flag for pharmacist medication reconciliation.
+1.8 | statin_present | bool | N | N | Derived from 1.1 | Atorvastatin, Rosuvastatin detected. Relevant for cardiovascular risk stratification. Not safety-critical.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+2.1 | fbg_recent | int | Y | Y | Ask (regex) | Fasting blood glucose in mg/dL. HARD_STOP: <70 (HS-FBG-LO: active hypoglycemia) or >300 (HS-FBG-HI: possible DKA/hyperosmolar). SOFT_FLAG: >200 (physician awareness). Plausible range: 40–500.
+2.2 | ppbg_recent | int | C | N | Ask (regex) | Post-prandial blood glucose if available. Optional at intake. Becomes mandatory in structured meal testing (Protocol Phase 1). Plausible range: 40–600.
+2.3 | recent_hba1c | float | Y | Y | Ask or Lab | HbA1c value. Used for stratum classification (Protocol §2.1). SOFT_FLAG SF-01: >8.5% (aggressive intervention stratum). SOFT_FLAG SF-02: if hba1c_date > 90 days (stale data, lab reorder). Plausible range: 3.0–18.0%.
+2.4 | hba1c_date | date | Y | N | Ask | Date of most recent HbA1c test. If >90 days: baseline lab order triggered. If >180 days: HbA1c value treated as ESTIMATED quality.
+2.5 | hypoglycemia_history | enum | Y | Y | Ask (buttons) | { none, occasional, frequent, severe_with_assistance }. HARD_STOP: severe_with_assistance. SOFT_FLAG SF-03: occasional + SU present. Buttons in Hindi: [Nahi | Haan kabhi kabhi | Haan aksar | Haan behoshi hui].
+2.6 | dawn_phenomenon_suspected | bool | N | N | Derived from 2.1+2.2 | If FBG > PPBG (morning fasting higher than post-meal), dawn phenomenon suspected. Flag for KB-26 twin initialization.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+3.1 | bp_home_systolic | int | Y | Y | Ask/Device | Home BP systolic in mmHg. HARD_STOP HS-06: >180 (hypertensive crisis). Plausible range: 60–260. If from device: quality score 0.85. If self-reported: quality score 0.70.
+3.2 | bp_home_diastolic | int | Y | Y | Ask/Device | Home BP diastolic in mmHg. HARD_STOP HS-06: >120 (hypertensive crisis). SOFT_FLAG: 100–120 (Stage 2–3 boundary). Plausible range: 30–150.
+3.3 | bp_medication_timing | enum | C | N | Ask (buttons) | When are BP medications taken? { morning, evening, both, none }. Relevant for reverse dipper detection (KB-22 PM-04). If reverse dipper + morning-only dosing: Decision Card recommends evening shift.
+3.4 | chest_pain | bool | Y | Y | Ask (buttons) | HARD_STOP HS-CHEST: if true. ‘Kya aaj ya aaj ke pehle seene mein dard ya bhaari pan mehsoos hua?’ Always asked. Never carried forward.
+3.5 | heart_rate_resting | int | C | N | Ask/Device | Resting HR in bpm. If from wearable: auto-populated. If self-reported: optional. >100 at rest: flag for physician. Used in KB-26 twin (sympathetic tone estimation).
+3.6 | edema_lower_limb | enum | C | Y | Ask | { none, mild, moderate, severe }. New onset edema: flag for physician (possible heart failure or CKD progression). Buttons: [Nahi | Thoda sa | Zyada | Bahut zyada].
+# | Slot Name | Type | M | S | Source | Validation / Notes
+4.1 | egfr_recent | float | Y | Y | Ask or Lab | eGFR in mL/min/1.73m². HARD_STOP HS-EGFR: <30 + metformin (contraindicated per Protocol §4.3). SOFT_FLAG SF-04: 30–44 (CKD 3b, dose adjustment required). ‘Pata nahi’ accepted → flags stale labs, orders baseline.
+4.2 | serum_creatinine | float | C | Y | Lab | If available from recent labs. Range 0.3–8.0 mg/dL. If >1.5: flag.
+4.3 | uacr_latest | float | C | Y | Lab | Urine albumin-to-creatinine ratio. If HTN axis active. >300 mg/g: RAAS continuation prioritized per KDIGO. >30: microalbuminuria flag.
+4.4 | potassium_latest | float | C | Y | Lab | If on ACEi/ARB and eGFR < 60. HARD_STOP: >5.5 mEq/L (hyperkalemia risk). Plausible: 2.5–7.0.
+4.5 | lipid_panel_date | date | O | N | Ask | Date of last lipid panel. Flag if >12 months. Orders baseline if missing.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+5.1 | neuropathy_symptoms | object | Y | N | Ask | { tingling, numbness, burning, none } + location (feet, hands, both). SNOMED CT coded. Feeds diabetic neuropathy screening.
+5.2 | vision_changes | enum | Y | Y | Ask | { none, blurring, floaters, sudden_loss }. HARD_STOP HS-VISION: sudden_loss (possible retinal detachment/vascular event). Ophthalmology referral if any vision change.
+5.3 | last_eye_exam_date | date | O | N | Ask | Flag if >12 months. Annual dilated eye exam per ADA Standards.
+5.4 | focal_neuro_deficit | bool | Y | Y | Ask | HARD_STOP HS-STROKE: if true. ‘Kya haath pair mein kamzori, bolne mein dikkat, chehra teda hua?’ Stroke screening.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+6.1 | weight_kg | float | Y | N | Ask/ASHA | Body weight in kg. Plausible: 20–300. Self-reported or ASHA-measured. Used for BMI calculation and protein target (g/kg).
+6.2 | height_cm | float | Y | N | Ask | Height in cm. Collected once (doesn’t change). Plausible: 100–220. Used for BMI.
+6.3 | waist_circ_cm | int | Y | N | Ask/ASHA | Waist circumference. CRITICAL: Protocol §5.4 states WC > BMI as the primary body composition metric. Indian thresholds: M >90cm, F >80cm = elevated visceral adiposity. Self-measured has +/- 3cm error. ASHA-measured is authoritative.
+6.4 | dinner_pattern | enum | Y | N | Ask (buttons) | { rice_heavy, roti_dal, mixed, other }. Primary carb source identification for M3 carb titration protocol. Buttons: [Chawal zyada | Roti-dal | Mix | Kuch aur].
+6.5 | protein_intake_est | enum | Y | N | Ask (buttons) | { high (daily dal+egg), moderate (sometimes), low (rarely) }. Feeds Protocol §7.2 protein restoration. If low: Phase 1 priority.
+6.6 | walk_days_week | int | Y | N | Ask (buttons) | Days per week with >10 min walking. [0–2 | 3–4 | 5+]. Baseline for Protocol §7.3 progressive activity.
+6.7 | exercise_capacity | enum | C | N | Ask | { no_limitation, mild, moderate, severe }. If severe: flag for physician (functional assessment needed before prescribing exercise).
+6.8 | sleep_quality | enum | Y | N | Ask (buttons) | { good, moderate, poor }. Poor sleep → STOP-BANG items asked (OSA screening). Feeds KB-22 PM-07 sleep monitoring node.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+7.1 | meal_preparer | enum | Y | N | Ask (buttons) | Who cooks? { self, spouse, parent, shared, cook_hired }. CRITICAL for M3 carb titration — if patient doesn’t cook, guidance must target the cook via co-enrollee registration.
+7.2 | tobacco_use | enum | Y | N | Ask | { never, former, current_smoking, current_chewing }. Smoking: cardiovascular risk modifier. Chewing (gutka/paan): oral cancer screening reminder. Common in Indian population.
+7.3 | alcohol_use | enum | Y | N | Ask | { none, occasional, regular, heavy }. Heavy: liver function flag, metformin risk, calorie source for weight management.
+7.4 | language_preference | enum | Y | N | Ask/Auto | { hindi, english, tamil, telugu, bengali, marathi, gujarati, kannada }. Auto-detected from WhatsApp message language or explicitly asked. Drives all subsequent coaching communication.
+7.5 | digital_literacy | enum | C | N | ASHA assessment | { high, moderate, low }. Government channel only. Determines: app vs WhatsApp-only, message complexity, photo-based instructions vs text.
+# | Slot Name | Type | M | S | Source | Validation / Notes
+8.1 | nsaid_use | bool | Y | Y | Ask | Regular NSAID use? (Combiflam, Brufen, Voveran). HARD_STOP H11: nsaid_use=true AND RAAS_blocker AND diuretic (Triple Whammy: acute kidney injury risk). Appendix B mandate.
+8.2 | sit_to_stand_ability | enum | C | N | Ask/ASHA | Functional capacity proxy. { easy, with_effort, needs_help, cannot }. If cannot: exercise protocol modified. ASHA can directly observe.
+8.3 | dyspnea_on_exertion | bool | Y | Y | Ask | Breathlessness with activity? If yes + rest dyspnea: escalate (possible heart failure). If exertional only: exercise intensity guidance adjusted.
+8.4 | salt_intake_est | enum | C | N | Ask | { low, moderate, heavy, unknown }. Average Indian intake 13.8g/day (WHO recommends <5g). Feeds M3 salt reduction messaging for HTN axis.
+8.5 | fasting_period | bool | C | N | Calendar-triggered | Ramadan, Navratri, or other fasting period active? If true + SU: ADVISORY for hypoglycemia risk during fasting. Protocol AD-03.
+8.6 | beta_blocker_use | bool | C | Y | Derived from 1.1 | Non-selective beta-blockers (propranolol, carvedilol) mask hypoglycemia symptoms. If on SU/insulin: REVIEW RV-01 for physician awareness.
+8.7 | stop_bang_score | int | C | N | Derived from 6.8 + others | If sleep_quality=poor: calculate STOP-BANG score (Snoring, Tiredness, Observed apnea, Pressure (BP), BMI, Age, Neck, Gender). Score ≥3: OSA screening referral.
+8.8 | thyroid_status | enum | O | N | Ask/Lab | { normal, hypothyroid, hyperthyroid, unknown }. Hypothyroidism common in Indian diabetic women. Affects weight management and medication metabolism.
+ID | Trigger Condition | Clinical Rationale | Patient Message (Hindi) | Slot(s)
+H1 | fbg_recent < 70 mg/dL | Active hypoglycemia requiring immediate intervention | "Aapka sugar bahut kam hai. Abhi meetha kuch khaayein aur doctor se turant baat karein." | 2.1
+H2 | fbg_recent > 300 mg/dL | Possible DKA or hyperosmolar state requiring urgent medical attention | "Aapka sugar bahut zyada hai. Kripya turant clinic jaayein aur paani peete rahein." | 2.1
+H3 | bp_systolic > 180 OR bp_diastolic > 120 | Hypertensive crisis requiring urgent evaluation | "Aapka BP bahut zyada hai. Kripya let jaayein aur doctor ko turant call karein." | 3.1, 3.2
+H4 | chest_pain = true | Rule out acute coronary syndrome — time-critical | "Seene mein dard ho raha hai toh abhi nearest hospital emergency jaayein. 112 call karein." | 3.4
+H5 | focal_neuro_deficit = true | Possible stroke — time-critical intervention (golden hour) | "Yeh serious ho sakta hai. Abhi turant hospital jaayein. Ambulance ke liye 112 call karein." | 5.4
+H6 | vision_changes = sudden_loss | Possible retinal detachment or vascular event | "Aankh ki roshni achanak kami bahut serious hai. Turant eye doctor ya emergency jaayein." | 5.2
+H7 | insulin_present = true | Insulin patients excluded from v1 protocol (require specialized management) | "Aap insulin le rahe hain. Aapke liye alag se doctor review hoga. Hum aapko connect karenge." | 1.3
+H8 | hypoglycemia_history = severe_with_assistance | History of severe hypoglycemia indicates high-risk patient requiring physician oversight | "Aapko pehle sugar bahut girne ki problem rahi hai. Doctor se pehle baat hogi." | 2.5
+H9 | egfr_recent < 30 AND metformin in medications | Metformin contraindicated in severe CKD (risk of lactic acidosis) | "Aapki kidney function mein dawai badalni padegi. Doctor review karengen." | 4.1, 1.1
+H10 | pregnancy_status = yes AND diabetes_medication_present | Oral diabetic medications may harm fetus — immediate medication review required | "Pregnancy mein yeh dawaiyaan review honi chahiye. Doctor se turant baat hogi." | (conditional slot, F<50)
+H11 | nsaid_use=true AND raas_blocker=true AND diuretic=true | Triple Whammy: combined RAAS + diuretic + NSAID causes acute kidney injury | "Aap jo dard ki goli le rahe hain, usse kidney par asar ho sakta hai. Doctor review jaruri hai." | 8.1, 1.5, 1.6
+ID | Trigger Condition | Action | Slot(s)
+SF-01 | recent_hba1c > 8.5% | Flag aggressive intervention stratum. Pharmacist considers medication escalation in initial review. | 2.3
+SF-02 | hba1c_date > 90 days | Flag stale data. Order baseline HbA1c lab. Use current value as estimate with LOW_QUALITY flag. | 2.4
+SF-03 | hypoglycemia_history = occasional AND sulfonylurea_present = true | Hypoglycemia risk with SU. Pharmacist considers SU dose reduction or timing adjustment in review. | 2.5, 1.2
+SF-04 | egfr_recent between 30 and 44 | CKD 3b. Metformin dose cap at 1000mg/day. Protein cap at 0.8g/kg. Flag for nephrology referral consideration. | 4.1
+SF-05 | fbg_recent between 200 and 300 | Significantly elevated but not crisis. Pharmacist awareness for initial medication review. | 2.1
+SF-06 | bp_diastolic between 100 and 120 | Stage 2–3 HTN boundary. Not crisis, but requires medication review. Protocol §2.1 BP staging. | 3.2
+SF-07 | medication_count > 5 | Polypharmacy. Pharmacist conducts medication reconciliation. Check for drug interactions. | 1.7
+SF-08 | stop_bang_score >= 3 | OSA screening positive. Add OSA screening to physician review card. Affects BP management strategy. | 8.7
+Flow | Trigger | Slots | Duration | Nodes | Output | Cadence
+Full Intake | Patient enrollment | 50 | 7–10 min | ~25 (some nodes collect multiple related slots) | Patient profile (FHIR Patient + 50 Observation/Condition resources). Enrolled in KB-20. | Once per patient (enrollment)
+Biweekly Check-in (M0-CI) | Day 14 clock trigger | 12 | 3–4 min | 7 states (CS1–CS7) | Trajectory Signal feeding M4 correction loop classification. | Every 14 days throughout 84-day program
+Structured Meal Test | Protocol Phase 1 trigger | 6–8 per meal | 2–3 min per meal | 4 nodes | Pre-meal FBG, meal description, 2hr PPBG, delta calculation. Feeds M3 carb titration. | 4–6 meals tested over Days 1–14
+90-Day Re-Intake | 90-day commercial clock | 50 (full refresh) | 7–10 min | Same as Full Intake | Updated patient profile. New baseline. Cycle 2 enrollment decision. | Every 90 days (commercial reporting cycle)
+Mode | Description | Latency | Accuracy | Used For
+BUTTON | WhatsApp interactive buttons (2–3 options). No NLU needed. Direct mapping. | <50ms | 100% (deterministic) | Categorical slots: dinner_pattern, protein_intake, walk_days, yes/no questions. Preferred mode wherever possible.
+REGEX | Pattern matching on numeric values. Regex extracts digits from message text. | <10ms | 95%+ (fails on non-numeric responses) | Numeric slots: fbg_recent, weight, waist, BP values. Handles: ‘132’, ‘sugar 132 tha’, ‘132 mg’.
+NLU (LLM) | LLM extracts structured data from free-text Hindi. Used ONLY when buttons and regex are insufficient. | 200–500ms | 85–92% (confidence scored) | Medication list extraction (complex, free-text names + dosages), HbA1c with date (‘7.4 tha 2 mahine pehle’), complex symptom descriptions.
+DEVICE | Value auto-populated from connected device (BP monitor, glucometer, wearable) via app relay. | <100ms | 95%+ (device accuracy) | BP, glucose, HR, weight — when patient has a connected device. Bypasses conversational question entirely.
+ASHA | ASHA worker enters value on tablet. Structured form input. No NLU needed. | <50ms | 98%+ (trained worker) | Government channel: physical measurements (weight, waist, BP taken by ASHA). ASHA form validates input ranges.
+State | Slots Collected | Question Pattern (Hindi) | Transition Rules
+CS1 | chest_pain + hypo_episodes_14d | Combined safety: ‘Pichle 2 hafton mein seene mein dard ya sugar girne ke lakshan?’ [Nahi | Seene dard | Sugar gira | Dono] | Chest pain → HARD_STOP H4. Severe hypo → HARD_STOP H8. Else → CS2.
+CS2 | bp_home_recent (sys + dia) | "Ghar par BP check kiya? Kitna aaya?" Regex extraction or device auto-fill. | >180/120 → HARD_STOP H3. Record values. → CS3.
+CS3 | fbg_readings_14d (array of values) | "Pichle 2 hafton ke fasting sugar bataiyein. Kitne baar check kiya?" Regex extracts multiple values. | Any value <70 or >300 → safety flag. Record all values for trend analysis. → CS4.
+CS4 | medication_adherence + changes + side_effects | "Dawai regular li? Koi badlaav kiya? Nai taklif?" Buttons + free text for side effects. | Side effects present → flag for pharmacist. Self-initiated medication changes → safety flag. → CS5.
+CS5 | meal_adherence + protein_adherence | "Khaane mein badlaav kaise chal raha hai? Protein kaisa?" Buttons: [Most days | Half | Few | None] for each. | Map to adherence enum. Both feed M4 trajectory classification. → CS6.
+CS6 | exercise_adherence | "Hafta mein kitne din exercise? Kitni der?" Buttons + optional free text. | Record frequency + duration. → CS7 if waist_circ due, else → COMPLETE.
+CS7 | waist_circ_cm (conditional: only if >30 days since last) | "Kamar naapein aur bataiyein. Pichli baar [X] cm tha." Regex. | Carry forward if <30 days old (skip this state). Otherwise collect and → COMPLETE.
+Library | Purpose
+github.com/segmentio/kafka-go | Kafka producer for publishing enrollment events, slot fills, safety triggers, check-in completions to downstream KB services.
+github.com/jackc/pgx/v5 | PostgreSQL driver for event-sourced slot storage, session state, enrollment records. Uses connection pooling via pgxpool.
+github.com/redis/go-redis/v9 | Redis for session locking (distributed lock per patient session), message idempotency (dedup hash with 24hr TTL), and NLU response caching.
+github.com/samply/golang-fhir-models | FHIR R4 Go structs for generating Patient, Observation, Condition, MedicationStatement resources from slot values.
+gopkg.in/yaml.v3 | YAML parser for loading flow graph definitions. Flow graphs are YAML files listing nodes and edges.
+github.com/go-playground/validator/v10 | Struct validation for slot values: range checks, required fields, type assertions. Custom validators for clinical ranges.
+github.com/prometheus/client_golang | Prometheus metrics: enrollment counts, slot fill rates, safety trigger rates, session durations, NLU latencies.
+go.opentelemetry.io/otel | Distributed tracing: trace each patient session from WhatsApp webhook through slot fills to Kafka publish.
+golang.org/x/crypto/nacl/box | ABDM encryption for ABHA linking flow (same X25519 cipher suite as ingestion service).
+Event | Kafka Topic | Trigger | Consumers | Payload
+PATIENT_CREATED | intake.patient-lifecycle | New enrollment initiated | KB-20 (creates longitudinal record) | { patientId, tenantId, channelType, phone, abhaId, enrollDate }
+SLOT_FILLED | intake.slot-events | Each slot fill during intake or check-in | KB-20 (stores observation), KB-22 (if safety-relevant slot) | { patientId, slotName, value, confidence, source, extractionMode, timestamp, safetyResult }
+HARD_STOP_TRIGGERED | intake.safety-alerts | HARD_STOP rule evaluates true | KB-23 (generates urgent physician card), Notification Service (physician alert) | { patientId, ruleId, triggerCondition, slotValues, timestamp, patientMessage }
+SOFT_FLAG_RAISED | intake.safety-flags | SOFT_FLAG rule evaluates true | Pharmacist Review Queue (annotated on review) | { patientId, flagId, triggerCondition, slotValues, recommendation }
+INTAKE_COMPLETED | intake.completions | All mandatory slots filled, safety passed | Pharmacist Review Queue | { patientId, sessionId, slotSummary (all 50 slots), riskStratification (GREEN/YELLOW/RED), softFlags[] }
+PATIENT_ENROLLED | intake.patient-lifecycle | Pharmacist approves intake | KB-20, KB-21, KB-23, KB-26, BCE, App Service | { patientId, tenantId, channelType, enrolledAt, riskStratum, protocolAssignment, labOrdersPlaced[] }
+CHECKIN_COMPLETED | intake.checkin-events | M0-CI biweekly check-in finished | M4 (trajectory classification), KB-20 (longitudinal update), KB-21 (adherence update) | { patientId, checkinDay, trajectorySignal, slotValues (12 slots), safetyFlags[] }
+SESSION_ABANDONED | intake.session-lifecycle | 7 days no response after all reminders | Admin Dashboard, Tenant Reporting | { patientId, lastActiveAt, slotsFilledCount, totalSlots, abandonedAt }
+LAB_ORDER_PLACED | intake.lab-orders | Missing baseline labs detected at intake completion | Lab Integration Service, Patient Notification | { patientId, labTests[] (HbA1c, lipid, eGFR, UACR), preferredLab, urgency }
+Metric | Type | Labels | Alert Threshold | Purpose
+intake_enrollments_total | Counter | tenant_id, channel_type, status (completed|abandoned|hard_stopped) | Abandoned rate > 30% | Track enrollment funnel conversion by channel
+intake_slot_fills_total | Counter | slot_name, extraction_mode, confidence_tier (high|medium|low) | Low confidence rate > 20% per slot | Identify slots where extraction quality is poor (NLU needs tuning)
+intake_safety_triggers_total | Counter | rule_id, rule_type (hard_stop|soft_flag), tenant_id | Any H4 (chest pain) or H5 (stroke) trigger | Critical safety events require immediate operational awareness
+intake_session_duration_seconds | Histogram | channel_type, flow_type (intake|checkin|meal_test) | P95 > 15 minutes for intake | Sessions running too long indicate UX problems or confused patients
+intake_nlu_latency_seconds | Histogram | extraction_mode, confidence_tier | P99 > 2 seconds | NLU response time directly impacts patient experience on WhatsApp
+intake_pharmacist_review_queue_depth | Gauge | tenant_id, risk_stratum | Depth > 20 for > 2 hours | Pharmacist bottleneck — patients waiting for review, delaying enrollment
+intake_whatsapp_delivery_rate | Gauge | message_type (question|safety|reminder) | Delivery rate < 95% | WhatsApp delivery failures indicate phone number issues or API problems
+intake_offline_queue_depth | Gauge | (govt channel only) | Depth > 50 pending sync | ASHA tablets accumulating offline sessions — connectivity issues in the field
+intake_session_lock_contention | Counter |  | Any contention | Concurrent message processing for same patient — should be near zero

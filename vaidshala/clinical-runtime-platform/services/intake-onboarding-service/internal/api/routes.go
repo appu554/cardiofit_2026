@@ -52,18 +52,34 @@ func (s *Server) setupRoutes() {
 		fhir.POST("/Patient/:id/$verify-otp", s.stubHandler("Verify OTP"))
 		fhir.POST("/Patient/:id/$link-abha", s.stubHandler("Link ABHA"))
 
-		// Review
-		fhir.POST("/Encounter/:id/$submit-review", s.stubHandler("Submit Review"))
-		fhir.POST("/Encounter/:id/$approve", s.stubHandler("Approve"))
-		fhir.POST("/Encounter/:id/$request-clarification", s.stubHandler("Request Clarification"))
-		fhir.POST("/Encounter/:id/$escalate", s.stubHandler("Escalate"))
+		// -- LIVE Review operations (Phase 5) --
+		fhir.POST("/Encounter/:id/$submit-review", s.reviewHandler.HandleSubmitReview)
+		fhir.POST("/ReviewEntry/:id/$approve", s.reviewHandler.HandleApprove)
+		fhir.POST("/ReviewEntry/:id/$request-clarification", s.reviewHandler.HandleRequestClarification)
+		fhir.POST("/ReviewEntry/:id/$escalate", s.reviewHandler.HandleEscalate)
 
-		// Check-in
-		fhir.POST("/Patient/:id/$checkin", s.stubHandler("Start Checkin"))
-		fhir.POST("/Encounter/:id/$checkin-slot", s.stubHandler("Fill Checkin Slot"))
+		// -- LIVE Check-in operations (Phase 5) --
+		fhir.POST("/Patient/:id/$checkin", s.checkinHandler.HandleStartCheckin)
+		fhir.POST("/CheckinSession/:id/$checkin-slot", s.checkinHandler.HandleFillCheckinSlot)
 
 		// Co-enrollee
 		fhir.POST("/Patient/:id/$register-co-enrollee", s.stubHandler("Register Co-enrollee"))
+	}
+
+	// -- Phase 4: Channel Adapters --
+
+	// WhatsApp Business API webhook
+	webhook := s.Router.Group("/webhook")
+	{
+		webhook.GET("/whatsapp", s.whatsappHandler.HandleVerification)
+		webhook.POST("/whatsapp", s.whatsappHandler.HandleIncoming)
+	}
+
+	// ASHA tablet channel
+	channel := s.Router.Group("/channel")
+	{
+		channel.POST("/asha/submit", s.ashaHandler.HandleBatchSubmit)
+		channel.GET("/asha/sync/:deviceId", s.ashaHandler.HandleSyncStatus)
 	}
 }
 

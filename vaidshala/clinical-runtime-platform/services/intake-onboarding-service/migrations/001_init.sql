@@ -47,10 +47,12 @@ CREATE TABLE review_queue (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     patient_id      UUID NOT NULL REFERENCES enrollments(patient_id),
     encounter_id    UUID NOT NULL,
+    tenant_id       UUID,
     risk_stratum    TEXT NOT NULL,
     status          TEXT DEFAULT 'PENDING',
     reviewer_id     UUID,
     reviewed_at     TIMESTAMPTZ,
+    notes           TEXT DEFAULT '',
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 

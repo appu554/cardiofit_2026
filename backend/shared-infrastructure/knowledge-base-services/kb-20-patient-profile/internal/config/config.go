@@ -113,10 +113,10 @@ func Load() (*Config, error) {
 		},
 		FHIR: GoogleFHIRConfig{
 			Enabled:         getEnvAsBool("FHIR_SYNC_ENABLED", false),
-			ProjectID:       getEnv("GOOGLE_CLOUD_PROJECT_ID", "cardiofit-905a8"),
+			ProjectID:       getEnv("GOOGLE_CLOUD_PROJECT_ID", "project-2bbef9ac-174b-4b59-8fe"),
 			Location:        getEnv("GOOGLE_CLOUD_LOCATION", "asia-south1"),
-			DatasetID:       getEnv("GOOGLE_CLOUD_DATASET_ID", "clinical-synthesis-hub"),
-			FhirStoreID:     getEnv("GOOGLE_CLOUD_FHIR_STORE_ID", "fhir-store"),
+			DatasetID:       getEnv("GOOGLE_CLOUD_DATASET_ID", "vaidshala-clinical"),
+			FhirStoreID:     getEnv("GOOGLE_CLOUD_FHIR_STORE_ID", "cardiofit-fhir-r4"),
 			CredentialsPath: getEnv("GOOGLE_CLOUD_CREDENTIALS_PATH", "credentials/google-credentials.json"),
 			WriteBack:       getEnvAsBool("FHIR_WRITE_BACK", false),
 		},

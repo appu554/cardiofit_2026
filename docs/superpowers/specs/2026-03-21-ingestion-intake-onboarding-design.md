@@ -396,7 +396,7 @@ Target: `backend/services/api-gateway/`
 ```
 Flutter App  → Gateway /api/v1/intake/fhir/Patient/$enroll     → :8141/fhir/Patient/$enroll
 Dashboard    → Gateway /api/v1/intake/fhir/Encounter?status=pending → :8141/fhir/Encounter?status=pending
-Lab webhook  → Gateway /api/v1/ingest/labs/thyrocare           → :8140/ingest/labs/thyrocare
+Lab webhook  → Gateway /api/v1/ingest/labs/thyrocare           → :8140/labs/thyrocare
 Device data  → Gateway /api/v1/ingest/fhir/Observation         → :8140/fhir/Observation
 ```
 

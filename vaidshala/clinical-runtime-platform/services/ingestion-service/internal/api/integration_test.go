@@ -131,7 +131,7 @@ func TestIntegration_PostDeviceIngest(t *testing.T) {
 	bodyBytes, _ := json.Marshal(body)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/ingest/devices", bytes.NewReader(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, "/devices", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	server.Router.ServeHTTP(w, req)
 
@@ -160,7 +160,7 @@ func TestIntegration_PostAppCheckin(t *testing.T) {
 	bodyBytes, _ := json.Marshal(body)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/ingest/app-checkin", bytes.NewReader(bodyBytes))
+	req, _ := http.NewRequest(http.MethodPost, "/app-checkin", bytes.NewReader(bodyBytes))
 	req.Header.Set("Content-Type", "application/json")
 	server.Router.ServeHTTP(w, req)
 
@@ -297,10 +297,11 @@ func TestIntegration_StubEndpointsReturn501(t *testing.T) {
 	}{
 		{http.MethodPost, "/fhir"},
 		{http.MethodPost, "/fhir/DiagnosticReport"},
-		{http.MethodPost, "/ingest/ehr/hl7v2"},
-		{http.MethodPost, "/ingest/ehr/fhir"},
-		{http.MethodPost, "/ingest/labs/thyrocare"},
-		{http.MethodPost, "/ingest/abdm/data-push"},
+		// /ehr/hl7v2 now returns 501 from real handler (MLLP stub), not stubHandler
+		// /ehr/fhir now returns 422 from real FHIR handler (invalid empty input)
+		// /labs/:labId now returns 404/401 from real lab handler
+		// /abdm/data-push returns 501 stub when abdmHandler is nil (no crypto keys)
+		{http.MethodPost, "/abdm/data-push"},
 	}
 
 	for _, s := range stubs {

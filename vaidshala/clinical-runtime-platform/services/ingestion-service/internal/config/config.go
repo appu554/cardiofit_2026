@@ -1,12 +1,43 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"vaidshala/clinical-runtime-platform/pkg/fhirclient"
 )
+
+func init() {
+	loadDotEnv(".env")
+}
+
+// loadDotEnv reads a .env file and sets vars not already in the environment.
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, val)
+		}
+	}
+}
 
 // Config holds all configuration for the Ingestion Service.
 type Config struct {
@@ -49,6 +80,12 @@ func (c *Config) IsDevelopment() bool {
 	return c.Environment == "development" || c.Environment == "dev"
 }
 
+// GetLabAPIKey returns the API key for a specific lab provider.
+// Keys are stored as LAB_API_KEY_{UPPER_LAB_ID} env vars.
+func (c *Config) GetLabAPIKey(labID string) string {
+	return getEnv("LAB_API_KEY_"+strings.ToUpper(labID), "")
+}
+
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
@@ -67,11 +104,11 @@ func Load() *Config {
 		},
 		FHIR: fhirclient.GoogleFHIRConfig{
 			Enabled:         getEnvAsBool("FHIR_ENABLED", false),
-			ProjectID:       getEnv("FHIR_PROJECT_ID", ""),
-			Location:        getEnv("FHIR_LOCATION", ""),
-			DatasetID:       getEnv("FHIR_DATASET_ID", ""),
-			FhirStoreID:     getEnv("FHIR_STORE_ID", ""),
-			CredentialsPath: getEnv("GOOGLE_APPLICATION_CREDENTIALS", ""),
+			ProjectID:       getEnv("FHIR_PROJECT_ID", "project-2bbef9ac-174b-4b59-8fe"),
+			Location:        getEnv("FHIR_LOCATION", "asia-south1"),
+			DatasetID:       getEnv("FHIR_DATASET_ID", "vaidshala-clinical"),
+			FhirStoreID:     getEnv("FHIR_STORE_ID", "cardiofit-fhir-r4"),
+			CredentialsPath: getEnv("GOOGLE_APPLICATION_CREDENTIALS", "credentials/google-credentials.json"),
 		},
 		Kafka: KafkaConfig{
 			Brokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},

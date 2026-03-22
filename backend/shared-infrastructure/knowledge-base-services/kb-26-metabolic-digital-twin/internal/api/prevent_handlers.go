@@ -33,6 +33,11 @@ func (s *Server) getPREVENT(c *gin.Context) {
 	}
 
 	// No persisted score — compute from current twin state.
+	if s.preventScorer == nil {
+		sendError(c, http.StatusServiceUnavailable, "PREVENT scorer not available", "SERVICE_UNAVAILABLE", nil)
+		return
+	}
+
 	twin, err := s.twinUpdater.GetLatest(patientID)
 	if err != nil {
 		sendError(c, http.StatusNotFound, "twin state not found", "TWIN_NOT_FOUND", nil)

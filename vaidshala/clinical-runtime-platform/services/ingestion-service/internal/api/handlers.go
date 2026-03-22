@@ -129,7 +129,7 @@ func (s *Server) handleFHIRObservation(c *gin.Context) {
 	})
 }
 
-// handleDeviceIngest handles POST /ingest/devices.
+// handleDeviceIngest handles POST /devices.
 func (s *Server) handleDeviceIngest(c *gin.Context) {
 	metrics.MessagesReceived.WithLabelValues("DEVICE", "", "").Inc()
 
@@ -171,7 +171,7 @@ func (s *Server) handleDeviceIngest(c *gin.Context) {
 	})
 }
 
-// handleAppCheckin handles POST /ingest/app-checkin (patient self-report from Flutter app).
+// handleAppCheckin handles POST /app-checkin (patient self-report from Flutter app).
 func (s *Server) handleAppCheckin(c *gin.Context) {
 	metrics.MessagesReceived.WithLabelValues("PATIENT_REPORTED", "app_checkin", "").Inc()
 
@@ -211,7 +211,7 @@ func (s *Server) handleAppCheckin(c *gin.Context) {
 	})
 }
 
-// handleWhatsAppIngest handles POST /ingest/whatsapp (NLU-parsed WhatsApp messages).
+// handleWhatsAppIngest handles POST /whatsapp (NLU-parsed WhatsApp messages).
 func (s *Server) handleWhatsAppIngest(c *gin.Context) {
 	metrics.MessagesReceived.WithLabelValues("PATIENT_REPORTED", "whatsapp", "").Inc()
 

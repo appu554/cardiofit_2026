@@ -26,17 +26,18 @@ func (s *Server) setupRoutes() {
 		fhirGroup.POST("/OperationOutcome/:id/$replay", s.dlqReplay.HandleReplay)
 	}
 
-	// Source-specific receivers
-	ingest := s.Router.Group("/ingest")
-	{
-		ingest.POST("/ehr/hl7v2", s.stubHandler("HL7v2 ingest"))                   // Phase 4
-		ingest.POST("/ehr/fhir", s.stubHandler("FHIR passthrough"))                // Phase 4
-		ingest.POST("/labs/:labId", s.stubHandler("Lab ingest"))                    // Phase 4
-		ingest.POST("/devices", s.handleDeviceIngest)                               // Phase 2
-		ingest.POST("/app-checkin", s.handleAppCheckin)                             // Phase 2
-		ingest.POST("/whatsapp", s.handleWhatsAppIngest)                            // Phase 2
-		ingest.POST("/wearables/:provider", s.stubHandler("Wearable ingest"))       // Phase 4
-		ingest.POST("/abdm/data-push", s.stubHandler("ABDM data push"))            // Phase 4
+	// Source-specific receivers (mounted at root — gateway strips /api/v1/ingest prefix)
+	s.Router.POST("/ehr/hl7v2", s.ehrHandler.HandleHL7v2)                   // Phase 4 (MLLP stub)
+	s.Router.POST("/ehr/fhir", s.ehrHandler.HandleFHIRPassthrough)          // Phase 4
+	s.Router.POST("/labs/:labId", s.labHandler.HandleLabWebhook)            // Phase 4
+	s.Router.POST("/devices", s.handleDeviceIngest)                         // Phase 2
+	s.Router.POST("/app-checkin", s.handleAppCheckin)                       // Phase 2
+	s.Router.POST("/whatsapp", s.handleWhatsAppIngest)                      // Phase 2
+	s.Router.POST("/wearables/:provider", s.wearableHandler.HandleIngest) // Phase 5
+	if s.abdmHandler != nil {
+		s.Router.POST("/abdm/data-push", s.abdmHandler.HandleDataPush)  // Phase 4
+	} else {
+		s.Router.POST("/abdm/data-push", s.stubHandler("ABDM data push — configure X25519 keys")) // Phase 4
 	}
 
 	// Internal (service-to-service)
@@ -47,6 +48,15 @@ func (s *Server) setupRoutes() {
 
 	// Admin/Dashboard
 	s.Router.GET("/$source-status", s.stubHandler("Source status"))
+
+	// Phase 5: DLQ resolver admin endpoints
+	admin := s.Router.Group("/admin")
+	{
+		admin.GET("/dlq", s.handleDLQList)
+		admin.GET("/dlq/:id", s.handleDLQGet)
+		admin.POST("/dlq/:id/$discard", s.handleDLQDiscard)
+		admin.GET("/dlq/$count", s.handleDLQCount)
+	}
 }
 
 // stubHandler returns a 501 Not Implemented response with the endpoint name.
