@@ -27,6 +27,9 @@ func (s *Server) RegisterRoutes() {
 		v1.POST("/perturbations", s.handleCreatePerturbation)
 		v1.GET("/perturbations/:patient_id/active", s.handleGetActivePerturbations)
 
+		// Configuration endpoints (consumed by Flink)
+		v1.GET("/config/risk-scoring", s.getRiskScoringConfig)
+
 		// Clinical Signal Processing (KB-22 SignalPublisher)
 		v1.POST("/clinical-signals", s.handleClinicalSignal)
 
