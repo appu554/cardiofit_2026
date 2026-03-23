@@ -84,6 +84,10 @@ var vitalThresholds = VitalThresholdsResponse{
 		TachycardiaModerate: 110,
 		TachycardiaSevere:   120,
 	},
+	// NormalHigh and Stage2HTN are intentionally both 140, matching the KB-4
+	// spec (Section 5.3).  Stage 1 HTN (130-139 mmHg) is not separately
+	// tracked here because this endpoint serves Flink alerting thresholds, not
+	// full clinical BP staging.
 	SystolicBP: SystolicBPThresholds{
 		HypotensionSevere: 70,
 		Hypotension:       90,

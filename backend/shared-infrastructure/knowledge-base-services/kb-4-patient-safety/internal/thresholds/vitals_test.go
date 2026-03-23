@@ -128,7 +128,9 @@ func TestGetVitalThresholds_VersionPresent(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	var body map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &body)
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
 
 	v, ok := body["version"]
 	if !ok {

@@ -10,6 +10,16 @@ import (
 // scoring dataset.
 const earlyWarningVersion = "2026-03-23T00:00:00Z"
 
+// EWSThresholds defines the alert-escalation thresholds for an early-warning
+// scoring system.  Critical and High are the aggregate score values that
+// trigger the respective escalation tiers.  LowMediumSingle3 flags whether a
+// single parameter scoring 3 alone triggers a medium escalation (NEWS2 only).
+type EWSThresholds struct {
+	Critical         int  `json:"critical"`
+	High             int  `json:"high"`
+	LowMediumSingle3 bool `json:"low_medium_single3,omitempty"`
+}
+
 // ScoreBand represents a single scoring band in an early-warning system.
 // Min and Max are inclusive boundaries; Points is the score awarded when
 // the observed value falls within [Min, Max].
@@ -28,20 +38,20 @@ type NEWS2Scores struct {
 	SystolicBP      []ScoreBand            `json:"systolic_bp"`
 	HeartRate       []ScoreBand            `json:"heart_rate"`
 	Temperature     []ScoreBand            `json:"temperature"`
-	Consciousness   map[string]int         `json:"consciousness"`
-	SupplementalO2  map[string]int         `json:"supplemental_o2"`
-	Thresholds      map[string]interface{} `json:"thresholds"`
+	Consciousness   map[string]int `json:"consciousness"`
+	SupplementalO2  map[string]int `json:"supplemental_o2"`
+	Thresholds      EWSThresholds  `json:"thresholds"`
 }
 
 // MEWSScores holds the complete MEWS (Modified Early Warning Score)
 // scoring parameters.
 type MEWSScores struct {
-	RespiratoryRate []ScoreBand            `json:"respiratory_rate"`
-	HeartRate       []ScoreBand            `json:"heart_rate"`
-	SystolicBP      []ScoreBand            `json:"systolic_bp"`
-	Temperature     []ScoreBand            `json:"temperature"`
-	Consciousness   map[string]int         `json:"consciousness"`
-	Thresholds      map[string]interface{} `json:"thresholds"`
+	RespiratoryRate []ScoreBand    `json:"respiratory_rate"`
+	HeartRate       []ScoreBand    `json:"heart_rate"`
+	SystolicBP      []ScoreBand    `json:"systolic_bp"`
+	Temperature     []ScoreBand    `json:"temperature"`
+	Consciousness   map[string]int `json:"consciousness"`
+	Thresholds      EWSThresholds  `json:"thresholds"`
 }
 
 // EarlyWarningScoresResponse is the top-level response for
@@ -106,10 +116,10 @@ var earlyWarningScores = EarlyWarningScoresResponse{
 		SupplementalO2: map[string]int{
 			"on_oxygen": 2,
 		},
-		Thresholds: map[string]interface{}{
-			"critical":            7,
-			"high":                5,
-			"low_medium_single3":  true,
+		Thresholds: EWSThresholds{
+			Critical:         7,
+			High:             5,
+			LowMediumSingle3: true,
 		},
 	},
 	MEWS: MEWSScores{
@@ -146,9 +156,9 @@ var earlyWarningScores = EarlyWarningScoresResponse{
 			"pain":         2,
 			"unresponsive": 3,
 		},
-		Thresholds: map[string]interface{}{
-			"critical": 5,
-			"high":     3,
+		Thresholds: EWSThresholds{
+			Critical: 5,
+			High:     3,
 		},
 	},
 	Version: earlyWarningVersion,
