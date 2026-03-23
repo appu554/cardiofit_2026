@@ -87,5 +87,11 @@ func (s *Server) setupRoutes() {
 		{
 			loinc.GET("/registry", s.getLOINCRegistry)
 		}
+
+		// Lab thresholds for Flink stream enrichment and V-MCU Channel B safety
+		thresholds := v1.Group("/thresholds")
+		{
+			thresholds.GET("/labs", s.getLabThresholds)
+		}
 	}
 }
