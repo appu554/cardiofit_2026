@@ -13,6 +13,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
+	"kb-patient-safety/internal/thresholds"
 	"kb-patient-safety/pkg/analytics"
 	"kb-patient-safety/pkg/explainability"
 	grpcserver "kb-patient-safety/pkg/grpc"
@@ -443,6 +444,10 @@ func setupRoutes(router *gin.Engine, db *gorm.DB) {
 		v1.GET("/explain/blackbox", handleExplainBlackBox())
 		v1.GET("/explain/alert/:alertId", handleExplainAlert())
 		v1.POST("/explain/check", handleExplainSafetyCheck())
+
+		// NEW: Clinical threshold endpoints (consumed by Flink BroadcastState)
+		v1.GET("/thresholds/vitals", thresholds.HandleGetVitalThresholds)
+		v1.GET("/thresholds/early-warning-scores", thresholds.HandleGetEarlyWarningScores)
 	}
 
 	// Also mount under /api/v1 for compatibility
