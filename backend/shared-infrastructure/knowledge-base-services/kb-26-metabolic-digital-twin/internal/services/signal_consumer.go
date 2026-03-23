@@ -46,7 +46,8 @@ func (r *SignalRouter) Route(data []byte) (RouteAction, error) {
 	switch env.SignalType {
 	case "FBG", "PPBG", "HBA1C", "SBP", "DBP", "HR", "WEIGHT", "WAIST",
 		"CREATININE", "ACR", "POTASSIUM", "LIPID_PANEL", "ORTHOSTATIC",
-		"ADHERENCE", "ACTIVITY":
+		"ADHERENCE", "ACTIVITY",
+		"TOTAL_CHOLESTEROL", "HDL", "LDL", "TRIGLYCERIDES", "COMPLIANCE":
 		return RouteProcessObservation, nil
 	case "HYPO_EVENT":
 		return RouteProcessObservation, nil
