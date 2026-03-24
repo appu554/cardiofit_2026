@@ -148,7 +148,12 @@ public enum KafkaTopics {
     INGESTION_SAFETY_CRITICAL("ingestion.safety-critical", 4, 90),
 
     // ============= KB Threshold Hot-Swap =============
-    KB_CLINICAL_THRESHOLDS_CHANGES("kb.clinical-thresholds.changes", 1, 7);
+    KB_CLINICAL_THRESHOLDS_CHANGES("kb.clinical-thresholds.changes", 1, 7, true),
+
+    // ============= Ingestion DLQs (3 topics) =============
+    DLQ_INGESTION_LABS("dlq.ingestion.labs.v1", 4, 90),
+    DLQ_INGESTION_VITALS("dlq.ingestion.vitals.v1", 4, 90),
+    DLQ_INGESTION_SAFETY_CRITICAL("dlq.ingestion.safety-critical.v1", 4, 90);
 
     private final String topicName;
     private final int partitions;
