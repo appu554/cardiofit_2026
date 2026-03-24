@@ -18,7 +18,7 @@ import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
-import org.apache.flink.streaming.api.windowing.time.Time;
+import java.time.Duration;
 import org.apache.flink.util.Collector;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -115,7 +115,7 @@ public class HpiCalibrationStreamJob {
 
         // 7-day sliding window with 1-day slide for concordance aggregation
         DataStream<ConcordanceAggregate> windowed = keyed
-                .window(SlidingEventTimeWindows.of(Time.days(7), Time.days(1)))
+                .window(SlidingEventTimeWindows.of(Duration.ofDays(7), Duration.ofDays(1)))
                 .aggregate(new ConcordanceAggregator())
                 .name("7day-concordance-window");
 
@@ -303,7 +303,7 @@ public class HpiCalibrationStreamJob {
         private transient ValueState<String> currentTierState;
 
         @Override
-        public void open(Configuration parameters) {
+        public void open(org.apache.flink.api.common.functions.OpenContext openContext) {
             cumulativeCasesState = getRuntimeContext().getState(
                     new ValueStateDescriptor<>("cumulative-cases", TypeInformation.of(Integer.class))
             );

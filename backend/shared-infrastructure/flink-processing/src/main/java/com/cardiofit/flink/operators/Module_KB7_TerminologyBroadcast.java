@@ -259,8 +259,8 @@ public class Module_KB7_TerminologyBroadcast {
         private transient boolean initialized;
 
         @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
+        public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
+            super.open(openContext);
             LOG.info("=== Initializing Terminology Enrichment Processor ===");
             initialized = true;
             LOG.info("=== Terminology Enrichment Processor Ready (awaiting CDC broadcasts) ===");
