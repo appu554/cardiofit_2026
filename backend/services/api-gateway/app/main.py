@@ -10,12 +10,14 @@ from app.graphql.schema import schema
 from app.config import settings
 from app.auth import AuthenticationMiddleware, HeaderAuthMiddleware
 from app.middleware import RBACMiddleware, RequestLoggingMiddleware, RateLimitMiddleware, GraphQLRBACMiddleware
+from app.middleware.metrics import MetricsMiddleware, metrics_endpoint
 from app.api.proxy import router as proxy_router
 from app.api.endpoints.raw_fhir import router as raw_fhir_router
 from app.api.endpoints.raw_graphql import router as raw_graphql_router
 from app.api.endpoints.direct_fhir import router as direct_fhir_router
 from app.api.endpoints.patient_app import router as patient_router, auth_router as otp_router
 from app.api.endpoints.doctor_dashboard import router as doctor_router
+from app.api.endpoints.websocket_proxy import router as ws_router
 
 # Configure logging
 logging.basicConfig(
@@ -116,6 +118,11 @@ logger.info("Added RBACMiddleware")
 app.add_middleware(GraphQLRBACMiddleware)
 logger.info("Added GraphQLRBACMiddleware")
 
+# Prometheus metrics (Phase 2)
+if settings.METRICS_ENABLED:
+    app.add_middleware(MetricsMiddleware)
+    logger.info("Added MetricsMiddleware")
+
 # Create GraphQL router with context
 async def get_context(request: Request):
     # Include user information from request state if available
@@ -148,6 +155,9 @@ async def health_check():
             "proxy": "up"
         }
     }
+
+# Prometheus metrics endpoint — NOT in auth exclusion list (requires JWT + admin role)
+app.add_route("/metrics", metrics_endpoint)
 
 # Root endpoint
 @app.get("/")
@@ -291,6 +301,7 @@ app.include_router(direct_fhir_router, prefix="/api")
 app.include_router(otp_router)       # /api/v1/auth/* (public)
 app.include_router(patient_router)   # /api/v1/patient/* (JWT required)
 app.include_router(doctor_router)    # /api/v1/doctor/* (JWT required)
+app.include_router(ws_router)        # /api/v1/doctor/subscriptions (WebSocket)
 
 # Mount proxy router for API endpoints last
 app.include_router(proxy_router)

@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Request, HTTPException
 
 from app.config import settings  # module-level singleton, NOT get_settings()
+from app.middleware.circuit_breaker import get_breaker
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["patient-app"])
@@ -108,6 +109,11 @@ async def tenant_branding(tenant_id: str, request: Request):
 async def _forward(request: Request, service_url: str, path: str, method: str = None) -> Any:
     """Forward request to a downstream service with X-User-* headers."""
     method = method or request.method
+    breaker = get_breaker(service_url)
+
+    if not breaker.is_available():
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+
     headers = _build_headers(request)
     body = await request.body() if method in ("POST", "PUT", "PATCH") else None
 
@@ -120,11 +126,17 @@ async def _forward(request: Request, service_url: str, path: str, method: str = 
                 content=body,
                 params=dict(request.query_params),
             )
+            if resp.status_code >= 500:
+                breaker.record_failure()
+            else:
+                breaker.record_success()
             return resp.json()
     except httpx.ConnectError:
+        breaker.record_failure()
         raise HTTPException(status_code=502, detail="Downstream service unavailable")
     except Exception as e:
-        logger.error("Proxy error: %s %s -> %s", method, path, e)
+        breaker.record_failure()
+        logger.error("Proxy error: %s %s → %s", method, path, e)
         raise HTTPException(status_code=502, detail="Downstream service error")
 
 
