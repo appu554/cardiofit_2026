@@ -16,7 +16,7 @@ Replace the ingestion service's direct dual-write pattern (inline FHIR Store + K
 | Kafka publishing | Direct `segmentio/kafka-go` writes in `producer.go` | Outbox SDK `SaveAndPublish()` / `SaveAndPublishBatch()` |
 | FHIR Store writes | Synchronous in HTTP handler (kept) | Synchronous in HTTP handler (kept — no change) |
 | Flink consumption | Does not consume `ingestion.*` topics | Module1b IngestionCanonicalizer reads `ingestion.*` topics |
-| Flink FHIR writes | FHIRRouter writes all events to FHIR | FHIRRouter skips `source=ingestion-service` (already in FHIR) |
+| Flink FHIR writes | FHIRRouter writes all events to FHIR | Routing operator checks `sourceSystem=="ingestion-service"` → sets `sendToFHIR=false` (already in FHIR) |
 | Clinical thresholds | 50+ hardcoded values in Flink Java | Live from KB-4, KB-20, KB-1, KB-23 via BroadcastState |
 
 ---
@@ -53,7 +53,7 @@ Flink Module1b (IngestionCanonicalizer) → Module2 (Enrichment)
   → Module3 (CDS) → Module4 (Pattern Detection / CEP)
   → Module5 (ML Scoring) → Module6 (Egress Routing)
   │
-  ├─ FHIRRouter: SKIP (source=ingestion-service, raw Observation already in FHIR)
+  ├─ FHIRRouter: SKIP (routing operator sets sendToFHIR=false for sourceSystem=ingestion-service)
   ├─ CriticalAlertRouter → prod.ehr.alerts.critical (if applicable)
   ├─ AuditRouter → prod.ehr.audit.logs
   ├─ AnalyticsRouter → prod.ehr.analytics.events
@@ -70,10 +70,10 @@ Flink Module1b (IngestionCanonicalizer) → Module2 (Enrichment)
 Same as routine until Stage 2. Validator sets `CRITICAL_VALUE` flag. Stage 4 uses `SaveAndPublishBatch()` for dual-publish in ONE PostgreSQL transaction:
 
 ```
-SaveAndPublishBatch(ctx, tx, []OutboxEvent{
-  Row 1: topic="ingestion.labs",            medical_context="critical", priority=1
-  Row 2: topic="ingestion.safety-critical", medical_context="critical", priority=1
-})
+SaveAndPublishBatch(ctx, []EventRequest{
+  {EventType: "observation.created", Topic: "ingestion.labs",            MedicalContext: "critical", Priority: 1, EventData: canonicalObs},
+  {EventType: "observation.created", Topic: "ingestion.safety-critical", MedicalContext: "critical", Priority: 1, EventData: canonicalObs},
+}, nil) // nil businessLogic — FHIR write already completed in Stage 3
 ```
 
 Both rows: same `event_data` payload (canonical observation + fhir_resource_id), different `topic` and `event_type`. Central Publisher processes critical events FIRST in every poll cycle. Circuit breaker: critical events ALWAYS pass, even when circuit is OPEN.
@@ -100,14 +100,35 @@ Routine observations: single `SaveAndPublish()` to source topic only.
 | **Ingestion Service** (synchronous) | `Observation` | Before outbox write, in HTTP handler | Patient app needs immediate confirmation; ABDM compliance; FHIR resource ID in Kafka payload |
 | **Flink** (asynchronous) | `RiskAssessment`, `DetectedIssue`, `CarePlan` | After trend analysis, pattern detection, ML scoring | Derived clinical intelligence — what the raw facts mean |
 
-FHIRRouter skip condition:
+FHIRRouter skip mechanism:
+
+The Flink pipeline model hierarchy is: `CanonicalEvent` → Module2 enrichment → `EnrichedClinicalEvent` → `TransactionalMultiSinkRouterV2_OptionC` → `RoutedEnrichedEvent` (with `RoutingDecision`) → FHIRRouter. The `CanonicalEvent` has no routing field — routing decisions are made by `TransactionalMultiSinkRouterV2_OptionC` which inspects the enriched event and creates a `RoutingDecision`.
+
+To prevent duplicate FHIR writes, the routing operator's `shouldPersistToFHIR()` checks `sourceSystem`:
+
 ```java
-if (event.getSource().equals("ingestion-service")
-    && event.getType().equals("observation.created")) {
-    // SKIP — raw Observation already in FHIR Store from Stage 3
-    return;
+// In TransactionalMultiSinkRouterV2_OptionC.shouldPersistToFHIR():
+if ("ingestion-service".equals(event.getSourceSystem())) {
+    return false; // Raw Observation already in FHIR from ingestion Stage 3
 }
-// All other events (RiskAssessment, DetectedIssue, etc.) → write to FHIR
+// ... existing logic for EHR pipeline events unchanged ...
+```
+
+Module1b sets `sourceSystem = "ingestion-service"` on every `CanonicalEvent` it produces. This propagates through enrichment to `EnrichedClinicalEvent.getSourceSystem()`, where the routing operator reads it.
+
+The FHIRRouter itself remains unchanged:
+```java
+// FHIRRouter (UNCHANGED):
+.filter(event -> event.getRouting() != null && event.getRouting().isSendToFHIR())
+```
+
+Similarly, critical value routing for ingestion events is handled in `isCriticalEvent()`:
+```java
+// In TransactionalMultiSinkRouterV2_OptionC.isCriticalEvent():
+if ("ingestion-service".equals(event.getSourceSystem())) {
+    List<?> flags = (List<?>) event.getPayload().get("flags");
+    if (flags != null && flags.contains("CRITICAL_VALUE")) return true;
+}
 ```
 
 ---
@@ -315,6 +336,8 @@ All of these process ingestion events automatically once Module1b feeds them int
 | Time-series aggregation | TimeSeriesAggregator | 1-min tumbling | VitalMetric |
 | ML inference (sepsis, cardiac, respiratory) | Module5 | per-event | MLPrediction |
 
+**SmartAlertGenerator suppression state:** Alert suppression in `SmartAlertGenerator.java` is currently **DISABLED** due to a cross-patient safety bug — static shared `alertHistory` caused Patient B's critical alerts to be suppressed when Patient A triggered the same alert type within the suppression window. All alerts fire unconditionally. With Module1b adding ingestion events to Flink, alert volume will increase. The per-patient fix (Flink `KeyedState`-based suppression) should be implemented before or alongside PR3. Until then, `Module6_AlertComposition` (which uses proper keyed state) provides the only dedup layer.
+
 ---
 
 ## 5. KB Threshold Centralization
@@ -399,6 +422,12 @@ Three-tier fallback (zero-downtime guarantee):
       {"min": 92, "max": 93, "points": 2},
       {"min": 94, "max": 95, "points": 1},
       {"min": 96, "max": 100, "points": 0}
+    ],
+    "spo2_scale2": [
+      {"min": 0, "max": 92, "points": 3},
+      {"min": 93, "max": 94, "points": 2},
+      {"min": 95, "max": 96, "points": 1},
+      {"min": 97, "max": 100, "points": 3}
     ],
     "systolic_bp": [
       {"min": 0, "max": 90, "points": 3},
@@ -596,7 +625,7 @@ Exposes the existing `lab_validator.go` plausibility ranges plus KDIGO/clinical 
 
 ```java
 // Reuses existing patterns:
-// - AsyncHttpClient (from GoogleFHIRClient)
+// - AsyncHttpClient (Netty-based, from GoogleFHIRClient used by AsyncPatientEnricher — NOT GoogleFHIRStoreSink which is synchronous)
 // - Caffeine cache with L1 fresh + L2 stale (from GoogleFHIRClient)
 // - Resilience4j circuit breaker (from AsyncPatientEnricher)
 // - BroadcastState (from Module3_ComprehensiveCDS_WithCDC)
@@ -794,6 +823,6 @@ Phase 4 (sequential): PR8 (depends on PR3 + PR4-PR7)
 3. **KB threshold refresh every 5 minutes** — clinical guidelines change at most quarterly. 5-min cache TTL is conservative.
 4. **Module1b is a new Flink job** — adds one job to manage. But it's ~200 lines, stateless, and follows the proven Module1 pattern.
 5. **No gRPC for threshold endpoints** — KB services expose HTTP REST only. Async HTTP client with Caffeine cache provides adequate performance (~5ms cached, ~50ms uncached).
-6. **Outbox table auto-creation** — The SDK calls `EnsureOutboxTable()` on startup, which runs CREATE TABLE IF NOT EXISTS. The ingestion service's PostgreSQL instance (port 5433, `ingestion_service` DB) must be accessible with DDL permissions for the `ingestion_user` role. Verify before PR1.
+6. **Outbox table auto-creation** — The SDK auto-creates the outbox table during client initialization (via the internal `createOutboxTable()` call inside `initialize()`), which runs CREATE TABLE IF NOT EXISTS. The ingestion service's PostgreSQL instance (port 5433, `ingestion_service` DB) must be accessible with DDL permissions for the `ingestion_user` role. For manual migrations, use the public `MigrationTool.CreateOutboxTable()` API. Verify before PR1.
 7. **Idempotency on caller retry** — If a caller retries after a timeout (FHIR write succeeded but HTTP response was lost), the ingestion service generates a new `event_id`. To prevent duplicate outbox events, the FHIR `fhir_resource_id` should be used as a dedup key: `INSERT INTO outbox_events_ingestion_service ... ON CONFLICT ON CONSTRAINT uq_fhir_resource_id DO NOTHING`. Requires adding a unique partial index on `(event_data->>'fhir_resource_id') WHERE status != 'published'` to the outbox table.
 8. **`kb.clinical-thresholds.changes` topic** — Created in PR0 but initially unused (no producer). ClinicalThresholdService uses 5-minute polling (mechanism 1) for MVP. The topic is available for future KB service CDC publishers (mechanism 2).
