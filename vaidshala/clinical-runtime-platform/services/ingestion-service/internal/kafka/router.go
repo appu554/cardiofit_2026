@@ -17,9 +17,10 @@ var topicMap = map[canonical.ObservationType]string{
 	canonical.ObsDeviceData:      "ingestion.device-data",
 	canonical.ObsPatientReported: "ingestion.patient-reported",
 	canonical.ObsMedications:     "ingestion.medications",
-	canonical.ObsHPI:             "ingestion.hpi",
-	canonical.ObsABDMRecords:     "ingestion.abdm-records",
-	canonical.ObsGeneral:         "ingestion.observations",
+	canonical.ObsABDMRecords:        "ingestion.abdm-records",
+	canonical.ObsWearableAggregates: "ingestion.wearable-aggregates",
+	canonical.ObsCGMRaw:             "ingestion.cgm-raw",
+	canonical.ObsGeneral:            "ingestion.observations",
 }
 
 // TopicRouter selects the Kafka topic and partition key based on

@@ -39,7 +39,6 @@ const (
 	SourceABDM            SourceType = "ABDM"
 	SourceLab             SourceType = "LAB"
 	SourcePatientReported SourceType = "PATIENT_REPORTED"
-	SourceHPI             SourceType = "HPI"
 	SourceDevice          SourceType = "DEVICE"
 	SourceWearable        SourceType = "WEARABLE"
 )
@@ -52,10 +51,11 @@ const (
 	ObsLabs            ObservationType = "LABS"
 	ObsMedications     ObservationType = "MEDICATIONS"
 	ObsPatientReported ObservationType = "PATIENT_REPORTED"
-	ObsHPI             ObservationType = "HPI"
-	ObsDeviceData      ObservationType = "DEVICE_DATA"
-	ObsABDMRecords     ObservationType = "ABDM_RECORDS"
-	ObsGeneral         ObservationType = "GENERAL"
+	ObsDeviceData          ObservationType = "DEVICE_DATA"
+	ObsABDMRecords         ObservationType = "ABDM_RECORDS"
+	ObsWearableAggregates  ObservationType = "WEARABLE_AGGREGATES"
+	ObsCGMRaw              ObservationType = "CGM_RAW"
+	ObsGeneral             ObservationType = "GENERAL"
 )
 
 // DeviceContext carries metadata about the originating device, applicable
