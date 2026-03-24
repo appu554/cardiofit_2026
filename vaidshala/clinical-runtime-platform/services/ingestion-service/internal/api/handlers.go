@@ -107,14 +107,37 @@ func (s *Server) handleFHIRObservation(c *gin.Context) {
 		}
 	}
 
-	// Publish to Kafka
-	if s.kafkaProducer != nil && s.topicRouter != nil {
+	// Publish via outbox (preferred) or direct Kafka (fallback)
+	isCritical := false
+	for _, flag := range results[0].Flags {
+		if flag == canonical.FlagCriticalValue {
+			isCritical = true
+			break
+		}
+	}
+	if s.outboxPublisher != nil {
+		var pubErr error
+		if isCritical {
+			pubErr = s.outboxPublisher.PublishCritical(c.Request.Context(), &results[0], fhirResourceID)
+		} else {
+			pubErr = s.outboxPublisher.Publish(c.Request.Context(), &results[0], fhirResourceID)
+		}
+		if pubErr != nil {
+			s.logger.Error("outbox publish failed", zap.Error(pubErr))
+		}
+	} else if s.kafkaProducer != nil && s.topicRouter != nil {
 		topic, key, err := s.topicRouter.Route(c.Request.Context(), &results[0])
 		if err == nil {
 			_ = s.kafkaProducer.Publish(
 				c.Request.Context(), topic, key, &results[0],
 				"Observation", fhirResourceID, s.config.Kafka.Brokers,
 			)
+			if isCritical {
+				_ = s.kafkaProducer.Publish(
+					c.Request.Context(), "ingestion.safety-critical", key, &results[0],
+					"Observation", fhirResourceID, s.config.Kafka.Brokers,
+				)
+			}
 		}
 	}
 

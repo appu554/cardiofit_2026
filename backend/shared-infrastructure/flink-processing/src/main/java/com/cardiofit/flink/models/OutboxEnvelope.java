@@ -33,7 +33,7 @@ public class OutboxEnvelope implements Serializable {
     private String correlationId;
 
     @JsonProperty("priority")
-    private String priority;
+    private int priority;
 
     @JsonProperty("medical_context")
     private String medicalContext;
@@ -66,8 +66,8 @@ public class OutboxEnvelope implements Serializable {
     public String getCorrelationId() { return correlationId; }
     public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
 
-    public String getPriority() { return priority; }
-    public void setPriority(String priority) { this.priority = priority; }
+    public int getPriority() { return priority; }
+    public void setPriority(int priority) { this.priority = priority; }
 
     public String getMedicalContext() { return medicalContext; }
     public void setMedicalContext(String medicalContext) { this.medicalContext = medicalContext; }

@@ -105,7 +105,10 @@ public class Module1b_IngestionCanonicalizer {
         ingestionTopics.add(KafkaTopics.INGESTION_ABDM_RECORDS.getTopicName());
         ingestionTopics.add(KafkaTopics.INGESTION_MEDICATIONS.getTopicName());
         ingestionTopics.add(KafkaTopics.INGESTION_OBSERVATIONS.getTopicName());
-        ingestionTopics.add(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName());
+        // NOTE: ingestion.safety-critical is NOT consumed here — critical events
+        // are already on their source topics (e.g., ingestion.labs via dual-publish).
+        // Subscribing would cause duplicate processing in the Flink pipeline.
+        // KB-22 consumes ingestion.safety-critical directly for fast deterioration detection.
 
         KafkaSource<OutboxEnvelope> source = KafkaSource.<OutboxEnvelope>builder()
             .setBootstrapServers(getBootstrapServers())
