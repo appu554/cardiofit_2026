@@ -3,6 +3,8 @@ package com.cardiofit.flink.scoring;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.cardiofit.flink.thresholds.ClinicalThresholdSet;
+
 import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
@@ -20,12 +22,52 @@ import java.util.Map;
  * - 5-6: Medium risk (urgent response needed)
  * - 7+: High risk (emergency response needed)
  *
+ * Threshold injection (PR8):
+ * Call {@link #setThresholds(ClinicalThresholdSet)} to replace hardcoded defaults
+ * with centralized thresholds from ClinicalThresholdService / BroadcastState.
+ * If thresholds are null the calculator uses its original hardcoded values --
+ * this guarantees zero regression during incremental rollout.
+ *
  * Based on MODULE2_ADVANCED_ENHANCEMENTS.md Phase 1, Item 2
  * Reference: Royal College of Physicians (2017) National Early Warning Score (NEWS) 2
  */
 public class NEWS2Calculator implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(NEWS2Calculator.class);
+
+    /**
+     * Injectable thresholds from ClinicalThresholdService / BroadcastState.
+     * When null, the calculator falls back to its original hardcoded constants.
+     *
+     * Pattern for other operators to follow:
+     * <pre>
+     *   // In your operator's open() or processBroadcastElement():
+     *   calculator.setThresholds(thresholdService.getThresholds());
+     * </pre>
+     */
+    private static volatile ClinicalThresholdSet.NEWS2Params injectedParams = null;
+
+    /**
+     * Inject centralized NEWS2 parameters. Pass null to revert to hardcoded defaults.
+     * Thread-safe: uses volatile write.
+     *
+     * @param params NEWS2 scoring parameters from ClinicalThresholdSet, or null
+     */
+    public static void setThresholds(ClinicalThresholdSet thresholds) {
+        if (thresholds != null && thresholds.getNews2() != null) {
+            injectedParams = thresholds.getNews2();
+            LOG.info("NEWS2Calculator thresholds injected: version={}", thresholds.getVersion());
+        } else {
+            injectedParams = null;
+            LOG.info("NEWS2Calculator thresholds cleared, using hardcoded defaults");
+        }
+    }
+
+    /** Returns the currently active NEWS2 params (injected or hardcoded). */
+    private static ClinicalThresholdSet.NEWS2Params getParams() {
+        ClinicalThresholdSet.NEWS2Params p = injectedParams;
+        return p != null ? p : ClinicalThresholdSet.NEWS2Params.defaults();
+    }
 
     /**
      * Calculate NEWS2 score from vital signs
@@ -52,7 +94,7 @@ public class NEWS2Calculator implements Serializable {
         int hrScore = calculateHeartRateScore(heartRate);
         int consciousnessScore = calculateConsciousnessScore(consciousness);
         int temperatureScore = calculateTemperatureScore(temperature);
-        int oxygenScore = isOnOxygen ? 2 : 0;
+        int oxygenScore = isOnOxygen ? getParams().getSupplementalOxygenScore() : 0;
 
         // Set component scores
         score.setRespiratoryRateScore(rrScore);
@@ -79,77 +121,70 @@ public class NEWS2Calculator implements Serializable {
     }
 
     /**
-     * Respiratory Rate scoring
-     * ≤8: 3 points
-     * 9-11: 1 point
-     * 12-20: 0 points
-     * 21-24: 2 points
-     * ≥25: 3 points
+     * Respiratory Rate scoring (threshold-aware)
+     *
+     * Default bands (from NEWS2 specification):
+     *   <=8: 3 points, 9-11: 1 point, 12-20: 0 points, 21-24: 2 points, >=25: 3 points
+     *
+     * When injected thresholds are present, the band boundaries come from
+     * ClinicalThresholdSet.NEWS2Params instead of the literals above.
      */
     private static int calculateRespiratoryRateScore(Integer rr) {
         if (rr == null) return 0;
 
-        if (rr <= 8) return 3;
-        if (rr <= 11) return 1;
-        if (rr <= 20) return 0;
-        if (rr <= 24) return 2;
-        return 3; // ≥25
+        ClinicalThresholdSet.NEWS2Params p = getParams();
+        if (rr <= p.getRrScore3Low()) return 3;      // default: <=8
+        if (rr <= p.getRrScore1Low()) return 1;       // default: 9-11
+        if (rr <= p.getRrScore0High()) return 0;      // default: 12-20
+        if (rr <= p.getRrScore2High()) return 2;       // default: 21-24
+        return 3; // >=25
     }
 
     /**
-     * Oxygen Saturation scoring (Scale 2 - for most patients)
-     * ≤91%: 3 points
-     * 92-93%: 2 points
-     * 94-95%: 1 point
-     * ≥96%: 0 points
+     * Oxygen Saturation scoring -- Scale 1 (on air) with threshold injection.
      *
-     * Note: Scale 1 used for COPD patients (not implemented here)
+     * Default bands: <=91: 3, 92-93: 2, 94-95: 1, >=96: 0
+     * Note: Scale 2 (on oxygen) is handled in ClinicalScoreCalculator.
      */
     private static int calculateOxygenSaturationScore(Integer spO2, boolean isOnOxygen) {
         if (spO2 == null) return 0;
 
-        if (spO2 <= 91) return 3;
-        if (spO2 <= 93) return 2;
-        if (spO2 <= 95) return 1;
-        return 0; // ≥96
+        ClinicalThresholdSet.NEWS2Params p = getParams();
+        if (spO2 <= p.getSpo2Scale1Score3()) return 3;   // default: <=91
+        if (spO2 <= p.getSpo2Scale1Score2()) return 2;   // default: 92-93
+        if (spO2 <= p.getSpo2Scale1Score1()) return 1;   // default: 94-95
+        return 0; // >=96
     }
 
     /**
-     * Systolic Blood Pressure scoring
-     * ≤90: 3 points
-     * 91-100: 2 points
-     * 101-110: 1 point
-     * 111-219: 0 points
-     * ≥220: 3 points
+     * Systolic Blood Pressure scoring with threshold injection.
+     * Default bands: <=90: 3, 91-100: 2, 101-110: 1, 111-219: 0, >=220: 3
      */
     private static int calculateSystolicBPScore(Integer sbp) {
         if (sbp == null) return 0;
 
-        if (sbp <= 90) return 3;
-        if (sbp <= 100) return 2;
-        if (sbp <= 110) return 1;
-        if (sbp <= 219) return 0;
-        return 3; // ≥220
+        ClinicalThresholdSet.NEWS2Params p = getParams();
+        if (sbp <= p.getSbpScore3Low()) return 3;     // default: <=90
+        if (sbp <= p.getSbpScore2Low()) return 2;     // default: 91-100
+        if (sbp <= p.getSbpScore1Low()) return 1;     // default: 101-110
+        if (sbp <= p.getSbpScore0High()) return 0;    // default: 111-219
+        return 3; // >=220
     }
 
     /**
-     * Heart Rate scoring
-     * ≤40: 3 points
-     * 41-50: 1 point
-     * 51-90: 0 points
-     * 91-110: 1 point
-     * 111-130: 2 points
-     * ≥131: 3 points
+     * Heart Rate scoring with threshold injection.
+     * Default bands: <=40: 3, 41-50: 1, 51-90: 0, 91-110: 1, 111-130: 2, >=131: 3
      */
     private static int calculateHeartRateScore(Integer hr) {
         if (hr == null) return 0;
 
-        if (hr <= 40) return 3;
-        if (hr <= 50) return 1;
-        if (hr <= 90) return 0;
-        if (hr <= 110) return 1;
-        if (hr <= 130) return 2;
-        return 3; // ≥131
+        ClinicalThresholdSet.NEWS2Params p = getParams();
+        if (hr <= p.getHrScore3Low()) return 3;      // default: <=40
+        if (hr <= p.getHrScore1Low()) return 1;      // default: 41-50
+        if (hr <= p.getHrScore0High()) return 0;     // default: 51-90
+        if (hr <= p.getHrScore1High()) return 1;     // default: 91-110
+        if (hr <= p.getHrScore2High()) return 2;     // default: 111-130
+        return 3; // >=131
     }
 
     /**
@@ -169,35 +204,34 @@ public class NEWS2Calculator implements Serializable {
     }
 
     /**
-     * Temperature scoring (°C)
-     * ≤35.0: 3 points
-     * 35.1-36.0: 1 point
-     * 36.1-38.0: 0 points
-     * 38.1-39.0: 1 point
-     * ≥39.1: 2 points
+     * Temperature scoring (Celsius) with threshold injection.
+     * Default bands: <=35.0: 3, 35.1-36.0: 1, 36.1-38.0: 0, 38.1-39.0: 1, >=39.1: 2
      */
     private static int calculateTemperatureScore(Double temp) {
         if (temp == null) return 0;
 
-        if (temp <= 35.0) return 3;
-        if (temp <= 36.0) return 1;
-        if (temp <= 38.0) return 0;
-        if (temp <= 39.0) return 1;
-        return 2; // ≥39.1
+        ClinicalThresholdSet.NEWS2Params p = getParams();
+        if (temp <= p.getTempScore3Low()) return 3;    // default: <=35.0
+        if (temp <= p.getTempScore1Low()) return 1;    // default: 35.1-36.0
+        if (temp <= p.getTempScore0High()) return 0;   // default: 36.1-38.0
+        if (temp <= p.getTempScore1High()) return 1;   // default: 38.1-39.0
+        return 2; // >=39.1
     }
 
     /**
-     * Determine risk level and clinical response based on total score
+     * Determine risk level and clinical response based on total score.
+     * Threshold boundaries come from injected params when available.
      */
     private static void determineRiskLevel(NEWS2Score score) {
         int total = score.getTotalScore();
+        ClinicalThresholdSet.NEWS2Params p = getParams();
 
         if (total == 0) {
             score.setRiskLevel("LOW");
             score.setClinicalRisk("Minimum");
             score.setRecommendedResponse("Continue routine monitoring");
             score.setResponseFrequency("Minimum 12 hourly");
-        } else if (total <= 4) {
+        } else if (total < p.getMediumThreshold()) { // default: <5
             score.setRiskLevel("LOW");
             score.setClinicalRisk("Low");
             score.setRecommendedResponse("Ward-based response");
@@ -210,7 +244,7 @@ public class NEWS2Calculator implements Serializable {
                 score.setRecommendedResponse("Urgent ward-based response");
                 score.setResponseFrequency("Minimum hourly");
             }
-        } else if (total <= 6) {
+        } else if (total < p.getHighThreshold()) { // default: <7
             score.setRiskLevel("MEDIUM");
             score.setClinicalRisk("Medium");
             score.setRecommendedResponse("Key threshold for urgent response");
