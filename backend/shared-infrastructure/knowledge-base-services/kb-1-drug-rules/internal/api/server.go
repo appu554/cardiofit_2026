@@ -235,6 +235,9 @@ func (s *Server) setupRoutes() {
 		// High-alert check endpoint
 		v1.GET("/high-alert/check", s.handleHighAlertCheck)
 
+		// High-risk categories endpoint
+		v1.GET("/high-risk/categories", s.handleGetHighRiskCategories)
+
 		// FDC (Fixed-Dose Combination) endpoints
 		v1.GET("/fdc/:drug_name/components", s.handleFDCComponents)
 
@@ -297,6 +300,7 @@ func (s *Server) setupRoutes() {
 		}
 
 		api.GET("/high-alert/check", s.handleHighAlertCheck)
+		api.GET("/high-risk/categories", s.handleGetHighRiskCategories)
 
 		// FDC and optimised dose endpoints
 		api.GET("/fdc/:drug_name/components", s.handleFDCComponents)
