@@ -250,9 +250,14 @@ func (s *Server) handleWhatsAppIngest(c *gin.Context) {
 	})
 }
 
-// handleHPIIngest handles POST /internal/hpi (slot data from Intake M0, service-to-service).
-func (s *Server) handleHPIIngest(c *gin.Context) {
-	metrics.MessagesReceived.WithLabelValues("HPI", "intake_m0", "").Inc()
+
+// handleWearableIngest handles POST /wearables/:provider.
+// Unlike the standalone wearable.Handler (which only returns HTTP), this
+// method feeds wearable observations through the full pipeline:
+// adapter → orchestrator (normalize + validate + map) → FHIR Store → Kafka.
+func (s *Server) handleWearableIngest(c *gin.Context) {
+	provider := c.Param("provider")
+	metrics.MessagesReceived.WithLabelValues("WEARABLE", provider, "").Inc()
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -260,25 +265,25 @@ func (s *Server) handleHPIIngest(c *gin.Context) {
 		return
 	}
 
-	// HPI data arrives as an array of CanonicalObservations from Intake
-	var observations []canonical.CanonicalObservation
-	if err := json.Unmarshal(body, &observations); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON: " + err.Error()})
+	// Delegate JSON → CanonicalObservation conversion to the wearable adapter
+	observations, err := s.wearableHandler.ConvertPayload(provider, body)
+	if err != nil {
+		s.logger.Error("wearable conversion failed",
+			zap.String("provider", provider),
+			zap.Error(err),
+		)
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Mark as HPI source
-	for i := range observations {
-		observations[i].SourceType = canonical.SourceHPI
-		observations[i].ObservationType = canonical.ObsHPI
-	}
-
+	// Run through the full pipeline (normalize → validate → map → route)
 	results, err := s.orchestrator.Process(c.Request.Context(), observations)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "pipeline processing failed"})
 		return
 	}
 
+	// Publish each result to FHIR Store + Kafka
 	for i := range results {
 		s.publishResult(c, &results[i])
 	}
@@ -286,15 +291,18 @@ func (s *Server) handleHPIIngest(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"status":    "accepted",
 		"processed": len(results),
+		"total":     len(observations),
 	})
 }
 
-// publishResult writes an observation to FHIR Store and publishes to Kafka.
+// publishResult writes an observation to FHIR Store and publishes via outbox (or Kafka fallback).
 func (s *Server) publishResult(c *gin.Context, obs *canonical.CanonicalObservation) {
 	// Check for critical values
+	isCritical := false
 	for _, flag := range obs.Flags {
 		if flag == canonical.FlagCriticalValue {
 			metrics.CriticalValues.WithLabelValues(string(obs.ObservationType), obs.TenantID.String()).Inc()
+			isCritical = true
 			break
 		}
 	}
@@ -341,7 +349,27 @@ func (s *Server) publishResult(c *gin.Context, obs *canonical.CanonicalObservati
 		}
 	}
 
-	// Publish to Kafka
+	// Publish via outbox (preferred) or direct Kafka (fallback).
+	// Outbox path uses SaveAndPublish / SaveAndPublishBatch for at-least-once
+	// delivery via the Global Outbox Service's polling publisher.
+	if s.outboxPublisher != nil {
+		var err error
+		if isCritical {
+			err = s.outboxPublisher.PublishCritical(c.Request.Context(), obs, fhirResourceID)
+		} else {
+			err = s.outboxPublisher.Publish(c.Request.Context(), obs, fhirResourceID)
+		}
+		if err != nil {
+			metrics.DLQMessages.WithLabelValues("OUTBOX", string(obs.SourceType)).Inc()
+			s.logger.Error("outbox publish failed",
+				zap.String("patient_id", obs.PatientID.String()),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+
+	// Fallback: direct Kafka (used when OUTBOX_ENABLED=false or SDK init failed)
 	if s.kafkaProducer != nil && s.topicRouter != nil {
 		topic, key, err := s.topicRouter.Route(c.Request.Context(), obs)
 		if err == nil {
@@ -357,6 +385,14 @@ func (s *Server) publishResult(c *gin.Context, obs *canonical.CanonicalObservati
 				s.logger.Error("Kafka publish failed",
 					zap.String("topic", topic),
 					zap.Error(pubErr),
+				)
+			}
+
+			// Dual-publish critical values to the safety-critical topic
+			if isCritical {
+				_ = s.kafkaProducer.Publish(
+					c.Request.Context(), "ingestion.safety-critical", key, obs,
+					resourceType, fhirResourceID, s.config.Kafka.Brokers,
 				)
 			}
 		}

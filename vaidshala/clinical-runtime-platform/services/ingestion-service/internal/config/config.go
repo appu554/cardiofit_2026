@@ -46,6 +46,7 @@ type Config struct {
 	Redis       RedisConfig
 	FHIR        fhirclient.GoogleFHIRConfig
 	Kafka       KafkaConfig
+	Outbox      OutboxConfig
 	Environment string
 	LogLevel    string
 }
@@ -73,6 +74,14 @@ type RedisConfig struct {
 type KafkaConfig struct {
 	Brokers []string
 	GroupID string
+}
+
+// OutboxConfig holds Global Outbox SDK settings for atomic event publishing.
+type OutboxConfig struct {
+	Enabled         bool
+	DatabaseURL     string
+	GRPCAddress     string
+	DefaultPriority int32
 }
 
 // IsDevelopment returns true when running in development mode.
@@ -113,6 +122,12 @@ func Load() *Config {
 		Kafka: KafkaConfig{
 			Brokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
 			GroupID: getEnv("KAFKA_GROUP_ID", "ingestion-service"),
+		},
+		Outbox: OutboxConfig{
+			Enabled:         getEnvAsBool("OUTBOX_ENABLED", false),
+			DatabaseURL:     getEnv("OUTBOX_DATABASE_URL", ""),
+			GRPCAddress:     getEnv("OUTBOX_GRPC_ADDRESS", "localhost:50052"),
+			DefaultPriority: int32(getEnvAsInt("OUTBOX_DEFAULT_PRIORITY", 5)),
 		},
 		Environment: getEnv("ENVIRONMENT", "development"),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),

@@ -21,6 +21,7 @@ import (
 	"github.com/cardiofit/ingestion-service/internal/dlq"
 	fhirmapper "github.com/cardiofit/ingestion-service/internal/fhir"
 	kafkapkg "github.com/cardiofit/ingestion-service/internal/kafka"
+	outboxpkg "github.com/cardiofit/ingestion-service/internal/outbox"
 	"github.com/cardiofit/ingestion-service/internal/pipeline"
 	"vaidshala/clinical-runtime-platform/pkg/fhirclient"
 )
@@ -34,8 +35,9 @@ type Server struct {
 	fhirClient    *fhirclient.Client
 	logger        *zap.Logger
 	orchestrator  *pipeline.Orchestrator
-	kafkaProducer *kafkapkg.Producer
-	topicRouter   *kafkapkg.TopicRouter
+	outboxPublisher *outboxpkg.Publisher
+	kafkaProducer   *kafkapkg.Producer
+	topicRouter     *kafkapkg.TopicRouter
 	dlqPublisher  dlq.Publisher
 	dlqReplay     *dlq.ReplayHandler
 	labHandler    *labs.Handler
@@ -81,9 +83,24 @@ func NewServer(
 	// Pipeline orchestrator
 	orchestrator := pipeline.NewOrchestrator(normalizer, validator, mapper, topicRouter, dlqPub, logger)
 
-	// Kafka producer
+	// Outbox publisher (preferred path — replaces direct Kafka writes)
+	var outboxPublisher *outboxpkg.Publisher
+	if cfg.Outbox.Enabled {
+		dbURL := cfg.Outbox.DatabaseURL
+		if dbURL == "" {
+			dbURL = cfg.Database.URL
+		}
+		sdkClient, err := outboxpkg.NewOutboxClient(dbURL, cfg.Outbox.GRPCAddress, cfg.Outbox.DefaultPriority)
+		if err != nil {
+			logger.Error("outbox SDK init failed — falling back to direct Kafka", zap.Error(err))
+		} else {
+			outboxPublisher = outboxpkg.NewPublisher(sdkClient, logger)
+		}
+	}
+
+	// Kafka producer (fallback when outbox is disabled or init failed)
 	var kafkaProducer *kafkapkg.Producer
-	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Brokers[0] != "" {
+	if outboxPublisher == nil && len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Brokers[0] != "" {
 		kafkaProducer = kafkapkg.NewProducer(cfg.Kafka.Brokers, logger)
 	}
 
@@ -114,15 +131,16 @@ func NewServer(
 	dlqResolver := dlq.NewResolver(db, logger)
 
 	s := &Server{
-		Router:        router,
-		config:        cfg,
-		db:            db,
-		redis:         redisClient,
-		fhirClient:    fhirClient,
-		logger:        logger,
-		orchestrator:  orchestrator,
-		kafkaProducer: kafkaProducer,
-		topicRouter:   topicRouter,
+		Router:          router,
+		config:          cfg,
+		db:              db,
+		redis:           redisClient,
+		fhirClient:      fhirClient,
+		logger:          logger,
+		orchestrator:    orchestrator,
+		outboxPublisher: outboxPublisher,
+		kafkaProducer:   kafkaProducer,
+		topicRouter:     topicRouter,
 		dlqPublisher:  dlqPub,
 		dlqReplay:     dlqReplay,
 		labHandler:    labHandler,

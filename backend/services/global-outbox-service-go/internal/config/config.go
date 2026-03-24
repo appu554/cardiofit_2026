@@ -182,6 +182,7 @@ func setDefaults() {
 		"lab-service",
 		"fhir-service",
 		"generic-service",
+		"ingestion-service",
 	})
 }
 
