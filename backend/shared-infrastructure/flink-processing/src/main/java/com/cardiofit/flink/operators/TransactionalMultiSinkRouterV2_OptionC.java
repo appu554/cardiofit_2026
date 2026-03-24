@@ -7,6 +7,8 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
+
 /**
  * Option C: Single Transactional Sink Router
  *
@@ -108,9 +110,20 @@ public class TransactionalMultiSinkRouterV2_OptionC extends ProcessFunction<Enri
     }
 
     /**
-     * Critical event detection logic (same as V1)
+     * Critical event detection logic (same as V1, extended for ingestion events)
      */
     private boolean isCriticalEvent(EnrichedClinicalEvent event) {
+        // Ingestion service events: check for CRITICAL_VALUE flag in payload
+        if ("ingestion-service".equals(event.getSourceSystem())) {
+            Object flags = event.getPayload() != null ? event.getPayload().get("flags") : null;
+            if (flags instanceof List && ((List<?>) flags).contains("CRITICAL_VALUE")) {
+                LOG.debug("Critical ingestion event detected via CRITICAL_VALUE flag: {}", event.getId());
+                return true;
+            }
+            // Ingestion events without CRITICAL_VALUE flag are not critical
+            // (standard clinical significance checks below may still apply)
+        }
+
         // High clinical significance
         if (event.getClinicalSignificance() > 0.8) {
             return true;
@@ -139,9 +152,18 @@ public class TransactionalMultiSinkRouterV2_OptionC extends ProcessFunction<Enri
     }
 
     /**
-     * FHIR persistence decision logic (same as V1)
+     * FHIR persistence decision logic (same as V1, with ingestion-service skip)
+     *
+     * Ingestion service events already have raw Observations persisted to FHIR
+     * at ingestion Stage 3, so we skip duplicate FHIR writes here.
      */
     private boolean shouldPersistToFHIR(EnrichedClinicalEvent event) {
+        // Ingestion service events: FHIR resource already persisted at Stage 3
+        if ("ingestion-service".equals(event.getSourceSystem())) {
+            LOG.debug("Skipping FHIR persistence for ingestion-service event: {}", event.getId());
+            return false;
+        }
+
         if (event.getSourceEventType() == null) {
             return false;
         }

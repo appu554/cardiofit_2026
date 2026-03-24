@@ -38,6 +38,8 @@ public class RoutedEventToEnrichedEventMapper implements MapFunction<EnrichedPat
                 .eventType(enrichedPatientEvent.getOriginalEvent().getEventType())
                 .timestamp(LocalDateTime.ofInstant(Instant.ofEpochMilli(enrichedPatientEvent.getOriginalEvent().getTimestamp()), ZoneOffset.UTC))
                 .priority(mapPriority(enrichedPatientEvent))
+                .sourceSystem(enrichedPatientEvent.getOriginalEvent().getSourceSystem())
+                .payload(enrichedPatientEvent.getOriginalEvent().getPayload())
                 .originalPayload(enrichedPatientEvent.getOriginalEvent().getPayload());
 
             // Map drug interactions if present

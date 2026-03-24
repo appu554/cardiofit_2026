@@ -50,6 +50,11 @@ public class EnrichedClinicalEvent implements Serializable {
     private boolean criticalEvent;
     private boolean highClinicalSignificance;
 
+    // Source tracking for routing decisions (e.g., "ingestion-service")
+    private String sourceSystem;
+    // Canonical payload carried through from Module1b for routing inspection
+    private Map<String, Object> payload;
+
     public EnrichedClinicalEvent() {}
 
     public EnrichedClinicalEvent(String eventId, String patientId, String eventType,
@@ -175,6 +180,12 @@ public class EnrichedClinicalEvent implements Serializable {
         this.highClinicalSignificance = highClinicalSignificance;
     }
 
+    public String getSourceSystem() { return sourceSystem; }
+    public void setSourceSystem(String sourceSystem) { this.sourceSystem = sourceSystem; }
+
+    public Map<String, Object> getPayload() { return payload; }
+    public void setPayload(Map<String, Object> payload) { this.payload = payload; }
+
     // Convert LocalDateTime to long for timestamp
     public void setTimestamp(long timestamp) {
         this.timestamp = LocalDateTime.ofEpochSecond(timestamp / 1000, 0, java.time.ZoneOffset.UTC);
@@ -215,6 +226,8 @@ public class EnrichedClinicalEvent implements Serializable {
         private Set<String> destinations;
         private boolean criticalEvent = false;
         private boolean highClinicalSignificance = false;
+        private String sourceSystem;
+        private Map<String, Object> payload;
 
         public Builder eventId(String eventId) { this.eventId = eventId; return this; }
         public Builder patientId(String patientId) { this.patientId = patientId; return this; }
@@ -257,6 +270,12 @@ public class EnrichedClinicalEvent implements Serializable {
         public Builder highClinicalSignificance(boolean highClinicalSignificance) {
             this.highClinicalSignificance = highClinicalSignificance; return this;
         }
+        public Builder sourceSystem(String sourceSystem) {
+            this.sourceSystem = sourceSystem; return this;
+        }
+        public Builder payload(Map<String, Object> payload) {
+            this.payload = payload; return this;
+        }
 
         public EnrichedClinicalEvent build() {
             EnrichedClinicalEvent event = new EnrichedClinicalEvent();
@@ -277,6 +296,8 @@ public class EnrichedClinicalEvent implements Serializable {
             event.destinations = this.destinations;
             event.criticalEvent = this.criticalEvent;
             event.highClinicalSignificance = this.highClinicalSignificance;
+            event.sourceSystem = this.sourceSystem;
+            event.payload = this.payload;
             return event;
         }
     }

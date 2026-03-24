@@ -133,7 +133,22 @@ public enum KafkaTopics {
 
     // Supporting Infrastructure
     EHR_SEMANTIC_MESH("prod.ehr.semantic.mesh", 4, 365, true),  // Compacted topic
-    EHR_AUDIT_LOGS("prod.ehr.audit.logs", 8, 2555);  // 7 years retention
+    EHR_AUDIT_LOGS("prod.ehr.audit.logs", 8, 2555),  // 7 years retention
+
+    // ============= Ingestion Service Topics (10 topics) =============
+    INGESTION_LABS("ingestion.labs", 12, 90),
+    INGESTION_VITALS("ingestion.vitals", 8, 30),
+    INGESTION_DEVICE_DATA("ingestion.device-data", 8, 30),
+    INGESTION_PATIENT_REPORTED("ingestion.patient-reported", 8, 30),
+    INGESTION_WEARABLE_AGGREGATES("ingestion.wearable-aggregates", 4, 14),
+    INGESTION_CGM_RAW("ingestion.cgm-raw", 4, 7),
+    INGESTION_ABDM_RECORDS("ingestion.abdm-records", 4, 180),
+    INGESTION_MEDICATIONS("ingestion.medications", 8, 90),
+    INGESTION_OBSERVATIONS("ingestion.observations", 8, 30),
+    INGESTION_SAFETY_CRITICAL("ingestion.safety-critical", 4, 90),
+
+    // ============= KB Threshold Hot-Swap =============
+    KB_CLINICAL_THRESHOLDS_CHANGES("kb.clinical-thresholds.changes", 1, 7);
 
     private final String topicName;
     private final int partitions;
@@ -254,5 +269,12 @@ public enum KafkaTopics {
         return this == SIMPLE_ALERTS ||
                this == COMPOSED_ALERTS ||
                this == URGENT_ALERTS;
+    }
+
+    /**
+     * Check if topic is an ingestion service topic
+     */
+    public boolean isIngestionTopic() {
+        return this.name().startsWith("INGESTION_");
     }
 }
