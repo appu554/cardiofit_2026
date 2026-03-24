@@ -114,7 +114,38 @@ SERVICE_ROUTES = {
         "target": settings.INTAKE_SERVICE_URL,
         "strip_prefix": True,
         "public_paths": []
-    }
+    },
+    # Vaidshala Clinical Runtime — KB services
+    "kb20_patient_profile": {
+        "prefix": "/api/v1/kb20",
+        "target": settings.KB20_SERVICE_URL,
+        "strip_prefix": True,
+        "public_paths": []
+    },
+    "kb22_hpi_engine": {
+        "prefix": "/api/v1/kb22",
+        "target": settings.KB22_SERVICE_URL,
+        "strip_prefix": True,
+        "public_paths": []
+    },
+    "kb23_decision_cards": {
+        "prefix": "/api/v1/kb23",
+        "target": settings.KB23_SERVICE_URL,
+        "strip_prefix": True,
+        "public_paths": []
+    },
+    "kb25_lifestyle_graph": {
+        "prefix": "/api/v1/kb25",
+        "target": settings.KB25_SERVICE_URL,
+        "strip_prefix": True,
+        "public_paths": []
+    },
+    "kb26_metabolic_twin": {
+        "prefix": "/api/v1/kb26",
+        "target": settings.KB26_SERVICE_URL,
+        "strip_prefix": True,
+        "public_paths": []
+    },
 }
 
 async def forward_request(

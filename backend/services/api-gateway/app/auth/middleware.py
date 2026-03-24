@@ -6,6 +6,8 @@ import logging
 import os
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from app.auth.auth_cache import AuthResponseCache
+from app.config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +36,10 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.auth_service_url = auth_service_url or os.getenv("AUTH_SERVICE_URL", DEFAULT_AUTH_SERVICE_URL)
         self.exclude_paths = exclude_paths or ["/docs", "/openapi.json", "/redoc", "/health"]
+        self._auth_cache = AuthResponseCache(
+            ttl_seconds=settings.AUTH_CACHE_TTL_SECONDS,
+            max_size=settings.AUTH_CACHE_MAX_SIZE,
+        )
         logger.info(f"Initialized AuthenticationMiddleware with Auth Service URL: {self.auth_service_url}")
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
@@ -83,6 +89,18 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 content="Invalid Authorization header format",
                 headers={"WWW-Authenticate": "Bearer"}
             )
+
+        # === Cache fast-path: check if token was recently verified ===
+        token_hash = self._auth_cache.hash_token(token)
+        cached_user = self._auth_cache.get(token_hash)
+        if cached_user is not None:
+            request.state.user = cached_user
+            request.state.user_role = cached_user.get("role", "authenticated")
+            request.state.user_roles = cached_user.get("roles", [])
+            request.state.user_permissions = cached_user.get("permissions", [])
+            logger.debug("Auth cache HIT for user %s", cached_user.get("id"))
+            return await call_next(request)
+        # === End cache fast-path ===
 
         # Validate the token with the Auth Service
         try:
@@ -134,6 +152,9 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                 request.state.user_role = role
                 request.state.user_roles = roles
                 request.state.user_permissions = permissions
+
+                # Cache the verified user info for future requests with this token
+                self._auth_cache.put(token_hash, user_info)
 
                 # Log RBAC information
                 logger.info(f"User authenticated: {user_info.get('id')} with role: {role}")

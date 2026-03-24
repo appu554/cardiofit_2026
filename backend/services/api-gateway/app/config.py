@@ -27,6 +27,34 @@ class Settings(BaseSettings):
     # Apollo Federation Gateway URL
     APOLLO_FEDERATION_URL: str = os.getenv("APOLLO_FEDERATION_URL", "http://localhost:4000/graphql")
 
+    # === Auth Cache (Phase 1) ===
+    # Cache Auth Service /verify responses to avoid per-request calls
+    # JWT secrets stay in Auth Service (port 8001) — NOT duplicated here
+    AUTH_CACHE_TTL_SECONDS: int = int(os.getenv("AUTH_CACHE_TTL_SECONDS", "60"))
+    AUTH_CACHE_MAX_SIZE: int = int(os.getenv("AUTH_CACHE_MAX_SIZE", "10000"))
+
+    # === Vaidshala Clinical Runtime Services ===
+    KB20_SERVICE_URL: str = os.getenv("KB20_SERVICE_URL", "http://localhost:8131")
+    KB22_SERVICE_URL: str = os.getenv("KB22_SERVICE_URL", "http://localhost:8132")
+    KB23_SERVICE_URL: str = os.getenv("KB23_SERVICE_URL", "http://localhost:8134")
+    KB25_SERVICE_URL: str = os.getenv("KB25_SERVICE_URL", "http://localhost:8136")
+    KB26_SERVICE_URL: str = os.getenv("KB26_SERVICE_URL", "http://localhost:8137")
+    VMCU_SERVICE_URL: str = os.getenv("VMCU_SERVICE_URL", "")
+
+    # === CORS (configurable, Phase 3) ===
+    CORS_ALLOWED_ORIGINS: str = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:3002")
+
+    # === Redis (Phase 3) ===
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6380")
+    REDIS_RATE_LIMIT_ENABLED: bool = os.getenv("REDIS_RATE_LIMIT_ENABLED", "False").lower() in ("true", "1", "t")
+
+    # === Circuit Breaker (Phase 2) ===
+    CIRCUIT_BREAKER_FAIL_MAX: int = int(os.getenv("CIRCUIT_BREAKER_FAIL_MAX", "5"))
+    CIRCUIT_BREAKER_RESET_TIMEOUT: int = int(os.getenv("CIRCUIT_BREAKER_RESET_TIMEOUT", "30"))
+
+    # === Metrics (Phase 2) ===
+    METRICS_ENABLED: bool = os.getenv("METRICS_ENABLED", "False").lower() in ("true", "1", "t")
+
     # API Configuration
     API_PREFIX: str = "/api"
     PROJECT_NAME: str = "Clinical Synthesis Hub API Gateway"

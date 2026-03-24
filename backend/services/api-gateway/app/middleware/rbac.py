@@ -146,7 +146,28 @@ ROUTE_PERMISSIONS = {
     },
     r"^/api/v1/ingest/abdm": {
         "POST": ["ingest:abdm"]
-    }
+    },
+
+    # === Patient App routes (Phase 1) ===
+    r"^/api/v1/patient/[^/]+/health-score": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/actions/today": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/health-drive": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/progress": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/cause-effect": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/timeline": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/insights": {"GET": ["patient:read"]},
+    r"^/api/v1/patient/[^/]+/checkin": {"POST": ["patient:write"]},
+    r"^/api/v1/patient/[^/]+/abdm/verify": {"POST": ["patient:write"]},
+
+    # === Doctor Dashboard routes (Phase 1) ===
+    r"^/api/v1/doctor/graphql": {"POST": ["doctor:read"]},
+    r"^/api/v1/doctor/patients/[^/]+/summary": {"GET": ["doctor:read"]},
+    r"^/api/v1/doctor/patients/[^/]+/mri": {"GET": ["doctor:read"]},
+    r"^/api/v1/doctor/patients/[^/]+/cards": {"GET": ["doctor:read"]},
+    r"^/api/v1/doctor/cards/[^/]+/action": {"POST": ["doctor:write"]},
+    r"^/api/v1/doctor/traces/[^/]+": {"GET": ["doctor:admin"]},
+    r"^/api/v1/doctor/patients/[^/]+/channel-b-inputs": {"GET": ["doctor:read"]},
+    r"^/api/v1/doctor/patients/[^/]+/channel-c-inputs": {"GET": ["doctor:read"]},
 }
 
 # Define role-based route restrictions
@@ -188,7 +209,14 @@ ROLE_ROUTE_RESTRICTIONS = {
     r"^/api/v1/ingest/ehr":
         ["system", "physician"],
     r"^/api/v1/ingest/abdm":
-        ["system"]
+        ["system"],
+
+    # === Patient App — patient role only ===
+    r"^/api/v1/patient/": ["patient", "admin", "system"],
+    # === Doctor Dashboard — physician, nurse, admin ===
+    r"^/api/v1/doctor/": ["physician", "doctor", "nurse", "admin", "super_admin"],
+    # === V-MCU traces — physician and admin only (sensitive) ===
+    r"^/api/v1/doctor/traces/": ["physician", "doctor", "admin"],
 }
 
 class RBACMiddleware(BaseHTTPMiddleware):

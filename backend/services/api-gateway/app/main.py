@@ -14,6 +14,8 @@ from app.api.proxy import router as proxy_router
 from app.api.endpoints.raw_fhir import router as raw_fhir_router
 from app.api.endpoints.raw_graphql import router as raw_graphql_router
 from app.api.endpoints.direct_fhir import router as direct_fhir_router
+from app.api.endpoints.patient_app import router as patient_router, auth_router as otp_router
+from app.api.endpoints.doctor_dashboard import router as doctor_router
 
 # Configure logging
 logging.basicConfig(
@@ -99,14 +101,14 @@ if settings.ENABLE_REQUEST_LOGGING:
 app.add_middleware(
     AuthenticationMiddleware,
     auth_service_url=settings.AUTH_SERVICE_URL,
-    exclude_paths=["/docs", "/openapi.json", "/redoc", "/health", "/graphql", "/graphql-explorer", "/graphql-explorer-v2", "/static", "/favicon.ico", "/api/auth/login", "/api/auth/token", "/api/auth/authorize", "/api/auth/callback", "/api/auth/verify", "/api/graphql/playground", "/api/graphql/explorer", "/api/graphql/explorer/schema", "/api/graphql/explorer/query-builder"]
+    exclude_paths=["/docs", "/openapi.json", "/redoc", "/health", "/graphql", "/graphql-explorer", "/graphql-explorer-v2", "/static", "/favicon.ico", "/api/auth/login", "/api/auth/token", "/api/auth/authorize", "/api/auth/callback", "/api/auth/verify", "/api/graphql/playground", "/api/graphql/explorer", "/api/graphql/explorer/schema", "/api/graphql/explorer/query-builder", "/api/v1/auth/otp/send", "/api/v1/auth/otp/verify", "/api/v1/auth/refresh", "/api/v1/tenants", "/api/v1/family"]
 )
 logger.info(f"Added AuthenticationMiddleware with Auth Service URL: {settings.AUTH_SERVICE_URL}")
 
 # Add RBAC middleware
 app.add_middleware(
     RBACMiddleware,
-    exclude_paths=["/docs", "/openapi.json", "/redoc", "/health", "/graphql", "/graphql-explorer", "/graphql-explorer-v2", "/static", "/favicon.ico", "/api/auth/login", "/api/auth/token", "/api/auth/authorize", "/api/auth/callback", "/api/auth/verify", "/api/graphql", "/api/graphql/playground", "/api/graphql/explorer", "/api/graphql/explorer/schema", "/api/graphql/explorer/query-builder"]
+    exclude_paths=["/docs", "/openapi.json", "/redoc", "/health", "/graphql", "/graphql-explorer", "/graphql-explorer-v2", "/static", "/favicon.ico", "/api/auth/login", "/api/auth/token", "/api/auth/authorize", "/api/auth/callback", "/api/auth/verify", "/api/graphql", "/api/graphql/playground", "/api/graphql/explorer", "/api/graphql/explorer/schema", "/api/graphql/explorer/query-builder", "/api/v1/auth/otp/send", "/api/v1/auth/otp/verify", "/api/v1/auth/refresh", "/api/v1/tenants", "/api/v1/family"]
 )
 logger.info("Added RBACMiddleware")
 
@@ -284,6 +286,11 @@ app.include_router(raw_graphql_router, prefix="/api")
 
 # Mount direct FHIR router for direct FHIR operations without validation
 app.include_router(direct_fhir_router, prefix="/api")
+
+# Patient App routes -- MUST come BEFORE proxy catch-all
+app.include_router(otp_router)       # /api/v1/auth/* (public)
+app.include_router(patient_router)   # /api/v1/patient/* (JWT required)
+app.include_router(doctor_router)    # /api/v1/doctor/* (JWT required)
 
 # Mount proxy router for API endpoints last
 app.include_router(proxy_router)
