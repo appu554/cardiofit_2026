@@ -7,9 +7,43 @@ import time
 import asyncio
 from collections import defaultdict
 
+import redis.asyncio as aioredis
+from app.config import settings  # module-level singleton
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class RedisRateLimiter:
+    """Sliding window rate limiter backed by Redis sorted sets.
+    Falls back to in-memory limiter if Redis is unavailable.
+    """
+
+    def __init__(self, redis_url: str, max_requests: int = 100, window_seconds: int = 60):
+        self.redis = aioredis.from_url(redis_url, decode_responses=True)
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+
+    async def is_allowed(self, key: str) -> bool:
+        try:
+            now = time.time()
+            window_start = now - self.window_seconds
+            redis_key = f"rl:{key}"
+
+            pipe = self.redis.pipeline()
+            pipe.zremrangebyscore(redis_key, 0, window_start)
+            pipe.zcard(redis_key)
+            pipe.zadd(redis_key, {str(now): now})
+            pipe.expire(redis_key, self.window_seconds + 1)
+            results = await pipe.execute()
+
+            count = results[1]
+            return count < self.max_requests
+        except Exception:
+            # Redis down — allow (fail-open for availability)
+            return True
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
@@ -32,7 +66,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.requests = defaultdict(list)  # client_ip -> list of request timestamps
         self.lock = asyncio.Lock()
         logger.info(f"Initialized RateLimitMiddleware with limit: {requests_limit} requests per {window_size} seconds")
-        
+
+        self._redis_limiter = None
+        if settings.REDIS_RATE_LIMIT_ENABLED and settings.REDIS_URL:
+            self._redis_limiter = RedisRateLimiter(
+                settings.REDIS_URL,
+                max_requests=self.requests_limit,
+                window_seconds=self.window_size,
+            )
+            logger.info("Redis rate limiter enabled: %s", settings.REDIS_URL)
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """
         Process the request, check rate limits, and pass it to the next middleware.
@@ -55,10 +98,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # Get client IP
         client_ip = request.client.host
-        
-        # Check if client has exceeded rate limit
+
+        # Redis rate limiting (preferred when configured)
+        if self._redis_limiter:
+            allowed = await self._redis_limiter.is_allowed(client_ip)
+            if not allowed:
+                logger.warning("Redis rate limit exceeded for IP: %s", client_ip)
+                return JSONResponse(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    content={"detail": "Rate limit exceeded. Please try again later."},
+                    headers={"X-RateLimit-Limit": str(self.requests_limit)},
+                )
+            return await call_next(request)
+
+        # Fallback: in-memory rate limiting
         current_time = time.time()
-        
+
         async with self.lock:
             if client_ip in self.requests:
                 # Remove old requests

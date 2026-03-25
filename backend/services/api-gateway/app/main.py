@@ -11,6 +11,7 @@ from app.config import settings
 from app.auth import AuthenticationMiddleware, HeaderAuthMiddleware
 from app.middleware import RBACMiddleware, RequestLoggingMiddleware, RateLimitMiddleware, GraphQLRBACMiddleware
 from app.middleware.metrics import MetricsMiddleware, metrics_endpoint
+from app.middleware.audit_log import AuditLogMiddleware
 from app.api.proxy import router as proxy_router
 from app.api.endpoints.raw_fhir import router as raw_fhir_router
 from app.api.endpoints.raw_graphql import router as raw_graphql_router
@@ -71,14 +72,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS
+# Configurable CORS origins (Phase 3) — use CORS_ALLOWED_ORIGINS env var
+cors_origins = [o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace with specific origins in production
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-User-ID", "X-User-Role",
+                   "X-Patient-ID", "X-Request-ID", "X-Correlation-ID"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-Request-ID", "X-Correlation-ID"],
 )
+
+# HIPAA audit logging (Phase 3) — outermost middleware after CORS
+app.add_middleware(AuditLogMiddleware)
+logger.info("Added AuditLogMiddleware")
 
 # Add rate limiting middleware if enabled
 if settings.RATE_LIMIT_ENABLED:

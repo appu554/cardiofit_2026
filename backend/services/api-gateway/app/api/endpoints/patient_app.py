@@ -15,6 +15,16 @@ from app.middleware.circuit_breaker import get_breaker
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["patient-app"])
 
+_response_cache = None
+
+
+def _get_cache():
+    global _response_cache
+    if _response_cache is None and settings.REDIS_URL and settings.REDIS_RATE_LIMIT_ENABLED:
+        from app.middleware.response_cache import ResponseCache
+        _response_cache = ResponseCache(settings.REDIS_URL)
+    return _response_cache
+
 # --- Public routes (no auth) ---
 
 auth_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -114,6 +124,17 @@ async def _forward(request: Request, service_url: str, path: str, method: str = 
     if not breaker.is_available():
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
+    # Response cache check (GET only)
+    cache = _get_cache()
+    user_id = ""
+    if hasattr(request.state, "user") and isinstance(request.state.user, dict):
+        user_id = request.state.user.get("id", "")
+    if cache and method == "GET":
+        cached = await cache.get(method, path, user_id)
+        if cached is not None:
+            breaker.record_success()
+            return cached
+
     headers = _build_headers(request)
     body = await request.body() if method in ("POST", "PUT", "PATCH") else None
 
@@ -130,7 +151,11 @@ async def _forward(request: Request, service_url: str, path: str, method: str = 
                 breaker.record_failure()
             else:
                 breaker.record_success()
-            return resp.json()
+            result = resp.json()
+            # Cache successful GET responses
+            if cache and method == "GET" and resp.status_code == 200:
+                await cache.set(method, path, user_id, result)
+            return result
     except httpx.ConnectError:
         breaker.record_failure()
         raise HTTPException(status_code=502, detail="Downstream service unavailable")
