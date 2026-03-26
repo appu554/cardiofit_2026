@@ -29,6 +29,24 @@ type CanonicalObservation struct {
 	ClinicalContext *ClinicalContext `json:"clinical_context,omitempty"`
 	ABDMContext     *ABDMContext     `json:"abdm_context,omitempty"`
 	RawPayload      []byte           `json:"raw_payload,omitempty"`
+
+	// DataTier classifies the signal tier for CGM/glucose observations.
+	// Values: TIER_1_CGM, TIER_2_HYBRID, TIER_3_SMBG
+	DataTier string `json:"data_tier,omitempty"`
+
+	// V4 Signal Schema Extensions (per Flink Architecture §7.1–7.3)
+	SourceProtocol        string  `json:"source_protocol,omitempty"`          // S1 FBG: Tier 3 rotating meal protocol
+	LinkedMealID          string  `json:"linked_meal_id,omitempty"`           // S2 PPBG: links to S4 meal log for MealResponseCorrelator
+	SodiumEstimatedMg     float64 `json:"sodium_estimated_mg,omitempty"`      // S4 Meal: auto-computed from IFCT/AUSNUT
+	PreparationMethod     string  `json:"preparation_method,omitempty"`       // S4 Meal: RAW, BOILED, FRIED, etc.
+	FoodNameLocal         string  `json:"food_name_local,omitempty"`          // S4 Meal: regional language food name
+	SymptomAwareness      *bool   `json:"symptom_awareness,omitempty"`        // S6 Hypo: CID-03 masking detection
+	BPDeviceType          string  `json:"bp_device_type,omitempty"`           // S7 BP: oscillometric_cuff, cuffless_ppg, etc.
+	ClinicalGrade         *bool   `json:"clinical_grade,omitempty"`           // S7 BP: validated vs consumer-grade device
+	MeasurementMethod     string  `json:"measurement_method,omitempty"`       // S7 BP: auscultatory, oscillometric, cuffless
+	LinkedSeatedReadingID string  `json:"linked_seated_reading_id,omitempty"` // S8 BP standing: orthostatic delta
+	WakingTime            string  `json:"waking_time,omitempty"`              // S9/S10 BP: HH:MM for surge window
+	SleepTime             string  `json:"sleep_time,omitempty"`               // S9/S10 BP: HH:MM for nocturnal window
 }
 
 // SourceType identifies the originating system for an observation.
@@ -54,8 +72,16 @@ const (
 	ObsDeviceData          ObservationType = "DEVICE_DATA"
 	ObsABDMRecords         ObservationType = "ABDM_RECORDS"
 	ObsWearableAggregates  ObservationType = "WEARABLE_AGGREGATES"
-	ObsCGMRaw              ObservationType = "CGM_RAW"
+	ObsCGMRaw              ObservationType = "CGM_RAW" // S24 — already existed
 	ObsGeneral             ObservationType = "GENERAL"
+
+	// V4 Signal Types — numbering per NorthStar Architecture §2.1
+	ObsSodiumEstimate     ObservationType = "SODIUM_ESTIMATE"     // S23
+	ObsInterventionEvent  ObservationType = "INTERVENTION_EVENT"  // S25
+	ObsPhysicianFeedback  ObservationType = "PHYSICIAN_FEEDBACK"  // S26
+	ObsWaistCircumference ObservationType = "WAIST_CIRCUMFERENCE" // S27
+	ObsExerciseSession    ObservationType = "EXERCISE_SESSION"    // S28
+	ObsMoodStress         ObservationType = "MOOD_STRESS"         // S29
 )
 
 // DeviceContext carries metadata about the originating device, applicable

@@ -21,6 +21,16 @@ var topicMap = map[canonical.ObservationType]string{
 	canonical.ObsWearableAggregates: "ingestion.wearable-aggregates",
 	canonical.ObsCGMRaw:             "ingestion.cgm-raw",
 	canonical.ObsGeneral:            "ingestion.observations",
+
+	// V4 NorthStar signals (S23-S26)
+	canonical.ObsSodiumEstimate:    "ingestion.patient-reported",
+	canonical.ObsInterventionEvent: "clinical.intervention-events",
+	canonical.ObsPhysicianFeedback: "clinical.decision-cards",
+
+	// Extended V4 signals (S27-S29)
+	canonical.ObsWaistCircumference: "ingestion.patient-reported",
+	canonical.ObsExerciseSession:    "ingestion.wearable-aggregates",
+	canonical.ObsMoodStress:         "ingestion.patient-reported",
 }
 
 // TopicRouter selects the Kafka topic and partition key based on
