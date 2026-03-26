@@ -19,7 +19,7 @@ SERVICE_ROUTES = {
     "auth": {
         "prefix": "/api/auth",
         "target": settings.AUTH_SERVICE_URL,
-        "strip_prefix": True,
+        "strip_prefix": False,
         "public_paths": [
             "/login",
             "/token",
@@ -120,30 +120,35 @@ SERVICE_ROUTES = {
         "prefix": "/api/v1/kb20",
         "target": settings.KB20_SERVICE_URL,
         "strip_prefix": True,
+        "internal_prefix": "/api/v1",
         "public_paths": []
     },
     "kb22_hpi_engine": {
         "prefix": "/api/v1/kb22",
         "target": settings.KB22_SERVICE_URL,
         "strip_prefix": True,
+        "internal_prefix": "/api/v1",
         "public_paths": []
     },
     "kb23_decision_cards": {
         "prefix": "/api/v1/kb23",
         "target": settings.KB23_SERVICE_URL,
         "strip_prefix": True,
+        "internal_prefix": "/api/v1",
         "public_paths": []
     },
     "kb25_lifestyle_graph": {
         "prefix": "/api/v1/kb25",
         "target": settings.KB25_SERVICE_URL,
         "strip_prefix": True,
+        "internal_prefix": "/api/v1/kb25",
         "public_paths": []
     },
     "kb26_metabolic_twin": {
         "prefix": "/api/v1/kb26",
         "target": settings.KB26_SERVICE_URL,
         "strip_prefix": True,
+        "internal_prefix": "/api/v1/kb26",
         "public_paths": []
     },
 }
@@ -153,7 +158,8 @@ async def forward_request(
     target_url: str,
     path: str,
     strip_prefix: bool = False,
-    service_prefix: str = ""
+    service_prefix: str = "",
+    internal_prefix: str = "",
 ) -> Response:
     """
     Forward the request to the target service and return the response.
@@ -175,10 +181,11 @@ async def forward_request(
     # Determine the target path
     target_path = path
     if strip_prefix and path.startswith(service_prefix):
-        target_path = path[len(service_prefix):]
-        # Ensure the path starts with a slash
-        if not target_path.startswith('/'):
-            target_path = '/' + target_path
+        remainder = path[len(service_prefix):]
+        if not remainder.startswith('/'):
+            remainder = '/' + remainder
+        # Prepend the service's internal route prefix
+        target_path = internal_prefix + remainder if internal_prefix else remainder
 
     # Build the full URL
     url = urljoin(target_url, target_path)
@@ -702,7 +709,8 @@ async def proxy_endpoint(request: Request, path: str):
             target_url=route_config["target"],
             path=full_path,
             strip_prefix=route_config["strip_prefix"],
-            service_prefix=prefix
+            service_prefix=prefix,
+            internal_prefix=route_config.get("internal_prefix", ""),
         )
     except Exception as e:
         # Log the error
