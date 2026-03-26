@@ -119,8 +119,8 @@ public class Module4_PatternDetection {
         // Output semantic events to Kafka for Module 5 consumption
         semanticEvents
             .sinkTo(createSemanticEventsSink())
-            .uid("Semantic Events Sink")
-            .name("Semantic Events to Kafka");
+            .uid("Module4 Semantic Events Sink")
+            .name("Module4 Semantic Events to Kafka");
 
         // DEPRECATED: Direct semantic events source (bypasses Module 3)
         // DataStream<SemanticEvent> semanticEvents = createSemanticEventSource(env);
@@ -414,6 +414,9 @@ public class Module4_PatternDetection {
         // Clinical deterioration patterns
         PatternStream<SemanticEvent> deteriorationPatterns = detectDeteriorationPatterns(keyedSemanticEvents);
 
+        // V4: Cross-domain deterioration (glycaemic + hemodynamic concurrent decline)
+        PatternStream<SemanticEvent> crossDomainPatterns = detectCrossDomainDeteriorationPatterns(keyedSemanticEvents);
+
         // Acute Kidney Injury detection pattern (KDIGO criteria) - uses EnrichedEvent with RiskIndicators
         // TODO: Extract risk indicators from CDS event for AKI pattern detection
         // PatternStream<EnrichedEvent> akiPatterns = ClinicalPatterns.detectAKIPattern(enrichedEvents);
@@ -463,6 +466,11 @@ public class Module4_PatternDetection {
         DataStream<PatternEvent> deteriorationEvents = deteriorationPatterns
             .select(new DeteriorationPatternSelectFunction())
             .uid("Deterioration Pattern Events");
+
+        // V4: Cross-domain deterioration events
+        DataStream<PatternEvent> crossDomainEvents = crossDomainPatterns
+            .select(new CrossDomainDeteriorationSelectFunction())
+            .uid("Cross-Domain Deterioration Events");
 
         DataStream<PatternEvent> medicationEvents = medicationPatterns
             .select(new MedicationPatternSelectFunction())
@@ -517,6 +525,7 @@ public class Module4_PatternDetection {
         // Unified pattern stream (union operation does not support uid/name)
         DataStream<PatternEvent> allPatternEvents = immediatePatternEvents  // START with immediate events
             .union(deteriorationEvents)
+            .union(crossDomainEvents)
             .union(medicationEvents)
             .union(vitalTrendEvents)
             .union(pathwayEvents)
@@ -961,6 +970,36 @@ public class Module4_PatternDetection {
     }
 
     /**
+     * V4: Detect cross-domain deterioration — glycaemic AND hemodynamic concurrent decline.
+     * Fires when both domains show declining trajectory within 72h window.
+     */
+    private static PatternStream<SemanticEvent> detectCrossDomainDeteriorationPatterns(
+            DataStream<SemanticEvent> input) {
+        Pattern<SemanticEvent, ?> crossDomainDecline = Pattern
+            .<SemanticEvent>begin("glycaemic_decline")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return "GLYCAEMIC".equals(event.getClinicalDomain())
+                        && ("DECLINING".equals(event.getTrajectoryClass())
+                            || "RAPID_RISING".equals(event.getTrajectoryClass()));
+                }
+            })
+            .followedBy("hemodynamic_decline")
+            .where(new SimpleCondition<SemanticEvent>() {
+                @Override
+                public boolean filter(SemanticEvent event) {
+                    return "HEMODYNAMIC".equals(event.getClinicalDomain())
+                        && ("DECLINING".equals(event.getTrajectoryClass())
+                            || "RAPID_RISING".equals(event.getTrajectoryClass()));
+                }
+            })
+            .within(Duration.ofHours(72));
+
+        return CEP.pattern(input, crossDomainDecline);
+    }
+
+    /**
      * Detect medication adherence patterns
      */
     private static PatternStream<SemanticEvent> detectMedicationPatterns(DataStream<SemanticEvent> input) {
@@ -1140,6 +1179,52 @@ public class Module4_PatternDetection {
 
         private double calculateTimespan(SemanticEvent first, SemanticEvent last) {
             return (last.getEventTime() - first.getEventTime()) / (1000.0 * 3600.0);
+        }
+    }
+
+    /**
+     * V4: Select function for cross-domain deterioration patterns.
+     * Fires when glycaemic and hemodynamic domains both show declining/rapid-rising trajectory.
+     */
+    public static class CrossDomainDeteriorationSelectFunction implements PatternSelectFunction<SemanticEvent, PatternEvent> {
+        @Override
+        public PatternEvent select(Map<String, List<SemanticEvent>> pattern) throws Exception {
+            List<SemanticEvent> glycaemic = pattern.get("glycaemic_decline");
+            List<SemanticEvent> hemodynamic = pattern.get("hemodynamic_decline");
+
+            PatternEvent patternEvent = new PatternEvent();
+            patternEvent.setId(UUID.randomUUID().toString());
+            patternEvent.setPatternType("CROSS_DOMAIN_DECLINE");
+            patternEvent.setPatientId(glycaemic.get(0).getPatientId());
+            patternEvent.setDetectionTime(System.currentTimeMillis());
+            patternEvent.setSeverity("HIGH");
+            patternEvent.setConfidence(0.80);
+
+            Map<String, Object> patternDetails = new HashMap<>();
+            patternDetails.put("glycaemic_trajectory", glycaemic.get(0).getTrajectoryClass());
+            patternDetails.put("hemodynamic_trajectory", hemodynamic.get(0).getTrajectoryClass());
+            patternDetails.put("glycaemic_domain", glycaemic.get(0).getClinicalDomain());
+            patternDetails.put("hemodynamic_domain", hemodynamic.get(0).getClinicalDomain());
+            patternDetails.put("timespan_hours",
+                (hemodynamic.get(0).getEventTime() - glycaemic.get(0).getEventTime()) / (1000.0 * 3600.0));
+            patternEvent.setPatternDetails(patternDetails);
+
+            List<String> involvedEvents = new ArrayList<>();
+            involvedEvents.add(glycaemic.get(0).getId());
+            involvedEvents.add(hemodynamic.get(0).getId());
+            patternEvent.setInvolvedEvents(involvedEvents);
+
+            patternEvent.setRecommendedActions(Arrays.asList(
+                "CROSS_DOMAIN_ASSESSMENT_REQUIRED",
+                "ESCALATE_TO_PHYSICIAN",
+                "MHRI_RECOMPUTATION_NEEDED"
+            ));
+
+            LOG.info("V4: Detected cross-domain deterioration for patient {}: glycaemic={}, hemodynamic={}",
+                patternEvent.getPatientId(),
+                glycaemic.get(0).getTrajectoryClass(),
+                hemodynamic.get(0).getTrajectoryClass());
+            return patternEvent;
         }
     }
 

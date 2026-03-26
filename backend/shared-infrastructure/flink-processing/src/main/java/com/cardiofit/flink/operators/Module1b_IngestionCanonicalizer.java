@@ -212,8 +212,22 @@ public class Module1b_IngestionCanonicalizer {
                 .correlationId(envelope.getCorrelationId())
                 .build();
 
-            LOG.debug("Canonicalized ingestion event: id={}, type={}, patient={}",
-                canonical.getId(), eventType, data.getPatientId());
+            // V4: Add data tier and CGM activity flags for downstream MHRI computation
+            String sourceType = data.getSourceType() != null ? data.getSourceType().toUpperCase() : "";
+            String obsType = data.getObservationType() != null ? data.getObservationType().toUpperCase() : "";
+            if (obsType.contains("CGM")) {
+                payload.put("data_tier", "TIER_1_CGM");
+                payload.put("cgm_active", true);
+            } else if (sourceType.contains("WEARABLE") || obsType.contains("DEVICE")) {
+                payload.put("data_tier", "TIER_2_HYBRID");
+                payload.put("cgm_active", false);
+            } else {
+                payload.put("data_tier", "TIER_3_SMBG");
+                payload.put("cgm_active", false);
+            }
+
+            LOG.debug("Canonicalized ingestion event: id={}, type={}, patient={}, data_tier={}",
+                canonical.getId(), eventType, data.getPatientId(), payload.get("data_tier"));
 
             return canonical;
         }
@@ -298,6 +312,10 @@ public class Module1b_IngestionCanonicalizer {
     }
 
     private static String getBootstrapServers() {
+        String envServers = System.getenv("KAFKA_BOOTSTRAP_SERVERS");
+        if (envServers != null && !envServers.isEmpty()) {
+            return envServers;
+        }
         return KafkaConfigLoader.isRunningInDocker()
             ? "kafka:29092"
             : "localhost:9092";

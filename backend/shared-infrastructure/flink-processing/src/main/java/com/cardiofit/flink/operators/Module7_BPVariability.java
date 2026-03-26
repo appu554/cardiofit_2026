@@ -53,6 +53,10 @@ public class Module7_BPVariability {
     private static final OutputTag<BPVariabilityMetrics> CRISIS_TAG =
         new OutputTag<BPVariabilityMetrics>("hypertensive-crisis") {};
 
+    // V4: MHRI recomputation trigger thresholds
+    private static final double ARV_THRESHOLD_LOW = 8.0;
+    private static final double ARV_THRESHOLD_HIGH = 15.0;
+
     public static void main(String[] args) throws Exception {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(PARALLELISM);
@@ -120,6 +124,10 @@ public class Module7_BPVariability {
         private transient ValueState<Double> lastMorningSBP;
         private transient ValueState<Double> lastEveningSBP;
 
+        // V4: Previous values for MHRI recomputation trigger detection
+        private transient ValueState<Double> previousArvSbp7d;
+        private transient ValueState<String> previousDipClass;
+
         @Override
         public void open(Configuration params) {
             dailySummaries = getRuntimeContext().getMapState(
@@ -128,6 +136,11 @@ public class Module7_BPVariability {
                 new ValueStateDescriptor<>("morning_sbp", Double.class));
             lastEveningSBP = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("evening_sbp", Double.class));
+            // V4: State for MHRI recomputation trigger detection
+            previousArvSbp7d = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("prev_arv_sbp_7d", Double.class));
+            previousDipClass = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("prev_dip_class", String.class));
         }
 
         @Override
@@ -235,6 +248,29 @@ public class Module7_BPVariability {
             }
 
             result.setComputedAt(Instant.now());
+
+            // V4: Check MHRI recomputation triggers
+            Double prevArv = previousArvSbp7d.value();
+            String prevDip = previousDipClass.value();
+            Double currentArv = result.getArvSbp7d();
+            String currentDip = result.getDipClassification();
+
+            boolean arvCrossed = prevArv != null && currentArv != null &&
+                ((prevArv < ARV_THRESHOLD_LOW && currentArv >= ARV_THRESHOLD_HIGH) ||
+                 (prevArv >= ARV_THRESHOLD_HIGH && currentArv < ARV_THRESHOLD_LOW));
+            boolean dipChanged = prevDip != null && currentDip != null && !prevDip.equals(currentDip);
+            boolean surgeSevere = result.getMorningSurgeToday() != null && result.getMorningSurgeToday() > 35.0;
+
+            if (arvCrossed || dipChanged || surgeSevere) {
+                LOG.info("MHRI recomputation triggered for patient {}: arv_crossed={}, dip_changed={}, surge_severe={}",
+                         patientId, arvCrossed, dipChanged, surgeSevere);
+                // Trigger data is carried in the BPVariabilityMetrics output — KB-26 consumer checks for changes
+            }
+
+            // Update previous state for next comparison
+            if (currentArv != null) previousArvSbp7d.update(currentArv);
+            if (currentDip != null) previousDipClass.update(currentDip);
+
             out.collect(result);
         }
     }

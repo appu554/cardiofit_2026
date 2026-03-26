@@ -93,6 +93,13 @@ public class SemanticEvent implements Serializable {
     @JsonProperty("semantic_quality")
     private SemanticQuality semanticQuality;
 
+    // V4: Dual-domain trajectory fields (set by Module3/trajectory analysis)
+    @JsonProperty("clinical_domain")
+    private String clinicalDomain;  // GLYCAEMIC, HEMODYNAMIC, RENAL, METABOLIC
+
+    @JsonProperty("trajectory_class")
+    private String trajectoryClass;  // STABLE, RISING, DECLINING, RAPID_RISING
+
     // Default constructor
     public SemanticEvent() {
         this.processingTime = System.currentTimeMillis();
@@ -169,6 +176,16 @@ public class SemanticEvent implements Serializable {
 
         public Builder correlationId(String correlationId) {
             event.correlationId = correlationId;
+            return this;
+        }
+
+        public Builder clinicalDomain(String clinicalDomain) {
+            event.clinicalDomain = clinicalDomain;
+            return this;
+        }
+
+        public Builder trajectoryClass(String trajectoryClass) {
+            event.trajectoryClass = trajectoryClass;
             return this;
         }
 
@@ -252,6 +269,12 @@ public class SemanticEvent implements Serializable {
 
     public SemanticQuality getSemanticQuality() { return semanticQuality; }
     public void setSemanticQuality(SemanticQuality semanticQuality) { this.semanticQuality = semanticQuality; }
+
+    public String getClinicalDomain() { return clinicalDomain; }
+    public void setClinicalDomain(String clinicalDomain) { this.clinicalDomain = clinicalDomain; }
+
+    public String getTrajectoryClass() { return trajectoryClass; }
+    public void setTrajectoryClass(String trajectoryClass) { this.trajectoryClass = trajectoryClass; }
 
     // Utility methods
     /**
