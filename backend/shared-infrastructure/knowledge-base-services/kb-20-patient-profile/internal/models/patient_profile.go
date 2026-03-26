@@ -38,6 +38,49 @@ type PatientProfile struct {
 	// FHIR integration
 	FHIRPatientID string `gorm:"size:200;index;column:fhir_patient_id" json:"fhir_patient_id,omitempty"`
 
+	// ============= V4: BP Variability Domain (from Flink Module7) =============
+	ARVSBP7d          *float64 `gorm:"type:decimal(6,2)" json:"arv_sbp_7d,omitempty"`
+	ARVSBP30d         *float64 `gorm:"type:decimal(6,2)" json:"arv_sbp_30d,omitempty"`
+	MorningSurge7dAvg *float64 `gorm:"type:decimal(6,2)" json:"morning_surge_7d_avg,omitempty"`
+	DipClassification string   `gorm:"size:20" json:"dip_classification,omitempty"`
+	BPControlStatus   string   `gorm:"size:20" json:"bp_control_status,omitempty"`
+
+	// ============= V4: Metabolic Status (from DD#6 MHRI inputs) =============
+	WaistCm             *float64 `gorm:"type:decimal(5,1)" json:"waist_cm,omitempty"`
+	WaistToHeightRatio  *float64 `gorm:"type:decimal(4,3)" json:"waist_to_height_ratio,omitempty"`
+	WaistRiskFlag       string   `gorm:"size:20" json:"waist_risk_flag,omitempty"`
+	LDLCholesterol      *float64 `gorm:"type:decimal(5,1)" json:"ldl_cholesterol,omitempty"`
+	TGHDLRatio          *float64 `gorm:"type:decimal(4,2)" json:"tg_hdl_ratio,omitempty"`
+	WeightTrajectory30d string   `gorm:"size:20" json:"weight_trajectory_30d,omitempty"`
+
+	// ============= V4: Engagement (from Flink Module9) =============
+	EngagementComposite *float64 `gorm:"type:decimal(3,2)" json:"engagement_composite,omitempty"`
+	EngagementStatus    string   `gorm:"size:20" json:"engagement_status,omitempty"`
+
+	// ============= V4: Phenotype (from DD#9 quarterly clustering) =============
+	PhenotypeCluster       string   `gorm:"size:30" json:"phenotype_cluster,omitempty"`
+	PhenotypeConfidence    *float64 `gorm:"type:decimal(3,2)" json:"phenotype_confidence,omitempty"`
+	PhenotypeClusterOrigin string   `gorm:"size:30" json:"phenotype_cluster_origin,omitempty"`
+
+	// ============= V4: MHRI (from KB-26 computation) =============
+	MHRIScore       *float64 `gorm:"type:decimal(5,2)" json:"mhri_score,omitempty"`
+	MHRITrajectory  string   `gorm:"size:30" json:"mhri_trajectory,omitempty"`
+	MHRIDataQuality string   `gorm:"size:10" json:"mhri_data_quality,omitempty"`
+
+	// ============= V4: CKM Stage (AHA Cardiovascular-Kidney-Metabolic) =============
+	CKMStage       int      `gorm:"default:0" json:"ckm_stage"`
+	HasClinicalCVD bool     `gorm:"default:false" json:"has_clinical_cvd"`
+	ASCVDRisk10y   *float64 `gorm:"type:decimal(5,2)" json:"ascvd_risk_10y,omitempty"`
+	DiabetesYears  *int     `json:"diabetes_years,omitempty"`
+	HTNYears       *int     `json:"htn_years,omitempty"`
+	HbA1c          *float64 `gorm:"type:decimal(4,2)" json:"hba1c,omitempty"`
+	EGFR           *float64 `gorm:"type:decimal(5,1)" json:"egfr,omitempty"`
+	UACR           *float64 `gorm:"type:decimal(7,1)" json:"uacr,omitempty"`
+	Potassium      *float64 `gorm:"type:decimal(3,1)" json:"potassium,omitempty"`
+
+	// ============= V4: Data Tier =============
+	DataTier string `gorm:"size:20;default:'TIER_3_SMBG'" json:"data_tier"`
+
 	// Metadata
 	Active    bool      `gorm:"default:true" json:"active"`
 	CreatedAt time.Time `json:"created_at"`
