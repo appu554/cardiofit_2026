@@ -36,6 +36,25 @@ func TestStratumMatches(t *testing.T) {
 		// Multiple strata in list — match any
 		{"multi-strata direct", "DM_ONLY", []string{"DM_HTN", "DM_ONLY"}, true},
 		{"multi-strata ancestor", "DM_HTN_CKD_HF", []string{"DM_ONLY", "DM_HTN"}, true},
+
+		// V4: CKD substaging (KDIGO 2024) — children of DM_HTN_CKD
+		{"CKD_3a matches DM_HTN_CKD", "DM_HTN_CKD_3a", []string{"DM_HTN_CKD"}, true},
+		{"CKD_3b matches DM_HTN_CKD", "DM_HTN_CKD_3b", []string{"DM_HTN_CKD"}, true},
+		{"CKD_A3 matches DM_HTN_CKD", "DM_HTN_CKD_A3", []string{"DM_HTN_CKD"}, true},
+		{"CKD_3a matches DM_HTN", "DM_HTN_CKD_3a", []string{"DM_HTN"}, true},
+		{"CKD_3a matches DM_HTN_base", "DM_HTN_CKD_3a", []string{"DM_HTN_base"}, true},
+		{"CKD_3a does not match DM_ONLY", "DM_HTN_CKD_3a", []string{"DM_ONLY"}, false},
+		{"CKD_3a does not match DM_HTN_CKD_HF", "DM_HTN_CKD_3a", []string{"DM_HTN_CKD_HF"}, false},
+
+		// V4: HF subtyping (ESC 2024) — children of DM_HTN_CKD_HF (4-level chain)
+		{"HF_REDUCED matches DM_HTN_CKD_HF", "DM_HTN_CKD_HF_REDUCED", []string{"DM_HTN_CKD_HF"}, true},
+		{"HF_PRESERVED matches DM_HTN_CKD_HF", "DM_HTN_CKD_HF_PRESERVED", []string{"DM_HTN_CKD_HF"}, true},
+		{"HF_REDUCED matches DM_HTN_CKD", "DM_HTN_CKD_HF_REDUCED", []string{"DM_HTN_CKD"}, true},
+		{"HF_REDUCED matches DM_HTN", "DM_HTN_CKD_HF_REDUCED", []string{"DM_HTN"}, true},
+		{"HF_REDUCED matches DM_HTN_base", "DM_HTN_CKD_HF_REDUCED", []string{"DM_HTN_base"}, true},
+		{"HF_PRESERVED matches DM_HTN_base", "DM_HTN_CKD_HF_PRESERVED", []string{"DM_HTN_base"}, true},
+		{"HF_REDUCED does not match DM_ONLY", "DM_HTN_CKD_HF_REDUCED", []string{"DM_ONLY"}, false},
+		{"HF_REDUCED does not match CKD_3a", "DM_HTN_CKD_HF_REDUCED", []string{"DM_HTN_CKD_3a"}, false},
 	}
 
 	for _, tt := range tests {
@@ -57,11 +76,19 @@ func TestHierarchyCoversAllKnownStrata(t *testing.T) {
 	// These must match KB-20's exported stratum constants.
 	// Update this list when KB-20 adds new strata.
 	kb20Strata := []string{
+		// V3 strata
 		"DM_HTN",
 		"DM_HTN_CKD",
 		"DM_HTN_CKD_HF",
 		"DM_ONLY",
 		"HTN_ONLY",
+		// V4: CKD substaging (KDIGO 2024)
+		"DM_HTN_CKD_3a",
+		"DM_HTN_CKD_3b",
+		"DM_HTN_CKD_A3",
+		// V4: HF subtyping (ESC 2024)
+		"DM_HTN_CKD_HF_REDUCED",
+		"DM_HTN_CKD_HF_PRESERVED",
 	}
 	for _, s := range kb20Strata {
 		if _, ok := stratumParent[s]; !ok {

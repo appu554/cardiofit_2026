@@ -7,18 +7,31 @@ package services
 //	DM_HTN_base
 //	├── DM_HTN
 //	│   └── DM_HTN_CKD
-//	│       └── DM_HTN_CKD_HF
+//	│       ├── DM_HTN_CKD_HF
+//	│       │   ├── DM_HTN_CKD_HF_REDUCED   (V4: HF subtyping — ESC 2024)
+//	│       │   └── DM_HTN_CKD_HF_PRESERVED  (V4: HF subtyping — ESC 2024)
+//	│       ├── DM_HTN_CKD_3a               (V4: CKD substaging — KDIGO 2024)
+//	│       ├── DM_HTN_CKD_3b               (V4: CKD substaging — KDIGO 2024)
+//	│       └── DM_HTN_CKD_A3               (V4: CKD substaging — KDIGO 2024)
 //	├── DM_ONLY
 //	└── HTN_ONLY
 var stratumParent = map[string]string{
+	// V3 strata
 	"DM_HTN":        "DM_HTN_base",
 	"DM_HTN_CKD":    "DM_HTN",
 	"DM_HTN_CKD_HF": "DM_HTN_CKD",
 	"DM_ONLY":       "DM_HTN_base",
 	"HTN_ONLY":      "DM_HTN_base",
+	// V4: CKD substaging (KDIGO 2024)
+	"DM_HTN_CKD_3a": "DM_HTN_CKD",
+	"DM_HTN_CKD_3b": "DM_HTN_CKD",
+	"DM_HTN_CKD_A3": "DM_HTN_CKD",
+	// V4: HF subtyping (ESC 2024)
+	"DM_HTN_CKD_HF_REDUCED":   "DM_HTN_CKD_HF",
+	"DM_HTN_CKD_HF_PRESERVED": "DM_HTN_CKD_HF",
 }
 
-const maxAncestorDepth = 3
+const maxAncestorDepth = 4
 
 // StratumMatches returns true if patientStratum is accepted by any stratum
 // in nodeStrata, accounting for the hierarchy. A node declaring "DM_HTN_base"
