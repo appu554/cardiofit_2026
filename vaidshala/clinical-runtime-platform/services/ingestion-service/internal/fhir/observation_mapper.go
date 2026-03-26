@@ -41,7 +41,7 @@ func MapObservation(obs *canonical.CanonicalObservation) ([]byte, error) {
 		},
 	}
 
-	// Code (LOINC)
+	// Code (LOINC) — required 1..1 in FHIR R4 Observation
 	if obs.LOINCCode != "" {
 		codeCoding := []map[string]interface{}{
 			{
@@ -55,6 +55,19 @@ func MapObservation(obs *canonical.CanonicalObservation) ([]byte, error) {
 		resource["code"] = map[string]interface{}{
 			"coding": codeCoding,
 		}
+	} else {
+		// WhatsApp NLU and other unmapped sources may lack a LOINC code.
+		// FHIR R4 requires Observation.code (1..1), so we emit a text-only
+		// code element to satisfy the Google Healthcare API constraint.
+		codeElement := map[string]interface{}{
+			"text": "Unmapped observation",
+		}
+		if obs.ValueString != "" {
+			codeElement["text"] = obs.ValueString
+		} else if obs.Unit != "" {
+			codeElement["text"] = fmt.Sprintf("Observation (%s)", obs.Unit)
+		}
+		resource["code"] = codeElement
 	}
 
 	// Value
@@ -131,7 +144,105 @@ func MapObservation(obs *canonical.CanonicalObservation) ([]byte, error) {
 		}
 	}
 
+	// V4 Signal Schema Extensions — mapped as FHIR R4 extensions
+	// Per §7.1–7.3 of the Flink Architecture spec.
+	var v4Extensions []map[string]interface{}
+
+	if obs.DataTier != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/data-tier", obs.DataTier,
+		))
+	}
+	if obs.BPDeviceType != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/bp-device-type", obs.BPDeviceType,
+		))
+	}
+	if obs.MeasurementMethod != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/measurement-method", obs.MeasurementMethod,
+		))
+	}
+	if obs.PreparationMethod != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/preparation-method", obs.PreparationMethod,
+		))
+	}
+	if obs.FoodNameLocal != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/food-name-local", obs.FoodNameLocal,
+		))
+	}
+	if obs.SodiumEstimatedMg != 0 {
+		v4Extensions = append(v4Extensions, fhirDecimalExtension(
+			"https://vaidshala.in/fhir/extension/sodium-estimated-mg", obs.SodiumEstimatedMg,
+		))
+	}
+	if obs.LinkedMealID != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/linked-meal-id", obs.LinkedMealID,
+		))
+	}
+	if obs.LinkedSeatedReadingID != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/linked-seated-reading-id", obs.LinkedSeatedReadingID,
+		))
+	}
+	if obs.SymptomAwareness != nil {
+		v4Extensions = append(v4Extensions, fhirBoolExtension(
+			"https://vaidshala.in/fhir/extension/symptom-awareness", *obs.SymptomAwareness,
+		))
+	}
+	if obs.ClinicalGrade != nil {
+		v4Extensions = append(v4Extensions, fhirBoolExtension(
+			"https://vaidshala.in/fhir/extension/clinical-grade", *obs.ClinicalGrade,
+		))
+	}
+	if obs.WakingTime != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/waking-time", obs.WakingTime,
+		))
+	}
+	if obs.SleepTime != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/sleep-time", obs.SleepTime,
+		))
+	}
+	if obs.SourceProtocol != "" {
+		v4Extensions = append(v4Extensions, fhirStringExtension(
+			"https://vaidshala.in/fhir/extension/source-protocol", obs.SourceProtocol,
+		))
+	}
+
+	if len(v4Extensions) > 0 {
+		resource["extension"] = v4Extensions
+	}
+
 	return json.Marshal(resource)
+}
+
+// fhirStringExtension creates a FHIR R4 extension element with a valueString.
+func fhirStringExtension(url, value string) map[string]interface{} {
+	return map[string]interface{}{
+		"url":         url,
+		"valueString": value,
+	}
+}
+
+// fhirDecimalExtension creates a FHIR R4 extension element with a valueDecimal.
+func fhirDecimalExtension(url string, value float64) map[string]interface{} {
+	return map[string]interface{}{
+		"url":          url,
+		"valueDecimal": value,
+	}
+}
+
+// fhirBoolExtension creates a FHIR R4 extension element with a valueBoolean.
+func fhirBoolExtension(url string, value bool) map[string]interface{} {
+	return map[string]interface{}{
+		"url":          url,
+		"valueBoolean": value,
+	}
 }
 
 // observationCategory returns the FHIR observation category string.
