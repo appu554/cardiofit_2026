@@ -117,6 +117,7 @@ public class Module8_ComorbidityInteraction {
         private transient MapState<String, Double> recentLabs;
         private transient MapState<String, Double> previousLabs;
         private transient ValueState<Double> lastWeight;
+        private transient ValueState<Double> previousWeight;
         private transient ValueState<Long> lastWeightTimestamp;
         private transient ValueState<Integer> mealSkipCount24h;
         private transient ValueState<Boolean> symptomReportPresent;
@@ -131,12 +132,29 @@ public class Module8_ComorbidityInteraction {
                 new MapStateDescriptor<>("previous_labs", String.class, Double.class));
             lastWeight = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("last_weight", Double.class));
+            previousWeight = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("previous_weight", Double.class));
             lastWeightTimestamp = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("last_weight_ts", Long.class));
-            mealSkipCount24h = getRuntimeContext().getState(
-                new ValueStateDescriptor<>("meal_skip_24h", Integer.class));
-            symptomReportPresent = getRuntimeContext().getState(
-                new ValueStateDescriptor<>("symptom_report_present", Boolean.class));
+            // Meal skip count expires after 24h — prevents stale state from
+            // permanently triggering CID-04 (Euglycemic DKA) and CID-17 (Fasting)
+            ValueStateDescriptor<Integer> mealSkipDesc =
+                new ValueStateDescriptor<>("meal_skip_24h", Integer.class);
+            mealSkipDesc.enableTimeToLive(StateTtlConfig.newBuilder(org.apache.flink.api.common.time.Time.hours(24))
+                .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                .build());
+            mealSkipCount24h = getRuntimeContext().getState(mealSkipDesc);
+
+            // Symptom report expires after 4h — matches glucose staleness threshold.
+            // Prevents a historical symptom report from permanently suppressing CID-03.
+            ValueStateDescriptor<Boolean> symptomDesc =
+                new ValueStateDescriptor<>("symptom_report_present", Boolean.class);
+            symptomDesc.enableTimeToLive(StateTtlConfig.newBuilder(org.apache.flink.api.common.time.Time.hours(4))
+                .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                .build());
+            symptomReportPresent = getRuntimeContext().getState(symptomDesc);
         }
 
         @Override
@@ -182,6 +200,11 @@ public class Module8_ComorbidityInteraction {
                 case "VITAL_SIGN":
                     String vitalType = String.valueOf(event.getOrDefault("vitalType", ""));
                     if ("WEIGHT".equals(vitalType) && event.get("value") instanceof Number) {
+                        // Save current weight as previous before updating
+                        Double currentWeight = lastWeight.value();
+                        if (currentWeight != null) {
+                            previousWeight.update(currentWeight);
+                        }
                         lastWeight.update(((Number) event.get("value")).doubleValue());
                         lastWeightTimestamp.update(System.currentTimeMillis());
                     }
@@ -236,13 +259,13 @@ public class Module8_ComorbidityInteraction {
                                   activeMedications.contains("LOOP_DIURETIC");
 
             if (hasRASi && hasSGLT2i && hasDiuretic) {
-                Double currentWeight = lastWeight.value();
+                Double currentWt = lastWeight.value();
+                Double prevWt = previousWeight.value();
                 Long weightTs = lastWeightTimestamp.value();
                 boolean weightDrop = false;
-                if (currentWeight != null && weightTs != null) {
-                    Double prevWeight = recentLabs.get("WEIGHT_PREV");
+                if (currentWt != null && prevWt != null && weightTs != null) {
                     long threeDaysMs = 3L * 24 * 60 * 60 * 1000;
-                    if (prevWeight != null && (prevWeight - currentWeight) > 2.0 &&
+                    if ((prevWt - currentWt) > 2.0 &&
                         (System.currentTimeMillis() - weightTs) < threeDaysMs) {
                         weightDrop = true;
                     }
