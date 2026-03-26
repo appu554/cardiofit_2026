@@ -69,15 +69,31 @@ Rationale:
 
 **New file**: `kb-22-hpi-engine/internal/services/stratum_hierarchy.go`
 
-Hierarchy map defining parent-child relationships:
+Hierarchy map defining parent-child relationships (nested, not flat):
 
 ```
-DM_HTN_base (catch-all for any DM+HTN)
+DM_HTN_base (catch-all for any cardiometabolic patient)
 ├── DM_HTN
-├── DM_HTN_CKD
-├── DM_HTN_CKD_HF
-├── DM_ONLY       (if a node declares DM_HTN_base, it accepts DM-only too)
-└── HTN_ONLY      (same logic)
+│   └── DM_HTN_CKD
+│       └── DM_HTN_CKD_HF
+├── DM_ONLY
+└── HTN_ONLY
+```
+
+**Design note**: The hierarchy is nested — `DM_HTN_CKD` is a child of `DM_HTN`, which is a child of `DM_HTN_base`. This means:
+- A node declaring `DM_HTN_base` accepts ALL strata (catch-all)
+- A node declaring `DM_HTN` accepts `DM_HTN`, `DM_HTN_CKD`, and `DM_HTN_CKD_HF` (but not `DM_ONLY` or `HTN_ONLY`)
+- A node declaring `DM_HTN_CKD` accepts `DM_HTN_CKD` and `DM_HTN_CKD_HF` (but not `DM_HTN` alone)
+
+Go map representation: `map[string]string` where key = child, value = parent:
+```go
+var stratumParent = map[string]string{
+    "DM_HTN":        "DM_HTN_base",
+    "DM_HTN_CKD":    "DM_HTN",
+    "DM_HTN_CKD_HF": "DM_HTN_CKD",
+    "DM_ONLY":       "DM_HTN_base",
+    "HTN_ONLY":      "DM_HTN_base",
+}
 ```
 
 Function signature:
@@ -100,12 +116,14 @@ Implementation:
 **Test file**: `kb-22-hpi-engine/internal/services/stratum_hierarchy_test.go`
 
 Test cases:
-- `StratumMatches("DM_HTN", ["DM_HTN_base"])` → true
-- `StratumMatches("DM_HTN_CKD", ["DM_HTN_base"])` → true
-- `StratumMatches("DM_HTN_CKD_HF", ["DM_HTN_base"])` → true
+- `StratumMatches("DM_HTN", ["DM_HTN_base"])` → true (grandchild via DM_HTN → DM_HTN_base)
+- `StratumMatches("DM_HTN_CKD", ["DM_HTN_base"])` → true (walks DM_HTN_CKD → DM_HTN → DM_HTN_base)
+- `StratumMatches("DM_HTN_CKD_HF", ["DM_HTN_base"])` → true (walks 3 levels up)
 - `StratumMatches("DM_HTN", ["DM_HTN"])` → true (direct match)
-- `StratumMatches("DM_HTN_CKD", ["DM_HTN"])` → false (DM_HTN is not a parent of DM_HTN_CKD in this hierarchy — DM_HTN_base is)
-- `StratumMatches("NONE", ["DM_HTN_base"])` → false
+- `StratumMatches("DM_HTN_CKD", ["DM_HTN"])` → true (DM_HTN_CKD is a child of DM_HTN in nested hierarchy)
+- `StratumMatches("DM_HTN", ["DM_HTN_CKD"])` → false (parent cannot match child's stratum)
+- `StratumMatches("DM_ONLY", ["DM_HTN"])` → false (DM_ONLY is under DM_HTN_base, not DM_HTN)
+- `StratumMatches("NONE", ["DM_HTN_base"])` → false (NONE not in hierarchy)
 - `StratumMatches("DM_HTN", [])` → false (empty strata list)
 
 ### V4 Extensibility
@@ -148,8 +166,8 @@ The API Gateway's Patient App and Doctor Dashboard endpoint handlers forward req
 | 38 | `GET /doctor/patients/{id}/mri` | KB-26 `/patients/{id}/mri` | KB-26 `GET /api/v1/kb26/mri/{id}` | Wrong path |
 | 44 | `GET /doctor/patients/{id}/cards` | KB-23 `/patients/{id}/cards` | KB-23 `GET /api/v1/patients/{id}/active-cards` | Wrong path |
 | 50 | `POST /doctor/cards/{id}/action` | KB-23 `/cards/{id}/action` | KB-23 `POST /api/v1/cards/{id}/mcu-gate-resume` | Wrong path |
-| 68 | `GET /doctor/patients/{id}/channel-b-inputs` | KB-20 `/patients/{id}/channel-b-inputs` | KB-20 `GET /api/v1/patient/{id}/channel-b-inputs` | Missing `/api/v1/` prefix |
-| 74 | `GET /doctor/patients/{id}/channel-c-inputs` | KB-20 `/patients/{id}/channel-c-inputs` | KB-20 `GET /api/v1/patient/{id}/channel-c-inputs` | Missing `/api/v1/` prefix |
+| 68 | `GET /doctor/patients/{id}/channel-b-inputs` | KB-20 `/patients/{id}/channel-b-inputs` | KB-20 `GET /api/v1/patient/{id}/channel-b-inputs` | Missing `/api/v1/` prefix + `/patients/` (plural) vs `/patient/` (singular) |
+| 74 | `GET /doctor/patients/{id}/channel-c-inputs` | KB-20 `/patients/{id}/channel-c-inputs` | KB-20 `GET /api/v1/patient/{id}/channel-c-inputs` | Missing `/api/v1/` prefix + `/patients/` (plural) vs `/patient/` (singular) |
 
 #### Catch-all Proxy (`app/api/proxy.py`)
 
@@ -237,16 +255,60 @@ def extract_health_score(kb26_mri_response: dict) -> dict:
 
 #### 2c. Fix Catch-all Proxy
 
-In `proxy.py`'s catch-all forwarding logic, after stripping the service prefix, prepend `/api/v1/` to the remaining path:
+KB services have **inconsistent route group prefixes**:
+- KB-20, KB-22, KB-23: routes under `/api/v1` (no service name in group)
+- KB-25: routes under `/api/v1/kb25` (service name in group)
+- KB-26: routes under `/api/v1/kb26` (service name in group)
+
+The catch-all proxy strips the gateway prefix (e.g., `/api/v1/kb22`) and must prepend the correct **internal prefix** for each service. A blanket "prepend `/api/v1/`" would break KB-25 and KB-26.
+
+**Solution**: Add an `internal_prefix` field to `SERVICE_ROUTES` for each Vaidshala service:
 
 ```python
-# Before: path = full_path.removeprefix(route["prefix"])  → "/sessions"
-# After:  path = "/api/v1" + full_path.removeprefix(route["prefix"])  → "/api/v1/sessions"
+SERVICE_ROUTES = {
+    # ...existing legacy routes unchanged...
+    "kb20_patient_profile": {
+        "prefix": "/api/v1/kb20", "target": "http://localhost:8131",
+        "strip_prefix": True, "internal_prefix": "/api/v1",
+    },
+    "kb22_hpi_engine": {
+        "prefix": "/api/v1/kb22", "target": "http://localhost:8132",
+        "strip_prefix": True, "internal_prefix": "/api/v1",
+    },
+    "kb23_decision_cards": {
+        "prefix": "/api/v1/kb23", "target": "http://localhost:8134",
+        "strip_prefix": True, "internal_prefix": "/api/v1",
+    },
+    "kb25_lifestyle_graph": {
+        "prefix": "/api/v1/kb25", "target": "http://localhost:8136",
+        "strip_prefix": True, "internal_prefix": "/api/v1/kb25",
+    },
+    "kb26_metabolic_twin": {
+        "prefix": "/api/v1/kb26", "target": "http://localhost:8137",
+        "strip_prefix": True, "internal_prefix": "/api/v1/kb26",
+    },
+}
 ```
 
-This applies only to Vaidshala services (KB-20 through KB-26) where `strip_prefix=True`. Legacy services (auth, patient, fhir) keep their existing behavior.
+Proxy logic:
+```python
+# Before: path = full_path.removeprefix(route["prefix"])
+# After:
+remainder = full_path.removeprefix(route["prefix"])
+internal_prefix = route.get("internal_prefix", "")
+path = internal_prefix + remainder
+```
+
+Examples:
+- `/api/v1/kb22/sessions` → strip `/api/v1/kb22` → `/sessions` → prepend `/api/v1` → `/api/v1/sessions` ✓
+- `/api/v1/kb25/causal-chain/sbp` → strip `/api/v1/kb25` → `/causal-chain/sbp` → prepend `/api/v1/kb25` → `/api/v1/kb25/causal-chain/sbp` ✓
+- `/api/v1/kb26/mri/123` → strip `/api/v1/kb26` → `/mri/123` → prepend `/api/v1/kb26` → `/api/v1/kb26/mri/123` ✓
+
+Legacy services (`strip_prefix=False`) are unchanged — they don't use `internal_prefix`.
 
 #### 2d. Update _forward() Signature
+
+**File**: `app/api/endpoints/patient_app.py` (line 119) — this is where `_forward()` is defined. The catch-all proxy in `proxy.py` has its own separate `forward_request()` function.
 
 Add optional `body_transform` parameter to `_forward()`:
 
@@ -325,6 +387,8 @@ async def patient_health_score(patient_id: str, request: Request):
 ```
 
 **Failure mode**: If KB-20 is unreachable, return HTTP 502. Patient ID resolution is a required step — no fallback to raw UUID.
+
+**Redis graceful degradation**: The gateway currently treats Redis as optional (see `_get_cache()` in `patient_app.py:21-26`). The resolver follows the same pattern — if Redis is unavailable, skip the cache layer and call KB-20 on every request. This adds ~10ms per request but maintains functionality. The resolver must NOT fail if Redis is down.
 
 **Cache key format**: `patient_resolve:{uuid}` → `{abha_id}` (Redis string, TTL 3600s)
 
