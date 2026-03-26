@@ -248,12 +248,18 @@ func fhirBoolExtension(url string, value bool) map[string]interface{} {
 // observationCategory returns the FHIR observation category string.
 func observationCategory(obs *canonical.CanonicalObservation) string {
 	switch obs.ObservationType {
-	case canonical.ObsVitals, canonical.ObsDeviceData:
+	case canonical.ObsVitals, canonical.ObsDeviceData, canonical.ObsCGMRaw,
+		canonical.ObsWaistCircumference:
 		return "vital-signs"
 	case canonical.ObsLabs:
 		return "laboratory"
-	case canonical.ObsPatientReported:
+	case canonical.ObsPatientReported, canonical.ObsSodiumEstimate,
+		canonical.ObsMoodStress:
 		return "survey"
+	case canonical.ObsExerciseSession, canonical.ObsWearableAggregates:
+		return "activity"
+	case canonical.ObsInterventionEvent, canonical.ObsPhysicianFeedback:
+		return "social-history"
 	default:
 		return "laboratory"
 	}

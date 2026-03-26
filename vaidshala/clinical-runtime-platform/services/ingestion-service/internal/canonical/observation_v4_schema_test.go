@@ -172,7 +172,7 @@ func TestV4Schema_DataTierSerializes(t *testing.T) {
 		PatientID:       uuid.New(),
 		ObservationType: ObsCGMRaw,
 		Timestamp:       time.Now(),
-		DataTier:        "TIER_1_CGM",
+		DataTier:        DataTierCGM,
 	}
 
 	data, err := json.Marshal(obs)

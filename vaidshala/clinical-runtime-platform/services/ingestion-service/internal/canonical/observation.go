@@ -31,8 +31,7 @@ type CanonicalObservation struct {
 	RawPayload      []byte           `json:"raw_payload,omitempty"`
 
 	// DataTier classifies the signal tier for CGM/glucose observations.
-	// Values: TIER_1_CGM, TIER_2_HYBRID, TIER_3_SMBG
-	DataTier string `json:"data_tier,omitempty"`
+	DataTier DataTier `json:"data_tier,omitempty"`
 
 	// V4 Signal Schema Extensions (per Flink Architecture §7.1–7.3)
 	SourceProtocol        string  `json:"source_protocol,omitempty"`          // S1 FBG: Tier 3 rotating meal protocol
@@ -68,12 +67,12 @@ const (
 	ObsVitals          ObservationType = "VITALS"
 	ObsLabs            ObservationType = "LABS"
 	ObsMedications     ObservationType = "MEDICATIONS"
-	ObsPatientReported ObservationType = "PATIENT_REPORTED"
-	ObsDeviceData          ObservationType = "DEVICE_DATA"
-	ObsABDMRecords         ObservationType = "ABDM_RECORDS"
-	ObsWearableAggregates  ObservationType = "WEARABLE_AGGREGATES"
-	ObsCGMRaw              ObservationType = "CGM_RAW" // S24 — already existed
-	ObsGeneral             ObservationType = "GENERAL"
+	ObsPatientReported    ObservationType = "PATIENT_REPORTED"
+	ObsDeviceData         ObservationType = "DEVICE_DATA"
+	ObsABDMRecords        ObservationType = "ABDM_RECORDS"
+	ObsWearableAggregates ObservationType = "WEARABLE_AGGREGATES"
+	ObsCGMRaw             ObservationType = "CGM_RAW" // S24
+	ObsGeneral            ObservationType = "GENERAL"
 
 	// V4 Signal Types — numbering per NorthStar Architecture §2.1
 	ObsSodiumEstimate     ObservationType = "SODIUM_ESTIMATE"     // S23
@@ -82,6 +81,15 @@ const (
 	ObsWaistCircumference ObservationType = "WAIST_CIRCUMFERENCE" // S27
 	ObsExerciseSession    ObservationType = "EXERCISE_SESSION"    // S28
 	ObsMoodStress         ObservationType = "MOOD_STRESS"         // S29
+)
+
+// DataTier classifies glucose data quality tiers for Flink processing.
+type DataTier string
+
+const (
+	DataTierCGM    DataTier = "TIER_1_CGM"
+	DataTierHybrid DataTier = "TIER_2_HYBRID"
+	DataTierSMBG   DataTier = "TIER_3_SMBG"
 )
 
 // DeviceContext carries metadata about the originating device, applicable
