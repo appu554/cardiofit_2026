@@ -121,7 +121,7 @@ public class FlinkJobOrchestrator {
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
-        LOG.info("Launching complete EHR Intelligence pipeline with all 7 modules (1, 1b, 2-6)");
+        LOG.info("Launching complete EHR Intelligence pipeline with all 8 modules (1, 1b, 2-6, 8)");
 
         try {
             // Module 1: Ingestion & Gateway (traditional EHR sources)

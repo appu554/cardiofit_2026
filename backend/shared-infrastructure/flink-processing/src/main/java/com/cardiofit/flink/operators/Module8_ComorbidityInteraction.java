@@ -119,6 +119,7 @@ public class Module8_ComorbidityInteraction {
         private transient ValueState<Double> lastWeight;
         private transient ValueState<Long> lastWeightTimestamp;
         private transient ValueState<Integer> mealSkipCount24h;
+        private transient ValueState<Boolean> symptomReportPresent;
 
         @Override
         public void open(Configuration parameters) {
@@ -134,6 +135,8 @@ public class Module8_ComorbidityInteraction {
                 new ValueStateDescriptor<>("last_weight_ts", Long.class));
             mealSkipCount24h = getRuntimeContext().getState(
                 new ValueStateDescriptor<>("meal_skip_24h", Integer.class));
+            symptomReportPresent = getRuntimeContext().getState(
+                new ValueStateDescriptor<>("symptom_report_present", Boolean.class));
         }
 
         @Override
@@ -189,6 +192,9 @@ public class Module8_ComorbidityInteraction {
                         Integer count = mealSkipCount24h.value();
                         mealSkipCount24h.update(count == null ? 1 : count + 1);
                     }
+                    break;
+                case "SYMPTOM_REPORT":
+                    symptomReportPresent.update(Boolean.TRUE.equals(event.get("reported")));
                     break;
             }
         }
@@ -279,8 +285,11 @@ public class Module8_ComorbidityInteraction {
             boolean hasHypoRisk = activeMedications.contains("INSULIN") || activeMedications.contains("SULFONYLUREA");
             boolean hasBetaBlocker = activeMedications.contains("BETA_BLOCKER");
             Double glucose = recentLabs.get("GLUCOSE");
+            // Only fire if no symptom report — masking means patient is unaware of hypo
+            Boolean symptomsReported = symptomReportPresent.value();
+            boolean noSymptoms = symptomsReported == null || !symptomsReported;
 
-            if (hasHypoRisk && hasBetaBlocker && glucose != null && glucose < 60) {
+            if (hasHypoRisk && hasBetaBlocker && glucose != null && glucose < 60 && noSymptoms) {
                 alerts.add(new ComorbidityAlert(
                     patientId, "CID-03", "Hypoglycemia Masking", ComorbidityAlert.AlertSeverity.HALT,
                     String.format("HALT: Hypoglycemia masking. Glucose %.0f on insulin/SU + beta-blocker. " +
