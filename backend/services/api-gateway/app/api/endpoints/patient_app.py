@@ -6,11 +6,15 @@ X-User-* headers injected from validated JWT claims.
 import logging
 from typing import Any
 
+import json
+
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 
 from app.config import settings  # module-level singleton, NOT get_settings()
 from app.middleware.circuit_breaker import get_breaker
+from app.api.patient_resolver import resolve_patient_id
+from app.api.transforms import checkin_to_session, extract_health_score
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["patient-app"])
@@ -53,49 +57,88 @@ async def token_refresh(request: Request):
 @router.get("/patient/{patient_id}/health-score")
 async def patient_health_score(patient_id: str, request: Request):
     """KB-26: Composite health score from Metabolic Digital Twin."""
-    return await _forward(request, settings.KB26_SERVICE_URL, f"/patients/{patient_id}/health-score")
+    resolved_id = await resolve_patient_id(patient_id)
+    return await _forward(
+        request, settings.KB26_SERVICE_URL,
+        f"/api/v1/kb26/mri/{resolved_id}",
+        response_transform=extract_health_score,
+    )
 
 
 @router.get("/patient/{patient_id}/actions/today")
 async def patient_actions_today(patient_id: str, request: Request):
     """KB-23: Today's action items from Decision Cards."""
-    return await _forward(request, settings.KB23_SERVICE_URL, f"/patients/{patient_id}/actions/today")
+    resolved_id = await resolve_patient_id(patient_id)
+    return await _forward(
+        request, settings.KB23_SERVICE_URL,
+        f"/api/v1/patients/{resolved_id}/active-cards",
+    )
 
 
 @router.get("/patient/{patient_id}/health-drive")
 async def patient_health_drive(patient_id: str, request: Request):
-    """KB-25: Lifestyle Knowledge Graph health-drive data."""
-    return await _forward(request, settings.KB25_SERVICE_URL, f"/patients/{patient_id}/health-drive")
+    """KB-25: Lifestyle Knowledge Graph recommendations."""
+    resolved_id = await resolve_patient_id(patient_id)
+    return await _forward(
+        request, settings.KB25_SERVICE_URL,
+        "/api/v1/kb25/recommend-lifestyle",
+        method="POST",
+        body=json.dumps({"patient_id": resolved_id}).encode(),
+    )
 
 
 @router.get("/patient/{patient_id}/progress")
 async def patient_progress(patient_id: str, request: Request):
-    """KB-20: Protocol progress from Patient Profile."""
-    return await _forward(request, settings.KB20_SERVICE_URL, f"/patients/{patient_id}/progress")
+    """KB-20: Protocol progress from Patient Profile.
+
+    Note: KB-20 has its own resolveFHIRPatientID() middleware, so no
+    gateway-level resolution needed — pass patient_id as-is.
+    """
+    return await _forward(
+        request, settings.KB20_SERVICE_URL,
+        f"/api/v1/patient/{patient_id}/protocols",
+    )
 
 
 @router.get("/patient/{patient_id}/cause-effect")
 async def patient_cause_effect(patient_id: str, request: Request):
-    """KB-26: Cause-effect analysis from Metabolic Digital Twin."""
-    return await _forward(request, settings.KB26_SERVICE_URL, f"/patients/{patient_id}/cause-effect")
+    """KB-26: Cause-effect analysis (not yet implemented)."""
+    raise HTTPException(
+        status_code=501,
+        detail={"error": "endpoint not yet implemented", "planned_service": "KB-26"},
+    )
 
 
 @router.get("/patient/{patient_id}/timeline")
 async def patient_timeline(patient_id: str, request: Request):
-    """KB-20: Patient clinical timeline."""
-    return await _forward(request, settings.KB20_SERVICE_URL, f"/patients/{patient_id}/timeline")
+    """KB-20: Patient clinical timeline (not yet implemented)."""
+    raise HTTPException(
+        status_code=501,
+        detail={"error": "endpoint not yet implemented", "planned_service": "KB-20"},
+    )
 
 
 @router.get("/patient/{patient_id}/insights")
 async def patient_insights(patient_id: str, request: Request):
-    """KB-26: Patient-facing insights from Metabolic Digital Twin."""
-    return await _forward(request, settings.KB26_SERVICE_URL, f"/patients/{patient_id}/insights")
+    """KB-26: Patient-facing insights (not yet implemented)."""
+    raise HTTPException(
+        status_code=501,
+        detail={"error": "endpoint not yet implemented", "planned_service": "KB-26"},
+    )
 
 
 @router.post("/patient/{patient_id}/checkin")
 async def patient_checkin(patient_id: str, request: Request):
-    """KB-22: Daily check-in via HPI Engine."""
-    return await _forward(request, settings.KB22_SERVICE_URL, f"/patients/{patient_id}/checkin", method="POST")
+    """KB-22: Daily check-in via HPI Engine — transforms to session creation."""
+    resolved_id = await resolve_patient_id(patient_id)
+    req_body = await request.json()
+    session_body = checkin_to_session(resolved_id, req_body)
+    return await _forward(
+        request, settings.KB22_SERVICE_URL,
+        "/api/v1/sessions",
+        method="POST",
+        body=json.dumps(session_body).encode(),
+    )
 
 
 @router.post("/patient/{patient_id}/abdm/verify")
@@ -116,8 +159,24 @@ async def tenant_branding(tenant_id: str, request: Request):
     return await _forward(request, settings.PATIENT_SERVICE_URL, f"/tenants/{tenant_id}/branding")
 
 
-async def _forward(request: Request, service_url: str, path: str, method: str = None) -> Any:
-    """Forward request to a downstream service with X-User-* headers."""
+async def _forward(
+    request: Request,
+    service_url: str,
+    path: str,
+    method: str = None,
+    body: bytes = None,
+    response_transform=None,
+) -> Any:
+    """Forward request to a downstream service with X-User-* headers.
+
+    Args:
+        request: Incoming FastAPI request.
+        service_url: Base URL of the target KB service.
+        path: Internal path on the target service (must be the correct KB route).
+        method: HTTP method override (defaults to request.method).
+        body: Pre-built request body bytes. If None, reads from request.
+        response_transform: Optional callable(dict) -> dict to transform the response.
+    """
     method = method or request.method
     breaker = get_breaker(service_url)
 
@@ -136,7 +195,8 @@ async def _forward(request: Request, service_url: str, path: str, method: str = 
             return cached
 
     headers = _build_headers(request)
-    body = await request.body() if method in ("POST", "PUT", "PATCH") else None
+    if body is None:
+        body = await request.body() if method in ("POST", "PUT", "PATCH") else None
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -152,6 +212,11 @@ async def _forward(request: Request, service_url: str, path: str, method: str = 
             else:
                 breaker.record_success()
             result = resp.json()
+
+            # Apply response transform if provided
+            if response_transform and resp.status_code == 200:
+                result = response_transform(result)
+
             # Cache successful GET responses
             if cache and method == "GET" and resp.status_code == 200:
                 await cache.set(method, path, user_id, result)
