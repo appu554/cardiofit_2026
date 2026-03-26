@@ -65,6 +65,10 @@ public class FlinkJobOrchestrator {
                 // Consumes all 9 ingestion.* topics → enriched-patient-events-v1
                 Module1b_IngestionCanonicalizer.createIngestionPipeline(env);
                 break;
+            case "bp-variability":
+            case "module7":
+                Module7_BPVariability.createBPVariabilityPipeline(env);
+                break;
             case "comorbidity-interaction":
             case "module8":
                 Module8_ComorbidityInteraction.createComorbidityPipeline(env);
@@ -121,7 +125,7 @@ public class FlinkJobOrchestrator {
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
-        LOG.info("Launching complete EHR Intelligence pipeline with all 8 modules (1, 1b, 2-6, 8)");
+        LOG.info("Launching complete EHR Intelligence pipeline with all 9 modules (1, 1b, 2-8)");
 
         try {
             // Module 1: Ingestion & Gateway (traditional EHR sources)
@@ -152,11 +156,15 @@ public class FlinkJobOrchestrator {
             LOG.info("Initializing Module 6: Egress Routing");
             Module6_EgressRouting.createEgressRoutingPipeline(env);
 
+            // Module 7: BP Variability Engine
+            LOG.info("Initializing Module 7: BP Variability Engine");
+            Module7_BPVariability.createBPVariabilityPipeline(env);
+
             // Module 8: Comorbidity Interaction Detector
             LOG.info("Initializing Module 8: Comorbidity Interaction Detector");
             Module8_ComorbidityInteraction.createComorbidityPipeline(env);
 
-            LOG.info("All 8 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
+            LOG.info("All 9 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
 
         } catch (Exception e) {
             LOG.error("Failed to initialize complete pipeline", e);
