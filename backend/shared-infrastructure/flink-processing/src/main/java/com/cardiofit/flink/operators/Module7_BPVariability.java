@@ -138,18 +138,37 @@ public class Module7_BPVariability {
             String patientId = ctx.getCurrentKey();
             boolean isCuffless = Boolean.TRUE.equals(event.get("cuffless"));
 
-            // 1. Crisis bypass — SBP>180 or DBP>120
-            if (HypertensiveCrisisDetector.isCrisis(sbp, dbp) &&
-                !HypertensiveCrisisDetector.requiresCuffConfirmation(isCuffless)) {
-                BPVariabilityMetrics crisis = new BPVariabilityMetrics();
-                crisis.setPatientId(patientId);
-                crisis.setBpControlStatus("CRISIS");
-                crisis.setComputedAt(Instant.now());
-                ctx.output(CRISIS_TAG, crisis);
+            // Input validation: reject physiologically impossible readings
+            if (sbp < 60 || sbp > 300 || dbp < 30 || dbp > 200) {
+                LOG.warn("Rejected invalid BP reading for patient {}: SBP={} DBP={}", patientId, sbp, dbp);
+                return;
             }
 
-            // 2. Update daily summary
-            String today = LocalDate.now().toString();
+            // Extract event time (not wall-clock) for correct bucketing on replay
+            long eventTs = ctx.timestamp() != null ? ctx.timestamp()
+                : ((Number) event.getOrDefault("timestamp", System.currentTimeMillis())).longValue();
+            LocalDate eventDate = Instant.ofEpochMilli(eventTs).atZone(ZoneOffset.UTC).toLocalDate();
+            int hour = Instant.ofEpochMilli(eventTs).atZone(ZoneOffset.UTC).getHour();
+
+            // 1. Crisis bypass — SBP>180 or DBP>120
+            if (HypertensiveCrisisDetector.isCrisis(sbp, dbp)) {
+                if (!HypertensiveCrisisDetector.requiresCuffConfirmation(isCuffless)) {
+                    BPVariabilityMetrics crisis = new BPVariabilityMetrics();
+                    crisis.setPatientId(patientId);
+                    crisis.setBpControlStatus("CRISIS");
+                    crisis.setSbp7dAvg(sbp);   // populate triggering values
+                    crisis.setDbp7dAvg(dbp);
+                    crisis.setComputedAt(Instant.ofEpochMilli(eventTs));
+                    ctx.output(CRISIS_TAG, crisis);
+                } else {
+                    // Cuffless crisis: log for audit — downstream should prompt cuff confirmation
+                    LOG.warn("Cuffless crisis reading for patient {}: SBP={} DBP={} — cuff confirmation needed",
+                             patientId, sbp, dbp);
+                }
+            }
+
+            // 2. Update daily summary (keyed by event date, not wall clock)
+            String today = eventDate.toString();
             String existing = dailySummaries.get(today);
             double dayAvgSBP = sbp, dayAvgDBP = dbp;
             int count = 1;
@@ -164,8 +183,15 @@ public class Module7_BPVariability {
             }
             dailySummaries.put(today, String.format("%.1f,%.1f,%d", dayAvgSBP, dayAvgDBP, count));
 
-            // 3. Track morning/evening for surge detection
-            int hour = LocalTime.now().getHour();
+            // Evict entries older than 30 days to prevent unbounded state growth
+            LocalDate cutoff = eventDate.minusDays(30);
+            List<String> toRemove = new ArrayList<>();
+            for (String key : dailySummaries.keys()) {
+                if (LocalDate.parse(key).isBefore(cutoff)) toRemove.add(key);
+            }
+            for (String key : toRemove) dailySummaries.remove(key);
+
+            // 3. Track morning/evening for surge detection (using event-time hour)
             if (hour >= 6 && hour <= 9) { lastMorningSBP.update(sbp); }
             if (hour >= 20 && hour <= 23) { lastEveningSBP.update(sbp); }
 
