@@ -482,6 +482,92 @@ topics:
       producers: ["kb-22-hpi-engine", "kb-26-metabolic-digital-twin", "kb-21-behavioral-intelligence", "kb-25-lifestyle-knowledge-graph", "kb-23-decision-cards"]
       consumers: ["ops-monitoring"]
 
+  # V4 Output Topics — Flink Modules 7-11 and downstream consumers
+  v4_outputs:
+    - name: flink.bp-variability-metrics
+      description: "Per-patient BP variability metrics (ARV, surge, dip) from Module7"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      compression_type: snappy
+      cleanup_policy: delete
+      producers: ["flink-module7-bp-variability"]
+      consumers: ["kb-26-metabolic-digital-twin", "kb-23-decision-cards"]
+
+    - name: flink.meal-response
+      description: "Meal-glucose and sodium-BP correlation pairs from Module10"
+      partitions: 8
+      retention_ms: 2592000000  # 30 days
+      compression_type: snappy
+      cleanup_policy: delete
+      producers: ["flink-module10-meal-response"]
+      consumers: ["kb-26-metabolic-digital-twin", "kb-25-lifestyle-knowledge-graph"]
+
+    - name: flink.engagement-signals
+      description: "Daily per-patient engagement composite scores from Module9"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      compression_type: snappy
+      cleanup_policy: delete
+      producers: ["flink-module9-engagement"]
+      consumers: ["kb-26-metabolic-digital-twin", "kb-21-behavioral-intelligence"]
+
+    - name: clinical.intervention-events
+      description: "Intervention approval/modification events for IOR tracking"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      compression_type: gzip
+      cleanup_policy: delete
+      min_insync_replicas: 3
+      producers: ["kb-23-decision-cards"]
+      consumers: ["flink-module11-intervention-window", "ior-generator"]
+
+    - name: clinical.decision-cards
+      description: "Generated Decision Cards from KB-23 dual-domain pipeline"
+      partitions: 4
+      retention_ms: 2592000000  # 30 days
+      compression_type: snappy
+      cleanup_policy: delete
+      producers: ["kb-23-decision-cards"]
+      consumers: ["api-gateway", "notification-service"]
+
+    - name: alerts.comorbidity-interactions
+      description: "Cross-domain drug interaction alerts from Module8 CID"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      compression_type: gzip
+      cleanup_policy: delete
+      min_insync_replicas: 3
+      producers: ["flink-module8-comorbidity"]
+      consumers: ["kb-23-decision-cards", "notification-service"]
+
+    - name: flink.meal-patterns
+      description: "Weekly dietary pattern aggregation from Module10 MealPatternAggregator — worst foods, avg daily sodium, salt_sensitivity_beta"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      compression_type: snappy
+      cleanup_policy: delete
+      producers: ["flink-module10-meal-response"]
+      consumers: ["kb-21-behavioral-intelligence", "kb-26-metabolic-digital-twin", "phenotype-clustering"]
+
+    - name: alerts.engagement-drop
+      description: "Low-volume engagement threshold breach alerts (ORANGE/RED) — triggers re-engagement workflow"
+      partitions: 2
+      retention_ms: 7776000000  # 90 days
+      compression_type: gzip
+      cleanup_policy: delete
+      producers: ["flink-module9-engagement"]
+      consumers: ["notification-service", "kb-21-behavioral-intelligence"]
+
+    - name: clinical.intervention-window-signals
+      description: "Module11 WINDOW_OPENED/WINDOW_CLOSED events — triggers IOR generator"
+      partitions: 4
+      retention_ms: 7776000000  # 90 days
+      compression_type: gzip
+      cleanup_policy: delete
+      min_insync_replicas: 3
+      producers: ["flink-module11-intervention-window"]
+      consumers: ["ior-generator", "kb-20-patient-profile"]
+
   # Dead Letter Queue Topics - Error handling
   dlq:
     - name: failed-validation.v1

@@ -153,7 +153,18 @@ public enum KafkaTopics {
     // ============= Ingestion DLQs (3 topics) =============
     DLQ_INGESTION_LABS("dlq.ingestion.labs.v1", 4, 90),
     DLQ_INGESTION_VITALS("dlq.ingestion.vitals.v1", 4, 90),
-    DLQ_INGESTION_SAFETY_CRITICAL("dlq.ingestion.safety-critical.v1", 4, 90);
+    DLQ_INGESTION_SAFETY_CRITICAL("dlq.ingestion.safety-critical.v1", 4, 90),
+
+    // ============= V4 Output Topics (9 topics) =============
+    FLINK_BP_VARIABILITY_METRICS("flink.bp-variability-metrics", 8, 30),
+    FLINK_MEAL_RESPONSE("flink.meal-response", 8, 30),
+    FLINK_MEAL_PATTERNS("flink.meal-patterns", 4, 90),
+    FLINK_ENGAGEMENT_SIGNALS("flink.engagement-signals", 4, 30),
+    CLINICAL_INTERVENTION_EVENTS("clinical.intervention-events", 4, 90),
+    CLINICAL_INTERVENTION_WINDOW_SIGNALS("clinical.intervention-window-signals", 4, 90),
+    CLINICAL_DECISION_CARDS("clinical.decision-cards", 4, 30),
+    ALERTS_COMORBIDITY_INTERACTIONS("alerts.comorbidity-interactions", 4, 90),
+    ALERTS_ENGAGEMENT_DROP("alerts.engagement-drop", 2, 90);
 
     private final String topicName;
     private final int partitions;
@@ -281,5 +292,20 @@ public enum KafkaTopics {
      */
     public boolean isIngestionTopic() {
         return this.name().startsWith("INGESTION_");
+    }
+
+    /**
+     * Check if topic is a V4 output topic
+     */
+    public boolean isV4OutputTopic() {
+        return this == FLINK_BP_VARIABILITY_METRICS ||
+               this == FLINK_MEAL_RESPONSE ||
+               this == FLINK_MEAL_PATTERNS ||
+               this == FLINK_ENGAGEMENT_SIGNALS ||
+               this == CLINICAL_INTERVENTION_EVENTS ||
+               this == CLINICAL_INTERVENTION_WINDOW_SIGNALS ||
+               this == CLINICAL_DECISION_CARDS ||
+               this == ALERTS_COMORBIDITY_INTERACTIONS ||
+               this == ALERTS_ENGAGEMENT_DROP;
     }
 }
