@@ -145,14 +145,8 @@ func (s *SessionService) CreateSession(ctx context.Context, req models.CreateSes
 	session.ReliabilityModifier = sessionCtx.ReliabilityModifier
 	session.AdherenceGainFactor = sessionCtx.AdherenceGainFactor
 
-	// Validate stratum is supported by the node
-	stratumSupported := false
-	for _, supported := range node.StrataSupported {
-		if supported == sessionCtx.StratumLabel {
-			stratumSupported = true
-			break
-		}
-	}
+	// Validate stratum is supported by the node (hierarchical matching)
+	stratumSupported := StratumMatches(sessionCtx.StratumLabel, node.StrataSupported)
 	if !stratumSupported {
 		s.db.DB.WithContext(ctx).Model(&session).Update("status", models.StatusAbandoned)
 		return nil, fmt.Errorf("stratum %s not supported by node %s (supported: %v)",
