@@ -170,11 +170,16 @@ public class Module7_BPVariability {
             if (hour >= 20 && hour <= 23) { lastEveningSBP.update(sbp); }
 
             // 4. Compute variability metrics from 30-day state
-            List<Double> sbpHistory = new ArrayList<>();
+            // Collect date→SBP pairs and sort by date to ensure temporal ordering
+            // (MapState iteration order is not guaranteed)
+            List<Map.Entry<String, String>> entries = new ArrayList<>();
             for (Map.Entry<String, String> entry : dailySummaries.entries()) {
-                sbpHistory.add(Double.parseDouble(entry.getValue().split(",")[0]));
+                entries.add(new AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue()));
             }
-            double[] sbpArr = sbpHistory.stream().mapToDouble(Double::doubleValue).toArray();
+            entries.sort(Map.Entry.comparingByKey()); // ISO date strings sort lexicographically
+            double[] sbpArr = entries.stream()
+                .mapToDouble(e -> Double.parseDouble(e.getValue().split(",")[0]))
+                .toArray();
 
             BPVariabilityMetrics result = new BPVariabilityMetrics();
             result.setPatientId(patientId);
@@ -194,7 +199,7 @@ public class Module7_BPVariability {
             }
 
             // Dipping (uses last night vs last day average)
-            if (sbpHistory.size() >= 2) {
+            if (sbpArr.length >= 2) {
                 Double nightAvgSBP = lastEveningSBP.value();
                 if (nightAvgSBP != null) {
                     result.setDipClassification(
