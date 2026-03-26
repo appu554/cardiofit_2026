@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request, HTTPException
 
 from app.config import settings  # module-level singleton, NOT get_settings()
 from app.api.endpoints.patient_app import _forward, _build_headers
+from app.api.patient_resolver import resolve_patient_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/doctor", tags=["doctor-dashboard"])
@@ -29,25 +30,40 @@ async def doctor_graphql(request: Request):
 @router.get("/patients/{patient_id}/summary")
 async def patient_summary(patient_id: str, request: Request):
     """KB-20: Patient profile summary."""
-    return await _forward(request, settings.KB20_SERVICE_URL, f"/patients/{patient_id}/summary")
+    return await _forward(
+        request, settings.KB20_SERVICE_URL,
+        f"/api/v1/patient/{patient_id}/profile",
+    )
 
 
 @router.get("/patients/{patient_id}/mri")
 async def patient_mri(patient_id: str, request: Request):
     """KB-26: Metabolic Risk Index."""
-    return await _forward(request, settings.KB26_SERVICE_URL, f"/patients/{patient_id}/mri")
+    resolved_id = await resolve_patient_id(patient_id)
+    return await _forward(
+        request, settings.KB26_SERVICE_URL,
+        f"/api/v1/kb26/mri/{resolved_id}",
+    )
 
 
 @router.get("/patients/{patient_id}/cards")
 async def patient_cards(patient_id: str, request: Request):
     """KB-23: Decision cards."""
-    return await _forward(request, settings.KB23_SERVICE_URL, f"/patients/{patient_id}/cards")
+    resolved_id = await resolve_patient_id(patient_id)
+    return await _forward(
+        request, settings.KB23_SERVICE_URL,
+        f"/api/v1/patients/{resolved_id}/active-cards",
+    )
 
 
 @router.post("/cards/{card_id}/action")
 async def card_action(card_id: str, request: Request):
     """KB-23: Physician action on card (approve/modify/escalate)."""
-    return await _forward(request, settings.KB23_SERVICE_URL, f"/cards/{card_id}/action", method="POST")
+    return await _forward(
+        request, settings.KB23_SERVICE_URL,
+        f"/api/v1/cards/{card_id}/mcu-gate-resume",
+        method="POST",
+    )
 
 
 # --- V-MCU safety traces ---
@@ -65,10 +81,16 @@ async def safety_traces(patient_id: str, request: Request):
 @router.get("/patients/{patient_id}/channel-b-inputs")
 async def channel_b_inputs(patient_id: str, request: Request):
     """KB-20: Channel B projection data."""
-    return await _forward(request, settings.KB20_SERVICE_URL, f"/patients/{patient_id}/channel-b-inputs")
+    return await _forward(
+        request, settings.KB20_SERVICE_URL,
+        f"/api/v1/patient/{patient_id}/channel-b-inputs",
+    )
 
 
 @router.get("/patients/{patient_id}/channel-c-inputs")
 async def channel_c_inputs(patient_id: str, request: Request):
     """KB-20: Channel C projection data."""
-    return await _forward(request, settings.KB20_SERVICE_URL, f"/patients/{patient_id}/channel-c-inputs")
+    return await _forward(
+        request, settings.KB20_SERVICE_URL,
+        f"/api/v1/patient/{patient_id}/channel-c-inputs",
+    )
