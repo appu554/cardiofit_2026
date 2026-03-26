@@ -28,8 +28,9 @@ func ComputeCKMStage(p PatientProfile) int {
 	}
 
 	// Stage 2: T2DM or moderate-to-high CKD with metabolic risk
+	// Note: DiabetesYears path must check DMType to avoid conflating T1DM with T2DM
 	hasT2DM := p.HbA1c != nil && *p.HbA1c >= 6.5
-	if p.DiabetesYears != nil && *p.DiabetesYears > 0 {
+	if p.DiabetesYears != nil && *p.DiabetesYears > 0 && p.DMType == "T2DM" {
 		hasT2DM = true
 	}
 	moderateCKD := (p.EGFR != nil && *p.EGFR < 60.0) || (p.UACR != nil && *p.UACR >= 30.0)
@@ -38,8 +39,8 @@ func ComputeCKMStage(p PatientProfile) int {
 	}
 
 	// Stage 1: excess adiposity, dyslipidemia, or metabolic syndrome markers
-	// Note: BMI is a value type (float64), not a pointer — use > 0 guard for "present"
-	excessAdipose := (p.BMI >= 25.0) || (p.WaistToHeightRatio != nil && *p.WaistToHeightRatio >= 0.5)
+	// Note: BMI is a value type (float64), not a pointer — guard with > 0 for "present"
+	excessAdipose := (p.BMI > 0 && p.BMI >= 25.0) || (p.WaistToHeightRatio != nil && *p.WaistToHeightRatio >= 0.5)
 	dyslipidemia := p.TGHDLRatio != nil && *p.TGHDLRatio >= 3.5
 	preDiabetes := p.HbA1c != nil && *p.HbA1c >= 5.7 && *p.HbA1c < 6.5
 	if excessAdipose || dyslipidemia || preDiabetes {
