@@ -59,6 +59,16 @@ public class FlinkJobOrchestrator {
             case "egress-routing":
                 Module6_EgressRouting.createEgressRoutingPipeline(env);
                 break;
+            case "module1b-canonicalizer":
+            case "ingestion-canonicalizer":
+                // Module 1b: Canonicalizes ingestion service outbox events
+                // Consumes all 9 ingestion.* topics → enriched-patient-events-v1
+                Module1b_IngestionCanonicalizer.createIngestionPipeline(env);
+                break;
+            case "comorbidity-interaction":
+            case "module8":
+                Module8_ComorbidityInteraction.createComorbidityPipeline(env);
+                break;
             default:
                 LOG.warn("Unknown job type: {}. Defaulting to comprehensive CDS.", jobType);
                 Module3_ComprehensiveCDS.createComprehensiveCDSPipeline(env);
@@ -111,12 +121,16 @@ public class FlinkJobOrchestrator {
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
-        LOG.info("Launching complete EHR Intelligence pipeline with all 6 modules");
+        LOG.info("Launching complete EHR Intelligence pipeline with all 7 modules (1, 1b, 2-6)");
 
         try {
-            // Module 1: Ingestion & Gateway
+            // Module 1: Ingestion & Gateway (traditional EHR sources)
             LOG.info("Initializing Module 1: Ingestion & Gateway");
             Module1_Ingestion.createIngestionPipeline(env);
+
+            // Module 1b: Ingestion Canonicalizer (outbox events from ingestion service)
+            LOG.info("Initializing Module 1b: Ingestion Canonicalizer");
+            Module1b_IngestionCanonicalizer.createIngestionPipeline(env);
 
             // Module 2: Enhanced Context Assembly
             LOG.info("Initializing Module 2: Enhanced Context Assembly");
@@ -138,7 +152,11 @@ public class FlinkJobOrchestrator {
             LOG.info("Initializing Module 6: Egress Routing");
             Module6_EgressRouting.createEgressRoutingPipeline(env);
 
-            LOG.info("All 6 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
+            // Module 8: Comorbidity Interaction Detector
+            LOG.info("Initializing Module 8: Comorbidity Interaction Detector");
+            Module8_ComorbidityInteraction.createComorbidityPipeline(env);
+
+            LOG.info("All 8 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
 
         } catch (Exception e) {
             LOG.error("Failed to initialize complete pipeline", e);
