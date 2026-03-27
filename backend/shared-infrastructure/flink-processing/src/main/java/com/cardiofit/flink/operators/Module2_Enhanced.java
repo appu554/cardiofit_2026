@@ -2262,21 +2262,27 @@ public class Module2_Enhanced {
                         org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema.builder()
                                 .setTopic("clinical-patterns.v1")
                                 .setValueSerializationSchema(new org.apache.flink.api.common.serialization.SerializationSchema<EnrichedPatientContext>() {
-                                    private final ObjectMapper mapper = new ObjectMapper();
+                                    private static final ObjectMapper MAPPER = new ObjectMapper();
+                                    static {
+                                        MAPPER.registerModule(new JavaTimeModule());
+                                    }
 
                                     @Override
                                     public byte[] serialize(EnrichedPatientContext element) {
                                         try {
-                                            mapper.registerModule(new JavaTimeModule());
-                                            return mapper.writeValueAsBytes(element);
+                                            return MAPPER.writeValueAsBytes(element);
                                         } catch (Exception e) {
-                                            LOG.error("Failed to serialize EnrichedPatientContext", e);
-                                            return new byte[0];
+                                            LOG.error("Failed to serialize EnrichedPatientContext for patient {}: {}",
+                                                element != null ? element.getPatientId() : "null", e.getMessage());
+                                            throw new RuntimeException(
+                                                "EnrichedPatientContext serialization failed", e);
                                         }
                                     }
                                 })
                                 .build()
                 )
+                .setTransactionalIdPrefix("module2-unified-enriched-context")
+                .setDeliveryGuarantee(org.apache.flink.connector.base.DeliveryGuarantee.AT_LEAST_ONCE)
                 .build();
     }
 
