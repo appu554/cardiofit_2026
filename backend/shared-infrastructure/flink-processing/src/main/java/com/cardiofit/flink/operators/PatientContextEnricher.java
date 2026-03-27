@@ -91,7 +91,11 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
             try {
                 String neo4jUri = KafkaConfigLoader.getNeo4jUri();
                 String neo4jUser = System.getenv().getOrDefault("NEO4J_USER", "neo4j");
-                String neo4jPassword = System.getenv().getOrDefault("NEO4J_PASSWORD", "CardioFit2024!");
+                String neo4jPassword = System.getenv("NEO4J_PASSWORD");
+                if (neo4jPassword == null || neo4jPassword.isEmpty()) {
+                    LOG.error("NEO4J_PASSWORD environment variable not set — Neo4j enrichment disabled");
+                    return; // Skip Neo4j initialization; enrichment will proceed without graph data
+                }
                 LOG.info("Connecting to Neo4j at: {}", neo4jUri);
 
                 neo4jClient = new Neo4jGraphClient(neo4jUri, neo4jUser, neo4jPassword);

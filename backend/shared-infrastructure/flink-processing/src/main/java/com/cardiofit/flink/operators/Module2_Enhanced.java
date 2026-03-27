@@ -193,7 +193,10 @@ public class Module2_Enhanced {
             // Initialize Neo4j client using same method as old Module2
             String neo4jUri = com.cardiofit.flink.utils.KafkaConfigLoader.getNeo4jUri();
             String neo4jUser = System.getenv().getOrDefault("NEO4J_USER", "neo4j");
-            String neo4jPassword = System.getenv().getOrDefault("NEO4J_PASSWORD", "CardioFit2024!");
+            String neo4jPassword = System.getenv("NEO4J_PASSWORD");
+            if (neo4jPassword == null || neo4jPassword.isEmpty()) {
+                throw new IllegalStateException("NEO4J_PASSWORD environment variable is required but not set");
+            }
             LOG.info("Connecting to Neo4j at: {}", neo4jUri);
 
             neo4jClient = new Neo4jGraphClient(neo4jUri, neo4jUser, neo4jPassword);
