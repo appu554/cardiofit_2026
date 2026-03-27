@@ -46,6 +46,7 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
     private transient GoogleFHIRClient fhirClient;
     private transient Neo4jGraphClient neo4jClient;
     private transient ObjectMapper objectMapper;
+    private transient io.github.resilience4j.circuitbreaker.CircuitBreaker neo4jCircuitBreaker;
 
     // Enrichment configuration
     private final boolean enableFhirEnrichment;
@@ -101,6 +102,17 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
                 neo4jClient = new Neo4jGraphClient(neo4jUri, neo4jUser, neo4jPassword);
                 neo4jClient.initialize();
                 LOG.info("Neo4jGraphClient initialized successfully");
+
+                io.github.resilience4j.circuitbreaker.CircuitBreakerConfig cbConfig =
+                    io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.custom()
+                        .failureRateThreshold(50)
+                        .waitDurationInOpenState(java.time.Duration.ofSeconds(30))
+                        .slidingWindowSize(20)
+                        .minimumNumberOfCalls(5)
+                        .build();
+                neo4jCircuitBreaker = io.github.resilience4j.circuitbreaker.CircuitBreaker.of(
+                    "neo4j-enrichment", cbConfig);
+                LOG.info("Neo4j circuit breaker initialized (50% threshold, 30s open wait, window=20)");
             } catch (Exception e) {
                 LOG.error("Failed to initialize Neo4j client", e);
                 // Continue without Neo4j enrichment
@@ -220,8 +232,18 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
             return CompletableFuture.completedFuture(null);
         }
 
+        // Circuit breaker: fast-fail when Neo4j is degraded
+        if (neo4jCircuitBreaker != null &&
+            neo4jCircuitBreaker.getState() == io.github.resilience4j.circuitbreaker.CircuitBreaker.State.OPEN) {
+            LOG.debug("Neo4j circuit breaker OPEN for patient {}, skipping graph enrichment", state.getPatientId());
+            return CompletableFuture.completedFuture(null);
+        }
+
         return neo4jClient.queryGraphAsync(state.getPatientId())
             .thenAccept(graphData -> {
+                if (neo4jCircuitBreaker != null) {
+                    neo4jCircuitBreaker.onSuccess(0, java.util.concurrent.TimeUnit.MILLISECONDS);
+                }
                 if (graphData != null) {
                     // Apply Neo4j data to state
                     if (graphData.getCareTeam() != null) {
@@ -236,18 +258,16 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
                         state.setCarePathways(graphData.getCarePathways());
                     }
 
-                    // Placeholder for similar patients (would require new Neo4j query)
-                    // state.setSimilarPatients(...);
-
-                    // Placeholder for cohort insights (would require new Neo4j query)
-                    // state.setCohortInsights(...);
-
                     LOG.debug("Neo4j enrichment complete for patient {}", state.getPatientId());
                 }
             })
             .exceptionally(throwable -> {
-                LOG.warn("Graph data fetch failed for patient {}: {}",
-                    state.getPatientId(), throwable.getMessage());
+                if (neo4jCircuitBreaker != null) {
+                    neo4jCircuitBreaker.onError(0, java.util.concurrent.TimeUnit.MILLISECONDS, throwable);
+                }
+                LOG.warn("Graph data fetch failed for patient {}: {} (circuit breaker state: {})",
+                    state.getPatientId(), throwable.getMessage(),
+                    neo4jCircuitBreaker != null ? neo4jCircuitBreaker.getState() : "N/A");
                 return null;
             })
             .thenApply(v -> null); // Convert to CompletableFuture<Void>
