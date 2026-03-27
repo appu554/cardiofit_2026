@@ -115,7 +115,7 @@ public class OutboxEnvelope implements Serializable {
         private String loincCode;
 
         @JsonProperty("value")
-        private double value;
+        private Double value;
 
         @JsonProperty("unit")
         private String unit;
@@ -130,7 +130,7 @@ public class OutboxEnvelope implements Serializable {
         private String sourceId;
 
         @JsonProperty("quality_score")
-        private double qualityScore;
+        private Double qualityScore;
 
         @JsonProperty("flags")
         private List<String> flags;
@@ -157,8 +157,8 @@ public class OutboxEnvelope implements Serializable {
         public String getLoincCode() { return loincCode; }
         public void setLoincCode(String loincCode) { this.loincCode = loincCode; }
 
-        public double getValue() { return value; }
-        public void setValue(double value) { this.value = value; }
+        public Double getValue() { return value; }
+        public void setValue(Double value) { this.value = value; }
 
         public String getUnit() { return unit; }
         public void setUnit(String unit) { this.unit = unit; }
@@ -172,8 +172,8 @@ public class OutboxEnvelope implements Serializable {
         public String getSourceId() { return sourceId; }
         public void setSourceId(String sourceId) { this.sourceId = sourceId; }
 
-        public double getQualityScore() { return qualityScore; }
-        public void setQualityScore(double qualityScore) { this.qualityScore = qualityScore; }
+        public Double getQualityScore() { return qualityScore; }
+        public void setQualityScore(Double qualityScore) { this.qualityScore = qualityScore; }
 
         public List<String> getFlags() { return flags; }
         public void setFlags(List<String> flags) { this.flags = flags; }

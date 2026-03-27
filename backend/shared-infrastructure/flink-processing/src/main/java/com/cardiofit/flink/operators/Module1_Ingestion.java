@@ -13,6 +13,7 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
@@ -73,7 +74,9 @@ public class Module1_Ingestion {
         LOG.info("Creating ingestion pipeline for clinical events");
 
         // Create unified stream from multiple clinical event topics
-        DataStream<RawEvent> unifiedEventStream = createUnifiedEventStream(env);
+        DataStream<RawEvent> unifiedEventStream = createUnifiedEventStream(env)
+            .filter(event -> event != null)
+            .uid("Null Event Filter");
 
         // Process and validate events
         SingleOutputStreamOperator<CanonicalEvent> processedEvents = unifiedEventStream
@@ -94,64 +97,32 @@ public class Module1_Ingestion {
     }
 
     /**
-     * Create a unified stream from multiple Kafka topics
+     * Create a unified stream from all 6 legacy EHR topics using a single KafkaSource.
+     * Single consumer group (A2 fix) + watermark idleness (A3 fix).
      */
     private static DataStream<RawEvent> createUnifiedEventStream(StreamExecutionEnvironment env) {
-
-        // Patient events stream
-        DataStream<RawEvent> patientEvents = createKafkaSource(env,
-            KafkaTopics.PATIENT_EVENTS, "patient-ingestion-v2");
-
-        // Medication events stream
-        DataStream<RawEvent> medicationEvents = createKafkaSource(env,
-            KafkaTopics.MEDICATION_EVENTS, "medication-ingestion");
-
-        // Observation events stream
-        DataStream<RawEvent> observationEvents = createKafkaSource(env,
-            KafkaTopics.OBSERVATION_EVENTS, "observation-ingestion");
-
-        // Vital signs events stream
-        DataStream<RawEvent> vitalEvents = createKafkaSource(env,
-            KafkaTopics.VITAL_SIGNS_EVENTS, "vital-ingestion");
-
-        // Lab result events stream
-        DataStream<RawEvent> labEvents = createKafkaSource(env,
-            KafkaTopics.LAB_RESULT_EVENTS, "lab-ingestion");
-
-        // Device data stream
-        DataStream<RawEvent> deviceEvents = createKafkaSource(env,
-            KafkaTopics.VALIDATED_DEVICE_DATA, "device-ingestion");
-
-        // Union all streams
-        return patientEvents
-            .union(medicationEvents)
-            .union(observationEvents)
-            .union(vitalEvents)
-            .union(labEvents)
-            .union(deviceEvents);
-    }
-
-    /**
-     * Create Kafka source for a specific topic
-     */
-    private static DataStream<RawEvent> createKafkaSource(
-            StreamExecutionEnvironment env,
-            KafkaTopics topic,
-            String consumerGroup) {
+        List<String> ehrTopics = java.util.Arrays.asList(
+            KafkaTopics.PATIENT_EVENTS.getTopicName(),
+            KafkaTopics.MEDICATION_EVENTS.getTopicName(),
+            KafkaTopics.OBSERVATION_EVENTS.getTopicName(),
+            KafkaTopics.VITAL_SIGNS_EVENTS.getTopicName(),
+            KafkaTopics.LAB_RESULT_EVENTS.getTopicName(),
+            KafkaTopics.VALIDATED_DEVICE_DATA.getTopicName()
+        );
 
         KafkaSource<RawEvent> source = KafkaSource.<RawEvent>builder()
             .setBootstrapServers(getBootstrapServers())
-            .setTopics(topic.getTopicName())
-            .setGroupId(consumerGroup)
+            .setTopics(ehrTopics)
+            .setGroupId("flink-module1-ingestion")
             .setValueOnlyDeserializer(new RawEventDeserializer())
-            // REMOVED: .setStartingOffsets() - causes ClassCastException, use auto.offset.reset from consumer config
             .build();
 
         return env.fromSource(source,
             WatermarkStrategy
                 .<RawEvent>forBoundedOutOfOrderness(Duration.ofMinutes(5))
-                .withTimestampAssigner((event, timestamp) -> event.getEventTime()),
-            "Kafka Source: " + topic.getTopicName());
+                .withTimestampAssigner((event, timestamp) -> event.getEventTime())
+                .withIdleness(Duration.ofMinutes(2)),
+            "Kafka Source: EHR topics (6)");
     }
 
     /**
@@ -186,6 +157,16 @@ public class Module1_Ingestion {
                 // Canonicalize the event
                 CanonicalEvent canonical = canonicalizeEvent(rawEvent, ctx);
 
+                // Wire validation notes into the event (reviewer fix: get-or-create, don't overwrite)
+                if (validation.isSanitized()) {
+                    CanonicalEvent.IngestionMetadata ingMeta = canonical.getIngestionMetadata();
+                    if (ingMeta == null) {
+                        ingMeta = new CanonicalEvent.IngestionMetadata();
+                    }
+                    ingMeta.setValidationStatus("SANITIZED");
+                    canonical.setIngestionMetadata(ingMeta);
+                }
+
                 // Emit the canonical event
                 out.collect(canonical);
 
@@ -200,6 +181,8 @@ public class Module1_Ingestion {
         }
 
         private ValidationResult validateEvent(RawEvent event) {
+            java.util.List<String> notes = new java.util.ArrayList<>();
+
             // 1. Patient ID validation - check both null and blank
             if (event.getPatientId() == null || event.getPatientId().trim().isEmpty()) {
                 return ValidationResult.invalid("Missing or blank patient ID");
@@ -207,8 +190,8 @@ public class Module1_Ingestion {
 
             // 2. Event type validation - allow missing with warning (will default to UNKNOWN)
             if (event.getType() == null || event.getType().trim().isEmpty()) {
-                LOG.warn("Missing event type for event {}, will default to UNKNOWN", event.getId());
-                // Don't fail validation - parseEventType() will handle the default
+                LOG.info("Missing event type for event {}, will default to UNKNOWN", event.getId());
+                notes.add("event_type defaulted to UNKNOWN");
             }
 
             // 3. Timestamp validation - explicit null/zero check
@@ -216,17 +199,23 @@ public class Module1_Ingestion {
                 return ValidationResult.invalid("Invalid or zero event timestamp");
             }
 
-            // 4. Timestamp sanity checks
+            // 4. Timestamp sanity checks — CLAMP instead of reject (C1 fix)
             long now = System.currentTimeMillis();
+            long maxFuture = now + Duration.ofHours(1).toMillis();
+            long maxPast = now - Duration.ofDays(30).toMillis();
 
-            // Event time should not be too far in the future (1 hour tolerance)
-            if (event.getEventTime() > now + Duration.ofHours(1).toMillis()) {
-                return ValidationResult.invalid("Event time too far in future (max 1 hour tolerance)");
+            if (event.getEventTime() > maxFuture) {
+                long originalTime = event.getEventTime();
+                event.setEventTime(maxFuture);
+                LOG.info("Event {} timestamp {} clamped from future to now+1h", event.getId(), originalTime);
+                notes.add("timestamp clamped from future (" + originalTime + ") to now+1h");
             }
 
-            // Event time should not be too old (30 days retention window)
-            if (event.getEventTime() < now - Duration.ofDays(30).toMillis()) {
-                return ValidationResult.invalid("Event time too old (>30 days, outside retention window)");
+            if (event.getEventTime() < maxPast) {
+                long originalTime = event.getEventTime();
+                event.setEventTime(maxPast);
+                LOG.info("Event {} timestamp {} clamped from >30d past to 30d boundary", event.getId(), originalTime);
+                notes.add("timestamp clamped from >30d past (" + originalTime + ") to 30d boundary");
             }
 
             // 5. Payload validation
@@ -234,7 +223,7 @@ public class Module1_Ingestion {
                 return ValidationResult.invalid("Missing or empty payload");
             }
 
-            return ValidationResult.valid();
+            return notes.isEmpty() ? ValidationResult.valid() : ValidationResult.sanitized(notes);
         }
 
         private CanonicalEvent canonicalizeEvent(RawEvent raw, Context ctx) {
@@ -247,8 +236,10 @@ public class Module1_Ingestion {
                 .encounterId(null)  // Explicitly null for Module 1, hydrated in Module 2
                 .eventType(parseEventType(raw.getType()))
                 .eventTime(raw.getEventTime())
+                .sourceSystem("legacy-ehr")
                 .payload(normalizePayload(raw.getPayload()))
                 .metadata(eventMetadata)  // Preserve clinical context metadata
+                .correlationId(raw.getCorrelationId() != null ? raw.getCorrelationId() : java.util.UUID.randomUUID().toString())
                 .build();
         }
 
@@ -340,29 +331,34 @@ public class Module1_Ingestion {
      * Validation result helper class
      */
     private static class ValidationResult {
-        private final boolean valid;
-        private final String errorMessage;
+        enum Status { VALID, SANITIZED, INVALID }
 
-        private ValidationResult(boolean valid, String errorMessage) {
-            this.valid = valid;
+        private final Status status;
+        private final String errorMessage;
+        private final java.util.List<String> notes;
+
+        private ValidationResult(Status status, String errorMessage, java.util.List<String> notes) {
+            this.status = status;
             this.errorMessage = errorMessage;
+            this.notes = notes;
         }
 
         public static ValidationResult valid() {
-            return new ValidationResult(true, null);
+            return new ValidationResult(Status.VALID, null, java.util.Collections.emptyList());
+        }
+
+        public static ValidationResult sanitized(java.util.List<String> notes) {
+            return new ValidationResult(Status.SANITIZED, null, notes);
         }
 
         public static ValidationResult invalid(String errorMessage) {
-            return new ValidationResult(false, errorMessage);
+            return new ValidationResult(Status.INVALID, errorMessage, java.util.Collections.emptyList());
         }
 
-        public boolean isValid() {
-            return valid;
-        }
-
-        public String getErrorMessage() {
-            return errorMessage;
-        }
+        public boolean isValid() { return status != Status.INVALID; }
+        public boolean isSanitized() { return status == Status.SANITIZED; }
+        public String getErrorMessage() { return errorMessage; }
+        public java.util.List<String> getNotes() { return notes; }
     }
 
     /**
@@ -375,10 +371,14 @@ public class Module1_Ingestion {
             .setBootstrapServers(getBootstrapServers())
             .setRecordSerializer(KafkaRecordSerializationSchema.builder()
                 .setTopic(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
-                .setKeySerializationSchema(event -> ((CanonicalEvent)event).getPatientId().getBytes())
+                .setKeySerializationSchema(event ->
+                    ((CanonicalEvent) event).getPatientId() != null
+                        ? ((CanonicalEvent) event).getPatientId().getBytes()
+                        : "UNKNOWN".getBytes())
                 .setValueSerializationSchema(new CanonicalEventSerializer())
                 .build())
             .setTransactionalIdPrefix("module1-enriched-events")
+            .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)
             .build();
     }
 
@@ -386,12 +386,14 @@ public class Module1_Ingestion {
      * Create sink for Dead Letter Queue
      */
     private static KafkaSink<RawEvent> createDLQSink() {
-        // Don't use setKafkaProducerConfig() when using custom serialization schemas
-        // The RecordSerializer handles serialization, not the Kafka producer config
         return KafkaSink.<RawEvent>builder()
             .setBootstrapServers(getBootstrapServers())
             .setRecordSerializer(KafkaRecordSerializationSchema.builder()
                 .setTopic(KafkaTopics.DLQ_PROCESSING_ERRORS.getTopicName())
+                .setKeySerializationSchema(event ->
+                    ((RawEvent) event).getPatientId() != null
+                        ? ((RawEvent) event).getPatientId().getBytes()
+                        : "UNKNOWN".getBytes())
                 .setValueSerializationSchema(new RawEventSerializer())
                 .build())
             .setTransactionalIdPrefix("module1-dlq-errors")
@@ -416,7 +418,17 @@ public class Module1_Ingestion {
 
         @Override
         public RawEvent deserialize(byte[] message) throws IOException {
-            return objectMapper.readValue(message, RawEvent.class);
+            if (message == null || message.length == 0) {
+                LOG.warn("Received null or empty message, skipping");
+                return null;
+            }
+            try {
+                return objectMapper.readValue(message, RawEvent.class);
+            } catch (Exception e) {
+                LOG.error("Failed to deserialize raw event ({} bytes): {}. Message dropped.",
+                    message.length, e.getMessage());
+                return null;
+            }
         }
 
         @Override

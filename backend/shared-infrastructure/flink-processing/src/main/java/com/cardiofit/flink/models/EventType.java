@@ -45,6 +45,10 @@ public enum EventType {
     DEVICE_MALFUNCTION,
     DEVICE_MAINTENANCE,
 
+    // Patient-reported and document events (V4)
+    PATIENT_REPORTED,       // Symptoms, meal logs, exercise, mood — from patient app/WhatsApp
+    CLINICAL_DOCUMENT,      // ABDM discharge summaries, prescriptions, immunization records
+
     // Safety events
     ADVERSE_EVENT,
     ALLERGY_ALERT,
@@ -125,6 +129,20 @@ public enum EventType {
             case "SENSOR_ALARM":
                 return DEVICE_ALARM;
 
+            // Patient-reported data (V4)
+            case "PATIENT_REPORTED":
+            case "PATIENT_OBSERVATION":
+            case "SYMPTOM":
+            case "MEAL_LOG":
+                return PATIENT_REPORTED;
+
+            // Clinical documents (V4 — ABDM records)
+            case "ABDM_RECORDS":
+            case "ABDM":
+            case "CLINICAL_DOCUMENT":
+            case "DISCHARGE_SUMMARY":
+                return CLINICAL_DOCUMENT;
+
             default:
                 try {
                     return EventType.valueOf(normalized);
@@ -152,6 +170,8 @@ public enum EventType {
             case ADVERSE_EVENT:
             case ALLERGY_ALERT:
             case DRUG_INTERACTION:
+            case PATIENT_REPORTED:
+            case CLINICAL_DOCUMENT:
                 return true;
             default:
                 return false;
