@@ -212,7 +212,7 @@
 | **Lines added** | +296 |
 | **Lines removed** | -172 |
 | **Net change** | +124 lines |
-| **Tasks completed** | 15/15 |
+| **Tasks completed** | 16/16 |
 | **Gaps remaining** | 0 |
 
 ### Commits (chronological)
@@ -261,6 +261,16 @@
 | `RuntimeException` instead of `SerializationException` | Class doesn't exist in Flink 2.1.0 | None |
 | `LOG.debug` instead of `LOG.info` for V4 events | Code review: high-volume events | Improved |
 | Tests documented instead of rewritten | Legacy tests target wrong operators | Known debt |
+
+### Task 16: Promote data_tier to First-Class Field on EnrichedPatientContext [POST-REVIEW]
+
+**Finding (from TIER_1_CGM end-to-end trace):** `data_tier` propagates through Module 2 but lands at `patientState.latestVitals["data_tier"]` — a nested map path. Module 3 MHRI needs it as a clean accessor, not a fragile map lookup.
+
+- [x] **Step 1:** Added `dataTier` field with `@JsonProperty("dataTier")` to `EnrichedPatientContext.java`. Javadoc documents propagation path and default behavior.
+- [x] **Step 2:** Extraction in `PatientContextAggregator.processElement()`: reads `state.getLatestVitals().get("data_tier")`, falls back to `"TIER_3_SMBG"` for legacy EHR events.
+- [x] **Step 3:** Compilation verified.
+
+---
 
 ### Known Remaining Debt
 

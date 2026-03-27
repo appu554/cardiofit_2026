@@ -186,6 +186,12 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         enrichedContext.setEventTime(event.getEventTime()); // Standardized timestamp naming
         enrichedContext.setEventType(event.getEventType());
 
+        // Extract data_tier from latestVitals into first-class field for Module 3 MHRI.
+        // Falls back to TIER_3_SMBG (lowest fidelity) for legacy EHR events without data_tier.
+        // See: TIER_1_CGM end-to-end trace in docs/superpowers/plans/2026-03-27-module2-fixes.md
+        Object dataTierRaw = state.getLatestVitals().get("data_tier");
+        enrichedContext.setDataTier(dataTierRaw instanceof String ? (String) dataTierRaw : "TIER_3_SMBG");
+
         // Populate enrichmentData map from PatientContextState FHIR data
         if (state.isHasFhirData()) {
             java.util.Map<String, Object> enrichmentData = new java.util.HashMap<>();

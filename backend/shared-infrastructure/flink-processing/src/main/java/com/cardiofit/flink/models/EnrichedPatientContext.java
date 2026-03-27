@@ -88,6 +88,18 @@ public class EnrichedPatientContext implements Serializable {
     @JsonProperty("terminologyContext")
     private Map<String, Object> terminologyContext;
 
+    /**
+     * V4 data tier classification from Module 1b ingestion pipeline.
+     * Determines signal fidelity for downstream computations (e.g., MHRI in Module 3).
+     * Values: TIER_1_CGM, TIER_2_FINGERSTICK, TIER_3_SMBG, etc.
+     * Defaults to TIER_3_SMBG if not set (legacy EHR path doesn't emit data_tier).
+     *
+     * Propagation path: CanonicalEvent.payload["data_tier"] → VitalsPayload.additionalVitals
+     * → PatientContextState.latestVitals → extracted here as first-class field.
+     */
+    @JsonProperty("dataTier")
+    private String dataTier;
+
     public EnrichedPatientContext() {
         this.processingTime = System.currentTimeMillis();
         this.enrichmentData = new HashMap<>();
@@ -192,6 +204,14 @@ public class EnrichedPatientContext implements Serializable {
 
     public void setTerminologyContext(Map<String, Object> terminologyContext) {
         this.terminologyContext = terminologyContext;
+    }
+
+    public String getDataTier() {
+        return dataTier;
+    }
+
+    public void setDataTier(String dataTier) {
+        this.dataTier = dataTier;
     }
 
     /**
