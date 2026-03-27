@@ -1011,15 +1011,23 @@ public class Module2_Enhanced {
         // Use Docker network address when running in Flink cluster
         String kafkaBootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092");
 
-        // Custom deserializer for CanonicalEvent
+        // Custom deserializer for CanonicalEvent — crash-safe (null-on-failure)
         org.apache.flink.api.common.serialization.DeserializationSchema<CanonicalEvent> deserializer =
             new org.apache.flink.api.common.serialization.DeserializationSchema<CanonicalEvent>() {
                 private final ObjectMapper mapper = new ObjectMapper();
+                {
+                    mapper.registerModule(new JavaTimeModule());
+                }
 
                 @Override
                 public CanonicalEvent deserialize(byte[] message) throws java.io.IOException {
-                    mapper.registerModule(new JavaTimeModule());
-                    return mapper.readValue(message, CanonicalEvent.class);
+                    try {
+                        return mapper.readValue(message, CanonicalEvent.class);
+                    } catch (Exception e) {
+                        LOG.error("Failed to deserialize CanonicalEvent ({} bytes), skipping: {}",
+                            message != null ? message.length : 0, e.getMessage());
+                        return null;  // Null = skip this record, don't crash-loop
+                    }
                 }
 
                 @Override
@@ -1065,16 +1073,19 @@ public class Module2_Enhanced {
             .setRecordSerializer(org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema.builder()
                 .setTopic("clinical-patterns.v1")
                 .setValueSerializationSchema(new org.apache.flink.api.common.serialization.SerializationSchema<EnrichedEvent>() {
-                    private final ObjectMapper mapper = new ObjectMapper();
+                    private static final ObjectMapper MAPPER = new ObjectMapper();
+                    static {
+                        MAPPER.registerModule(new JavaTimeModule());
+                    }
 
                     @Override
                     public byte[] serialize(EnrichedEvent event) {
                         try {
-                            mapper.registerModule(new JavaTimeModule());
-                            return mapper.writeValueAsBytes(event);
+                            return MAPPER.writeValueAsBytes(event);
                         } catch (Exception e) {
-                            LOG.error("Failed to serialize enriched event", e);
-                            return new byte[0];
+                            LOG.error("Failed to serialize enriched event for patient {}: {}",
+                                event != null ? event.getPatientId() : "null", e.getMessage());
+                            throw new RuntimeException("EnrichedEvent serialization failed", e);
                         }
                     }
                 })
@@ -1795,8 +1806,13 @@ public class Module2_Enhanced {
         // Step 1: Read CanonicalEvent from Module 1 output
         DataStream<CanonicalEvent> canonicalEvents = createCanonicalEventSource(env);
 
+        // Filter out nulls from crash-safe deserializer (malformed messages)
+        DataStream<CanonicalEvent> validEvents = canonicalEvents
+                .filter(event -> event != null)
+                .uid("module2-null-event-filter");
+
         // Step 2: Convert CanonicalEvent to GenericEvent for unified processing
-        DataStream<GenericEvent> genericEvents = canonicalEvents
+        DataStream<GenericEvent> genericEvents = validEvents
                 .flatMap(new CanonicalEventToGenericEventConverter())
                 .uid("canonical-to-generic-converter");
 
