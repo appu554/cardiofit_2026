@@ -2062,6 +2062,17 @@ public class Module2_Enhanced {
             }
         }
 
+        // Keys already extracted into VitalsPayload typed fields — exclude from additionalVitals
+        // to prevent duplication in PatientContextState.latestVitals (Caveat 2 from TIER_1_CGM trace).
+        private static final Set<String> EXTRACTED_VITAL_KEYS = Set.of(
+            "heartrate", "heartRate",
+            "systolicbloodpressure", "systolicBP",
+            "diastolicbloodpressure", "diastolicBP",
+            "oxygensaturation", "oxygenSaturation", "spo2",
+            "respiratoryrate", "respiratoryRate", "rr",
+            "temperature", "bodyTemperature", "temp"
+        );
+
         private VitalsPayload convertToVitalsPayload(Map<String, Object> vitals) {
             VitalsPayload payload = new VitalsPayload();
 
@@ -2073,7 +2084,16 @@ public class Module2_Enhanced {
             payload.setRespiratoryRate(extractInteger(vitals, "respiratoryrate", "respiratoryRate", "rr"));
             payload.setTemperature(extractDouble(vitals, "temperature", "bodyTemperature", "temp"));
 
-            payload.setAdditionalVitals(vitals);
+            // Store only non-vital metadata fields (data_tier, device_type, source_system, etc.)
+            // in additionalVitals. Already-extracted vital sign keys are excluded to prevent
+            // duplication when toVitalsMap() merges additionalVitals back into the vitals map.
+            Map<String, Object> metadata = new HashMap<>();
+            for (Map.Entry<String, Object> entry : vitals.entrySet()) {
+                if (!EXTRACTED_VITAL_KEYS.contains(entry.getKey())) {
+                    metadata.put(entry.getKey(), entry.getValue());
+                }
+            }
+            payload.setAdditionalVitals(metadata);
             return payload;
         }
 
