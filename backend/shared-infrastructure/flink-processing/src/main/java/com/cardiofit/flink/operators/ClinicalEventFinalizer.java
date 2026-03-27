@@ -65,10 +65,13 @@ public class ClinicalEventFinalizer extends ProcessFunction<EnrichedPatientConte
         }
 
         enrichmentMeta.put("enrichment_timestamp", System.currentTimeMillis());
+        enrichmentMeta.put("finalized_at", Instant.now().toString());
         enrichmentMeta.put("pipeline_version", PIPELINE_VERSION);
         enrichmentMeta.put("has_fhir_data", state.isHasFhirData());
         enrichmentMeta.put("has_neo4j_data", state.isHasNeo4jData());
         enrichmentMeta.put("enrichment_complete", state.isEnrichmentComplete());
+        enrichmentMeta.put("alert_count", state.getActiveAlerts() != null ? state.getActiveAlerts().size() : 0);
+        enrichmentMeta.put("acuity_score", state.getCombinedAcuityScore());
 
         // Derive a convenience status for quick downstream filtering
         String enrichmentStatus;
