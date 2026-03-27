@@ -91,7 +91,12 @@ import java.util.*;
  *
  * @see PatientSnapshot V1 and V2 data models
  * @see StateSchemaRegistry Version tracking
+ *
+ * @deprecated Replaced by unified pipeline in Module2_Enhanced.createUnifiedPipeline().
+ * Active operators: PatientContextAggregator, PatientContextEnricher,
+ * ClinicalIntelligenceEvaluator, ClinicalEventFinalizer.
  */
+@Deprecated
 public class Module2_ContextAssembly_DualState
         extends KeyedProcessFunction<String, CanonicalEvent, EnrichedEvent> {
 

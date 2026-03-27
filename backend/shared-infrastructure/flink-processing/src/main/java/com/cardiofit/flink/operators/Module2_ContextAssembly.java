@@ -45,7 +45,12 @@ import java.util.concurrent.TimeoutException;
  * - Calculate derived metrics and clinical indicators
  * - Manage patient session windows and context snapshots
  * - Route enriched events for downstream processing
+ *
+ * @deprecated Replaced by unified pipeline in Module2_Enhanced.createUnifiedPipeline().
+ * Active operators: PatientContextAggregator, PatientContextEnricher,
+ * ClinicalIntelligenceEvaluator, ClinicalEventFinalizer.
  */
+@Deprecated
 public class Module2_ContextAssembly {
     private static final Logger LOG = LoggerFactory.getLogger(Module2_ContextAssembly.class);
 
