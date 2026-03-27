@@ -50,6 +50,10 @@ import java.util.Optional;
 public class PatientContextAggregator extends KeyedProcessFunction<String, GenericEvent, EnrichedPatientContext> {
     private static final Logger LOG = LoggerFactory.getLogger(PatientContextAggregator.class);
 
+    // DLQ side-output for events that fail processing
+    public static final org.apache.flink.util.OutputTag<GenericEvent> DLQ_TAG =
+            new org.apache.flink.util.OutputTag<GenericEvent>("module2-dlq") {};
+
     // Unified patient state (keyed by patientId in RocksDB)
     private transient ValueState<PatientContextState> patientState;
 
@@ -116,45 +120,53 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             LOG.info("Created new patient context for patientId={}", patientId);
         }
 
-        // Record event in state
-        state.recordEvent(event.getEventType());
+        // Process event with DLQ routing for failures
+        try {
+            // Switch-based processing for different event types
+            switch (event.getEventType()) {
+                case "VITAL_SIGN":
+                    processVitalSign(state, event);
+                    break;
 
-        // Switch-based processing for different event types
-        switch (event.getEventType()) {
-            case "VITAL_SIGN":
-                processVitalSign(state, event);
-                break;
+                case "LAB_RESULT":
+                    processLabResult(state, event);
+                    checkLabAbnormalities(state);
+                    break;
 
-            case "LAB_RESULT":
-                processLabResult(state, event);
-                checkLabAbnormalities(state);
-                break;
+                case "MEDICATION_ORDERED":
+                case "MEDICATION_PRESCRIBED":
+                case "MEDICATION_ADMINISTERED":
+                case "MEDICATION_DISCONTINUED":
+                case "MEDICATION_MISSED":
+                case "MEDICATION_UPDATE":  // Legacy support
+                    processMedication(state, event);
+                    checkMedicationInteractions(state);
+                    break;
 
-            case "MEDICATION_ORDERED":
-            case "MEDICATION_PRESCRIBED":
-            case "MEDICATION_ADMINISTERED":
-            case "MEDICATION_DISCONTINUED":
-            case "MEDICATION_MISSED":
-            case "MEDICATION_UPDATE":  // Legacy support
-                processMedication(state, event);
-                checkMedicationInteractions(state);
-                break;
+                case "PATIENT_REPORTED":
+                    // V4: Record event and pass through for downstream processing
+                    // PRO data contributes to patient engagement metrics but doesn't update vitals/labs/meds
+                    LOG.debug("Patient-reported event for patientId={}, recording for context", patientId);
+                    break;
 
-            case "PATIENT_REPORTED":
-                // V4: Record event and pass through for downstream processing
-                // PRO data contributes to patient engagement metrics but doesn't update vitals/labs/meds
-                LOG.debug("Patient-reported event for patientId={}, recording for context", patientId);
-                break;
+                case "CLINICAL_DOCUMENT":
+                    // V4: Record event and pass through for downstream NLP processing
+                    // Documents contribute to patient narrative but don't update structured clinical state
+                    LOG.debug("Clinical document event for patientId={}, recording for context", patientId);
+                    break;
 
-            case "CLINICAL_DOCUMENT":
-                // V4: Record event and pass through for downstream NLP processing
-                // Documents contribute to patient narrative but don't update structured clinical state
-                LOG.debug("Clinical document event for patientId={}, recording for context", patientId);
-                break;
+                default:
+                    LOG.warn("Unknown event type: {} for patientId={}", event.getEventType(), patientId);
+                    return;
+            }
 
-            default:
-                LOG.warn("Unknown event type: {} for patientId={}", event.getEventType(), patientId);
-                return;
+            // Only count successfully processed events (not DLQ'd or unknown)
+            state.recordEvent(event.getEventType());
+
+        } catch (Exception e) {
+            LOG.error("Failed to process {} event for patientId={}: {}", event.getEventType(), patientId, e.getMessage());
+            ctx.output(DLQ_TAG, event);
+            return;  // Don't emit failed events downstream
         }
 
         // Update state timestamp

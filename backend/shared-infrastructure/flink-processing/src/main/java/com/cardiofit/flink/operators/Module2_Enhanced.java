@@ -1820,10 +1820,16 @@ public class Module2_Enhanced {
                 .uid("canonical-to-generic-converter");
 
         // Step 3 & 4: Key by patientId and apply PatientContextAggregator
-        DataStream<EnrichedPatientContext> aggregatedContext = genericEvents
+        // Use SingleOutputStreamOperator to access DLQ side-output
+        org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator<EnrichedPatientContext> aggregatedContext = genericEvents
                 .keyBy(GenericEvent::getPatientId)
                 .process(new PatientContextAggregator())
                 .uid("unified-patient-context-aggregator");
+
+        // DLQ: Capture failed events from aggregator
+        aggregatedContext.getSideOutput(PatientContextAggregator.DLQ_TAG)
+                .sinkTo(createDlqSink("module2-dlq.v1"))
+                .uid("module2-dlq-sink");
 
         // Step 4.5: FHIR & Neo4j Enrichment (Lazy Enrichment Pattern)
         // This step enriches patient context with FHIR data (demographics, conditions, medications)
@@ -2253,6 +2259,41 @@ public class Module2_Enhanced {
      * Create Kafka sink for EnrichedPatientContext
      * Outputs to clinical-patterns.v1 topic (same as original pipeline)
      */
+    private static KafkaSink<GenericEvent> createDlqSink(String topic) {
+        String kafkaBootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092");
+
+        return org.apache.flink.connector.kafka.sink.KafkaSink.<GenericEvent>builder()
+                .setBootstrapServers(kafkaBootstrapServers)
+                .setRecordSerializer(
+                        org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema.builder()
+                                .setTopic(topic)
+                                .setValueSerializationSchema(new SafeGenericEventSerializer())
+                                .build()
+                )
+                .setDeliveryGuarantee(org.apache.flink.connector.base.DeliveryGuarantee.AT_LEAST_ONCE)
+                .build();
+    }
+
+    private static class SafeGenericEventSerializer implements org.apache.flink.api.common.serialization.SerializationSchema<GenericEvent> {
+        private static final ObjectMapper MAPPER = new ObjectMapper();
+        static {
+            MAPPER.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(GenericEvent event) {
+            try {
+                return MAPPER.writeValueAsBytes(event);
+            } catch (Exception e) {
+                // For DLQ, return a best-effort JSON with error info rather than throwing
+                String fallback = String.format("{\"error\":\"serialization_failed\",\"patientId\":\"%s\",\"eventType\":\"%s\"}",
+                        event != null ? event.getPatientId() : "null",
+                        event != null ? event.getEventType() : "null");
+                return fallback.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+    }
+
     private static KafkaSink<EnrichedPatientContext> createEnrichedPatientContextSink() {
         String kafkaBootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092");
 
