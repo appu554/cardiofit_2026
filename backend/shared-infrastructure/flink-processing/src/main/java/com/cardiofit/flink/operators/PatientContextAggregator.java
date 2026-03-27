@@ -76,9 +76,27 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
     public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
         super.open(openContext);
 
-        // Initialize state descriptor for RocksDB storage
+        // Initialize state descriptor for RocksDB storage with 7-day TTL
+        // Clinical justification: 7 days covers readmission correlation window
+        // (CMS 30-day readmission metric uses initial events, not full 30-day state)
+        // and ensures state cleanup for inactive patients.
+        //
+        // SCOPE CAVEAT: Flink keyed state is for acute/subacute monitoring windows,
+        // NOT longitudinal patient records. FHIR store (Google Healthcare API) and
+        // KB-20 Patient Profile own the longitudinal view. If a patient returns after
+        // TTL expiry, enrichment re-fetches from FHIR/Neo4j (lazy enrichment pattern
+        // in PatientContextEnricher handles this automatically).
         ValueStateDescriptor<PatientContextState> stateDescriptor =
                 new ValueStateDescriptor<>("patientContext", PatientContextState.class);
+
+        org.apache.flink.api.common.state.StateTtlConfig ttlConfig =
+                org.apache.flink.api.common.state.StateTtlConfig
+                        .newBuilder(java.time.Duration.ofDays(7))
+                        .setUpdateType(org.apache.flink.api.common.state.StateTtlConfig.UpdateType.OnReadAndWrite)
+                        .setStateVisibility(org.apache.flink.api.common.state.StateTtlConfig.StateVisibility.NeverReturnExpired)
+                        .build();
+        stateDescriptor.enableTimeToLive(ttlConfig);
+
         patientState = getRuntimeContext().getState(stateDescriptor);
 
         // Initialize JSON mapper for payload conversion
