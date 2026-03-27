@@ -122,6 +122,18 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
                 checkMedicationInteractions(state);
                 break;
 
+            case "PATIENT_REPORTED":
+                // V4: Record event and pass through for downstream processing
+                // PRO data contributes to patient engagement metrics but doesn't update vitals/labs/meds
+                LOG.debug("Patient-reported event for patientId={}, recording for context", patientId);
+                break;
+
+            case "CLINICAL_DOCUMENT":
+                // V4: Record event and pass through for downstream NLP processing
+                // Documents contribute to patient narrative but don't update structured clinical state
+                LOG.debug("Clinical document event for patientId={}, recording for context", patientId);
+                break;
+
             default:
                 LOG.warn("Unknown event type: {} for patientId={}", event.getEventType(), patientId);
                 return;

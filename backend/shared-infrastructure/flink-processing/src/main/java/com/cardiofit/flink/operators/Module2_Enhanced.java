@@ -2004,6 +2004,28 @@ public class Module2_Enhanced {
                         }
                         break;
 
+                    case PATIENT_REPORTED:
+                        // V4: Patient-reported outcomes (PROs) — symptoms, questionnaires, lifestyle data
+                        GenericEvent proEvent = new GenericEvent();
+                        proEvent.setEventType("PATIENT_REPORTED");
+                        proEvent.setPatientId(patientId);
+                        proEvent.setEventTime(eventTime);
+                        proEvent.setPayload(payload);  // Pass raw payload — PRO structure varies
+                        out.collect(proEvent);
+                        LOG.debug("Emitted PATIENT_REPORTED GenericEvent from flat payload for patient {}", patientId);
+                        break;
+
+                    case CLINICAL_DOCUMENT:
+                        // V4: Clinical documents (discharge summaries, notes, imaging reports)
+                        GenericEvent docEvent = new GenericEvent();
+                        docEvent.setEventType("CLINICAL_DOCUMENT");
+                        docEvent.setPatientId(patientId);
+                        docEvent.setEventTime(eventTime);
+                        docEvent.setPayload(payload);  // Pass raw payload — document structure varies
+                        out.collect(docEvent);
+                        LOG.debug("Emitted CLINICAL_DOCUMENT GenericEvent from flat payload for patient {}", patientId);
+                        break;
+
                     default:
                         LOG.warn("Unsupported eventType {} for flat payload conversion", eventType);
                         break;
