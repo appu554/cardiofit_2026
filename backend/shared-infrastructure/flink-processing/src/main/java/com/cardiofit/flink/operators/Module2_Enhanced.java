@@ -1044,7 +1044,11 @@ public class Module2_Enhanced {
 
         return env.fromSource(
             kafkaSource,
-            org.apache.flink.api.common.eventtime.WatermarkStrategy.noWatermarks(),
+            org.apache.flink.api.common.eventtime.WatermarkStrategy
+                .<CanonicalEvent>forBoundedOutOfOrderness(java.time.Duration.ofMinutes(5))
+                .withTimestampAssigner((event, recordTimestamp) ->
+                    event.getEventTime() > 0 ? event.getEventTime() : recordTimestamp)
+                .withIdleness(java.time.Duration.ofMinutes(5)),
             "Kafka-CanonicalEvents-Source"
         );
     }
