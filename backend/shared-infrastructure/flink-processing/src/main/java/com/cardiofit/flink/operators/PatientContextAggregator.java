@@ -164,7 +164,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         patientState.update(state);
 
         // DEBUG: Log alert state before emission
-        LOG.info("🚨 BEFORE EMISSION - PatientId: {}, AlertCount: {}, Alerts: {}",
+        LOG.debug("🚨 BEFORE EMISSION - PatientId: {}, AlertCount: {}, Alerts: {}",
                  patientId, state.getActiveAlerts().size(), state.getActiveAlerts());
 
         // Emit enriched context for downstream processing
@@ -190,7 +190,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         long latencyMs = processingTime - eventTime;
 
         if (latencyMs > 60000) { // > 1 minute
-            LOG.warn("⚠️ HIGH LATENCY DETECTED: {}ms ({} seconds) for patient {} | " +
+            LOG.debug("⚠️ HIGH LATENCY DETECTED: {}ms ({} seconds) for patient {} | " +
                      "EventTime: {} | ProcessingTime: {} | EventType: {} | " +
                      "Possible causes: clock skew, event replay, or system backpressure",
                      latencyMs, latencyMs / 1000, patientId,
@@ -200,7 +200,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
 
         out.collect(enrichedContext);
 
-        LOG.info("✅ AFTER EMISSION - Emitted context with {} alerts for patient {}",
+        LOG.debug("✅ AFTER EMISSION - Emitted context with {} alerts for patient {}",
                  state.getActiveAlerts().size(), patientId);
         LOG.debug("Processed {} event for patientId={}, eventCount={}, alertsCount={}",
                 event.getEventType(), patientId, state.getEventCount(), state.getActiveAlerts().size());
@@ -222,7 +222,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             Map<String, Object> vitalsMap = vitals.toVitalsMap();
 
             // DEBUG: Log vitals extraction
-            LOG.info("🔍 DEBUG - VitalsPayload: HR={}, SBP={}, RR={}, Temp={}, vitalsMap.size()={}, keys={}",
+            LOG.debug("🔍 DEBUG - VitalsPayload: HR={}, SBP={}, RR={}, Temp={}, vitalsMap.size()={}, keys={}",
                 vitals.getHeartRate(), vitals.getSystolicBP(), vitals.getRespiratoryRate(),
                 vitals.getTemperature(), vitalsMap.size(), vitalsMap.keySet());
 
@@ -230,7 +230,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             state.getLatestVitals().putAll(vitalsMap);
 
             // DEBUG: Log state after update
-            LOG.info("🔍 DEBUG - After putAll: latestVitals.size()={}, keys={}",
+            LOG.debug("🔍 DEBUG - After putAll: latestVitals.size()={}, keys={}",
                 state.getLatestVitals().size(), state.getLatestVitals().keySet());
 
             // Store additional metadata
@@ -260,7 +260,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         try {
             // DEBUG: Log raw payload to understand structure
             Object rawPayload = event.getPayload();
-            LOG.info("RAW LAB PAYLOAD TYPE: {} | CONTENT: {}",
+            LOG.debug("RAW LAB PAYLOAD TYPE: {} | CONTENT: {}",
                      rawPayload != null ? rawPayload.getClass().getName() : "null",
                      rawPayload);
 
@@ -272,7 +272,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             }
 
             // DEBUG: Log extracted values
-            LOG.info("EXTRACTED LAB: loincCode={}, labName={}, value={}, unit={}",
+            LOG.debug("EXTRACTED LAB: loincCode={}, labName={}, value={}, unit={}",
                      labPayload.getLoincCode(), labPayload.getLabName(),
                      labPayload.getValue(), labPayload.getUnit());
 
@@ -312,7 +312,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
      * Process medication event and update active medications
      */
     private void processMedication(PatientContextState state, GenericEvent event) {
-        LOG.warn("🔵 PROCESSING MEDICATION for patient {} | EventType: {} | Payload type: {}",
+        LOG.debug("🔵 PROCESSING MEDICATION for patient {} | EventType: {} | Payload type: {}",
                  state.getPatientId(), event.getEventType(),
                  event.getPayload() != null ? event.getPayload().getClass().getName() : "null");
 
@@ -320,11 +320,11 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             // Extract medication payload
             MedicationPayload medPayload = extractPayload(event, MedicationPayload.class);
             if (medPayload == null) {
-                LOG.warn("❌ Failed to extract MedicationPayload from event");
+                LOG.debug("❌ Failed to extract MedicationPayload from event");
                 return;
             }
 
-            LOG.warn("✅ MedicationPayload extracted: rxNormCode={}, medicationName={}, dose={} {}",
+            LOG.debug("✅ MedicationPayload extracted: rxNormCode={}, medicationName={}, dose={} {}",
                      medPayload.getRxNormCode(), medPayload.getMedicationName(),
                      medPayload.getDose(), medPayload.getDoseUnit());
 
@@ -358,7 +358,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             Medication medication = medPayload.toMedication();
             state.getActiveMedications().put(medKey, medication);
 
-            LOG.warn("✅ MEDICATION ADDED TO MAP for patient {}: key='{}', medication='{}', dose={} {}, activeMedicationsSize={}",
+            LOG.debug("✅ MEDICATION ADDED TO MAP for patient {}: key='{}', medication='{}', dose={} {}, activeMedicationsSize={}",
                     state.getPatientId(),
                     medKey,
                     medPayload.getMedicationName(),
@@ -422,13 +422,13 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         checkLabValueWithContext(labs, "2524-7", LACTATE_THRESHOLD, true, state.getPatientId())
                 .ifPresent(alert -> {
                     indicators.setElevatedLactate(true);
-                    LOG.info("🚨 LACTATE ALERT GENERATED: {}", alert.getMessage());
+                    LOG.debug("🚨 LACTATE ALERT GENERATED: {}", alert.getMessage());
 
                     // Check for severe elevation
                     LabResult lactate = labs.get("2524-7");
                     if (lactate != null && lactate.getValue() != null && lactate.getValue() >= LACTATE_SEVERE_THRESHOLD) {
                         indicators.setSeverelyElevatedLactate(true);
-                        LOG.info("⚠️  SEVERELY ELEVATED LACTATE detected");
+                        LOG.debug("⚠️  SEVERELY ELEVATED LACTATE detected");
                     }
 
                     state.addAlert(alert);
@@ -942,16 +942,16 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
     private void checkLabValue(Map<String, LabResult> labs, String loincCode, double threshold, boolean checkHigh,
                                 java.util.function.Consumer<Boolean> callback) {
         LabResult lab = labs.get(loincCode);
-        LOG.info("🔬 checkLabValue: loincCode={}, threshold={}, checkHigh={}, labFound={}, labValue={}",
+        LOG.debug("🔬 checkLabValue: loincCode={}, threshold={}, checkHigh={}, labFound={}, labValue={}",
                  loincCode, threshold, checkHigh, lab != null, lab != null ? lab.getValue() : "null");
 
         if (lab != null && lab.getValue() != null) {
             boolean abnormal = checkHigh ? lab.getValue() > threshold : lab.getValue() < threshold;
-            LOG.info("🧪 Lab {} abnormal check: value={} {} threshold={} → result={}",
+            LOG.debug("🧪 Lab {} abnormal check: value={} {} threshold={} → result={}",
                      loincCode, lab.getValue(), checkHigh ? ">" : "<", threshold, abnormal);
             callback.accept(abnormal);
         } else {
-            LOG.warn("⚠️  Lab {} not found or has null value in recentLabs map", loincCode);
+            LOG.debug("⚠️  Lab {} not found or has null value in recentLabs map", loincCode);
         }
     }
 
