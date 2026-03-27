@@ -2,7 +2,9 @@ package com.cardiofit.flink.models.protocol;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Simplified Protocol for BroadcastState (Phase 2 CDC Integration)
@@ -41,11 +43,29 @@ public class SimplifiedProtocol implements Serializable {
     private double baseConfidence;
     private double activationThreshold;
 
+    /**
+     * Flattened trigger conditions for Phase 1 matching.
+     * Maps parameter name → threshold value for simple range checks.
+     */
+    private Map<String, Double> triggerThresholds;
+
+    /**
+     * Required chronic conditions (ICD-10 codes) for protocol activation.
+     */
+    private List<String> requiredConditionCodes;
+
+    /**
+     * Minimum acuity score threshold for protocol activation.
+     */
+    private Double minAcuityThreshold;
+
     public SimplifiedProtocol() {
         this.contraindications = new ArrayList<>();
         this.triggerParameters = new ArrayList<>();
         this.baseConfidence = 0.85;
         this.activationThreshold = 0.70;
+        this.triggerThresholds = new HashMap<>();
+        this.requiredConditionCodes = new ArrayList<>();
     }
 
     /**
@@ -193,6 +213,30 @@ public class SimplifiedProtocol implements Serializable {
 
     public void setActivationThreshold(double activationThreshold) {
         this.activationThreshold = activationThreshold;
+    }
+
+    public Map<String, Double> getTriggerThresholds() {
+        return triggerThresholds;
+    }
+
+    public void setTriggerThresholds(Map<String, Double> triggerThresholds) {
+        this.triggerThresholds = triggerThresholds;
+    }
+
+    public List<String> getRequiredConditionCodes() {
+        return requiredConditionCodes;
+    }
+
+    public void setRequiredConditionCodes(List<String> requiredConditionCodes) {
+        this.requiredConditionCodes = requiredConditionCodes;
+    }
+
+    public Double getMinAcuityThreshold() {
+        return minAcuityThreshold;
+    }
+
+    public void setMinAcuityThreshold(Double minAcuityThreshold) {
+        this.minAcuityThreshold = minAcuityThreshold;
     }
 
     @Override
