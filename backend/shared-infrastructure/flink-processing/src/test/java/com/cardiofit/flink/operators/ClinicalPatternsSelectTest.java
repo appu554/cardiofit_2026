@@ -1,6 +1,7 @@
 package com.cardiofit.flink.operators;
 
 import com.cardiofit.flink.builders.Module4TestBuilder;
+import com.cardiofit.flink.models.EnrichedEvent;
 import com.cardiofit.flink.models.PatternEvent;
 import com.cardiofit.flink.models.SemanticEvent;
 import com.cardiofit.flink.patterns.ClinicalPatterns;
@@ -203,6 +204,59 @@ public class ClinicalPatternsSelectTest {
         assertEquals(0.88, result.getConfidence(), 0.01);
         // Not full compliance → NON_COMPLIANT status
         assertEquals("NON_COMPLIANT", result.getPatternDetails().get("compliance_status"));
+    }
+
+    // ── AKIPatternSelectFunction ──────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void aki_stage1_producesHighSeverity() throws Exception {
+        var fn = new ClinicalPatterns.AKIPatternSelectFunction();
+        Map<String, List<EnrichedEvent>> matchMap = Module4TestBuilder.akiMatchMap("AKI-001", 1.8);
+        PatternEvent result = fn.select(matchMap);
+
+        assertEquals("ACUTE_KIDNEY_INJURY", result.getPatternType());
+        assertEquals("AKI-001", result.getPatientId());
+        // ratio = 1.8 / 1.0 = 1.8 → >= 1.5 → Stage 1 → HIGH
+        assertEquals("HIGH", result.getSeverity());
+        assertEquals(1, (int) result.getPatternDetails().get("aki_stage"));
+        assertEquals(1.0, (double) result.getPatternDetails().get("baseline_creatinine"), 0.01);
+        assertEquals(1.8, (double) result.getPatternDetails().get("elevated_creatinine"), 0.01);
+        assertEquals(1.8, (double) result.getPatternDetails().get("creatinine_ratio"), 0.01);
+        assertEquals(3, result.getInvolvedEvents().size());
+
+        // Risk factors: hypotension=true, onNephrotoxicMeds=true
+        List<String> riskFactors = (List<String>) result.getPatternDetails().get("risk_factors");
+        assertTrue(riskFactors.contains("HYPOTENSION"));
+        assertTrue(riskFactors.contains("NEPHROTOXIC_MEDICATIONS"));
+
+        // Stage 1 actions: common set only
+        assertTrue(result.getRecommendedActions().contains("REPEAT_CREATININE_MEASUREMENT"));
+        assertTrue(result.getRecommendedActions().contains("REVIEW_MEDICATION_LIST"));
+        assertTrue(result.getRecommendedActions().contains("ASSESS_FLUID_STATUS"));
+        // Stage 2+ actions should NOT be present
+        assertFalse(result.getRecommendedActions().contains("NEPHROLOGY_CONSULTATION"));
+        assertFalse(result.getRecommendedActions().contains("URGENT_NEPHROLOGY_CONSULT"));
+    }
+
+    @Test
+    void aki_stage3_producesCriticalSeverity() throws Exception {
+        var fn = new ClinicalPatterns.AKIPatternSelectFunction();
+        // ratio = 3.5 / 1.0 = 3.5 → >= 3.0 → Stage 3 → CRITICAL
+        Map<String, List<EnrichedEvent>> matchMap = Module4TestBuilder.akiMatchMap("AKI-002", 3.5);
+        PatternEvent result = fn.select(matchMap);
+
+        assertEquals("CRITICAL", result.getSeverity());
+        assertEquals(3, (int) result.getPatternDetails().get("aki_stage"));
+        assertEquals(3.5, (double) result.getPatternDetails().get("creatinine_ratio"), 0.01);
+
+        // Stage 3 adds urgent nephrology + dialysis assessment + central line
+        assertTrue(result.getRecommendedActions().contains("URGENT_NEPHROLOGY_CONSULT"));
+        assertTrue(result.getRecommendedActions().contains("ASSESS_FOR_DIALYSIS_INDICATION"));
+        assertTrue(result.getRecommendedActions().contains("CENTRAL_LINE_PLACEMENT"));
+        // Stage 2 actions also present at stage 3
+        assertTrue(result.getRecommendedActions().contains("NEPHROLOGY_CONSULTATION"));
+        assertTrue(result.getRecommendedActions().contains("MONITOR_URINE_OUTPUT"));
     }
 
     // ── Helper: build drug-lab match map with correct "medicationData" key ──

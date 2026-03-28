@@ -126,9 +126,8 @@ public class Module4_PatternDetection {
         // DEPRECATED: Direct semantic events source (bypasses Module 3)
         // DataStream<SemanticEvent> semanticEvents = createSemanticEventSource(env);
 
-        // DEPRECATED: Direct enriched events from Module 2
-        // Use CDS events which contain the full patient state including enriched context
-        // DataStream<EnrichedEvent> enrichedEvents = createEnrichedEventSource(env);
+        // Enriched events from Module 2 — required for AKI pattern detection (KDIGO criteria)
+        DataStream<EnrichedEvent> enrichedEvents = createEnrichedEventSource(env);
 
         DataStream<SemanticEvent> loggedSemanticEvents = semanticEvents
             .process(new org.apache.flink.streaming.api.functions.ProcessFunction<SemanticEvent, SemanticEvent>() {
@@ -418,8 +417,7 @@ public class Module4_PatternDetection {
         PatternStream<SemanticEvent> crossDomainPatterns = detectCrossDomainDeteriorationPatterns(keyedSemanticEvents);
 
         // Acute Kidney Injury detection pattern (KDIGO criteria) - uses EnrichedEvent with RiskIndicators
-        // TODO: Extract risk indicators from CDS event for AKI pattern detection
-        // PatternStream<EnrichedEvent> akiPatterns = ClinicalPatterns.detectAKIPattern(enrichedEvents);
+        PatternStream<EnrichedEvent> akiPatterns = ClinicalPatterns.detectAKIPattern(enrichedEvents);
 
         // Medication adherence patterns
         PatternStream<SemanticEvent> medicationPatterns = detectMedicationPatterns(keyedSemanticEvents);
@@ -484,10 +482,9 @@ public class Module4_PatternDetection {
             .select(new PathwayCompliancePatternSelectFunction())
             .uid("Pathway Compliance Events");
 
-        // TODO: Re-enable AKI pattern detection once risk indicators are extracted from CDS events
-        // DataStream<PatternEvent> akiEvents = akiPatterns
-        //     .select(new ClinicalPatterns.AKIPatternSelectFunction())
-        //     .uid("AKI Pattern Events");
+        DataStream<PatternEvent> akiEvents = akiPatterns
+            .select(new ClinicalPatterns.AKIPatternSelectFunction())
+            .uid("AKI Pattern Events");
 
         // NEW: Convert advanced CEP patterns to pattern events
         DataStream<PatternEvent> sepsisEvents = sepsisPatterns
@@ -529,7 +526,7 @@ public class Module4_PatternDetection {
             .union(medicationEvents)
             .union(vitalTrendEvents)
             .union(pathwayEvents)
-            // .union(akiEvents)  // TODO: Re-enable when AKI pattern is fixed
+            .union(akiEvents)
             .union(trendAnalysis)
             .union(anomalyDetection)
             .union(protocolMonitoring)
