@@ -26,7 +26,9 @@ import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.util.OutputTag;
 import org.apache.flink.streaming.api.functions.co.KeyedBroadcastProcessFunction;
 import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
@@ -64,6 +66,9 @@ import java.util.stream.Collectors;
  */
 public class Module3_ComprehensiveCDS_WithCDC {
     private static final Logger LOG = LoggerFactory.getLogger(Module3_ComprehensiveCDS_WithCDC.class);
+
+    public static final OutputTag<EnrichedPatientContext> DLQ_OUTPUT_TAG =
+            new OutputTag<EnrichedPatientContext>("dlq-cds-events"){};
 
     // BroadcastStateDescriptor for protocol hot-swapping
     // Uses SimplifiedProtocol (flattened version) to avoid StackOverflowError from nested structures
@@ -159,7 +164,7 @@ public class Module3_ComprehensiveCDS_WithCDC {
         LOG.info("KB-4/KB-5/KB-7 BroadcastStreams initialized for downstream consumption");
 
         // Connect clinical events with protocol CDC broadcast stream
-        DataStream<CDSEvent> comprehensiveEvents = enrichedPatientContexts
+        SingleOutputStreamOperator<CDSEvent> comprehensiveEvents = enrichedPatientContexts
                 .keyBy(EnrichedPatientContext::getPatientId)
                 .connect(protocolBroadcastStream)
                 .process(new CDSProcessorWithCDC())
@@ -170,6 +175,12 @@ public class Module3_ComprehensiveCDS_WithCDC {
         comprehensiveEvents.sinkTo(createCDSEventsSink())
                 .uid("comprehensive-cds-events-cdc-sink")
                 .name("CDS Events Sink (CDC-enabled)");
+
+        // DLQ sink for failed CDS events
+        comprehensiveEvents.getSideOutput(DLQ_OUTPUT_TAG)
+                .sinkTo(createDLQSink())
+                .uid("module3-dlq-sink")
+                .name("Module 3 CDS DLQ Sink");
 
         LOG.info("CDC BroadcastStream pipeline initialized successfully");
     }
@@ -441,68 +452,80 @@ public class Module3_ComprehensiveCDS_WithCDC {
 
             List<CDSPhaseResult> allResults = new ArrayList<>();
 
-            // Phase 1: Protocol Matching
-            CDSPhaseResult phase1 = Module3PhaseExecutor.executePhase1(context, protocols);
-            allResults.add(phase1);
-            cdsEvent.addPhaseResult(phase1);
+            try {
+                // Phase 1: Protocol Matching
+                CDSPhaseResult phase1 = Module3PhaseExecutor.executePhase1(context, protocols);
+                allResults.add(phase1);
+                cdsEvent.addPhaseResult(phase1);
 
-            @SuppressWarnings("unchecked")
-            List<String> matchedProtocolIds = phase1.isActive()
-                    ? (List<String>) phase1.getDetail("matchedProtocolIds")
-                    : Collections.emptyList();
+                @SuppressWarnings("unchecked")
+                List<String> matchedProtocolIds = phase1.isActive()
+                        ? (List<String>) phase1.getDetail("matchedProtocolIds")
+                        : Collections.emptyList();
 
-            // Phase 2: Clinical Scoring + MHRI
-            CDSPhaseResult phase2 = Module3PhaseExecutor.executePhase2(context);
-            allResults.add(phase2);
-            cdsEvent.addPhaseResult(phase2);
+                // Phase 2: Clinical Scoring + MHRI
+                CDSPhaseResult phase2 = Module3PhaseExecutor.executePhase2(context);
+                allResults.add(phase2);
+                cdsEvent.addPhaseResult(phase2);
 
-            // Phase 5: Guideline Concordance
-            CDSPhaseResult phase5 = Module3PhaseExecutor.executePhase5(
-                    context, matchedProtocolIds, protocols);
-            allResults.add(phase5);
-            cdsEvent.addPhaseResult(phase5);
+                // Phase 4: Diagnostic Tests
+                CDSPhaseResult phase4 = Module3PhaseExecutor.executePhase4(context);
+                allResults.add(phase4);
+                cdsEvent.addPhaseResult(phase4);
 
-            // Phase 6: Medication Rules
-            CDSPhaseResult phase6 = Module3PhaseExecutor.executePhase6(context);
-            allResults.add(phase6);
-            cdsEvent.addPhaseResult(phase6);
+                // Phase 5: Guideline Concordance
+                CDSPhaseResult phase5 = Module3PhaseExecutor.executePhase5(
+                        context, matchedProtocolIds, protocols);
+                allResults.add(phase5);
+                cdsEvent.addPhaseResult(phase5);
 
-            // Phase 7: Safety Checks
-            CDSPhaseResult phase7 = Module3PhaseExecutor.executePhase7(context);
-            allResults.add(phase7);
-            cdsEvent.addPhaseResult(phase7);
+                // Phase 6: Medication Rules
+                CDSPhaseResult phase6 = Module3PhaseExecutor.executePhase6(context);
+                allResults.add(phase6);
+                cdsEvent.addPhaseResult(phase6);
 
-            // Phase 8: Output Composition (mutates cdsEvent)
-            Module3PhaseExecutor.executePhase8(cdsEvent, allResults);
+                // Phase 7: Safety Checks
+                CDSPhaseResult phase7 = Module3PhaseExecutor.executePhase7(context);
+                allResults.add(phase7);
+                cdsEvent.addPhaseResult(phase7);
 
-            // Update patient CDS state
-            if (cdsEvent.getMhriScore() != null && cdsEvent.getMhriScore().getComposite() != null) {
-                cdsState.addMHRI(cdsEvent.getMhriScore().getComposite());
+                // Phase 8: Output Composition (mutates cdsEvent)
+                Module3PhaseExecutor.executePhase8(cdsEvent, allResults);
+
+                // Update patient CDS state
+                if (cdsEvent.getMhriScore() != null && cdsEvent.getMhriScore().getComposite() != null) {
+                    cdsState.addMHRI(cdsEvent.getMhriScore().getComposite());
+                }
+                cdsState.setActiveProtocols(new HashSet<>(matchedProtocolIds != null
+                        ? matchedProtocolIds : Collections.emptyList()));
+                cdsState.setLastProcessedTime(System.currentTimeMillis());
+                cdsState.setEventsSinceLastCDS(cdsState.getEventsSinceLastCDS() + 1);
+                patientCDSState.update(cdsState);
+
+                // Per-phase latency summary
+                long totalPhaseMs = 0;
+                for (CDSPhaseResult pr : allResults) {
+                    totalPhaseMs += pr.getDurationMs();
+                }
+                LOG.debug("CDS latency breakdown: patient={} totalPhaseMs={} phases={}",
+                        context.getPatientId(), totalPhaseMs,
+                        allResults.stream()
+                                .map(pr -> pr.getPhaseName() + "=" + pr.getDurationMs() + "ms")
+                                .collect(Collectors.joining(", ")));
+
+                LOG.info("CDS complete: patient={} protocols={} mhri={} safety={}",
+                        context.getPatientId(),
+                        cdsEvent.getProtocolsMatched(),
+                        cdsEvent.getMhriScore() != null ? cdsEvent.getMhriScore().getComposite() : "null",
+                        cdsEvent.getSafetyAlerts().size());
+
+                out.collect(cdsEvent);
+
+            } catch (Exception e) {
+                LOG.error("CDS processing failed for patient={}, routing to DLQ: {}",
+                        context.getPatientId(), e.getMessage(), e);
+                ctx.output(DLQ_OUTPUT_TAG, context);
             }
-            cdsState.setActiveProtocols(new HashSet<>(matchedProtocolIds != null
-                    ? matchedProtocolIds : Collections.emptyList()));
-            cdsState.setLastProcessedTime(System.currentTimeMillis());
-            cdsState.setEventsSinceLastCDS(cdsState.getEventsSinceLastCDS() + 1);
-            patientCDSState.update(cdsState);
-
-            // Per-phase latency summary
-            long totalPhaseMs = 0;
-            for (CDSPhaseResult pr : allResults) {
-                totalPhaseMs += pr.getDurationMs();
-            }
-            LOG.debug("CDS latency breakdown: patient={} totalPhaseMs={} phases={}",
-                    context.getPatientId(), totalPhaseMs,
-                    allResults.stream()
-                            .map(pr -> pr.getPhaseName() + "=" + pr.getDurationMs() + "ms")
-                            .collect(Collectors.joining(", ")));
-
-            LOG.info("CDS complete: patient={} protocols={} mhri={} safety={}",
-                    context.getPatientId(),
-                    cdsEvent.getProtocolsMatched(),
-                    cdsEvent.getMhriScore() != null ? cdsEvent.getMhriScore().getComposite() : "null",
-                    cdsEvent.getSafetyAlerts().size());
-
-            out.collect(cdsEvent);
         }
 
         /**
@@ -626,6 +649,38 @@ public class Module3_ComprehensiveCDS_WithCDC {
                 .setTransactionalIdPrefix("comprehensive-cds-cdc-tx")
                 .setKafkaProducerConfig(producerConfig)
                 .build();
+    }
+
+    private static KafkaSink<EnrichedPatientContext> createDLQSink() {
+        return KafkaSink.<EnrichedPatientContext>builder()
+                .setBootstrapServers(getBootstrapServers())
+                .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                        .setTopic(getTopicName("MODULE3_DLQ_TOPIC", "module3-cds-dlq.v1"))
+                        .setKeySerializationSchema((EnrichedPatientContext event) ->
+                                event.getPatientId() != null ? event.getPatientId().getBytes() : new byte[0])
+                        .setValueSerializationSchema(new DLQSerializer())
+                        .build())
+                .build();
+    }
+
+    public static class DLQSerializer implements SerializationSchema<EnrichedPatientContext> {
+        private static final long serialVersionUID = 1L;
+        private transient ObjectMapper objectMapper;
+
+        @Override
+        public byte[] serialize(EnrichedPatientContext element) {
+            if (objectMapper == null) {
+                objectMapper = new ObjectMapper();
+                objectMapper.registerModule(new JavaTimeModule());
+            }
+            try {
+                return objectMapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                LOG.error("Failed to serialize DLQ event for patient {}: {}",
+                        element.getPatientId(), e.getMessage());
+                return new byte[0]; // DLQ serialization failure is non-critical
+            }
+        }
     }
 
     private static String getBootstrapServers() {
