@@ -1,5 +1,6 @@
 package com.cardiofit.flink.models;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
@@ -8,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_EMPTY)
 public class CDSEvent implements Serializable {
     private static final long serialVersionUID = 2L;
@@ -112,7 +114,10 @@ public class CDSEvent implements Serializable {
     @Override
     public String toString() {
         return String.format("CDSEvent{patient='%s', type='%s', phases=%d, recs=%d, safety=%d, mhri=%s}",
-                patientId, eventType, phaseResults.size(), recommendations.size(),
-                safetyAlerts.size(), mhriScore != null ? mhriScore.getComposite() : "null");
+                patientId, eventType,
+                phaseResults != null ? phaseResults.size() : 0,
+                recommendations != null ? recommendations.size() : 0,
+                safetyAlerts != null ? safetyAlerts.size() : 0,
+                mhriScore != null ? mhriScore.getComposite() : "null");
     }
 }

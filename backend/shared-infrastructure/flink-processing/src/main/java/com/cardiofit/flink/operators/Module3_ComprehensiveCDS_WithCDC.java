@@ -309,7 +309,11 @@ public class Module3_ComprehensiveCDS_WithCDC {
                 initialized = true;
                 LOG.info("=== CDS PROCESSOR INITIALIZED (Protocols will be loaded from CDC BroadcastState) ===");
 
-                // Patient CDS state with 7-day TTL
+                // Patient CDS state with 7-day TTL.
+                // OnCreateAndWrite: TTL resets on state mutations (not reads).
+                // This is correct for Flink — processElement always writes patientCDSState.update(),
+                // so TTL resets on every event. OnReadAndWrite would be wasteful here since
+                // reads without writes don't occur in this operator.
                 StateTtlConfig ttlConfig = StateTtlConfig.newBuilder(Duration.ofDays(7))
                         .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
                         .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
@@ -350,7 +354,7 @@ public class Module3_ComprehensiveCDS_WithCDC {
             }
 
             String operation = payload.getOperation();
-            LOG.info("📡 CDC EVENT: op={}, source={}.{}, ts={}",
+            LOG.info("CDC EVENT: op={}, source={}.{}, ts={}",
                     operation,
                     payload.getSource() != null ? payload.getSource().getDatabase() : "unknown",
                     payload.getSource() != null ? payload.getSource().getTable() : "unknown",
@@ -362,7 +366,7 @@ public class Module3_ComprehensiveCDS_WithCDC {
                 if (before != null && before.getProtocolId() != null) {
                     String protocolId = before.getProtocolId();
                     protocolState.remove(protocolId);
-                    LOG.info("🗑️ DELETED Protocol from BroadcastState: {}", protocolId);
+                    LOG.info("DELETED protocol from BroadcastState: {}", protocolId);
                 }
 
             } else {
@@ -377,7 +381,7 @@ public class Module3_ComprehensiveCDS_WithCDC {
                     // Update BroadcastState (visible to all parallel instances immediately)
                     protocolState.put(protocolId, protocol);
 
-                    LOG.info("✅ {} Protocol in BroadcastState: {} v{} | Category: {} | Specialty: {}",
+                    LOG.info("{} protocol in BroadcastState: {} v{} | Category: {} | Specialty: {}",
                             payload.isCreate() ? "CREATED" : "UPDATED",
                             protocol.getProtocolId(),
                             protocol.getVersion(),
@@ -414,7 +418,12 @@ public class Module3_ComprehensiveCDS_WithCDC {
                 protocols.put(entry.getKey(), entry.getValue());
             }
 
-            // Cold-start readiness gate
+            // Cold-start readiness gate (per-patient, not global).
+            // Each patient's ValueState starts with broadcastStateSeeded=false.
+            // It flips to true on the first event where protocolState is non-empty.
+            // NOTE: broadcastStateReady on CDSEvent reflects THIS patient's first-seen state,
+            // not whether the operator has globally received CDC events. Downstream consumers
+            // should treat broadcastStateReady=false as "protocol matching may be incomplete".
             PatientCDSState cdsState = patientCDSState.value();
             if (cdsState == null) {
                 cdsState = new PatientCDSState();
