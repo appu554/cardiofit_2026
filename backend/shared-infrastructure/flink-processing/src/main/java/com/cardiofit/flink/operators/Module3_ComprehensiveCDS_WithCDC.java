@@ -7,6 +7,9 @@ import com.cardiofit.flink.knowledgebase.*;
 import com.cardiofit.flink.knowledgebase.medications.loader.MedicationDatabaseLoader;
 import com.cardiofit.flink.loader.DiagnosticTestLoader;
 import com.cardiofit.flink.cdc.ProtocolCDCEvent;
+import com.cardiofit.flink.cdc.DrugRuleCDCEvent;
+import com.cardiofit.flink.cdc.DrugInteractionCDCEvent;
+import com.cardiofit.flink.cdc.TerminologyCDCEvent;
 import com.cardiofit.flink.cdc.DebeziumJSONDeserializer;
 import com.cardiofit.flink.models.protocol.Protocol;
 import com.cardiofit.flink.models.protocol.SimplifiedProtocol;
@@ -71,6 +74,30 @@ public class Module3_ComprehensiveCDS_WithCDC {
                     TypeInformation.of(SimplifiedProtocol.class)
             );
 
+    // KB-4: Drug dosing rules (keyed by drugId)
+    public static final MapStateDescriptor<String, String> DRUG_RULE_STATE_DESCRIPTOR =
+            new MapStateDescriptor<>(
+                    "drug-rule-broadcast-state",
+                    TypeInformation.of(String.class),
+                    TypeInformation.of(String.class)  // JSON string of DrugRuleData
+            );
+
+    // KB-5: Drug interactions (keyed by interactionId)
+    public static final MapStateDescriptor<String, String> DRUG_INTERACTION_STATE_DESCRIPTOR =
+            new MapStateDescriptor<>(
+                    "drug-interaction-broadcast-state",
+                    TypeInformation.of(String.class),
+                    TypeInformation.of(String.class)  // JSON string of InteractionData
+            );
+
+    // KB-7: Terminology (keyed by conceptCode)
+    public static final MapStateDescriptor<String, String> TERMINOLOGY_STATE_DESCRIPTOR =
+            new MapStateDescriptor<>(
+                    "terminology-broadcast-state",
+                    TypeInformation.of(String.class),
+                    TypeInformation.of(String.class)  // JSON string of TerminologyData
+            );
+
     public static void main(String[] args) throws Exception {
         LOG.info("Starting Module 3: Comprehensive CDS with CDC BroadcastStream (Phase 2)");
 
@@ -97,9 +124,28 @@ public class Module3_ComprehensiveCDS_WithCDC {
         // Stream 2: Protocol CDC events from Debezium
         DataStream<ProtocolCDCEvent> protocolCDCStream = createProtocolCDCSource(env);
 
+        // Stream 3: Drug Rule CDC events from KB-4
+        DataStream<DrugRuleCDCEvent> drugRuleCDCStream = createDrugRuleCDCSource(env);
+
+        // Stream 4: Drug Interaction CDC events from KB-5
+        DataStream<DrugInteractionCDCEvent> drugInteractionCDCStream = createDrugInteractionCDCSource(env);
+
+        // Stream 5: Terminology CDC events from KB-7
+        DataStream<TerminologyCDCEvent> terminologyCDCStream = createTerminologyCDCSource(env);
+
         // Convert Protocol CDC stream to BroadcastStream
         BroadcastStream<ProtocolCDCEvent> protocolBroadcastStream = protocolCDCStream
                 .broadcast(PROTOCOL_STATE_DESCRIPTOR);
+
+        // Broadcast KB-4, KB-5, KB-7 streams (consumed independently by downstream operators)
+        BroadcastStream<DrugRuleCDCEvent> drugRuleBroadcastStream = drugRuleCDCStream
+                .broadcast(DRUG_RULE_STATE_DESCRIPTOR);
+        BroadcastStream<DrugInteractionCDCEvent> drugInteractionBroadcastStream = drugInteractionCDCStream
+                .broadcast(DRUG_INTERACTION_STATE_DESCRIPTOR);
+        BroadcastStream<TerminologyCDCEvent> terminologyBroadcastStream = terminologyCDCStream
+                .broadcast(TERMINOLOGY_STATE_DESCRIPTOR);
+
+        LOG.info("KB-4/KB-5/KB-7 BroadcastStreams initialized for downstream consumption");
 
         // Connect clinical events with protocol CDC broadcast stream
         DataStream<CDSEvent> comprehensiveEvents = enrichedPatientContexts
@@ -135,6 +181,69 @@ public class Module3_ComprehensiveCDS_WithCDC {
                 source,
                 WatermarkStrategy.noWatermarks(),
                 "Protocol CDC Source"
+        );
+    }
+
+    /**
+     * Create Drug Rule CDC source from Kafka kb1.drug_rule_packs.changes topic (KB-4)
+     */
+    private static DataStream<DrugRuleCDCEvent> createDrugRuleCDCSource(StreamExecutionEnvironment env) {
+        LOG.info("Creating Drug Rule CDC source from kb1.drug_rule_packs.changes");
+
+        KafkaSource<DrugRuleCDCEvent> source = KafkaSource.<DrugRuleCDCEvent>builder()
+                .setBootstrapServers(getBootstrapServers())
+                .setTopics("kb1.drug_rule_packs.changes")
+                .setGroupId("module3-drug-rule-cdc-consumer")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(DebeziumJSONDeserializer.forDrugRule())
+                .build();
+
+        return env.fromSource(
+                source,
+                WatermarkStrategy.noWatermarks(),
+                "Drug Rule CDC Source (KB-4)"
+        );
+    }
+
+    /**
+     * Create Drug Interaction CDC source from Kafka kb5.drug_interactions.changes topic (KB-5)
+     */
+    private static DataStream<DrugInteractionCDCEvent> createDrugInteractionCDCSource(StreamExecutionEnvironment env) {
+        LOG.info("Creating Drug Interaction CDC source from kb5.drug_interactions.changes");
+
+        KafkaSource<DrugInteractionCDCEvent> source = KafkaSource.<DrugInteractionCDCEvent>builder()
+                .setBootstrapServers(getBootstrapServers())
+                .setTopics("kb5.drug_interactions.changes")
+                .setGroupId("module3-drug-interaction-cdc-consumer")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(DebeziumJSONDeserializer.forDrugInteraction())
+                .build();
+
+        return env.fromSource(
+                source,
+                WatermarkStrategy.noWatermarks(),
+                "Drug Interaction CDC Source (KB-5)"
+        );
+    }
+
+    /**
+     * Create Terminology CDC source from Kafka kb7.terminology.changes topic (KB-7)
+     */
+    private static DataStream<TerminologyCDCEvent> createTerminologyCDCSource(StreamExecutionEnvironment env) {
+        LOG.info("Creating Terminology CDC source from kb7.terminology.changes");
+
+        KafkaSource<TerminologyCDCEvent> source = KafkaSource.<TerminologyCDCEvent>builder()
+                .setBootstrapServers(getBootstrapServers())
+                .setTopics("kb7.terminology.changes")
+                .setGroupId("module3-terminology-cdc-consumer")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(DebeziumJSONDeserializer.forTerminology())
+                .build();
+
+        return env.fromSource(
+                source,
+                WatermarkStrategy.noWatermarks(),
+                "Terminology CDC Source (KB-7)"
         );
     }
 
