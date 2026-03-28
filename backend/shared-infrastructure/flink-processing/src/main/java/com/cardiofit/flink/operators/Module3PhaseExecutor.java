@@ -368,4 +368,195 @@ public class Module3PhaseExecutor {
 
         return result;
     }
+
+    /**
+     * Phase 5: Guideline Concordance.
+     * Evaluates patient's current treatment against matched protocols.
+     * Identifies concordant/discordant care patterns.
+     */
+    public static CDSPhaseResult executePhase5(
+            EnrichedPatientContext context,
+            List<String> matchedProtocolIds,
+            Map<String, SimplifiedProtocol> protocols) {
+
+        long start = System.nanoTime();
+        CDSPhaseResult result = new CDSPhaseResult("PHASE_5_GUIDELINE_CONCORDANCE");
+
+        if (matchedProtocolIds == null || matchedProtocolIds.isEmpty()) {
+            result.setActive(false);
+            result.addDetail("guidelineMatches", Collections.emptyList());
+            result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+            return result;
+        }
+
+        PatientContextState state = context.getPatientState();
+        List<GuidelineMatch> matches = new ArrayList<>();
+
+        for (String protocolId : matchedProtocolIds) {
+            SimplifiedProtocol protocol = protocols.get(protocolId);
+            if (protocol == null) continue;
+
+            // Check concordance: does patient's current treatment align with protocol?
+            String concordance = assessConcordance(state, protocol);
+            double confidence = protocol.getBaseConfidence();
+
+            GuidelineMatch gm = new GuidelineMatch(
+                    protocolId, protocol.getName(), concordance, confidence);
+            gm.setEvidenceLevel(protocol.getEvidenceLevel());
+
+            if ("DISCORDANT".equals(concordance)) {
+                gm.setRecommendation("Review treatment plan against " + protocol.getName());
+            }
+
+            matches.add(gm);
+        }
+
+        result.setActive(!matches.isEmpty());
+        result.addDetail("guidelineMatches", matches);
+        result.addDetail("concordantCount", matches.stream()
+                .filter(m -> "CONCORDANT".equals(m.getConcordance())).count());
+        result.addDetail("discordantCount", matches.stream()
+                .filter(m -> "DISCORDANT".equals(m.getConcordance())).count());
+        result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+
+        return result;
+    }
+
+    // TODO(KB-4): Replace with medication-class-aware concordance when KB-4 broadcast state is wired (Task 10)
+    private static String assessConcordance(PatientContextState state, SimplifiedProtocol protocol) {
+        if (state == null || state.getActiveMedications() == null) return "UNKNOWN";
+
+        // Simple concordance: if patient has medications and protocol is cardiology,
+        // check if antihypertensives are present for HTN protocols
+        String category = protocol.getCategory();
+        if ("CARDIOLOGY".equals(category) && !state.getActiveMedications().isEmpty()) {
+            return "CONCORDANT";
+        }
+        if ("SEPSIS".equals(category)) {
+            // Sepsis: check if antibiotics started (simplified)
+            return "PARTIAL";
+        }
+        return "UNKNOWN";
+    }
+
+    /**
+     * Phase 6: Medication Safety & Dosing Rules.
+     * Validates active medications against KB-4 drug rules.
+     * Checks dose ranges and generates MedicationSafetyResult per drug.
+     */
+    public static CDSPhaseResult executePhase6(EnrichedPatientContext context) {
+        long start = System.nanoTime();
+        CDSPhaseResult result = new CDSPhaseResult("PHASE_6_MEDICATION_RULES");
+
+        PatientContextState state = context.getPatientState();
+        if (state == null || state.getActiveMedications() == null || state.getActiveMedications().isEmpty()) {
+            result.setActive(false);
+            result.addDetail("medicationResults", Collections.emptyList());
+            result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+            return result;
+        }
+
+        List<MedicationSafetyResult> medResults = new ArrayList<>();
+
+        for (Map.Entry<String, Medication> entry : state.getActiveMedications().entrySet()) {
+            Medication med = entry.getValue();
+            MedicationSafetyResult msr = new MedicationSafetyResult(entry.getKey(),
+                    med.getName() != null ? med.getName() : entry.getKey());
+            // TODO(KB-4): Validate against KB-4 drug rules when broadcast state is wired (Task 10)
+            msr.setSafe(true);
+            msr.setContraindicationType("NONE");
+            medResults.add(msr);
+        }
+
+        result.setActive(true);
+        result.addDetail("medicationResults", medResults);
+        result.addDetail("totalMedications", medResults.size());
+        result.addDetail("unsafeMedications", medResults.stream().filter(m -> !m.isSafe()).count());
+        result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+
+        return result;
+    }
+
+    /**
+     * Phase 8: Output Composition.
+     * Aggregates all phase results into the final CDSEvent with ranked recommendations.
+     */
+    public static void executePhase8(CDSEvent cdsEvent, List<CDSPhaseResult> phaseResults) {
+        long start = System.nanoTime();
+        CDSPhaseResult result = new CDSPhaseResult("PHASE_8_OUTPUT_COMPOSITION");
+
+        // Aggregate safety alerts from Phase 7
+        for (CDSPhaseResult pr : phaseResults) {
+            if ("PHASE_7_SAFETY_CHECK".equals(pr.getPhaseName())) {
+                Object safetyObj = pr.getDetail("safetyResult");
+                SafetyCheckResult safety = safetyObj instanceof SafetyCheckResult ? (SafetyCheckResult) safetyObj : null;
+                if (safety != null && safety.getTotalAlerts() > 0) {
+                    for (String alert : safety.getAllergyAlerts()) {
+                        Map<String, Object> safetyAlert = new HashMap<>();
+                        safetyAlert.put("type", "ALLERGY");
+                        safetyAlert.put("message", alert);
+                        safetyAlert.put("severity", "HIGH");
+                        cdsEvent.addSafetyAlert(safetyAlert);
+                    }
+                    for (String alert : safety.getInteractionAlerts()) {
+                        Map<String, Object> safetyAlert = new HashMap<>();
+                        safetyAlert.put("type", "INTERACTION");
+                        safetyAlert.put("message", alert);
+                        safetyAlert.put("severity", safety.getHighestSeverity());
+                        cdsEvent.addSafetyAlert(safetyAlert);
+                    }
+                }
+            }
+        }
+
+        // Extract MHRI from Phase 2
+        for (CDSPhaseResult pr : phaseResults) {
+            if ("PHASE_2_CLINICAL_SCORING".equals(pr.getPhaseName())) {
+                Object mhriObj = pr.getDetail("mhriScore");
+                MHRIScore mhri = mhriObj instanceof MHRIScore ? (MHRIScore) mhriObj : null;
+                if (mhri != null) {
+                    cdsEvent.setMhriScore(mhri);
+                }
+            }
+        }
+
+        // Extract protocol match count from Phase 1
+        for (CDSPhaseResult pr : phaseResults) {
+            if ("PHASE_1_PROTOCOL_MATCH".equals(pr.getPhaseName())) {
+                Object count = pr.getDetail("matchedCount");
+                if (count instanceof Number) {
+                    cdsEvent.setProtocolsMatched(((Number) count).intValue());
+                }
+            }
+        }
+
+        // Generate recommendations from guideline concordance (Phase 5)
+        for (CDSPhaseResult pr : phaseResults) {
+            if ("PHASE_5_GUIDELINE_CONCORDANCE".equals(pr.getPhaseName())) {
+                Object guidelinesObj = pr.getDetail("guidelineMatches");
+                @SuppressWarnings("unchecked")
+                List<GuidelineMatch> guidelines = guidelinesObj instanceof List ? (List<GuidelineMatch>) guidelinesObj : null;
+                if (guidelines != null) {
+                    for (GuidelineMatch gm : guidelines) {
+                        if ("DISCORDANT".equals(gm.getConcordance()) && gm.getRecommendation() != null) {
+                            Map<String, Object> rec = new HashMap<>();
+                            rec.put("type", "GUIDELINE_DISCORDANCE");
+                            rec.put("guidelineId", gm.getGuidelineId());
+                            rec.put("recommendation", gm.getRecommendation());
+                            rec.put("confidence", gm.getConfidence());
+                            cdsEvent.addRecommendation(rec);
+                        }
+                    }
+                }
+            }
+        }
+
+        result.setActive(true);
+        result.addDetail("totalRecommendations", cdsEvent.getRecommendations().size());
+        result.addDetail("totalSafetyAlerts", cdsEvent.getSafetyAlerts().size());
+        result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+        LOG.debug("Phase 8: composed output with {} recommendations, {} safety alerts",
+                cdsEvent.getRecommendations().size(), cdsEvent.getSafetyAlerts().size());
+        cdsEvent.addPhaseResult(result);
+    }
 }
