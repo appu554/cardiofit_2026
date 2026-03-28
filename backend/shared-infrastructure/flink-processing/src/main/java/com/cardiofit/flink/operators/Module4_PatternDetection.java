@@ -725,94 +725,21 @@ public class Module4_PatternDetection {
         if (patientState != null) {
             Map<String, Object> clinicalData = new HashMap<>();
 
-            // Extract vital signs (lowercase keys as expected by sepsis pattern)
-            Map<String, Object> latestVitals = patientState.getLatestVitals();
-            if (latestVitals != null && !latestVitals.isEmpty()) {
-                Map<String, Object> vitalSigns = new HashMap<>();
-
-                // Convert lowercase keys to snake_case for pattern matching
-                // Module 2 stores as: heartrate, systolicbp, diastolicbp, respiratoryrate, oxygensaturation, temperature
-                if (latestVitals.get("heartrate") != null) {
-                    vitalSigns.put("heart_rate", latestVitals.get("heartrate"));
-                }
-                if (latestVitals.get("systolicbp") != null) {
-                    vitalSigns.put("systolic_bp", latestVitals.get("systolicbp"));
-                }
-                if (latestVitals.get("diastolicbp") != null) {
-                    vitalSigns.put("diastolic_bp", latestVitals.get("diastolicbp"));
-                }
-                if (latestVitals.get("respiratoryrate") != null) {
-                    vitalSigns.put("respiratory_rate", latestVitals.get("respiratoryrate"));
-                }
-                if (latestVitals.get("temperature") != null) {
-                    vitalSigns.put("temperature", latestVitals.get("temperature"));
-                }
-                if (latestVitals.get("oxygensaturation") != null) {
-                    vitalSigns.put("oxygen_saturation", latestVitals.get("oxygensaturation"));
-                }
-
+            // Extract vital signs (delegate to Module4SemanticConverter)
+            Map<String, Object> vitalSigns = Module4SemanticConverter.normalizeVitalSigns(patientState.getLatestVitals());
+            if (!vitalSigns.isEmpty()) {
                 clinicalData.put("vitalSigns", vitalSigns);
             }
 
-            // Extract lab values (keyed by LOINC code and standardized names)
-            Map<String, com.cardiofit.flink.models.LabResult> recentLabs = patientState.getRecentLabs();
-            if (recentLabs != null && !recentLabs.isEmpty()) {
-                Map<String, Object> labValues = new HashMap<>();
-
-                for (Map.Entry<String, com.cardiofit.flink.models.LabResult> entry : recentLabs.entrySet()) {
-                    com.cardiofit.flink.models.LabResult lab = entry.getValue();
-                    if (lab != null && lab.getValue() != null) {
-                        String loincCode = entry.getKey();
-                        Double value = lab.getValue();
-
-                        // Store by LOINC code
-                        labValues.put(loincCode, value);
-
-                        // Map LOINC codes to standardized names expected by CEP patterns
-                        // These match the keys used in ClinicalPatterns.java
-                        switch (loincCode) {
-                            case "2524-7":  // Lactate
-                                labValues.put("lactate", value);
-                                break;
-                            case "6690-2":  // WBC
-                                labValues.put("wbc_count", value.intValue());
-                                break;
-                            case "33959-8": // Procalcitonin
-                                labValues.put("procalcitonin", value);
-                                break;
-                            case "2160-0":  // Creatinine
-                                labValues.put("creatinine", value);
-                                break;
-                            case "777-3":   // Platelets
-                                labValues.put("platelet_count", value.intValue());
-                                break;
-                        }
-
-                        // Also store by labType if available
-                        String labType = lab.getLabType();
-                        if (labType != null) {
-                            labValues.put(labType.toLowerCase(), value);
-                        }
-                    }
-                }
-
+            // Extract lab values (delegate to Module4SemanticConverter)
+            Map<String, Object> labValues = Module4SemanticConverter.extractLabValues(patientState.getRecentLabs());
+            if (!labValues.isEmpty()) {
                 clinicalData.put("labValues", labValues);
             }
 
-            // Extract risk indicators for additional context
-            com.cardiofit.flink.models.RiskIndicators riskIndicators = patientState.getRiskIndicators();
-            if (riskIndicators != null) {
-                Map<String, Object> riskData = new HashMap<>();
-                riskData.put("tachycardia", riskIndicators.isTachycardia());
-                riskData.put("hypotension", riskIndicators.isHypotension());
-                riskData.put("fever", riskIndicators.isFever());
-                riskData.put("hypoxia", riskIndicators.isHypoxia());
-                riskData.put("tachypnea", riskIndicators.isTachypnea());
-                riskData.put("elevatedLactate", riskIndicators.isElevatedLactate());
-                riskData.put("severelyElevatedLactate", riskIndicators.isSeverelyElevatedLactate());
-                riskData.put("leukocytosis", riskIndicators.isLeukocytosis());
-                riskData.put("sepsisRisk", riskIndicators.getSepsisRisk());
-
+            // Extract risk indicators (delegate to Module4SemanticConverter)
+            Map<String, Object> riskData = Module4SemanticConverter.extractRiskIndicators(patientState.getRiskIndicators());
+            if (!riskData.isEmpty()) {
                 clinicalData.put("riskIndicators", riskData);
             }
 
@@ -821,10 +748,10 @@ public class Module4_PatternDetection {
 
             // Log clinical data extraction with details
             if (clinicalData.containsKey("vitalSigns")) {
-                Map<String, Object> vitalSigns = (Map<String, Object>) clinicalData.get("vitalSigns");
+                Map<String, Object> loggedVitals = (Map<String, Object>) clinicalData.get("vitalSigns");
                 LOG.debug("DEBUG - Patient {}: vitalSigns keys={}, labValues={} entries",
                     cdsEvent.getPatientId(),
-                    vitalSigns.keySet(),
+                    loggedVitals.keySet(),
                     clinicalData.containsKey("labValues") ? ((Map)clinicalData.get("labValues")).size() : 0);
             } else {
                 LOG.debug("DEBUG - Patient {}: NO vitalSigns extracted! latestVitals from state was null/empty",
