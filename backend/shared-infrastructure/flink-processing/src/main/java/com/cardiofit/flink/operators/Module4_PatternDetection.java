@@ -52,12 +52,12 @@ import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindow
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
-import java.time.Duration;import org.apache.flink.util.OutputTag;
+import java.time.Duration;
+import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -130,7 +130,6 @@ public class Module4_PatternDetection {
         // Use CDS events which contain the full patient state including enriched context
         // DataStream<EnrichedEvent> enrichedEvents = createEnrichedEventSource(env);
 
-        // DEBUG: Log events before keying for CEP input
         DataStream<SemanticEvent> loggedSemanticEvents = semanticEvents
             .process(new org.apache.flink.streaming.api.functions.ProcessFunction<SemanticEvent, SemanticEvent>() {
                 @Override
@@ -823,7 +822,7 @@ public class Module4_PatternDetection {
             // Set clinical data on semantic event
             semanticEvent.setClinicalData(clinicalData);
 
-            // DEBUG: Log clinical data extraction with details
+            // Log clinical data extraction with details
             if (clinicalData.containsKey("vitalSigns")) {
                 Map<String, Object> vitalSigns = (Map<String, Object>) clinicalData.get("vitalSigns");
                 LOG.debug("DEBUG - Patient {}: vitalSigns keys={}, labValues={} entries",

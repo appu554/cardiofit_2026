@@ -53,7 +53,7 @@ class Module4ClinicalScoring {
             long criticalAlertCount = alerts.stream()
                 .filter(alert -> alert.getSeverity() != null)
                 // BUG: getSeverity() returns AlertSeverity enum; .equals("CRITICAL") always false.
-                // Fix: use alert.getSeverity() == AlertSeverity.CRITICAL (separate task)
+                // TODO: Fix to alert.getSeverity() == AlertSeverity.CRITICAL — tracked as tech debt
                 .filter(alert -> alert.getSeverity().equals("CRITICAL") ||
                     (alert.getPriorityLevel() != null && alert.getPriorityLevel().equals("CRITICAL")))
                 .count();
