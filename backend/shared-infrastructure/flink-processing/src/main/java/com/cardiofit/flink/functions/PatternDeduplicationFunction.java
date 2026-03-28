@@ -22,10 +22,15 @@ import java.util.*;
  * - Increases confidence when layers agree
  * - Tracks which sources confirmed the pattern
  *
+ * Improvements over v1:
+ * - Severity escalation passthrough (HIGH→CRITICAL emitted immediately)
+ * - Dedup key is pattern type only (not severity) for escalation detection
+ * - Public static helpers for testability
+ *
  * Implements Gap 1 from Gap Implementation Guide
  *
  * @author CardioFit Clinical Intelligence Team
- * @version 1.0
+ * @version 2.0
  */
 public class PatternDeduplicationFunction
     extends KeyedProcessFunction<String, PatternEvent, PatternEvent> {
@@ -36,8 +41,15 @@ public class PatternDeduplicationFunction
     // State to track recent patterns by type (for deduplication window)
     private transient MapState<String, Long> recentPatternsState;
 
+    // State to track last-seen severity per pattern key (for escalation detection)
+    private transient MapState<String, String> recentSeverityState;
+
     // Deduplication window: 5 minutes
     private static final long DEDUP_WINDOW_MS = 5 * 60 * 1000;
+
+    // Canonical severity order — index+1 gives numeric severity level
+    private static final List<String> SEVERITY_ORDER =
+        Arrays.asList("LOW", "MODERATE", "HIGH", "CRITICAL");
 
     @Override
     public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
@@ -50,6 +62,11 @@ public class PatternDeduplicationFunction
         MapStateDescriptor<String, Long> recentPatternsDescriptor =
             new MapStateDescriptor<>("recent-patterns", String.class, Long.class);
         recentPatternsState = getRuntimeContext().getMapState(recentPatternsDescriptor);
+
+        // Initialize recent severity tracking for escalation detection
+        MapStateDescriptor<String, String> recentSeverityDescriptor =
+            new MapStateDescriptor<>("recent-severity", String.class, String.class);
+        recentSeverityState = getRuntimeContext().getMapState(recentSeverityDescriptor);
     }
 
     @Override
@@ -59,58 +76,91 @@ public class PatternDeduplicationFunction
         Collector<PatternEvent> out) throws Exception {
 
         long now = System.currentTimeMillis();
-        String patternKey = getPatternKey(pattern);
+        String patternKey = computePatternKey(pattern);
 
         // Check if similar pattern was recently fired
         Long lastFiredTime = recentPatternsState.get(patternKey);
+        String lastSeverity = recentSeverityState.get(patternKey);
 
         if (lastFiredTime != null && (now - lastFiredTime) < DEDUP_WINDOW_MS) {
-            // Duplicate pattern within window - MERGE
-
-            PatternEvent lastPattern = lastPatternState.value();
-
-            if (lastPattern != null && shouldMerge(lastPattern, pattern)) {
-                PatternEvent mergedPattern = mergePatterns(lastPattern, pattern);
-                out.collect(mergedPattern);
-                lastPatternState.update(mergedPattern);
-                recentPatternsState.put(patternKey, now);
-            } else {
-                // Different enough to emit separately
+            // Within dedup window — check for severity escalation
+            if (lastSeverity != null && isSeverityEscalation(lastSeverity, pattern.getSeverity())) {
+                // ESCALATION: emit immediately even within dedup window
+                pattern.addTag("SEVERITY_ESCALATION");
                 out.collect(pattern);
                 lastPatternState.update(pattern);
                 recentPatternsState.put(patternKey, now);
+                recentSeverityState.put(patternKey, pattern.getSeverity());
+            } else {
+                // Same or lower severity — merge if possible
+                PatternEvent lastPattern = lastPatternState.value();
+                if (lastPattern != null && shouldMerge(lastPattern, pattern)) {
+                    PatternEvent mergedPattern = mergePatterns(lastPattern, pattern);
+                    out.collect(mergedPattern);
+                    lastPatternState.update(mergedPattern);
+                    recentPatternsState.put(patternKey, now);
+                    recentSeverityState.put(patternKey, mergedPattern.getSeverity());
+                    // Keep existing severity (merge doesn't escalate)
+                } else {
+                    // Different enough to emit separately
+                    out.collect(pattern);
+                    lastPatternState.update(pattern);
+                    recentPatternsState.put(patternKey, now);
+                    recentSeverityState.put(patternKey, pattern.getSeverity());
+                }
             }
         } else {
-            // New pattern - emit immediately
+            // New pattern outside window — emit immediately
             out.collect(pattern);
             lastPatternState.update(pattern);
             recentPatternsState.put(patternKey, now);
+            recentSeverityState.put(patternKey, pattern.getSeverity());
         }
 
         // Schedule cleanup timer
         ctx.timerService().registerProcessingTimeTimer(now + DEDUP_WINDOW_MS);
     }
 
+    // ═══ Public static helpers for testability ═══════════════════════════════
+
     /**
-     * Generate deduplication key from pattern
-     * Key format: "{patternType}:{severity}"
+     * Compute dedup key from pattern — type only, NOT severity.
+     * This ensures escalations within the same type are detected.
      */
-    private String getPatternKey(PatternEvent pattern) {
-        return pattern.getPatternType() + ":" + pattern.getSeverity();
+    public static String computePatternKey(PatternEvent pattern) {
+        return pattern.getPatternType();
     }
 
     /**
-     * Determine if two patterns should be merged
-     * Merge if same type and similar severity
+     * Returns true if newSeverity is strictly higher than oldSeverity.
+     */
+    public static boolean isSeverityEscalation(String oldSeverity, String newSeverity) {
+        return severityIndex(newSeverity) > severityIndex(oldSeverity);
+    }
+
+    /**
+     * Returns numeric index for severity comparison. Higher = more severe.
+     * Returns 0 for null or unrecognized values.
+     */
+    public static int severityIndex(String severity) {
+        if (severity == null) return 0;
+        int idx = SEVERITY_ORDER.indexOf(severity.toUpperCase());
+        return idx >= 0 ? idx + 1 : 0;
+    }
+
+    // ═══ Private helpers ══════════════════════════════════════════════════════
+
+    /**
+     * Determine if two patterns should be merged.
+     * Merge if same type (severity may differ — escalation already handled above).
      */
     private boolean shouldMerge(PatternEvent existing, PatternEvent newPattern) {
-        return existing.getPatternType().equals(newPattern.getPatternType()) &&
-               existing.getSeverity().equals(newPattern.getSeverity());
+        return existing.getPatternType().equals(newPattern.getPatternType());
     }
 
     /**
-     * Merge two pattern events from different sources
-     * Combines evidence and increases confidence
+     * Merge two pattern events from different sources.
+     * Combines evidence and increases confidence.
      */
     private PatternEvent mergePatterns(PatternEvent existing, PatternEvent newPattern) {
 
@@ -224,21 +274,22 @@ public class PatternDeduplicationFunction
     }
 
     /**
-     * Get highest severity between two values
+     * Get highest severity between two values using SEVERITY_ORDER.
      */
     private String getHighestSeverity(String sev1, String sev2) {
-        List<String> severityOrder = Arrays.asList("LOW", "MODERATE", "HIGH", "CRITICAL");
-        int idx1 = severityOrder.indexOf(sev1.toUpperCase());
-        int idx2 = severityOrder.indexOf(sev2.toUpperCase());
+        int idx1 = severityIndex(sev1);
+        int idx2 = severityIndex(sev2);
 
-        if (idx1 < 0) idx1 = 0;
-        if (idx2 < 0) idx2 = 0;
+        if (idx1 <= 0 && idx2 <= 0) return sev1 != null ? sev1 : sev2;
+        if (idx1 <= 0) return sev2;
+        if (idx2 <= 0) return sev1;
 
-        return severityOrder.get(Math.max(idx1, idx2));
+        // Return the string at (max_idx - 1) from SEVERITY_ORDER
+        return SEVERITY_ORDER.get(Math.max(idx1, idx2) - 1);
     }
 
     /**
-     * Extract source algorithm from pattern metadata
+     * Extract source algorithm from pattern metadata.
      */
     private String getSourceFromMetadata(PatternEvent pattern) {
         if (pattern.getPatternMetadata() != null &&
@@ -256,7 +307,9 @@ public class PatternDeduplicationFunction
         while (iterator.hasNext()) {
             Map.Entry<String, Long> entry = iterator.next();
             if (timestamp - entry.getValue() > DEDUP_WINDOW_MS) {
+                String expiredKey = entry.getKey();
                 iterator.remove();
+                recentSeverityState.remove(expiredKey);
             }
         }
     }
