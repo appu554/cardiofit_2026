@@ -73,4 +73,22 @@ public class MHRIScoreTest {
 
         assertEquals(59.0, score.getComposite(), 0.01);
     }
+
+    @Test
+    void computeComposite_tier2Hybrid_interpolatedWeights() {
+        MHRIScore score = new MHRIScore();
+        score.setGlycemicComponent(70.0);
+        score.setHemodynamicComponent(60.0);
+        score.setRenalComponent(50.0);
+        score.setMetabolicComponent(40.0);
+        score.setEngagementComponent(80.0);
+        score.setDataTier("TIER_2_FINGERSTICK");
+
+        score.computeComposite();
+
+        // Tier 2 weights: glycemic=0.20, hemodynamic=0.275, renal=0.225, metabolic=0.15, engagement=0.15
+        // (70*0.20) + (60*0.275) + (50*0.225) + (40*0.15) + (80*0.15)
+        // = 14.0 + 16.5 + 11.25 + 6.0 + 12.0 = 59.75
+        assertEquals(59.75, score.getComposite(), 0.01);
+    }
 }

@@ -22,6 +22,13 @@ public class MHRIScore implements Serializable {
     private static final double T3_METABOLIC = 0.15;
     private static final double T3_ENGAGEMENT = 0.15;
 
+    // Tier 2 (Fingerstick/Hybrid) weights — interpolated between T1 and T3
+    private static final double T2_GLYCEMIC = 0.20;
+    private static final double T2_HEMODYNAMIC = 0.275;
+    private static final double T2_RENAL = 0.225;
+    private static final double T2_METABOLIC = 0.15;
+    private static final double T2_ENGAGEMENT = 0.15;
+
     @JsonProperty("glycemicComponent")
     private Double glycemicComponent;
 
@@ -54,12 +61,16 @@ public class MHRIScore implements Serializable {
     public void computeComposite() {
         String tier = (dataTier != null) ? dataTier : "TIER_3_SMBG";
         boolean isTier1 = tier.startsWith("TIER_1");
+        boolean isTier2 = tier.startsWith("TIER_2");
 
-        double gW = isTier1 ? T1_GLYCEMIC : T3_GLYCEMIC;
-        double hW = isTier1 ? T1_HEMODYNAMIC : T3_HEMODYNAMIC;
-        double rW = isTier1 ? T1_RENAL : T3_RENAL;
-        double mW = isTier1 ? T1_METABOLIC : T3_METABOLIC;
-        double eW = isTier1 ? T1_ENGAGEMENT : T3_ENGAGEMENT;
+        double gW, hW, rW, mW, eW;
+        if (isTier1) {
+            gW = T1_GLYCEMIC; hW = T1_HEMODYNAMIC; rW = T1_RENAL; mW = T1_METABOLIC; eW = T1_ENGAGEMENT;
+        } else if (isTier2) {
+            gW = T2_GLYCEMIC; hW = T2_HEMODYNAMIC; rW = T2_RENAL; mW = T2_METABOLIC; eW = T2_ENGAGEMENT;
+        } else {
+            gW = T3_GLYCEMIC; hW = T3_HEMODYNAMIC; rW = T3_RENAL; mW = T3_METABOLIC; eW = T3_ENGAGEMENT;
+        }
 
         double g = glycemicComponent != null ? glycemicComponent : 0.0;
         double h = hemodynamicComponent != null ? hemodynamicComponent : 0.0;
