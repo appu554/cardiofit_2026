@@ -138,6 +138,66 @@ public class Module3TestBuilder {
         return p;
     }
 
+    /**
+     * Patient on metformin with impaired renal function (eGFR ~58).
+     * Creatinine=1.4, age=58, male → CKD-EPI eGFR ≈ 58 mL/min (<60 threshold).
+     * Metformin IS in RENALLY_CLEARED_MEDS, so Phase 6 should flag it.
+     */
+    public static EnrichedPatientContext renalImpairedMetforminPatient(String patientId) {
+        PatientContextState state = new PatientContextState(patientId);
+
+        state.getLatestVitals().put("systolicbloodpressure", 145);
+        state.getLatestVitals().put("diastolicbloodpressure", 88);
+        state.getLatestVitals().put("heartrate", 78);
+
+        LabResult creatinine = new LabResult();
+        creatinine.setLabCode("2160-0");
+        creatinine.setValue(1.4);
+        creatinine.setLabType("Creatinine");
+        creatinine.setUnit("mg/dL");
+        state.getRecentLabs().put("2160-0", creatinine);
+
+        LabResult hba1c = new LabResult();
+        hba1c.setLabCode("4548-4");
+        hba1c.setValue(7.8);
+        hba1c.setLabType("HbA1c");
+        hba1c.setUnit("%");
+        state.getRecentLabs().put("4548-4", hba1c);
+
+        // Metformin — renally cleared, requires dose adjustment when eGFR <60
+        Medication metformin = new Medication();
+        metformin.setCode("6809");
+        metformin.setName("Metformin");
+        metformin.setDosage("1000mg");
+        state.getActiveMedications().put("6809", metformin);
+
+        PatientDemographics demo = new PatientDemographics();
+        demo.setAge(58);
+        demo.setGender("male");
+        state.setDemographics(demo);
+
+        EnrichedPatientContext epc = new EnrichedPatientContext(patientId, state);
+        epc.setEventType("VITAL_SIGN");
+        epc.setEventTime(System.currentTimeMillis());
+        epc.setDataTier("TIER_3_SMBG");
+        return epc;
+    }
+
+    /**
+     * Protocol with no trigger thresholds — simulates legacy CDC protocols
+     * that have category/name but no structured trigger criteria.
+     */
+    public static SimplifiedProtocol emptyThresholdProtocol() {
+        SimplifiedProtocol p = new SimplifiedProtocol();
+        p.setProtocolId("LEGACY-GENERIC-V1");
+        p.setName("Generic Clinical Protocol");
+        p.setVersion("1.0");
+        p.setCategory("CLINICAL");
+        p.setSpecialty("General");
+        // Deliberately NO triggerThresholds set — uses empty map from constructor
+        return p;
+    }
+
     public static Map<String, SimplifiedProtocol> defaultProtocolMap() {
         Map<String, SimplifiedProtocol> map = new HashMap<>();
         SimplifiedProtocol sepsis = sepsisProtocol();

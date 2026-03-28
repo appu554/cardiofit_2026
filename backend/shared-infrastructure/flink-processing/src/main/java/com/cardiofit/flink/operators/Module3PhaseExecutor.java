@@ -89,7 +89,10 @@ public class Module3PhaseExecutor {
 
         Map<String, Double> thresholds = protocol.getTriggerThresholds();
         if (thresholds == null || thresholds.isEmpty()) {
-            return protocol.getBaseConfidence();
+            // No trigger criteria defined — protocol cannot match any patient.
+            // Returning baseConfidence here would cause every protocol without
+            // thresholds to match every patient (0.85 >= 0.70 activation).
+            return 0.0;
         }
 
         int totalCriteria = thresholds.size();
