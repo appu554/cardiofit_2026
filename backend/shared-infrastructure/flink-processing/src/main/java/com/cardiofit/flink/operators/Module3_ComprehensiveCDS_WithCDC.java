@@ -533,6 +533,10 @@ public class Module3_ComprehensiveCDS_WithCDC {
             // Set evidence source as database name (kb3_guidelines)
             protocol.setEvidenceSource("kb3_guidelines");
 
+            // KNOWN LIMITATION: triggerThresholds not populated from CDC payload.
+            // All CDC-loaded protocols will match every patient until thresholds are
+            // parsed from cdcData.getContent() or the CDC schema is extended.
+
             return protocol;
         }
 
@@ -680,8 +684,9 @@ public class Module3_ComprehensiveCDS_WithCDC {
             try {
                 return objectMapper.writeValueAsBytes(element);
             } catch (Exception e) {
-                LOG.error("Failed to serialize CDSEvent: {}", e.getMessage());
-                return new byte[0];
+                LOG.error("Failed to serialize CDSEvent for patient {}: {}",
+                        element.getPatientId(), e.getMessage());
+                throw new RuntimeException("CDSEvent serialization failure — clinical data loss prevented", e);
             }
         }
     }

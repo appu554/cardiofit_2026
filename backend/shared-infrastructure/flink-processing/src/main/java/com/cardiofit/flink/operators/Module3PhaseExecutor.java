@@ -259,7 +259,7 @@ public class Module3PhaseExecutor {
      */
     private static double normalizeHemodynamic(PatientContextState state) {
         Object sbpObj = state.getLatestVitals().get("systolicbloodpressure");
-        if (sbpObj == null) return 30.0;
+        if (!(sbpObj instanceof Number)) return 30.0;
         double sbp = ((Number) sbpObj).doubleValue();
 
         if (sbp < 120) return 0.0;
