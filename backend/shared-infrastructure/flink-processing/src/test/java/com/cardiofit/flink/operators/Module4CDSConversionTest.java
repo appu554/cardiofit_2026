@@ -14,11 +14,6 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Tests for Module 4 clinical significance calculation and risk level determination.
  * These functions control CEP pattern matching thresholds.
- *
- * NOTE: determineRiskLevel compares AlertSeverity/AlertPriority enums to String "CRITICAL"
- * via .equals(), which always returns false (enum.equals(String) == false in Java).
- * The alert-based "high" path is therefore unreachable via severity/priority fields.
- * Tests reflect the actual implemented behavior.
  */
 public class Module4CDSConversionTest {
 
@@ -83,13 +78,11 @@ public class Module4CDSConversionTest {
     }
 
     /**
-     * The alert-based critical path uses .equals("CRITICAL") on AlertSeverity/AlertPriority enums.
-     * Java enum.equals(String) always returns false, so the criticalAlertCount is always 0.
-     * This test documents that the path is effectively unreachable via severity/priority fields,
-     * and that alert presence alone (with low scores) falls through to "low".
+     * With the enum comparison fix, 2+ CRITICAL alerts now correctly trigger "high" risk level
+     * even when NEWS2 < 10 and qSOFA < 2.
      */
     @Test
-    void riskLevel_alertsPresent_butCriticalPathUnreachable_dueTo_enumStringComparison() {
+    void riskLevel_high_when2CriticalAlerts() {
         Set<SimpleAlert> alerts = new HashSet<>();
         SimpleAlert a1 = new SimpleAlert(AlertType.VITAL_THRESHOLD_BREACH, AlertSeverity.CRITICAL,
             "Critical alert 1", "P001");
@@ -99,9 +92,9 @@ public class Module4CDSConversionTest {
         a2.setPriorityLevel(AlertPriority.CRITICAL);
         alerts.add(a1);
         alerts.add(a2);
-        // NEWS2=4, qSOFA=0 → falls through alert loop (enum.equals(String)==false) → "low"
-        assertEquals("low", Module4ClinicalScoring.determineRiskLevel(4, 0, alerts),
-            "Alert-based critical path is unreachable due to enum.equals(String) always false");
+        // NEWS2=4, qSOFA=0 — below score thresholds, but 2 CRITICAL alerts → "high"
+        assertEquals("high", Module4ClinicalScoring.determineRiskLevel(4, 0, alerts),
+            "2+ CRITICAL alerts should trigger high risk even with low scores");
     }
 
     @Test

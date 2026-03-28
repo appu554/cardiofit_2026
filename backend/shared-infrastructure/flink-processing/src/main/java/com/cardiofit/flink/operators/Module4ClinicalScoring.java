@@ -1,5 +1,7 @@
 package com.cardiofit.flink.operators;
 
+import com.cardiofit.flink.models.AlertPriority;
+import com.cardiofit.flink.models.AlertSeverity;
 import com.cardiofit.flink.models.SimpleAlert;
 import java.util.Set;
 
@@ -52,10 +54,8 @@ class Module4ClinicalScoring {
         if (alerts != null && !alerts.isEmpty()) {
             long criticalAlertCount = alerts.stream()
                 .filter(alert -> alert.getSeverity() != null)
-                // BUG: getSeverity() returns AlertSeverity enum; .equals("CRITICAL") always false.
-                // TODO: Fix to alert.getSeverity() == AlertSeverity.CRITICAL — tracked as tech debt
-                .filter(alert -> alert.getSeverity().equals("CRITICAL") ||
-                    (alert.getPriorityLevel() != null && alert.getPriorityLevel().equals("CRITICAL")))
+                .filter(alert -> alert.getSeverity() == AlertSeverity.CRITICAL ||
+                    (alert.getPriorityLevel() != null && alert.getPriorityLevel() == AlertPriority.CRITICAL))
                 .count();
             if (criticalAlertCount >= 2) {
                 return "high";
