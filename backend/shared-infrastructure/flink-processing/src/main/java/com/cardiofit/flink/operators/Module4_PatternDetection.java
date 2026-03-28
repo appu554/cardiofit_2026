@@ -135,7 +135,7 @@ public class Module4_PatternDetection {
             .process(new org.apache.flink.streaming.api.functions.ProcessFunction<SemanticEvent, SemanticEvent>() {
                 @Override
                 public void processElement(SemanticEvent event, Context ctx, org.apache.flink.util.Collector<SemanticEvent> out) {
-                    LOG.info("🎯 CEP INPUT - Patient {}: sig={}, risk={}, eventType={}",
+                    LOG.debug("🎯 CEP INPUT - Patient {}: sig={}, risk={}, eventType={}",
                         event.getPatientId(), event.getClinicalSignificance(),
                         event.getRiskLevel(), event.getEventType());
                     out.collect(event);
@@ -397,7 +397,7 @@ public class Module4_PatternDetection {
                     pe.addTag("DRUG_INTERACTIONS");
                 }
 
-                LOG.info("✅ COMPREHENSIVE IMMEDIATE PATTERN for patient {}: type={}, severity={}, confidence={:.3f}, actions={}, alerts={}, processingTime={:.2f}ms",
+                LOG.debug("✅ COMPREHENSIVE IMMEDIATE PATTERN for patient {}: type={}, severity={}, confidence={:.3f}, actions={}, alerts={}, processingTime={:.2f}ms",
                     semanticEvent.getPatientId(),
                     pe.getPatternType(),
                     pe.getSeverity(),
@@ -687,7 +687,7 @@ public class Module4_PatternDetection {
 
             // CRITICAL FIX: Calculate clinical_significance and risk_level for CEP pattern matching
             PatientContextState patientState = cdsEvent.getPatientState();
-            LOG.info("🔍 DEBUG - Processing patient {}: patientState is {}",
+            LOG.debug("🔍 DEBUG - Processing patient {}: patientState is {}",
                 cdsEvent.getPatientId(), (patientState == null ? "NULL" : "NOT NULL"));
 
             if (patientState != null) {
@@ -707,7 +707,7 @@ public class Module4_PatternDetection {
                 );
                 annotations.put("risk_level", riskLevel);
 
-                LOG.info("✅ CEP DATA - Patient {}: clinical_significance={}, risk_level={} (NEWS2={}, qSOFA={}, acuity={})",
+                LOG.debug("✅ CEP DATA - Patient {}: clinical_significance={}, risk_level={} (NEWS2={}, qSOFA={}, acuity={})",
                     cdsEvent.getPatientId(), clinicalSignificance, riskLevel,
                     patientState.getNews2Score(), patientState.getQsofaScore(),
                     patientState.getCombinedAcuityScore());
@@ -826,12 +826,12 @@ public class Module4_PatternDetection {
             // DEBUG: Log clinical data extraction with details
             if (clinicalData.containsKey("vitalSigns")) {
                 Map<String, Object> vitalSigns = (Map<String, Object>) clinicalData.get("vitalSigns");
-                LOG.info("DEBUG - Patient {}: vitalSigns keys={}, labValues={} entries",
+                LOG.debug("DEBUG - Patient {}: vitalSigns keys={}, labValues={} entries",
                     cdsEvent.getPatientId(),
                     vitalSigns.keySet(),
                     clinicalData.containsKey("labValues") ? ((Map)clinicalData.get("labValues")).size() : 0);
             } else {
-                LOG.info("DEBUG - Patient {}: NO vitalSigns extracted! latestVitals from state was null/empty",
+                LOG.debug("DEBUG - Patient {}: NO vitalSigns extracted! latestVitals from state was null/empty",
                     cdsEvent.getPatientId());
             }
         }
@@ -877,7 +877,7 @@ public class Module4_PatternDetection {
                 public boolean filter(SemanticEvent event) {
                     boolean matches = event.getClinicalSignificance() > 0.3 &&
                                      !event.getRiskLevel().equals("high");
-                    LOG.info("🔍 CEP BASELINE CHECK - Patient {}: sig={}, risk={}, matches={}",
+                    LOG.debug("🔍 CEP BASELINE CHECK - Patient {}: sig={}, risk={}, matches={}",
                         event.getPatientId(), event.getClinicalSignificance(),
                         event.getRiskLevel(), matches);
                     return matches;
@@ -889,7 +889,7 @@ public class Module4_PatternDetection {
                 public boolean filter(SemanticEvent event) {
                     boolean matches = event.getClinicalSignificance() > 0.6 ||
                                      event.getRiskLevel().equals("moderate");
-                    LOG.info("🔍 CEP WARNING CHECK - Patient {}: sig={}, risk={}, matches={}",
+                    LOG.debug("🔍 CEP WARNING CHECK - Patient {}: sig={}, risk={}, matches={}",
                         event.getPatientId(), event.getClinicalSignificance(),
                         event.getRiskLevel(), matches);
                     return matches;
@@ -902,7 +902,7 @@ public class Module4_PatternDetection {
                     boolean matches = event.getClinicalSignificance() > 0.8 ||
                                      event.getRiskLevel().equals("high") ||
                                      event.hasClinicalAlerts();
-                    LOG.info("🔍 CEP CRITICAL CHECK - Patient {}: sig={}, risk={}, alerts={}, matches={}",
+                    LOG.debug("🔍 CEP CRITICAL CHECK - Patient {}: sig={}, risk={}, alerts={}, matches={}",
                         event.getPatientId(), event.getClinicalSignificance(),
                         event.getRiskLevel(), event.hasClinicalAlerts(), matches);
                     return matches;
