@@ -160,4 +160,141 @@ public class Module3PhaseExecutor {
 
         return null;
     }
+
+    /**
+     * Phase 2: Clinical Scoring + MHRI Computation.
+     */
+    public static CDSPhaseResult executePhase2(EnrichedPatientContext context) {
+        long start = System.nanoTime();
+        CDSPhaseResult result = new CDSPhaseResult("PHASE_2_CLINICAL_SCORING");
+
+        PatientContextState state = context.getPatientState();
+        if (state == null) {
+            result.setActive(false);
+            result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+            return result;
+        }
+
+        result.setActive(true);
+
+        // Extract Module 2 scores
+        if (state.getNews2Score() != null) result.addDetail("news2Score", state.getNews2Score());
+        if (state.getQsofaScore() != null) result.addDetail("qsofaScore", state.getQsofaScore());
+        if (state.getCombinedAcuityScore() != null) result.addDetail("combinedAcuityScore", state.getCombinedAcuityScore());
+
+        // CKD-EPI eGFR estimation
+        Double egfr = estimateCKDEPI(state);
+        if (egfr != null) result.addDetail("estimatedGFR", egfr);
+
+        // Compute MHRI
+        MHRIScore mhri = computeMHRI(context, state, egfr);
+        result.addDetail("mhriScore", mhri);
+
+        result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+        return result;
+    }
+
+    /**
+     * CKD-EPI 2021 eGFR estimation (race-free).
+     */
+    private static Double estimateCKDEPI(PatientContextState state) {
+        LabResult creatinineResult = state.getRecentLabs() != null ? state.getRecentLabs().get("2160-0") : null;
+        if (creatinineResult == null) return null;
+
+        PatientDemographics demo = state.getDemographics();
+        if (demo == null || demo.getAge() == null || demo.getAge() <= 0) return null;
+
+        double scr = creatinineResult.getValue();
+        int age = demo.getAge();
+        boolean isFemale = "female".equalsIgnoreCase(demo.getGender());
+
+        double kappa = isFemale ? 0.7 : 0.9;
+        double alpha = isFemale ? -0.241 : -0.302;
+        double multiplier = isFemale ? 1.012 : 1.0;
+
+        double scrOverKappa = scr / kappa;
+        double minTerm = Math.pow(Math.min(scrOverKappa, 1.0), alpha);
+        double maxTerm = Math.pow(Math.max(scrOverKappa, 1.0), -1.200);
+
+        return 142.0 * minTerm * maxTerm * Math.pow(0.9938, age) * multiplier;
+    }
+
+    /**
+     * Compute MHRI composite from patient data with piecewise linear normalization.
+     */
+    private static MHRIScore computeMHRI(EnrichedPatientContext context, PatientContextState state, Double egfr) {
+        MHRIScore mhri = new MHRIScore();
+        mhri.setDataTier(context.getDataTier() != null ? context.getDataTier() : "TIER_3_SMBG");
+
+        mhri.setGlycemicComponent(normalizeGlycemic(state));
+        mhri.setHemodynamicComponent(normalizeHemodynamic(state));
+        mhri.setRenalComponent(normalizeRenal(egfr));
+        mhri.setMetabolicComponent(normalizeMetabolic(state));
+        mhri.setEngagementComponent(normalizeEngagement(state));
+
+        mhri.computeComposite();
+        return mhri;
+    }
+
+    /**
+     * Normalize HbA1c to 0-100 risk score.
+     */
+    private static double normalizeGlycemic(PatientContextState state) {
+        if (state.getRecentLabs() == null) return 30.0;
+        LabResult hba1c = state.getRecentLabs().get("4548-4");
+        if (hba1c == null) return 30.0;
+
+        double val = hba1c.getValue();
+        if (val < 5.7) return 0.0;
+        if (val <= 6.4) return piecewiseLinear(val, 5.7, 6.4, 10.0, 30.0);
+        if (val <= 8.0) return piecewiseLinear(val, 6.4, 8.0, 30.0, 60.0);
+        if (val <= 10.0) return piecewiseLinear(val, 8.0, 10.0, 60.0, 85.0);
+        return Math.min(100.0, piecewiseLinear(val, 10.0, 14.0, 85.0, 100.0));
+    }
+
+    /**
+     * Normalize BP to 0-100 hemodynamic risk score.
+     */
+    private static double normalizeHemodynamic(PatientContextState state) {
+        Object sbpObj = state.getLatestVitals().get("systolicbloodpressure");
+        if (sbpObj == null) return 30.0;
+        double sbp = ((Number) sbpObj).doubleValue();
+
+        if (sbp < 120) return 0.0;
+        if (sbp <= 139) return piecewiseLinear(sbp, 120, 139, 10.0, 30.0);
+        if (sbp <= 159) return piecewiseLinear(sbp, 139, 159, 30.0, 60.0);
+        if (sbp <= 179) return piecewiseLinear(sbp, 159, 179, 60.0, 85.0);
+        return Math.min(100.0, piecewiseLinear(sbp, 179, 200, 85.0, 100.0));
+    }
+
+    /**
+     * Normalize eGFR to 0-100 renal risk score.
+     */
+    private static double normalizeRenal(Double egfr) {
+        if (egfr == null) return 20.0;
+        if (egfr >= 90) return 0.0;
+        if (egfr >= 60) return piecewiseLinear(egfr, 90, 60, 0.0, 30.0);
+        if (egfr >= 30) return piecewiseLinear(egfr, 60, 30, 30.0, 65.0);
+        if (egfr >= 15) return piecewiseLinear(egfr, 30, 15, 65.0, 85.0);
+        return Math.min(100.0, piecewiseLinear(egfr, 15, 0, 85.0, 100.0));
+    }
+
+    private static double normalizeMetabolic(PatientContextState state) {
+        int medCount = state.getActiveMedications() != null ? state.getActiveMedications().size() : 0;
+        return Math.min(100.0, medCount * 15.0);
+    }
+
+    private static double normalizeEngagement(PatientContextState state) {
+        long events = state.getEventCount();
+        if (events <= 0) return 50.0;
+        if (events <= 5) return 40.0;
+        if (events <= 20) return 30.0;
+        return 20.0;
+    }
+
+    private static double piecewiseLinear(double x, double x0, double x1, double y0, double y1) {
+        if (x1 == x0) return y0;
+        double t = (x - x0) / (x1 - x0);
+        return y0 + t * (y1 - y0);
+    }
 }
