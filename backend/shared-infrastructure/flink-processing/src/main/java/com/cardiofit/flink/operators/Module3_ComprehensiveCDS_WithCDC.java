@@ -103,9 +103,20 @@ public class Module3_ComprehensiveCDS_WithCDC {
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-        env.setParallelism(2);
-        env.enableCheckpointing(30000);
-        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+        int parallelism = Integer.parseInt(
+                System.getenv().getOrDefault("MODULE3_PARALLELISM", "4"));
+        env.setParallelism(parallelism);
+
+        env.enableCheckpointing(180000); // 3-minute checkpoint interval
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(30000); // 30s min pause
+        env.getCheckpointConfig().setCheckpointTimeout(120000); // 2-minute timeout
+        env.getCheckpointConfig().setMaxConcurrentCheckpoints(1);
+
+        // RocksDB state backend — in Flink 2.x, configure via flink-conf.yaml:
+        //   state.backend.type: rocksdb
+        //   state.backend.incremental: true
+        // Programmatic setStateBackend() was removed in Flink 2.x; see FlinkJobOrchestrator for pattern.
+        LOG.info("State backend configured via flink-conf.yaml (Flink 2.x)");
 
         createCDSPipelineWithCDC(env);
 
@@ -464,6 +475,17 @@ public class Module3_ComprehensiveCDS_WithCDC {
             cdsState.setLastProcessedTime(System.currentTimeMillis());
             cdsState.setEventsSinceLastCDS(cdsState.getEventsSinceLastCDS() + 1);
             patientCDSState.update(cdsState);
+
+            // Per-phase latency summary
+            long totalPhaseMs = 0;
+            for (CDSPhaseResult pr : allResults) {
+                totalPhaseMs += pr.getDurationMs();
+            }
+            LOG.debug("CDS latency breakdown: patient={} totalPhaseMs={} phases={}",
+                    context.getPatientId(), totalPhaseMs,
+                    allResults.stream()
+                            .map(pr -> pr.getPhaseName() + "=" + pr.getDurationMs() + "ms")
+                            .collect(Collectors.joining(", ")));
 
             LOG.info("CDS complete: patient={} protocols={} mhri={} safety={}",
                     context.getPatientId(),
