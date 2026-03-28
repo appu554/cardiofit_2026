@@ -309,7 +309,9 @@ public class Module4TestBuilder {
     }
 
     /**
-     * Build a LabTrendAlert for mapper tests
+     * Build a LabTrendAlert for mapper tests.
+     * Sets percentChange (required by mapper's severity logic), interpretation (required for
+     * patternDetails description), and representative first/last values.
      */
     public static LabTrendAlert labTrendAlert(String patientId, String labName, String direction) {
         LabTrendAlert alert = new LabTrendAlert();
@@ -317,6 +319,11 @@ public class Module4TestBuilder {
         alert.setLabName(labName);
         alert.setTrendDirection(direction);
         alert.setTimestamp(System.currentTimeMillis());
+        alert.setFirstValue(0.9);
+        alert.setLastValue(1.4);
+        alert.setAbsoluteChange(0.5);
+        alert.setPercentChange(55.6);
+        alert.setInterpretation("Creatinine rising — monitor renal function");
         return alert;
     }
 
@@ -330,6 +337,7 @@ public class Module4TestBuilder {
         alert.setVitalSignName(vitalName);
         alert.setCoefficientOfVariation(cv);
         alert.setTimestamp(System.currentTimeMillis());
+        alert.setVariabilityLevel("HIGH");
         return alert;
     }
 

@@ -1779,7 +1779,7 @@ public class Module4_PatternDetection {
     /**
      * Convert MEWSAlert to PatternEvent
      */
-    private static class MEWSAlertToPatternEventMapper implements MapFunction<MEWSAlert, PatternEvent> {
+    static class MEWSAlertToPatternEventMapper implements MapFunction<MEWSAlert, PatternEvent> {
         @Override
         public PatternEvent map(MEWSAlert alert) {
             PatternEvent event = new PatternEvent();
@@ -1816,7 +1816,7 @@ public class Module4_PatternDetection {
     /**
      * Convert LabTrendAlert to PatternEvent
      */
-    private static class LabTrendAlertToPatternEventMapper implements MapFunction<LabTrendAlert, PatternEvent> {
+    static class LabTrendAlertToPatternEventMapper implements MapFunction<LabTrendAlert, PatternEvent> {
         @Override
         public PatternEvent map(LabTrendAlert alert) {
             PatternEvent event = new PatternEvent();
@@ -1885,7 +1885,7 @@ public class Module4_PatternDetection {
     /**
      * Convert VitalVariabilityAlert to PatternEvent
      */
-    private static class VitalVariabilityAlertToPatternEventMapper implements MapFunction<VitalVariabilityAlert, PatternEvent> {
+    static class VitalVariabilityAlertToPatternEventMapper implements MapFunction<VitalVariabilityAlert, PatternEvent> {
         @Override
         public PatternEvent map(VitalVariabilityAlert alert) {
             PatternEvent event = new PatternEvent();
