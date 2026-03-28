@@ -274,49 +274,61 @@ public class Module3_ComprehensiveCDS_WithCDC {
             }
 
             // Read protocols from BroadcastState
-            ReadOnlyBroadcastState<String, SimplifiedProtocol> protocolState = ctx.getBroadcastState(PROTOCOL_STATE_DESCRIPTOR);
+            ReadOnlyBroadcastState<String, SimplifiedProtocol> protocolState =
+                ctx.getBroadcastState(PROTOCOL_STATE_DESCRIPTOR);
 
-            // Count protocols in BroadcastState
-            int protocolCount = 0;
             Map<String, SimplifiedProtocol> protocols = new HashMap<>();
             for (Map.Entry<String, SimplifiedProtocol> entry : protocolState.immutableEntries()) {
                 protocols.put(entry.getKey(), entry.getValue());
-                protocolCount++;
             }
 
+            // Create typed CDSEvent
             CDSEvent cdsEvent = new CDSEvent(context);
+            cdsEvent.setBroadcastStateReady(!protocols.isEmpty());
 
-            // Phase 1: Protocol Matching using BroadcastState protocols
-            List<SimplifiedProtocol> matchedProtocols = addProtocolData(context, cdsEvent, protocols);
+            List<CDSPhaseResult> allResults = new ArrayList<>();
 
-            // Phase 2: Clinical Scoring (already in context from Module 2)
-            addScoringData(context, cdsEvent);
+            // Phase 1: Protocol Matching
+            CDSPhaseResult phase1 = Module3PhaseExecutor.executePhase1(context, protocols);
+            allResults.add(phase1);
+            cdsEvent.addPhaseResult(phase1);
 
-            // Phase 4: Diagnostic Test Recommendations
-            addDiagnosticData(context, cdsEvent);
+            @SuppressWarnings("unchecked")
+            List<String> matchedProtocolIds = phase1.isActive()
+                    ? (List<String>) phase1.getDetail("matchedProtocolIds")
+                    : Collections.emptyList();
 
-            // Phase 5: Clinical Guidelines
-            addGuidelineData(context, cdsEvent);
+            // Phase 2: Clinical Scoring + MHRI
+            CDSPhaseResult phase2 = Module3PhaseExecutor.executePhase2(context);
+            allResults.add(phase2);
+            cdsEvent.addPhaseResult(phase2);
 
-            // Phase 6: Medication Safety
-            addMedicationData(context, cdsEvent);
+            // Phase 5: Guideline Concordance
+            CDSPhaseResult phase5 = Module3PhaseExecutor.executePhase5(
+                    context, matchedProtocolIds, protocols);
+            allResults.add(phase5);
+            cdsEvent.addPhaseResult(phase5);
 
-            // Phase 7: Evidence Attribution
-            addEvidenceData(context, cdsEvent);
+            // Phase 6: Medication Rules
+            CDSPhaseResult phase6 = Module3PhaseExecutor.executePhase6(context);
+            allResults.add(phase6);
+            cdsEvent.addPhaseResult(phase6);
 
-            // Phase 8A: Predictive Analytics
-            addPredictiveData(context, cdsEvent);
+            // Phase 7: Safety Checks
+            CDSPhaseResult phase7 = Module3PhaseExecutor.executePhase7(context);
+            allResults.add(phase7);
+            cdsEvent.addPhaseResult(phase7);
 
-            // Phase 8B-D: Pathways, Population Health, FHIR Integration
-            addAdvancedCDSData(context, cdsEvent);
+            // Phase 8: Output Composition (mutates cdsEvent)
+            Module3PhaseExecutor.executePhase8(cdsEvent, allResults);
 
-            // Generate Clinical Recommendations
-            generateClinicalRecommendations(context, cdsEvent, matchedProtocols);
+            LOG.info("CDS complete: patient={} protocols={} mhri={} safety={}",
+                    context.getPatientId(),
+                    cdsEvent.getProtocolsMatched(),
+                    cdsEvent.getMhriScore() != null ? cdsEvent.getMhriScore().getComposite() : "null",
+                    cdsEvent.getSafetyAlerts().size());
 
             out.collect(cdsEvent);
-
-            LOG.info("Processed CDS event for patient {} with {} protocols (from CDC BroadcastState), {} recommendations",
-                    context.getPatientId(), protocolCount, cdsEvent.getCdsRecommendations().size());
         }
 
         /**
@@ -359,170 +371,6 @@ public class Module3_ComprehensiveCDS_WithCDC {
             return protocol;
         }
 
-        /**
-         * Phase 1: Protocol matching using protocols from BroadcastState
-         */
-        private List<SimplifiedProtocol> addProtocolData(
-                EnrichedPatientContext context,
-                CDSEvent cdsEvent,
-                Map<String, SimplifiedProtocol> protocols) {
-
-            List<SimplifiedProtocol> matchedProtocols = new ArrayList<>();
-
-            try {
-                // TODO: Implement protocol matching logic using BroadcastState protocols
-                // For now, just count protocols
-                cdsEvent.addPhaseData("phase1_active", true);
-                cdsEvent.addPhaseData("phase1_protocol_count", protocols.size());
-                cdsEvent.addPhaseData("phase1_protocol_source", "CDC BroadcastState");
-                cdsEvent.addPhaseData("phase1_matched_protocols", matchedProtocols.size());
-
-                LOG.debug("Protocol matching using {} protocols from CDC BroadcastState for patient {}",
-                        protocols.size(), context.getPatientId());
-
-            } catch (Exception e) {
-                LOG.error("Phase 1 error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-
-            return matchedProtocols;
-        }
-
-        // Phase 2-8 methods (same as original Module3_ComprehensiveCDS.java)
-
-        private void addScoringData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                PatientContextState state = context.getPatientState();
-                if (state != null) {
-                    cdsEvent.addPhaseData("phase2_news2", state.getNews2Score());
-                    cdsEvent.addPhaseData("phase2_qsofa", state.getQsofaScore());
-                    cdsEvent.addPhaseData("phase2_active", true);
-                }
-            } catch (Exception e) {
-                LOG.error("Phase 2 error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void addDiagnosticData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                DiagnosticTestLoader loader = DiagnosticTestLoader.getInstance();
-                cdsEvent.addPhaseData("phase4_active", true);
-                cdsEvent.addPhaseData("phase4_lab_test_count", loader.getAllLabTests().size());
-                cdsEvent.addPhaseData("phase4_imaging_count", loader.getAllImagingStudies().size());
-            } catch (Exception e) {
-                LOG.error("Phase 4 error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void addGuidelineData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                GuidelineLoader loader = GuidelineLoader.getInstance();
-                cdsEvent.addPhaseData("phase5_active", true);
-                cdsEvent.addPhaseData("phase5_guideline_count", loader.getGuidelineCount());
-            } catch (Exception e) {
-                LOG.error("Phase 5 error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void addMedicationData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                cdsEvent.addPhaseData("phase6_active", true);
-                cdsEvent.addPhaseData("phase6_medication_database", "loaded");
-            } catch (Exception e) {
-                LOG.error("Phase 6 error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void addEvidenceData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                CitationLoader loader = CitationLoader.getInstance();
-                cdsEvent.addPhaseData("phase7_active", true);
-                cdsEvent.addPhaseData("phase7_citation_count", loader.getCitationCount());
-            } catch (Exception e) {
-                LOG.error("Phase 7 error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void addPredictiveData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                cdsEvent.addPhaseData("phase8a_active", true);
-                cdsEvent.addPhaseData("phase8a_predictive_models", "initialized");
-            } catch (Exception e) {
-                LOG.error("Phase 8A error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void addAdvancedCDSData(EnrichedPatientContext context, CDSEvent cdsEvent) {
-            try {
-                cdsEvent.addPhaseData("phase8b_pathways", "active");
-                cdsEvent.addPhaseData("phase8c_population_health", "active");
-                cdsEvent.addPhaseData("phase8d_fhir_integration", "active");
-            } catch (Exception e) {
-                LOG.error("Phase 8B-D error for patient {}: {}", context.getPatientId(), e.getMessage());
-            }
-        }
-
-        private void generateClinicalRecommendations(
-                EnrichedPatientContext context,
-                CDSEvent cdsEvent,
-                List<SimplifiedProtocol> matchedProtocols) {
-            // TODO: Implement recommendation generation
-            // Placeholder for now
-            cdsEvent.addCDSRecommendation("recommendationEngine", "CDC-enabled");
-        }
-    }
-
-    /**
-     * CDS Event data model
-     */
-    public static class CDSEvent implements Serializable {
-        private static final long serialVersionUID = 1L;
-
-        private String patientId;
-        private PatientContextState patientState;
-        private String eventType;
-        private long eventTime;
-        private long processingTime;
-        private long latencyMs;
-        private Map<String, Object> phaseData;
-        private Map<String, Object> cdsRecommendations;
-
-        public CDSEvent() {
-            this.phaseData = new HashMap<>();
-            this.cdsRecommendations = new HashMap<>();
-        }
-
-        public CDSEvent(EnrichedPatientContext context) {
-            this.patientId = context.getPatientId();
-            this.patientState = context.getPatientState();
-            this.eventType = context.getEventType();
-            this.eventTime = context.getEventTime();
-            this.processingTime = context.getProcessingTime();
-            this.latencyMs = context.getLatencyMs();
-            this.phaseData = new HashMap<>();
-            this.cdsRecommendations = new HashMap<>();
-        }
-
-        public void addPhaseData(String key, Object value) {
-            this.phaseData.put(key, value);
-        }
-
-        public void addCDSRecommendation(String key, Object value) {
-            this.cdsRecommendations.put(key, value);
-        }
-
-        public String getPatientId() {
-            return patientId;
-        }
-
-        public Map<String, Object> getCdsRecommendations() {
-            return cdsRecommendations;
-        }
-
-        @Override
-        public String toString() {
-            return String.format("CDSEvent{patientId='%s', eventType='%s', phaseDataPoints=%d, cdsRecommendations=%d}",
-                    patientId, eventType, phaseData.size(), cdsRecommendations.size());
-        }
     }
 
     // ========== KAFKA SOURCE/SINK HELPERS ==========
