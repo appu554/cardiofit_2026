@@ -554,74 +554,74 @@ public class Module3PhaseExecutor {
     /**
      * Phase 8: Output Composition.
      * Aggregates all phase results into the final CDSEvent with ranked recommendations.
+     * Single-pass iteration over phase results for efficiency.
      */
     public static void executePhase8(CDSEvent cdsEvent, List<CDSPhaseResult> phaseResults) {
         long start = System.nanoTime();
         CDSPhaseResult result = new CDSPhaseResult("PHASE_8_OUTPUT_COMPOSITION");
 
-        // Aggregate safety alerts from Phase 7
         for (CDSPhaseResult pr : phaseResults) {
-            if ("PHASE_7_SAFETY_CHECK".equals(pr.getPhaseName())) {
-                Object safetyObj = pr.getDetail("safetyResult");
-                SafetyCheckResult safety = safetyObj instanceof SafetyCheckResult ? (SafetyCheckResult) safetyObj : null;
-                if (safety != null && safety.getTotalAlerts() > 0) {
-                    for (String alert : safety.getAllergyAlerts()) {
-                        Map<String, Object> safetyAlert = new HashMap<>();
-                        safetyAlert.put("type", "ALLERGY");
-                        safetyAlert.put("message", alert);
-                        safetyAlert.put("severity", "HIGH");
-                        cdsEvent.addSafetyAlert(safetyAlert);
+            String phase = pr.getPhaseName();
+            if (phase == null) continue;
+
+            switch (phase) {
+                case "PHASE_1_PROTOCOL_MATCH": {
+                    Object count = pr.getDetail("matchedCount");
+                    if (count instanceof Number) {
+                        cdsEvent.setProtocolsMatched(((Number) count).intValue());
                     }
-                    for (String alert : safety.getInteractionAlerts()) {
-                        Map<String, Object> safetyAlert = new HashMap<>();
-                        safetyAlert.put("type", "INTERACTION");
-                        safetyAlert.put("message", alert);
-                        safetyAlert.put("severity", safety.getHighestSeverity());
-                        cdsEvent.addSafetyAlert(safetyAlert);
+                    break;
+                }
+                case "PHASE_2_CLINICAL_SCORING": {
+                    Object mhriObj = pr.getDetail("mhriScore");
+                    if (mhriObj instanceof MHRIScore) {
+                        cdsEvent.setMhriScore((MHRIScore) mhriObj);
                     }
+                    break;
                 }
-            }
-        }
-
-        // Extract MHRI from Phase 2
-        for (CDSPhaseResult pr : phaseResults) {
-            if ("PHASE_2_CLINICAL_SCORING".equals(pr.getPhaseName())) {
-                Object mhriObj = pr.getDetail("mhriScore");
-                MHRIScore mhri = mhriObj instanceof MHRIScore ? (MHRIScore) mhriObj : null;
-                if (mhri != null) {
-                    cdsEvent.setMhriScore(mhri);
-                }
-            }
-        }
-
-        // Extract protocol match count from Phase 1
-        for (CDSPhaseResult pr : phaseResults) {
-            if ("PHASE_1_PROTOCOL_MATCH".equals(pr.getPhaseName())) {
-                Object count = pr.getDetail("matchedCount");
-                if (count instanceof Number) {
-                    cdsEvent.setProtocolsMatched(((Number) count).intValue());
-                }
-            }
-        }
-
-        // Generate recommendations from guideline concordance (Phase 5)
-        for (CDSPhaseResult pr : phaseResults) {
-            if ("PHASE_5_GUIDELINE_CONCORDANCE".equals(pr.getPhaseName())) {
-                Object guidelinesObj = pr.getDetail("guidelineMatches");
-                @SuppressWarnings("unchecked")
-                List<GuidelineMatch> guidelines = guidelinesObj instanceof List ? (List<GuidelineMatch>) guidelinesObj : null;
-                if (guidelines != null) {
-                    for (GuidelineMatch gm : guidelines) {
-                        if ("DISCORDANT".equals(gm.getConcordance()) && gm.getRecommendation() != null) {
-                            Map<String, Object> rec = new HashMap<>();
-                            rec.put("type", "GUIDELINE_DISCORDANCE");
-                            rec.put("guidelineId", gm.getGuidelineId());
-                            rec.put("recommendation", gm.getRecommendation());
-                            rec.put("confidence", gm.getConfidence());
-                            cdsEvent.addRecommendation(rec);
+                case "PHASE_5_GUIDELINE_CONCORDANCE": {
+                    Object guidelinesObj = pr.getDetail("guidelineMatches");
+                    if (guidelinesObj instanceof List) {
+                        @SuppressWarnings("unchecked")
+                        List<GuidelineMatch> guidelines = (List<GuidelineMatch>) guidelinesObj;
+                        for (GuidelineMatch gm : guidelines) {
+                            if ("DISCORDANT".equals(gm.getConcordance()) && gm.getRecommendation() != null) {
+                                Map<String, Object> rec = new HashMap<>();
+                                rec.put("type", "GUIDELINE_DISCORDANCE");
+                                rec.put("guidelineId", gm.getGuidelineId());
+                                rec.put("recommendation", gm.getRecommendation());
+                                rec.put("confidence", gm.getConfidence());
+                                cdsEvent.addRecommendation(rec);
+                            }
                         }
                     }
+                    break;
                 }
+                case "PHASE_7_SAFETY_CHECK": {
+                    Object safetyObj = pr.getDetail("safetyResult");
+                    if (safetyObj instanceof SafetyCheckResult) {
+                        SafetyCheckResult safety = (SafetyCheckResult) safetyObj;
+                        if (safety.getTotalAlerts() > 0) {
+                            for (String alert : safety.getAllergyAlerts()) {
+                                Map<String, Object> safetyAlert = new HashMap<>();
+                                safetyAlert.put("type", "ALLERGY");
+                                safetyAlert.put("message", alert);
+                                safetyAlert.put("severity", "HIGH");
+                                cdsEvent.addSafetyAlert(safetyAlert);
+                            }
+                            for (String alert : safety.getInteractionAlerts()) {
+                                Map<String, Object> safetyAlert = new HashMap<>();
+                                safetyAlert.put("type", "INTERACTION");
+                                safetyAlert.put("message", alert);
+                                safetyAlert.put("severity", safety.getHighestSeverity());
+                                cdsEvent.addSafetyAlert(safetyAlert);
+                            }
+                        }
+                    }
+                    break;
+                }
+                default:
+                    break; // Phase 4, Phase 6 — no output composition needed
             }
         }
 
