@@ -440,4 +440,244 @@ public class Module4TestBuilder {
         map.put("intervention", List.of(intervention));
         return map;
     }
+
+    // ── EnrichedEvent builders (for ClinicalPatterns AKI tests) ──────
+
+    /**
+     * Build an EnrichedEvent with baseline creatinine for AKI pattern testing.
+     * Creatinine = 1.0 mg/dL (normal baseline).
+     */
+    public static EnrichedEvent baselineCreatinineEvent(String patientId) {
+        EnrichedEvent event = new EnrichedEvent();
+        event.setId(UUID.randomUUID().toString());
+        event.setPatientId(patientId);
+        event.setEventTime(System.currentTimeMillis() - 86400_000); // 24h ago
+
+        Map<String, Object> payload = new HashMap<>();
+        Map<String, Object> labValues = new HashMap<>();
+        labValues.put("creatinine", 1.0);
+        payload.put("labValues", labValues);
+        event.setPayload(payload);
+
+        RiskIndicators risk = new RiskIndicators();
+        event.setRiskIndicators(risk);
+
+        return event;
+    }
+
+    /**
+     * Build an EnrichedEvent with elevated creatinine for AKI KDIGO Stage 1.
+     * Creatinine = 1.8 mg/dL (1.8x baseline of 1.0 → Stage 1).
+     */
+    public static EnrichedEvent elevatedCreatinineEvent(String patientId, double creatinineValue) {
+        EnrichedEvent event = new EnrichedEvent();
+        event.setId(UUID.randomUUID().toString());
+        event.setPatientId(patientId);
+        event.setEventTime(System.currentTimeMillis());
+
+        Map<String, Object> payload = new HashMap<>();
+        Map<String, Object> labValues = new HashMap<>();
+        labValues.put("creatinine", creatinineValue);
+        payload.put("labValues", labValues);
+        event.setPayload(payload);
+
+        RiskIndicators risk = new RiskIndicators();
+        event.setRiskIndicators(risk);
+
+        return event;
+    }
+
+    /**
+     * Build an EnrichedEvent with AKI risk factors (hypotension + nephrotoxic meds).
+     */
+    public static EnrichedEvent akiRiskFactorEvent(String patientId) {
+        EnrichedEvent event = new EnrichedEvent();
+        event.setId(UUID.randomUUID().toString());
+        event.setPatientId(patientId);
+        event.setEventTime(System.currentTimeMillis());
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("labValues", new HashMap<>());
+        event.setPayload(payload);
+
+        RiskIndicators risk = new RiskIndicators();
+        risk.setHypotension(true);
+        risk.setOnNephrotoxicMeds(true);
+        event.setRiskIndicators(risk);
+
+        return event;
+    }
+
+    // ── Sepsis-specific SemanticEvent builders ──────────────────────
+
+    /**
+     * Build a sepsis baseline SemanticEvent with normal vitals.
+     */
+    @SuppressWarnings("unchecked")
+    public static SemanticEvent sepsisBaselineEvent(String patientId) {
+        SemanticEvent se = baselineVitalEvent(patientId);
+        Map<String, Object> vitalSigns = (Map<String, Object>) se.getClinicalData().get("vitalSigns");
+        vitalSigns.put("heart_rate", 80);
+        vitalSigns.put("systolic_bp", 120);
+        vitalSigns.put("respiratory_rate", 16);
+        vitalSigns.put("temperature", 37.0);
+        vitalSigns.put("oxygen_saturation", 98);
+
+        Map<String, Object> labValues = new HashMap<>();
+        labValues.put("lactate", 1.0);
+        labValues.put("creatinine", 0.9);
+        labValues.put("platelets", 250000);
+        se.getClinicalData().put("labValues", labValues);
+
+        return se;
+    }
+
+    /**
+     * Build a sepsis early warning SemanticEvent with elevated vitals (qSOFA >= 2).
+     * RR=24, SBP=95 → qSOFA = 2 (RR>=22 + SBP<=100).
+     */
+    @SuppressWarnings("unchecked")
+    public static SemanticEvent sepsisWarningEvent(String patientId) {
+        SemanticEvent se = baselineVitalEvent(patientId);
+        Map<String, Object> vitalSigns = (Map<String, Object>) se.getClinicalData().get("vitalSigns");
+        vitalSigns.put("heart_rate", 110);
+        vitalSigns.put("systolic_bp", 95);
+        vitalSigns.put("respiratory_rate", 24);
+        vitalSigns.put("temperature", 38.5);
+        vitalSigns.put("oxygen_saturation", 93);
+
+        Map<String, Object> labValues = new HashMap<>();
+        labValues.put("lactate", 2.5);
+        labValues.put("creatinine", 1.2);
+        labValues.put("platelets", 180000);
+        se.getClinicalData().put("labValues", labValues);
+
+        return se;
+    }
+
+    /**
+     * Build a sepsis deterioration SemanticEvent with organ dysfunction.
+     * Lactate > 4.0 → organ dysfunction = true.
+     */
+    @SuppressWarnings("unchecked")
+    public static SemanticEvent sepsisDeteriorationEvent(String patientId) {
+        SemanticEvent se = baselineVitalEvent(patientId);
+        Map<String, Object> vitalSigns = (Map<String, Object>) se.getClinicalData().get("vitalSigns");
+        vitalSigns.put("heart_rate", 130);
+        vitalSigns.put("systolic_bp", 80);
+        vitalSigns.put("respiratory_rate", 30);
+        vitalSigns.put("temperature", 39.5);
+        vitalSigns.put("oxygen_saturation", 88);
+
+        Map<String, Object> labValues = new HashMap<>();
+        labValues.put("lactate", 4.5);
+        labValues.put("creatinine", 2.5);
+        labValues.put("platelets", 80000);
+        se.getClinicalData().put("labValues", labValues);
+
+        return se;
+    }
+
+    /**
+     * Build a rapid deterioration set of SemanticEvents.
+     * HR baseline=80 → HR elevated=125 → RR elevated=30 → O2sat decreased=85.
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, List<SemanticEvent>> rapidDeteriorationMatchMap(String patientId) {
+        Map<String, List<SemanticEvent>> map = new HashMap<>();
+
+        SemanticEvent hrBaseline = baselineVitalEvent(patientId);
+        ((Map<String, Object>) hrBaseline.getClinicalData().get("vitalSigns")).put("heart_rate", 80.0);
+        hrBaseline.setEventTime(System.currentTimeMillis() - 1800_000);
+
+        SemanticEvent hrElevated = baselineVitalEvent(patientId);
+        ((Map<String, Object>) hrElevated.getClinicalData().get("vitalSigns")).put("heart_rate", 125.0);
+        hrElevated.setEventTime(System.currentTimeMillis() - 1200_000);
+
+        SemanticEvent rrElevated = baselineVitalEvent(patientId);
+        ((Map<String, Object>) rrElevated.getClinicalData().get("vitalSigns")).put("respiratory_rate", 30.0);
+        rrElevated.setEventTime(System.currentTimeMillis() - 600_000);
+
+        SemanticEvent o2satDecreased = baselineVitalEvent(patientId);
+        ((Map<String, Object>) o2satDecreased.getClinicalData().get("vitalSigns")).put("oxygen_saturation", 85.0);
+        o2satDecreased.setEventTime(System.currentTimeMillis());
+
+        map.put("hr_baseline", List.of(hrBaseline));
+        map.put("hr_elevated", List.of(hrElevated));
+        map.put("rr_elevated", List.of(rrElevated));
+        map.put("o2sat_decreased", List.of(o2satDecreased));
+        return map;
+    }
+
+    /**
+     * Build a drug-lab monitoring match map with a medication started event.
+     */
+    public static Map<String, List<SemanticEvent>> drugLabMonitoringMatchMap(String patientId, String medicationName) {
+        Map<String, List<SemanticEvent>> map = new HashMap<>();
+
+        SemanticEvent medEvent = baselineVitalEvent(patientId);
+        medEvent.setEventType(EventType.MEDICATION_ORDERED);
+        Map<String, Object> medData = new HashMap<>();
+        medData.put("medication_name", medicationName);
+        medEvent.getClinicalData().put("medications", medData);
+
+        map.put("high_risk_med_started", List.of(medEvent));
+        return map;
+    }
+
+    /**
+     * Build a sepsis pathway compliance match map.
+     * @param cultureMinsAfterDx minutes from diagnosis to blood cultures
+     * @param abxMinsAfterDx minutes from diagnosis to antibiotics
+     */
+    public static Map<String, List<SemanticEvent>> sepsisPathwayMatchMap(
+            String patientId, double cultureMinsAfterDx, double abxMinsAfterDx) {
+        Map<String, List<SemanticEvent>> map = new HashMap<>();
+        long baseTime = System.currentTimeMillis() - 7200_000;
+
+        SemanticEvent diagnosis = baselineVitalEvent(patientId);
+        diagnosis.setEventTime(baseTime);
+
+        SemanticEvent cultures = baselineVitalEvent(patientId);
+        cultures.setEventTime(baseTime + (long)(cultureMinsAfterDx * 60_000));
+
+        SemanticEvent antibiotics = baselineVitalEvent(patientId);
+        antibiotics.setEventTime(baseTime + (long)(abxMinsAfterDx * 60_000));
+
+        map.put("sepsis_diagnosis", List.of(diagnosis));
+        map.put("blood_cultures_ordered", List.of(cultures));
+        map.put("antibiotics_started", List.of(antibiotics));
+        return map;
+    }
+
+    /**
+     * Build an AKI CEP match map for ClinicalPatterns.AKIPatternSelectFunction.
+     */
+    public static Map<String, List<EnrichedEvent>> akiMatchMap(String patientId, double elevatedCreatinine) {
+        Map<String, List<EnrichedEvent>> map = new HashMap<>();
+        map.put("baseline_creatinine", List.of(baselineCreatinineEvent(patientId)));
+        map.put("elevated_creatinine", List.of(elevatedCreatinineEvent(patientId, elevatedCreatinine)));
+        map.put("risk_factor_present", List.of(akiRiskFactorEvent(patientId)));
+        return map;
+    }
+
+    /**
+     * Build a sepsis CEP match map for ClinicalPatterns.SepsisPatternSelectFunction.
+     */
+    public static Map<String, List<SemanticEvent>> sepsisMatchMap(String patientId) {
+        Map<String, List<SemanticEvent>> map = new HashMap<>();
+        SemanticEvent baseline = sepsisBaselineEvent(patientId);
+        baseline.setEventTime(System.currentTimeMillis() - 3600_000);
+
+        SemanticEvent warning = sepsisWarningEvent(patientId);
+        warning.setEventTime(System.currentTimeMillis() - 1800_000);
+
+        SemanticEvent deterioration = sepsisDeteriorationEvent(patientId);
+        deterioration.setEventTime(System.currentTimeMillis());
+
+        map.put("baseline", List.of(baseline));
+        map.put("early_warning", List.of(warning));
+        map.put("deterioration", List.of(deterioration));
+        return map;
+    }
 }
