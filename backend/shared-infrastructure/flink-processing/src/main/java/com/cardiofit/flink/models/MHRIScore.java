@@ -79,6 +79,19 @@ public class MHRIScore implements Serializable {
         double e = engagementComponent != null ? engagementComponent : 0.0;
 
         this.composite = (g * gW) + (h * hW) + (r * rW) + (m * mW) + (e * eW);
+
+        // Glycemic × Hemodynamic interaction: superlinear risk when both are elevated (≥60).
+        // Clinical rationale: uncontrolled diabetes + uncontrolled hypertension compound
+        // cardiovascular risk beyond what linear weighting captures.
+        // Bonus is normalized to [0, 5] points max (when both components are 100).
+        if (g >= 60.0 && h >= 60.0) {
+            double gExcess = (g - 60.0) / 40.0; // 0.0 to 1.0
+            double hExcess = (h - 60.0) / 40.0; // 0.0 to 1.0
+            double interactionBonus = 5.0 * gExcess * hExcess;
+            this.composite += interactionBonus;
+        }
+
+        this.composite = Math.min(100.0, this.composite); // Cap at 100
         this.riskCategory = classifyRisk(this.composite);
         this.computedAt = System.currentTimeMillis();
     }

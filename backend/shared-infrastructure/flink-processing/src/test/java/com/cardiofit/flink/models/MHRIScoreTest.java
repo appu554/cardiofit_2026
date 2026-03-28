@@ -91,4 +91,42 @@ public class MHRIScoreTest {
         // = 14.0 + 16.5 + 11.25 + 6.0 + 12.0 = 59.75
         assertEquals(59.75, score.getComposite(), 0.01);
     }
+
+    @Test
+    void interactionTerm_elevatedGlycemicAndHemodynamic() {
+        MHRIScore score = new MHRIScore();
+        score.setGlycemicComponent(80.0);  // elevated
+        score.setHemodynamicComponent(75.0); // elevated
+        score.setRenalComponent(30.0);
+        score.setMetabolicComponent(20.0);
+        score.setEngagementComponent(25.0);
+        score.setDataTier("TIER_3_SMBG");
+
+        score.computeComposite();
+
+        // Base: (80*0.15) + (75*0.30) + (30*0.25) + (20*0.15) + (25*0.15)
+        //     = 12 + 22.5 + 7.5 + 3 + 3.75 = 48.75
+        // Interaction: both >=60 → bonus = 5.0 * ((80-60)/40) * ((75-60)/40) = 5.0 * 0.5 * 0.375 = 0.9375
+        // Total: 48.75 + 0.9375 = 49.6875
+        double compositeWithInteraction = score.getComposite();
+        assertTrue(compositeWithInteraction > 48.75,
+                "Interaction term should boost composite above base 48.75, got " + compositeWithInteraction);
+    }
+
+    @Test
+    void interactionTerm_noBoostWhenBelowThreshold() {
+        MHRIScore score = new MHRIScore();
+        score.setGlycemicComponent(40.0);  // below 60
+        score.setHemodynamicComponent(75.0);
+        score.setRenalComponent(30.0);
+        score.setMetabolicComponent(20.0);
+        score.setEngagementComponent(25.0);
+        score.setDataTier("TIER_3_SMBG");
+
+        score.computeComposite();
+
+        // Base only: (40*0.15) + (75*0.30) + (30*0.25) + (20*0.15) + (25*0.15)
+        //          = 6 + 22.5 + 7.5 + 3 + 3.75 = 42.75
+        assertEquals(42.75, score.getComposite(), 0.01);
+    }
 }
