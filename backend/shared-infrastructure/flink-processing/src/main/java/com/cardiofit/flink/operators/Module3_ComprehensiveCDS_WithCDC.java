@@ -255,6 +255,7 @@ public class Module3_ComprehensiveCDS_WithCDC {
 
         private transient DrugInteractionAnalyzer drugInteractionAnalyzer;
         private transient boolean initialized;
+        private transient ValueState<PatientCDSState> patientCDSState;
 
         @Override
         public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
@@ -296,6 +297,17 @@ public class Module3_ComprehensiveCDS_WithCDC {
 
                 initialized = true;
                 LOG.info("=== CDS PROCESSOR INITIALIZED (Protocols will be loaded from CDC BroadcastState) ===");
+
+                // Patient CDS state with 7-day TTL
+                StateTtlConfig ttlConfig = StateTtlConfig.newBuilder(Duration.ofDays(7))
+                        .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                        .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                        .build();
+
+                ValueStateDescriptor<PatientCDSState> stateDescriptor =
+                        new ValueStateDescriptor<>("patient-cds-state", PatientCDSState.class);
+                stateDescriptor.enableTimeToLive(ttlConfig);
+                patientCDSState = getRuntimeContext().getState(stateDescriptor);
 
             } catch (Exception e) {
                 LOG.error("=== INITIALIZATION FAILED ===", e);
@@ -391,9 +403,21 @@ public class Module3_ComprehensiveCDS_WithCDC {
                 protocols.put(entry.getKey(), entry.getValue());
             }
 
+            // Cold-start readiness gate
+            PatientCDSState cdsState = patientCDSState.value();
+            if (cdsState == null) {
+                cdsState = new PatientCDSState();
+            }
+
+            if (!protocols.isEmpty() && !cdsState.isBroadcastStateSeeded()) {
+                cdsState.setBroadcastStateSeeded(true);
+                LOG.info("Broadcast state seeded for patient={}, protocols={}",
+                        context.getPatientId(), protocols.size());
+            }
+
             // Create typed CDSEvent
             CDSEvent cdsEvent = new CDSEvent(context);
-            cdsEvent.setBroadcastStateReady(!protocols.isEmpty());
+            cdsEvent.setBroadcastStateReady(cdsState.isBroadcastStateSeeded());
 
             List<CDSPhaseResult> allResults = new ArrayList<>();
 
@@ -430,6 +454,16 @@ public class Module3_ComprehensiveCDS_WithCDC {
 
             // Phase 8: Output Composition (mutates cdsEvent)
             Module3PhaseExecutor.executePhase8(cdsEvent, allResults);
+
+            // Update patient CDS state
+            if (cdsEvent.getMhriScore() != null && cdsEvent.getMhriScore().getComposite() != null) {
+                cdsState.addMHRI(cdsEvent.getMhriScore().getComposite());
+            }
+            cdsState.setActiveProtocols(new HashSet<>(matchedProtocolIds != null
+                    ? matchedProtocolIds : Collections.emptyList()));
+            cdsState.setLastProcessedTime(System.currentTimeMillis());
+            cdsState.setEventsSinceLastCDS(cdsState.getEventsSinceLastCDS() + 1);
+            patientCDSState.update(cdsState);
 
             LOG.info("CDS complete: patient={} protocols={} mhri={} safety={}",
                     context.getPatientId(),
@@ -478,6 +512,45 @@ public class Module3_ComprehensiveCDS_WithCDC {
             protocol.setEvidenceSource("kb3_guidelines");
 
             return protocol;
+        }
+
+        /**
+         * Per-patient CDS state accumulated across events.
+         * Stored in RocksDB with 7-day TTL.
+         */
+        public static class PatientCDSState implements Serializable {
+            private static final long serialVersionUID = 1L;
+            private List<Double> mhriHistory;      // Last N MHRI scores for trend
+            private Set<String> activeProtocols;    // Currently active protocol IDs
+            private long lastProcessedTime;
+            private int eventsSinceLastCDS;
+            private boolean broadcastStateSeeded;   // True after first broadcast event received
+
+            public PatientCDSState() {
+                this.mhriHistory = new ArrayList<>();
+                this.activeProtocols = new HashSet<>();
+                this.lastProcessedTime = 0;
+                this.eventsSinceLastCDS = 0;
+                this.broadcastStateSeeded = false;
+            }
+
+            public void addMHRI(double score) {
+                mhriHistory.add(score);
+                if (mhriHistory.size() > 10) {
+                    mhriHistory.remove(0); // Keep last 10
+                }
+            }
+
+            // Getters and setters
+            public List<Double> getMhriHistory() { return mhriHistory; }
+            public Set<String> getActiveProtocols() { return activeProtocols; }
+            public void setActiveProtocols(Set<String> p) { this.activeProtocols = p; }
+            public long getLastProcessedTime() { return lastProcessedTime; }
+            public void setLastProcessedTime(long t) { this.lastProcessedTime = t; }
+            public int getEventsSinceLastCDS() { return eventsSinceLastCDS; }
+            public void setEventsSinceLastCDS(int c) { this.eventsSinceLastCDS = c; }
+            public boolean isBroadcastStateSeeded() { return broadcastStateSeeded; }
+            public void setBroadcastStateSeeded(boolean s) { this.broadcastStateSeeded = s; }
         }
 
     }
