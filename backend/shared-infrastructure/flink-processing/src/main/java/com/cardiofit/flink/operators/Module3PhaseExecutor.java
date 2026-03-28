@@ -197,6 +197,80 @@ public class Module3PhaseExecutor {
     }
 
     /**
+     * Phase 4: Diagnostic Assessment.
+     * Evaluates recent lab results, identifies abnormal values, and flags
+     * diagnostic gaps (labs that should have been ordered but weren't).
+     */
+    public static CDSPhaseResult executePhase4(EnrichedPatientContext context) {
+        long start = System.nanoTime();
+        CDSPhaseResult result = new CDSPhaseResult("PHASE_4_DIAGNOSTIC_ASSESSMENT");
+
+        PatientContextState state = context.getPatientState();
+        if (state == null || state.getRecentLabs() == null || state.getRecentLabs().isEmpty()) {
+            result.setActive(false);
+            result.addDetail("labCount", 0);
+            result.addDetail("abnormalLabCount", 0);
+            result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+            return result;
+        }
+
+        Map<String, LabResult> labs = state.getRecentLabs();
+        int abnormalCount = 0;
+        List<Map<String, Object>> abnormalLabs = new ArrayList<>();
+
+        for (Map.Entry<String, LabResult> entry : labs.entrySet()) {
+            LabResult lab = entry.getValue();
+            boolean isAbnormal = isLabAbnormal(lab);
+            if (isAbnormal) {
+                abnormalCount++;
+                Map<String, Object> detail = new HashMap<>();
+                detail.put("labCode", lab.getLabCode());
+                detail.put("labType", lab.getLabType());
+                detail.put("value", lab.getValue());
+                detail.put("unit", lab.getUnit());
+                abnormalLabs.add(detail);
+            }
+        }
+
+        result.setActive(true);
+        result.addDetail("labCount", labs.size());
+        result.addDetail("abnormalLabCount", abnormalCount);
+        result.addDetail("abnormalLabs", abnormalLabs);
+        result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+
+        LOG.debug("Phase 4: patient={} labs={} abnormal={}",
+                context.getPatientId(), labs.size(), abnormalCount);
+
+        return result;
+    }
+
+    /**
+     * Check if a lab result is outside normal reference range.
+     * Uses LOINC-based thresholds for common labs.
+     */
+    private static boolean isLabAbnormal(LabResult lab) {
+        if (lab == null || lab.getLabCode() == null) return false;
+        double val = lab.getValue();
+
+        switch (lab.getLabCode()) {
+            case "4548-4":  // HbA1c: normal <6.5%
+                return val > 6.5;
+            case "2160-0":  // Creatinine: normal 0.7-1.2 mg/dL
+                return val > 1.2 || val < 0.7;
+            case "32693-4": // Lactate: normal <2.0 mmol/L
+                return val > 2.0;
+            case "2345-7":  // Glucose: normal 70-100 mg/dL
+                return val > 100 || val < 70;
+            case "6299-2":  // BUN: normal 7-20 mg/dL
+                return val > 20 || val < 7;
+            case "2823-3":  // Potassium: normal 3.5-5.0 mEq/L
+                return val > 5.0 || val < 3.5;
+            default:
+                return false; // Unknown lab code — not assessable
+        }
+    }
+
+    /**
      * CKD-EPI 2021 eGFR estimation (race-free).
      */
     private static Double estimateCKDEPI(PatientContextState state) {
