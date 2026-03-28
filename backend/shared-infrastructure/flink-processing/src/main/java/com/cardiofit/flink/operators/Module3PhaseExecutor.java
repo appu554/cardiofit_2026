@@ -500,27 +500,59 @@ public class Module3PhaseExecutor {
         return result;
     }
 
-    // TODO(KB-4): Replace with medication-class-aware concordance when KB-4 broadcast state is wired (Task 10)
-    private static String assessConcordance(PatientContextState state, SimplifiedProtocol protocol) {
-        if (state == null || state.getActiveMedications() == null) return "UNKNOWN";
+    // Medication class keywords for concordance assessment.
+    // Maps protocol categories to expected medication class indicators.
+    private static final Map<String, List<String>> CATEGORY_MED_KEYWORDS = new HashMap<>();
+    static {
+        CATEGORY_MED_KEYWORDS.put("CARDIOLOGY", Arrays.asList(
+                "telmisartan", "losartan", "valsartan",          // ARBs
+                "lisinopril", "enalapril", "ramipril",            // ACE inhibitors
+                "amlodipine", "nifedipine",                       // CCBs
+                "metoprolol", "atenolol", "carvedilol",           // Beta-blockers
+                "hydrochlorothiazide", "chlorthalidone"           // Thiazides
+        ));
+        CATEGORY_MED_KEYWORDS.put("SEPSIS", Arrays.asList(
+                "ceftriaxone", "piperacillin", "meropenem",       // IV antibiotics
+                "vancomycin", "ciprofloxacin", "metronidazole"
+        ));
+    }
 
-        // Simple concordance: if patient has medications and protocol is cardiology,
-        // check if antihypertensives are present for HTN protocols
+    /**
+     * Assess concordance between patient's medications and protocol category.
+     * Checks if the patient is on a medication class consistent with the protocol.
+     */
+    private static String assessConcordance(PatientContextState state, SimplifiedProtocol protocol) {
+        if (state == null || state.getActiveMedications() == null || state.getActiveMedications().isEmpty()) {
+            return "UNKNOWN";
+        }
+
         String category = protocol.getCategory();
-        if ("CARDIOLOGY".equals(category) && !state.getActiveMedications().isEmpty()) {
-            return "CONCORDANT";
+        List<String> expectedKeywords = CATEGORY_MED_KEYWORDS.get(category);
+        if (expectedKeywords == null) {
+            return "UNKNOWN"; // No concordance rules for this category
         }
+
+        // Check if any active medication matches expected class keywords
+        for (Medication med : state.getActiveMedications().values()) {
+            String medName = med.getName() != null ? med.getName().toLowerCase() : "";
+            for (String keyword : expectedKeywords) {
+                if (medName.contains(keyword)) {
+                    return "CONCORDANT";
+                }
+            }
+        }
+
+        // Patient has medications but none match expected class
         if ("SEPSIS".equals(category)) {
-            // Sepsis: check if antibiotics started (simplified)
-            return "PARTIAL";
+            return "PARTIAL"; // Sepsis: no antibiotics yet → partial compliance
         }
-        return "UNKNOWN";
+        return "DISCORDANT";
     }
 
     /**
      * Phase 6: Medication Safety & Dosing Rules.
-     * Validates active medications against KB-4 drug rules.
-     * Checks dose ranges and generates MedicationSafetyResult per drug.
+     * Validates active medications against basic safety rules.
+     * Flags renal dose adjustment needs when eGFR is impaired.
      */
     public static CDSPhaseResult executePhase6(EnrichedPatientContext context) {
         long start = System.nanoTime();
@@ -534,15 +566,26 @@ public class Module3PhaseExecutor {
             return result;
         }
 
+        // Check renal function for dose adjustment flagging
+        Double egfr = estimateCKDEPI(state);
+        boolean renalImpairment = (egfr != null && egfr < 60.0);
+
         List<MedicationSafetyResult> medResults = new ArrayList<>();
 
         for (Map.Entry<String, Medication> entry : state.getActiveMedications().entrySet()) {
             Medication med = entry.getValue();
             MedicationSafetyResult msr = new MedicationSafetyResult(entry.getKey(),
                     med.getName() != null ? med.getName() : entry.getKey());
-            // TODO(KB-4): Validate against KB-4 drug rules when broadcast state is wired (Task 10)
-            msr.setSafe(true);
-            msr.setContraindicationType("NONE");
+
+            // Flag renal dose adjustment for renally-cleared medications
+            if (renalImpairment && isRenallyClearedMedication(med.getName())) {
+                msr.setSafe(false);
+                msr.setContraindicationType("RENAL_DOSE_ADJUSTMENT");
+                msr.setReason(String.format("eGFR=%.0f mL/min — renal dose adjustment may be required", egfr));
+                msr.setRecommendation("Review dose for renal impairment per KB-4 drug rules");
+                msr.setSeverityScore(2);
+            }
+
             medResults.add(msr);
         }
 
@@ -550,9 +593,24 @@ public class Module3PhaseExecutor {
         result.addDetail("medicationResults", medResults);
         result.addDetail("totalMedications", medResults.size());
         result.addDetail("unsafeMedications", medResults.stream().filter(m -> !m.isSafe()).count());
+        if (egfr != null) result.addDetail("estimatedGFR", egfr);
         result.setDurationMs((System.nanoTime() - start) / 1_000_000);
 
         return result;
+    }
+
+    /**
+     * Known renally-cleared medications that require dose adjustment when eGFR <60.
+     */
+    private static final Set<String> RENALLY_CLEARED_MEDS = new HashSet<>(Arrays.asList(
+            "metformin", "digoxin", "gabapentin", "pregabalin", "allopurinol",
+            "dabigatran", "enoxaparin", "vancomycin", "gentamicin", "lithium"
+    ));
+
+    private static boolean isRenallyClearedMedication(String medName) {
+        if (medName == null) return false;
+        String lower = medName.toLowerCase();
+        return RENALLY_CLEARED_MEDS.stream().anyMatch(lower::contains);
     }
 
     /**
