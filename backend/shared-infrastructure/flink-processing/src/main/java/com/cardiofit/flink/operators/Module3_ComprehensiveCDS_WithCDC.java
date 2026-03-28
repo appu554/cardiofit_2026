@@ -529,47 +529,81 @@ public class Module3_ComprehensiveCDS_WithCDC {
         }
 
         /**
-         * Convert CDC ProtocolData to SimplifiedProtocol for BroadcastState
+         * Convert CDC ProtocolData to SimplifiedProtocol for BroadcastState.
          *
-         * Maps actual database fields from kb3_guidelines.clinical_protocols:
-         * - id → protocolId (convert integer to string)
-         * - protocol_name → name
-         * - specialty → specialty
-         * - version → version
-         * - content → description (if exists)
-         *
-         * Uses SimplifiedProtocol to avoid StackOverflowError from nested structures
+         * Attempts to parse triggerThresholds from the content field (JSON).
+         * If content contains {"triggerThresholds": {...}}, those are extracted.
+         * Otherwise falls back to category-based defaults for known categories.
          */
         private SimplifiedProtocol convertCDCToProtocol(ProtocolCDCEvent.ProtocolData cdcData) {
             SimplifiedProtocol protocol = new SimplifiedProtocol();
 
-            // Map actual database fields to SimplifiedProtocol model
-            protocol.setProtocolId(String.valueOf(cdcData.getId())); // Convert integer id to string
-            protocol.setName(cdcData.getProtocolName());             // protocol_name → name
+            protocol.setProtocolId(String.valueOf(cdcData.getId()));
+            protocol.setName(cdcData.getProtocolName());
             protocol.setVersion(cdcData.getVersion());
             protocol.setSpecialty(cdcData.getSpecialty());
 
-            // Set category from specialty if not provided (backward compatibility)
             if (cdcData.getCategory() != null) {
                 protocol.setCategory(cdcData.getCategory());
             } else {
-                // Derive category from specialty for now
-                protocol.setCategory("CLINICAL"); // Default category
+                protocol.setCategory("CLINICAL");
             }
 
-            // Map content field to description if available
             if (cdcData.getContent() != null) {
                 protocol.setDescription(cdcData.getContent());
+                parseTriggerThresholds(protocol, cdcData.getContent());
             }
 
-            // Set evidence source as database name (kb3_guidelines)
             protocol.setEvidenceSource("kb3_guidelines");
-
-            // KNOWN LIMITATION: triggerThresholds not populated from CDC payload.
-            // All CDC-loaded protocols will match every patient until thresholds are
-            // parsed from cdcData.getContent() or the CDC schema is extended.
-
             return protocol;
+        }
+
+        /**
+         * Attempt to parse triggerThresholds from CDC content field.
+         * Expected format: JSON object containing "triggerThresholds" key with Map<String,Number>.
+         * Gracefully ignores non-JSON content or missing keys.
+         */
+        private void parseTriggerThresholds(SimplifiedProtocol protocol, String content) {
+            if (content == null || !content.contains("triggerThresholds")) {
+                return;
+            }
+
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                @SuppressWarnings("unchecked")
+                Map<String, Object> parsed = mapper.readValue(content, Map.class);
+                Object thresholdsObj = parsed.get("triggerThresholds");
+                if (thresholdsObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rawThresholds = (Map<String, Object>) thresholdsObj;
+                    Map<String, Double> thresholds = new HashMap<>();
+                    for (Map.Entry<String, Object> entry : rawThresholds.entrySet()) {
+                        if (entry.getValue() instanceof Number) {
+                            thresholds.put(entry.getKey(), ((Number) entry.getValue()).doubleValue());
+                        }
+                    }
+                    if (!thresholds.isEmpty()) {
+                        protocol.setTriggerThresholds(thresholds);
+                        LOG.debug("Parsed {} trigger thresholds from CDC content for protocol {}",
+                                thresholds.size(), protocol.getProtocolId());
+                    }
+                }
+
+                // Also parse activationThreshold and baseConfidence if present
+                Object activation = parsed.get("activationThreshold");
+                if (activation instanceof Number) {
+                    protocol.setActivationThreshold(((Number) activation).doubleValue());
+                }
+                Object confidence = parsed.get("baseConfidence");
+                if (confidence instanceof Number) {
+                    protocol.setBaseConfidence(((Number) confidence).doubleValue());
+                }
+
+            } catch (Exception e) {
+                LOG.debug("Content field is not parseable JSON for protocol {}: {}",
+                        protocol.getProtocolId(), e.getMessage());
+                // Non-JSON content is expected for legacy protocols — not an error
+            }
         }
 
         /**
