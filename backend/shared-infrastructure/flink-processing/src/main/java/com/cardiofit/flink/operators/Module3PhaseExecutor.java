@@ -2,6 +2,8 @@ package com.cardiofit.flink.operators;
 
 import com.cardiofit.flink.models.*;
 import com.cardiofit.flink.models.protocol.SimplifiedProtocol;
+import com.cardiofit.flink.safety.AllergyChecker;
+import com.cardiofit.flink.safety.DrugInteractionChecker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -296,5 +298,74 @@ public class Module3PhaseExecutor {
         if (x1 == x0) return y0;
         double t = (x - x0) / (x1 - x0);
         return y0 + t * (y1 - y0);
+    }
+
+    /**
+     * Phase 7: Safety Checks.
+     * Cross-references active medications against patient allergies and drug interactions.
+     */
+    public static CDSPhaseResult executePhase7(EnrichedPatientContext context) {
+        long start = System.nanoTime();
+        CDSPhaseResult result = new CDSPhaseResult("PHASE_7_SAFETY_CHECK");
+        result.setActive(true);
+
+        SafetyCheckResult safety = new SafetyCheckResult();
+        PatientContextState state = context.getPatientState();
+
+        if (state == null) {
+            result.addDetail("safetyResult", safety);
+            result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+            return result;
+        }
+
+        List<String> allergies = state.getAllergies() != null ? state.getAllergies() : Collections.emptyList();
+        Map<String, Medication> activeMeds = state.getActiveMedications() != null
+                ? state.getActiveMedications() : Collections.emptyMap();
+
+        // Check each active medication against allergies
+        if (!allergies.isEmpty() && !activeMeds.isEmpty()) {
+            AllergyChecker allergyChecker = new AllergyChecker();
+            for (Map.Entry<String, Medication> entry : activeMeds.entrySet()) {
+                Medication med = entry.getValue();
+                String medName = med.getName() != null ? med.getName() : med.getCode();
+                for (String allergen : allergies) {
+                    if (allergyChecker.hasCrossReactivity(medName, allergen)) {
+                        safety.addAllergyAlert(String.format(
+                                "ALLERGY: %s may cross-react with known allergen %s",
+                                medName, allergen));
+                    }
+                }
+            }
+        }
+
+        // Check drug-drug interactions among active medications
+        if (activeMeds.size() >= 2) {
+            DrugInteractionChecker interactionChecker = new DrugInteractionChecker();
+            List<String> medNames = new ArrayList<>();
+            for (Medication m : activeMeds.values()) {
+                medNames.add(m.getName() != null ? m.getName() : m.getCode());
+            }
+            for (int i = 0; i < medNames.size(); i++) {
+                for (int j = i + 1; j < medNames.size(); j++) {
+                    DrugInteractionChecker.DrugInteraction interaction =
+                            interactionChecker.findInteraction(medNames.get(i), medNames.get(j));
+                    if (interaction != null) {
+                        String severity = interaction.getSeverity() != null
+                                ? interaction.getSeverity().name() : "MODERATE";
+                        safety.addInteractionAlert(String.format(
+                                "INTERACTION: %s + %s — %s",
+                                medNames.get(i), medNames.get(j), interaction.getEffect()), severity);
+                    }
+                }
+            }
+        }
+
+        result.addDetail("safetyResult", safety);
+        result.addDetail("allergyCount", safety.getAllergyAlerts().size());
+        result.addDetail("interactionCount", safety.getInteractionAlerts().size());
+        result.addDetail("hasCriticalAlert", safety.isHasCriticalAlert());
+        result.setDurationMs((System.nanoTime() - start) / 1_000_000);
+
+        return result;
     }
 }
