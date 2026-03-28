@@ -12,6 +12,7 @@ import com.cardiofit.flink.models.MEWSAlert;
 import com.cardiofit.flink.models.LabTrendAlert;
 import com.cardiofit.flink.models.VitalVariabilityAlert;
 import com.cardiofit.flink.models.DailyRiskScore;
+import com.cardiofit.flink.models.SimpleAlert;
 import com.cardiofit.flink.patterns.ClinicalPatterns;
 import com.cardiofit.flink.analytics.MEWSCalculator;
 import com.cardiofit.flink.analytics.LabTrendAnalyzer;
@@ -847,35 +848,7 @@ public class Module4_PatternDetection {
      * - 0.8-1.0: Critical significance (severe deterioration)
      */
     private static double calculateClinicalSignificance(int news2Score, int qsofaScore, double acuityScore) {
-        // NEWS2 scoring: 0-4 (low), 5-6 (medium), 7+ (high risk)
-        // qSOFA scoring: 0-1 (negative), 2+ (positive for organ dysfunction)
-        // Combined acuity: 0-10 scale
-
-        double significance = 0.0;
-
-        // NEWS2 contribution (50% weight) - increased for better CEP pattern matching
-        if (news2Score >= 10) {
-            significance += 0.5;  // Very high risk
-        } else if (news2Score >= 7) {
-            significance += 0.4;  // High risk
-        } else if (news2Score >= 5) {
-            significance += 0.35; // Medium risk (increased from 0.25)
-        } else if (news2Score > 0) {
-            significance += 0.15; // Low risk but present
-        }
-
-        // qSOFA contribution (30% weight)
-        if (qsofaScore >= 2) {
-            significance += 0.3; // Positive for organ dysfunction
-        } else if (qsofaScore == 1) {
-            significance += 0.15; // Partial criteria
-        }
-
-        // Acuity contribution (20% weight) - normalized from 0-10 scale
-        significance += (acuityScore / 10.0) * 0.2;
-
-        // Ensure within bounds [0.0, 1.0]
-        return Math.min(1.0, Math.max(0.0, significance));
+        return Module4ClinicalScoring.calculateClinicalSignificance(news2Score, qsofaScore, acuityScore);
     }
 
     /**
@@ -887,37 +860,8 @@ public class Module4_PatternDetection {
      * - "moderate": NEWS2 5-9, qSOFA 1, some HIGH alerts → baseline/warning candidate
      * - "high": NEWS2 ≥10, qSOFA ≥2, multiple CRITICAL alerts → critical event
      */
-    private static String determineRiskLevel(int news2Score, int qsofaScore, java.util.Set<com.cardiofit.flink.models.SimpleAlert> alerts) {
-        // Very high risk criteria - severe deterioration
-        if (news2Score >= 10 || qsofaScore >= 2) {
-            return "high";
-        }
-
-        // Check for multiple CRITICAL priority alerts (indicates severe state)
-        if (alerts != null && !alerts.isEmpty()) {
-            long criticalAlertCount = alerts.stream()
-                .filter(alert -> alert.getSeverity() != null)
-                .filter(alert -> alert.getSeverity().equals("CRITICAL") ||
-                               (alert.getPriorityLevel() != null && alert.getPriorityLevel().equals("CRITICAL")))
-                .count();
-
-            // Multiple critical alerts = high risk regardless of scores
-            if (criticalAlertCount >= 2) {
-                return "high";
-            }
-        }
-
-        // Moderate risk criteria (NEWS2 5-9 is high clinical risk but moderate for CEP progression)
-        if (news2Score >= 5 || qsofaScore >= 1) {
-            return "moderate";
-        }
-
-        // Low risk (baseline)
-        if (news2Score <= 4 && qsofaScore == 0) {
-            return "low";
-        }
-
-        return "unknown";
+    private static String determineRiskLevel(int news2Score, int qsofaScore, Set<SimpleAlert> alerts) {
+        return Module4ClinicalScoring.determineRiskLevel(news2Score, qsofaScore, alerts);
     }
 
     // ===== CEP Pattern Definitions =====
