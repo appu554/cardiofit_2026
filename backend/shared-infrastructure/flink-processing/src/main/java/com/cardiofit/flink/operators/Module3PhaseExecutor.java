@@ -17,6 +17,10 @@ import java.util.*;
 public class Module3PhaseExecutor {
     private static final Logger LOG = LoggerFactory.getLogger(Module3PhaseExecutor.class);
 
+    // Cached stateless checkers — both use static rule maps, safe to share
+    private static final AllergyChecker ALLERGY_CHECKER = new AllergyChecker();
+    private static final DrugInteractionChecker INTERACTION_CHECKER = new DrugInteractionChecker();
+
     /**
      * Phase 1: Protocol Matching.
      * Matches patient vitals/scores against SimplifiedProtocol triggerThresholds.
@@ -398,7 +402,7 @@ public class Module3PhaseExecutor {
 
         // Check each active medication against allergies
         if (!allergies.isEmpty() && !activeMeds.isEmpty()) {
-            AllergyChecker allergyChecker = new AllergyChecker();
+            AllergyChecker allergyChecker = ALLERGY_CHECKER;
             for (Map.Entry<String, Medication> entry : activeMeds.entrySet()) {
                 Medication med = entry.getValue();
                 String medName = med.getName() != null ? med.getName() : med.getCode();
@@ -414,7 +418,7 @@ public class Module3PhaseExecutor {
 
         // Check drug-drug interactions among active medications
         if (activeMeds.size() >= 2) {
-            DrugInteractionChecker interactionChecker = new DrugInteractionChecker();
+            DrugInteractionChecker interactionChecker = INTERACTION_CHECKER;
             List<String> medNames = new ArrayList<>();
             for (Medication m : activeMeds.values()) {
                 medNames.add(m.getName() != null ? m.getName() : m.getCode());
