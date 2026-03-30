@@ -112,8 +112,7 @@ public class PatientMLState implements Serializable {
         if (sevIdx > severityIndex(maxSeveritySeen)) {
             maxSeveritySeen = pattern.severity();
         }
-        if ("CRITICAL".equals(pattern.severity())
-                && pattern.tags() != null
+        if (pattern.tags() != null
                 && pattern.tags().contains("SEVERITY_ESCALATION")) {
             severityEscalationDetected = true;
         }
@@ -194,6 +193,13 @@ public class PatientMLState implements Serializable {
     public String getMaxSeveritySeen() { return maxSeveritySeen; }
     public boolean isSeverityEscalationDetected() { return severityEscalationDetected; }
     public long getLastPatternTime() { return lastPatternTime; }
+
+    public void setRecentPatterns(List<PatternSummary> recentPatterns) { this.recentPatterns = recentPatterns; }
+    public void setDeteriorationPatternCount(int deteriorationPatternCount) { this.deteriorationPatternCount = deteriorationPatternCount; }
+    public void setSepsisPatternCount(int sepsisPatternCount) { this.sepsisPatternCount = sepsisPatternCount; }
+    public void setMaxSeveritySeen(String maxSeveritySeen) { this.maxSeveritySeen = maxSeveritySeen; }
+    public void setSeverityEscalationDetected(boolean severityEscalationDetected) { this.severityEscalationDetected = severityEscalationDetected; }
+    public void setLastPatternTime(long lastPatternTime) { this.lastPatternTime = lastPatternTime; }
 
     public Map<String, Double> getLastPredictions() { return lastPredictions; }
     public void setLastPredictions(Map<String, Double> lastPredictions) { this.lastPredictions = lastPredictions; }
