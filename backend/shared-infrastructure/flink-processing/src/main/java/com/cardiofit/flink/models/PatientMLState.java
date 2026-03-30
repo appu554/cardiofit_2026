@@ -26,9 +26,9 @@ public class PatientMLState implements Serializable {
 
     // ── Temporal features (ring buffers) ──
     private double[] news2History;
-    private int news2HistoryIndex;
+    private long news2HistoryIndex;
     private double[] acuityHistory;
-    private int acuityHistoryIndex;
+    private long acuityHistoryIndex;
     private long firstEventTime;
     private int totalEventCount;
 
@@ -60,31 +60,38 @@ public class PatientMLState implements Serializable {
     // ── Ring buffer helpers ──
 
     public void pushNews2(int score) {
-        news2History[news2HistoryIndex % HISTORY_SIZE] = score;
+        news2History[(int) (news2HistoryIndex % HISTORY_SIZE)] = score;
         news2HistoryIndex++;
     }
 
     public void pushAcuity(double score) {
-        acuityHistory[acuityHistoryIndex % HISTORY_SIZE] = score;
+        acuityHistory[(int) (acuityHistoryIndex % HISTORY_SIZE)] = score;
         acuityHistoryIndex++;
     }
 
     public double news2Slope() {
-        return calculateSlope(news2History, Math.min(news2HistoryIndex, HISTORY_SIZE));
+        int count = (int) Math.min(news2HistoryIndex, HISTORY_SIZE);
+        int oldest = news2HistoryIndex >= HISTORY_SIZE
+                ? (int) (news2HistoryIndex % HISTORY_SIZE) : 0;
+        return calculateSlope(news2History, oldest, count);
     }
 
     public double acuitySlope() {
-        return calculateSlope(acuityHistory, Math.min(acuityHistoryIndex, HISTORY_SIZE));
+        int count = (int) Math.min(acuityHistoryIndex, HISTORY_SIZE);
+        int oldest = acuityHistoryIndex >= HISTORY_SIZE
+                ? (int) (acuityHistoryIndex % HISTORY_SIZE) : 0;
+        return calculateSlope(acuityHistory, oldest, count);
     }
 
-    private static double calculateSlope(double[] buffer, int count) {
+    private static double calculateSlope(double[] buffer, int startIdx, int count) {
         if (count < 2) return 0.0;
         double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
         for (int i = 0; i < count; i++) {
+            double y = buffer[(startIdx + i) % buffer.length];
             sumX += i;
-            sumY += buffer[i];
-            sumXY += i * buffer[i];
-            sumX2 += i * i;
+            sumY += y;
+            sumXY += i * y;
+            sumX2 += (double) i * i;
         }
         double denom = count * sumX2 - sumX * sumX;
         if (Math.abs(denom) < 1e-9) return 0.0;
@@ -178,8 +185,8 @@ public class PatientMLState implements Serializable {
 
     public double[] getNews2History() { return news2History; }
     public double[] getAcuityHistory() { return acuityHistory; }
-    public int getNews2HistoryIndex() { return news2HistoryIndex; }
-    public int getAcuityHistoryIndex() { return acuityHistoryIndex; }
+    public long getNews2HistoryIndex() { return news2HistoryIndex; }
+    public long getAcuityHistoryIndex() { return acuityHistoryIndex; }
 
     public long getFirstEventTime() { return firstEventTime; }
     public void setFirstEventTime(long firstEventTime) { this.firstEventTime = firstEventTime; }
