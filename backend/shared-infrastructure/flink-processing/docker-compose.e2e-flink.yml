@@ -1,0 +1,198 @@
+# =============================================================================
+# E2E Flink Pipeline — Modules 1, 1b, 2, 3, 4
+# =============================================================================
+# Lean stack: Flink JobManager + TaskManager + Job Submitter.
+# Connects to external Kafka (cardiofit-lite network). FHIR disabled — E2E
+# test script injects FHIR data via Kafka; pipeline does not need a live FHIR
+# store connection. Module 2 enricher degrades gracefully via circuit breakers
+# when Neo4j is unavailable.
+#
+# Prerequisites:
+#   1. Kafka running:
+#      cd ../kafka && docker compose -f docker-compose.hpi-lite.yml up -d
+#   2. Create topics:
+#      bash create-kafka-topics.sh         # Module 1 legacy topics
+#      bash create-ingestion-topics.sh     # Module 1b ingestion topics
+#   3. Build JAR:
+#      mvn clean package -DskipTests -q
+#   4. Start Flink:
+#      docker compose -f docker-compose.e2e-flink.yml up -d
+#   5. Check Flink UI:
+#      open http://localhost:8181
+#   6. Run E2E:
+#      KAFKA_BOOTSTRAP=localhost:9092 bash scripts/e2e-module1-module2-checklist.sh
+#
+# Memory budget (~3.5 GB total):
+#   JobManager:  1.2 GB
+#   TaskManager: 2.0 GB (8 slots, enough for 3 modules at parallelism=2)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Flink JobManager
+  # ---------------------------------------------------------------------------
+  flink-jobmanager:
+    image: flink:2.1-java17
+    container_name: cardiofit-flink-jobmanager
+    hostname: flink-jobmanager
+    command: jobmanager
+    ports:
+      - "8181:8081"   # Flink Web UI (8181 to avoid conflict with kb8-calculator)
+      - "6123:6123"   # RPC
+    environment:
+      # --- Kafka ---
+      KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
+
+      # --- Google FHIR Store (disabled — E2E injects FHIR data via Kafka) ---
+      USE_GOOGLE_HEALTHCARE_API: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: "/dev/null"
+
+      # --- Neo4j (optional — circuit breaker handles unavailability) ---
+      # Uncomment if running Neo4j locally:
+      # NEO4J_URI: "bolt://neo4j:7687"
+      # NEO4J_USERNAME: "neo4j"
+      # NEO4J_PASSWORD: "CardioFit2024!"
+      # NEO4J_DATABASE: "cardiofit"
+
+      DOCKER_CONTAINER: "true"
+
+      # --- Flink configuration ---
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.rpc.port: 6123
+        jobmanager.memory.process.size: 1200m
+        taskmanager.numberOfTaskSlots: 48
+        parallelism.default: 1
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        state.savepoints.dir: file:///tmp/flink-savepoints
+        execution.checkpointing.interval: 30000
+        execution.checkpointing.mode: EXACTLY_ONCE
+        execution.checkpointing.timeout: 120000
+        rest.flamegraph.enabled: true
+    volumes:
+      - ./target:/opt/flink/usrlib
+      - ./models:/opt/flink/models:ro
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Flink TaskManager (single, lean)
+  # ---------------------------------------------------------------------------
+  flink-taskmanager:
+    image: flink:2.1-java17
+    container_name: cardiofit-flink-taskmanager
+    hostname: flink-taskmanager
+    command: taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2500m
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
+      USE_GOOGLE_HEALTHCARE_API: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: "/dev/null"
+      DOCKER_CONTAINER: "true"
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.rpc.port: 6123
+        taskmanager.memory.process.size: 2048m
+        taskmanager.numberOfTaskSlots: 48
+        parallelism.default: 1
+    volumes:
+      - ./target:/opt/flink/usrlib
+      - ./models:/opt/flink/models:ro
+    networks:
+      - cardiofit-lite
+
+  # ---------------------------------------------------------------------------
+  # Job Submitter — submits only Modules 1, 1b, 2 (one-shot container)
+  # ---------------------------------------------------------------------------
+  flink-submitter:
+    image: flink:2.1-java17
+    container_name: cardiofit-flink-submitter
+    depends_on:
+      flink-taskmanager:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
+      DOCKER_CONTAINER: "true"
+      USE_GOOGLE_HEALTHCARE_API: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: "/dev/null"
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Waiting 20s for TaskManager to register slots..."
+        sleep 20
+
+        JAR=/opt/flink/usrlib/flink-ehr-intelligence-1.0.0.jar
+        if [ ! -f "$$JAR" ]; then
+          echo "ERROR: JAR not found at $$JAR"
+          echo "Run: mvn clean package -DskipTests -q"
+          exit 1
+        fi
+
+        submit() {
+          local name="$$1"
+          local job_arg="$$2"
+          echo ""
+          echo "━━━ Submitting $$name ━━━"
+          /opt/flink/bin/flink run -d -m flink-jobmanager:8081 \
+            -c com.cardiofit.flink.FlinkJobOrchestrator \
+            "$$JAR" "$$job_arg" development
+          local rc=$$?
+          if [ $$rc -eq 0 ]; then
+            echo "  ✓ $$name submitted"
+          else
+            echo "  ✗ $$name FAILED (exit code $$rc)"
+          fi
+          sleep 5
+        }
+
+        submit "Module 1:  Ingestion & Gateway"      "ingestion-only"
+        submit "Module 1b: Ingestion Canonicalizer"   "module1b-canonicalizer"
+        submit "Module 2:  Context Assembly"          "context-assembly"
+        submit "Module 3:  Comprehensive CDS"         "comprehensive-cds"
+        submit "Module 4:  Pattern Detection"         "pattern-detection"
+
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "All 5 modules submitted. Check Flink UI: http://localhost:8181"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+        # List running jobs
+        sleep 3
+        /opt/flink/bin/flink list -m flink-jobmanager:8081 || true
+    volumes:
+      - ./target:/opt/flink/usrlib:ro
+    networks:
+      - cardiofit-lite
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Kafka UI — visual topic inspection at http://localhost:9080
+  # ---------------------------------------------------------------------------
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: cardiofit-kafka-ui
+    ports:
+      - "9080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: cardiofit-lite
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-lite:29092
+    networks:
+      - cardiofit-lite
+    restart: unless-stopped
+
+networks:
+  cardiofit-lite:
+    external: true
