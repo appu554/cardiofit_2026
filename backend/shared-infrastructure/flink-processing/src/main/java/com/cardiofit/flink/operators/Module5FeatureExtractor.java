@@ -164,7 +164,6 @@ public class Module5FeatureExtractor {
 
     // ── Alert feature extraction (Gap 4) ──
 
-    @SuppressWarnings("unchecked")
     public static boolean alertPresent(Map<String, Object> alerts, String alertType) {
         if (alerts == null) return false;
         return alerts.containsKey(alertType);
