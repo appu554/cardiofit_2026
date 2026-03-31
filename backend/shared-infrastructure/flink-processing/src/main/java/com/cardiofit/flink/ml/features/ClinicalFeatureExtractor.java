@@ -174,6 +174,19 @@ public class ClinicalFeatureExtractor implements Serializable {
         // Convert Map<String, Double> to Map<String, Object> for helper method
         Map<String, Object> vitals = new HashMap<>(context.getLatestVitals());
 
+        // Normalize vital keys to handle both production (heartrate) and SemanticEvent (heart_rate) formats
+        Map<String, Object> normalized = new HashMap<>(vitals);
+        Map<String, String> aliases = Map.of(
+            "heartrate", "heart_rate", "systolicbloodpressure", "systolic_bp",
+            "diastolicbloodpressure", "diastolic_bp", "respiratoryrate", "respiratory_rate",
+            "oxygensaturation", "oxygen_saturation"
+        );
+        for (Map.Entry<String, Object> e : vitals.entrySet()) {
+            String alias = aliases.get(e.getKey());
+            if (alias != null) normalized.put(alias, e.getValue());
+        }
+        vitals = normalized;
+
         // Primary vitals
         double hr = getDoubleValue(vitals, "heart_rate", 80.0);
         double sysBP = getDoubleValue(vitals, "systolic_bp", 120.0);
