@@ -6,22 +6,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Clinical Action - Individual actionable recommendation
+ * Output action record emitted by Module 6.
+ * Main collector output of the ClinicalActionEngine.
  *
- * Detailed clinical action with medication specifics, dosing calculations,
- * diagnostic details, and evidence-based rationale. Part of a clinical
- * recommendation bundle.
- *
- * @author CardioFit Platform - Module 3
- * @version 1.0
- * @since 2025-10-20
+ * Also serves as the detailed clinical action record used by Module 3 (ActionBuilder).
+ * The Module 6 fields (action_type as String, alert) coexist with Module 3 fields.
  */
 public class ClinicalAction implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    // Action Classification
-    @JsonProperty("action_id")
-    private String actionId;
+    // ── Module 6 fields ──────────────────────────────────────────────────────
+
+    @JsonProperty("action_id") private String actionId;
+    /** Module 6 action type: NEW_ALERT, ESCALATION, AUTO_RESOLVED, ACKNOWLEDGMENT */
+    @JsonProperty("action_type_str") private String actionTypeStr;
+    @JsonProperty("alert") private ClinicalAlert alert;
+    @JsonProperty("timestamp") private long timestamp = System.currentTimeMillis();
+
+    // ── Module 3 / ActionBuilder fields ──────────────────────────────────────
 
     @JsonProperty("action_type")
     private ActionType actionType;
@@ -32,24 +34,21 @@ public class ClinicalAction implements Serializable {
     @JsonProperty("sequence_order")
     private int sequenceOrder;
 
-    // Timing
     @JsonProperty("urgency")
-    private String urgency;  // STAT, URGENT, ROUTINE
+    private String urgency;
 
     @JsonProperty("timeframe")
-    private String timeframe;  // "within 1 hour", "within 4 hours", "within 24 hours"
+    private String timeframe;
 
     @JsonProperty("timeframe_rationale")
     private String timeframeRationale;
 
-    // Action-Specific Details
     @JsonProperty("medication_details")
     private MedicationDetails medicationDetails;
 
     @JsonProperty("diagnostic_details")
     private DiagnosticDetails diagnosticDetails;
 
-    // Rationale & Evidence
     @JsonProperty("clinical_rationale")
     private String clinicalRationale;
 
@@ -57,23 +56,20 @@ public class ClinicalAction implements Serializable {
     private List<EvidenceReference> evidenceReferences;
 
     @JsonProperty("evidence_strength")
-    private String evidenceStrength;  // STRONG, MODERATE, WEAK, EXPERT_CONSENSUS
+    private String evidenceStrength;
 
-    // Prerequisites
     @JsonProperty("prerequisite_checks")
     private List<String> prerequisiteChecks;
 
     @JsonProperty("required_lab_values")
     private List<String> requiredLabValues;
 
-    // Monitoring
     @JsonProperty("expected_outcome")
     private String expectedOutcome;
 
     @JsonProperty("monitoring_parameters")
     private String monitoringParameters;
 
-    // Default constructor
     public ClinicalAction() {
         this.actionId = java.util.UUID.randomUUID().toString();
         this.evidenceReferences = new ArrayList<>();
@@ -81,16 +77,45 @@ public class ClinicalAction implements Serializable {
         this.requiredLabValues = new ArrayList<>();
     }
 
-    // Constructor with type and description
-    public ClinicalAction(ActionType actionType, String description) {
-        this();
-        this.actionType = actionType;
-        this.description = description;
+    // ── Module 6 static factories ─────────────────────────────────────────────
+
+    public static ClinicalAction newAlert(ClinicalAlert alert) {
+        ClinicalAction a = new ClinicalAction();
+        a.actionTypeStr = "NEW_ALERT";
+        a.alert = alert;
+        return a;
     }
 
-    // Getters and Setters
+    public static ClinicalAction escalation(ClinicalAlert alert, String escalateTo) {
+        ClinicalAction a = new ClinicalAction();
+        a.actionTypeStr = "ESCALATION";
+        a.alert = alert;
+        return a;
+    }
+
+    public static ClinicalAction autoResolved(ClinicalAlert alert) {
+        ClinicalAction a = new ClinicalAction();
+        a.actionTypeStr = "AUTO_RESOLVED";
+        a.alert = alert;
+        return a;
+    }
+
+    // ── Module 6 accessors ────────────────────────────────────────────────────
+
     public String getActionId() { return actionId; }
     public void setActionId(String actionId) { this.actionId = actionId; }
+
+    /** Module 6 string action type. Use {@link #getActionType()} for Module 3 enum type. */
+    public String getActionTypeStr() { return actionTypeStr; }
+    public void setActionTypeStr(String actionTypeStr) { this.actionTypeStr = actionTypeStr; }
+
+    public ClinicalAlert getAlert() { return alert; }
+    public void setAlert(ClinicalAlert alert) { this.alert = alert; }
+
+    public long getTimestamp() { return timestamp; }
+    public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
+
+    // ── Module 3 / ActionBuilder accessors ───────────────────────────────────
 
     public ActionType getActionType() { return actionType; }
     public void setActionType(ActionType actionType) { this.actionType = actionType; }
@@ -120,9 +145,7 @@ public class ClinicalAction implements Serializable {
     public void setClinicalRationale(String clinicalRationale) { this.clinicalRationale = clinicalRationale; }
 
     public List<EvidenceReference> getEvidenceReferences() { return evidenceReferences; }
-    public void setEvidenceReferences(List<EvidenceReference> evidenceReferences) {
-        this.evidenceReferences = evidenceReferences;
-    }
+    public void setEvidenceReferences(List<EvidenceReference> evidenceReferences) { this.evidenceReferences = evidenceReferences; }
 
     public String getEvidenceStrength() { return evidenceStrength; }
     public void setEvidenceStrength(String evidenceStrength) { this.evidenceStrength = evidenceStrength; }
@@ -139,56 +162,25 @@ public class ClinicalAction implements Serializable {
     public String getMonitoringParameters() { return monitoringParameters; }
     public void setMonitoringParameters(String monitoringParameters) { this.monitoringParameters = monitoringParameters; }
 
-    // Utility methods
-
-    /**
-     * Check if action is STAT urgency
-     */
-    public boolean isStatUrgency() {
-        return "STAT".equals(urgency);
-    }
-
-    /**
-     * Check if action is therapeutic (medication)
-     */
-    public boolean isTherapeutic() {
-        return ActionType.THERAPEUTIC.equals(actionType);
-    }
-
-    /**
-     * Check if action is diagnostic
-     */
-    public boolean isDiagnostic() {
-        return ActionType.DIAGNOSTIC.equals(actionType);
-    }
-
-    /**
-     * Check if action has strong evidence
-     */
-    public boolean hasStrongEvidence() {
-        return "STRONG".equals(evidenceStrength);
-    }
+    public boolean isStatUrgency() { return "STAT".equals(urgency); }
+    public boolean isTherapeutic() { return ActionType.THERAPEUTIC.equals(actionType); }
+    public boolean isDiagnostic() { return ActionType.DIAGNOSTIC.equals(actionType); }
+    public boolean hasStrongEvidence() { return "STRONG".equals(evidenceStrength); }
 
     @Override
     public String toString() {
-        return "ClinicalAction{" +
-            "actionId='" + actionId + '\'' +
-            ", actionType=" + actionType +
-            ", description='" + description + '\'' +
-            ", urgency='" + urgency + '\'' +
-            ", timeframe='" + timeframe + '\'' +
-            ", sequenceOrder=" + sequenceOrder +
-            '}';
+        return "ClinicalAction{actionId='" + actionId + "', actionType=" + actionType +
+            ", actionTypeStr='" + actionTypeStr + "', description='" + description + "'}";
     }
 
     /**
-     * Action Type Enumeration
+     * Action Type Enumeration (Module 3 / ActionBuilder).
      */
     public enum ActionType {
-        DIAGNOSTIC,           // Order tests (labs, imaging, cultures)
-        THERAPEUTIC,          // Medications, procedures, interventions
-        MONITORING,           // Vital sign monitoring, lab monitoring
-        ESCALATION,           // ICU transfer, specialist consult
-        MEDICATION_REVIEW     // Review/adjust existing medications
+        DIAGNOSTIC,
+        THERAPEUTIC,
+        MONITORING,
+        ESCALATION,
+        MEDICATION_REVIEW
     }
 }
