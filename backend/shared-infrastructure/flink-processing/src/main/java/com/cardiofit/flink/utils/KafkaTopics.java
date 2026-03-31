@@ -47,6 +47,8 @@ public enum KafkaTopics {
     EVIDENCE_VALIDATIONS("evidence-validations.v1", 4, 30),
     CLINICAL_REASONING_EVENTS("clinical-reasoning-events.v1", 8, 30),
     INFERENCE_RESULTS("inference-results.v1", 8, 30),
+    ML_RISK_ALERTS("ml-risk-alerts.v1", 8, 30),
+    PREDICTION_AUDIT("prediction-audit.v1", 4, 90),
 
     // ============= Workflow & Orchestration (6 topics) =============
     WORKFLOW_EVENTS("workflow-events.v1", 8, 30),
@@ -111,6 +113,14 @@ public enum KafkaTopics {
     SIMPLE_ALERTS("simple-alerts.v1", 4, 7),           // Module 2 threshold-based alerts
     COMPOSED_ALERTS("composed-alerts.v1", 4, 7),       // Module 6 composed alerts (all severities)
     URGENT_ALERTS("urgent-alerts.v1", 4, 7),           // Module 6 urgent alerts (HIGH + CRITICAL)
+
+    // ── Module 6: Clinical Action Engine ──
+    CLINICAL_NOTIFICATIONS("clinical-notifications.v1", 4, 7),
+    CLINICAL_AUDIT("clinical-audit.v1", 4, 2555),          // 7-year retention
+    CLINICAL_ACTIONS("clinical-actions.v1", 4, 30),
+    FHIR_WRITEBACK("fhir-writeback.v1", 4, 30),
+    ALERT_STATE_UPDATES("alert-state-updates.v1", 4, 30),
+    ALERT_ACKNOWLEDGMENTS("alert-acknowledgments.v1", 4, 30),
 
     // ============= Protocol Trigger Topics (Phase 4 Enhancement) =============
     PROTOCOL_TRIGGERS("protocol-triggers.v1", 4, 30),  // Clinical protocol trigger audit trail
