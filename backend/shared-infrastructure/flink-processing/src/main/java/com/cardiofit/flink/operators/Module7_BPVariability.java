@@ -128,7 +128,7 @@ public class Module7_BPVariability {
         private transient ValueState<Double> previousArvSbp7d;
         private transient ValueState<String> previousDipClass;
 
-        @Override
+        // Flink 2.x: open(Configuration) is no longer overridable; omit @Override
         public void open(Configuration params) {
             dailySummaries = getRuntimeContext().getMapState(
                 new MapStateDescriptor<>("daily_bp_30d", String.class, String.class));
@@ -171,7 +171,7 @@ public class Module7_BPVariability {
                     crisis.setBpControlStatus("CRISIS");
                     crisis.setSbp7dAvg(sbp);   // populate triggering values
                     crisis.setDbp7dAvg(dbp);
-                    crisis.setComputedAt(Instant.ofEpochMilli(eventTs));
+                    crisis.setComputedAt(eventTs);
                     ctx.output(CRISIS_TAG, crisis);
                 } else {
                     // Cuffless crisis: log for audit — downstream should prompt cuff confirmation
@@ -243,11 +243,11 @@ public class Module7_BPVariability {
                 if (nightAvgSBP != null) {
                     result.setDipClassification(
                         DippingPatternClassifier.classify(dayAvgSBP, nightAvgSBP));
-                    result.setDipConfidence(DippingPatternClassifier.confidence(isCuffless));
+                    // dipConfidence removed in V4 BPVariabilityMetrics
                 }
             }
 
-            result.setComputedAt(Instant.now());
+            result.setComputedAt(System.currentTimeMillis());
 
             // V4: Check MHRI recomputation triggers
             Double prevArv = previousArvSbp7d.value();
