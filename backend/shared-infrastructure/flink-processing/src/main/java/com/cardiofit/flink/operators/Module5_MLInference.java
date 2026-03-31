@@ -98,67 +98,35 @@ public class Module5_MLInference {
     }
 
     public static void createMLInferencePipeline(StreamExecutionEnvironment env) {
-        LOG.info("Creating ML inference pipeline");
+        LOG.info("Creating ML inference pipeline (KeyedCoProcessFunction architecture)");
 
-        // Input streams
-        DataStream<SemanticEvent> semanticEvents = createSemanticEventSource(env);
+        // Input stream 1: CDS events from Module 3
+        DataStream<EnrichedPatientContext> cdsEvents = createEnrichedPatientContextSource(env);
+
+        // Input stream 2: Pattern events from Module 4
         DataStream<PatternEvent> patternEvents = createPatternEventSource(env);
 
-        // Feature engineering streams
-        DataStream<FeatureVector> semanticFeatures = semanticEvents
-            .keyBy(SemanticEvent::getPatientId)
-            .map(new SemanticFeatureExtractor())
-            .uid("Semantic Feature Extraction");
+        // Dual-input KeyedCoProcessFunction — CDS triggers inference, patterns buffer
+        SingleOutputStreamOperator<MLPrediction> predictions = cdsEvents
+            .keyBy(EnrichedPatientContext::getPatientId)
+            .connect(patternEvents.keyBy(PatternEvent::getPatientId))
+            .process(new Module5_MLInferenceEngine())
+            .uid("Module5-ML-Inference-Engine");
 
-        DataStream<FeatureVector> patternFeatures = patternEvents
-            .keyBy(PatternEvent::getPatientId)
-            .map(new PatternFeatureExtractor())
-            .uid("Pattern Feature Extraction");
-
-        // Combine feature streams
-        DataStream<FeatureVector> combinedFeatures = semanticFeatures
-            .union(patternFeatures)
-            .keyBy(FeatureVector::getPatientId)
-            .process(new FeatureCombiner())
-            .uid("Feature Combination");
-
-        // ML Inference Pipeline
-        SingleOutputStreamOperator<MLPrediction> mlPredictions = combinedFeatures
-            .keyBy(FeatureVector::getPatientId)
-            .process(new MLInferenceProcessor())
-            .uid("ML Inference Engine");
-
-        // Ensemble predictions for improved accuracy
-        DataStream<MLPrediction> ensembledPredictions = mlPredictions
-            .keyBy(MLPrediction::getPatientId)
-            .process(new EnsembleProcessor())
-            .uid("Ensemble Predictions");
-
-        // Route predictions to main sink
-        ensembledPredictions
+        // Main output: all predictions
+        predictions
             .sinkTo(createMLPredictionsSink())
             .uid("ML Predictions Sink");
 
-        // Route specific prediction types to specialized sinks
-        mlPredictions.getSideOutput(READMISSION_RISK_TAG)
-            .sinkTo(createReadmissionRiskSink())
-            .uid("Readmission Risk Sink");
+        // Side output: high-risk predictions
+        predictions.getSideOutput(Module5_MLInferenceEngine.HIGH_RISK_TAG)
+            .sinkTo(createHighRiskAlertsSink())
+            .uid("High Risk Predictions Sink");
 
-        mlPredictions.getSideOutput(SEPSIS_PREDICTION_TAG)
-            .sinkTo(createSepsisPredictionSink())
-            .uid("Sepsis Prediction Sink");
-
-        mlPredictions.getSideOutput(DETERIORATION_RISK_TAG)
-            .sinkTo(createDeteriorationRiskSink())
-            .uid("Deterioration Risk Sink");
-
-        mlPredictions.getSideOutput(FALL_RISK_TAG)
-            .sinkTo(createFallRiskSink())
-            .uid("Fall Risk Sink");
-
-        mlPredictions.getSideOutput(MORTALITY_RISK_TAG)
-            .sinkTo(createMortalityRiskSink())
-            .uid("Mortality Risk Sink");
+        // Side output: audit trail
+        predictions.getSideOutput(Module5_MLInferenceEngine.AUDIT_TAG)
+            .sinkTo(createAuditSink())
+            .uid("Prediction Audit Sink");
 
         // ========================================
         // MIMIC-IV Real ML Inference Pipeline
@@ -1017,6 +985,19 @@ public class Module5_MLInference {
                 .build())
             .setKafkaProducerConfig(producerConfig)
             .setTransactionalIdPrefix("module5-high-risk-alerts")
+            .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+            .build();
+    }
+
+    private static KafkaSink<MLPrediction> createAuditSink() {
+        return KafkaSink.<MLPrediction>builder()
+            .setBootstrapServers(KafkaConfigLoader.getBootstrapServers())
+            .setRecordSerializer(
+                KafkaRecordSerializationSchema.builder()
+                    .setTopic("prediction-audit.v1")
+                    .setValueSerializationSchema(new MLPredictionSerializer())
+                    .build()
+            )
             .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
             .build();
     }
