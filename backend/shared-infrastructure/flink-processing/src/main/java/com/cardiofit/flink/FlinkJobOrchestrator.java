@@ -1,13 +1,31 @@
 package com.cardiofit.flink;
 
+import com.cardiofit.flink.models.AuditRecord;
+import com.cardiofit.flink.models.ClinicalAction;
+import com.cardiofit.flink.models.ClinicalEvent;
+import com.cardiofit.flink.models.FhirWriteRequest;
+import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
 import com.cardiofit.flink.utils.KafkaConfigLoader;
+import com.cardiofit.flink.utils.KafkaTopics;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.contrib.streaming.state.EmbeddedRocksDBStateBackend;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.time.Duration;
 
 /**
@@ -40,7 +58,9 @@ public class FlinkJobOrchestrator {
                 Module1_Ingestion.createIngestionPipeline(env);
                 break;
             case "context-assembly":
-                Module2_Enhanced.createEnhancedPipeline(env);
+                // Use unified pipeline: outputs EnrichedPatientContext (camelCase)
+                // which Module 3 expects, instead of EnrichedEvent (snake_case)
+                Module2_Enhanced.createUnifiedPipeline(env);
                 break;
             case "comprehensive-cds":
                 // Module 3: Comprehensive CDS with all 8 phases integrated
@@ -72,6 +92,10 @@ public class FlinkJobOrchestrator {
             case "comorbidity-interaction":
             case "module8":
                 Module8_ComorbidityInteraction.createComorbidityPipeline(env);
+                break;
+            case "clinical-action-engine":
+            case "module6-cae":
+                launchClinicalActionEngine(env);
                 break;
             default:
                 LOG.warn("Unknown job type: {}. Defaulting to comprehensive CDS.", jobType);
@@ -119,6 +143,165 @@ public class FlinkJobOrchestrator {
         env.getConfig().setGlobalJobParameters(KafkaConfigLoader.getGlobalParameters());
 
         LOG.info("Environment configured: parallelism={}, checkpointing=30s", parallelism);
+    }
+
+    /**
+     * Launch the Module 6 Clinical Action Engine pipeline.
+     *
+     * Consumes ClinicalEvent records from CLINICAL_REASONING_EVENTS, keys by patientId,
+     * processes through Module6_ClinicalActionEngine, and routes outputs to:
+     *   - Main output (ClinicalAction)      → CLINICAL_ACTIONS
+     *   - NOTIFICATION_TAG side output      → CLINICAL_NOTIFICATIONS
+     *   - AUDIT_TAG side output             → CLINICAL_AUDIT
+     *   - FHIR_TAG side output              → FHIR_WRITEBACK
+     */
+    private static void launchClinicalActionEngine(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 6: Clinical Action Engine pipeline");
+
+        String bootstrapServers = KafkaConfigLoader.getBootstrapServers();
+
+        KafkaSource<ClinicalEvent> source = KafkaSource.<ClinicalEvent>builder()
+            .setBootstrapServers(bootstrapServers)
+            .setTopics(KafkaTopics.CLINICAL_REASONING_EVENTS.getTopicName())
+            .setGroupId("flink-module6-clinical-action-engine")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new ClinicalEventDeserializer())
+            .build();
+
+        SingleOutputStreamOperator<ClinicalAction> actions = env
+            .fromSource(
+                source,
+                WatermarkStrategy.<ClinicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((event, ts) -> event.getEventTime()),
+                "Kafka Source: Clinical Reasoning Events"
+            )
+            .keyBy(ClinicalEvent::getPatientId)
+            .process(new Module6_ClinicalActionEngine())
+            .uid("Module6 Clinical Action Engine")
+            .name("Module6 Clinical Action Engine");
+
+        // Main output → clinical-actions.v1
+        actions.sinkTo(
+            KafkaSink.<ClinicalAction>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.builder()
+                        .setTopic(KafkaTopics.CLINICAL_ACTIONS.getTopicName())
+                        .setValueSerializationSchema(new ClinicalActionSerializer())
+                        .build())
+                .build()
+        );
+
+        // Side output: notifications → clinical-notifications.v1
+        actions.getSideOutput(Module6_ClinicalActionEngine.NOTIFICATION_TAG).sinkTo(
+            KafkaSink.<NotificationRequest>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<NotificationRequest>builder()
+                        .setTopic(KafkaTopics.CLINICAL_NOTIFICATIONS.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<NotificationRequest>())
+                        .build())
+                .build()
+        );
+
+        // Side output: audit records → clinical-audit.v1
+        actions.getSideOutput(Module6_ClinicalActionEngine.AUDIT_TAG).sinkTo(
+            KafkaSink.<AuditRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<AuditRecord>builder()
+                        .setTopic(KafkaTopics.CLINICAL_AUDIT.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<AuditRecord>())
+                        .build())
+                .build()
+        );
+
+        // Side output: FHIR writeback → fhir-writeback.v1
+        actions.getSideOutput(Module6_ClinicalActionEngine.FHIR_TAG).sinkTo(
+            KafkaSink.<FhirWriteRequest>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<FhirWriteRequest>builder()
+                        .setTopic(KafkaTopics.FHIR_WRITEBACK.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<FhirWriteRequest>())
+                        .build())
+                .build()
+        );
+
+        LOG.info("Module 6 Clinical Action Engine pipeline configured: "
+            + "source={}, sinks=[{}, {}, {}, {}]",
+            KafkaTopics.CLINICAL_REASONING_EVENTS.getTopicName(),
+            KafkaTopics.CLINICAL_ACTIONS.getTopicName(),
+            KafkaTopics.CLINICAL_NOTIFICATIONS.getTopicName(),
+            KafkaTopics.CLINICAL_AUDIT.getTopicName(),
+            KafkaTopics.FHIR_WRITEBACK.getTopicName());
+    }
+
+    /** Deserializes JSON bytes into a ClinicalEvent using Jackson. */
+    private static class ClinicalEventDeserializer implements DeserializationSchema<ClinicalEvent> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public ClinicalEvent deserialize(byte[] message) throws IOException {
+            if (message == null || message.length == 0) return null;
+            return mapper.readValue(message, ClinicalEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(ClinicalEvent nextElement) {
+            return false;
+        }
+
+        @Override
+        public TypeInformation<ClinicalEvent> getProducedType() {
+            return TypeInformation.of(ClinicalEvent.class);
+        }
+    }
+
+    /** Serializes a ClinicalAction to JSON bytes. */
+    private static class ClinicalActionSerializer implements SerializationSchema<ClinicalAction> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(ClinicalAction element) {
+            try {
+                return mapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize ClinicalAction", e);
+            }
+        }
+    }
+
+    /** Generic JSON serializer for side-output model types. */
+    private static class JsonSerializer<T> implements SerializationSchema<T> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public byte[] serialize(T element) {
+            try {
+                return mapper.writeValueAsBytes(element);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to serialize " + element.getClass().getSimpleName(), e);
+            }
+        }
     }
 
     /**
