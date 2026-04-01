@@ -34,15 +34,18 @@ public class Module7_BPVariabilityEngine
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(Module7_BPVariabilityEngine.class);
 
-    // Side-output tag for crisis readings.
-    // Both hypertensive crisis (SBP>180/DBP>120) and acute surge (SBP delta>30 in <1hr)
-    // emit to this tag intentionally. The downstream safety-critical consumer distinguishes
-    // them by reading values (absolute threshold vs. delta), not by tag.
+    // Side-output tag for hypertensive crisis readings (SBP>180 / DBP>120).
     // Cuffless/non-clinical-grade readings CAN trigger crisis side-output (steps 2-3 run
     // before the clinical-grade filter at step 4) — this is by design since safety signals
     // should fire regardless of source grade.
     public static final OutputTag<BPReading> CRISIS_TAG =
         new OutputTag<>("safety-critical", TypeInformation.of(BPReading.class));
+
+    // Separate side-output tag for acute surge (SBP delta >30 in <1hr).
+    // Distinct from CRISIS_TAG so downstream consumers can route differently:
+    // crisis → immediate clinical escalation, surge → trend-aware alert.
+    public static final OutputTag<BPReading> ACUTE_SURGE_TAG =
+        new OutputTag<>("acute-surge", TypeInformation.of(BPReading.class));
 
     // Flink keyed state
     private transient ValueState<PatientBPState> bpState;
@@ -95,40 +98,48 @@ public class Module7_BPVariabilityEngine
             ctx.output(CRISIS_TAG, reading);
         }
 
-        // 3. Acute surge detection
+        // 3. Acute surge detection → separate tag from crisis
         BPReading lastReading = lastReadingState.value();
-        if (lastReading != null && Module7CrisisDetector.isAcuteSurge(lastReading, reading)) {
+        boolean acuteSurge = lastReading != null && Module7CrisisDetector.isAcuteSurge(lastReading, reading);
+        if (acuteSurge) {
             LOG.warn("Module7: ACUTE SURGE for patient {}. delta={}",
                 reading.getPatientId(),
                 reading.getSystolic() - lastReading.getSystolic());
-            ctx.output(CRISIS_TAG, reading);
+            ctx.output(ACUTE_SURGE_TAG, reading);
         }
         lastReadingState.update(reading);
 
-        // 4. Skip non-clinical-grade for main computation
+        // 3b. Accumulate cuffless readings for research ARV (before clinical-grade skip)
         BPSource source = reading.resolveSource();
-        if (!source.isClinicalGrade()) {
-            LOG.debug("Module7: skipping non-clinical-grade reading (source={}) for patient {}",
-                source, reading.getPatientId());
-            return;
-        }
-
-        // 5. Update rolling state
         PatientBPState state = bpState.value();
         if (state == null) {
             state = new PatientBPState(reading.getPatientId());
         }
+        if (source == BPSource.CUFFLESS) {
+            state.addCufflessReading(reading.getSystolic());
+        }
+
+        // 4. Skip non-clinical-grade for main computation
+        if (!source.isClinicalGrade()) {
+            LOG.debug("Module7: skipping non-clinical-grade reading (source={}) for patient {}",
+                source, reading.getPatientId());
+            bpState.update(state); // persist cuffless buffer even when skipping
+            return;
+        }
+
+        // 5. Update rolling state (state already loaded in step 3b)
         state.addReading(reading);
 
         // 6. Compute all metrics
-        BPVariabilityMetrics metrics = computeMetrics(reading, state);
+        BPVariabilityMetrics metrics = computeMetrics(reading, state, acuteSurge);
 
         // 7. Emit and update state
         out.collect(metrics);
         bpState.update(state);
     }
 
-    private BPVariabilityMetrics computeMetrics(BPReading reading, PatientBPState state) {
+    private BPVariabilityMetrics computeMetrics(BPReading reading, PatientBPState state,
+                                                 boolean acuteSurge) {
         long now = reading.getTimestamp();
         BPVariabilityMetrics m = new BPVariabilityMetrics();
 
@@ -191,8 +202,20 @@ public class Module7_BPVariabilityEngine
         m.setMaskedHTNSuspected(wcResult.maskedHtnSuspect());
         m.setClinicHomeGapSBP(wcResult.clinicHomeDelta());
 
-        // Crisis
+        // Crisis + Acute surge
         m.setCrisisFlag(Module7CrisisDetector.isCrisis(reading));
+        m.setAcuteSurgeFlag(acuteSurge);
+
+        // Cuffless ARV (Gap A: reading-to-reading, research only)
+        m.setArvCuffless(state.getCufflessARV());
+
+        // Within-day SD (Gap C: when today has ≥3 readings)
+        java.time.LocalDate today = java.time.Instant.ofEpochMilli(now)
+            .atZone(java.time.ZoneOffset.UTC).toLocalDate();
+        DailyBPSummary todaySummary = state.getDailySummaries().get(today.toString());
+        if (todaySummary != null) {
+            m.setWithinDaySdSbp(todaySummary.getWithinDaySdSBP());
+        }
 
         // Data quality
         m.setTotalReadingsInState(state.getTotalReadingsProcessed());

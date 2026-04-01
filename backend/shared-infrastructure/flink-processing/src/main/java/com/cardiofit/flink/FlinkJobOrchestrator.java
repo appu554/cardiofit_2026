@@ -400,6 +400,18 @@ public class FlinkJobOrchestrator {
                         .setValueSerializationSchema(new BPReadingSerializer())
                         .build())
                 .build());
+
+        // Acute surge side output → ingestion.safety-critical (same topic, separate tag
+        // for future routing flexibility — downstream distinguishes by SBP delta vs threshold)
+        metrics.getSideOutput(Module7_BPVariabilityEngine.ACUTE_SURGE_TAG).sinkTo(
+            KafkaSink.<com.cardiofit.flink.models.BPReading>builder()
+                .setBootstrapServers(bootstrap)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.builder()
+                        .setTopic(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName())
+                        .setValueSerializationSchema(new BPReadingSerializer())
+                        .build())
+                .build());
     }
 
     // --- Module 7 serializers ---
