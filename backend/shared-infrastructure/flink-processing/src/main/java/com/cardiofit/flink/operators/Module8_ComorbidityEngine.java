@@ -162,16 +162,18 @@ public class Module8_ComorbidityEngine
                 if (labType != null && value != null) {
                     state.updateLab(labType, value);
 
-                    // eGFR: track baseline + current + 14-day history for CID-01
+                    // eGFR: track baseline + current + previous reading for CID-01
                     if ("egfr".equalsIgnoreCase(labType)) {
                         if (state.getEGFRBaseline() == null) {
                             state.setEGFRBaseline(value);
                             state.setEGFRBaselineTimestamp(eventTime);
                         }
-                        // Shift current → 14d-ago if current is >14 days old
-                        Long prevTs = state.getEGFRCurrentTimestamp();
-                        if (prevTs != null && (eventTime - prevTs) >= 14L * 86400000L) {
+                        // Always shift current → 14dAgo on new reading.
+                        // Temporal validity (7–21 day gap) checked at read time
+                        // in getEGFRAcuteDeclinePercent14d().
+                        if (state.getEGFRCurrent() != null) {
                             state.setEGFR14dAgo(state.getEGFRCurrent());
+                            state.setEGFR14dAgoTimestamp(state.getEGFRCurrentTimestamp());
                         }
                         state.setEGFRCurrent(value);
                         state.setEGFRCurrentTimestamp(eventTime);
@@ -227,6 +229,7 @@ public class Module8_ComorbidityEngine
                 }
                 if ("KETO_DIET".equalsIgnoreCase(symptom) || "LOW_CARB".equalsIgnoreCase(symptom)) {
                     state.setSymptomReportedKetoDiet(true);
+                    state.setSymptomKetoDietTimestamp(eventTime);
                 }
                 // Symptom resolution — allows clearing sticky flags
                 if ("RESOLVED".equalsIgnoreCase(getStringField(payload, "status"))) {

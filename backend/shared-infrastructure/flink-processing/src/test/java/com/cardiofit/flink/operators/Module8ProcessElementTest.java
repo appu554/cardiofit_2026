@@ -100,6 +100,80 @@ class Module8ProcessElementTest {
             "CID-15 should fire after NSAID added to existing SGLT2I");
     }
 
+    @Test
+    @DisplayName("CID-06 fires when thiazide + FBG delta >15 mg/dL over 14 days via processElement")
+    void thiazideFBGDelta_firesCID06() throws Exception {
+        String patientId = "P-HARNESS-FBG";
+        long now = System.currentTimeMillis();
+
+        // 1) Thiazide medication
+        harness.processElement(buildMedEvent(patientId, "hydrochlorothiazide", "THIAZIDE", now - 14L * 86_400_000L), now - 14L * 86_400_000L);
+
+        // 2) FBG reading 14 days ago: 110 mg/dL
+        harness.processElement(buildLabEvent(patientId, "fbg", 110.0, now - 14L * 86_400_000L), now - 14L * 86_400_000L);
+
+        // 3) FBG reading now: 130 mg/dL (delta = +20, exceeds 15 threshold)
+        harness.processElement(buildLabEvent(patientId, "fbg", 130.0, now), now);
+
+        // 4) Verify CID-06 fires through the full operator pipeline
+        List<CIDAlert> output = harness.extractOutputValues();
+        assertTrue(output.stream().anyMatch(a -> "CID_06".equals(a.getRuleId())),
+            "CID-06 should fire when FBG increases >15 mg/dL over 14 days on thiazide");
+
+        // 5) Verify it's PAUSE severity (not routed to HALT side-output)
+        // getSideOutput() returns null (not empty list) when no HALT alerts exist
+        var sideOutput = harness.getSideOutput(Module8_ComorbidityEngine.HALT_SAFETY_TAG);
+        assertTrue(sideOutput == null || sideOutput.stream().noneMatch(r -> "CID_06".equals(r.getValue().getRuleId())),
+            "CID-06 is PAUSE severity — should NOT appear in HALT side-output");
+    }
+
+    @Test
+    @DisplayName("Keto diet flag persists past 72h — dietary choices don't auto-resolve")
+    void ketoDietPersists_CID04StillFires() throws Exception {
+        String patientId = "P-HARNESS-KETO";
+        long now = System.currentTimeMillis();
+
+        // 1) SGLT2i medication
+        harness.processElement(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 80L * 3600_000L), now - 80L * 3600_000L);
+
+        // 2) Keto diet reported 80 hours ago (>72h ago, but keto has no TTL)
+        harness.processElement(buildSymptomEvent(patientId, "KETO_DIET", null, now - 80L * 3600_000L), now - 80L * 3600_000L);
+
+        // 3) Benign vital event NOW — keto should NOT expire (dietary choice is sticky)
+        harness.processElement(buildVitalEvent(patientId, 120.0, null, null, now), now);
+
+        // 4) CID-04 should fire — keto diet persists until explicit RESOLVED event
+        List<CIDAlert> output = harness.extractOutputValues();
+        assertTrue(output.stream().anyMatch(a -> "CID_04".equals(a.getRuleId())),
+            "CID-04 should fire — keto diet flag has no TTL (dietary choices don't auto-resolve)");
+    }
+
+    @Test
+    @DisplayName("Keto diet resolves only via explicit RESOLVED event")
+    void ketoDietResolved_CID04Stops() throws Exception {
+        String patientId = "P-HARNESS-KETO-RES";
+        long now = System.currentTimeMillis();
+
+        // 1) SGLT2i + keto diet
+        harness.processElement(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 5000), now - 5000);
+        harness.processElement(buildSymptomEvent(patientId, "KETO_DIET", null, now - 4000), now - 4000);
+
+        // 2) Verify CID-04 fires
+        List<CIDAlert> output1 = harness.extractOutputValues();
+        assertTrue(output1.stream().anyMatch(a -> "CID_04".equals(a.getRuleId())),
+            "CID-04 should fire when SGLT2i + keto diet active");
+
+        // 3) Patient reports stopping keto diet
+        harness.processElement(buildSymptomEvent(patientId, "KETO_DIET", "RESOLVED", now), now);
+
+        // 4) CID-04 should NOT appear in new output
+        // extractOutputValues() is non-destructive — use size delta to check new entries
+        List<CIDAlert> output2 = harness.extractOutputValues();
+        List<CIDAlert> newAlerts = output2.subList(output1.size(), output2.size());
+        assertFalse(newAlerts.stream().anyMatch(a -> "CID_04".equals(a.getRuleId())),
+            "CID-04 should stop firing after keto diet explicitly resolved");
+    }
+
     // --- Test event builders using CORRECT payload field names ---
 
     private CanonicalEvent buildMedEvent(String patientId, String drugName, String drugClass, long time) {
@@ -124,6 +198,19 @@ class Module8ProcessElementTest {
             .id("evt-" + System.nanoTime())
             .patientId(patientId)
             .eventType(EventType.LAB_RESULT)
+            .eventTime(time)
+            .payload(payload)
+            .build();
+    }
+
+    private CanonicalEvent buildSymptomEvent(String patientId, String symptomType, String status, long time) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("symptom_type", symptomType);
+        if (status != null) payload.put("status", status);
+        return CanonicalEvent.builder()
+            .id("evt-" + System.nanoTime())
+            .patientId(patientId)
+            .eventType(EventType.PATIENT_REPORTED)
             .eventTime(time)
             .payload(payload)
             .build();

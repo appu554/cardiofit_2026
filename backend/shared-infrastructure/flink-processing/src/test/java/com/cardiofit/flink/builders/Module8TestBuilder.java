@@ -26,7 +26,9 @@ public class Module8TestBuilder {
         state.addToRollingBuffer("weight", 75.0, daysAgo(7));
         state.addToRollingBuffer("weight", 72.0, System.currentTimeMillis());
         state.setEGFR14dAgo(60.0);
+        state.setEGFR14dAgoTimestamp(daysAgo(14));
         state.setEGFRCurrent(48.0);
+        state.setEGFRCurrentTimestamp(System.currentTimeMillis());
         return state;
     }
 
@@ -38,7 +40,9 @@ public class Module8TestBuilder {
         state.addToRollingBuffer("weight", 74.5, daysAgo(7));
         state.addToRollingBuffer("weight", 74.0, System.currentTimeMillis());
         state.setEGFR14dAgo(60.0);
+        state.setEGFR14dAgoTimestamp(daysAgo(14));
         state.setEGFRCurrent(58.0);
+        state.setEGFRCurrentTimestamp(System.currentTimeMillis());
         return state;
     }
 

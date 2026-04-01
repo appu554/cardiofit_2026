@@ -36,9 +36,14 @@ class Module7SurgeDetectionTest {
     @Test
     void todaySurge_computedFromMorningMinusPreviousEvening() {
         PatientBPState state = new PatientBPState("P-TODAY");
-        long now = System.currentTimeMillis();
-        long yesterday = now - 24 * 60 * 60 * 1000L;
-        state.addReading(Module7TestBuilder.eveningReading("P-TODAY", 115, 72, yesterday + 12 * 3600000L));
+        // Use fixed noon-UTC timestamps to avoid date-boundary flakiness.
+        // yesterday+12h can land on today's calendar day when test runs after noon UTC.
+        java.time.LocalDate todayDate = java.time.Instant.ofEpochMilli(System.currentTimeMillis())
+            .atZone(java.time.ZoneOffset.UTC).toLocalDate();
+        long now = todayDate.atTime(10, 0).toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+        long yesterdayEvening = todayDate.minusDays(1).atTime(20, 0)
+            .toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+        state.addReading(Module7TestBuilder.eveningReading("P-TODAY", 115, 72, yesterdayEvening));
         state.addReading(Module7TestBuilder.morningReading("P-TODAY", 148, 88, now));
 
         List<DailyBPSummary> summaries = state.getSummariesInWindow(7, now);

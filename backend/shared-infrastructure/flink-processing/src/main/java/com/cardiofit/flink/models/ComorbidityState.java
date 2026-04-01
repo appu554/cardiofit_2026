@@ -47,6 +47,7 @@ public class ComorbidityState implements Serializable {
     private boolean symptomReportedNauseaVomiting;
     private long symptomNauseaOnsetTimestamp;
     private boolean symptomReportedKetoDiet;
+    private long symptomKetoDietTimestamp;
 
     // --- Patient History Flags ---
     private boolean genitalInfectionHistory;
@@ -62,6 +63,7 @@ public class ComorbidityState implements Serializable {
     private Double eGFRCurrent;
     private Long eGFRCurrentTimestamp;
     private Double eGFR14dAgo;
+    private Long eGFR14dAgoTimestamp;
 
     // --- Potassium Trajectory ---
     private Double previousPotassium;
@@ -246,8 +248,19 @@ public class ComorbidityState implements Serializable {
         return sbp7d - sbp14d;
     }
 
+    /**
+     * Acute eGFR decline percentage from the previous reading.
+     * Only valid when the two readings are 7–21 days apart (centred on 14 days).
+     * This read-time check ensures we don't compare against stale data from months ago
+     * or overly recent data from back-to-back labs.
+     */
     public Double getEGFRAcuteDeclinePercent14d() {
         if (eGFR14dAgo == null || eGFRCurrent == null || eGFR14dAgo < 1e-9) return null;
+        if (eGFR14dAgoTimestamp == null || eGFRCurrentTimestamp == null) return null;
+        long gapMs = eGFRCurrentTimestamp - eGFR14dAgoTimestamp;
+        long sevenDays = 7L * 86400000L;
+        long twentyOneDays = 21L * 86400000L;
+        if (gapMs < sevenDays || gapMs > twentyOneDays) return null;
         return ((eGFR14dAgo - eGFRCurrent) / eGFR14dAgo) * 100.0;
     }
 
@@ -268,6 +281,8 @@ public class ComorbidityState implements Serializable {
                 && (now - symptomNauseaOnsetTimestamp) > SYMPTOM_TTL_MS) {
             symptomReportedNauseaVomiting = false;
         }
+        // Keto diet flag intentionally has no TTL — dietary choices don't auto-resolve.
+        // Cleared only via explicit PATIENT_REPORTED event with status=RESOLVED.
     }
 
     public boolean isNauseaPersistent(long now, long minDurationMs) {
@@ -366,6 +381,8 @@ public class ComorbidityState implements Serializable {
     public void setPreviousPotassium(Double v) { this.previousPotassium = v; }
     public Double getEGFR14dAgo() { return eGFR14dAgo; }
     public void setEGFR14dAgo(Double v) { this.eGFR14dAgo = v; }
+    public Long getEGFR14dAgoTimestamp() { return eGFR14dAgoTimestamp; }
+    public void setEGFR14dAgoTimestamp(Long v) { this.eGFR14dAgoTimestamp = v; }
     public long getSymptomNauseaOnsetTimestamp() { return symptomNauseaOnsetTimestamp; }
     public void setSymptomNauseaOnsetTimestamp(long v) { this.symptomNauseaOnsetTimestamp = v; }
     public long getSymptomHypoglycemiaTimestamp() { return symptomHypoglycemiaTimestamp; }
@@ -384,6 +401,8 @@ public class ComorbidityState implements Serializable {
     public void setSymptomReportedNauseaVomiting(boolean v) { this.symptomReportedNauseaVomiting = v; }
     public boolean isSymptomReportedKetoDiet() { return symptomReportedKetoDiet; }
     public void setSymptomReportedKetoDiet(boolean v) { this.symptomReportedKetoDiet = v; }
+    public long getSymptomKetoDietTimestamp() { return symptomKetoDietTimestamp; }
+    public void setSymptomKetoDietTimestamp(long v) { this.symptomKetoDietTimestamp = v; }
     public boolean isGenitalInfectionHistory() { return genitalInfectionHistory; }
     public void setGenitalInfectionHistory(boolean v) { this.genitalInfectionHistory = v; }
     public boolean isFallsHistory() { return fallsHistory; }
