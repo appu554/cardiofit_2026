@@ -1,5 +1,6 @@
 package com.cardiofit.flink;
 
+import com.cardiofit.flink.models.AlertAcknowledgment;
 import com.cardiofit.flink.models.AuditRecord;
 import com.cardiofit.flink.models.ClinicalAction;
 import com.cardiofit.flink.models.ClinicalEvent;
@@ -87,7 +88,8 @@ public class FlinkJobOrchestrator {
                 break;
             case "bp-variability":
             case "module7":
-                Module7_BPVariability.createBPVariabilityPipeline(env);
+            case "bp-variability-engine":
+                launchBPVariabilityEngine(env);
                 break;
             case "comorbidity-interaction":
             case "module8":
@@ -156,11 +158,12 @@ public class FlinkJobOrchestrator {
      *   - FHIR_TAG side output              → FHIR_WRITEBACK
      */
     private static void launchClinicalActionEngine(StreamExecutionEnvironment env) {
-        LOG.info("Launching Module 6: Clinical Action Engine pipeline");
+        LOG.info("Launching Module 6: Clinical Action Engine pipeline (dual-input)");
 
         String bootstrapServers = KafkaConfigLoader.getBootstrapServers();
 
-        KafkaSource<ClinicalEvent> source = KafkaSource.<ClinicalEvent>builder()
+        // Input 1: ClinicalEvent from Modules 3/4/5
+        KafkaSource<ClinicalEvent> eventSource = KafkaSource.<ClinicalEvent>builder()
             .setBootstrapServers(bootstrapServers)
             .setTopics(KafkaTopics.CLINICAL_REASONING_EVENTS.getTopicName())
             .setGroupId("flink-module6-clinical-action-engine")
@@ -168,14 +171,31 @@ public class FlinkJobOrchestrator {
             .setValueOnlyDeserializer(new ClinicalEventDeserializer())
             .build();
 
-        SingleOutputStreamOperator<ClinicalAction> actions = env
-            .fromSource(
-                source,
-                WatermarkStrategy.<ClinicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
-                    .withTimestampAssigner((event, ts) -> event.getEventTime()),
-                "Kafka Source: Clinical Reasoning Events"
-            )
-            .keyBy(ClinicalEvent::getPatientId)
+        // Input 2: AlertAcknowledgment from physicians
+        KafkaSource<AlertAcknowledgment> ackSource = KafkaSource.<AlertAcknowledgment>builder()
+            .setBootstrapServers(bootstrapServers)
+            .setTopics(KafkaTopics.ALERT_ACKNOWLEDGMENTS.getTopicName())
+            .setGroupId("flink-module6-acknowledgments")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new AlertAcknowledgmentDeserializer())
+            .build();
+
+        var eventStream = env.fromSource(
+            eventSource,
+            WatermarkStrategy.<ClinicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                .withTimestampAssigner((event, ts) -> event.getEventTime()),
+            "Kafka Source: Clinical Reasoning Events"
+        ).keyBy(ClinicalEvent::getPatientId);
+
+        var ackStream = env.fromSource(
+            ackSource,
+            WatermarkStrategy.<AlertAcknowledgment>forBoundedOutOfOrderness(Duration.ofSeconds(30))
+                .withTimestampAssigner((ack, ts) -> ack.getTimestamp()),
+            "Kafka Source: Alert Acknowledgments"
+        ).keyBy(AlertAcknowledgment::getPatientId);
+
+        SingleOutputStreamOperator<ClinicalAction> actions = eventStream
+            .connect(ackStream)
             .process(new Module6_ClinicalActionEngine())
             .uid("Module6 Clinical Action Engine")
             .name("Module6 Clinical Action Engine");
@@ -229,8 +249,9 @@ public class FlinkJobOrchestrator {
         );
 
         LOG.info("Module 6 Clinical Action Engine pipeline configured: "
-            + "source={}, sinks=[{}, {}, {}, {}]",
+            + "sources=[{}, {}], sinks=[{}, {}, {}, {}]",
             KafkaTopics.CLINICAL_REASONING_EVENTS.getTopicName(),
+            KafkaTopics.ALERT_ACKNOWLEDGMENTS.getTopicName(),
             KafkaTopics.CLINICAL_ACTIONS.getTopicName(),
             KafkaTopics.CLINICAL_NOTIFICATIONS.getTopicName(),
             KafkaTopics.CLINICAL_AUDIT.getTopicName(),
@@ -261,6 +282,33 @@ public class FlinkJobOrchestrator {
         @Override
         public TypeInformation<ClinicalEvent> getProducedType() {
             return TypeInformation.of(ClinicalEvent.class);
+        }
+    }
+
+    /** Deserializes JSON bytes into an AlertAcknowledgment using Jackson. */
+    private static class AlertAcknowledgmentDeserializer implements DeserializationSchema<AlertAcknowledgment> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public AlertAcknowledgment deserialize(byte[] message) throws IOException {
+            if (message == null || message.length == 0) return null;
+            return mapper.readValue(message, AlertAcknowledgment.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(AlertAcknowledgment nextElement) {
+            return false;
+        }
+
+        @Override
+        public TypeInformation<AlertAcknowledgment> getProducedType() {
+            return TypeInformation.of(AlertAcknowledgment.class);
         }
     }
 
@@ -305,6 +353,94 @@ public class FlinkJobOrchestrator {
     }
 
     /**
+     * Module 7: BP Variability Engine.
+     * Consumes ingestion.vitals, keys by patientId, produces bp-variability-metrics
+     * and safety-critical side output.
+     */
+    private static void launchBPVariabilityEngine(StreamExecutionEnvironment env) {
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // Kafka source: BPReading from ingestion.vitals
+        KafkaSource<com.cardiofit.flink.models.BPReading> source = KafkaSource
+            .<com.cardiofit.flink.models.BPReading>builder()
+            .setBootstrapServers(bootstrap)
+            .setTopics(KafkaTopics.INGESTION_VITALS.getTopicName())
+            .setGroupId("flink-module7-bp-variability-v2")
+            .setValueOnlyDeserializer(new BPReadingDeserializer())
+            .build();
+
+        SingleOutputStreamOperator<com.cardiofit.flink.models.BPVariabilityMetrics> metrics = env
+            .fromSource(source,
+                WatermarkStrategy.<com.cardiofit.flink.models.BPReading>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((r, ts) -> r.getTimestamp()),
+                "Kafka Source: BP Readings")
+            .keyBy(com.cardiofit.flink.models.BPReading::getPatientId)
+            .process(new Module7_BPVariabilityEngine())
+            .uid("module7-bp-variability-engine")
+            .name("Module 7: BP Variability Engine");
+
+        // Main output → flink.bp-variability-metrics
+        metrics.sinkTo(
+            KafkaSink.<com.cardiofit.flink.models.BPVariabilityMetrics>builder()
+                .setBootstrapServers(bootstrap)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.builder()
+                        .setTopic(KafkaTopics.FLINK_BP_VARIABILITY_METRICS.getTopicName())
+                        .setValueSerializationSchema(new BPMetricsSerializer())
+                        .build())
+                .build());
+
+        // Crisis side output → ingestion.safety-critical
+        metrics.getSideOutput(Module7_BPVariabilityEngine.CRISIS_TAG).sinkTo(
+            KafkaSink.<com.cardiofit.flink.models.BPReading>builder()
+                .setBootstrapServers(bootstrap)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.builder()
+                        .setTopic(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName())
+                        .setValueSerializationSchema(new BPReadingSerializer())
+                        .build())
+                .build());
+    }
+
+    // --- Module 7 serializers ---
+
+    static class BPReadingDeserializer implements DeserializationSchema<com.cardiofit.flink.models.BPReading> {
+        private transient ObjectMapper mapper;
+        @Override public void open(InitializationContext ctx) {
+            mapper = new ObjectMapper();
+        }
+        @Override public com.cardiofit.flink.models.BPReading deserialize(byte[] bytes) throws IOException {
+            return mapper.readValue(bytes, com.cardiofit.flink.models.BPReading.class);
+        }
+        @Override public boolean isEndOfStream(com.cardiofit.flink.models.BPReading r) { return false; }
+        @Override public TypeInformation<com.cardiofit.flink.models.BPReading> getProducedType() {
+            return TypeInformation.of(com.cardiofit.flink.models.BPReading.class);
+        }
+    }
+
+    static class BPMetricsSerializer implements SerializationSchema<com.cardiofit.flink.models.BPVariabilityMetrics> {
+        private transient ObjectMapper mapper;
+        @Override public void open(InitializationContext ctx) {
+            mapper = new ObjectMapper();
+        }
+        @Override public byte[] serialize(com.cardiofit.flink.models.BPVariabilityMetrics m) {
+            try { return mapper.writeValueAsBytes(m); }
+            catch (Exception e) { throw new RuntimeException("Serialize BPMetrics failed", e); }
+        }
+    }
+
+    static class BPReadingSerializer implements SerializationSchema<com.cardiofit.flink.models.BPReading> {
+        private transient ObjectMapper mapper;
+        @Override public void open(InitializationContext ctx) {
+            mapper = new ObjectMapper();
+        }
+        @Override public byte[] serialize(com.cardiofit.flink.models.BPReading r) {
+            try { return mapper.writeValueAsBytes(r); }
+            catch (Exception e) { throw new RuntimeException("Serialize BPReading failed", e); }
+        }
+    }
+
+    /**
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
@@ -341,7 +477,7 @@ public class FlinkJobOrchestrator {
 
             // Module 7: BP Variability Engine
             LOG.info("Initializing Module 7: BP Variability Engine");
-            Module7_BPVariability.createBPVariabilityPipeline(env);
+            launchBPVariabilityEngine(env);
 
             // Module 8: Comorbidity Interaction Detector
             LOG.info("Initializing Module 8: Comorbidity Interaction Detector");
