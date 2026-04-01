@@ -2,8 +2,11 @@ package com.cardiofit.flink;
 
 import com.cardiofit.flink.models.AlertAcknowledgment;
 import com.cardiofit.flink.models.AuditRecord;
+import com.cardiofit.flink.models.CanonicalEvent;
+import com.cardiofit.flink.models.CIDAlert;
 import com.cardiofit.flink.models.ClinicalAction;
 import com.cardiofit.flink.models.ClinicalEvent;
+import com.cardiofit.flink.models.EventType;
 import com.cardiofit.flink.models.FhirWriteRequest;
 import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
@@ -91,9 +94,10 @@ public class FlinkJobOrchestrator {
             case "bp-variability-engine":
                 launchBPVariabilityEngine(env);
                 break;
-            case "comorbidity-interaction":
+            case "comorbidity":
             case "module8":
-                Module8_ComorbidityInteraction.createComorbidityPipeline(env);
+            case "comorbidity-interaction":
+                launchComorbidityEngine(env);
                 break;
             case "clinical-action-engine":
             case "module6-cae":
@@ -453,6 +457,93 @@ public class FlinkJobOrchestrator {
     }
 
     /**
+     * R10: Explicit launcher with dual-sink wiring.
+     * Main output → alerts.comorbidity-interactions
+     * HALT side-output → ingestion.safety-critical (patient safety fast-path)
+     */
+    private static void launchComorbidityEngine(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 8: Comorbidity Interaction Engine pipeline");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // Source: CanonicalEvent from enriched-patient-events-v1
+        KafkaSource<CanonicalEvent> source = KafkaSource.<CanonicalEvent>builder()
+            .setBootstrapServers(bootstrap)
+            .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+            .setGroupId("flink-module8-comorbidity-engine-v2")
+            .setStartingOffsets(OffsetsInitializer.latest())
+            .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+            .build();
+
+        SingleOutputStreamOperator<CIDAlert> alerts = env
+            .fromSource(source,
+                WatermarkStrategy.<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((e, ts) -> e.getEventTime()),
+                "Kafka Source: Enriched Patient Events (Module 8)")
+            .keyBy(CanonicalEvent::getPatientId)
+            .process(new Module8_ComorbidityEngine())
+            .uid("module8-comorbidity-engine")
+            .name("Module 8: Comorbidity Interaction Engine");
+
+        // Main output → alerts.comorbidity-interactions (all severities)
+        alerts.sinkTo(
+            KafkaSink.<CIDAlert>builder()
+                .setBootstrapServers(bootstrap)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<CIDAlert>builder()
+                        .setTopic(KafkaTopics.ALERTS_COMORBIDITY_INTERACTIONS.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<CIDAlert>())
+                        .build())
+                .build()
+        ).name("Sink: Comorbidity Alerts");
+
+        // HALT side-output → ingestion.safety-critical (fast-path, never suppressed)
+        alerts.getSideOutput(Module8_ComorbidityEngine.HALT_SAFETY_TAG).sinkTo(
+            KafkaSink.<CIDAlert>builder()
+                .setBootstrapServers(bootstrap)
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<CIDAlert>builder()
+                        .setTopic(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<CIDAlert>())
+                        .build())
+                .build()
+        ).name("Sink: HALT Safety-Critical Alerts");
+
+        LOG.info("Module 8 Comorbidity Engine pipeline configured: "
+            + "source=[{}], sinks=[{}, {}]",
+            KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName(),
+            KafkaTopics.ALERTS_COMORBIDITY_INTERACTIONS.getTopicName(),
+            KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName());
+    }
+
+    /** Deserializes JSON bytes into a CanonicalEvent using Jackson. */
+    static class CanonicalEventDeserializer implements DeserializationSchema<CanonicalEvent> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public CanonicalEvent deserialize(byte[] message) throws IOException {
+            if (message == null || message.length == 0) return null;
+            return mapper.readValue(message, CanonicalEvent.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(CanonicalEvent nextElement) {
+            return false;
+        }
+
+        @Override
+        public TypeInformation<CanonicalEvent> getProducedType() {
+            return TypeInformation.of(CanonicalEvent.class);
+        }
+    }
+
+    /**
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
@@ -493,7 +584,7 @@ public class FlinkJobOrchestrator {
 
             // Module 8: Comorbidity Interaction Detector
             LOG.info("Initializing Module 8: Comorbidity Interaction Detector");
-            Module8_ComorbidityInteraction.createComorbidityPipeline(env);
+            launchComorbidityEngine(env);
 
             LOG.info("All 9 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
 
