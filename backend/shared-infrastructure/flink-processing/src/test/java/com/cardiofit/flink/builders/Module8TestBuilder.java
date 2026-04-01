@@ -46,6 +46,7 @@ public class Module8TestBuilder {
         ComorbidityState state = new ComorbidityState(patientId);
         state.addMedication("ramipril", "ACEI", 10.0);
         state.addMedication("finerenone", "FINERENONE", 20.0);
+        state.setPreviousPotassium(5.1); // K+ rising: 5.1 → 5.5
         state.updateLab("potassium", 5.5);
         return state;
     }
