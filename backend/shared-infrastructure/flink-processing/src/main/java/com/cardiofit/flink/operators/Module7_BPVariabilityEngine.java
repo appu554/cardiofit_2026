@@ -34,7 +34,13 @@ public class Module7_BPVariabilityEngine
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(Module7_BPVariabilityEngine.class);
 
-    // Side-output tag for crisis readings
+    // Side-output tag for crisis readings.
+    // Both hypertensive crisis (SBP>180/DBP>120) and acute surge (SBP delta>30 in <1hr)
+    // emit to this tag intentionally. The downstream safety-critical consumer distinguishes
+    // them by reading values (absolute threshold vs. delta), not by tag.
+    // Cuffless/non-clinical-grade readings CAN trigger crisis side-output (steps 2-3 run
+    // before the clinical-grade filter at step 4) — this is by design since safety signals
+    // should fire regardless of source grade.
     public static final OutputTag<BPReading> CRISIS_TAG =
         new OutputTag<>("safety-critical", TypeInformation.of(BPReading.class));
 

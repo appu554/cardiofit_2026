@@ -9,11 +9,16 @@ import static org.junit.jupiter.api.Assertions.*;
 class Module7DipClassificationTest {
 
     @Test
-    void controlledPatient_hasResult() {
+    void controlledPatient_withoutNightReadings_returnsInsufficientData() {
+        // controlledPatient() has MORNING + EVENING but no NIGHT readings.
+        // EVENING (17-22h) is isDaytime()=true, isNocturnal()=false in TimeContext,
+        // so the dip classifier cannot compute a nocturnal mean → INSUFFICIENT_DATA.
         PatientBPState state = Module7TestBuilder.controlledPatient("P-DIP");
         List<DailyBPSummary> summaries = state.getSummariesInWindow(7, System.currentTimeMillis());
         Module7DipClassifier.DipResult result = Module7DipClassifier.classify(summaries);
         assertNotNull(result);
+        assertEquals(DipClassification.INSUFFICIENT_DATA, result.classification(),
+            "No NIGHT readings → classifier should return INSUFFICIENT_DATA");
     }
 
     @Test
