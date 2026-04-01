@@ -18,6 +18,7 @@ import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
@@ -378,6 +379,7 @@ public class FlinkJobOrchestrator {
                 WatermarkStrategy.<com.cardiofit.flink.models.BPReading>forBoundedOutOfOrderness(Duration.ofMinutes(2))
                     .withTimestampAssigner((r, ts) -> r.getTimestamp()),
                 "Kafka Source: BP Readings")
+            .filter(r -> r != null && r.getPatientId() != null)
             .keyBy(com.cardiofit.flink.models.BPReading::getPatientId)
             .process(new Module7_BPVariabilityEngine())
             .uid("module7-bp-variability-engine")
@@ -387,6 +389,8 @@ public class FlinkJobOrchestrator {
         metrics.sinkTo(
             KafkaSink.<com.cardiofit.flink.models.BPVariabilityMetrics>builder()
                 .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m7-metrics")
                 .setRecordSerializer(
                     KafkaRecordSerializationSchema.builder()
                         .setTopic(KafkaTopics.FLINK_BP_VARIABILITY_METRICS.getTopicName())
@@ -398,6 +402,8 @@ public class FlinkJobOrchestrator {
         metrics.getSideOutput(Module7_BPVariabilityEngine.CRISIS_TAG).sinkTo(
             KafkaSink.<com.cardiofit.flink.models.BPReading>builder()
                 .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m7-crisis")
                 .setRecordSerializer(
                     KafkaRecordSerializationSchema.builder()
                         .setTopic(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName())
@@ -410,6 +416,8 @@ public class FlinkJobOrchestrator {
         metrics.getSideOutput(Module7_BPVariabilityEngine.ACUTE_SURGE_TAG).sinkTo(
             KafkaSink.<com.cardiofit.flink.models.BPReading>builder()
                 .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m7-surge")
                 .setRecordSerializer(
                     KafkaRecordSerializationSchema.builder()
                         .setTopic(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName())
@@ -426,7 +434,13 @@ public class FlinkJobOrchestrator {
             mapper = new ObjectMapper();
         }
         @Override public com.cardiofit.flink.models.BPReading deserialize(byte[] bytes) throws IOException {
-            return mapper.readValue(bytes, com.cardiofit.flink.models.BPReading.class);
+            if (bytes == null || bytes.length == 0) return null;
+            try {
+                return mapper.readValue(bytes, com.cardiofit.flink.models.BPReading.class);
+            } catch (Exception e) {
+                LOG.warn("Failed to deserialize BPReading, skipping: {}", e.getMessage());
+                return null;
+            }
         }
         @Override public boolean isEndOfStream(com.cardiofit.flink.models.BPReading r) { return false; }
         @Override public TypeInformation<com.cardiofit.flink.models.BPReading> getProducedType() {
@@ -471,7 +485,7 @@ public class FlinkJobOrchestrator {
             .setBootstrapServers(bootstrap)
             .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
             .setGroupId("flink-module8-comorbidity-engine-v2")
-            .setStartingOffsets(OffsetsInitializer.latest())
+            .setStartingOffsets(OffsetsInitializer.earliest())
             .setValueOnlyDeserializer(new CanonicalEventDeserializer())
             .build();
 
@@ -489,6 +503,8 @@ public class FlinkJobOrchestrator {
         alerts.sinkTo(
             KafkaSink.<CIDAlert>builder()
                 .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m8-comorbidity-alerts")
                 .setRecordSerializer(
                     KafkaRecordSerializationSchema.<CIDAlert>builder()
                         .setTopic(KafkaTopics.ALERTS_COMORBIDITY_INTERACTIONS.getTopicName())
@@ -501,6 +517,8 @@ public class FlinkJobOrchestrator {
         alerts.getSideOutput(Module8_ComorbidityEngine.HALT_SAFETY_TAG).sinkTo(
             KafkaSink.<CIDAlert>builder()
                 .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m8-halt-safety")
                 .setRecordSerializer(
                     KafkaRecordSerializationSchema.<CIDAlert>builder()
                         .setTopic(KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName())
