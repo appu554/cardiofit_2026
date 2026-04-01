@@ -167,7 +167,8 @@ public class ComorbidityState implements Serializable {
         List<TimestampedValue> buffer = rollingBuffers.computeIfAbsent(
             metric.toLowerCase(), k -> new ArrayList<>());
         buffer.add(new TimestampedValue(value, timestamp));
-        long cutoff = timestamp - 14L * 86400000L;
+        // Keep 15 days to ensure 14-day lookback queries find entries at exactly 14d ago
+        long cutoff = timestamp - 15L * 86400000L;
         buffer.removeIf(tv -> tv.timestamp < cutoff);
     }
 
@@ -212,10 +213,23 @@ public class ComorbidityState implements Serializable {
         return getValueApproxDaysAgo("weight", now, 7);
     }
 
+    public Double getLatestFromBuffer(String metric) {
+        List<TimestampedValue> buffer = rollingBuffers.get(metric.toLowerCase());
+        if (buffer == null || buffer.isEmpty()) return null;
+        TimestampedValue latest = null;
+        for (TimestampedValue tv : buffer) {
+            if (latest == null || tv.timestamp > latest.timestamp) latest = tv;
+        }
+        return latest != null ? latest.value : null;
+    }
+
     public Double getWeightDelta7d(long now) {
         Double w7d = getWeightApprox7dAgo(now);
-        if (latestWeight == null || w7d == null) return null;
-        return latestWeight - w7d;
+        if (w7d == null) return null;
+        // Prefer latestWeight point-in-time field; fall back to rolling buffer
+        Double currentWeight = latestWeight != null ? latestWeight : getLatestFromBuffer("weight");
+        if (currentWeight == null) return null;
+        return currentWeight - w7d;
     }
 
     public Double getFBGDelta14d(long now) {
