@@ -37,7 +37,7 @@ import java.util.UUID;
  * - 5-minute grace period: timer at 3h05m not 3h00m for late-arriving readings
  * - Overlapping meals: if second meal within 90 min, both flagged, first window truncated
  * - Pre-meal BP: retroactive buffer — most recent BP within 60 min before meal
- * - Data tier: inferred from first glucose source (CGM→Tier1, SMBG→Tier3)
+ * - Data tier: per-session, computed at close time from glucose sources in that session's window
  *
  * State TTL: 7 days (covers meal windows + some buffer).
  */
@@ -118,7 +118,7 @@ public class Module10_MealResponseCorrelator
             ctx.output(MEAL_PATTERN_FEED_TAG, record);
 
             LOG.debug("Meal session closed: patient={}, meal={}, tier={}, glucose={}, bp={}",
-                state.getPatientId(), mealEventId, state.getDataTier(),
+                state.getPatientId(), mealEventId, record.getDataTier(),
                 record.getGlucoseReadingCount(), record.isBpComplete());
         }
 
@@ -171,20 +171,15 @@ public class Module10_MealResponseCorrelator
             if (!(val instanceof Number)) return;
             glucoseValue = ((Number) val).doubleValue();
             source = "CGM";
-
-            if (state.getDataTier() == DataTier.TIER_3_SMBG) {
-                state.setDataTier(DataTier.TIER_1_CGM);
-            }
         } else {
             Object val = payload.get("value");
             if (!(val instanceof Number)) return;
             glucoseValue = ((Number) val).doubleValue();
             source = "SMBG";
-
-            if (state.getDataTier() == DataTier.TIER_1_CGM) {
-                state.setDataTier(DataTier.TIER_2_HYBRID);
-            }
         }
+        // Data tier is computed per-session at close time via MealSession.computeSessionTier(),
+        // not upgraded at the patient level. This prevents one CGM session from permanently
+        // promoting the tier for future SMBG-only sessions.
 
         state.addGlucoseReading(timestamp, glucoseValue, source);
     }
@@ -205,13 +200,16 @@ public class Module10_MealResponseCorrelator
 
     private MealResponseRecord buildRecord(MealCorrelationState state,
                                             MealCorrelationState.MealSession session) {
+        // Per-session tier: computed from glucose sources seen in THIS session's window
+        DataTier sessionTier = session.computeSessionTier();
+
         // Analyze glucose
         Module10GlucoseAnalyzer.Result glucoseResult =
             Module10GlucoseAnalyzer.analyze(session.glucoseWindow);
 
         // Classify curve shape (Tier 1 only)
         CurveShape curveShape = CurveShape.UNKNOWN;
-        if (state.getDataTier().supportsCurveClassification() && glucoseResult != null) {
+        if (sessionTier.supportsCurveClassification() && glucoseResult != null) {
             curveShape = Module10CurveClassifier.classify(session.glucoseWindow);
         }
 
@@ -226,7 +224,7 @@ public class Module10_MealResponseCorrelator
         Double sodiumMg = getDoubleField(mealPayload, "sodium_mg");
 
         // Compute quality score
-        double qualityScore = computeQualityScore(glucoseResult, bpResult, state.getDataTier());
+        double qualityScore = computeQualityScore(glucoseResult, bpResult, sessionTier);
 
         MealResponseRecord.Builder builder = MealResponseRecord.builder()
             .recordId("m10-" + UUID.randomUUID())
@@ -237,7 +235,7 @@ public class Module10_MealResponseCorrelator
             .carbGrams(carbGrams)
             .proteinGrams(proteinGrams)
             .sodiumMg(sodiumMg)
-            .dataTier(state.getDataTier())
+            .dataTier(sessionTier)
             .overlapping(session.overlapping)
             .mealPayload(mealPayload)
             .qualityScore(qualityScore);

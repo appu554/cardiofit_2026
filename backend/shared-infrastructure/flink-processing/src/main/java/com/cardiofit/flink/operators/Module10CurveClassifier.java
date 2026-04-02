@@ -129,18 +129,29 @@ public class Module10CurveClassifier {
         return false;
     }
 
+    /**
+     * Detect plateau: sustained elevation after peak with fall rate < 0.5 mg/dL/min.
+     * Uses a 3-point sliding window average of fall rates to smooth out 5-min interval noise.
+     * A single noisy CGM reading won't falsely terminate plateau detection.
+     */
     private static boolean isPlateau(double[] smoothed, int peakIdx,
                                       List<GlucoseWindow.Reading> readings) {
-        if (peakIdx >= smoothed.length - 2) return false;
+        if (peakIdx >= smoothed.length - 3) return false;
 
         double sustainedStart = readings.get(peakIdx).timestamp;
+
+        // Compute per-interval fall rates
+        double[] fallRates = new double[smoothed.length - 1];
         for (int i = peakIdx + 1; i < smoothed.length; i++) {
             double dtMin = (readings.get(i).timestamp - readings.get(i - 1).timestamp) / 60_000.0;
-            if (dtMin <= 0) continue;
-            double fallRate = (smoothed[i - 1] - smoothed[i]) / dtMin;
-            if (fallRate > PLATEAU_FALL_RATE) {
-                // Check if we sustained long enough before the drop
-                double sustainedMin = (readings.get(i - 1).timestamp - sustainedStart) / 60_000.0;
+            fallRates[i - 1] = (dtMin > 0) ? (smoothed[i - 1] - smoothed[i]) / dtMin : 0.0;
+        }
+
+        // 3-point sliding window average of fall rates to suppress noise
+        for (int i = peakIdx + 1; i < smoothed.length - 2; i++) {
+            double avgFallRate = (fallRates[i - 1] + fallRates[i] + fallRates[i + 1]) / 3.0;
+            if (avgFallRate > PLATEAU_FALL_RATE) {
+                double sustainedMin = (readings.get(i).timestamp - sustainedStart) / 60_000.0;
                 return sustainedMin >= PLATEAU_DURATION_MIN;
             }
         }

@@ -14,7 +14,7 @@ import java.util.Map;
  * Key design decisions:
  * - activeSessions: Map<mealEventId, MealSession> — supports overlapping meals
  * - lastBPReading: retroactive buffer for pre-meal BP (most recent within 60 min)
- * - dataTier: inferred from first CGM/SMBG event (sticky per patient)
+ * - dataTier: per-session, computed at close time from glucose sources in that session
  * - overlappingMealIds: tracks meal IDs flagged for overlap (second meal within 90 min)
  *
  * State TTL: 7 days (OnReadAndWrite + NeverReturnExpired).
@@ -110,6 +110,12 @@ public class MealCorrelationState implements Serializable {
             long windowEnd = session.mealTimestamp + GLUCOSE_WINDOW_MS;
             if (timestamp >= session.mealTimestamp && timestamp <= windowEnd) {
                 session.glucoseWindow.addReading(timestamp, value, source);
+                // Track glucose source per session for per-session tier computation
+                if ("CGM".equalsIgnoreCase(source)) {
+                    session.hasCGM = true;
+                } else if ("SMBG".equalsIgnoreCase(source)) {
+                    session.hasSMBG = true;
+                }
                 // Baseline is NOT set here — deferred to Module10GlucoseAnalyzer.analyze()
                 // which uses the chronologically earliest reading (after sortByTime).
                 // Setting it here would be incorrect if Kafka delivers out-of-order.
@@ -145,6 +151,9 @@ public class MealCorrelationState implements Serializable {
 
     /**
      * Find session whose timer should fire at given timestamp.
+     * NOTE: Multiple sessions can share the same timerFireTime if two meals arrive with
+     * identical timestamps (same mealTimestamp → same timerFireTime). This is intentional:
+     * onTimer will close and emit all of them in the same callback.
      */
     public List<String> getSessionsForTimer(long timerTimestamp) {
         List<String> ids = new ArrayList<>();
@@ -198,8 +207,24 @@ public class MealCorrelationState implements Serializable {
         @JsonProperty("overlapping")
         public boolean overlapping;
 
+        @JsonProperty("hasCGM")
+        public boolean hasCGM;
+
+        @JsonProperty("hasSMBG")
+        public boolean hasSMBG;
+
         public MealSession() {
             this.mealPayload = new HashMap<>();
+        }
+
+        /**
+         * Compute data tier from glucose sources seen in THIS session.
+         * CGM-only → Tier 1, both CGM+SMBG → Tier 2, SMBG-only or none → Tier 3.
+         */
+        public DataTier computeSessionTier() {
+            if (hasCGM && hasSMBG) return DataTier.TIER_2_HYBRID;
+            if (hasCGM) return DataTier.TIER_1_CGM;
+            return DataTier.TIER_3_SMBG;
         }
     }
 }

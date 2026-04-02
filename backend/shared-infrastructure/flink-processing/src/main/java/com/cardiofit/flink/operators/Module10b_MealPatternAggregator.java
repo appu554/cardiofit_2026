@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.DayOfWeek;
+import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -140,7 +141,13 @@ public class Module10b_MealPatternAggregator
                 .map(MealResponseRecord::getGlucoseExcursion)
                 .sorted()
                 .collect(Collectors.toList());
-            double median = excursions.get(excursions.size() / 2);
+            double median;
+            int n = excursions.size();
+            if (n % 2 == 1) {
+                median = excursions.get(n / 2);
+            } else {
+                median = (excursions.get(n / 2 - 1) + excursions.get(n / 2)) / 2.0;
+            }
             summary.setMedianExcursion(median);
 
             double meanTTP = withGlucose.stream()
@@ -202,12 +209,16 @@ public class Module10b_MealPatternAggregator
     }
 
     /**
-     * Compute next Monday 00:00 UTC.
+     * Compute next Monday 00:00 UTC, strictly after currentTimeMs.
+     * If currentTimeMs is exactly Monday 00:00:00.000 UTC, returns the FOLLOWING Monday
+     * (the timer just fired at this boundary, so the next one is 7 days out).
      */
     static long computeNextMonday(long currentTimeMs) {
         ZonedDateTime now = Instant.ofEpochMilli(currentTimeMs).atZone(ZoneOffset.UTC);
-        ZonedDateTime nextMonday = now.toLocalDate()
-            .with(java.time.temporal.TemporalAdjusters.next(DayOfWeek.MONDAY))
+        // Start from tomorrow's date to guarantee strictly-after semantics,
+        // then find the next Monday (or same if tomorrow is Monday).
+        ZonedDateTime nextMonday = now.toLocalDate().plusDays(1)
+            .with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY))
             .atStartOfDay(ZoneOffset.UTC);
         return nextMonday.toInstant().toEpochMilli();
     }
