@@ -6,8 +6,13 @@ import com.cardiofit.flink.models.CanonicalEvent;
 import com.cardiofit.flink.models.CIDAlert;
 import com.cardiofit.flink.models.ClinicalAction;
 import com.cardiofit.flink.models.ClinicalEvent;
+import com.cardiofit.flink.models.EngagementDropAlert;
+import com.cardiofit.flink.models.EngagementSignal;
+import com.cardiofit.flink.models.RelapseRiskScore;
 import com.cardiofit.flink.models.EventType;
 import com.cardiofit.flink.models.FhirWriteRequest;
+import com.cardiofit.flink.models.MealResponseRecord;
+import com.cardiofit.flink.models.MealPatternSummary;
 import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
 import com.cardiofit.flink.utils.KafkaConfigLoader;
@@ -103,6 +108,21 @@ public class FlinkJobOrchestrator {
             case "clinical-action-engine":
             case "module6-cae":
                 launchClinicalActionEngine(env);
+                break;
+            case "engagement":
+            case "module9":
+            case "engagement-monitor":
+                launchEngagementMonitor(env);
+                break;
+            case "meal-response":
+            case "module10":
+            case "meal-response-correlator":
+                launchMealResponseCorrelator(env);
+                break;
+            case "meal-patterns":
+            case "module10b":
+            case "meal-pattern-aggregator":
+                launchMealPatternAggregator(env);
                 break;
             default:
                 LOG.warn("Unknown job type: {}. Defaulting to comprehensive CDS.", jobType);
@@ -534,6 +554,210 @@ public class FlinkJobOrchestrator {
             KafkaTopics.INGESTION_SAFETY_CRITICAL.getTopicName());
     }
 
+    /**
+     * Module 9: Engagement Monitor.
+     * Timer-driven daily engagement scoring with 8 DD#8-reconciled signal channels.
+     * Dual sink: engagement signals (main) + drop alerts (side output).
+     */
+    private static void launchEngagementMonitor(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 9: Engagement Monitor pipeline");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // Source: CanonicalEvent from enriched-patient-events-v1 (same as Module 8)
+        KafkaSource<CanonicalEvent> source = KafkaSource.<CanonicalEvent>builder()
+            .setBootstrapServers(bootstrap)
+            .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+            .setGroupId("flink-module9-engagement-monitor-v1")
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+            .build();
+
+        // Pipeline: keyBy patientId -> Module 9 operator
+        SingleOutputStreamOperator<EngagementSignal> signals = env
+            .fromSource(source,
+                WatermarkStrategy.<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((e, ts) -> e.getEventTime()),
+                "Kafka Source: Enriched Patient Events (Module 9)")
+            .keyBy(CanonicalEvent::getPatientId)
+            .process(new Module9_EngagementMonitor())
+            .uid("module9-engagement-monitor")
+            .name("Module 9: Engagement Monitor");
+
+        // Main output -> flink.engagement-signals
+        signals.sinkTo(
+            KafkaSink.<EngagementSignal>builder()
+                .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m9-engagement-signals")
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<EngagementSignal>builder()
+                        .setTopic(KafkaTopics.FLINK_ENGAGEMENT_SIGNALS.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<EngagementSignal>())
+                        .build())
+                .build()
+        ).name("Sink: Engagement Signals");
+
+        // Side output -> alerts.engagement-drop
+        signals.getSideOutput(Module9_EngagementMonitor.ENGAGEMENT_DROP_TAG).sinkTo(
+            KafkaSink.<EngagementDropAlert>builder()
+                .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m9-engagement-drop-alerts")
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<EngagementDropAlert>builder()
+                        .setTopic(KafkaTopics.ALERTS_ENGAGEMENT_DROP.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<EngagementDropAlert>())
+                        .build())
+                .build()
+        ).name("Sink: Engagement Drop Alerts");
+
+        // Phase 2 side output -> alerts.relapse-risk
+        signals.getSideOutput(Module9_EngagementMonitor.RELAPSE_RISK_TAG).sinkTo(
+            KafkaSink.<RelapseRiskScore>builder()
+                .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m9-relapse-risk-alerts")
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<RelapseRiskScore>builder()
+                        .setTopic(KafkaTopics.ALERTS_RELAPSE_RISK.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<RelapseRiskScore>())
+                        .build())
+                .build()
+        ).name("Sink: Relapse Risk Alerts");
+
+        LOG.info("Module 9 Engagement Monitor pipeline configured: "
+            + "source=[{}], sinks=[{}, {}, {}]",
+            KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName(),
+            KafkaTopics.FLINK_ENGAGEMENT_SIGNALS.getTopicName(),
+            KafkaTopics.ALERTS_ENGAGEMENT_DROP.getTopicName(),
+            KafkaTopics.ALERTS_RELAPSE_RISK.getTopicName());
+    }
+
+    /**
+     * Module 10: Meal Response Correlator.
+     * Session-window-driven per-meal glucose/BP correlation.
+     * Single sink: MealResponseRecord → flink.meal-response.
+     */
+    private static void launchMealResponseCorrelator(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 10: Meal Response Correlator pipeline");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        KafkaSource<CanonicalEvent> source = KafkaSource.<CanonicalEvent>builder()
+            .setBootstrapServers(bootstrap)
+            .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+            .setGroupId("flink-module10-meal-response-v1")
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+            .build();
+
+        SingleOutputStreamOperator<MealResponseRecord> records = env
+            .fromSource(source,
+                WatermarkStrategy.<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                    .withTimestampAssigner((e, ts) -> e.getEventTime()),
+                "Kafka Source: Enriched Patient Events (Module 10)")
+            .keyBy(CanonicalEvent::getPatientId)
+            .process(new Module10_MealResponseCorrelator())
+            .uid("module10-meal-response-correlator")
+            .name("Module 10: Meal Response Correlator");
+
+        // Main output → flink.meal-response
+        records.sinkTo(
+            KafkaSink.<MealResponseRecord>builder()
+                .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m10-meal-response")
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<MealResponseRecord>builder()
+                        .setTopic(KafkaTopics.FLINK_MEAL_RESPONSE.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<MealResponseRecord>())
+                        .build())
+                .build()
+        ).name("Sink: Meal Response Records");
+
+        LOG.info("Module 10 pipeline configured: source=[{}], sink=[{}]",
+            KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName(),
+            KafkaTopics.FLINK_MEAL_RESPONSE.getTopicName());
+    }
+
+    /**
+     * Module 10b: Meal Pattern Aggregator.
+     * Weekly aggregation of meal response records with OLS salt sensitivity.
+     * Separate job from Module 10 for failure isolation.
+     * Input: MealResponseRecord from flink.meal-response
+     * Output: MealPatternSummary to flink.meal-patterns
+     */
+    private static void launchMealPatternAggregator(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 10b: Meal Pattern Aggregator pipeline");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // Source: MealResponseRecord from flink.meal-response (output of Module 10)
+        KafkaSource<MealResponseRecord> source = KafkaSource.<MealResponseRecord>builder()
+            .setBootstrapServers(bootstrap)
+            .setTopics(KafkaTopics.FLINK_MEAL_RESPONSE.getTopicName())
+            .setGroupId("flink-module10b-meal-patterns-v1")
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setValueOnlyDeserializer(new MealResponseRecordDeserializer())
+            .build();
+
+        SingleOutputStreamOperator<MealPatternSummary> summaries = env
+            .fromSource(source,
+                WatermarkStrategy.<MealResponseRecord>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                    .withTimestampAssigner((r, ts) -> r.getMealTimestamp()),
+                "Kafka Source: Meal Response Records (Module 10b)")
+            .keyBy(MealResponseRecord::getPatientId)
+            .process(new Module10b_MealPatternAggregator())
+            .uid("module10b-meal-pattern-aggregator")
+            .name("Module 10b: Meal Pattern Aggregator");
+
+        // Output → flink.meal-patterns
+        summaries.sinkTo(
+            KafkaSink.<MealPatternSummary>builder()
+                .setBootstrapServers(bootstrap)
+                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setTransactionalIdPrefix("m10b-meal-patterns")
+                .setRecordSerializer(
+                    KafkaRecordSerializationSchema.<MealPatternSummary>builder()
+                        .setTopic(KafkaTopics.FLINK_MEAL_PATTERNS.getTopicName())
+                        .setValueSerializationSchema(new JsonSerializer<MealPatternSummary>())
+                        .build())
+                .build()
+        ).name("Sink: Meal Pattern Summaries");
+
+        LOG.info("Module 10b pipeline configured: source=[{}], sink=[{}]",
+            KafkaTopics.FLINK_MEAL_RESPONSE.getTopicName(),
+            KafkaTopics.FLINK_MEAL_PATTERNS.getTopicName());
+    }
+
+    /** Deserializes JSON bytes into a MealResponseRecord using Jackson. */
+    static class MealResponseRecordDeserializer implements DeserializationSchema<MealResponseRecord> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        @Override
+        public MealResponseRecord deserialize(byte[] message) throws IOException {
+            if (message == null || message.length == 0) return null;
+            return mapper.readValue(message, MealResponseRecord.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(MealResponseRecord nextElement) {
+            return false;
+        }
+
+        @Override
+        public TypeInformation<MealResponseRecord> getProducedType() {
+            return TypeInformation.of(MealResponseRecord.class);
+        }
+    }
+
     /** Deserializes JSON bytes into a CanonicalEvent using Jackson. */
     static class CanonicalEventDeserializer implements DeserializationSchema<CanonicalEvent> {
         private transient ObjectMapper mapper;
@@ -565,7 +789,7 @@ public class FlinkJobOrchestrator {
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
-        LOG.info("Launching complete EHR Intelligence pipeline with all 9 modules (1, 1b, 2-8)");
+        LOG.info("Launching complete EHR Intelligence pipeline with all 11 modules (1, 1b, 2-10b)");
 
         try {
             // Module 1: Ingestion & Gateway (traditional EHR sources)
@@ -604,7 +828,19 @@ public class FlinkJobOrchestrator {
             LOG.info("Initializing Module 8: Comorbidity Interaction Detector");
             launchComorbidityEngine(env);
 
-            LOG.info("All 9 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
+            // Module 9: Engagement Monitor
+            LOG.info("Initializing Module 9: Engagement Monitor");
+            launchEngagementMonitor(env);
+
+            // Module 10: Meal Response Correlator
+            LOG.info("Initializing Module 10: Meal Response Correlator");
+            launchMealResponseCorrelator(env);
+
+            // Module 10b: Meal Pattern Aggregator
+            LOG.info("Initializing Module 10b: Meal Pattern Aggregator");
+            launchMealPatternAggregator(env);
+
+            LOG.info("All 11 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
 
         } catch (Exception e) {
             LOG.error("Failed to initialize complete pipeline", e);
