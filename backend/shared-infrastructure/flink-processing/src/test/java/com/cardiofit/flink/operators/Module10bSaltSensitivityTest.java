@@ -33,7 +33,7 @@ class Module10bSaltSensitivityTest {
         long now = System.currentTimeMillis();
         for (int i = 0; i < 35; i++) {
             double sodium = 300 + i * 40;
-            double sbpExcursion = 5.0 + Math.random() * 0.5;
+            double sbpExcursion = 5.0 + (i % 5) * 0.01; // deterministic tiny noise
             pairs.add(new MealPatternState.SodiumSBPPair(sodium, sbpExcursion, now - i * 86400000L));
         }
 
