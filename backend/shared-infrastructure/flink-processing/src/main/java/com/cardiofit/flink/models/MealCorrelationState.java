@@ -110,10 +110,9 @@ public class MealCorrelationState implements Serializable {
             long windowEnd = session.mealTimestamp + GLUCOSE_WINDOW_MS;
             if (timestamp >= session.mealTimestamp && timestamp <= windowEnd) {
                 session.glucoseWindow.addReading(timestamp, value, source);
-                // Set baseline from first reading if not set
-                if (session.glucoseWindow.getBaseline() == null) {
-                    session.glucoseWindow.setBaseline(value);
-                }
+                // Baseline is NOT set here — deferred to Module10GlucoseAnalyzer.analyze()
+                // which uses the chronologically earliest reading (after sortByTime).
+                // Setting it here would be incorrect if Kafka delivers out-of-order.
             }
         }
     }

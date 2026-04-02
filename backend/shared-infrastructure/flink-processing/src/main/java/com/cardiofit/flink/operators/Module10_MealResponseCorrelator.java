@@ -30,7 +30,10 @@ import java.util.UUID;
  * Output: MealResponseRecord to flink.meal-response (main output).
  *
  * Design decisions:
- * - Processing-time timers (not event-time) ensure window closes even if CGM goes offline
+ * - Processing-time timers (not event-time) ensure window closes even if CGM goes offline.
+ *   CAVEAT: during Kafka offset resets or batch replay, windows close immediately (wall-clock,
+ *   not 3h of event time), producing near-empty glucose windows. For backfill, consider
+ *   adding an event-time mode with event-time timers.
  * - 5-minute grace period: timer at 3h05m not 3h00m for late-arriving readings
  * - Overlapping meals: if second meal within 90 min, both flagged, first window truncated
  * - Pre-meal BP: retroactive buffer — most recent BP within 60 min before meal
@@ -259,8 +262,9 @@ public class Module10_MealResponseCorrelator
                    .bpComplete(bpResult.complete);
         }
 
-        // Window duration
-        long windowDuration = System.currentTimeMillis() - session.mealTimestamp;
+        // Window duration: use deterministic session boundaries, not wall-clock.
+        // timerFireTime = mealTimestamp + GLUCOSE_WINDOW_MS + GLUCOSE_GRACE_MS (3h05m)
+        long windowDuration = session.timerFireTime - session.mealTimestamp;
         builder.windowDurationMs(windowDuration);
 
         return builder.build();

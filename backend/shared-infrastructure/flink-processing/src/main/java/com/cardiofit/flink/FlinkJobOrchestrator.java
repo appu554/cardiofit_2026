@@ -741,10 +741,18 @@ public class FlinkJobOrchestrator {
             mapper.registerModule(new JavaTimeModule());
         }
 
+        private ObjectMapper mapper() {
+            if (mapper == null) {
+                mapper = new ObjectMapper();
+                mapper.registerModule(new JavaTimeModule());
+            }
+            return mapper;
+        }
+
         @Override
         public MealResponseRecord deserialize(byte[] message) throws IOException {
             if (message == null || message.length == 0) return null;
-            return mapper.readValue(message, MealResponseRecord.class);
+            return mapper().readValue(message, MealResponseRecord.class);
         }
 
         @Override
