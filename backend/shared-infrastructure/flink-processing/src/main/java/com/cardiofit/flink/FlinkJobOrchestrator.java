@@ -13,6 +13,8 @@ import com.cardiofit.flink.models.EventType;
 import com.cardiofit.flink.models.FhirWriteRequest;
 import com.cardiofit.flink.models.MealResponseRecord;
 import com.cardiofit.flink.models.MealPatternSummary;
+import com.cardiofit.flink.models.ActivityResponseRecord;
+import com.cardiofit.flink.models.FitnessPatternSummary;
 import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
 import com.cardiofit.flink.utils.KafkaConfigLoader;
@@ -123,6 +125,16 @@ public class FlinkJobOrchestrator {
             case "module10b":
             case "meal-pattern-aggregator":
                 launchMealPatternAggregator(env);
+                break;
+            case "activity-response":
+            case "module11":
+            case "activity-response-correlator":
+                launchActivityResponseCorrelator(env);
+                break;
+            case "fitness-patterns":
+            case "module11b":
+            case "fitness-pattern-aggregator":
+                launchFitnessPatternAggregator(env);
                 break;
             default:
                 LOG.warn("Unknown job type: {}. Defaulting to comprehensive CDS.", jobType);
@@ -766,6 +778,133 @@ public class FlinkJobOrchestrator {
         }
     }
 
+    /**
+     * Module 11: Activity Response Correlator.
+     * Exercise-session-window-driven per-activity HR/glucose/BP correlation.
+     * Single sink: ActivityResponseRecord → flink.activity-response.
+     */
+    private static void launchActivityResponseCorrelator(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 11: Activity Response Correlator pipeline");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        KafkaSource<CanonicalEvent> source = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+                .setGroupId("flink-module11-activity-response-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+                .build();
+
+        SingleOutputStreamOperator<ActivityResponseRecord> records = env
+                .fromSource(source,
+                        WatermarkStrategy.<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                                .withTimestampAssigner((e, ts) -> e.getEventTime()),
+                        "Kafka Source: Enriched Patient Events (Module 11)")
+                .keyBy(CanonicalEvent::getPatientId)
+                .process(new Module11_ActivityResponseCorrelator())
+                .uid("module11-activity-response-correlator")
+                .name("Module 11: Activity Response Correlator");
+
+        records.sinkTo(
+                KafkaSink.<ActivityResponseRecord>builder()
+                        .setBootstrapServers(bootstrap)
+                        .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                        .setTransactionalIdPrefix("m11-activity-response")
+                        .setRecordSerializer(
+                                KafkaRecordSerializationSchema.<ActivityResponseRecord>builder()
+                                        .setTopic(KafkaTopics.FLINK_ACTIVITY_RESPONSE.getTopicName())
+                                        .setValueSerializationSchema(new JsonSerializer<ActivityResponseRecord>())
+                                        .build())
+                        .build()
+        ).name("Sink: Activity Response Records");
+
+        LOG.info("Module 11 pipeline configured: source=[{}], sink=[{}]",
+                KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName(),
+                KafkaTopics.FLINK_ACTIVITY_RESPONSE.getTopicName());
+    }
+
+    /**
+     * Module 11b: Fitness Pattern Aggregator.
+     * Weekly aggregation of activity response records with VO2max estimation.
+     * Separate job from Module 11 for failure isolation.
+     */
+    private static void launchFitnessPatternAggregator(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 11b: Fitness Pattern Aggregator pipeline");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        KafkaSource<ActivityResponseRecord> source = KafkaSource.<ActivityResponseRecord>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.FLINK_ACTIVITY_RESPONSE.getTopicName())
+                .setGroupId("flink-module11b-fitness-patterns-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new ActivityResponseRecordDeserializer())
+                .build();
+
+        SingleOutputStreamOperator<FitnessPatternSummary> summaries = env
+                .fromSource(source,
+                        WatermarkStrategy.<ActivityResponseRecord>forBoundedOutOfOrderness(Duration.ofMinutes(5))
+                                .withTimestampAssigner((r, ts) -> r.getActivityStartTime()),
+                        "Kafka Source: Activity Response Records (Module 11b)")
+                .keyBy(ActivityResponseRecord::getPatientId)
+                .process(new Module11b_FitnessPatternAggregator())
+                .uid("module11b-fitness-pattern-aggregator")
+                .name("Module 11b: Fitness Pattern Aggregator");
+
+        summaries.sinkTo(
+                KafkaSink.<FitnessPatternSummary>builder()
+                        .setBootstrapServers(bootstrap)
+                        .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                        .setTransactionalIdPrefix("m11b-fitness-patterns")
+                        .setRecordSerializer(
+                                KafkaRecordSerializationSchema.<FitnessPatternSummary>builder()
+                                        .setTopic(KafkaTopics.FLINK_FITNESS_PATTERNS.getTopicName())
+                                        .setValueSerializationSchema(new JsonSerializer<FitnessPatternSummary>())
+                                        .build())
+                        .build()
+        ).name("Sink: Fitness Pattern Summaries");
+
+        LOG.info("Module 11b pipeline configured: source=[{}], sink=[{}]",
+                KafkaTopics.FLINK_ACTIVITY_RESPONSE.getTopicName(),
+                KafkaTopics.FLINK_FITNESS_PATTERNS.getTopicName());
+    }
+
+    /** Deserializes JSON bytes into an ActivityResponseRecord using Jackson. */
+    static class ActivityResponseRecordDeserializer implements DeserializationSchema<ActivityResponseRecord> {
+        private transient ObjectMapper mapper;
+
+        @Override
+        public void open(InitializationContext context) {
+            mapper = new ObjectMapper();
+            mapper.registerModule(new JavaTimeModule());
+        }
+
+        private ObjectMapper mapper() {
+            if (mapper == null) {
+                mapper = new ObjectMapper();
+                mapper.registerModule(new JavaTimeModule());
+            }
+            return mapper;
+        }
+
+        @Override
+        public ActivityResponseRecord deserialize(byte[] message) throws IOException {
+            if (message == null || message.length == 0) return null;
+            return mapper().readValue(message, ActivityResponseRecord.class);
+        }
+
+        @Override
+        public boolean isEndOfStream(ActivityResponseRecord nextElement) {
+            return false;
+        }
+
+        @Override
+        public TypeInformation<ActivityResponseRecord> getProducedType() {
+            return TypeInformation.of(ActivityResponseRecord.class);
+        }
+    }
+
     /** Deserializes JSON bytes into a CanonicalEvent using Jackson. */
     static class CanonicalEventDeserializer implements DeserializationSchema<CanonicalEvent> {
         private transient ObjectMapper mapper;
@@ -797,7 +936,7 @@ public class FlinkJobOrchestrator {
      * Launch the complete 6-module EHR Intelligence pipeline
      */
     private static void launchFullPipeline(StreamExecutionEnvironment env) {
-        LOG.info("Launching complete EHR Intelligence pipeline with all 11 modules (1, 1b, 2-10b)");
+        LOG.info("Launching complete EHR Intelligence pipeline with all 13 modules (1, 1b, 2-11b)");
 
         try {
             // Module 1: Ingestion & Gateway (traditional EHR sources)
@@ -848,7 +987,15 @@ public class FlinkJobOrchestrator {
             LOG.info("Initializing Module 10b: Meal Pattern Aggregator");
             launchMealPatternAggregator(env);
 
-            LOG.info("All 11 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
+            // Module 11: Activity Response Correlator
+            LOG.info("Initializing Module 11: Activity Response Correlator");
+            launchActivityResponseCorrelator(env);
+
+            // Module 11b: Fitness Pattern Aggregator
+            LOG.info("Initializing Module 11b: Fitness Pattern Aggregator");
+            launchFitnessPatternAggregator(env);
+
+            LOG.info("All 13 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
 
         } catch (Exception e) {
             LOG.error("Failed to initialize complete pipeline", e);

@@ -174,7 +174,10 @@ public enum KafkaTopics {
     CLINICAL_INTERVENTION_WINDOW_SIGNALS("clinical.intervention-window-signals", 4, 90),
     CLINICAL_DECISION_CARDS("clinical.decision-cards", 4, 30),
     ALERTS_COMORBIDITY_INTERACTIONS("alerts.comorbidity-interactions", 4, 90),
-    ALERTS_ENGAGEMENT_DROP("alerts.engagement-drop", 2, 90);
+    ALERTS_ENGAGEMENT_DROP("alerts.engagement-drop", 2, 90),
+    ALERTS_RELAPSE_RISK("alerts.relapse-risk", 4, 90),
+    FLINK_ACTIVITY_RESPONSE("flink.activity-response", 8, 30),
+    FLINK_FITNESS_PATTERNS("flink.fitness-patterns", 4, 90);
 
     private final String topicName;
     private final int partitions;
@@ -316,6 +319,9 @@ public enum KafkaTopics {
                this == CLINICAL_INTERVENTION_WINDOW_SIGNALS ||
                this == CLINICAL_DECISION_CARDS ||
                this == ALERTS_COMORBIDITY_INTERACTIONS ||
-               this == ALERTS_ENGAGEMENT_DROP;
+               this == ALERTS_ENGAGEMENT_DROP ||
+               this == ALERTS_RELAPSE_RISK ||
+               this == FLINK_ACTIVITY_RESPONSE ||
+               this == FLINK_FITNESS_PATTERNS;
     }
 }
