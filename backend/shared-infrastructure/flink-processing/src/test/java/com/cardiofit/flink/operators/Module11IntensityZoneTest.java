@@ -81,4 +81,16 @@ class Module11IntensityZoneTest {
         assertEquals(ExerciseBPResponse.INCOMPLETE,
                 ExerciseBPResponse.classify(null, 160.0, 130.0));
     }
+
+    @Test
+    void exerciseBPResponse_sexAwareThresholds() {
+        // 200 mmHg peak: NORMAL for male (threshold 210), EXAGGERATED for female (threshold 190)
+        assertEquals(ExerciseBPResponse.NORMAL,
+                ExerciseBPResponse.classify(150.0, 200.0, 145.0, "M"));
+        assertEquals(ExerciseBPResponse.EXAGGERATED,
+                ExerciseBPResponse.classify(150.0, 200.0, 145.0, "F"));
+        // Unknown sex uses conservative (female) threshold
+        assertEquals(ExerciseBPResponse.EXAGGERATED,
+                ExerciseBPResponse.classify(150.0, 200.0, 145.0, null));
+    }
 }

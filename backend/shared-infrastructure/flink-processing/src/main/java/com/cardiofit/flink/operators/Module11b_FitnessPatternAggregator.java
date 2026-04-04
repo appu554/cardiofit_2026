@@ -104,9 +104,14 @@ public class Module11b_FitnessPatternAggregator
 
         state.setLastWeeklyEmitTimestamp(timestamp);
 
-        // Re-register next Monday
-        long nextMonday = computeNextMonday(timestamp);
-        ctx.timerService().registerProcessingTimeTimer(nextMonday);
+        // Only re-register weekly timer if we had records to process.
+        // For inactive patients, the timer will be re-registered on next processElement().
+        if (!weeklyRecords.isEmpty()) {
+            long nextMonday = computeNextMonday(timestamp);
+            ctx.timerService().registerProcessingTimeTimer(nextMonday);
+        } else {
+            state.setWeeklyTimerRegistered(false);
+        }
         patternState.update(state);
     }
 

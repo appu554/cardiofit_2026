@@ -5,17 +5,29 @@ import com.cardiofit.flink.models.FitnessLevel;
 /**
  * Submaximal VO2max estimation for Module 11b.
  *
- * Uses a hybrid Astrand-Ryhming approach for streaming context:
- *   Base: VO2max = 15 × (HR_max / HR_rest)  [Uth et al., Eur J Appl Physiol 2004]
- *   Adjusted by submaximal exercise HR fraction using HR reserve.
+ * Uses the Uth et al. (2004) resting-HR estimator as a base:
+ *   VO2max_base = 15 × (HR_max / HR_rest)
+ *
+ * Then applies a NON-VALIDATED heuristic correction factor that reduces
+ * the estimate for lower-effort sessions:
+ *   VO2max = VO2max_base × (0.8 + 0.2 × effortFraction)
+ *
+ * where effortFraction = (peakExerciseHR - restingHR) / HR_reserve.
+ * This means: at 100% effort → ×1.0 (no correction); at 60% effort → ×0.92.
+ * The rationale is that submaximal HR underestimates peak capacity
+ * proportionally to how far below HR_max the exercise was performed.
+ * This formula is a bespoke interpolation, NOT derived from the Astrand-Ryhming
+ * or ACSM submaximal protocols. It should be treated as an approximation
+ * suitable for trend tracking, not clinical diagnosis.
  *
  * Validation constraints:
  * - Peak HR must be >= 60% of HR_max (submaximal effort threshold)
  * - Peak HR capped at HR_max (physiological ceiling)
  * - Resting HR defaults to 72 bpm if unavailable
  *
- * Accuracy: +/-10-15% vs direct VO2max measurement. Improves with
- * multiple sessions (averaging reduces noise from day-to-day HR variability).
+ * Accuracy: NOT validated against spirometry. Expected +/-15-20% vs direct
+ * VO2max measurement. Improves with multiple sessions (averaging reduces
+ * noise from day-to-day HR variability). Use for trend monitoring only.
  *
  * Stateless utility class.
  */

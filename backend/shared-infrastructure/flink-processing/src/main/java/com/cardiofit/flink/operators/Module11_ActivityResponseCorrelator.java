@@ -89,6 +89,14 @@ public class Module11_ActivityResponseCorrelator
             }
         }
 
+        // Extract patient sex if available (for sex-aware BP thresholds)
+        if (state.getPatientSex() == null) {
+            Object sexObj = payload.get("patient_sex");
+            if (sexObj != null) {
+                state.setPatientSex(sexObj.toString());
+            }
+        }
+
         // Route by event type
         if (isActivityEvent(eventType, payload)) {
             handleActivityEvent(event, state, ctx);
@@ -250,7 +258,7 @@ public class Module11_ActivityResponseCorrelator
         Double peakSBP = session.peakExerciseSBP;
         Double postSBP = session.bpWindow.getPostMealSBP();
         Module11ExerciseBPAnalyzer.Result bpResult =
-                Module11ExerciseBPAnalyzer.analyze(preSBP, peakSBP, postSBP);
+                Module11ExerciseBPAnalyzer.analyze(preSBP, peakSBP, postSBP, state.getPatientSex());
 
         // Compute RPP
         Double peakRPP = null;

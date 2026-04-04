@@ -33,7 +33,20 @@ public class Module11ExerciseBPAnalyzer {
      * @return classification result (never null)
      */
     public static Result analyze(Double preSBP, Double peakSBP, Double postSBP) {
-        ExerciseBPResponse classification = ExerciseBPResponse.classify(preSBP, peakSBP, postSBP);
+        return analyze(preSBP, peakSBP, postSBP, null);
+    }
+
+    /**
+     * Analyze exercise BP response with sex-aware thresholds.
+     *
+     * @param preSBP     pre-exercise systolic BP (mmHg), null if unavailable
+     * @param peakSBP    peak exercise systolic BP (mmHg), null if unavailable
+     * @param postSBP    post-exercise systolic BP (mmHg), null if unavailable
+     * @param patientSex "M", "F", or null (uses conservative/female threshold)
+     * @return classification result (never null)
+     */
+    public static Result analyze(Double preSBP, Double peakSBP, Double postSBP, String patientSex) {
+        ExerciseBPResponse classification = ExerciseBPResponse.classify(preSBP, peakSBP, postSBP, patientSex);
 
         Double sbpRise = null;
         if (preSBP != null && peakSBP != null) {

@@ -27,6 +27,9 @@ public class ActivityCorrelationState implements Serializable {
     @JsonProperty("patientAge")
     private Integer patientAge;
 
+    @JsonProperty("patientSex")
+    private String patientSex;
+
     @JsonProperty("hrMax")
     private double hrMax;
 
@@ -78,7 +81,9 @@ public class ActivityCorrelationState implements Serializable {
         session.activityStartTime = activityStart;
         session.activityPayload = payload != null ? new HashMap<>(payload) : new HashMap<>();
 
-        long cappedDuration = Math.min(Math.max(durationMs, 30L * 60_000L), MAX_ACTIVITY_DURATION_MS);
+        // Floor at 5 min (sanity minimum), not 30 min — short activities like
+        // 10-min walks are valid and shouldn't have their recovery window misaligned
+        long cappedDuration = Math.min(Math.max(durationMs, 5L * 60_000L), MAX_ACTIVITY_DURATION_MS);
         session.reportedDurationMs = durationMs;
         session.activityEndTime = activityStart + cappedDuration;
 
@@ -145,10 +150,10 @@ public class ActivityCorrelationState implements Serializable {
             long lookback = 30L * 60_000L;
             if (timestamp >= (session.activityStartTime - lookback) && timestamp <= windowEnd) {
                 session.glucoseWindow.addReading(timestamp, value, source);
-                if (session.glucoseWindow.getBaseline() == null
-                        && timestamp < session.activityStartTime) {
-                    session.glucoseWindow.setBaseline(value);
-                }
+                // Don't eagerly set baseline here — out-of-order Kafka delivery means
+                // the first pre-exercise reading to arrive may not be the closest to
+                // activity start. Let Module11GlucoseExerciseAnalyzer.analyze() determine
+                // the correct baseline by iterating backwards through sorted readings.
             }
         }
     }
@@ -208,6 +213,8 @@ public class ActivityCorrelationState implements Serializable {
     public long getLastUpdated() { return lastUpdated; }
     public void setLastUpdated(long ts) { this.lastUpdated = ts; }
     public Double getLastRestingHR() { return lastRestingHR; }
+    public String getPatientSex() { return patientSex; }
+    public void setPatientSex(String sex) { this.patientSex = sex; }
     public Double getLastBPSystolic() { return lastBPSystolic; }
     public Double getLastBPDiastolic() { return lastBPDiastolic; }
     public Long getLastBPTimestamp() { return lastBPTimestamp; }
