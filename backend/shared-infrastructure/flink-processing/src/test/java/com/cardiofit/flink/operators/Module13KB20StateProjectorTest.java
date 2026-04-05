@@ -81,6 +81,23 @@ class Module13KB20StateProjectorTest {
     }
 
     @Test
+    void project_mealPatternEvent_mergeOperation() {
+        CanonicalEvent event = Module13TestBuilder.mealPatternEvent(
+                "p1", Module13TestBuilder.BASE_TIME, 42.5, 35.0, "HIGH", 0.72);
+
+        List<KB20StateUpdate> updates = Module13KB20StateProjector.project(event);
+
+        assertFalse(updates.isEmpty());
+        assertEquals(4, updates.size());
+        updates.forEach(u -> {
+            assertEquals(KB20StateUpdate.UpdateOperation.MERGE, u.getOperation());
+            assertEquals("module10b", u.getSourceModule());
+        });
+        assertEquals("meal_mean_iauc", updates.get(0).getFieldPath());
+        assertEquals(42.5, updates.get(0).getValue());
+    }
+
+    @Test
     void project_unknownSourceModule_returnsEmptyList() {
         CanonicalEvent event = CanonicalEvent.builder()
                 .id("evt-unknown")

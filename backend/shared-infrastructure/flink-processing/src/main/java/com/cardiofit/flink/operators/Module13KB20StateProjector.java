@@ -98,8 +98,7 @@ public final class Module13KB20StateProjector {
 
     private static List<KB20StateUpdate> projectLabResult(CanonicalEvent event, Map<String, Object> payload) {
         List<KB20StateUpdate> updates = new ArrayList<>();
-        String labType = payload.get("lab_type") != null ? payload.get("lab_type").toString() : "";
-        addIfPresent(updates, event, KB20StateUpdate.UpdateOperation.REPLACE, "enriched", "lab_type", labType);
+        addIfPresent(updates, event, KB20StateUpdate.UpdateOperation.REPLACE, "enriched", "lab_type", payload.get("lab_type"));
         addIfPresent(updates, event, KB20StateUpdate.UpdateOperation.REPLACE, "enriched", "lab_value", payload.get("value"));
         return updates;
     }
