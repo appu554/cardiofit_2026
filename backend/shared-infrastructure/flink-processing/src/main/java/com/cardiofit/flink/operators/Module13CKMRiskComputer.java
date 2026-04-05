@@ -55,7 +55,7 @@ public final class Module13CKMRiskComputer {
                     .compositeClassification(CKMRiskVelocity.CompositeClassification.UNKNOWN)
                     .compositeScore(0.0)
                     .dataCompleteness(0.0)
-                    .computationTimestamp(System.currentTimeMillis())
+                    .computationTimestamp(state.getLastUpdated())
                     .build();
         }
 
@@ -81,7 +81,7 @@ public final class Module13CKMRiskComputer {
                     .compositeClassification(CKMRiskVelocity.CompositeClassification.UNKNOWN)
                     .compositeScore(0.0)
                     .dataCompleteness(dataCompleteness)
-                    .computationTimestamp(System.currentTimeMillis())
+                    .computationTimestamp(state.getLastUpdated())
                     .build();
         }
 

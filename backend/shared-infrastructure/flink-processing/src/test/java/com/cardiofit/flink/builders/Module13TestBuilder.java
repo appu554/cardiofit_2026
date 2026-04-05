@@ -131,6 +131,8 @@ public class Module13TestBuilder {
         s.recordModuleSeen("module10b", BASE_TIME);
         s.recordModuleSeen("module11b", BASE_TIME);
         s.recordModuleSeen("enriched", BASE_TIME);
+        s.recordModuleSeen("module12", BASE_TIME);
+        s.recordModuleSeen("module12b", BASE_TIME);
         s.setLastUpdated(BASE_TIME);
         return s;
     }

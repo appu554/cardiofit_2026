@@ -103,6 +103,7 @@ public class ClinicalStateSummary implements Serializable {
 
     // --- MetricSnapshot: all numeric values at a point in time ---
     public static class MetricSnapshot implements Serializable {
+        private static final long serialVersionUID = 1L;
         // Module 7: BP Variability
         public Double arv;
         public VariabilityClassification variabilityClass;
@@ -154,6 +155,7 @@ public class ClinicalStateSummary implements Serializable {
     // --- Inner models for intervention tracking ---
 
     public static class InterventionWindowSummary implements Serializable {
+        private static final long serialVersionUID = 1L;
         private String interventionId;
         private InterventionType interventionType;
         private String status;
@@ -178,6 +180,7 @@ public class ClinicalStateSummary implements Serializable {
     }
 
     public static class InterventionDeltaSummary implements Serializable {
+        private static final long serialVersionUID = 1L;
         private String interventionId;
         private InterventionType interventionType;
         private TrajectoryAttribution attribution;
