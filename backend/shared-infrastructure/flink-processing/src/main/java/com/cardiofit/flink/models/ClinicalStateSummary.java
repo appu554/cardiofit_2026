@@ -1,0 +1,200 @@
+package com.cardiofit.flink.models;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+import java.io.Serializable;
+import java.util.*;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class ClinicalStateSummary implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    private String patientId;
+
+    // --- Metric snapshots: current + previous for velocity computation ---
+    private MetricSnapshot currentSnapshot = new MetricSnapshot();
+    private MetricSnapshot previousSnapshot; // null until first snapshot rotation
+    private long previousSnapshotTimestamp;
+
+    // --- Upstream module-specific state (non-metric) ---
+    private Double previousEngagementScore;
+    private String latestPhenotype;
+    private String dataTier;
+    private String channel;
+
+    // Module 12: Active Interventions
+    private Map<String, InterventionWindowSummary> activeInterventions = new HashMap<>();
+
+    // Module 12b: Completed Intervention Deltas
+    private List<InterventionDeltaSummary> recentInterventionDeltas = new ArrayList<>();
+
+    // --- Computed by Module 13 ---
+    private CKMRiskVelocity lastComputedVelocity;
+    private double dataCompletenessScore;
+
+    public void rotateSnapshots(long rotationTimestamp) {
+        this.previousSnapshot = this.currentSnapshot.copy();
+        this.previousSnapshotTimestamp = rotationTimestamp;
+    }
+
+    // --- Dedup: last-emitted state change per type (24h window) ---
+    private Map<ClinicalStateChangeType, Long> lastEmittedChangeTimestamps = new EnumMap<>(ClinicalStateChangeType.class);
+
+    // --- Per-module last-seen timestamps ---
+    private Map<String, Long> moduleLastSeenMs = new HashMap<>();
+
+    // --- Write coalescing ---
+    private List<KB20StateUpdate> coalescingBuffer = new ArrayList<>();
+    private long coalescingTimerMs = -1L;
+
+    // --- Daily data absence timer ---
+    private long dailyTimerMs = -1L;
+
+    // --- Snapshot rotation timer (7-day interval) ---
+    private long snapshotRotationTimerMs = -1L;
+
+    // --- Idle-patient quiescence ---
+    private int consecutiveZeroCompletenessDays = 0;
+
+    private long lastUpdated;
+
+    public ClinicalStateSummary() {}
+
+    public ClinicalStateSummary(String patientId) {
+        this.patientId = patientId;
+        this.lastUpdated = System.currentTimeMillis();
+    }
+
+    public MetricSnapshot current() { return currentSnapshot; }
+    public MetricSnapshot previous() { return previousSnapshot; }
+    public long getPreviousSnapshotTimestamp() { return previousSnapshotTimestamp; }
+    public boolean hasVelocityData() { return previousSnapshot != null; }
+
+    public String getPatientId() { return patientId; }
+    public void setPatientId(String patientId) { this.patientId = patientId; }
+    public Double getPreviousEngagementScore() { return previousEngagementScore; }
+    public void setPreviousEngagementScore(Double v) { this.previousEngagementScore = v; }
+    public String getLatestPhenotype() { return latestPhenotype; }
+    public void setLatestPhenotype(String v) { this.latestPhenotype = v; }
+    public String getDataTier() { return dataTier; }
+    public void setDataTier(String v) { this.dataTier = v; }
+    public String getChannel() { return channel; }
+    public void setChannel(String v) { this.channel = v; }
+    public Map<String, InterventionWindowSummary> getActiveInterventions() { return activeInterventions; }
+    public List<InterventionDeltaSummary> getRecentInterventionDeltas() { return recentInterventionDeltas; }
+    public CKMRiskVelocity getLastComputedVelocity() { return lastComputedVelocity; }
+    public void setLastComputedVelocity(CKMRiskVelocity v) { this.lastComputedVelocity = v; }
+    public double getDataCompletenessScore() { return dataCompletenessScore; }
+    public void setDataCompletenessScore(double v) { this.dataCompletenessScore = v; }
+    public Map<ClinicalStateChangeType, Long> getLastEmittedChangeTimestamps() { return lastEmittedChangeTimestamps; }
+    public Map<String, Long> getModuleLastSeenMs() { return moduleLastSeenMs; }
+    public void recordModuleSeen(String moduleKey, long timestamp) { this.moduleLastSeenMs.put(moduleKey, timestamp); }
+    public List<KB20StateUpdate> getCoalescingBuffer() { return coalescingBuffer; }
+    public long getCoalescingTimerMs() { return coalescingTimerMs; }
+    public void setCoalescingTimerMs(long v) { this.coalescingTimerMs = v; }
+    public long getDailyTimerMs() { return dailyTimerMs; }
+    public void setDailyTimerMs(long v) { this.dailyTimerMs = v; }
+    public long getSnapshotRotationTimerMs() { return snapshotRotationTimerMs; }
+    public void setSnapshotRotationTimerMs(long v) { this.snapshotRotationTimerMs = v; }
+    public int getConsecutiveZeroCompletenessDays() { return consecutiveZeroCompletenessDays; }
+    public void setConsecutiveZeroCompletenessDays(int v) { this.consecutiveZeroCompletenessDays = v; }
+    public long getLastUpdated() { return lastUpdated; }
+    public void setLastUpdated(long v) { this.lastUpdated = v; }
+
+    // --- MetricSnapshot: all numeric values at a point in time ---
+    public static class MetricSnapshot implements Serializable {
+        // Module 7: BP Variability
+        public Double arv;
+        public VariabilityClassification variabilityClass;
+        public Double meanSBP;
+        public Double meanDBP;
+        public Double morningSurgeMagnitude;
+        public DipClassification dipClass;
+        // Module 9: Engagement
+        public Double engagementScore;
+        public EngagementLevel engagementLevel;
+        // Module 10b: Meal Patterns
+        public Double meanIAUC;
+        public Double medianExcursion;
+        public SaltSensitivityClass saltSensitivity;
+        public Double saltBeta;
+        // Module 11b: Fitness Patterns
+        public Double estimatedVO2max;
+        public Double vo2maxTrend;
+        public Double totalMetMinutes;
+        public Double meanExerciseGlucoseDelta;
+        // Labs
+        public Double fbg;
+        public Double hba1c;
+        public Double egfr;
+        public Double uacr;
+        public Double totalCholesterol;
+        public Double ldl;
+        public Double weight;
+        public Double bmi;
+
+        public MetricSnapshot() {}
+        public MetricSnapshot copy() {
+            MetricSnapshot c = new MetricSnapshot();
+            c.arv = this.arv; c.variabilityClass = this.variabilityClass;
+            c.meanSBP = this.meanSBP; c.meanDBP = this.meanDBP;
+            c.morningSurgeMagnitude = this.morningSurgeMagnitude; c.dipClass = this.dipClass;
+            c.engagementScore = this.engagementScore; c.engagementLevel = this.engagementLevel;
+            c.meanIAUC = this.meanIAUC; c.medianExcursion = this.medianExcursion;
+            c.saltSensitivity = this.saltSensitivity; c.saltBeta = this.saltBeta;
+            c.estimatedVO2max = this.estimatedVO2max; c.vo2maxTrend = this.vo2maxTrend;
+            c.totalMetMinutes = this.totalMetMinutes; c.meanExerciseGlucoseDelta = this.meanExerciseGlucoseDelta;
+            c.fbg = this.fbg; c.hba1c = this.hba1c; c.egfr = this.egfr; c.uacr = this.uacr;
+            c.totalCholesterol = this.totalCholesterol; c.ldl = this.ldl;
+            c.weight = this.weight; c.bmi = this.bmi;
+            return c;
+        }
+    }
+
+    // --- Inner models for intervention tracking ---
+
+    public static class InterventionWindowSummary implements Serializable {
+        private String interventionId;
+        private InterventionType interventionType;
+        private String status;
+        private long observationStartMs;
+        private long observationEndMs;
+        private TrajectoryClassification trajectoryAtOpen;
+
+        public InterventionWindowSummary() {}
+
+        public String getInterventionId() { return interventionId; }
+        public void setInterventionId(String v) { this.interventionId = v; }
+        public InterventionType getInterventionType() { return interventionType; }
+        public void setInterventionType(InterventionType v) { this.interventionType = v; }
+        public String getStatus() { return status; }
+        public void setStatus(String v) { this.status = v; }
+        public long getObservationStartMs() { return observationStartMs; }
+        public void setObservationStartMs(long v) { this.observationStartMs = v; }
+        public long getObservationEndMs() { return observationEndMs; }
+        public void setObservationEndMs(long v) { this.observationEndMs = v; }
+        public TrajectoryClassification getTrajectoryAtOpen() { return trajectoryAtOpen; }
+        public void setTrajectoryAtOpen(TrajectoryClassification v) { this.trajectoryAtOpen = v; }
+    }
+
+    public static class InterventionDeltaSummary implements Serializable {
+        private String interventionId;
+        private InterventionType interventionType;
+        private TrajectoryAttribution attribution;
+        private Double adherenceScore;
+        private long closedAtMs;
+
+        public InterventionDeltaSummary() {}
+
+        public String getInterventionId() { return interventionId; }
+        public void setInterventionId(String v) { this.interventionId = v; }
+        public InterventionType getInterventionType() { return interventionType; }
+        public void setInterventionType(InterventionType v) { this.interventionType = v; }
+        public TrajectoryAttribution getAttribution() { return attribution; }
+        public void setAttribution(TrajectoryAttribution v) { this.attribution = v; }
+        public Double getAdherenceScore() { return adherenceScore; }
+        public void setAdherenceScore(Double v) { this.adherenceScore = v; }
+        public long getClosedAtMs() { return closedAtMs; }
+        public void setClosedAtMs(long v) { this.closedAtMs = v; }
+    }
+}
