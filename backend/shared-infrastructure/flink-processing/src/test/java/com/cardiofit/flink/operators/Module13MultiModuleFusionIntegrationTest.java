@@ -65,10 +65,18 @@ class Module13MultiModuleFusionIntegrationTest {
     // --- Test 3: Full cycle: baselines → events → velocity → state change ---
     @Test
     void fullCycle_baselinesEventsVelocityStateChange() {
-        ClinicalStateSummary state = Module13TestBuilder.stateWithVelocity("p1",
-                CKMRiskVelocity.CompositeClassification.STABLE);
+        // Use stateWithSnapshotPair to ensure hasVelocityData() returns true
+        ClinicalStateSummary state = Module13TestBuilder.stateWithSnapshotPair("p1");
+        // Set previous velocity as STABLE so CKM escalation can be detected
+        state.setLastComputedVelocity(CKMRiskVelocity.builder()
+                .compositeClassification(CKMRiskVelocity.CompositeClassification.STABLE)
+                .compositeScore(0.1)
+                .dataCompleteness(0.85)
+                .computationTimestamp(Module13TestBuilder.BASE_TIME)
+                .build());
 
-        state.current().egfr = 48.0;
+        // Deteriorating renal: egfr drops from 65→43 (below 45 threshold), uacr rises
+        state.current().egfr = 43.0;
         state.current().uacr = 180.0;
         state.current().arv = 14.0;
 

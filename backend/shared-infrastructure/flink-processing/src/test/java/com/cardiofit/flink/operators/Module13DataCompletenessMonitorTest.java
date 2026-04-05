@@ -40,12 +40,12 @@ class Module13DataCompletenessMonitorTest {
     @Test
     void allModulesStale14Days_nearZeroScore() {
         ClinicalStateSummary state = Module13TestBuilder.stateWithBaselines("p1");
-        long now = Module13TestBuilder.BASE_TIME + 20 * Module13TestBuilder.DAY_MS;
+        long now = Module13TestBuilder.BASE_TIME + 28 * Module13TestBuilder.DAY_MS;
 
         Module13DataCompletenessMonitor.Result result =
                 Module13DataCompletenessMonitor.evaluate(state, now);
 
-        assertTrue(result.getCompositeScore() < 0.4);
+        assertTrue(result.getCompositeScore() < 0.15);
         assertTrue(result.isDataAbsenceCritical());
     }
 

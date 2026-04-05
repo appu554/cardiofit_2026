@@ -133,7 +133,7 @@ public final class Module13CKMRiskComputer {
                 .amplificationFactor(factor)
                 .domainsDeteriorating(deteriorating)
                 .dataCompleteness(dataCompleteness)
-                .computationTimestamp(System.currentTimeMillis())
+                .computationTimestamp(state.getLastUpdated())
                 .build();
     }
 

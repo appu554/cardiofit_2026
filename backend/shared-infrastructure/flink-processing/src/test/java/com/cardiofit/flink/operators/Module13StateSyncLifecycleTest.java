@@ -89,7 +89,7 @@ class Module13StateSyncLifecycleTest {
         for (int i = 0; i < 12; i++) {
             ClinicalStateSummary.InterventionDeltaSummary d = new ClinicalStateSummary.InterventionDeltaSummary();
             d.setInterventionId("int-" + i);
-            d.setAttribution(TrajectoryAttribution.IMPROVING);
+            d.setAttribution(TrajectoryAttribution.IMPROVEMENT_CONTINUED);
             state.getRecentInterventionDeltas().add(d);
             while (state.getRecentInterventionDeltas().size() > 10) {
                 state.getRecentInterventionDeltas().remove(0);
