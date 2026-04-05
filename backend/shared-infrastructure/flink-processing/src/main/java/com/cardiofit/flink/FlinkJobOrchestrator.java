@@ -241,8 +241,8 @@ public class FlinkJobOrchestrator {
             "Kafka Source: Alert Acknowledgments"
         ).keyBy(AlertAcknowledgment::getPatientId);
 
+        // TODO: Connect ackStream when Module6 migrates to KeyedCoProcessFunction
         SingleOutputStreamOperator<ClinicalAction> actions = eventStream
-            .connect(ackStream)
             .process(new Module6_ClinicalActionEngine())
             .uid("Module6 Clinical Action Engine")
             .name("Module6 Clinical Action Engine");
@@ -1146,7 +1146,7 @@ public class FlinkJobOrchestrator {
         String pgUrl = System.getenv().getOrDefault("KB20_POSTGRES_URL", "jdbc:postgresql://localhost:5433/kb20");
         String redisUrl = System.getenv().getOrDefault("KB20_REDIS_URL", "redis://localhost:6380");
 
-        kb20Updates.addSink(new KB20AsyncSinkFunction(pgUrl, redisUrl))
+        kb20Updates.sinkTo(new KB20AsyncSinkFunction(pgUrl, redisUrl))
                 .name("Sink: KB-20 State Projections (PostgreSQL + Redis)");
 
         LOG.info("Module 13 pipeline configured: 7 sources, 2 sinks (Kafka + KB-20)");
