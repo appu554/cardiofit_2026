@@ -23,6 +23,7 @@ public class Module13_ClinicalStateSynchroniser
             new OutputTag<KB20StateUpdate>("kb20-state-updates") {};
 
     private static final long COALESCING_WINDOW_MS = 5_000L;
+    private static final int MAX_COALESCING_BUFFER_SIZE = 100;
     private static final long DAILY_TIMER_INTERVAL_MS = 24 * 3_600_000L;
     private static final long SNAPSHOT_ROTATION_INTERVAL_MS = 7 * 86_400_000L;
     private static final int IDLE_QUIESCENCE_THRESHOLD = 30;
@@ -53,7 +54,7 @@ public class Module13_ClinicalStateSynchroniser
         }
 
         // 1. Route event and update state fields
-        String sourceModule = routeAndUpdateState(event, state);
+        String sourceModule = routeAndUpdateState(event, state, ctx.timerService().currentProcessingTime());
         if (sourceModule == null) {
             LOG.debug("Unroutable event for patient {}: type={}", event.getPatientId(), event.getEventType());
             summaryState.update(state);
@@ -124,6 +125,11 @@ public class Module13_ClinicalStateSynchroniser
                     .value(now)
                     .updateTimestamp(now)
                     .build());
+
+            // Safety cap: evict oldest if buffer exceeds limit
+            while (state.getCoalescingBuffer().size() > MAX_COALESCING_BUFFER_SIZE) {
+                state.getCoalescingBuffer().remove(0);
+            }
 
             // Register coalescing timer if not already set
             if (state.getCoalescingTimerMs() < 0) {
@@ -225,7 +231,7 @@ public class Module13_ClinicalStateSynchroniser
         summaryState.update(state);
     }
 
-    private String routeAndUpdateState(CanonicalEvent event, ClinicalStateSummary state) {
+    private String routeAndUpdateState(CanonicalEvent event, ClinicalStateSummary state, long processingTime) {
         Map<String, Object> payload = event.getPayload();
         if (payload == null) return null;
 
@@ -249,7 +255,7 @@ public class Module13_ClinicalStateSynchroniser
                 updateFromInterventionWindow(payload, state);
                 return "module12";
             case "module12b":
-                updateFromInterventionDelta(payload, state);
+                updateFromInterventionDelta(payload, state, processingTime);
                 return "module12b";
             case "enriched":
                 updateFromLabResult(payload, state);
@@ -341,7 +347,7 @@ public class Module13_ClinicalStateSynchroniser
         }
     }
 
-    private void updateFromInterventionDelta(Map<String, Object> payload, ClinicalStateSummary state) {
+    private void updateFromInterventionDelta(Map<String, Object> payload, ClinicalStateSummary state, long processingTime) {
         ClinicalStateSummary.InterventionDeltaSummary delta = new ClinicalStateSummary.InterventionDeltaSummary();
         delta.setInterventionId(payload.get("intervention_id") != null
                 ? payload.get("intervention_id").toString() : null);
@@ -352,7 +358,7 @@ public class Module13_ClinicalStateSynchroniser
             catch (IllegalArgumentException ignored) {}
         }
         delta.setAdherenceScore(toDouble(payload.get("adherence_score")));
-        delta.setClosedAtMs(System.currentTimeMillis());
+        delta.setClosedAtMs(processingTime);
         state.getRecentInterventionDeltas().add(delta);
 
         // Keep only last 10 deltas
