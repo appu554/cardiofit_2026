@@ -4,12 +4,14 @@ import com.cardiofit.flink.models.CanonicalEvent;
 import com.cardiofit.flink.models.EventType;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema;
+import org.apache.flink.util.Collector;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -22,8 +24,9 @@ import java.util.UUID;
  *
  * Parameterized per topic at construction time.
  */
-public class SourceTaggingDeserializer implements DeserializationSchema<CanonicalEvent> {
+public class SourceTaggingDeserializer implements KafkaRecordDeserializationSchema<CanonicalEvent>, Serializable {
 
+    private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(SourceTaggingDeserializer.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
@@ -37,8 +40,9 @@ public class SourceTaggingDeserializer implements DeserializationSchema<Canonica
     }
 
     @Override
-    public CanonicalEvent deserialize(byte[] message) throws IOException {
-        if (message == null || message.length == 0) return null;
+    public void deserialize(ConsumerRecord<byte[], byte[]> record, Collector<CanonicalEvent> out) {
+        byte[] message = record.value();
+        if (message == null || message.length == 0) return;
 
         try {
             Map<String, Object> raw = MAPPER.readValue(message, MAP_TYPE);
@@ -63,7 +67,7 @@ public class SourceTaggingDeserializer implements DeserializationSchema<Canonica
                 id = UUID.randomUUID().toString();
             }
 
-            return CanonicalEvent.builder()
+            CanonicalEvent event = CanonicalEvent.builder()
                     .id(id)
                     .patientId(patientId)
                     .eventType(eventType)
@@ -72,15 +76,11 @@ public class SourceTaggingDeserializer implements DeserializationSchema<Canonica
                     .payload(payload)
                     .build();
 
+            out.collect(event);
+
         } catch (Exception e) {
             LOG.warn("Failed to deserialize {} event: {}", sourceModuleTag, e.getMessage());
-            return null;
         }
-    }
-
-    @Override
-    public boolean isEndOfStream(CanonicalEvent nextElement) {
-        return false;
     }
 
     @Override

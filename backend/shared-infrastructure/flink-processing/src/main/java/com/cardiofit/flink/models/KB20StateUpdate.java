@@ -4,8 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.io.Serializable;
-import java.util.HashMap;
-import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class KB20StateUpdate implements Serializable {
@@ -15,39 +13,39 @@ public class KB20StateUpdate implements Serializable {
         REPLACE,
         MERGE,
         APPEND,
-        UPSERT
+        INCREMENT
     }
 
     @JsonProperty("patient_id") private String patientId;
-    @JsonProperty("field_updates") private Map<String, Object> fieldUpdates;
     @JsonProperty("operation") private UpdateOperation operation;
+    @JsonProperty("field_path") private String fieldPath;
+    @JsonProperty("value") private Object value;
+    @JsonProperty("previous_value") private Object previousValue;
     @JsonProperty("source_module") private String sourceModule;
-    @JsonProperty("timestamp") private long timestamp;
-    @JsonProperty("upsert_key") private String upsertKey;
+    @JsonProperty("update_timestamp") private long updateTimestamp;
 
-    public KB20StateUpdate() {
-        this.fieldUpdates = new HashMap<>();
-    }
+    public KB20StateUpdate() {}
 
     public static Builder builder() { return new Builder(); }
 
     public String getPatientId() { return patientId; }
-    public Map<String, Object> getFieldUpdates() { return fieldUpdates; }
     public UpdateOperation getOperation() { return operation; }
+    public String getFieldPath() { return fieldPath; }
+    public Object getValue() { return value; }
+    public Object getPreviousValue() { return previousValue; }
     public String getSourceModule() { return sourceModule; }
-    public long getTimestamp() { return timestamp; }
-    public String getUpsertKey() { return upsertKey; }
+    public long getUpdateTimestamp() { return updateTimestamp; }
 
     public static class Builder {
         private final KB20StateUpdate u = new KB20StateUpdate();
 
         public Builder patientId(String id) { u.patientId = id; return this; }
-        public Builder field(String name, Object value) { u.fieldUpdates.put(name, value); return this; }
-        public Builder fieldUpdates(Map<String, Object> fields) { u.fieldUpdates.putAll(fields); return this; }
         public Builder operation(UpdateOperation op) { u.operation = op; return this; }
+        public Builder fieldPath(String path) { u.fieldPath = path; return this; }
+        public Builder value(Object val) { u.value = val; return this; }
+        public Builder previousValue(Object prev) { u.previousValue = prev; return this; }
         public Builder sourceModule(String m) { u.sourceModule = m; return this; }
-        public Builder timestamp(long t) { u.timestamp = t; return this; }
-        public Builder upsertKey(String k) { u.upsertKey = k; return this; }
+        public Builder updateTimestamp(long t) { u.updateTimestamp = t; return this; }
         public KB20StateUpdate build() { return u; }
     }
 }
