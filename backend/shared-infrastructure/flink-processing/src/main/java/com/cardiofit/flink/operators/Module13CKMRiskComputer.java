@@ -37,6 +37,10 @@ public final class Module13CKMRiskComputer {
     private static final int MIN_DOMAINS_FOR_AMPLIFICATION = 2;
     private static final int MIN_DOMAINS_FOR_VALID_SCORE = 2;
 
+    // --- Composite classification thresholds ---
+    private static final double COMPOSITE_DETERIORATING_THRESHOLD = 0.40;
+    private static final double COMPOSITE_IMPROVING_THRESHOLD = -0.30;
+
     private Module13CKMRiskComputer() {}
 
     /**
@@ -105,10 +109,10 @@ public final class Module13CKMRiskComputer {
         CKMRiskVelocity.CompositeClassification classification;
         double compositeScore;
 
-        if (worst > CKMRiskDomain.METABOLIC.getDeterioratingThreshold()) {
+        if (worst > COMPOSITE_DETERIORATING_THRESHOLD) {
             classification = CKMRiskVelocity.CompositeClassification.DETERIORATING;
             compositeScore = Math.min(1.0, worst * factor);
-        } else if (best < CKMRiskDomain.METABOLIC.getImprovingThreshold()
+        } else if (best < COMPOSITE_IMPROVING_THRESHOLD
                 && sM <= 0 && sR <= 0 && sCV <= 0) {
             classification = CKMRiskVelocity.CompositeClassification.IMPROVING;
             compositeScore = best;
@@ -139,26 +143,26 @@ public final class Module13CKMRiskComputer {
      */
     static double computeMetabolicVelocity(ClinicalStateSummary.MetricSnapshot prev,
             ClinicalStateSummary.MetricSnapshot curr, ClinicalStateSummary state) {
-        int signals = 0;
+        double totalWeight = 0.0;
         double weighted = 0.0;
 
         if (prev.fbg != null && curr.fbg != null) {
             weighted += 0.35 * clamp((curr.fbg - prev.fbg) / FBG_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.35;
         }
         if (prev.hba1c != null && curr.hba1c != null) {
             weighted += 0.30 * clamp((curr.hba1c - prev.hba1c) / HBA1C_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.30;
         }
         if (prev.meanIAUC != null && curr.meanIAUC != null) {
             weighted += 0.20 * clamp((curr.meanIAUC - prev.meanIAUC) / IAUC_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.20;
         }
         if (prev.weight != null && curr.weight != null) {
             weighted += 0.15 * clamp((curr.weight - prev.weight) / WEIGHT_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.15;
         }
-        return signals == 0 ? Double.NaN : clamp(weighted / sumWeights(signals, 0.35, 0.30, 0.20, 0.15));
+        return totalWeight == 0 ? Double.NaN : clamp(weighted / totalWeight);
     }
 
     /**
@@ -167,23 +171,23 @@ public final class Module13CKMRiskComputer {
      */
     static double computeRenalVelocity(ClinicalStateSummary.MetricSnapshot prev,
             ClinicalStateSummary.MetricSnapshot curr, ClinicalStateSummary state) {
-        int signals = 0;
+        double totalWeight = 0.0;
         double weighted = 0.0;
 
         if (prev.egfr != null && curr.egfr != null) {
             // Inverted: prev - curr so that eGFR decline → positive velocity
             weighted += 0.50 * clamp((prev.egfr - curr.egfr) / EGFR_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.50;
         }
         if (prev.uacr != null && curr.uacr != null) {
             weighted += 0.25 * clamp((curr.uacr - prev.uacr) / UACR_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.25;
         }
         if (curr.arv != null && curr.meanSBP != null) {
             double arvNorm = curr.arv > 16.0 ? 1.0 : (curr.arv > 12.0 ? 0.5 : 0.0);
             double sbpFactor = curr.meanSBP > 140.0 ? 1.2 : 1.0;
             weighted += 0.15 * clamp(arvNorm * sbpFactor);
-            signals++;
+            totalWeight += 0.15;
         }
         if (!state.getRecentInterventionDeltas().isEmpty()) {
             double adherence = state.getRecentInterventionDeltas().stream()
@@ -192,9 +196,9 @@ public final class Module13CKMRiskComputer {
                     .average().orElse(0.5);
             // Low adherence → positive velocity (deteriorating)
             weighted += 0.10 * clamp(0.5 - adherence);
-            signals++;
+            totalWeight += 0.10;
         }
-        return signals == 0 ? Double.NaN : clamp(weighted / sumWeights(signals, 0.50, 0.25, 0.15, 0.10));
+        return totalWeight == 0 ? Double.NaN : clamp(weighted / totalWeight);
     }
 
     /**
@@ -202,25 +206,25 @@ public final class Module13CKMRiskComputer {
      */
     static double computeCardiovascularVelocity(ClinicalStateSummary.MetricSnapshot prev,
             ClinicalStateSummary.MetricSnapshot curr, ClinicalStateSummary state) {
-        int signals = 0;
+        double totalWeight = 0.0;
         double weighted = 0.0;
 
         if (prev.arv != null && curr.arv != null) {
             weighted += 0.30 * clamp((curr.arv - prev.arv) / ARV_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.30;
         }
         if (prev.ldl != null && curr.ldl != null) {
             weighted += 0.25 * clamp((curr.ldl - prev.ldl) / LDL_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.25;
         }
         if (prev.morningSurgeMagnitude != null && curr.morningSurgeMagnitude != null) {
             weighted += 0.20 * clamp((curr.morningSurgeMagnitude - prev.morningSurgeMagnitude) / SURGE_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.20;
         }
         if (prev.engagementScore != null && curr.engagementScore != null) {
             // Inverted: engagement drop = positive velocity (deteriorating)
             weighted += 0.15 * clamp((prev.engagementScore - curr.engagementScore) / ENGAGEMENT_DELTA_RANGE);
-            signals++;
+            totalWeight += 0.15;
         }
         if (!state.getRecentInterventionDeltas().isEmpty()) {
             long insufficient = state.getRecentInterventionDeltas().stream()
@@ -228,9 +232,9 @@ public final class Module13CKMRiskComputer {
                     .count();
             double ratio = (double) insufficient / state.getRecentInterventionDeltas().size();
             weighted += 0.10 * clamp(ratio * 2 - 1);
-            signals++;
+            totalWeight += 0.10;
         }
-        return signals == 0 ? Double.NaN : clamp(weighted / sumWeights(signals, 0.30, 0.25, 0.20, 0.15, 0.10));
+        return totalWeight == 0 ? Double.NaN : clamp(weighted / totalWeight);
     }
 
     /** Clamp value to [-1.0, +1.0] */
@@ -239,10 +243,4 @@ public final class Module13CKMRiskComputer {
     /** Convert NaN to 0.0 for safe composite arithmetic */
     private static double safe(double v) { return Double.isNaN(v) ? 0.0 : v; }
 
-    /** Sum the first `count` weights from the array */
-    private static double sumWeights(int count, double... weights) {
-        double sum = 0;
-        for (int i = 0; i < Math.min(count, weights.length); i++) sum += weights[i];
-        return sum > 0 ? sum : 1.0;
-    }
 }

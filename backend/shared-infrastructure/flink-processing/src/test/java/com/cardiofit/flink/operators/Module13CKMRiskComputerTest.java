@@ -113,4 +113,41 @@ class Module13CKMRiskComputerTest {
                 result.getCompositeClassification(),
                 "Cannot compute velocity without previous snapshot");
     }
+
+    // --- Test 8: Partial signal — only HbA1c available for metabolic, correctly normalized ---
+    @Test
+    void metabolicVelocity_onlyHba1cAvailable_correctlyNormalized() {
+        ClinicalStateSummary state = Module13TestBuilder.stateWithSnapshotPair("p1");
+        // Clear FBG so only HbA1c contributes
+        state.previous().fbg = null;
+        state.current().fbg = null;
+        state.previous().hba1c = 7.5;
+        state.current().hba1c = 7.0;
+        // Clear other metabolic signals
+        state.previous().meanIAUC = null; state.current().meanIAUC = null;
+        state.previous().weight = null; state.current().weight = null;
+
+        CKMRiskVelocity result = Module13CKMRiskComputer.compute(state);
+
+        // HbA1c delta = -0.5 / 1.0 range = -0.5, weighted by 0.30, normalized by 0.30 = -0.5
+        double metabolicV = result.getDomainVelocity(CKMRiskDomain.METABOLIC);
+        assertEquals(-0.5, metabolicV, 0.05,
+                "With only HbA1c available, velocity should be -0.5 (improving)");
+    }
+
+    // --- Test 9: Small mixed movements → STABLE composite ---
+    @Test
+    void composite_smallMixedMovements_returnsStable() {
+        ClinicalStateSummary state = Module13TestBuilder.stateWithSnapshotPair("p1");
+        // Small deterioration in metabolic, small improvement in renal
+        state.previous().fbg = 130.0; state.current().fbg = 135.0;  // slight worse
+        state.previous().egfr = 60.0; state.current().egfr = 62.0;  // slight better
+        state.previous().arv = 10.0;  state.current().arv = 10.5;   // negligible
+
+        CKMRiskVelocity result = Module13CKMRiskComputer.compute(state);
+
+        assertEquals(CKMRiskVelocity.CompositeClassification.STABLE,
+                result.getCompositeClassification(),
+                "Small mixed movements should result in STABLE");
+    }
 }
