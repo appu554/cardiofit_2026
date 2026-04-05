@@ -28,8 +28,9 @@ public class SourceTaggingDeserializer implements KafkaRecordDeserializationSche
 
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(SourceTaggingDeserializer.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+
+    private transient ObjectMapper mapper;
 
     private final String sourceModuleTag;
     private final EventType defaultEventType;
@@ -44,8 +45,12 @@ public class SourceTaggingDeserializer implements KafkaRecordDeserializationSche
         byte[] message = record.value();
         if (message == null || message.length == 0) return;
 
+        if (mapper == null) {
+            mapper = new ObjectMapper();
+        }
+
         try {
-            Map<String, Object> raw = MAPPER.readValue(message, MAP_TYPE);
+            Map<String, Object> raw = mapper.readValue(message, MAP_TYPE);
 
             Map<String, Object> payload = new HashMap<>(raw);
             payload.put("source_module", sourceModuleTag);
@@ -96,7 +101,7 @@ public class SourceTaggingDeserializer implements KafkaRecordDeserializationSche
         return null;
     }
 
-    private static long extractLong(Map<String, Object> map, String... keys) {
+    private long extractLong(Map<String, Object> map, String... keys) {
         for (String key : keys) {
             Object v = map.get(key);
             if (v instanceof Number) return ((Number) v).longValue();
@@ -105,6 +110,7 @@ public class SourceTaggingDeserializer implements KafkaRecordDeserializationSche
                 catch (NumberFormatException ignored) {}
             }
         }
+        LOG.debug("No timestamp field found for {} event, falling back to wall-clock time", sourceModuleTag);
         return System.currentTimeMillis();
     }
 }
