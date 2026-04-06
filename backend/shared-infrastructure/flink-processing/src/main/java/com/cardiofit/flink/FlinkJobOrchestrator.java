@@ -14,9 +14,13 @@ import com.cardiofit.flink.models.FhirWriteRequest;
 import com.cardiofit.flink.models.MealResponseRecord;
 import com.cardiofit.flink.models.MealPatternSummary;
 import com.cardiofit.flink.models.ActivityResponseRecord;
+import com.cardiofit.flink.models.ClinicalStateChangeEvent;
 import com.cardiofit.flink.models.FitnessPatternSummary;
+import com.cardiofit.flink.models.KB20StateUpdate;
 import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
+import com.cardiofit.flink.serialization.SourceTaggingDeserializer;
+import com.cardiofit.flink.sinks.KB20AsyncSinkFunction;
 import com.cardiofit.flink.utils.KafkaConfigLoader;
 import com.cardiofit.flink.utils.KafkaTopics;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,6 +34,7 @@ import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.CheckpointingMode;
@@ -136,6 +141,11 @@ public class FlinkJobOrchestrator {
             case "fitness-pattern-aggregator":
                 launchFitnessPatternAggregator(env);
                 break;
+            case "clinical-state-sync":
+            case "module13":
+            case "clinical-state-synchroniser":
+                launchClinicalStateSynchroniser(env);
+                break;
             default:
                 LOG.warn("Unknown job type: {}. Defaulting to comprehensive CDS.", jobType);
                 Module3_ComprehensiveCDS.createComprehensiveCDSPipeline(env);
@@ -231,8 +241,8 @@ public class FlinkJobOrchestrator {
             "Kafka Source: Alert Acknowledgments"
         ).keyBy(AlertAcknowledgment::getPatientId);
 
+        // TODO: Connect ackStream when Module6 migrates to KeyedCoProcessFunction
         SingleOutputStreamOperator<ClinicalAction> actions = eventStream
-            .connect(ackStream)
             .process(new Module6_ClinicalActionEngine())
             .uid("Module6 Clinical Action Engine")
             .name("Module6 Clinical Action Engine");
@@ -995,11 +1005,150 @@ public class FlinkJobOrchestrator {
             LOG.info("Initializing Module 11b: Fitness Pattern Aggregator");
             launchFitnessPatternAggregator(env);
 
-            LOG.info("All 13 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
+            // Module 13: Clinical State Synchroniser
+            LOG.info("Initializing Module 13: Clinical State Synchroniser");
+            launchClinicalStateSynchroniser(env);
+
+            LOG.info("All 14 modules initialized successfully - Complete EHR Intelligence Pipeline Ready");
 
         } catch (Exception e) {
             LOG.error("Failed to initialize complete pipeline", e);
             throw new RuntimeException("Pipeline initialization failed", e);
         }
+    }
+
+    /**
+     * Launch the Module 13 Clinical State Synchroniser pipeline.
+     * Consumes from 7 topics via multi-source union, outputs state change events
+     * and KB-20 state projections.
+     */
+    private static void launchClinicalStateSynchroniser(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 13: Clinical State Synchroniser pipeline (7-source fan-in)");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // All sources use SourceTaggingDeserializer to inject source_module tag.
+        // Upstream modules DON'T emit source_module, and Sources 5-6 emit
+        // InterventionWindowSignal/InterventionDeltaRecord, not CanonicalEvent.
+        // SourceTaggingDeserializer wraps raw JSON → CanonicalEvent with injected tag.
+
+        // Source 1: BP Variability Metrics (Module 7)
+        KafkaSource<CanonicalEvent> bpVarSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.FLINK_BP_VARIABILITY_METRICS.getTopicName())
+                .setGroupId("flink-module13-bp-variability-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module7", EventType.VITAL_SIGN))
+                .build();
+
+        // Source 2: Engagement Signals (Module 9)
+        KafkaSource<CanonicalEvent> engagementSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.FLINK_ENGAGEMENT_SIGNALS.getTopicName())
+                .setGroupId("flink-module13-engagement-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module9", EventType.PATIENT_REPORTED))
+                .build();
+
+        // Source 3: Meal Patterns (Module 10b)
+        KafkaSource<CanonicalEvent> mealSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.FLINK_MEAL_PATTERNS.getTopicName())
+                .setGroupId("flink-module13-meal-patterns-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module10b", EventType.PATIENT_REPORTED))
+                .build();
+
+        // Source 4: Fitness Patterns (Module 11b)
+        KafkaSource<CanonicalEvent> fitnessSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.FLINK_FITNESS_PATTERNS.getTopicName())
+                .setGroupId("flink-module13-fitness-patterns-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module11b", EventType.DEVICE_READING))
+                .build();
+
+        // Source 5: Intervention Window Signals (Module 12) — NOT CanonicalEvent upstream!
+        KafkaSource<CanonicalEvent> windowSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.CLINICAL_INTERVENTION_WINDOW_SIGNALS.getTopicName())
+                .setGroupId("flink-module13-intervention-windows-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module12", EventType.MEDICATION_ORDERED))
+                .build();
+
+        // Source 6: Intervention Deltas (Module 12b) — NOT CanonicalEvent upstream!
+        KafkaSource<CanonicalEvent> deltaSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.FLINK_INTERVENTION_DELTAS.getTopicName())
+                .setGroupId("flink-module13-intervention-deltas-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module12b", EventType.LAB_RESULT))
+                .build();
+
+        // Source 7: Enriched Patient Events (labs, vitals)
+        KafkaSource<CanonicalEvent> enrichedSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+                .setGroupId("flink-module13-enriched-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("enriched", EventType.LAB_RESULT))
+                .build();
+
+        // Create streams with watermark strategy
+        WatermarkStrategy<CanonicalEvent> watermark = WatermarkStrategy
+                .<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                .withTimestampAssigner((e, ts) -> e.getEventTime());
+
+        DataStream<CanonicalEvent> bpVarStream = env.fromSource(bpVarSource, watermark,
+                "Kafka Source: BP Variability (Module 13)");
+        DataStream<CanonicalEvent> engagementStream = env.fromSource(engagementSource, watermark,
+                "Kafka Source: Engagement Signals (Module 13)");
+        DataStream<CanonicalEvent> mealStream = env.fromSource(mealSource, watermark,
+                "Kafka Source: Meal Patterns (Module 13)");
+        DataStream<CanonicalEvent> fitnessStream = env.fromSource(fitnessSource, watermark,
+                "Kafka Source: Fitness Patterns (Module 13)");
+        DataStream<CanonicalEvent> windowStream = env.fromSource(windowSource, watermark,
+                "Kafka Source: Intervention Windows (Module 13)");
+        DataStream<CanonicalEvent> deltaStream = env.fromSource(deltaSource, watermark,
+                "Kafka Source: Intervention Deltas (Module 13)");
+        DataStream<CanonicalEvent> enrichedStream = env.fromSource(enrichedSource, watermark,
+                "Kafka Source: Enriched Patient Events (Module 13)");
+
+        // Union all 7 sources and process
+        Module13_ClinicalStateSynchroniser processor = new Module13_ClinicalStateSynchroniser();
+
+        SingleOutputStreamOperator<ClinicalStateChangeEvent> stateChanges = bpVarStream
+                .union(engagementStream, mealStream, fitnessStream, windowStream, deltaStream, enrichedStream)
+                .keyBy(CanonicalEvent::getPatientId)
+                .process(processor)
+                .uid("module13-clinical-state-synchroniser")
+                .name("Module 13: Clinical State Synchroniser");
+
+        // Main sink: State change events → Kafka
+        stateChanges.sinkTo(
+                KafkaSink.<ClinicalStateChangeEvent>builder()
+                        .setBootstrapServers(bootstrap)
+                        .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                        .setTransactionalIdPrefix("m13-state-changes")
+                        .setRecordSerializer(
+                                KafkaRecordSerializationSchema.<ClinicalStateChangeEvent>builder()
+                                        .setTopic(KafkaTopics.CLINICAL_STATE_CHANGE_EVENTS.getTopicName())
+                                        .setValueSerializationSchema(new JsonSerializer<ClinicalStateChangeEvent>())
+                                        .build())
+                        .build()
+        ).name("Sink: Clinical State Change Events");
+
+        // Side output sink: KB-20 state updates → async PostgreSQL + Redis
+        DataStream<KB20StateUpdate> kb20Updates = stateChanges
+                .getSideOutput(Module13_ClinicalStateSynchroniser.KB20_SIDE_OUTPUT);
+
+        String pgUrl = System.getenv().getOrDefault("KB20_POSTGRES_URL", "jdbc:postgresql://localhost:5433/kb20");
+        String redisUrl = System.getenv().getOrDefault("KB20_REDIS_URL", "redis://localhost:6380");
+
+        kb20Updates.sinkTo(new KB20AsyncSinkFunction(pgUrl, redisUrl))
+                .name("Sink: KB-20 State Projections (PostgreSQL + Redis)");
+
+        LOG.info("Module 13 pipeline configured: 7 sources, 2 sinks (Kafka + KB-20)");
     }
 }

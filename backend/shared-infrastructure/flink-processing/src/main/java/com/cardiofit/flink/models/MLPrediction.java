@@ -84,6 +84,19 @@ public class MLPrediction implements Serializable {
     @JsonProperty("input_features")
     private float[] inputFeatures;
 
+    // Module 5/6 enrichment fields
+    @JsonProperty("prediction_category")
+    private String predictionCategory;
+
+    @JsonProperty("trigger_source")
+    private String triggerSource;
+
+    @JsonProperty("context_depth")
+    private String contextDepth;
+
+    @JsonProperty("calibrated_score")
+    private Double calibratedScore;
+
     // Default constructor
     public MLPrediction() {
         this.predictionTime = System.currentTimeMillis();
@@ -152,6 +165,26 @@ public class MLPrediction implements Serializable {
 
         public Builder correlationId(String correlationId) {
             prediction.correlationId = correlationId;
+            return this;
+        }
+
+        public Builder predictionCategory(String predictionCategory) {
+            prediction.predictionCategory = predictionCategory;
+            return this;
+        }
+
+        public Builder calibratedScore(Double calibratedScore) {
+            prediction.calibratedScore = calibratedScore;
+            return this;
+        }
+
+        public Builder triggerSource(String triggerSource) {
+            prediction.triggerSource = triggerSource;
+            return this;
+        }
+
+        public Builder contextDepth(String contextDepth) {
+            prediction.contextDepth = contextDepth;
             return this;
         }
 
@@ -229,6 +262,18 @@ public class MLPrediction implements Serializable {
 
     public float[] getInputFeatures() { return inputFeatures; }
     public void setInputFeatures(float[] inputFeatures) { this.inputFeatures = inputFeatures; }
+
+    public String getPredictionCategory() { return predictionCategory; }
+    public void setPredictionCategory(String predictionCategory) { this.predictionCategory = predictionCategory; }
+
+    public String getTriggerSource() { return triggerSource; }
+    public void setTriggerSource(String triggerSource) { this.triggerSource = triggerSource; }
+
+    public String getContextDepth() { return contextDepth; }
+    public void setContextDepth(String contextDepth) { this.contextDepth = contextDepth; }
+
+    public Double getCalibratedScore() { return calibratedScore; }
+    public void setCalibratedScore(double calibratedScore) { this.calibratedScore = calibratedScore; }
 
     /**
      * Alias for getConfidence() to maintain backward compatibility

@@ -11,6 +11,7 @@ import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.common.state.*;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
@@ -123,7 +124,7 @@ public class Module8_ComorbidityInteraction {
         private transient ValueState<Boolean> symptomReportPresent;
 
         @Override
-        public void open(Configuration parameters) {
+        public void open(OpenContext openContext) throws Exception {
             activeMedications = getRuntimeContext().getMapState(
                 new MapStateDescriptor<>("active_medications", String.class, String.class));
             recentLabs = getRuntimeContext().getMapState(
@@ -140,7 +141,7 @@ public class Module8_ComorbidityInteraction {
             // permanently triggering CID-04 (Euglycemic DKA) and CID-17 (Fasting)
             ValueStateDescriptor<Integer> mealSkipDesc =
                 new ValueStateDescriptor<>("meal_skip_24h", Integer.class);
-            mealSkipDesc.enableTimeToLive(StateTtlConfig.newBuilder(org.apache.flink.api.common.time.Time.hours(24))
+            mealSkipDesc.enableTimeToLive(StateTtlConfig.newBuilder(Duration.ofHours(24))
                 .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
                 .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
                 .build());
@@ -150,7 +151,7 @@ public class Module8_ComorbidityInteraction {
             // Prevents a historical symptom report from permanently suppressing CID-03.
             ValueStateDescriptor<Boolean> symptomDesc =
                 new ValueStateDescriptor<>("symptom_report_present", Boolean.class);
-            symptomDesc.enableTimeToLive(StateTtlConfig.newBuilder(org.apache.flink.api.common.time.Time.hours(4))
+            symptomDesc.enableTimeToLive(StateTtlConfig.newBuilder(Duration.ofHours(4))
                 .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
                 .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
                 .build());

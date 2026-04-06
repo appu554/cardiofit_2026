@@ -122,6 +122,13 @@ public class KafkaConfigLoader {
     }
 
     /**
+     * Get bootstrap servers string based on environment (Docker vs local).
+     */
+    public static String getBootstrapServers() {
+        return isRunningInDocker() ? INTERNAL_BOOTSTRAP_SERVERS : EXTERNAL_BOOTSTRAP_SERVERS;
+    }
+
+    /**
      * Determine if running inside Docker container
      */
     public static boolean isRunningInDocker() {
