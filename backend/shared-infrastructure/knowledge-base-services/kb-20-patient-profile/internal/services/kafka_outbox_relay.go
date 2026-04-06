@@ -79,19 +79,26 @@ func (w *KafkaGoWriter) Close() error {
 	return errors.Join(errs...)
 }
 
+// TargetProvider computes personalised targets for a patient (A1 enrichment).
+// Implemented by ProjectionService; nil means targets are not enriched.
+type TargetProvider interface {
+	GetPersonalizedTargets(patientID string) (*models.PersonalizedTargets, error)
+}
+
 // KafkaOutboxRelay polls the event_outbox table for Kafka-unpublished rows,
 // maps them to signal/state-change envelopes, and publishes to Kafka.
 type KafkaOutboxRelay struct {
-	db            *gorm.DB
-	mapper        *EventSignalMapper
-	writer        KafkaWriter
-	metrics       *metrics.Collector
-	signalMetrics *signals.SignalMetrics
-	pollInterval  time.Duration
-	batchSize     int
-	log           *zap.Logger
-	cancel        context.CancelFunc
-	done          chan struct{}
+	db             *gorm.DB
+	mapper         *EventSignalMapper
+	writer         KafkaWriter
+	metrics        *metrics.Collector
+	signalMetrics  *signals.SignalMetrics
+	targetProvider TargetProvider // A1: optional personalised target enrichment
+	pollInterval   time.Duration
+	batchSize      int
+	log            *zap.Logger
+	cancel         context.CancelFunc
+	done           chan struct{}
 }
 
 // NewKafkaOutboxRelay creates a relay that bridges the KB-20 outbox to Kafka.
@@ -116,6 +123,13 @@ func NewKafkaOutboxRelay(
 // SetSignalMetrics attaches optional shared signal pipeline metrics to the relay.
 func (r *KafkaOutboxRelay) SetSignalMetrics(m *signals.SignalMetrics) {
 	r.signalMetrics = m
+}
+
+// SetTargetProvider attaches a personalised target provider for A1 enrichment.
+// When set, lab events published to Kafka will carry kb20_personalized_targets
+// so Flink Module 13 can use per-patient thresholds.
+func (r *KafkaOutboxRelay) SetTargetProvider(tp TargetProvider) {
+	r.targetProvider = tp
 }
 
 // Start launches the background polling goroutine.
@@ -251,6 +265,19 @@ func (r *KafkaOutboxRelay) publishSignal(ctx context.Context, sig *MappedSignal)
 		"loinc_code":  sig.LOINCCode,
 		"payload":     json.RawMessage(sig.Payload),
 		"created_at":  time.Now().UTC(),
+	}
+
+	// A1: Enrich lab events with personalised targets for Module 13
+	if r.targetProvider != nil && sig.LOINCCode != "" {
+		if targets, err := r.targetProvider.GetPersonalizedTargets(sig.PatientID); err == nil {
+			envelope["kb20_personalized_targets"] = map[string]interface{}{
+				"fbg_target":           targets.FBGTarget,
+				"hba1c_target":         targets.HbA1cTarget,
+				"sbp_target":           targets.SBPTarget,
+				"egfr_threshold":       targets.EGFRThreshold,
+				"sbp_kidney_threshold": targets.SBPKidneyThreshold,
+			}
+		}
 	}
 
 	value, err := json.Marshal(envelope)

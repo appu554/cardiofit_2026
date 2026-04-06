@@ -16,9 +16,11 @@ import (
 
 // FactStore projection cache configuration.
 const (
-	ChannelBCachePrefix = "kb20:chb:"
-	ChannelCCachePrefix = "kb20:chc:"
-	ProjectionCacheTTL  = 2 * time.Minute
+	ChannelBCachePrefix  = "kb20:chb:"
+	ChannelCCachePrefix  = "kb20:chc:"
+	TargetsCachePrefix   = "kb20:targets:"
+	ProjectionCacheTTL   = 2 * time.Minute
+	TargetsCacheTTL      = 5 * time.Minute // targets change less frequently than lab projections
 )
 
 // KB21FestivalLookup abstracts KB-21 festival status queries, breaking the
@@ -118,6 +120,7 @@ func (s *ProjectionService) GetChannelCProjection(patientID string) (*models.Cha
 func (s *ProjectionService) InvalidateProjectionCache(patientID string) {
 	s.cache.Delete(ChannelBCachePrefix + patientID)
 	s.cache.Delete(ChannelCCachePrefix + patientID)
+	s.cache.Delete(TargetsCachePrefix + patientID)
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -721,3 +724,63 @@ func float64Ptr(v float64) *float64 {
 
 // Compile-time assertion that decimal.Decimal has Float64 method.
 var _ = decimal.Decimal.Float64
+
+// ──────────────────────────────────────────────────────────────────────────
+// Personalised Clinical Targets (A1)
+// ──────────────────────────────────────────────────────────────────────────
+
+// GetPersonalizedTargets returns per-patient clinical targets for Module 13.
+// Checks Redis cache first (TTL 5min), then computes from patient profile.
+func (s *ProjectionService) GetPersonalizedTargets(patientID string) (*models.PersonalizedTargets, error) {
+	cacheKey := TargetsCachePrefix + patientID
+
+	// Try cache
+	var cached models.PersonalizedTargets
+	if err := s.cache.Get(cacheKey, &cached); err == nil {
+		return &cached, nil
+	}
+
+	// Fetch patient profile
+	var profile models.PatientProfile
+	if err := s.db.DB.Where("patient_id = ? AND active = true", patientID).First(&profile).Error; err != nil {
+		return nil, fmt.Errorf("patient not found: %w", err)
+	}
+
+	// Fetch latest eGFR
+	var latestEGFR *float64
+	var egfrEntry models.LabEntry
+	if err := s.db.DB.Where("patient_id = ? AND lab_type = ? AND validation_status = ?",
+		patientID, models.LabTypeEGFR, models.ValidationAccepted).
+		Order("measured_at DESC").First(&egfrEntry).Error; err == nil {
+		v, _ := egfrEntry.Value.Float64()
+		latestEGFR = &v
+	}
+
+	// Fetch latest UACR
+	var latestUACR *float64
+	var uacrEntry models.LabEntry
+	if err := s.db.DB.Where("patient_id = ? AND lab_type = ? AND validation_status = ?",
+		patientID, "ACR", models.ValidationAccepted).
+		Order("measured_at DESC").First(&uacrEntry).Error; err == nil {
+		v, _ := uacrEntry.Value.Float64()
+		latestUACR = &v
+	}
+
+	// Get PREVENT SBP target from Channel C (already computed)
+	var preventSBPTarget *float64
+	chC, err := s.GetChannelCProjection(patientID)
+	if err == nil && chC.PREVENTSBPTarget > 0 {
+		preventSBPTarget = &chC.PREVENTSBPTarget
+	}
+
+	targets := ComputePersonalizedTargets(profile, latestEGFR, latestUACR, preventSBPTarget)
+
+	// Cache
+	if cacheErr := s.cache.Set(cacheKey, &targets, TargetsCacheTTL); cacheErr != nil {
+		s.logger.Warn("Failed to cache personalized targets",
+			zap.String("patient_id", patientID),
+			zap.Error(cacheErr))
+	}
+
+	return &targets, nil
+}

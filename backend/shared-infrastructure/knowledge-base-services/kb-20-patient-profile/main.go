@@ -60,14 +60,18 @@ func main() {
 	eventBus.StartPoller(context.Background())
 	defer eventBus.Stop()
 
-	// Kafka outbox relay (feature-flagged)
+	// Kafka outbox relay (feature-flagged) — created here, started after projectionService
+	// is available so A1 personalised targets can be enriched onto lab events.
+	var kafkaRelay *services.KafkaOutboxRelay
+	var kafkaWriter *services.KafkaGoWriter
 	if os.Getenv("KAFKA_RELAY_ENABLED") == "true" {
 		brokers := strings.Split(os.Getenv("KAFKA_BROKERS"), ",")
-		kafkaWriter := services.NewKafkaGoWriter(brokers, "kb20-outbox-relay")
-		kafkaRelay := services.NewKafkaOutboxRelay(db.DB, kafkaWriter, metricsCollector, logger)
-		kafkaRelay.Start(context.Background())
-		defer kafkaRelay.Stop()
-		defer kafkaWriter.Close()
+		kafkaWriter = services.NewKafkaGoWriter(brokers, "kb20-outbox-relay")
+		kafkaRelay = services.NewKafkaOutboxRelay(db.DB, kafkaWriter, metricsCollector, logger)
+		defer func() {
+			if kafkaRelay != nil { kafkaRelay.Stop() }
+			if kafkaWriter != nil { kafkaWriter.Close() }
+		}()
 	}
 
 	// Initialize services
@@ -98,6 +102,13 @@ func main() {
 	kb21Adapter := &kb21FestivalAdapter{client: kb21Client}
 
 	projectionService := services.NewProjectionService(db, cacheClient, logger, loincRegistry, cfg.PREVENT, kb21Adapter)
+
+	// A1: Wire personalised target enrichment into Kafka outbox relay and start it
+	if kafkaRelay != nil {
+		kafkaRelay.SetTargetProvider(projectionService)
+		kafkaRelay.Start(context.Background())
+		logger.Info("Kafka outbox relay started with A1 personalised target enrichment")
+	}
 
 	protocolRegistry := services.NewProtocolRegistry()
 	protocolService := services.NewProtocolService(db, protocolRegistry, eventBus, logger)

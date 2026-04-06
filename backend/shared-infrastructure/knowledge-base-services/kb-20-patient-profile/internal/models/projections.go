@@ -169,3 +169,48 @@ type PerturbationWindow struct {
 	WindowExpiresAt time.Time `json:"window_expires_at"` // pharmacodynamic window end
 	ExpectedEffect  string    `json:"expected_effect"`   // e.g., "GLUCOSE_DROP", "BP_DROP"
 }
+
+// ──────────────────���─────────────────────────────────────────────────────────
+// Personalised Clinical Targets (A1 enhancement for Module 13 CKM velocity)
+//
+// Computed by KB-20 TargetEngine from patient demographics, CKD stage,
+// diabetes duration, and comorbidities. Published alongside lab events
+// so Flink Module 13 can use per-patient thresholds instead of hardcoded
+// population defaults.
+//
+// Clinical references:
+//   - FBG/HbA1c: ADA Standards of Care 2024, Chapter 6 (Glycemic Targets)
+//   - SBP: KDIGO 2024 BP guideline + AHA PREVENT equations
+//   - eGFR: KDIGO 2024 CKD evaluation + KB-20 trajectory classification
+// ────────────────────────────────────────────────────────────────────────────
+
+// PersonalizedTargets holds per-patient clinical targets derived from
+// demographics, disease state, and treatment context.
+type PersonalizedTargets struct {
+	PatientID string `json:"patient_id"`
+
+	// Glycemic targets
+	FBGTarget   float64 `json:"fbg_target"`   // mg/dL — fasting blood glucose goal
+	HbA1cTarget float64 `json:"hba1c_target"` // % — glycated haemoglobin goal
+
+	// Blood pressure targets
+	SBPTarget            float64 `json:"sbp_target"`              // mmHg — systolic BP goal
+	SBPKidneyThreshold   float64 `json:"sbp_kidney_threshold"`    // mmHg — renal-protective BP cutoff
+
+	// Renal monitoring threshold
+	EGFRThreshold float64 `json:"egfr_threshold"` // mL/min/1.73m² — rapid-decline alert boundary
+
+	// Rationale captures why each target was set (for audit/explainability)
+	Rationale TargetRationale `json:"rationale"`
+
+	// Metadata
+	ComputedAt time.Time `json:"computed_at"`
+}
+
+// TargetRationale provides clinical justification for each personalised target.
+type TargetRationale struct {
+	FBGReason   string `json:"fbg_reason"`
+	HbA1cReason string `json:"hba1c_reason"`
+	SBPReason   string `json:"sbp_reason"`
+	EGFRReason  string `json:"egfr_reason"`
+}

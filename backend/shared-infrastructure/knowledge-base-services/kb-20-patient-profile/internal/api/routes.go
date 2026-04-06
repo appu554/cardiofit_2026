@@ -1,9 +1,52 @@
 package api
 
 import (
+	"net/http"
+	"regexp"
+
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"kb-patient-profile/internal/models"
 )
+
+// uuidPattern matches standard UUID format (accepts both FHIR UUIDs and ABHA IDs).
+// ABHA IDs like "91-1001-2001-3001" do NOT match this pattern.
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// resolveFHIRPatientID is a middleware that resolves FHIR UUIDs to ABHA patient_ids.
+// If the :id param is a UUID, it looks up the patient by fhir_patient_id and replaces
+// the param with the ABHA patient_id. This lets KB-22/KB-23/KB-26 call KB-20 with
+// the FHIR UUID they naturally have, while KB-20 internally uses ABHA IDs.
+func (s *Server) resolveFHIRPatientID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		if id == "" || !uuidPattern.MatchString(id) {
+			c.Next()
+			return
+		}
+
+		// UUID detected — resolve to ABHA patient_id
+		var profile models.PatientProfile
+		if err := s.db.DB.Where("fhir_patient_id = ? AND active = true", id).First(&profile).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "patient not found for FHIR ID " + id})
+			c.Abort()
+			return
+		}
+
+		// Replace :id param while preserving all other params (node_id, med_id, etc.)
+		newParams := make(gin.Params, 0, len(c.Params))
+		for _, p := range c.Params {
+			if p.Key == "id" {
+				newParams = append(newParams, gin.Param{Key: "id", Value: profile.PatientID})
+			} else {
+				newParams = append(newParams, p)
+			}
+		}
+		c.Params = newParams
+		c.Next()
+	}
+}
 
 // setupRoutes registers all KB-20 REST API endpoints.
 func (s *Server) setupRoutes() {
@@ -16,8 +59,9 @@ func (s *Server) setupRoutes() {
 
 	v1 := s.Router.Group("/api/v1")
 	{
-		// Patient profile
+		// Patient profile — FHIR UUID resolution middleware applied to all :id routes
 		patient := v1.Group("/patient")
+		patient.Use(s.resolveFHIRPatientID())
 		{
 			patient.POST("", s.createPatient)
 			patient.GET("/:id/profile", s.getProfile)
@@ -39,6 +83,7 @@ func (s *Server) setupRoutes() {
 			// FactStore projections (Phase 0)
 			patient.GET("/:id/channel-b-inputs", s.getChannelBInputs)
 			patient.GET("/:id/channel-c-inputs", s.getChannelCInputs)
+			patient.GET("/:id/personalized-targets", s.getPersonalizedTargets)
 			patient.DELETE("/:id/projections/cache", s.invalidateProjectionCache)
 
 			// M3 Protocol lifecycle

@@ -44,6 +44,20 @@ func (s *Server) invalidateProjectionCache(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "projection cache invalidated"})
 }
 
+// getPersonalizedTargets serves the A1 personalised clinical targets for Module 13.
+// GET /api/v1/patient/:id/personalized-targets
+func (s *Server) getPersonalizedTargets(c *gin.Context) {
+	patientID := c.Param("id")
+
+	targets, err := s.projectionService.GetPersonalizedTargets(patientID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": targets})
+}
+
 // getLOINCRegistry returns the KB-7 verified LOINC code mappings used by FactStore.
 // GET /api/v1/loinc/registry
 func (s *Server) getLOINCRegistry(c *gin.Context) {
