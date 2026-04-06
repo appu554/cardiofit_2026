@@ -19,6 +19,7 @@ import com.cardiofit.flink.models.FitnessPatternSummary;
 import com.cardiofit.flink.models.KB20StateUpdate;
 import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
+import com.cardiofit.flink.serialization.PatientIdKeySerializer;
 import com.cardiofit.flink.serialization.SourceTaggingDeserializer;
 import com.cardiofit.flink.sinks.KB20AsyncSinkFunction;
 import com.cardiofit.flink.utils.KafkaConfigLoader;
@@ -1137,6 +1138,8 @@ public class FlinkJobOrchestrator {
                 .name("Module 13: Clinical State Synchroniser");
 
         // Main sink: State change events → Kafka
+        // PIPE-8: Key by patientId so downstream consumers of state-change-events.v1
+        // can co-partition with other patient-keyed topics (e.g., KB-20 projections)
         stateChanges.sinkTo(
                 KafkaSink.<ClinicalStateChangeEvent>builder()
                         .setBootstrapServers(bootstrap)
@@ -1145,6 +1148,7 @@ public class FlinkJobOrchestrator {
                         .setRecordSerializer(
                                 KafkaRecordSerializationSchema.<ClinicalStateChangeEvent>builder()
                                         .setTopic(KafkaTopics.CLINICAL_STATE_CHANGE_EVENTS.getTopicName())
+                                        .setKeySerializationSchema(new PatientIdKeySerializer<>())
                                         .setValueSerializationSchema(new JsonSerializer<ClinicalStateChangeEvent>())
                                         .build())
                         .build()

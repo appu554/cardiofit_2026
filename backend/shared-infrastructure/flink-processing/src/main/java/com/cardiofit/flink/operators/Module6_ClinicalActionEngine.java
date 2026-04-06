@@ -7,7 +7,7 @@ import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.state.StateTtlConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.streaming.api.functions.co.KeyedCoProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
@@ -20,15 +20,18 @@ import java.util.UUID;
 /**
  * Module 6: Clinical Action Engine — main operator.
  *
- * Consumes unified ClinicalEvents (from CDS, Pattern, ML sources),
- * classifies into HALT/PAUSE/SOFT_FLAG/ROUTINE, deduplicates across modules,
- * manages alert lifecycle with SLA escalation timers, and distributes
- * output to multiple Kafka sinks via side-output tags.
+ * Dual-input KeyedCoProcessFunction:
+ *   Input 1 (processElement1): ClinicalEvent from Modules 3/4/5
+ *   Input 2 (processElement2): AlertAcknowledgment from physicians via alert-acknowledgments.v1
+ *
+ * Classifies events into HALT/PAUSE/SOFT_FLAG/ROUTINE, deduplicates across modules,
+ * manages alert lifecycle with SLA escalation timers, processes physician acknowledgments
+ * to cancel pending escalations, and distributes output to multiple Kafka sinks.
  */
 public class Module6_ClinicalActionEngine
-        extends KeyedProcessFunction<String, ClinicalEvent, ClinicalAction> {
+        extends KeyedCoProcessFunction<String, ClinicalEvent, AlertAcknowledgment, ClinicalAction> {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
     private static final Logger LOG = LoggerFactory.getLogger(Module6_ClinicalActionEngine.class);
 
     // ── Side-output tags ──
@@ -64,11 +67,15 @@ public class Module6_ClinicalActionEngine
         dedupDescriptor.enableTimeToLive(ttlConfig);
         dedupState = getRuntimeContext().getState(dedupDescriptor);
 
-        LOG.info("Module6_ClinicalActionEngine initialized");
+        LOG.info("Module6_ClinicalActionEngine initialized (dual-input: ClinicalEvent + AlertAcknowledgment)");
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Input 1: ClinicalEvent (from Modules 3/4/5)
+    // ═══════════════════════════════════════════════════════════════════════════
+
     @Override
-    public void processElement(ClinicalEvent event, Context ctx,
+    public void processElement1(ClinicalEvent event, Context ctx,
                                 Collector<ClinicalAction> out) throws Exception {
 
         String patientId = event.getPatientId();
@@ -79,7 +86,6 @@ public class Module6_ClinicalActionEngine
 
         // 1. Classify
         ActionTier tier = Module6ActionClassifier.classify(event);
-        if (tier == ActionTier.ROUTINE) return; // no action needed
 
         // 2. Initialize state
         PatientAlertState patState = alertState.value();
@@ -88,41 +94,60 @@ public class Module6_ClinicalActionEngine
         Module6CrossModuleDedup dedup = dedupState.value();
         if (dedup == null) dedup = new Module6CrossModuleDedup();
 
-        // 3. Alert fatigue check
-        if (AlertLifecycleManager.checkAlertFatigue(patState)) {
+        // 2b. Prune expired dedup entries to bound memory growth
+        dedup.pruneExpired(event.getEventTime());
+
+        String clinicalCategory = event.getClinicalCategory();
+        String sourceModule = switch (event.getSource()) {
+            case CDS -> "MODULE_3_CDS";
+            case PATTERN -> "MODULE_4_CEP";
+            case ML_PREDICTION -> "MODULE_5_ML";
+        };
+
+        // 3. ROUTINE: emit audit record only (no alert, no notification)
+        if (tier == ActionTier.ROUTINE) {
+            AuditRecord routineAudit = new AuditRecord();
+            routineAudit.setAuditId(UUID.randomUUID().toString());
+            routineAudit.setEventType("ROUTINE_PROCESSED");
+            routineAudit.setPatientId(patientId);
+            routineAudit.setSourceModule(sourceModule);
+            routineAudit.setTier(ActionTier.ROUTINE);
+            routineAudit.setClinicalCategory(clinicalCategory);
+            ctx.output(AUDIT_TAG, routineAudit);
+            return;
+        }
+
+        // 4. Alert fatigue check (HALT always bypasses)
+        if (AlertLifecycleManager.checkAlertFatigue(patState, tier)) {
             alertState.update(patState);
             return; // suppress — fatigue threshold hit
         }
 
-        // 4. Cross-module dedup
-        String clinicalCategory = event.getClinicalCategory();
+        // 5. Cross-module dedup (keyed by category only)
         if (!dedup.shouldEmit(patientId, tier, clinicalCategory, event.getEventTime())) {
             alertState.update(patState);
             dedupState.update(dedup);
             return; // suppressed by dedup
         }
 
-        // 5. Create alert
-        String sourceModule = switch (event.getSource()) {
-            case CDS -> "MODULE_3_CDS";
-            case PATTERN -> "MODULE_4_CEP";
-            case ML_PREDICTION -> "MODULE_5_ML";
-        };
+        // 6. Create alert (using event time, not wall clock)
         ClinicalAlert alert = AlertLifecycleManager.createAlert(
-            patientId, tier, clinicalCategory, sourceModule);
+            patientId, tier, clinicalCategory, sourceModule, event.getEventTime());
 
-        // 6. Register escalation timer if needed
+        // 7. Register escalation timer and record mapping for lookup
         if (tier.requiresEscalation()) {
-            ctx.timerService().registerProcessingTimeTimer(alert.getSlaDeadlineMs());
+            long deadline = alert.getSlaDeadlineMs();
+            ctx.timerService().registerProcessingTimeTimer(deadline);
+            patState.registerTimerMapping(deadline, alert.getAlertId());
         }
 
-        // 7. Store in active alerts
-        patState.getActiveAlerts().put(clinicalCategory, alert);
+        // 8. Store in active alerts
+        patState.getActiveAlerts().put(alert.getAlertId(), alert);
 
-        // 8. Emit main output
+        // 9. Emit main output
         out.collect(ClinicalAction.newAlert(alert));
 
-        // 9. Emit notifications via side output
+        // 10. Emit notifications via side output
         List<NotificationRequest.Channel> channels = NotificationRouter.getChannels(alert);
         for (NotificationRequest.Channel channel : channels) {
             NotificationRequest notif = new NotificationRequest();
@@ -133,20 +158,112 @@ public class Module6_ClinicalActionEngine
             notif.setTier(tier);
             notif.setTitle(tier + ": " + clinicalCategory);
             notif.setRequiresAcknowledgment(tier == ActionTier.HALT);
+            // PIPE-4: Deterministic idempotency key for dedup on Flink restart
+            notif.setIdempotencyKey(NotificationRequest.computeIdempotencyKey(
+                    patientId, alert.getAlertId(), channel));
             ctx.output(NOTIFICATION_TAG, notif);
         }
 
-        // 10. Emit audit record
+        // 11. Emit audit record
         AuditRecord audit = AuditRecord.alertCreated(alert, event);
         ctx.output(AUDIT_TAG, audit);
 
-        // 11. Update state
+        // 12. Update state
         alertState.update(patState);
         dedupState.update(dedup);
 
         LOG.info("Module6 {} alert: patient={}, category={}, source={}",
             tier, patientId, clinicalCategory, sourceModule);
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Input 2: AlertAcknowledgment (from physicians)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    @Override
+    public void processElement2(AlertAcknowledgment ack, Context ctx,
+                                Collector<ClinicalAction> out) throws Exception {
+
+        String alertId = ack.getAlertId();
+        if (alertId == null || alertId.isEmpty()) {
+            LOG.warn("Dropping acknowledgment with null alertId");
+            return;
+        }
+
+        PatientAlertState patState = alertState.value();
+        if (patState == null) {
+            LOG.warn("Acknowledgment for unknown patient state, alertId={}", alertId);
+            return;
+        }
+
+        ClinicalAlert alert = patState.getActiveAlerts().get(alertId);
+        if (alert == null) {
+            LOG.warn("Acknowledgment for unknown alertId={}", alertId);
+            return;
+        }
+
+        // Determine target state from acknowledgment action
+        AlertState targetState = switch (ack.getAction()) {
+            case ACKNOWLEDGE -> AlertState.ACKNOWLEDGED;
+            case ACTION_TAKEN -> AlertState.ACTIONED;
+            case DISMISS -> alert.getState() == AlertState.ACTIVE
+                ? AlertState.AUTO_RESOLVED : AlertState.RESOLVED;
+        };
+
+        // Validate state transition
+        if (!alert.getState().canTransitionTo(targetState)) {
+            LOG.warn("Invalid state transition for alertId={}: {} → {}",
+                alertId, alert.getState(), targetState);
+            return;
+        }
+
+        // Apply state transition
+        alert.setState(targetState);
+        alert.setAcknowledgedBy(ack.getPractitionerId());
+
+        if (targetState == AlertState.ACKNOWLEDGED) {
+            alert.setAcknowledgedAt(ack.getTimestamp());
+        } else if (targetState == AlertState.ACTIONED) {
+            alert.setActionedAt(ack.getTimestamp());
+            alert.setActionDescription(ack.getActionDescription());
+        } else if (targetState == AlertState.RESOLVED) {
+            alert.setResolvedAt(ack.getTimestamp());
+        }
+
+        // Remove from active alerts if terminal state
+        if (targetState.isTerminal()) {
+            patState.getActiveAlerts().remove(alertId);
+        }
+
+        // Emit audit record for the acknowledgment
+        AuditRecord audit = new AuditRecord();
+        audit.setAuditId(UUID.randomUUID().toString());
+        audit.setEventType("ALERT_" + targetState.name());
+        audit.setEventDescription("Physician " + ack.getPractitionerId()
+            + " " + ack.getAction().name().toLowerCase() + " alert " + alertId);
+        audit.setPatientId(ack.getPatientId());
+        audit.setAlertId(alertId);
+        audit.setTier(alert.getTier());
+        audit.setClinicalCategory(alert.getClinicalCategory());
+        ctx.output(AUDIT_TAG, audit);
+
+        // Emit ClinicalAction for downstream consumers
+        ClinicalAction action = new ClinicalAction();
+        action.setActionId(UUID.randomUUID().toString());
+        action.setActionTypeStr("ACKNOWLEDGMENT");
+        action.setAlert(alert);
+        action.setTimestamp(ack.getTimestamp());
+        out.collect(action);
+
+        alertState.update(patState);
+
+        LOG.info("Module6 acknowledgment: alertId={}, action={}, by={}",
+            alertId, ack.getAction(), ack.getPractitionerId());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Timer: SLA escalation
+    // ═══════════════════════════════════════════════════════════════════════════
 
     @Override
     public void onTimer(long timestamp, OnTimerContext ctx,
@@ -155,39 +272,40 @@ public class Module6_ClinicalActionEngine
         PatientAlertState patState = alertState.value();
         if (patState == null) return;
 
-        // Find the alert whose SLA deadline matches this timer
-        for (ClinicalAlert alert : patState.getActiveAlerts().values()) {
-            if (alert.getState() == AlertState.ACTIVE
-                    && alert.getSlaDeadlineMs() == timestamp) {
+        // Lookup alert by timer→alertId mapping
+        String alertId = patState.popTimerMapping(timestamp);
+        if (alertId == null) return;
 
-                AlertLifecycleManager.escalate(alert);
-                out.collect(ClinicalAction.escalation(alert, alert.getAssignedTo()));
+        ClinicalAlert alert = patState.getActiveAlerts().get(alertId);
+        if (alert == null || alert.getState() != AlertState.ACTIVE) return;
 
-                // Emit audit for escalation
-                AuditRecord audit = new AuditRecord();
-                audit.setAuditId(UUID.randomUUID().toString());
-                audit.setEventType("ALERT_ESCALATED");
-                audit.setPatientId(alert.getPatientId());
-                audit.setAlertId(alert.getAlertId());
-                audit.setTier(alert.getTier());
-                audit.setClinicalCategory(alert.getClinicalCategory());
-                ctx.output(AUDIT_TAG, audit);
+        AlertLifecycleManager.escalate(alert);
+        out.collect(ClinicalAction.escalation(alert, alert.getAssignedTo()));
 
-                // Register next escalation if under max level
-                if (alert.getEscalationLevel() < 3 && alert.getTier().requiresEscalation()) {
-                    long nextEscalation = switch (alert.getTier()) {
-                        case HALT -> timestamp + (90 * 60 * 1000L);     // +90 min
-                        case PAUSE -> timestamp + (48 * 60 * 60 * 1000L); // +48 hr
-                        default -> -1L;
-                    };
-                    if (nextEscalation > 0) {
-                        ctx.timerService().registerProcessingTimeTimer(nextEscalation);
-                        alert.setSlaDeadlineMs(nextEscalation);
-                    }
-                }
-                break;
+        // Emit audit for escalation
+        AuditRecord audit = new AuditRecord();
+        audit.setAuditId(UUID.randomUUID().toString());
+        audit.setEventType("ALERT_ESCALATED");
+        audit.setPatientId(alert.getPatientId());
+        audit.setAlertId(alert.getAlertId());
+        audit.setTier(alert.getTier());
+        audit.setClinicalCategory(alert.getClinicalCategory());
+        ctx.output(AUDIT_TAG, audit);
+
+        // Register next escalation if under max level
+        if (alert.getEscalationLevel() < 3 && alert.getTier().requiresEscalation()) {
+            long nextEscalation = switch (alert.getTier()) {
+                case HALT -> timestamp + (90 * 60 * 1000L);     // +90 min
+                case PAUSE -> timestamp + (48 * 60 * 60 * 1000L); // +48 hr
+                default -> -1L;
+            };
+            if (nextEscalation > 0) {
+                ctx.timerService().registerProcessingTimeTimer(nextEscalation);
+                patState.registerTimerMapping(nextEscalation, alertId);
+                alert.setSlaDeadlineMs(nextEscalation);
             }
         }
+
         alertState.update(patState);
     }
 }

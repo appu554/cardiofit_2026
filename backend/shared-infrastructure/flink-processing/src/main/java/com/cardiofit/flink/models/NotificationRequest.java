@@ -26,6 +26,12 @@ public class NotificationRequest implements Serializable {
     @JsonProperty("priority") private int priority;
     @JsonProperty("requires_acknowledgment") private boolean requiresAcknowledgment;
 
+    // PIPE-4: Deterministic idempotency key for dedup on Flink restart.
+    // Computed as hash(patientId + alertId + channel) — same alert re-emitted after
+    // checkpoint recovery produces the same key, letting the notification service
+    // suppress duplicate SMS/push deliveries.
+    @JsonProperty("idempotency_key") private String idempotencyKey;
+
     public NotificationRequest() {}
 
     public String getNotificationId() { return notificationId; }
@@ -50,4 +56,16 @@ public class NotificationRequest implements Serializable {
     public void setPriority(int priority) { this.priority = priority; }
     public boolean isRequiresAcknowledgment() { return requiresAcknowledgment; }
     public void setRequiresAcknowledgment(boolean requiresAcknowledgment) { this.requiresAcknowledgment = requiresAcknowledgment; }
+    public String getIdempotencyKey() { return idempotencyKey; }
+    public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
+
+    /**
+     * PIPE-4: Compute a deterministic idempotency key from alert identity + channel.
+     * The same alert re-emitted after Flink restart will produce the same key.
+     */
+    public static String computeIdempotencyKey(String patientId, String alertId, Channel channel) {
+        String raw = patientId + "|" + alertId + "|" + channel.name();
+        // Simple deterministic hash using String.hashCode — no crypto needed for dedup
+        return "notif-" + Integer.toHexString(raw.hashCode());
+    }
 }

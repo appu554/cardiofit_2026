@@ -59,6 +59,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class Module3_SemanticMesh {
     private static final Logger LOG = LoggerFactory.getLogger(Module3_SemanticMesh.class);
 
+    // PIPE-6: CDS rule-set version — stamped on every SemanticEvent so downstream
+    // modules can detect stale clinical logic after hot-reload. Bump this when
+    // CDS rules, guideline mappings, or knowledge base integration changes.
+    public static final String CDS_RULE_VERSION = "3.1.0-2026Q2";
+
     // Output tags for different types of semantic events
     private static final OutputTag<SemanticEvent> DRUG_INTERACTION_TAG =
         new OutputTag<SemanticEvent>("drug-interactions"){};
@@ -111,6 +116,7 @@ public class Module3_SemanticMesh {
 
         // Connect enriched events with knowledge base updates
         SingleOutputStreamOperator<SemanticEvent> semanticEvents = enrichedEvents
+            .filter(e -> e.getPatientId() != null && !e.getPatientId().isEmpty())
             .keyBy(EnrichedEvent::getPatientId)
             .process(new SemanticReasoningProcessor())
             .uid("Semantic Reasoning Engine");
@@ -300,6 +306,8 @@ public class Module3_SemanticMesh {
 
             semanticEvent.setProcessingTime(System.currentTimeMillis());
             semanticEvent.setSemanticVersion("3.0");
+            // PIPE-6: Stamp CDS rule version for downstream version-aware filtering
+            semanticEvent.setKnowledgeBaseVersion(CDS_RULE_VERSION);
 
             return semanticEvent;
         }
@@ -606,6 +614,8 @@ public class Module3_SemanticMesh {
             errorAnnotations.put("processing_error", errorMessage);
             errorAnnotations.put("error_timestamp", System.currentTimeMillis());
             errorEvent.setSemanticAnnotations(errorAnnotations);
+            // PIPE-6: Stamp version even on error events for traceability
+            errorEvent.setKnowledgeBaseVersion(CDS_RULE_VERSION);
 
             return errorEvent;
         }
@@ -998,6 +1008,7 @@ public class Module3_SemanticMesh {
         public void open(DeserializationSchema.InitializationContext context) {
             objectMapper = new ObjectMapper();
             objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         }
 
         @Override
@@ -1021,6 +1032,7 @@ public class Module3_SemanticMesh {
         public void open(DeserializationSchema.InitializationContext context) {
             objectMapper = new ObjectMapper();
             objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         }
 
         @Override
@@ -1066,6 +1078,7 @@ public class Module3_SemanticMesh {
         public void open(DeserializationSchema.InitializationContext context) {
             objectMapper = new ObjectMapper();
             objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         }
 
         @Override

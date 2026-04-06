@@ -88,6 +88,14 @@ public class Module4_PatternDetection {
     private static final OutputTag<PatternEvent> TREND_ANALYSIS_TAG =
         new OutputTag<PatternEvent>("trend-analysis"){};
 
+    // PIPE-3: Late event side output — captures events that arrive after watermark advancement
+    // during Kafka consumer lag. Prevents silent data loss in CEP windows.
+    public static final OutputTag<SemanticEvent> LATE_EVENT_TAG =
+        new OutputTag<SemanticEvent>("late-clinical-events"){};
+
+    // PIPE-3: Maximum late arrival tolerance for windowed operations
+    private static final Duration ALLOWED_LATENESS = Duration.ofMinutes(5);
+
     public static void main(String[] args) throws Exception {
         LOG.info("Starting Module 4: Pattern Detection (CEP & Windowed Analytics)");
 
@@ -143,6 +151,7 @@ public class Module4_PatternDetection {
 
         // Key by patient ID for pattern detection
         KeyedStream<SemanticEvent, String> keyedSemanticEvents = loggedSemanticEvents
+            .filter(e -> e.getPatientId() != null && !e.getPatientId().isEmpty())
             .keyBy(SemanticEvent::getPatientId);
 
         // IMMEDIATE: Convert every semantic event to comprehensive pattern event for Module 5
@@ -452,8 +461,11 @@ public class Module4_PatternDetection {
         DataStream<VitalVariabilityAlert> vitalVariabilityAlerts = VitalVariabilityAnalyzer.analyzeAllVitalVariability(keyedSemanticEvents);
 
         // NEW: Daily Aggregate Risk Scoring (24-hour tumbling window)
+        // PIPE-3: allowedLateness + lateDataOutputTag prevents silent data loss during Kafka lag
         DataStream<DailyRiskScore> dailyRiskScores = keyedSemanticEvents
             .window(TumblingEventTimeWindows.of(Duration.ofHours(24)))
+            .allowedLateness(ALLOWED_LATENESS)
+            .sideOutputLateData(LATE_EVENT_TAG)
             .apply(new RiskScoreCalculator.DailyRiskScoringWindowFunction())
             .name("Daily Risk Scoring")
             .uid("Daily-Risk-Scoring");
@@ -542,6 +554,7 @@ public class Module4_PatternDetection {
         // Apply 5-minute deduplication window to prevent alert storms
         // Merges patterns from Layer 1 (instant state) + Layer 2 (CEP) when they fire together
         DataStream<PatternEvent> dedupedPatterns = allPatternEvents
+            .filter(pe -> pe.getPatientId() != null && !pe.getPatientId().isEmpty())
             .keyBy(PatternEvent::getPatientId)
             .process(new PatternDeduplicationFunction())
             .uid("Pattern Deduplication")
@@ -604,13 +617,13 @@ public class Module4_PatternDetection {
     }
 
     /**
-     * Create enriched event source from Module 2 for RiskIndicators-based patterns
-     * DEPRECATED: Use createCDSEventSource() instead to consume from Module 3
+     * Create enriched event source from Module 2 for RiskIndicators-based patterns (AKI/KDIGO)
+     * Reads from enriched-patient-events-v1 (Module 2 output)
      */
     private static DataStream<EnrichedEvent> createEnrichedEventSource(StreamExecutionEnvironment env) {
         KafkaSource<EnrichedEvent> source = KafkaSource.<EnrichedEvent>builder()
             .setBootstrapServers(getBootstrapServers())
-            .setTopics(getTopicName("MODULE4_ENRICHED_INPUT_TOPIC", "clinical-patterns.v1"))
+            .setTopics(getTopicName("MODULE4_ENRICHED_INPUT_TOPIC", "enriched-patient-events-v1"))
             .setGroupId("pattern-detection-enriched")
             .setStartingOffsets(OffsetsInitializer.timestamp(System.currentTimeMillis()))
             .setValueOnlyDeserializer(new EnrichedEventDeserializer())
@@ -962,10 +975,13 @@ public class Module4_PatternDetection {
      */
     private static DataStream<PatternEvent> performTrendAnalysis(DataStream<SemanticEvent> input) {
         return input
-            .filter(event -> event.getEventType() == EventType.VITAL_SIGN ||
-                           event.getEventType() == EventType.LAB_RESULT)
+            .filter(event -> (event.getEventType() == EventType.VITAL_SIGN ||
+                           event.getEventType() == EventType.LAB_RESULT) &&
+                           event.getPatientId() != null && !event.getPatientId().isEmpty())
             .keyBy(SemanticEvent::getPatientId)
             .window(SlidingEventTimeWindows.of(Duration.ofHours(4), Duration.ofHours(1)))
+            .allowedLateness(ALLOWED_LATENESS)
+            .sideOutputLateData(LATE_EVENT_TAG)
             .apply(new TrendAnalysisWindowFunction())
             .uid("Trend Analysis");
     }
@@ -975,8 +991,11 @@ public class Module4_PatternDetection {
      */
     private static DataStream<PatternEvent> performAnomalyDetection(DataStream<SemanticEvent> input) {
         return input
+            .filter(e -> e.getPatientId() != null && !e.getPatientId().isEmpty())
             .keyBy(SemanticEvent::getPatientId)
             .window(TumblingEventTimeWindows.of(Duration.ofMinutes(30)))
+            .allowedLateness(ALLOWED_LATENESS)
+            .sideOutputLateData(LATE_EVENT_TAG)
             .process(new AnomalyDetectionWindowFunction())
             .uid("Anomaly Detection");
     }
@@ -986,9 +1005,12 @@ public class Module4_PatternDetection {
      */
     private static DataStream<PatternEvent> monitorClinicalProtocols(DataStream<SemanticEvent> input) {
         return input
-            .filter(event -> event.hasGuidelineRecommendations())
+            .filter(event -> event.hasGuidelineRecommendations() &&
+                           event.getPatientId() != null && !event.getPatientId().isEmpty())
             .keyBy(SemanticEvent::getPatientId)
             .window(TumblingEventTimeWindows.of(Duration.ofHours(2)))
+            .allowedLateness(ALLOWED_LATENESS)
+            .sideOutputLateData(LATE_EVENT_TAG)
             .apply(new ProtocolMonitoringWindowFunction())
             .uid("Protocol Monitoring");
     }
@@ -1558,6 +1580,7 @@ public class Module4_PatternDetection {
         public void open(DeserializationSchema.InitializationContext context) {
             objectMapper = new ObjectMapper();
             objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         }
 
         @Override
@@ -1645,6 +1668,7 @@ public class Module4_PatternDetection {
         public void open(DeserializationSchema.InitializationContext context) {
             objectMapper = new ObjectMapper();
             objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         }
 
         @Override
