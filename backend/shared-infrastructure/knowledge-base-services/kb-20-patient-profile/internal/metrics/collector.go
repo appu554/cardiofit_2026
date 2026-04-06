@@ -17,6 +17,14 @@ type Collector struct {
 	EGFRComputed    prometheus.Counter
 	StratumQueries  prometheus.Counter
 	EventsPublished *prometheus.CounterVec
+	// A1: Personalised target metrics
+	TargetComputations    prometheus.Counter
+	TargetComputeDuration prometheus.Histogram
+	TargetCacheHits       prometheus.Counter
+	TargetCacheMisses     prometheus.Counter
+	// Kafka outbox relay metrics
+	OutboxRelayPublished *prometheus.CounterVec
+	OutboxRelayErrors     prometheus.Counter
 }
 
 // NewCollector creates and registers all KB-20 Prometheus metrics.
@@ -62,6 +70,37 @@ func NewCollector() *Collector {
 			Name: "kb20_events_published_total",
 			Help: "Events published to event bus",
 		}, []string{"event_type"}),
+
+		TargetComputations: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb20_target_computations_total",
+			Help: "Total personalised target computations",
+		}),
+
+		TargetComputeDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb20_target_compute_duration_seconds",
+			Help:    "Duration of personalised target computation",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1},
+		}),
+
+		TargetCacheHits: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb20_target_cache_hits_total",
+			Help: "Personalised target cache hits",
+		}),
+
+		TargetCacheMisses: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb20_target_cache_misses_total",
+			Help: "Personalised target cache misses",
+		}),
+
+		OutboxRelayPublished: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb20_outbox_relay_published_total",
+			Help: "Events published to Kafka by outbox relay",
+		}, []string{"topic"}),
+
+		OutboxRelayErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb20_outbox_relay_errors_total",
+			Help: "Outbox relay publish failures",
+		}),
 	}
 }
 

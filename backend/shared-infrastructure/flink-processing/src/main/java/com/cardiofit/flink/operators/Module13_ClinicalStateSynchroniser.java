@@ -1,5 +1,7 @@
 package com.cardiofit.flink.operators;
 
+import com.cardiofit.flink.config.Module13PilotConfig;
+import com.cardiofit.flink.metrics.Module13Metrics;
 import com.cardiofit.flink.models.*;
 import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.api.common.state.StateTtlConfig;
@@ -29,6 +31,8 @@ public class Module13_ClinicalStateSynchroniser
     private static final int IDLE_QUIESCENCE_THRESHOLD = 30;
 
     private transient ValueState<ClinicalStateSummary> summaryState;
+    private transient Module13Metrics metrics;
+    private transient Module13PilotConfig pilotConfig;
 
     @Override
     public void open(OpenContext openContext) throws Exception {
@@ -41,12 +45,21 @@ public class Module13_ClinicalStateSynchroniser
                 .build();
         stateDesc.enableTimeToLive(ttl);
         summaryState = getRuntimeContext().getState(stateDesc);
-        LOG.info("Module 13 Clinical State Synchroniser initialized (90-day TTL, 7-source fan-in)");
+        metrics = new Module13Metrics(getRuntimeContext().getMetricGroup());
+        pilotConfig = Module13PilotConfig.fromEnvironment();
+        LOG.info("Module 13 Clinical State Synchroniser initialized (90-day TTL, 7-source fan-in, enabled={})",
+                pilotConfig.isEnabled());
     }
 
     @Override
     public void processElement(CanonicalEvent event, Context ctx,
                                Collector<ClinicalStateChangeEvent> out) throws Exception {
+        // Feature flag: master kill-switch
+        if (!pilotConfig.isEnabled()) return;
+
+        // Feature flag: pilot cohort filter
+        if (!pilotConfig.isPatientInPilot(event.getPatientId())) return;
+
         ClinicalStateSummary state = summaryState.value();
         if (state == null) {
             state = new ClinicalStateSummary(event.getPatientId());
@@ -54,9 +67,11 @@ public class Module13_ClinicalStateSynchroniser
         }
 
         // 1. Route event and update state fields
+        long processStart = System.nanoTime();
         String sourceModule = routeAndUpdateState(event, state, ctx.timerService().currentProcessingTime());
         if (sourceModule == null) {
             LOG.debug("Unroutable event for patient {}: type={}", event.getPatientId(), event.getEventType());
+            metrics.recordUnroutableEvent();
             summaryState.update(state);
             return;
         }
@@ -67,23 +82,53 @@ public class Module13_ClinicalStateSynchroniser
                 Module13DataCompletenessMonitor.evaluate(state, ctx.timerService().currentProcessingTime());
         state.setDataCompletenessScore(completeness.getCompositeScore());
 
-        // 3. Compute CKM risk velocity
-        CKMRiskVelocity velocity = Module13CKMRiskComputer.compute(state);
+        // 3. Compute CKM risk velocity (feature-flagged)
+        CKMRiskVelocity velocity;
+        if (pilotConfig.isCkmVelocityEnabled()) {
+            velocity = Module13CKMRiskComputer.compute(state);
+        } else {
+            velocity = CKMRiskVelocity.builder()
+                    .compositeClassification(CKMRiskVelocity.CompositeClassification.UNKNOWN)
+                    .compositeScore(0.0).dataCompleteness(0.0)
+                    .computationTimestamp(ctx.timerService().currentProcessingTime()).build();
+        }
 
-        // 4. Detect state changes
-        List<ClinicalStateChangeEvent> changes = Module13StateChangeDetector.detect(
-                state, velocity, ctx.timerService().currentProcessingTime());
+        // 4. Detect state changes (feature-flagged)
+        List<ClinicalStateChangeEvent> changes;
+        if (pilotConfig.isStateChangesEnabled()) {
+            changes = Module13StateChangeDetector.detect(
+                    state, velocity, ctx.timerService().currentProcessingTime());
+            // Safety cap
+            if (changes.size() > pilotConfig.getMaxStateChangesPerEvent()) {
+                LOG.warn("State changes capped: {} → {} for patient {}",
+                        changes.size(), pilotConfig.getMaxStateChangesPerEvent(), event.getPatientId());
+                changes = changes.subList(0, pilotConfig.getMaxStateChangesPerEvent());
+            }
+        } else {
+            changes = Collections.emptyList();
+        }
 
-        // 5. Emit state change events + update dedup timestamps
+        // 5. Record metrics for velocity and completeness
+        metrics.recordVelocityClassification(
+                velocity.getCompositeClassification().name(),
+                velocity.getCompositeScore(),
+                velocity.isCrossDomainAmplification());
+        metrics.recordDataCompleteness(completeness.getCompositeScore());
+
+        // 6. Emit state change events + update dedup timestamps (dry-run guard)
         for (ClinicalStateChangeEvent change : changes) {
-            out.collect(change);
+            if (!pilotConfig.isDryRun()) {
+                out.collect(change);
+            }
             state.getLastEmittedChangeTimestamps().put(
                     change.getChangeType(), change.getProcessingTimestamp());
-            LOG.info("State change emitted: patient={}, type={}, priority={}",
+            metrics.recordStateChangeEmitted(change.getPriority());
+            LOG.info("State change {}: patient={}, type={}, priority={}",
+                    pilotConfig.isDryRun() ? "computed (dry-run)" : "emitted",
                     event.getPatientId(), change.getChangeType(), change.getPriority());
         }
 
-        // 6. Check data absence events from completeness monitor
+        // 7. Check data absence events from completeness monitor
         if (completeness.isDataAbsenceCritical()) {
             emitDataAbsenceIfNeeded(state, ctx, out, ClinicalStateChangeType.DATA_ABSENCE_CRITICAL, velocity);
         } else if (!completeness.getDataGapFlags().isEmpty()) {
@@ -94,8 +139,9 @@ public class Module13_ClinicalStateSynchroniser
         state.setLastComputedVelocity(velocity);
         state.setLastUpdated(ctx.timerService().currentProcessingTime());
 
-        // 8. Project KB-20 updates and buffer for coalescing (ADAPTED for List<KB20StateUpdate>)
-        List<KB20StateUpdate> kb20Updates = Module13KB20StateProjector.project(event);
+        // 8. Project KB-20 updates and buffer for coalescing (feature-flagged, dry-run guarded)
+        List<KB20StateUpdate> kb20Updates = pilotConfig.isKb20WritebackEnabled() && !pilotConfig.isDryRun()
+                ? Module13KB20StateProjector.project(event) : Collections.emptyList();
         if (!kb20Updates.isEmpty()) {
             state.getCoalescingBuffer().addAll(kb20Updates);
 
@@ -129,6 +175,7 @@ public class Module13_ClinicalStateSynchroniser
             // Safety cap: evict oldest if buffer exceeds limit
             while (state.getCoalescingBuffer().size() > MAX_COALESCING_BUFFER_SIZE) {
                 state.getCoalescingBuffer().remove(0);
+                metrics.recordCoalescingEviction();
             }
 
             // Register coalescing timer if not already set
@@ -157,6 +204,14 @@ public class Module13_ClinicalStateSynchroniser
         // 11. Reset idle counter since we received real data
         state.setConsecutiveZeroCompletenessDays(0);
 
+        // 12. Record processing latency and A1 enrichment status
+        long latencyMs = (System.nanoTime() - processStart) / 1_000_000;
+        metrics.recordEventProcessed(sourceModule, latencyMs);
+        if (state.getPersonalizedFBGTarget() == null) {
+            metrics.recordPersonalizedTargetsFallback();
+        }
+        metrics.setCoalescingBufferDepth(state.getCoalescingBuffer().size());
+
         summaryState.update(state);
     }
 
@@ -171,10 +226,13 @@ public class Module13_ClinicalStateSynchroniser
             for (KB20StateUpdate update : state.getCoalescingBuffer()) {
                 ctx.output(KB20_SIDE_OUTPUT, update);
             }
+            int flushedCount = state.getCoalescingBuffer().size();
             LOG.debug("Flushed {} KB-20 updates for patient {}",
-                    state.getCoalescingBuffer().size(), state.getPatientId());
+                    flushedCount, state.getPatientId());
             state.getCoalescingBuffer().clear();
             state.setCoalescingTimerMs(-1L);
+            metrics.recordCoalescingFlush(flushedCount);
+            metrics.setCoalescingBufferDepth(0);
 
         } else if (timestamp == state.getDailyTimerMs()) {
             // Daily data absence check
@@ -219,6 +277,7 @@ public class Module13_ClinicalStateSynchroniser
         } else if (timestamp == state.getSnapshotRotationTimerMs()) {
             // 7-day snapshot rotation for velocity computation
             state.rotateSnapshots(timestamp);
+            metrics.recordSnapshotRotation();
             LOG.info("Snapshot rotated for patient {}: previous snapshot captured at {}",
                     state.getPatientId(), timestamp);
 
@@ -420,6 +479,7 @@ public class Module13_ClinicalStateSynchroniser
      */
     @SuppressWarnings("unchecked")
     private void extractPersonalizedTargets(Map<String, Object> payload, ClinicalStateSummary state) {
+        if (!pilotConfig.isPersonalizedTargetsEnabled()) return;
         Object targetsObj = payload.get("kb20_personalized_targets");
         if (targetsObj == null) return;
 
@@ -445,6 +505,7 @@ public class Module13_ClinicalStateSynchroniser
         Double sbpKidneyThreshold = toDouble(targets.get("sbp_kidney_threshold"));
         if (sbpKidneyThreshold != null) state.setPersonalizedSBPKidneyThreshold(sbpKidneyThreshold);
 
+        metrics.recordPersonalizedTargetsEnriched();
         LOG.debug("Personalised targets updated for patient {}: FBG={}, HbA1c={}, SBP={}, eGFR={}, SBP-kidney={}",
                 state.getPatientId(), fbgTarget, hba1cTarget, sbpTarget, egfrThreshold, sbpKidneyThreshold);
     }
@@ -456,7 +517,7 @@ public class Module13_ClinicalStateSynchroniser
         long now = ctx.timerService().currentProcessingTime();
         if (lastEmitted != null && (now - lastEmitted) < 24 * 3_600_000L) return;
 
-        ClinicalStateChangeEvent event = ClinicalStateChangeEvent.builder()
+        ClinicalStateChangeEvent absenceEvent = ClinicalStateChangeEvent.builder()
                 .changeId(UUID.randomUUID().toString())
                 .patientId(state.getPatientId())
                 .changeType(type)
@@ -468,8 +529,15 @@ public class Module13_ClinicalStateSynchroniser
                 .confidenceScore(state.getDataCompletenessScore())
                 .processingTimestamp(now)
                 .build();
-        out.collect(event);
+        if (!pilotConfig.isDryRun()) {
+            out.collect(absenceEvent);
+        }
         state.getLastEmittedChangeTimestamps().put(type, now);
+        if (type == ClinicalStateChangeType.DATA_ABSENCE_CRITICAL) {
+            metrics.recordDataAbsenceCritical();
+        } else {
+            metrics.recordDataAbsenceWarning();
+        }
         LOG.warn("Data absence detected: patient={}, type={}", state.getPatientId(), type);
     }
 
