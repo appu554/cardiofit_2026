@@ -34,6 +34,14 @@ public class ClinicalStateSummary implements Serializable {
     private Set<String> activeCIDRuleIds = new HashSet<>();
     private long lastCIDAlertTimestamp;
 
+    // A1: Personalised targets from KB-20 (null = use population defaults)
+    // Populated when enriched events carry kb20_personalized_targets payload
+    private Double personalizedFBGTarget;     // mg/dL — default 110.0
+    private Double personalizedHbA1cTarget;   // % — default 7.0
+    private Double personalizedSBPTarget;     // mmHg — default 130.0
+    private Double personalizedEGFRThreshold; // mL/min — default 45.0
+    private Double personalizedSBPKidneyThreshold; // mmHg — default 140.0
+
     // --- Computed by Module 13 ---
     private CKMRiskVelocity lastComputedVelocity;
     private double dataCompletenessScore;
@@ -97,6 +105,17 @@ public class ClinicalStateSummary implements Serializable {
     public long getLastCIDAlertTimestamp() { return lastCIDAlertTimestamp; }
     public void setLastCIDAlertTimestamp(long v) { this.lastCIDAlertTimestamp = v; }
     public boolean hasActiveCIDHalt() { return activeCIDHaltCount > 0; }
+    // A1: Personalised target accessors
+    public Double getPersonalizedFBGTarget() { return personalizedFBGTarget; }
+    public void setPersonalizedFBGTarget(Double v) { this.personalizedFBGTarget = v; }
+    public Double getPersonalizedHbA1cTarget() { return personalizedHbA1cTarget; }
+    public void setPersonalizedHbA1cTarget(Double v) { this.personalizedHbA1cTarget = v; }
+    public Double getPersonalizedSBPTarget() { return personalizedSBPTarget; }
+    public void setPersonalizedSBPTarget(Double v) { this.personalizedSBPTarget = v; }
+    public Double getPersonalizedEGFRThreshold() { return personalizedEGFRThreshold; }
+    public void setPersonalizedEGFRThreshold(Double v) { this.personalizedEGFRThreshold = v; }
+    public Double getPersonalizedSBPKidneyThreshold() { return personalizedSBPKidneyThreshold; }
+    public void setPersonalizedSBPKidneyThreshold(Double v) { this.personalizedSBPKidneyThreshold = v; }
     public CKMRiskVelocity getLastComputedVelocity() { return lastComputedVelocity; }
     public void setLastComputedVelocity(CKMRiskVelocity v) { this.lastComputedVelocity = v; }
     public double getDataCompletenessScore() { return dataCompletenessScore; }

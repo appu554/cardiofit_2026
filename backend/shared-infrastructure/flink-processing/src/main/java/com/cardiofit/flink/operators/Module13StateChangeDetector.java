@@ -28,8 +28,10 @@ import java.util.*;
 public final class Module13StateChangeDetector {
 
     private static final long DEDUP_WINDOW_MS = 24 * 3_600_000L;
-    private static final double FBG_TARGET = 110.0;
-    private static final double SBP_TARGET = 130.0;
+    // Population-level defaults — overridden by per-patient targets from KB-20 when available
+    static final double DEFAULT_FBG_TARGET = 110.0;
+    static final double DEFAULT_SBP_TARGET = 130.0;
+    static final double DEFAULT_EGFR_THRESHOLD = 45.0;
     private static final double ENGAGEMENT_COLLAPSE_DELTA = 0.35;
     private static final int FUTILITY_CONSECUTIVE_COUNT = 2;
 
@@ -86,7 +88,10 @@ public final class Module13StateChangeDetector {
     private static void checkRenalRapidDecline(ClinicalStateSummary state,
             long ts, List<ClinicalStateChangeEvent> events) {
         Double egfr = state.current().egfr;
-        if (egfr != null && egfr < 45.0) {
+        // A1: Use personalised eGFR threshold from KB-20 if available, else population default
+        double egfrThreshold = state.getPersonalizedEGFRThreshold() != null
+                ? state.getPersonalizedEGFRThreshold() : DEFAULT_EGFR_THRESHOLD;
+        if (egfr != null && egfr < egfrThreshold) {
             emitIfNotDeduped(state, ts, events, ClinicalStateChangeType.RENAL_RAPID_DECLINE,
                     "eGFR_baseline", String.valueOf(egfr),
                     CKMRiskDomain.RENAL, "module7", state.getLastComputedVelocity());
@@ -143,7 +148,10 @@ public final class Module13StateChangeDetector {
     private static void checkMetabolicMilestone(ClinicalStateSummary state,
             long ts, List<ClinicalStateChangeEvent> events) {
         Double fbg = state.current().fbg;
-        if (fbg != null && fbg < FBG_TARGET) {
+        // A1: Use personalised FBG target from KB-20 if available, else population default
+        double fbgTarget = state.getPersonalizedFBGTarget() != null
+                ? state.getPersonalizedFBGTarget() : DEFAULT_FBG_TARGET;
+        if (fbg != null && fbg < fbgTarget) {
             emitIfNotDeduped(state, ts, events, ClinicalStateChangeType.METABOLIC_MILESTONE,
                     "FBG above target", String.valueOf(fbg),
                     CKMRiskDomain.METABOLIC, "enriched", state.getLastComputedVelocity());
@@ -153,7 +161,10 @@ public final class Module13StateChangeDetector {
     private static void checkBPMilestone(ClinicalStateSummary state,
             long ts, List<ClinicalStateChangeEvent> events) {
         Double meanSBP = state.current().meanSBP;
-        if (meanSBP != null && meanSBP < SBP_TARGET) {
+        // A1: Use personalised SBP target from KB-20 if available, else population default
+        double sbpTarget = state.getPersonalizedSBPTarget() != null
+                ? state.getPersonalizedSBPTarget() : DEFAULT_SBP_TARGET;
+        if (meanSBP != null && meanSBP < sbpTarget) {
             emitIfNotDeduped(state, ts, events, ClinicalStateChangeType.BP_MILESTONE,
                     "SBP above target", String.valueOf(meanSBP),
                     CKMRiskDomain.CARDIOVASCULAR, "module7", state.getLastComputedVelocity());

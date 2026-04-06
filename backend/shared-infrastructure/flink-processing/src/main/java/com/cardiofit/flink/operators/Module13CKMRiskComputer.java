@@ -31,6 +31,9 @@ public final class Module13CKMRiskComputer {
     private static final double SURGE_DELTA_RANGE = 20.0;
     private static final double ENGAGEMENT_DELTA_RANGE = 0.4;
 
+    // --- Population-level defaults (overridden by A1 personalised targets when available) ---
+    static final double DEFAULT_SBP_KIDNEY_THRESHOLD = 140.0;
+
     // --- Cross-domain amplification ---
     private static final double AMPLIFICATION_THRESHOLD = 0.2;
     private static final double AMPLIFICATION_FACTOR = 1.5;
@@ -185,7 +188,10 @@ public final class Module13CKMRiskComputer {
         }
         if (curr.arv != null && curr.meanSBP != null) {
             double arvNorm = curr.arv > 16.0 ? 1.0 : (curr.arv > 12.0 ? 0.5 : 0.0);
-            double sbpFactor = curr.meanSBP > 140.0 ? 1.2 : 1.0;
+            // A1: Use personalised SBP-kidney threshold from KB-20 if available
+            double sbpKidneyThreshold = state.getPersonalizedSBPKidneyThreshold() != null
+                    ? state.getPersonalizedSBPKidneyThreshold() : DEFAULT_SBP_KIDNEY_THRESHOLD;
+            double sbpFactor = curr.meanSBP > sbpKidneyThreshold ? 1.2 : 1.0;
             weighted += 0.15 * clamp(arvNorm * sbpFactor);
             totalWeight += 0.15;
         }

@@ -387,6 +387,9 @@ public class Module13_ClinicalStateSynchroniser
     }
 
     private void updateFromLabResult(Map<String, Object> payload, ClinicalStateSummary state) {
+        // A1: Extract personalised targets from KB-20 enrichment (when available)
+        extractPersonalizedTargets(payload, state);
+
         String labType = payload.get("lab_type") != null ? payload.get("lab_type").toString() : "";
         Double value = toDouble(payload.get("value"));
         if (value == null) return;
@@ -401,6 +404,49 @@ public class Module13_ClinicalStateSynchroniser
             case "WEIGHT": state.current().weight = value; break;
             default: break;
         }
+    }
+
+    /**
+     * A1: Extract personalised targets from KB-20 enrichment data.
+     *
+     * When KB-20 computes per-patient targets (based on age, CKD stage, diabetes
+     * duration, comorbidity burden), they arrive in the enriched event payload under
+     * the "kb20_personalized_targets" map. This method extracts them into the state
+     * so that Module13StateChangeDetector and Module13CKMRiskComputer can use them
+     * instead of hardcoded population defaults.
+     *
+     * Until KB-20 delivers these fields, the state values remain null and the
+     * detectors fall back to hardcoded thresholds (de-risked deployment).
+     */
+    @SuppressWarnings("unchecked")
+    private void extractPersonalizedTargets(Map<String, Object> payload, ClinicalStateSummary state) {
+        Object targetsObj = payload.get("kb20_personalized_targets");
+        if (targetsObj == null) return;
+
+        Map<String, Object> targets;
+        if (targetsObj instanceof Map) {
+            targets = (Map<String, Object>) targetsObj;
+        } else {
+            return;
+        }
+
+        Double fbgTarget = toDouble(targets.get("fbg_target"));
+        if (fbgTarget != null) state.setPersonalizedFBGTarget(fbgTarget);
+
+        Double hba1cTarget = toDouble(targets.get("hba1c_target"));
+        if (hba1cTarget != null) state.setPersonalizedHbA1cTarget(hba1cTarget);
+
+        Double sbpTarget = toDouble(targets.get("sbp_target"));
+        if (sbpTarget != null) state.setPersonalizedSBPTarget(sbpTarget);
+
+        Double egfrThreshold = toDouble(targets.get("egfr_threshold"));
+        if (egfrThreshold != null) state.setPersonalizedEGFRThreshold(egfrThreshold);
+
+        Double sbpKidneyThreshold = toDouble(targets.get("sbp_kidney_threshold"));
+        if (sbpKidneyThreshold != null) state.setPersonalizedSBPKidneyThreshold(sbpKidneyThreshold);
+
+        LOG.debug("Personalised targets updated for patient {}: FBG={}, HbA1c={}, SBP={}, eGFR={}, SBP-kidney={}",
+                state.getPatientId(), fbgTarget, hba1cTarget, sbpTarget, egfrThreshold, sbpKidneyThreshold);
     }
 
     private void emitDataAbsenceIfNeeded(ClinicalStateSummary state, Context ctx,
