@@ -164,7 +164,30 @@ public class Module1b_IngestionCanonicalizer {
     public static class OutboxValidationAndCanonicalization
             extends ProcessFunction<OutboxEnvelope, CanonicalEvent> {
 
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
+
+        // DLQ monitoring counters — exposed via Flink metrics → Prometheus
+        private transient org.apache.flink.metrics.Counter dlqTotal;
+        private transient org.apache.flink.metrics.Counter dlqNullEventData;
+        private transient org.apache.flink.metrics.Counter dlqNullPatientId;
+        private transient org.apache.flink.metrics.Counter dlqNullTimestamp;
+        private transient org.apache.flink.metrics.Counter dlqBadTimestamp;
+        private transient org.apache.flink.metrics.Counter dlqProcessingError;
+        private transient org.apache.flink.metrics.Counter canonicalizedTotal;
+
+        @Override
+        public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
+            var metrics = getRuntimeContext().getMetricGroup().addGroup("module1b_dlq");
+            dlqTotal = metrics.counter("dlq_events_total");
+            dlqNullEventData = metrics.counter("dlq_null_event_data");
+            dlqNullPatientId = metrics.counter("dlq_null_patient_id");
+            dlqNullTimestamp = metrics.counter("dlq_null_timestamp");
+            dlqBadTimestamp = metrics.counter("dlq_bad_timestamp");
+            dlqProcessingError = metrics.counter("dlq_processing_error");
+            canonicalizedTotal = getRuntimeContext().getMetricGroup()
+                .addGroup("module1b").counter("canonicalized_events_total");
+            LOG.info("DLQ monitoring counters registered");
+        }
 
         @Override
         public void processElement(OutboxEnvelope envelope, Context ctx, Collector<CanonicalEvent> out) {
@@ -174,6 +197,7 @@ public class Module1b_IngestionCanonicalizer {
                 // Validate: null eventData -> DLQ
                 if (data == null) {
                     LOG.warn("OutboxEnvelope {} has null event_data, routing to DLQ", envelope.getId());
+                    dlqTotal.inc(); dlqNullEventData.inc();
                     ctx.output(DLQ_OUTPUT_TAG, envelope);
                     return;
                 }
@@ -181,6 +205,7 @@ public class Module1b_IngestionCanonicalizer {
                 // Validate: null/blank patientId -> DLQ (Q7 fix)
                 if (data.getPatientId() == null || data.getPatientId().trim().isEmpty()) {
                     LOG.warn("OutboxEnvelope {} has null/blank patient_id, routing to DLQ", envelope.getId());
+                    dlqTotal.inc(); dlqNullPatientId.inc();
                     ctx.output(DLQ_OUTPUT_TAG, envelope);
                     return;
                 }
@@ -189,6 +214,7 @@ public class Module1b_IngestionCanonicalizer {
                 long eventTime;
                 if (data.getTimestamp() == null) {
                     LOG.warn("OutboxEnvelope {} has null timestamp, routing to DLQ", envelope.getId());
+                    dlqTotal.inc(); dlqNullTimestamp.inc();
                     ctx.output(DLQ_OUTPUT_TAG, envelope);
                     return;
                 }
@@ -197,6 +223,7 @@ public class Module1b_IngestionCanonicalizer {
                 } catch (Exception e) {
                     LOG.warn("OutboxEnvelope {} has unparseable timestamp '{}', routing to DLQ",
                         envelope.getId(), data.getTimestamp());
+                    dlqTotal.inc(); dlqBadTimestamp.inc();
                     ctx.output(DLQ_OUTPUT_TAG, envelope);
                     return;
                 }
@@ -229,7 +256,10 @@ public class Module1b_IngestionCanonicalizer {
                 if (obsType.contains("CGM")) {
                     payload.put("data_tier", "TIER_1_CGM");
                     payload.put("cgm_active", true);
-                } else if (sourceType.contains("WEARABLE") || obsType.contains("DEVICE")) {
+                } else if (sourceType.contains("WEARABLE") || obsType.contains("DEVICE")
+                        || obsType.contains("HEART_RATE") || obsType.contains("STEPS")
+                        || obsType.contains("SPO2") || obsType.contains("ACTIVITY")
+                        || obsType.contains("SLEEP")) {
                     payload.put("data_tier", "TIER_2_HYBRID");
                     payload.put("cgm_active", false);
                 } else {
@@ -247,6 +277,7 @@ public class Module1b_IngestionCanonicalizer {
                 CanonicalEvent canonical = CanonicalEvent.builder()
                     .id(data.getEventId() != null ? data.getEventId() : UUID.randomUUID().toString())
                     .patientId(data.getPatientId())
+                    .encounterId(data.getEncounterId())
                     .eventType(eventType)
                     .eventTime(eventTime)
                     .sourceSystem(SOURCE_SYSTEM)
@@ -258,11 +289,13 @@ public class Module1b_IngestionCanonicalizer {
                 LOG.debug("Canonicalized ingestion event: id={}, type={}, patient={}, data_tier={}",
                     canonical.getId(), eventType, data.getPatientId(), payload.get("data_tier"));
 
+                canonicalizedTotal.inc();
                 out.collect(canonical);
 
             } catch (Exception e) {
                 LOG.error("Unexpected error processing OutboxEnvelope {}: {}",
                     envelope.getId(), e.getMessage(), e);
+                dlqTotal.inc(); dlqProcessingError.inc();
                 ctx.output(DLQ_OUTPUT_TAG, envelope);
             }
         }
@@ -310,6 +343,10 @@ public class Module1b_IngestionCanonicalizer {
                 case "MEDICATION":
                     return EventType.MEDICATION_ORDERED;
 
+                case "MEDICATION_ADMINISTRATION":
+                case "MEDICATION_ADMINISTERED":
+                    return EventType.MEDICATION_ADMINISTERED;
+
                 case "PATIENT_REPORTED":
                     return EventType.PATIENT_REPORTED;
 
@@ -345,7 +382,7 @@ public class Module1b_IngestionCanonicalizer {
                 .setValueSerializationSchema(new CanonicalEventSerializer())
                 .build())
             .setTransactionalIdPrefix("module1b-ingestion-canonical")
-            .setDeliveryGuarantee(org.apache.flink.connector.base.DeliveryGuarantee.EXACTLY_ONCE)
+            .setDeliveryGuarantee(org.apache.flink.connector.base.DeliveryGuarantee.AT_LEAST_ONCE)
             .build();
     }
 
@@ -368,6 +405,7 @@ public class Module1b_IngestionCanonicalizer {
                 .setValueSerializationSchema(new SafeOutboxEnvelopeSerializer())
                 .build())
             .setTransactionalIdPrefix("module1b-dlq-errors")
+            .setDeliveryGuarantee(org.apache.flink.connector.base.DeliveryGuarantee.AT_LEAST_ONCE)
             .build();
     }
 

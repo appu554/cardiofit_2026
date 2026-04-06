@@ -17,7 +17,7 @@ import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.TypeHint;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.source.KafkaSource;
@@ -128,8 +128,8 @@ public class Module7_BPVariability {
         private transient ValueState<Double> previousArvSbp7d;
         private transient ValueState<String> previousDipClass;
 
-        // Flink 2.x: open(Configuration) is no longer overridable; omit @Override
-        public void open(Configuration params) {
+        @Override
+        public void open(OpenContext openContext) throws Exception {
             dailySummaries = getRuntimeContext().getMapState(
                 new MapStateDescriptor<>("daily_bp_30d", String.class, String.class));
             lastMorningSBP = getRuntimeContext().getState(

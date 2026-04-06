@@ -257,6 +257,9 @@ public class Module13_ClinicalStateSynchroniser
             case "module12b":
                 updateFromInterventionDelta(payload, state, processingTime);
                 return "module12b";
+            case "module8":
+                updateFromComorbidityAlert(payload, state);
+                return "module8";
             case "enriched":
                 updateFromLabResult(payload, state);
                 return "enriched";
@@ -365,6 +368,22 @@ public class Module13_ClinicalStateSynchroniser
         while (state.getRecentInterventionDeltas().size() > 10) {
             state.getRecentInterventionDeltas().remove(0);
         }
+    }
+
+    /** PIPE-7: Update CID alert state from Module 8 comorbidity alerts */
+    private void updateFromComorbidityAlert(Map<String, Object> payload, ClinicalStateSummary state) {
+        String ruleId = payload.get("ruleId") != null ? payload.get("ruleId").toString() : "";
+        String severity = payload.get("severity") != null ? payload.get("severity").toString() : "";
+
+        if (!ruleId.isEmpty()) {
+            state.getActiveCIDRuleIds().add(ruleId);
+        }
+        if ("HALT".equals(severity)) {
+            state.setActiveCIDHaltCount(state.getActiveCIDHaltCount() + 1);
+        } else if ("PAUSE".equals(severity)) {
+            state.setActiveCIDPauseCount(state.getActiveCIDPauseCount() + 1);
+        }
+        state.setLastCIDAlertTimestamp(System.currentTimeMillis());
     }
 
     private void updateFromLabResult(Map<String, Object> payload, ClinicalStateSummary state) {

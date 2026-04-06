@@ -383,6 +383,14 @@ public class MLPrediction implements Serializable {
         return null;
     }
 
+    /** PIPE-5: Set model version hash for audit and version pinning */
+    public void setModelVersion(String version) {
+        if (modelMetadata == null) {
+            modelMetadata = new java.util.HashMap<>();
+        }
+        modelMetadata.put("model_version", version);
+    }
+
     // ========================================
     // Monitoring and Validation Methods
     // ========================================

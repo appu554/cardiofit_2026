@@ -28,6 +28,12 @@ public class ClinicalStateSummary implements Serializable {
     // Module 12b: Completed Intervention Deltas
     private List<InterventionDeltaSummary> recentInterventionDeltas = new ArrayList<>();
 
+    // PIPE-7: Module 8 CID active alerts — severity counts and active rule IDs
+    private int activeCIDHaltCount;
+    private int activeCIDPauseCount;
+    private Set<String> activeCIDRuleIds = new HashSet<>();
+    private long lastCIDAlertTimestamp;
+
     // --- Computed by Module 13 ---
     private CKMRiskVelocity lastComputedVelocity;
     private double dataCompletenessScore;
@@ -82,6 +88,15 @@ public class ClinicalStateSummary implements Serializable {
     public void setChannel(String v) { this.channel = v; }
     public Map<String, InterventionWindowSummary> getActiveInterventions() { return activeInterventions; }
     public List<InterventionDeltaSummary> getRecentInterventionDeltas() { return recentInterventionDeltas; }
+    // PIPE-7: CID state accessors
+    public int getActiveCIDHaltCount() { return activeCIDHaltCount; }
+    public void setActiveCIDHaltCount(int v) { this.activeCIDHaltCount = v; }
+    public int getActiveCIDPauseCount() { return activeCIDPauseCount; }
+    public void setActiveCIDPauseCount(int v) { this.activeCIDPauseCount = v; }
+    public Set<String> getActiveCIDRuleIds() { return activeCIDRuleIds; }
+    public long getLastCIDAlertTimestamp() { return lastCIDAlertTimestamp; }
+    public void setLastCIDAlertTimestamp(long v) { this.lastCIDAlertTimestamp = v; }
+    public boolean hasActiveCIDHalt() { return activeCIDHaltCount > 0; }
     public CKMRiskVelocity getLastComputedVelocity() { return lastComputedVelocity; }
     public void setLastComputedVelocity(CKMRiskVelocity v) { this.lastComputedVelocity = v; }
     public double getDataCompletenessScore() { return dataCompletenessScore; }

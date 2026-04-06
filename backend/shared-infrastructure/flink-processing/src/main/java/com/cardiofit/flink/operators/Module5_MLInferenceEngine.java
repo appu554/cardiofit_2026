@@ -44,6 +44,8 @@ public class Module5_MLInferenceEngine
 
     // ONNX models (transient — initialized in open())
     private transient Map<String, ONNXModelContainer> modelSessions;
+    // PIPE-5: Model version tracking — hash per category for deterministic inference
+    private transient Map<String, String> modelHashes;
 
     private static final String[] CATEGORIES = {
         "readmission", "sepsis", "deterioration", "fall", "mortality"
@@ -71,22 +73,44 @@ public class Module5_MLInferenceEngine
 
         // Load ONNX models (graceful degradation — Section 10)
         modelSessions = new HashMap<>();
+        modelHashes = new HashMap<>();
         String modelBasePath = System.getenv("ML_MODEL_PATH");
         if (modelBasePath == null) modelBasePath = "/opt/flink/models";
+
+        // PIPE-5: Expected model hashes from config (env var format: SEPSIS_MODEL_HASH=abc123)
+        Map<String, String> expectedHashes = new HashMap<>();
+        for (String cat : CATEGORIES) {
+            String envKey = cat.toUpperCase() + "_MODEL_HASH";
+            String hash = System.getenv(envKey);
+            if (hash != null && !hash.isEmpty()) expectedHashes.put(cat, hash);
+        }
 
         for (String category : CATEGORIES) {
             String modelPath = modelBasePath + "/" + category + "/model.onnx";
             if (new File(modelPath).exists()) {
                 try {
+                    // PIPE-5: Compute SHA-256 hash of model file
+                    String actualHash = computeModelHash(modelPath);
+                    modelHashes.put(category, actualHash);
+
+                    // Verify against expected hash if configured
+                    String expected = expectedHashes.get(category);
+                    if (expected != null && !expected.equals(actualHash)) {
+                        LOG.error("ONNX model hash mismatch for {}: expected={}, actual={} — "
+                            + "skipping model to prevent inconsistent predictions",
+                            category, expected, actualHash);
+                        continue;
+                    }
+
                     List<String> featureNames = new ArrayList<>();
                     for (int i = 0; i < Module5FeatureExtractor.FEATURE_COUNT; i++) {
                         featureNames.add("f" + i);
                     }
                     ONNXModelContainer model = ONNXModelContainer.builder()
-                        .modelId(category + "_v1")
+                        .modelId(category + "_" + actualHash.substring(0, 8))
                         .modelName(category + " predictor")
                         .modelType(mapCategoryToModelType(category))
-                        .modelVersion("1.0.0")
+                        .modelVersion(actualHash.substring(0, 8))
                         .inputFeatureNames(featureNames)
                         .config(ModelConfig.builder()
                             .predictionThreshold(0.5)
@@ -97,7 +121,8 @@ public class Module5_MLInferenceEngine
                         .build();
                     model.initialize();
                     modelSessions.put(category, model);
-                    LOG.info("Loaded ONNX model for {} from {}", category, modelPath);
+                    LOG.info("Loaded ONNX model for {} from {} [hash={}]",
+                        category, modelPath, actualHash.substring(0, 12));
                 } catch (Exception e) {
                     LOG.warn("Failed to load model for {}: {}", category, e.getMessage());
                 }
@@ -229,6 +254,12 @@ public class Module5_MLInferenceEngine
                 rawPrediction.setRiskLevel(
                     Module5ClinicalScoring.classifyRiskLevel(calibrated, category));
 
+                // PIPE-5: Include model version hash for audit trail
+                String hash = modelHashes.get(category);
+                if (hash != null) {
+                    rawPrediction.setModelVersion(hash.substring(0, 8));
+                }
+
                 // Store input features for audit
                 rawPrediction.setInputFeatures(features);
 
@@ -286,14 +317,17 @@ public class Module5_MLInferenceEngine
             state.setLatestVitals(vitals);
         }
 
-        // Labs — extract numeric values with null safety (Gap 1)
+        // Labs — key by clinicalConcept (KB-7 canonical name, e.g. "LACTATE")
+        // Gap 6 fix: labType contains LOINC codes (e.g. "2524-7") but
+        // Module5FeatureExtractor looks up by friendly name ("lactate").
+        // clinicalConcept is pre-resolved by the ingestion service via KB-7.
         if (ps.getRecentLabs() != null) {
             Map<String, Double> labs = new HashMap<>();
             for (Map.Entry<String, LabResult> e : ps.getRecentLabs().entrySet()) {
                 LabResult labResult = e.getValue();
                 if (labResult != null && labResult.getValue() != null) {
-                    String key = labResult.getLabType() != null
-                        ? labResult.getLabType().toLowerCase() : e.getKey();
+                    String key = labResult.getClinicalConcept() != null
+                        ? labResult.getClinicalConcept().toLowerCase() : e.getKey();
                     labs.put(key, labResult.getValue());
                 }
             }
@@ -353,6 +387,24 @@ public class Module5_MLInferenceEngine
             case "mortality" -> ONNXModelContainer.ModelType.MORTALITY_PREDICTION;
             default -> ONNXModelContainer.ModelType.CLINICAL_DETERIORATION;
         };
+    }
+
+    /** PIPE-5: Compute SHA-256 hash of ONNX model file for version pinning */
+    private static String computeModelHash(String modelPath) throws Exception {
+        java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+        try (java.io.InputStream is = new java.io.FileInputStream(modelPath)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = is.read(buffer)) != -1) {
+                digest.update(buffer, 0, bytesRead);
+            }
+        }
+        byte[] hashBytes = digest.digest();
+        StringBuilder sb = new StringBuilder();
+        for (byte b : hashBytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     @Override

@@ -1,0 +1,47 @@
+groups:
+  - name: flink_dlq_alerts
+    rules:
+      # P0: Any DLQ event means clinical data is being silently dropped
+      - alert: FlinkDLQEventsDetected
+        expr: increase(flink_taskmanager_job_task_operator_module1b_dlq_dlq_events_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: clinical-engineering
+        annotations:
+          summary: "Flink Module 1b is routing events to Dead Letter Queue"
+          description: >
+            {{ $value }} events routed to DLQ in the last 5 minutes.
+            This means clinical data (labs, vitals, device readings) is being
+            silently dropped and will NOT reach downstream modules.
+            Patient safety impact: missed alerts, incomplete clinical state.
+          runbook: "1. Check DLQ topic depth: kafka-consumer-groups --describe --group flink-module1b-ingestion"
+
+      # High DLQ rate — systematic data quality issue
+      - alert: FlinkDLQHighRate
+        expr: >
+          rate(flink_taskmanager_job_task_operator_module1b_dlq_dlq_events_total[5m])
+          / rate(flink_taskmanager_job_task_operator_module1b_canonicalized_events_total[5m])
+          > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          team: clinical-engineering
+        annotations:
+          summary: "DLQ rate exceeds 1% of ingested events"
+          description: >
+            DLQ rejection rate is {{ $value | humanizePercentage }}.
+            Likely cause: upstream schema change or data quality regression.
+
+      # Specific rejection reasons for debugging
+      - alert: FlinkDLQNullPatientId
+        expr: increase(flink_taskmanager_job_task_operator_module1b_dlq_dlq_null_patient_id[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: data-engineering
+        annotations:
+          summary: "Multiple events with null patient_id reaching Module 1b"
+          description: >
+            {{ $value }} events with null/blank patient_id in the last 15 minutes.
+            Source: ingestion service is emitting events without patient context.

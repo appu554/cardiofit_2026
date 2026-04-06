@@ -48,6 +48,12 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
     private transient ObjectMapper objectMapper;
     private transient io.github.resilience4j.circuitbreaker.CircuitBreaker neo4jCircuitBreaker;
 
+    // PIPE-2: Local FHIR data cache — fallback when KB-20/FHIR is unreachable
+    private static final long FHIR_CACHE_TTL_MS = 3_600_000L; // 1 hour
+    private transient java.util.concurrent.ConcurrentHashMap<String, CachedFHIRData> fhirCache;
+    private transient org.apache.flink.metrics.Counter fhirCacheHits;
+    private transient org.apache.flink.metrics.Counter fhirCacheMisses;
+
     // Enrichment configuration
     private final boolean enableFhirEnrichment;
     private final boolean enableNeo4jEnrichment;
@@ -70,19 +76,24 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
         if (enableFhirEnrichment) {
             try {
                 String credentialsPath = KafkaConfigLoader.getGoogleCloudCredentialsPath();
-                LOG.info("Loading Google Cloud credentials from: {}", credentialsPath);
+                String projectId = KafkaConfigLoader.getGoogleCloudProjectId();
+                String location = KafkaConfigLoader.getGoogleCloudLocation();
+                String datasetId = KafkaConfigLoader.getGoogleCloudDatasetId();
+                String fhirStoreId = KafkaConfigLoader.getGoogleCloudFhirStoreId();
+                LOG.info("[FHIR-INIT] credentials={}, project={}, location={}, dataset={}, fhirStore={}",
+                    credentialsPath, projectId, location, datasetId, fhirStoreId);
 
-                fhirClient = new GoogleFHIRClient(
-                    KafkaConfigLoader.getGoogleCloudProjectId(),
-                    KafkaConfigLoader.getGoogleCloudLocation(),
-                    KafkaConfigLoader.getGoogleCloudDatasetId(),
-                    KafkaConfigLoader.getGoogleCloudFhirStoreId(),
-                    credentialsPath
-                );
+                // Check if credentials file exists
+                java.io.File credFile = new java.io.File(credentialsPath);
+                LOG.info("[FHIR-INIT] Credentials file exists={}, size={} bytes",
+                    credFile.exists(), credFile.exists() ? credFile.length() : -1);
+
+                fhirClient = new GoogleFHIRClient(projectId, location, datasetId, fhirStoreId, credentialsPath);
                 fhirClient.initialize();
-                LOG.info("GoogleFHIRClient initialized successfully");
+                LOG.info("[FHIR-INIT] GoogleFHIRClient initialized successfully");
             } catch (Exception e) {
-                LOG.error("Failed to initialize FHIR client", e);
+                LOG.error("[FHIR-INIT] Failed to initialize FHIR client: {} - {}",
+                    e.getClass().getSimpleName(), e.getMessage(), e);
                 // Continue without FHIR enrichment
             }
         }
@@ -121,6 +132,15 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
 
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
+
+        // PIPE-2: Initialize FHIR fallback cache
+        fhirCache = new java.util.concurrent.ConcurrentHashMap<>();
+        var metrics = getRuntimeContext().getMetricGroup().addGroup("module2_fhir_cache");
+        fhirCacheHits = metrics.counter("cache_hits");
+        fhirCacheMisses = metrics.counter("cache_misses");
+        getRuntimeContext().getMetricGroup().addGroup("module2_fhir_cache")
+            .gauge("cache_size", () -> (long) fhirCache.size());
+        LOG.info("FHIR fallback cache initialized (TTL: {}ms)", FHIR_CACHE_TTL_MS);
     }
 
     @Override
@@ -209,18 +229,53 @@ public class PatientContextEnricher extends RichAsyncFunction<EnrichedPatientCon
                     state.setFhirMedications(medications);
                 }
 
-                // Note: GoogleFHIRClient doesn't have direct getAllergiesAsync or getCareTeamAsync
-                // These would need to be parsed from AllergyIntolerance and CareTeam FHIR resources
-                // For Phase 1, we'll leave these for Phase 2 enhancement
-                // Allergies and care team can be extracted from patient/condition resources later
-
                 LOG.debug("FHIR enrichment complete for patient {}", patientId);
+
+                // PIPE-2: Cache successful FHIR data for fallback
+                fhirCache.put(patientId, new CachedFHIRData(
+                    state.getDemographics(), state.getChronicConditions(),
+                    state.getFhirMedications(), System.currentTimeMillis()));
 
             } catch (Exception e) {
                 LOG.error("FHIR data fetch failed for patient {}", patientId, e);
-                // Partial enrichment is acceptable
+
+                // PIPE-2: Serve from cache on failure
+                CachedFHIRData cached = fhirCache.get(patientId);
+                if (cached != null && !cached.isExpired(FHIR_CACHE_TTL_MS)) {
+                    LOG.info("Serving cached FHIR data for patient {} (age: {}ms)",
+                        patientId, System.currentTimeMillis() - cached.cachedAt);
+                    if (cached.demographics != null) state.setDemographics(cached.demographics);
+                    if (cached.conditions != null) state.setChronicConditions(cached.conditions);
+                    if (cached.medications != null) state.setFhirMedications(cached.medications);
+                    fhirCacheHits.inc();
+                } else {
+                    LOG.warn("No cached FHIR data for patient {} — enrichment incomplete", patientId);
+                    fhirCacheMisses.inc();
+                    // Evict expired entry
+                    if (cached != null) fhirCache.remove(patientId);
+                }
             }
         });
+    }
+
+    /** PIPE-2: Immutable cache entry for FHIR patient data with TTL */
+    private static class CachedFHIRData {
+        final PatientDemographics demographics;
+        final List<Condition> conditions;
+        final List<Medication> medications;
+        final long cachedAt;
+
+        CachedFHIRData(PatientDemographics demographics, List<Condition> conditions,
+                       List<Medication> medications, long cachedAt) {
+            this.demographics = demographics;
+            this.conditions = conditions;
+            this.medications = medications;
+            this.cachedAt = cachedAt;
+        }
+
+        boolean isExpired(long ttlMs) {
+            return System.currentTimeMillis() - cachedAt > ttlMs;
+        }
     }
 
     /**

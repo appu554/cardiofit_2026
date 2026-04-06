@@ -2,7 +2,7 @@ package com.cardiofit.stream.patterns;
 
 import org.apache.flink.api.common.state.*;
 import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.streaming.api.functions.co.KeyedBroadcastProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
@@ -54,8 +54,8 @@ public class ClinicalPathwayAdherenceFunction
     private transient ListState<PathwayEvent> pathwayHistory;
     private transient ValueState<Long> lastUpdateTime;
 
-    // @Override - Removed for Flink 2.x
-    public void open(Configuration config) {
+    @Override
+    public void open(OpenContext openContext) throws Exception {
         // Initialize per-patient state stores
         patientContextState = getRuntimeContext().getState(
             new ValueStateDescriptor<>("patient-context", PatientContext.class));

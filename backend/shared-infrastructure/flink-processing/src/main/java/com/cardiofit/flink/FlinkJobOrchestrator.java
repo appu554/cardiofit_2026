@@ -241,8 +241,8 @@ public class FlinkJobOrchestrator {
             "Kafka Source: Alert Acknowledgments"
         ).keyBy(AlertAcknowledgment::getPatientId);
 
-        // TODO: Connect ackStream when Module6 migrates to KeyedCoProcessFunction
         SingleOutputStreamOperator<ClinicalAction> actions = eventStream
+            .connect(ackStream)
             .process(new Module6_ClinicalActionEngine())
             .uid("Module6 Clinical Action Engine")
             .name("Module6 Clinical Action Engine");
@@ -1095,6 +1095,15 @@ public class FlinkJobOrchestrator {
                 .setDeserializer(new SourceTaggingDeserializer("enriched", EventType.LAB_RESULT))
                 .build();
 
+        // PIPE-7: Source 8: Comorbidity Alerts (Module 8) — CID state for renal velocity
+        KafkaSource<CanonicalEvent> cidSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.ALERTS_COMORBIDITY_INTERACTIONS.getTopicName())
+                .setGroupId("flink-module13-comorbidity-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializer(new SourceTaggingDeserializer("module8", EventType.ADVERSE_EVENT))
+                .build();
+
         // Create streams with watermark strategy
         WatermarkStrategy<CanonicalEvent> watermark = WatermarkStrategy
                 .<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
@@ -1114,12 +1123,14 @@ public class FlinkJobOrchestrator {
                 "Kafka Source: Intervention Deltas (Module 13)");
         DataStream<CanonicalEvent> enrichedStream = env.fromSource(enrichedSource, watermark,
                 "Kafka Source: Enriched Patient Events (Module 13)");
+        DataStream<CanonicalEvent> cidStream = env.fromSource(cidSource, watermark,
+                "Kafka Source: Comorbidity Alerts (Module 13)");
 
-        // Union all 7 sources and process
+        // Union all 8 sources and process
         Module13_ClinicalStateSynchroniser processor = new Module13_ClinicalStateSynchroniser();
 
         SingleOutputStreamOperator<ClinicalStateChangeEvent> stateChanges = bpVarStream
-                .union(engagementStream, mealStream, fitnessStream, windowStream, deltaStream, enrichedStream)
+                .union(engagementStream, mealStream, fitnessStream, windowStream, deltaStream, enrichedStream, cidStream)
                 .keyBy(CanonicalEvent::getPatientId)
                 .process(processor)
                 .uid("module13-clinical-state-synchroniser")
