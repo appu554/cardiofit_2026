@@ -15,11 +15,13 @@ public final class Module6ActionClassifier {
     private Module6ActionClassifier() {} // static utility
 
     public static ActionTier classify(ClinicalEvent event) {
+        int news2 = event.getNews2Score();
+        boolean news2Available = (news2 != ClinicalEvent.NEWS2_ABSENT);
 
         // ══ HALT conditions (immediate danger) ══
 
-        // Vitals-based
-        if (event.getNews2Score() >= 10) return ActionTier.HALT;
+        // Vitals-based (only when NEWS2 was actually computed)
+        if (news2Available && news2 >= 10) return ActionTier.HALT;
         if (event.getQsofaScore() >= 2 && event.hasSepsisIndicators()) return ActionTier.HALT;
 
         // Lab emergencies (from active alerts — invisible to vitals scoring)
@@ -40,7 +42,7 @@ public final class Module6ActionClassifier {
 
         // ══ PAUSE conditions (needs physician review) ══
 
-        if (event.getNews2Score() >= 7) return ActionTier.PAUSE;
+        if (news2Available && news2 >= 7) return ActionTier.PAUSE;
         if (event.getQsofaScore() >= 1) return ActionTier.PAUSE;
 
         if (event.hasActiveAlert("AKI_RISK", "HIGH")) return ActionTier.PAUSE;
@@ -58,7 +60,7 @@ public final class Module6ActionClassifier {
 
         // ══ SOFT_FLAG conditions (advisory) ══
 
-        if (event.getNews2Score() >= 5) return ActionTier.SOFT_FLAG;
+        if (news2Available && news2 >= 5) return ActionTier.SOFT_FLAG;
         if (event.hasActiveAlert("AKI_RISK", "MODERATE")) return ActionTier.SOFT_FLAG;
         if (event.hasAnyPredictionAbove(0.25)) return ActionTier.SOFT_FLAG;
         if (event.hasPatternWithSeverity("MODERATE")) return ActionTier.SOFT_FLAG;

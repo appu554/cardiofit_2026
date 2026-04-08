@@ -69,7 +69,7 @@ public class Guideline implements Serializable {
         private static final long serialVersionUID = 1L;
         private String journal;
         private Integer year;
-        private Integer volume;
+        private String volume;     // String to support "25 Suppl 2" etc.
         private String issue;  // Changed from Integer to String to support "Suppl 2", "1-2" etc
         private String pages;
         private String doi;
@@ -82,8 +82,8 @@ public class Guideline implements Serializable {
         public void setJournal(String journal) { this.journal = journal; }
         public Integer getYear() { return year; }
         public void setYear(Integer year) { this.year = year; }
-        public Integer getVolume() { return volume; }
-        public void setVolume(Integer volume) { this.volume = volume; }
+        public String getVolume() { return volume; }
+        public void setVolume(String volume) { this.volume = volume; }
         public String getIssue() { return issue; }
         public void setIssue(String issue) { this.issue = issue; }
         public String getPages() { return pages; }

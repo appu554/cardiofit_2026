@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -83,7 +83,7 @@ public class HRWindow implements Serializable {
     }
 
     public Map<ActivityIntensityZone, Long> computeZoneDistribution() {
-        Map<ActivityIntensityZone, Long> zones = new EnumMap<>(ActivityIntensityZone.class);
+        Map<ActivityIntensityZone, Long> zones = new HashMap<>();
         for (ActivityIntensityZone z : ActivityIntensityZone.values()) {
             zones.put(z, 0L);
         }

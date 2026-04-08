@@ -22,9 +22,9 @@
 #   6. Run E2E:
 #      KAFKA_BOOTSTRAP=localhost:9092 bash scripts/e2e-module1-module2-checklist.sh
 #
-# Memory budget (~3.5 GB total):
-#   JobManager:  1.2 GB
-#   TaskManager: 2.0 GB (8 slots, enough for 3 modules at parallelism=2)
+# Memory budget (~2.5 GB total):
+#   JobManager:  768 MB
+#   TaskManager: 2.0 GB (9 slots — one per job, all share single TaskManager)
 # =============================================================================
 
 services:
@@ -60,8 +60,8 @@ services:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         jobmanager.rpc.port: 6123
-        jobmanager.memory.process.size: 1200m
-        taskmanager.numberOfTaskSlots: 48
+        jobmanager.memory.process.size: 768m
+        taskmanager.numberOfTaskSlots: 16
         parallelism.default: 1
         state.checkpoints.dir: file:///tmp/flink-checkpoints
         state.savepoints.dir: file:///tmp/flink-savepoints
@@ -95,17 +95,24 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2500m
+          memory: 2200m
     environment:
       KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
       USE_GOOGLE_HEALTHCARE_API: "false"
       GOOGLE_APPLICATION_CREDENTIALS: "/dev/null"
       DOCKER_CONTAINER: "true"
+
+      # Module 13 feature flags (E2E: enabled, no KB-20 writeback)
+      MODULE13_ENABLED: "true"
+      MODULE13_DRY_RUN: "false"
+      MODULE13_KB20_WRITEBACK_ENABLED: "false"
+      MODULE13_PERSONALIZED_TARGETS_ENABLED: "false"
+
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         jobmanager.rpc.port: 6123
-        taskmanager.memory.process.size: 2048m
-        taskmanager.numberOfTaskSlots: 48
+        taskmanager.memory.process.size: 2g
+        taskmanager.numberOfTaskSlots: 16
         parallelism.default: 1
     volumes:
       - ./target:/opt/flink/usrlib
@@ -114,7 +121,7 @@ services:
       - cardiofit-lite
 
   # ---------------------------------------------------------------------------
-  # Job Submitter — submits Modules 1, 1b, 2, 3, 4 (one-shot container)
+  # Job Submitter — submits Modules 7→13 (8 jobs, one slot each)
   # ---------------------------------------------------------------------------
   flink-submitter:
     image: flink:2.1-java17
@@ -158,15 +165,18 @@ services:
           sleep 5
         }
 
-        submit "Module 1:  Ingestion & Gateway"      "ingestion-only"
-        submit "Module 1b: Ingestion Canonicalizer"   "module1b-canonicalizer"
-        submit "Module 2:  Context Assembly"          "context-assembly"
-        submit "Module 3:  Comprehensive CDS"         "comprehensive-cds"
-        submit "Module 4:  Pattern Detection"         "pattern-detection"
+        submit "Module 7:   BP Variability Engine"     "module7"
+        submit "Module 8:   Comorbidity Interaction"   "module8"
+        submit "Module 9:   Engagement Monitor"        "module9"
+        submit "Module 10:  Meal Response Correlator"  "module10"
+        submit "Module 10b: Meal Pattern Aggregator"   "module10b"
+        submit "Module 11:  Activity Response"         "module11"
+        submit "Module 11b: Fitness Pattern Aggregator" "module11b"
+        submit "Module 13:  Clinical State Sync"       "clinical-state-sync"
 
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "All 5 modules submitted. Check Flink UI: http://localhost:8181"
+        echo "All 8 modules (7→13) submitted. Check Flink UI: http://localhost:8181"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
         # List running jobs

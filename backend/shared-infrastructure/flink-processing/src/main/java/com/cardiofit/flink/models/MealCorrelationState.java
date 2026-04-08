@@ -32,6 +32,13 @@ public class MealCorrelationState implements Serializable {
     @JsonProperty("patientId")
     private String patientId;
 
+    /**
+     * Patient-level data tier — legacy field retained for serialization compatibility.
+     * Since the per-session tier fix, the authoritative tier for each meal record is
+     * computed by {@code MealSession.computeSessionTier()}, not this field.
+     * Module 10b weekly summaries use the worst (highest ordinal) tier across the
+     * week's records. This field is still initialized to TIER_3_SMBG as a safe default.
+     */
     @JsonProperty("dataTier")
     private DataTier dataTier;
 
@@ -74,7 +81,6 @@ public class MealCorrelationState implements Serializable {
         session.mealPayload = mealPayload != null ? new HashMap<>(mealPayload) : new HashMap<>();
         session.glucoseWindow = new GlucoseWindow();
         session.glucoseWindow.setWindowOpenTime(mealTimestamp);
-        session.glucoseWindow.setDataTier(dataTier);
         session.bpWindow = new BPWindow();
 
         // Retroactive pre-meal BP: attach if within 60 min

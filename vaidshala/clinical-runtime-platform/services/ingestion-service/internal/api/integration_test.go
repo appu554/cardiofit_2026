@@ -172,33 +172,6 @@ func TestIntegration_PostAppCheckin(t *testing.T) {
 	assert.Equal(t, float64(2), resp["processed"])
 }
 
-func TestIntegration_PostHPIIngest(t *testing.T) {
-	logger, _ := zap.NewDevelopment()
-	cfg := testConfig()
-	server := NewServer(cfg, nil, nil, nil, logger)
-
-	observations := []map[string]interface{}{
-		{
-			"id":               uuid.New().String(),
-			"patient_id":       uuid.New().String(),
-			"tenant_id":        uuid.New().String(),
-			"source_type":      "HPI",
-			"observation_type": "HPI",
-			"loinc_code":       "1558-6",
-			"value":            180.0,
-			"unit":             "mg/dL",
-			"timestamp":        "2026-03-21T10:00:00Z",
-		},
-	}
-	bodyBytes, _ := json.Marshal(observations)
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/internal/hpi", bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	server.Router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusCreated, w.Code)
-}
 
 func TestIntegration_DLQListEmpty(t *testing.T) {
 	logger, _ := zap.NewDevelopment()

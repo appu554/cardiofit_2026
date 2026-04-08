@@ -10,10 +10,10 @@ import (
 func TestCanonicalObservation_SourceTypes(t *testing.T) {
 	sources := []SourceType{
 		SourceEHR, SourceABDM, SourceLab,
-		SourcePatientReported, SourceHPI, SourceDevice, SourceWearable,
+		SourcePatientReported, SourceDevice, SourceWearable,
 	}
-	if len(sources) != 7 {
-		t.Errorf("expected 7 source types, got %d", len(sources))
+	if len(sources) != 6 {
+		t.Errorf("expected 6 source types, got %d", len(sources))
 	}
 }
 

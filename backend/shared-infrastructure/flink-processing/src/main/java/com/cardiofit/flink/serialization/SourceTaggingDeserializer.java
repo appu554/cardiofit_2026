@@ -58,7 +58,7 @@ public class SourceTaggingDeserializer implements KafkaRecordDeserializationSche
             String patientId = extractString(raw, "patient_id", "patientId");
 
             long eventTime = extractLong(raw, "event_time", "eventTime", "timestamp",
-                    "processing_timestamp", "observation_start_ms");
+                    "processing_timestamp", "observation_start_ms", "computed_at");
 
             EventType eventType = defaultEventType;
             String typeStr = extractString(raw, "event_type", "eventType");

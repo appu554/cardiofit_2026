@@ -190,21 +190,29 @@ public class Module2_Enhanced {
             fhirClient.initialize();
             LOG.info("GoogleFHIRClient initialized successfully");
 
-            // Initialize Neo4j client using same method as old Module2
-            String neo4jUri = com.cardiofit.flink.utils.KafkaConfigLoader.getNeo4jUri();
-            String neo4jUser = System.getenv().getOrDefault("NEO4J_USER", "neo4j");
+            // Initialize Neo4j client — graceful degradation if credentials missing
             String neo4jPassword = System.getenv("NEO4J_PASSWORD");
             if (neo4jPassword == null || neo4jPassword.isEmpty()) {
-                throw new IllegalStateException("NEO4J_PASSWORD environment variable is required but not set");
+                LOG.warn("NEO4J_PASSWORD not set — Neo4j enrichment disabled (circuit breaker mode). "
+                    + "Graph data (careTeam, riskFactors, carePathways) will be empty.");
+                neo4jClient = null;
+            } else {
+                try {
+                    String neo4jUri = com.cardiofit.flink.utils.KafkaConfigLoader.getNeo4jUri();
+                    String neo4jUser = System.getenv().getOrDefault("NEO4J_USER", "neo4j");
+                    LOG.info("Connecting to Neo4j at: {}", neo4jUri);
+                    neo4jClient = new Neo4jGraphClient(neo4jUri, neo4jUser, neo4jPassword);
+                    neo4jClient.initialize();
+                    LOG.info("Neo4jGraphClient initialized successfully");
+                } catch (Exception e) {
+                    LOG.warn("Neo4j initialization failed — enrichment disabled: {}", e.getMessage());
+                    neo4jClient = null;
+                }
             }
-            LOG.info("Connecting to Neo4j at: {}", neo4jUri);
-
-            neo4jClient = new Neo4jGraphClient(neo4jUri, neo4jUser, neo4jPassword);
-            neo4jClient.initialize();
-            LOG.info("Neo4jGraphClient initialized successfully");
 
             objectMapper = new ObjectMapper();
             objectMapper.registerModule(new JavaTimeModule());
+            objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         }
 
         @Override
@@ -1015,17 +1023,25 @@ public class Module2_Enhanced {
         String kafkaBootstrapServers = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092");
 
         // Custom deserializer for CanonicalEvent — crash-safe (null-on-failure)
+        // NOTE: ObjectMapper must be transient because JavaTimeModule contains
+        // DateTimeFormatter instances which are NOT java.io.Serializable.
+        // Flink serializes DeserializationSchema for cluster distribution.
         org.apache.flink.api.common.serialization.DeserializationSchema<CanonicalEvent> deserializer =
             new org.apache.flink.api.common.serialization.DeserializationSchema<CanonicalEvent>() {
-                private final ObjectMapper mapper = new ObjectMapper();
-                {
-                    mapper.registerModule(new JavaTimeModule());
+                private transient ObjectMapper mapper;
+
+                private ObjectMapper getMapper() {
+                    if (mapper == null) {
+                        mapper = new ObjectMapper();
+                        mapper.registerModule(new JavaTimeModule());
+                    }
+                    return mapper;
                 }
 
                 @Override
                 public CanonicalEvent deserialize(byte[] message) throws java.io.IOException {
                     try {
-                        return mapper.readValue(message, CanonicalEvent.class);
+                        return getMapper().readValue(message, CanonicalEvent.class);
                     } catch (Exception e) {
                         LOG.error("Failed to deserialize CanonicalEvent ({} bytes), skipping: {}",
                             message != null ? message.length : 0, e.getMessage());
@@ -1884,6 +1900,7 @@ public class Module2_Enhanced {
             String patientId = canonical.getPatientId();
             long eventTime = canonical.getEventTime();
             EventType eventType = canonical.getEventType();
+            String sourceSystem = canonical.getSourceSystem();
 
             if (patientId == null) {
                 LOG.warn("Received CanonicalEvent with null patientId, skipping");
@@ -1922,6 +1939,8 @@ public class Module2_Enhanced {
                             vitalEvent.setPatientId(patientId);
                             vitalEvent.setEventTime(eventTime);
                             vitalEvent.setPayload(vitalsPayload);
+                            vitalEvent.setEncounterId(canonical.getEncounterId());
+                            vitalEvent.setSource(sourceSystem);
                             out.collect(vitalEvent);
                             LOG.debug("Emitted VITAL_SIGN GenericEvent from nested structure");
                         }
@@ -1941,6 +1960,8 @@ public class Module2_Enhanced {
                                 labEvent.setPatientId(patientId);
                                 labEvent.setEventTime(eventTime);
                                 labEvent.setPayload(labPayload);
+                                labEvent.setEncounterId(canonical.getEncounterId());
+                                labEvent.setSource(sourceSystem);
                                 out.collect(labEvent);
                                 LOG.debug("Emitted LAB_RESULT GenericEvent from nested structure");
                             }
@@ -1965,6 +1986,8 @@ public class Module2_Enhanced {
                                 medEvent.setPatientId(patientId);
                                 medEvent.setEventTime(eventTime);
                                 medEvent.setPayload(medPayload);
+                                medEvent.setEncounterId(canonical.getEncounterId());
+                                medEvent.setSource(sourceSystem);
                                 out.collect(medEvent);
                                 LOG.debug("Emitted {} GenericEvent from nested structure", medEventType);
                             }
@@ -1993,6 +2016,8 @@ public class Module2_Enhanced {
                         vitalEvent.setPatientId(patientId);
                         vitalEvent.setEventTime(eventTime);
                         vitalEvent.setPayload(vitalsPayload);
+                        vitalEvent.setEncounterId(canonical.getEncounterId());
+                        vitalEvent.setSource(sourceSystem);
                         out.collect(vitalEvent);
                         LOG.info("Emitted VITAL_SIGN GenericEvent from flat payload for patient {}", patientId);
                         break;
@@ -2008,6 +2033,8 @@ public class Module2_Enhanced {
                             labEvent.setPatientId(patientId);
                             labEvent.setEventTime(eventTime);
                             labEvent.setPayload(labPayload);
+                            labEvent.setEncounterId(canonical.getEncounterId());
+                            labEvent.setSource(sourceSystem);
                             out.collect(labEvent);
                             LOG.info("Emitted LAB_RESULT GenericEvent from flat payload for patient {}", patientId);
                         }
@@ -2028,6 +2055,8 @@ public class Module2_Enhanced {
                             medEvent.setPatientId(patientId);
                             medEvent.setEventTime(eventTime);
                             medEvent.setPayload(medPayload);
+                            medEvent.setEncounterId(canonical.getEncounterId());
+                            medEvent.setSource(sourceSystem);
                             out.collect(medEvent);
                             LOG.info("Emitted {} GenericEvent from flat payload for patient {}", eventType.name(), patientId);
                         }
@@ -2040,6 +2069,8 @@ public class Module2_Enhanced {
                         proEvent.setPatientId(patientId);
                         proEvent.setEventTime(eventTime);
                         proEvent.setPayload(payload);  // Pass raw payload — PRO structure varies
+                        proEvent.setEncounterId(canonical.getEncounterId());
+                        proEvent.setSource(sourceSystem);
                         out.collect(proEvent);
                         LOG.debug("Emitted PATIENT_REPORTED GenericEvent from flat payload for patient {}", patientId);
                         break;
@@ -2051,6 +2082,8 @@ public class Module2_Enhanced {
                         docEvent.setPatientId(patientId);
                         docEvent.setEventTime(eventTime);
                         docEvent.setPayload(payload);  // Pass raw payload — document structure varies
+                        docEvent.setEncounterId(canonical.getEncounterId());
+                        docEvent.setSource(sourceSystem);
                         out.collect(docEvent);
                         LOG.debug("Emitted CLINICAL_DOCUMENT GenericEvent from flat payload for patient {}", patientId);
                         break;
@@ -2192,17 +2225,25 @@ public class Module2_Enhanced {
             LabPayload labPayload = new LabPayload();
 
             // Extract common lab fields from flat structure
-            // CRITICAL: Module 1 lowercases all keys, so check both camelCase and lowercase
-            String labName = (String) payload.getOrDefault("labName", payload.get("labname"));
-            String loincCode = (String) payload.getOrDefault("loincCode", payload.get("loinccode"));
+            // Must handle 3 naming conventions:
+            //   camelCase (labName)     — Module 2 internal / LabPayload serialization
+            //   lowercase (labname)     — Module 1 lowercased keys
+            //   snake_case (lab_name)   — RawEvent / ingestion service payload keys
+            String labName = (String) payload.getOrDefault("labName",
+                    payload.getOrDefault("labname", payload.get("lab_name")));
+            String loincCode = (String) payload.getOrDefault("loincCode",
+                    payload.getOrDefault("loinccode", payload.get("loinc_code")));
             Object valueObj = payload.get("value");
             String unit = (String) payload.get("unit");
             Boolean abnormal = (Boolean) payload.get("abnormal");
-            String abnormalFlag = (String) payload.getOrDefault("abnormalFlag", payload.get("abnormalflag"));
+            String abnormalFlag = (String) payload.getOrDefault("abnormalFlag",
+                    payload.getOrDefault("abnormalflag", payload.get("abnormal_flag")));
 
-            // Reference ranges
-            Object refLowObj = payload.getOrDefault("referenceRangeLow", payload.get("referencerangelow"));
-            Object refHighObj = payload.getOrDefault("referenceRangeHigh", payload.get("referencerangehigh"));
+            // Reference ranges — check camelCase, lowercase, and snake_case
+            Object refLowObj = payload.getOrDefault("referenceRangeLow",
+                    payload.getOrDefault("referencerangelow", payload.get("reference_range_low")));
+            Object refHighObj = payload.getOrDefault("referenceRangeHigh",
+                    payload.getOrDefault("referencerangehigh", payload.get("reference_range_high")));
 
             labPayload.setLabName(labName);
             labPayload.setLoincCode(loincCode != null ? loincCode : labName);
@@ -2239,19 +2280,30 @@ public class Module2_Enhanced {
             MedicationPayload medPayload = new MedicationPayload();
 
             // Extract common medication fields from flat structure with fallback keys
-            // Module 1 lowercases keys, so we need to check both camelCase and lowercase variants
-            String medName = extractString(payload, "medicationname", "medicationName");
-            String genericName = extractString(payload, "genericname", "genericName");
-            Object rxNormCodeObj = payload.getOrDefault("rxnormcode", payload.get("rxNormCode"));
+            // Must handle 3 naming conventions: camelCase, lowercase, and snake_case
+            String medName = extractString(payload, "medicationName", "medicationname", "medication_name");
+            String genericName = extractString(payload, "genericName", "genericname", "generic_name");
+            Object rxNormCodeObj = payload.getOrDefault("rxNormCode",
+                    payload.getOrDefault("rxnormcode", payload.get("rx_norm_code")));
             String rxNormCode = (rxNormCodeObj != null) ? rxNormCodeObj.toString() : null;
+            // Also check medication_code as alternate key for medication identifier
+            if (rxNormCode == null) {
+                Object medCodeObj = payload.getOrDefault("medicationCode",
+                        payload.getOrDefault("medicationcode", payload.get("medication_code")));
+                rxNormCode = (medCodeObj != null) ? medCodeObj.toString() : null;
+            }
             String route = extractString(payload, "route");
             String frequency = extractString(payload, "frequency");
-            String status = extractString(payload, "status", "administrationstatus", "administrationStatus");
-            Object doseObj = payload.getOrDefault("dose", payload.get("doseAmount"));
-            String doseUnit = extractString(payload, "doseunit", "doseUnit");
-            Object startTimeObj = payload.getOrDefault("starttime", payload.get("startTime"));
-            String brandName = extractString(payload, "brandname", "brandName");
-            String therapeuticClass = extractString(payload, "therapeuticclass", "therapeuticClass");
+            String status = extractString(payload, "status", "administrationStatus", "administrationstatus", "administration_status");
+            Object doseObj = payload.getOrDefault("dose",
+                    payload.getOrDefault("doseAmount", payload.get("dose_amount")));
+            String doseUnit = extractString(payload, "doseUnit", "doseunit", "dose_unit");
+            Object startTimeObj = payload.getOrDefault("startTime",
+                    payload.getOrDefault("starttime", payload.get("start_time")));
+            String brandName = extractString(payload, "brandName", "brandname", "brand_name");
+            String therapeuticClass = extractString(payload, "therapeuticClass", "therapeuticclass", "therapeutic_class");
+            // Also pick up dosage text (from ingestion service payload format)
+            String dosageText = extractString(payload, "dosage", "dosageText", "dosage_text");
 
             medPayload.setMedicationName(medName);
             medPayload.setGenericName(genericName != null ? genericName : medName);

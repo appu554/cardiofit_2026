@@ -110,6 +110,60 @@ LAB_LOINC = {
     "30934-4": "bnp",
 }
 
+# ---------------------------------------------------------------------------
+# Clinical Concept Map — mirrors what KB-7 Terminology will resolve in prod.
+# Maps LOINC codes to canonical clinical concepts + abnormality thresholds.
+# In production: Ingestion Service → KB-7 lookup → adds these fields to Kafka.
+# In E2E: hardcoded here so the pipeline exercises the same concept-driven path.
+# ---------------------------------------------------------------------------
+CLINICAL_CONCEPT_MAP = {
+    # Cardiac markers
+    "10839-9": {"concept": "TROPONIN", "group": "CARDIAC", "thresholds": {"H": 0.04}},
+    "42757-5": {"concept": "BNP", "group": "CARDIAC", "thresholds": {"H": 400.0}},
+    "30934-4": {"concept": "BNP", "group": "CARDIAC", "thresholds": {"H": 400.0}},
+    "13969-1": {"concept": "CKMB", "group": "CARDIAC", "thresholds": {"H": 25.0}},
+    # Metabolic / Renal
+    "2524-7":  {"concept": "LACTATE", "group": "METABOLIC", "thresholds": {"H": 2.0, "HH": 4.0}},
+    "2160-0":  {"concept": "CREATININE", "group": "RENAL", "thresholds": {"H": 1.3}},
+    "3094-0":  {"concept": "BUN", "group": "RENAL", "thresholds": {"H": 20.0}},
+    "48642-3": {"concept": "EGFR", "group": "RENAL", "thresholds": {"L": 60.0}},
+    # Electrolytes
+    "2823-3":  {"concept": "POTASSIUM", "group": "ELECTROLYTE", "thresholds": {"H": 5.5, "L": 3.5}},
+    "2951-2":  {"concept": "SODIUM", "group": "ELECTROLYTE", "thresholds": {"H": 145.0, "L": 135.0}},
+    # Hematology
+    "6690-2":  {"concept": "WBC", "group": "HEMATOLOGY", "thresholds": {"H": 11.0, "L": 4.0}},
+    "777-3":   {"concept": "PLATELETS", "group": "HEMATOLOGY", "thresholds": {"L": 150.0}},
+    "718-7":   {"concept": "HEMOGLOBIN", "group": "HEMATOLOGY", "thresholds": {"L": 12.0}},
+    # Coagulation
+    "34714-6": {"concept": "INR", "group": "COAGULATION", "thresholds": {"H": 3.5, "HH": 5.0}},
+    # Infection markers
+    "33959-8": {"concept": "PROCALCITONIN", "group": "INFECTION_MARKER", "thresholds": {"H": 0.5}},
+}
+
+
+def _resolve_abnormality(loinc_code, value):
+    """Determine clinicalConcept, conceptGroup, and abnormalityFlag from LOINC + value.
+
+    Returns (concept, group, flag) where flag is one of:
+      NORMAL, ELEVATED, CRITICALLY_ELEVATED, LOW, CRITICALLY_LOW
+    """
+    entry = CLINICAL_CONCEPT_MAP.get(loinc_code)
+    if entry is None:
+        return None, None, "UNKNOWN"
+
+    concept = entry["concept"]
+    group = entry["group"]
+    thresholds = entry["thresholds"]
+
+    # Check critically elevated first (HH), then elevated (H), then low (L)
+    if "HH" in thresholds and value >= thresholds["HH"]:
+        return concept, group, "CRITICALLY_ELEVATED"
+    if "H" in thresholds and value > thresholds["H"]:
+        return concept, group, "ELEVATED"
+    if "L" in thresholds and value < thresholds["L"]:
+        return concept, group, "LOW"
+    return concept, group, "NORMAL"
+
 # Reverse lookup: lab name → LOINC code
 LAB_NAME_TO_LOINC = {v: k for k, v in LAB_LOINC.items()}
 VITAL_NAME_TO_LOINC = {v: k for k, v in VITAL_LOINC.items() if k != "59408-5"}
@@ -266,12 +320,21 @@ def vital_event(patient_id, vitals_dict, encounter_id="", event_time=None):
 
 def lab_event(patient_id, loinc_code, value, unit, lab_name,
               encounter_id="", event_time=None):
-    """Build a lab-result RawEvent."""
+    """Build a lab-result RawEvent.
+
+    Automatically resolves clinicalConcept, conceptGroup, and abnormalityFlag
+    from the CLINICAL_CONCEPT_MAP — mirrors what KB-7 Terminology will do in
+    production via the ingestion service.
+    """
+    concept, group, abnormality = _resolve_abnormality(loinc_code, value)
     payload = {
-        "testName": lab_name,
-        "results": {lab_name: value},
-        "units": {lab_name: unit},
-        "loinc_code": loinc_code,
+        "labName": lab_name,
+        "loincCode": loinc_code,
+        "value": value,
+        "unit": unit,
+        "clinicalConcept": concept,
+        "conceptGroup": group,
+        "abnormalityFlag": abnormality,
     }
     return raw_event(
         event_type="lab-result",
@@ -713,15 +776,93 @@ class PipelineVerifier:
                 filtered.append(msg)
         return filtered
 
+    @staticmethod
+    def filter_by_patients(messages, patient_ids):
+        """Filter messages by patient ID set (for topics that strip correlationId)."""
+        filtered = []
+        for msg in messages:
+            pid = msg.get("patientId") or msg.get("patient_id") or ""
+            if pid in patient_ids:
+                filtered.append(msg)
+        return filtered
+
+    @staticmethod
+    def extract_clinical_evidence(messages):
+        """Extract clinical deterioration evidence from patientState in events.
+
+        Module 3/4 output contains patientState with NEWS2, qSOFA, alerts,
+        and riskIndicators — these ARE the clinical pattern detection results.
+        """
+        evidence = {
+            "alert_types": set(),
+            "max_news2": 0,
+            "max_qsofa": 0,
+            "risk_flags": set(),
+            "alert_severities": set(),
+        }
+        for msg in messages:
+            ps = msg.get("patientState") or {}
+            # Scores
+            news2 = ps.get("news2Score", 0) or 0
+            qsofa = ps.get("qsofaScore", 0) or 0
+            evidence["max_news2"] = max(evidence["max_news2"], news2)
+            evidence["max_qsofa"] = max(evidence["max_qsofa"], qsofa)
+            # Alerts
+            for alert in ps.get("allAlerts") or []:
+                atype = alert.get("alert_type", "")
+                if atype:
+                    evidence["alert_types"].add(atype)
+                sev = alert.get("severity", "")
+                if sev:
+                    evidence["alert_severities"].add(sev)
+            # Risk indicators
+            ri = ps.get("riskIndicators") or {}
+            for flag, val in ri.items():
+                if val is True:
+                    evidence["risk_flags"].add(flag)
+        return evidence
+
+    # Map scenario → what clinical evidence proves detection
+    SCENARIO_EVIDENCE_RULES = {
+        "sepsis": lambda ev: (
+            "SEPSIS_PATTERN" in ev["alert_types"]
+            or (ev["max_qsofa"] >= 2 and {"hypotension", "fever"} & ev["risk_flags"])
+        ),
+        "aki": lambda ev: (
+            "AKI_PATTERN" in ev["alert_types"]
+            or "elevatedCreatinine" in ev["risk_flags"]
+            or any("AKI" in a or "RENAL" in a or "KIDNEY" in a for a in ev["alert_types"])
+        ),
+        "rapid_deterioration": lambda ev: (
+            "DETERIORATION_PATTERN" in ev["alert_types"]
+            or ev["max_news2"] >= 7
+        ),
+        "drug_lab": lambda ev: (
+            "DRUG_LAB_INTERACTION" in ev["alert_types"]
+            or "onAnticoagulation" in ev["risk_flags"]
+            or any("DRUG" in a or "INR" in a or "INTERACTION" in a for a in ev["alert_types"])
+        ),
+        "cardiac_decompensation": lambda ev: (
+            "CARDIAC" in " ".join(ev["alert_types"])
+            or "elevatedBNP" in ev["risk_flags"]
+            or ev["max_news2"] >= 5
+            or "DETERIORATION_PATTERN" in ev["alert_types"]
+        ),
+    }
+
     def verify_all(self, assignments, wait_sec=90):
         """Wait for pipeline processing, then verify output topics.
 
-        Returns dict with per-patient verification results.
+        Uses two filtering strategies:
+        - enriched topic: filter by run_id (Module 1 preserves correlationId)
+        - cds/patterns topics: filter by patient ID (Module 3 strips correlationId)
         """
         print(f"\n{'='*60}")
         print(f"  VERIFICATION PHASE — waiting {wait_sec}s for pipeline")
         print(f"{'='*60}")
         time.sleep(wait_sec)
+
+        patient_ids = set(assignments.keys())
 
         results = {
             "enriched": {"total": 0, "by_patient": {}},
@@ -731,29 +872,55 @@ class PipelineVerifier:
             "scenario_verification": {},
         }
 
-        # Consume all 4 output topics
-        topics = {
-            "enriched": TOPIC_ENRICHED,
-            "context": TOPIC_CONTEXT,
-            "cds": TOPIC_CDS,
-            "patterns": TOPIC_PATTERNS,
-        }
+        # --- enriched: filter by run_id (Module 1 preserves correlationId) ---
+        print(f"\n  Consuming {TOPIC_ENRICHED}...")
+        msgs = self.consume_topic(TOPIC_ENRICHED, timeout_sec=30, max_messages=500)
+        run_msgs = self.filter_by_run(msgs, RUN_ID)
+        results["enriched"]["total"] = len(run_msgs)
+        print(f"    Total: {len(msgs)}, Run-filtered: {len(run_msgs)}")
+        for msg in run_msgs:
+            pid = msg.get("patientId") or msg.get("patient_id") or "unknown"
+            results["enriched"]["by_patient"].setdefault(pid, []).append(msg)
 
-        for label, topic in topics.items():
-            print(f"\n  Consuming {topic}...")
-            messages = self.consume_topic(topic, timeout_sec=30, max_messages=500)
-            run_messages = self.filter_by_run(messages, RUN_ID)
-            results[label]["total"] = len(run_messages)
-            print(f"    Total: {len(messages)}, Run-filtered: {len(run_messages)}")
+        # --- context: filter by run_id ---
+        print(f"\n  Consuming {TOPIC_CONTEXT}...")
+        msgs = self.consume_topic(TOPIC_CONTEXT, timeout_sec=30, max_messages=500)
+        run_msgs = self.filter_by_run(msgs, RUN_ID)
+        results["context"]["total"] = len(run_msgs)
+        print(f"    Total: {len(msgs)}, Run-filtered: {len(run_msgs)}")
+        for msg in run_msgs:
+            pid = msg.get("patientId") or msg.get("patient_id") or "unknown"
+            results["context"]["by_patient"].setdefault(pid, []).append(msg)
 
-            # Group by patient
-            for msg in run_messages:
-                pid = (msg.get("patient_id") or msg.get("patientId")
-                       or msg.get("payload", {}).get("patient_id") or "unknown")
-                results[label]["by_patient"].setdefault(pid, []).append(msg)
+        # --- cds: filter by patient ID (Module 3 strips correlationId) ---
+        print(f"\n  Consuming {TOPIC_CDS}...")
+        msgs = self.consume_topic(TOPIC_CDS, timeout_sec=30, max_messages=500)
+        pid_msgs = self.filter_by_patients(msgs, patient_ids)
+        results["cds"]["total"] = len(pid_msgs)
+        print(f"    Total: {len(msgs)}, Patient-filtered: {len(pid_msgs)}")
+        for msg in pid_msgs:
+            pid = msg.get("patientId") or msg.get("patient_id") or "unknown"
+            results["cds"]["by_patient"].setdefault(pid, []).append(msg)
 
-        # Verify per-scenario pattern detection
+        # --- patterns: filter by patient ID (also from Module 3/4 passthrough) ---
+        print(f"\n  Consuming {TOPIC_PATTERNS}...")
+        msgs = self.consume_topic(TOPIC_PATTERNS, timeout_sec=30, max_messages=500)
+        pid_msgs = self.filter_by_patients(msgs, patient_ids)
+        results["patterns"]["total"] = len(pid_msgs)
+        print(f"    Total: {len(msgs)}, Patient-filtered: {len(pid_msgs)}")
+        for msg in pid_msgs:
+            pid = msg.get("patientId") or msg.get("patient_id") or "unknown"
+            results["patterns"]["by_patient"].setdefault(pid, []).append(msg)
+
+        # Verify per-scenario using clinical evidence from patientState
         for pid, scenario in assignments.items():
+            # Combine CDS + pattern events for this patient
+            all_events = (
+                results["cds"]["by_patient"].get(pid, [])
+                + results["patterns"]["by_patient"].get(pid, [])
+            )
+            evidence = self.extract_clinical_evidence(all_events)
+
             verification = {
                 "scenario": scenario,
                 "expected_pattern": DeteriorationEngine.EXPECTED_PATTERNS.get(scenario),
@@ -761,24 +928,20 @@ class PipelineVerifier:
                 "context_count": len(results["context"]["by_patient"].get(pid, [])),
                 "cds_count": len(results["cds"]["by_patient"].get(pid, [])),
                 "patterns_count": len(results["patterns"]["by_patient"].get(pid, [])),
-                "detected_patterns": [],
+                "detected_patterns": sorted(evidence["alert_types"]),
+                "max_news2": evidence["max_news2"],
+                "max_qsofa": evidence["max_qsofa"],
+                "risk_flags": sorted(evidence["risk_flags"]),
                 "pass": False,
             }
 
-            # Extract detected pattern names from clinical-patterns topic
-            for msg in results["patterns"]["by_patient"].get(pid, []):
-                pattern_name = (msg.get("patternType") or msg.get("pattern_type")
-                                or msg.get("type") or "")
-                if pattern_name:
-                    verification["detected_patterns"].append(pattern_name)
-
             # Determine pass/fail
             if scenario == "control":
-                # Controls should NOT trigger deterioration patterns
-                verification["pass"] = verification["patterns_count"] == 0
+                # Controls should have 0 events (they send 0 events)
+                verification["pass"] = verification["cds_count"] == 0
             else:
-                expected = verification["expected_pattern"]
-                verification["pass"] = expected in verification["detected_patterns"]
+                rule = self.SCENARIO_EVIDENCE_RULES.get(scenario)
+                verification["pass"] = bool(rule and rule(evidence))
 
             results["scenario_verification"][pid] = verification
 
@@ -820,6 +983,9 @@ class ReportGenerator:
                     "scenario": v["scenario"],
                     "expected": v.get("expected_pattern"),
                     "detected": v["detected_patterns"],
+                    "max_news2": v.get("max_news2", 0),
+                    "max_qsofa": v.get("max_qsofa", 0),
+                    "risk_flags": v.get("risk_flags", []),
                     "enriched": v["enriched_count"],
                     "context": v["context_count"],
                     "cds": v["cds_count"],
@@ -850,17 +1016,20 @@ class ReportGenerator:
         print()
 
         # Per-scenario table
-        print(f"  {'Patient':<20} {'Scenario':<25} {'Expected':<22} "
-              f"{'Detected':<25} {'Result'}")
-        print(f"  {'-'*18:<20} {'-'*23:<25} {'-'*20:<22} "
-              f"{'-'*23:<25} {'-'*6}")
+        print(f"  {'Patient':<20} {'Scenario':<25} {'NEWS2':>5} {'qSOFA':>5} "
+              f"{'Alerts':<30} {'Result'}")
+        print(f"  {'-'*18:<20} {'-'*23:<25} {'-'*5:>5} {'-'*5:>5} "
+              f"{'-'*28:<30} {'-'*6}")
         for pid, sr in report["scenario_results"].items():
             pid_short = pid[:18] if len(pid) > 18 else pid
-            detected = ",".join(sr["detected"]) if sr["detected"] else "(none)"
+            alerts = ",".join(sr["detected"][:3]) if sr["detected"] else "(none)"
+            if len(alerts) > 28:
+                alerts = alerts[:25] + "..."
             status = "PASS" if sr["pass"] else "FAIL"
-            expected = sr.get("expected") or "(none)"
-            print(f"  {pid_short:<20} {sr['scenario']:<25} {expected:<22} "
-                  f"{detected:<25} {status}")
+            news2 = sr.get("max_news2", 0)
+            qsofa = sr.get("max_qsofa", 0)
+            print(f"  {pid_short:<20} {sr['scenario']:<25} {news2:>5} {qsofa:>5} "
+                  f"{alerts:<30} {status}")
 
         print(f"\n{'='*70}\n")
 

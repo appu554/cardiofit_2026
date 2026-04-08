@@ -1,5 +1,6 @@
 package com.cardiofit.flink.models;
 
+import com.cardiofit.flink.thresholds.ThresholdProvenance;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,6 +39,10 @@ public class CIDAlert implements java.io.Serializable {
 
     // Provenance
     private String correlationId;    // From triggering CanonicalEvent
+
+    // Threshold audit trail — one entry per threshold consulted during rule evaluation.
+    // Nullable for backward compatibility: existing Kafka consumers ignore unknown fields.
+    private List<ThresholdProvenance> thresholdProvenance;
 
     // --- Constructors ---
     public CIDAlert() {}
@@ -95,4 +100,6 @@ public class CIDAlert implements java.io.Serializable {
     public void setResolution(String resolution) { this.resolution = resolution; }
     public String getCorrelationId() { return correlationId; }
     public void setCorrelationId(String correlationId) { this.correlationId = correlationId; }
+    public List<ThresholdProvenance> getThresholdProvenance() { return thresholdProvenance; }
+    public void setThresholdProvenance(List<ThresholdProvenance> thresholdProvenance) { this.thresholdProvenance = thresholdProvenance; }
 }

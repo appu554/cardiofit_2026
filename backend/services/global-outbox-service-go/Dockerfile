@@ -1,12 +1,16 @@
 # Multi-stage build for Go Global Outbox Service
-FROM golang:1.21-alpine AS builder
+# Using Debian (glibc) because confluent-kafka-go v2.3.0 vendors
+# a glibc-linked librdkafka — Alpine/musl causes linker errors on ARM64.
+FROM golang:1.24-bookworm AS builder
 
 # Install dependencies
-RUN apk add --no-cache git ca-certificates tzdata protoc protobuf-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates tzdata protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install protobuf Go plugins
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-RUN go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+# Install protobuf Go plugins (pinned to versions compatible with go.mod deps)
+RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
+RUN go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
 
 # Set working directory
 WORKDIR /app
@@ -22,8 +26,8 @@ COPY . .
 
 # Generate protobuf code
 RUN mkdir -p pkg/proto
-RUN protoc --go_out=pkg/proto --go_opt=paths=source_relative \
-    --go-grpc_out=pkg/proto --go-grpc_opt=paths=source_relative \
+RUN protoc --go_out=. --go_opt=paths=source_relative \
+    --go-grpc_out=. --go-grpc_opt=paths=source_relative \
     pkg/proto/outbox.proto
 
 # Build the application
@@ -33,22 +37,23 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     -o global-outbox-service \
     cmd/server/main.go
 
-# Production image
-FROM alpine:latest
+# Production image — Debian slim for glibc compatibility
+FROM debian:bookworm-slim
 
 # Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata wget && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -u 1001 -S appuser -G appgroup
+RUN groupadd -g 1001 appgroup && \
+    useradd -u 1001 -g appgroup -s /bin/false appuser
 
 # Set working directory
 WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /app/global-outbox-service .
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Change ownership
 RUN chown -R appuser:appgroup /app

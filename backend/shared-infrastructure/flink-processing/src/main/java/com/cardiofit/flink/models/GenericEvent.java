@@ -58,6 +58,12 @@ public class GenericEvent implements Serializable {
     private String source;
 
     /**
+     * Encounter identifier for visit-level correlation
+     */
+    @JsonProperty("encounterId")
+    private String encounterId;
+
+    /**
      * Default constructor for deserialization
      */
     public GenericEvent() {
@@ -127,6 +133,14 @@ public class GenericEvent implements Serializable {
         this.source = source;
     }
 
+    public String getEncounterId() {
+        return encounterId;
+    }
+
+    public void setEncounterId(String encounterId) {
+        this.encounterId = encounterId;
+    }
+
     /**
      * Type-safe payload extraction with validation
      * @param expectedType The expected payload class
@@ -175,12 +189,13 @@ public class GenericEvent implements Serializable {
                 Objects.equals(eventType, that.eventType) &&
                 Objects.equals(patientId, that.patientId) &&
                 Objects.equals(payload, that.payload) &&
-                Objects.equals(source, that.source);
+                Objects.equals(source, that.source) &&
+                Objects.equals(encounterId, that.encounterId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventType, patientId, eventTime, payload, source);
+        return Objects.hash(eventType, patientId, eventTime, payload, source, encounterId);
     }
 
     @Override
@@ -190,6 +205,7 @@ public class GenericEvent implements Serializable {
                 ", patientId='" + patientId + '\'' +
                 ", eventTime=" + eventTime +
                 ", source='" + source + '\'' +
+                ", encounterId='" + encounterId + '\'' +
                 ", payload=" + (payload != null ? payload.getClass().getSimpleName() : "null") +
                 '}';
     }

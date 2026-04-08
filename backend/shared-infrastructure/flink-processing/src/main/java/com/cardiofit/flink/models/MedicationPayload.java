@@ -423,7 +423,9 @@ public class MedicationPayload implements Serializable {
         Medication med = new Medication();
 
         // Map name fields - use generic name if available, otherwise medication name
-        med.setName(genericName != null ? genericName : medicationName);
+        String resolvedName = genericName != null ? genericName : medicationName;
+        med.setName(resolvedName);
+        med.setDisplay(resolvedName);  // Also set display for medication interaction checks
 
         // Map RxNorm code
         med.setCode(rxNormCode);

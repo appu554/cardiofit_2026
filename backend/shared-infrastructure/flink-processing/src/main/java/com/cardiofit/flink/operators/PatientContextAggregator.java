@@ -60,21 +60,46 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
     // JSON mapper for payload deserialization
     private transient ObjectMapper objectMapper;
 
-    // Clinical thresholds (configurable via constructor if needed)
-    private static final double TROPONIN_THRESHOLD = 0.04; // ng/mL
-    private static final double BNP_THRESHOLD = 400.0; // pg/mL
-    private static final double CKMB_THRESHOLD = 25.0; // U/L
-    private static final double LACTATE_THRESHOLD = 2.0; // mmol/L
-    private static final double LACTATE_SEVERE_THRESHOLD = 4.0; // mmol/L
-    private static final double CREATININE_THRESHOLD = 1.3; // mg/dL
-    private static final double CREATININE_NEPHROTOXIC_THRESHOLD = 1.5; // mg/dL
-    private static final double POTASSIUM_LOW = 3.5; // mEq/L
-    private static final double POTASSIUM_HIGH = 5.5; // mEq/L
-    private static final double SODIUM_LOW = 135.0; // mEq/L
-    private static final double SODIUM_HIGH = 145.0; // mEq/L
-    private static final double WBC_LOW = 4.0; // K/uL
-    private static final double WBC_HIGH = 11.0; // K/uL
-    private static final double PLATELETS_LOW = 150.0; // K/uL
+    // Thresholds retained ONLY for drug-interaction checks (not lab abnormality detection).
+    // Lab abnormality detection is now concept-driven via clinicalConcept + abnormalityFlag.
+    private static final double CREATININE_NEPHROTOXIC_THRESHOLD = 1.5; // mg/dL — used by checkNephrotoxicRisk()
+    private static final double POTASSIUM_HIGH = 5.5; // mEq/L — used by checkHyperkalemiaRisk()
+    private static final double INR_HIGH = 3.5;       // ratio — used by checkAnticoagulationRisk()
+    private static final double INR_CRITICAL = 5.0;   // ratio — used by checkAnticoagulationRisk()
+    private static final double LACTATE_THRESHOLD = 2.0;        // mmol/L — used by determineSeverity() (legacy helper)
+    private static final double LACTATE_SEVERE_THRESHOLD = 4.0; // mmol/L — used by determineSeverity() (legacy helper)
+
+    /**
+     * Concept-driven risk flag mapping.
+     * Key = "CONCEPT_ABNORMALITY" (e.g., "TROPONIN_ELEVATED").
+     * Value = setter method reference name on RiskIndicators.
+     *
+     * In production, clinicalConcept + abnormalityFlag arrive pre-resolved by
+     * the ingestion service via KB-7 Terminology lookups.  The aggregator
+     * never interprets LOINC codes — it only reads the canonical concept and
+     * abnormality assessment that the upstream layer already computed.
+     */
+    private static final Map<String, java.util.function.BiConsumer<RiskIndicators, Boolean>> CONCEPT_FLAG_MAP = new HashMap<>();
+    static {
+        CONCEPT_FLAG_MAP.put("TROPONIN_ELEVATED",           (ri, v) -> ri.setElevatedTroponin(v));
+        CONCEPT_FLAG_MAP.put("TROPONIN_CRITICALLY_ELEVATED",(ri, v) -> ri.setElevatedTroponin(v));
+        CONCEPT_FLAG_MAP.put("BNP_ELEVATED",                (ri, v) -> ri.setElevatedBNP(v));
+        CONCEPT_FLAG_MAP.put("BNP_CRITICALLY_ELEVATED",     (ri, v) -> ri.setElevatedBNP(v));
+        CONCEPT_FLAG_MAP.put("CKMB_ELEVATED",               (ri, v) -> ri.setElevatedCKMB(v));
+        CONCEPT_FLAG_MAP.put("CKMB_CRITICALLY_ELEVATED",    (ri, v) -> ri.setElevatedCKMB(v));
+        CONCEPT_FLAG_MAP.put("LACTATE_ELEVATED",            (ri, v) -> ri.setElevatedLactate(v));
+        CONCEPT_FLAG_MAP.put("LACTATE_CRITICALLY_ELEVATED", (ri, v) -> { ri.setElevatedLactate(v); ri.setSeverelyElevatedLactate(v); });
+        CONCEPT_FLAG_MAP.put("CREATININE_ELEVATED",         (ri, v) -> ri.setElevatedCreatinine(v));
+        CONCEPT_FLAG_MAP.put("CREATININE_CRITICALLY_ELEVATED",(ri, v) -> ri.setElevatedCreatinine(v));
+        CONCEPT_FLAG_MAP.put("POTASSIUM_LOW",               (ri, v) -> ri.setHypokalemia(v));
+        CONCEPT_FLAG_MAP.put("POTASSIUM_ELEVATED",          (ri, v) -> ri.setHyperkalemia(v));
+        CONCEPT_FLAG_MAP.put("POTASSIUM_CRITICALLY_ELEVATED",(ri, v) -> ri.setHyperkalemia(v));
+        CONCEPT_FLAG_MAP.put("SODIUM_LOW",                  (ri, v) -> ri.setHyponatremia(v));
+        CONCEPT_FLAG_MAP.put("SODIUM_ELEVATED",             (ri, v) -> ri.setHypernatremia(v));
+        CONCEPT_FLAG_MAP.put("WBC_LOW",                     (ri, v) -> ri.setLeukopenia(v));
+        CONCEPT_FLAG_MAP.put("WBC_ELEVATED",                (ri, v) -> ri.setLeukocytosis(v));
+        CONCEPT_FLAG_MAP.put("PLATELETS_LOW",               (ri, v) -> ri.setThrombocytopenia(v));
+    }
 
     @Override
     public void open(org.apache.flink.api.common.functions.OpenContext openContext) throws Exception {
@@ -126,6 +151,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
             switch (event.getEventType()) {
                 case "VITAL_SIGN":
                     processVitalSign(state, event);
+                    checkVitalSignAbnormalities(state);
                     break;
 
                 case "LAB_RESULT":
@@ -185,6 +211,8 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         enrichedContext.setPatientState(state);
         enrichedContext.setEventTime(event.getEventTime()); // Standardized timestamp naming
         enrichedContext.setEventType(event.getEventType());
+        enrichedContext.setEncounterId(event.getEncounterId());
+        enrichedContext.setSourceSystem(event.getSource());
 
         // Extract data_tier from latestVitals into first-class field for Module 3 MHRI.
         // Falls back to TIER_3_SMBG (lowest fidelity) for legacy EHR events without data_tier.
@@ -390,176 +418,153 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
     }
 
     /**
-     * Check for lab abnormalities and update risk indicators
+     * Concept-driven lab abnormality detection.
+     *
+     * Reads clinicalConcept + abnormalityFlag from each LabResult (pre-resolved
+     * by the ingestion service / KB-7 in production, or hardcoded by the E2E
+     * script).  No LOINC codes are interpreted here — the aggregator is fully
+     * decoupled from lab vocabulary.
+     *
+     * Flow:
+     *   1. Iterate over all recent labs
+     *   2. For each lab with a non-null clinicalConcept and abnormalityFlag
+     *      that is NOT "NORMAL" / "UNKNOWN", build a lookup key
+     *      "CONCEPT_FLAG" (e.g., "POTASSIUM_ELEVATED")
+     *   3. Look up the matching setter in CONCEPT_FLAG_MAP and apply it
+     *   4. Generate a clinical alert with the lab value context
      */
     private void checkLabAbnormalities(PatientContextState state) {
         RiskIndicators indicators = state.getRiskIndicators();
         Map<String, LabResult> labs = state.getRecentLabs();
 
-        // Cardiac markers
-        checkLabValue(labs, "10839-9", TROPONIN_THRESHOLD, true, // LOINC for Troponin I
-                elevated -> {
-                    indicators.setElevatedTroponin(elevated);
-                    if (elevated) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.HIGH,
-                                "Elevated Troponin detected - possible myocardial injury",
-                                state.getPatientId()
-                        ));
-                    }
-                });
+        for (Map.Entry<String, LabResult> entry : labs.entrySet()) {
+            LabResult lab = entry.getValue();
+            String concept = lab.getClinicalConcept();
+            String flag = lab.getAbnormalityFlag();
 
-        checkLabValue(labs, "42757-5", BNP_THRESHOLD, true, // LOINC for BNP
-                elevated -> {
-                    indicators.setElevatedBNP(elevated);
-                    if (elevated) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.HIGH,
-                                "Elevated BNP - possible heart failure or cardiac stress",
-                                state.getPatientId()
-                        ));
-                    }
-                });
+            if (concept == null || flag == null || "NORMAL".equals(flag) || "UNKNOWN".equals(flag)) {
+                continue;
+            }
 
-        checkLabValue(labs, "13969-1", CKMB_THRESHOLD, true, // LOINC for CK-MB
-                elevated -> {
-                    indicators.setElevatedCKMB(elevated);
-                    if (elevated) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.MODERATE,
-                                "Elevated CK-MB - possible myocardial injury",
-                                state.getPatientId()
-                        ));
-                    }
-                });
+            String lookupKey = concept + "_" + flag;   // e.g., "BNP_ELEVATED"
+            var setter = CONCEPT_FLAG_MAP.get(lookupKey);
 
-        // Metabolic panel - LACTATE (with rich context)
-        checkLabValueWithContext(labs, "2524-7", LACTATE_THRESHOLD, true, state.getPatientId())
-                .ifPresent(alert -> {
-                    indicators.setElevatedLactate(true);
-                    LOG.debug("🚨 LACTATE ALERT GENERATED: {}", alert.getMessage());
+            if (setter != null) {
+                setter.accept(indicators, true);
+                LOG.debug("✅ Concept-driven flag set: {} for patient {}", lookupKey, state.getPatientId());
 
-                    // Check for severe elevation
-                    LabResult lactate = labs.get("2524-7");
-                    if (lactate != null && lactate.getValue() != null && lactate.getValue() >= LACTATE_SEVERE_THRESHOLD) {
-                        indicators.setSeverelyElevatedLactate(true);
-                        LOG.debug("⚠️  SEVERELY ELEVATED LACTATE detected");
-                    }
+                // Generate alert with value context
+                AlertSeverity severity = flag.startsWith("CRITICALLY") ? AlertSeverity.CRITICAL : AlertSeverity.HIGH;
+                String valueStr = lab.getValue() != null
+                        ? String.format("%.1f %s", lab.getValue(), lab.getUnit() != null ? lab.getUnit() : "")
+                        : "N/A";
+                state.addAlert(new SimpleAlert(
+                        AlertType.CLINICAL,
+                        severity,
+                        String.format("%s %s (%s)", concept, flag.toLowerCase().replace("_", " "), valueStr),
+                        state.getPatientId()
+                ));
+            } else {
+                LOG.debug("No risk flag mapping for concept key: {}", lookupKey);
+            }
+        }
 
-                    state.addAlert(alert);
-                });
-
-        checkLabValue(labs, "2160-0", CREATININE_THRESHOLD, true, // LOINC for Creatinine
-                elevated -> {
-                    indicators.setElevatedCreatinine(elevated);
-                    if (elevated) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.MODERATE,
-                                "Elevated creatinine - possible renal impairment",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        // Electrolytes
-        checkLabValue(labs, "2823-3", POTASSIUM_LOW, false, // LOINC for Potassium (check low)
-                low -> {
-                    indicators.setHypokalemia(low);
-                    if (low) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.HIGH,
-                                "Hypokalemia detected - arrhythmia risk",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        checkLabValue(labs, "2823-3", POTASSIUM_HIGH, true, // LOINC for Potassium (check high)
-                high -> {
-                    indicators.setHyperkalemia(high);
-                    if (high) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.CRITICAL,
-                                "Hyperkalemia detected - CRITICAL arrhythmia risk",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        checkLabValue(labs, "2951-2", SODIUM_LOW, false, // LOINC for Sodium (check low)
-                low -> {
-                    indicators.setHyponatremia(low);
-                    if (low) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.MODERATE,
-                                "Hyponatremia detected - risk for confusion, seizures",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        checkLabValue(labs, "2951-2", SODIUM_HIGH, true, // LOINC for Sodium (check high)
-                high -> {
-                    indicators.setHypernatremia(high);
-                    if (high) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.MODERATE,
-                                "Hypernatremia detected - dehydration or sodium overload",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        // Hematology
-        checkLabValue(labs, "6690-2", WBC_LOW, false, // LOINC for WBC (check low)
-                low -> {
-                    indicators.setLeukopenia(low);
-                    if (low) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.MODERATE,
-                                "Leukopenia - infection risk, possible immunosuppression",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        checkLabValue(labs, "6690-2", WBC_HIGH, true, // LOINC for WBC (check high)
-                high -> {
-                    indicators.setLeukocytosis(high);
-                    if (high) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.MODERATE,
-                                "Leukocytosis - possible infection or inflammatory process",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        checkLabValue(labs, "777-3", PLATELETS_LOW, false, // LOINC for Platelets
-                low -> {
-                    indicators.setThrombocytopenia(low);
-                    if (low) {
-                        state.addAlert(new SimpleAlert(
-                                AlertType.CLINICAL,
-                                AlertSeverity.HIGH,
-                                "Thrombocytopenia - bleeding risk, possible DIC",
-                                state.getPatientId()
-                        ));
-                    }
-                });
-
-        // Update state with new risk indicators
         state.setRiskIndicators(indicators);
+    }
+
+    /**
+     * Check vital-sign abnormalities and set boolean risk indicator flags.
+     *
+     * This fills the gap where Module 2's buildRiskIndicatorsFromAssessment()
+     * sets vital flags on EnrichedEvent but the aggregator never propagated
+     * them to PatientContextState — causing qSOFA, SIRS, and other composite
+     * scores in ClinicalIntelligenceEvaluator to always evaluate to 0.
+     *
+     * Thresholds follow standard clinical definitions:
+     * - Tachycardia: HR > 100 bpm
+     * - Bradycardia: HR < 50 bpm
+     * - Tachypnea:   RR > 22 /min (qSOFA threshold)
+     * - Bradypnea:   RR < 8 /min
+     * - Hypoxia:     SpO2 < 92%
+     * - Hypotension:  SBP < 90 mmHg (qSOFA threshold)
+     * - Hypertension:  SBP >= 180 mmHg (crisis)
+     * - Fever:        Temp >= 38.3°C (SIRS threshold)
+     * - Hypothermia:  Temp < 36.0°C (SIRS threshold)
+     */
+    private void checkVitalSignAbnormalities(PatientContextState state) {
+        Map<String, Object> vitals = state.getLatestVitals();
+        if (vitals == null || vitals.isEmpty()) {
+            return;
+        }
+
+        RiskIndicators indicators = state.getRiskIndicators();
+
+        // Heart rate — check multiple possible keys
+        Double hr = extractDouble(vitals, "heartrate");
+        if (hr == null) hr = extractDouble(vitals, "heartRate");
+        if (hr != null) {
+            indicators.setTachycardia(hr > 100);
+            indicators.setBradycardia(hr < 50);
+        }
+
+        // Respiratory rate
+        Double rr = extractDouble(vitals, "respiratoryrate");
+        if (rr == null) rr = extractDouble(vitals, "respiratoryRate");
+        if (rr != null) {
+            indicators.setTachypnea(rr > 22);
+            indicators.setBradypnea(rr < 8);
+        }
+
+        // Oxygen saturation
+        Double spo2 = extractDouble(vitals, "oxygensaturation");
+        if (spo2 == null) spo2 = extractDouble(vitals, "oxygenSaturation");
+        if (spo2 != null) {
+            indicators.setHypoxia(spo2 < 92);
+        }
+
+        // Systolic blood pressure
+        Double sbp = extractDouble(vitals, "systolicbloodpressure");
+        if (sbp == null) sbp = extractDouble(vitals, "systolicBP");
+        if (sbp == null) sbp = extractDouble(vitals, "systolicbp");
+        if (sbp != null) {
+            indicators.setHypotension(sbp < 90);
+            indicators.setHypertension(sbp >= 180);
+        }
+
+        // Temperature
+        Double temp = extractDouble(vitals, "temperature");
+        if (temp != null) {
+            indicators.setFever(temp >= 38.3);
+            indicators.setHypothermia(temp < 36.0);
+        }
+
+        state.setRiskIndicators(indicators);
+
+        LOG.debug("Vital-sign indicators updated for patient {}: tachycardia={}, tachypnea={}, " +
+                  "hypoxia={}, hypotension={}, fever={}, hypothermia={}, bradycardia={}",
+                  state.getPatientId(),
+                  indicators.isTachycardia(), indicators.isTachypnea(),
+                  indicators.isHypoxia(), indicators.isHypotension(),
+                  indicators.isFever(), indicators.isHypothermia(),
+                  indicators.isBradycardia());
+    }
+
+    /**
+     * Extract a Double from a vitals map, handling Integer/Number/String values.
+     */
+    private Double extractDouble(Map<String, Object> map, String key) {
+        if (map == null || !map.containsKey(key)) return null;
+        Object value = map.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        } else if (value instanceof String) {
+            try {
+                return Double.parseDouble((String) value);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
@@ -573,6 +578,7 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
         // Check drug-lab interactions
         checkNephrotoxicRisk(state, meds, labs);
         checkHyperkalemiaRisk(state, meds, labs);
+        checkAnticoagulationRisk(state, meds, labs);
 
         // Check drug-vital interactions
         checkBradycardiaRisk(state, meds, vitals);
@@ -642,6 +648,65 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
                         AlertType.MEDICATION,
                         AlertSeverity.HIGH,
                         "DRUG INTERACTION: ACE-I/ARB + K-sparing diuretic - Monitor potassium closely",
+                        state.getPatientId()
+                ));
+            }
+        }
+    }
+
+    /**
+     * Check for anticoagulation risk: anticoagulant medication + elevated INR
+     * Detects Warfarin, heparin, DOACs and monitors INR for supratherapeutic levels
+     */
+    private void checkAnticoagulationRisk(PatientContextState state, Map<String, Medication> meds, Map<String, LabResult> labs) {
+        boolean onAnticoagulation = meds.values().stream()
+                .anyMatch(med -> {
+                    if (med.getDisplay() == null) return false;
+                    String name = med.getDisplay().toLowerCase();
+                    return name.contains("warfarin") || name.contains("heparin") ||
+                           name.contains("apixaban") || name.contains("rivaroxaban") ||
+                           name.contains("edoxaban") || name.contains("dabigatran") ||
+                           name.contains("enoxaparin");
+                });
+
+        // Set the risk indicator flag
+        state.getRiskIndicators().setOnAnticoagulation(onAnticoagulation);
+
+        if (onAnticoagulation) {
+            // Check INR — LOINC 34714-6 (INR by coagulation assay) and 6301-6 (INR)
+            LabResult inr = labs.get("34714-6");
+            if (inr == null) inr = labs.get("6301-6");
+
+            if (inr != null && inr.getValue() != null) {
+                double inrValue = inr.getValue();
+
+                if (inrValue >= INR_CRITICAL) {
+                    state.addAlert(new SimpleAlert(
+                            AlertType.MEDICATION,
+                            AlertSeverity.CRITICAL,
+                            "DRUG-LAB INTERACTION: Anticoagulant with critically elevated INR (" +
+                                    String.format("%.1f", inrValue) + ") - HOLD anticoagulant, consider reversal",
+                            state.getPatientId()
+                    ));
+                } else if (inrValue >= INR_HIGH) {
+                    state.addAlert(new SimpleAlert(
+                            AlertType.MEDICATION,
+                            AlertSeverity.HIGH,
+                            "DRUG-LAB INTERACTION: Anticoagulant with supratherapeutic INR (" +
+                                    String.format("%.1f", inrValue) + ") - Hold dose, recheck in 6h",
+                            state.getPatientId()
+                    ));
+                }
+            }
+
+            // Check for concurrent bleeding signs: low hemoglobin while anticoagulated
+            LabResult hgb = labs.get("718-7"); // LOINC for Hemoglobin
+            if (hgb != null && hgb.getValue() != null && hgb.getValue() < 10.0) {
+                state.addAlert(new SimpleAlert(
+                        AlertType.MEDICATION,
+                        AlertSeverity.HIGH,
+                        "BLEEDING RISK: Anticoagulant with low hemoglobin (" +
+                                String.format("%.1f", hgb.getValue()) + " g/dL) - Assess for active bleeding",
                         state.getPatientId()
                 ));
             }
@@ -846,6 +911,18 @@ public class PatientContextAggregator extends KeyedProcessFunction<String, Gener
                 case "performinglab":
                 case "performing_lab":
                     normalized.put("performingLab", value);
+                    break;
+                case "clinicalconcept":
+                case "clinical_concept":
+                    normalized.put("clinicalConcept", value);
+                    break;
+                case "conceptgroup":
+                case "concept_group":
+                    normalized.put("conceptGroup", value);
+                    break;
+                case "abnormalityflag":
+                case "abnormality_flag":
+                    normalized.put("abnormalityFlag", value);
                     break;
                 default:
                     // Keep original key for unmapped fields (category, value, unit, etc.)

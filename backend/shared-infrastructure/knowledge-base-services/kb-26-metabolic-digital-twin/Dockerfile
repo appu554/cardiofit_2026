@@ -1,13 +1,18 @@
 # KB-26 Metabolic Digital Twin Service — Multi-stage Alpine build
-FROM golang:1.22-alpine AS builder
+# Context must be knowledge-base-services/ (parent) so shared/ is accessible
+FROM golang:1.24-alpine AS builder
 
 RUN apk add --no-cache git
 
+# Copy shared module first (required by go.mod replace directive)
+COPY shared/ /shared/
+
 WORKDIR /app
-COPY go.mod go.sum ./
+COPY kb-26-metabolic-digital-twin/go.mod kb-26-metabolic-digital-twin/go.sum ./
+ENV GOTOOLCHAIN=auto
 RUN go mod download
 
-COPY . .
+COPY kb-26-metabolic-digital-twin/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
 # Final stage

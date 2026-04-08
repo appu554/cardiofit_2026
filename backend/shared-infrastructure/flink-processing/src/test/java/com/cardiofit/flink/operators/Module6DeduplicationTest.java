@@ -77,4 +77,24 @@ class Module6DeduplicationTest {
         assertTrue(dedup.shouldEmit("P001", ActionTier.ROUTINE, "CDS_GENERAL", now + 1000),
             "ROUTINE events should never be suppressed");
     }
+
+    @Test
+    void crossTier_sameCategoryWithinWindow_suppressed() {
+        long now = System.currentTimeMillis();
+        // HALT arrives first for SEPSIS
+        assertTrue(dedup.shouldEmit("P001", ActionTier.HALT, "SEPSIS", now));
+        // PAUSE for same SEPSIS within window → suppressed (category-only key)
+        assertFalse(dedup.shouldEmit("P001", ActionTier.PAUSE, "SEPSIS", now + 60_000),
+            "Same category at different tier within window should be suppressed");
+    }
+
+    @Test
+    void pruneExpired_removesOldEntries() {
+        long now = System.currentTimeMillis();
+        dedup.shouldEmit("P001", ActionTier.HALT, "SEPSIS", now);
+        // After max window (60 min), prune should clear the entry
+        dedup.pruneExpired(now + 61 * 60_000);
+        // Should emit again because pruned
+        assertTrue(dedup.shouldEmit("P001", ActionTier.HALT, "SEPSIS", now + 61 * 60_000));
+    }
 }

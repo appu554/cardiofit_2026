@@ -43,13 +43,21 @@ func (p *Producer) Publish(ctx context.Context, topic string, patientID uuid.UUI
 		return nil
 	}
 
+	// Extract tenant context from payload if present (ISS-5).
+	tenantID, _ := payload["_tenant_id"].(string)
+	channelType, _ := payload["_channel_type"].(string)
+	delete(payload, "_tenant_id")
+	delete(payload, "_channel_type")
+
 	envelope := Envelope{
-		EventID:    uuid.New(),
-		EventType:  eventType,
-		SourceType: "INTAKE",
-		PatientID:  patientID,
-		Timestamp:  time.Now().UTC(),
-		Payload:    payload,
+		EventID:     uuid.New(),
+		EventType:   eventType,
+		SourceType:  "INTAKE",
+		PatientID:   patientID,
+		TenantID:    tenantID,
+		ChannelType: channelType,
+		Timestamp:   time.Now().UTC(),
+		Payload:     payload,
 	}
 
 	value, err := json.Marshal(envelope)

@@ -25,10 +25,11 @@ type SafetyFlag struct {
 // Supports BOOLEAN conditions (Q001=YES AND Q003=YES) and COMPOSITE_SCORE triggers.
 type SafetyTriggerDef struct {
 	ID        string `yaml:"id" json:"id"`
-	Type      string `yaml:"type,omitempty" json:"type,omitempty"` // BOOLEAN (default) or COMPOSITE_SCORE
-	Condition string `yaml:"condition" json:"condition"`           // Boolean expression: 'Q001=YES AND Q003=YES'
-	Severity  string `yaml:"severity" json:"severity"`             // IMMEDIATE | URGENT | WARN
-	Action    string `yaml:"recommended_action" json:"action"`
+	Type      string `yaml:"type,omitempty" json:"type,omitempty"`           // BOOLEAN (default) or COMPOSITE_SCORE
+	RuleType  string `yaml:"rule_type,omitempty" json:"rule_type,omitempty"` // HARD_STOP or SOFT_FLAG (intake context)
+	Condition string `yaml:"condition" json:"condition"`                     // Boolean expression: 'Q001=YES AND Q003=YES'
+	Severity  string `yaml:"severity" json:"severity"`                       // IMMEDIATE | URGENT | WARN
+	Action    string `yaml:"action" json:"action"`
 
 	// COMPOSITE_SCORE fields: weighted question-answer scoring.
 	// Keys are "QUESTION_ID=ANSWER_VALUE" pairs, values are weights.

@@ -119,4 +119,60 @@ public class Module4CDSConversionTest {
         // Verifies null alerts set is handled gracefully
         assertDoesNotThrow(() -> Module4ClinicalScoring.determineRiskLevel(4, 0, null));
     }
+
+    // ── CEP Threshold Boundary Tests ────────────────────────────
+
+    @Test
+    void significance_boundaryAtWarningThreshold() {
+        // CEP deterioration pattern uses significance >= 0.6 for "warning" match
+        // NEWS2=5 (0.35) + qSOFA=1 (0.15) + acuity=5.0 (0.10) = 0.60
+        double exactBoundary = Module4ClinicalScoring.calculateClinicalSignificance(5, 1, 5.0);
+        assertTrue(exactBoundary >= 0.6,
+            "NEWS2=5, qSOFA=1, acuity=5.0 must meet WARNING threshold (0.6), got " + exactBoundary);
+
+        // NEWS2=4 (0.15) + qSOFA=1 (0.15) + acuity=5.0 (0.10) = 0.40
+        double belowBoundary = Module4ClinicalScoring.calculateClinicalSignificance(4, 1, 5.0);
+        assertTrue(belowBoundary < 0.6,
+            "NEWS2=4, qSOFA=1, acuity=5.0 must be BELOW warning threshold, got " + belowBoundary);
+    }
+
+    @Test
+    void significance_boundaryAtCriticalThreshold() {
+        // CEP uses significance >= 0.8 for "critical" match
+        // NEWS2=7 (0.40) + qSOFA=2 (0.30) + acuity=5.0 (0.10) = 0.80
+        double exactCritical = Module4ClinicalScoring.calculateClinicalSignificance(7, 2, 5.0);
+        // Use epsilon tolerance for IEEE 754 rounding: 0.40 + 0.30 + 0.10 = 0.7999999999999999
+        assertTrue(exactCritical >= 0.8 - 1e-9,
+            "NEWS2=7, qSOFA=2, acuity=5.0 must meet CRITICAL threshold (0.8), got " + exactCritical);
+
+        // NEWS2=5 (0.35) + qSOFA=2 (0.30) + acuity=5.0 (0.10) = 0.75
+        double belowCritical = Module4ClinicalScoring.calculateClinicalSignificance(5, 2, 5.0);
+        assertTrue(belowCritical < 0.8,
+            "NEWS2=5, qSOFA=2, acuity=5.0 must be BELOW critical threshold, got " + belowCritical);
+    }
+
+    @Test
+    void significance_acuityAlone_neverCrossesCritical() {
+        // Even max acuity (10.0) only contributes 0.20
+        double sig = Module4ClinicalScoring.calculateClinicalSignificance(0, 0, 10.0);
+        assertTrue(sig <= 0.20,
+            "Acuity alone should not push significance above 0.20, got " + sig);
+    }
+
+    @Test
+    void riskLevel_realProductionValues_allLow() {
+        // Both patients in production sample have NEWS2=0, qSOFA=0, no alerts
+        assertEquals("low", Module4ClinicalScoring.determineRiskLevel(0, 0, null),
+            "Production patient with NEWS2=0, qSOFA=0 should be 'low'");
+        assertEquals("low", Module4ClinicalScoring.determineRiskLevel(0, 0, new HashSet<>()),
+            "Empty alert set should still be 'low'");
+    }
+
+    @Test
+    void significance_zeroScores_zeroAcuity_producesZeroSignificance() {
+        // Real production case: NEWS2=0, qSOFA=0, acuity=0.0
+        double sig = Module4ClinicalScoring.calculateClinicalSignificance(0, 0, 0.0);
+        assertEquals(0.0, sig, 0.001,
+            "Real low-acuity patient (NEWS2=0, qSOFA=0, acuity=0) must produce 0.0");
+    }
 }

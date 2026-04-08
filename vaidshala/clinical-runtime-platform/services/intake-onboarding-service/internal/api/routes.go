@@ -13,23 +13,24 @@ func (s *Server) setupRoutes() {
 	s.Router.GET("/startupz", s.handleStartupz)
 	s.Router.GET("/metrics", s.prometheusHandler())
 
-	// FHIR CRUD (passthrough to FHIR Store -- Phase 4 for full implementation)
+	// FHIR CRUD
 	fhir := s.Router.Group("/fhir")
 	{
-		// Patient
-		fhir.POST("/Patient", s.stubHandler("Create Patient"))
+		// Patient — LIVE
+		fhir.POST("/Patient", s.appHandler.HandleCreatePatient)          // Register new patient
 		fhir.GET("/Patient/:id", s.stubHandler("Read Patient"))
-		fhir.PUT("/Patient/:id", s.stubHandler("Update Patient"))
-		fhir.GET("/Patient", s.stubHandler("Search Patient"))
+		fhir.PUT("/Patient/:id", s.appHandler.HandleUpdatePatient) // Edit patient demographics
+		fhir.GET("/Patient", s.appHandler.HandleSearchPatient) // Lookup by phone or email
+
+		// Encounter — LIVE
+		fhir.POST("/Patient/:id/Encounter", s.appHandler.HandleCreateEncounter) // Create encounter for patient
+		fhir.POST("/Encounter", s.stubHandler("Create Encounter (legacy)"))
+		fhir.PUT("/Encounter/:id", s.stubHandler("Update Encounter"))
+		fhir.GET("/Encounter/:id", s.stubHandler("Read Encounter"))
 
 		// Observation
 		fhir.POST("/Observation", s.stubHandler("Create Observation"))
 		fhir.GET("/Observation", s.stubHandler("Search Observation"))
-
-		// Encounter
-		fhir.POST("/Encounter", s.stubHandler("Create Encounter"))
-		fhir.PUT("/Encounter/:id", s.stubHandler("Update Encounter"))
-		fhir.GET("/Encounter/:id", s.stubHandler("Read Encounter"))
 
 		// Other resources
 		fhir.POST("/MedicationStatement", s.stubHandler("Create MedicationStatement"))
@@ -39,10 +40,10 @@ func (s *Server) setupRoutes() {
 		fhir.GET("/Condition", s.stubHandler("Search Condition"))
 		fhir.POST("", s.stubHandler("FHIR Transaction Bundle"))
 
-		// -- LIVE $operations (Phase 3 -- wired to real handlers) --
+		// -- LIVE $operations --
 
-		// Enrollment
-		fhir.POST("/Patient/$enroll", s.appHandler.HandleEnroll)
+		// Enrollment — enroll existing patient with existing encounter
+		fhir.POST("/Patient/:id/$enroll", s.appHandler.HandleEnroll)
 
 		// Safety engine
 		fhir.POST("/Patient/:id/$evaluate-safety", s.appHandler.HandleEvaluateSafety)

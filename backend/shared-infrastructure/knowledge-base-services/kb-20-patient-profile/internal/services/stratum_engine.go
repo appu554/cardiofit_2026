@@ -157,7 +157,7 @@ func (se *StratumEngine) GetStratum(patientID string, nodeID string) (*models.St
 // supported by ARIC CKD substudy and Wang JAMA 2005 evidence (A01-Q4 satisfied).
 func (se *StratumEngine) determineStratum(profile models.PatientProfile, hasEGFR bool, egfr float64) string {
 	hasDM := profile.DMType == "T1DM" || profile.DMType == "T2DM"
-	hasHTN := false
+	hasHTN := profile.HTNStatus == "CONFIRMED"
 	hasHF := false
 	for _, c := range profile.Comorbidities {
 		switch c {

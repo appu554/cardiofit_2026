@@ -1,0 +1,370 @@
+# =============================================================================
+# E2E Stack: Full Clinical Pipeline
+# =============================================================================
+# Ingestion Service → Outbox → Kafka → Flink (Modules 1-6) → Sinks
+#
+# Provides: PostgreSQL (outbox), Global Outbox Service, Neo4j, Redis,
+# Elasticsearch, ClickHouse, Flink JobManager + TaskManager.
+#
+# Prerequisites:
+#   1. Start Kafka first:
+#      cd kafka && docker compose -f docker-compose.hpi-lite.yml up -d
+#   2. Create topics:
+#      cd ../flink-processing && bash create-ingestion-topics.sh
+#   3. Start this stack:
+#      docker compose -f docker-compose.e2e.yml up -d
+#   4. Run ingestion service on host:
+#      cd ../../vaidshala/clinical-runtime-platform/services/ingestion-service
+#      OUTBOX_ENABLED=true \
+#      OUTBOX_DATABASE_URL=postgres://outbox_user:outbox_pass@localhost:5434/outbox_db \
+#      KAFKA_BROKERS=localhost:9092 \
+#      DATABASE_URL=postgres://outbox_user:outbox_pass@localhost:5434/outbox_db \
+#      go run cmd/ingestion/main.go
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL for Outbox Tables
+  # ---------------------------------------------------------------------------
+  outbox-postgres:
+    image: postgres:15-alpine
+    container_name: cardiofit-outbox-postgres
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: outbox_user
+      POSTGRES_PASSWORD: outbox_pass
+      POSTGRES_DB: outbox_db
+    volumes:
+      - outbox_pg_data:/var/lib/postgresql/data
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outbox_user -d outbox_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Global Outbox Service (Polling Publisher)
+  # ---------------------------------------------------------------------------
+  global-outbox-service:
+    build:
+      context: ../services/global-outbox-service-go
+      dockerfile: Dockerfile
+    container_name: cardiofit-outbox-service
+    restart: unless-stopped
+    depends_on:
+      outbox-postgres:
+        condition: service_healthy
+    ports:
+      - "8042:8042"   # HTTP API (/health, /stats, /circuit-breaker)
+      - "50052:50052"  # gRPC (PublishEvent, HealthCheck)
+      - "8043:8043"   # Prometheus metrics
+    environment:
+      PROJECT_NAME: "Global Outbox Service Go"
+      VERSION: "1.0.0"
+      ENVIRONMENT: development
+      HOST: "0.0.0.0"
+      PORT: "8042"
+      GRPC_PORT: "50052"
+      LOG_LEVEL: DEBUG
+      DEBUG: "true"
+      DATABASE_URL: "postgresql://outbox_user:outbox_pass@outbox-postgres:5432/outbox_db"
+      DATABASE_POOL_SIZE: "10"
+      DATABASE_MAX_OVERFLOW: "20"
+      DATABASE_POOL_TIMEOUT: "30"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      PUBLISHER_ENABLED: "true"
+      PUBLISHER_POLL_INTERVAL: "1s"
+      PUBLISHER_BATCH_SIZE: "50"
+      PUBLISHER_MAX_WORKERS: "2"
+      MEDICAL_CIRCUIT_BREAKER_ENABLED: "true"
+      MEDICAL_CIRCUIT_BREAKER_MAX_QUEUE_DEPTH: "500"
+      MEDICAL_CIRCUIT_BREAKER_CRITICAL_THRESHOLD: "0.8"
+      MEDICAL_CIRCUIT_BREAKER_RECOVERY_TIMEOUT: "15"
+      ENABLE_METRICS: "true"
+      METRICS_PORT: "8043"
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8042/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Neo4j — Graph Database (REQUIRED for Modules 2 & 6)
+  # ---------------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5.15-community
+    container_name: cardiofit-neo4j-e2e
+    hostname: neo4j
+    restart: unless-stopped
+    ports:
+      - "7475:7474"  # HTTP browser (7475 to avoid conflict with kb3-neo4j)
+      - "7688:7687"  # Bolt protocol (7688 to avoid conflict with kb3-neo4j)
+    environment:
+      NEO4J_AUTH: neo4j/CardioFit2024!
+      NEO4J_initial_dbms_default__database: cardiofit
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_default__listen__address: 0.0.0.0
+    volumes:
+      - neo4j_e2e_data:/data
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "CardioFit2024!", "MATCH () RETURN count(*) as count"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Redis — Cache for Critical Alerts (optional sink, graceful degradation)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.2-alpine
+    container_name: cardiofit-redis-e2e
+    hostname: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass RedisCardioFit2024!
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "RedisCardioFit2024!", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Elasticsearch — Search & Analytics (optional sink)
+  # ---------------------------------------------------------------------------
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: cardiofit-elasticsearch-e2e
+    hostname: elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    environment:
+      cluster.name: cardiofit-e2e
+      node.name: es-node1
+      discovery.type: single-node
+      xpack.security.enabled: "true"
+      ELASTIC_PASSWORD: ElasticCardioFit2024!
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      xpack.security.http.ssl.enabled: "false"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch_e2e_data:/usr/share/elasticsearch/data
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:ElasticCardioFit2024! http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ---------------------------------------------------------------------------
+  # ClickHouse — OLAP Analytics (optional sink)
+  # ---------------------------------------------------------------------------
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.12-alpine
+    container_name: cardiofit-clickhouse-e2e
+    hostname: clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"  # HTTP
+      - "9000:9000"  # Native protocol
+    environment:
+      CLICKHOUSE_DB: cardiofit_analytics
+      CLICKHOUSE_USER: cardiofit_user
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_PASSWORD: ClickHouse2024!
+    volumes:
+      - clickhouse_e2e_data:/var/lib/clickhouse
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Flink JobManager — Full Clinical Pipeline
+  # ---------------------------------------------------------------------------
+  flink-jobmanager:
+    image: flink:2.1-java17
+    container_name: cardiofit-flink-jobmanager
+    hostname: flink-jobmanager
+    command: jobmanager
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "8181:8081"  # Flink Web UI
+      - "6123:6123"  # RPC
+    environment:
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
+      # Neo4j (REQUIRED — Module 2 & 6)
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USERNAME: "neo4j"
+      NEO4J_PASSWORD: "CardioFit2024!"
+      NEO4J_DATABASE: "cardiofit"
+      DOCKER_CONTAINER: "true"
+      # Google FHIR Store (same config as ingestion service)
+      USE_GOOGLE_HEALTHCARE_API: "true"
+      GOOGLE_CLOUD_PROJECT_ID: "project-2bbef9ac-174b-4b59-8fe"
+      GOOGLE_CLOUD_LOCATION: "asia-south1"
+      GOOGLE_CLOUD_DATASET_ID: "vaidshala-clinical"
+      GOOGLE_CLOUD_FHIR_STORE_ID: "cardiofit-fhir-r4"
+      GOOGLE_APPLICATION_CREDENTIALS: "/opt/flink/credentials/google-credentials.json"
+      # Elasticsearch (optional)
+      ELASTICSEARCH_HOST: "elasticsearch:9200"
+      ELASTICSEARCH_USERNAME: "elastic"
+      ELASTICSEARCH_PASSWORD: "ElasticCardioFit2024!"
+      # ClickHouse (optional)
+      CLICKHOUSE_HOST: "clickhouse:8123"
+      CLICKHOUSE_DATABASE: "cardiofit_analytics"
+      CLICKHOUSE_USERNAME: "cardiofit_user"
+      CLICKHOUSE_PASSWORD: "ClickHouse2024!"
+      # Redis (optional)
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "RedisCardioFit2024!"
+      # Flink properties
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.rpc.port: 6123
+        jobmanager.memory.process.size: 1600m
+        taskmanager.numberOfTaskSlots: 8
+        parallelism.default: 2
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        state.savepoints.dir: file:///tmp/flink-savepoints
+        execution.checkpointing.interval: 30000
+        execution.checkpointing.mode: EXACTLY_ONCE
+    volumes:
+      - ./flink-processing/target:/opt/flink/usrlib
+      - ./flink-processing/models:/opt/flink/models
+      - ./flink-processing/credentials:/opt/flink/credentials:ro
+    networks:
+      - cardiofit-lite
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Flink TaskManager
+  # ---------------------------------------------------------------------------
+  flink-taskmanager:
+    image: flink:2.1-java17
+    container_name: cardiofit-flink-taskmanager
+    hostname: flink-taskmanager
+    command: taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka-lite:29092"
+      NEO4J_URI: "bolt://neo4j:7687"
+      NEO4J_USERNAME: "neo4j"
+      NEO4J_PASSWORD: "CardioFit2024!"
+      NEO4J_DATABASE: "cardiofit"
+      DOCKER_CONTAINER: "true"
+      USE_GOOGLE_HEALTHCARE_API: "true"
+      GOOGLE_CLOUD_PROJECT_ID: "project-2bbef9ac-174b-4b59-8fe"
+      GOOGLE_CLOUD_LOCATION: "asia-south1"
+      GOOGLE_CLOUD_DATASET_ID: "vaidshala-clinical"
+      GOOGLE_CLOUD_FHIR_STORE_ID: "cardiofit-fhir-r4"
+      GOOGLE_APPLICATION_CREDENTIALS: "/opt/flink/credentials/google-credentials.json"
+      ELASTICSEARCH_HOST: "elasticsearch:9200"
+      ELASTICSEARCH_USERNAME: "elastic"
+      ELASTICSEARCH_PASSWORD: "ElasticCardioFit2024!"
+      CLICKHOUSE_HOST: "clickhouse:8123"
+      CLICKHOUSE_DATABASE: "cardiofit_analytics"
+      CLICKHOUSE_USERNAME: "cardiofit_user"
+      CLICKHOUSE_PASSWORD: "ClickHouse2024!"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "RedisCardioFit2024!"
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.rpc.port: 6123
+        taskmanager.memory.process.size: 4096m
+        taskmanager.numberOfTaskSlots: 16
+        parallelism.default: 2
+    volumes:
+      - ./flink-processing/target:/opt/flink/usrlib
+      - ./flink-processing/models:/opt/flink/models
+      - ./flink-processing/credentials:/opt/flink/credentials:ro
+    networks:
+      - cardiofit-lite
+
+  # ---------------------------------------------------------------------------
+  # Flink Job Submitter (one-shot) — submits full-pipeline + module1b
+  # ---------------------------------------------------------------------------
+  flink-job-submitter:
+    image: flink:2.1-java17
+    container_name: cardiofit-flink-submitter
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "Waiting 15s for TaskManager registration..."
+        sleep 15
+        JAR=/opt/flink/usrlib/flink-ehr-intelligence-1.0.0.jar
+
+        submit() {
+          echo "=== Submitting $$1 ==="
+          /opt/flink/bin/flink run -d -m flink-jobmanager:8081 \
+            -c com.cardiofit.flink.FlinkJobOrchestrator \
+            $$JAR $$2 development || echo "WARN: $$1 failed"
+          sleep 3
+        }
+
+        submit "Module 1: Ingestion & Gateway" ingestion-only
+        submit "Module 1b: Ingestion Canonicalizer" module1b-canonicalizer
+        submit "Module 2: Context Assembly" context-assembly
+        submit "Module 3: Comprehensive CDS" comprehensive-cds
+        submit "Module 4: Pattern Detection" pattern-detection
+        submit "Module 5: ML Inference" ml-inference
+        submit "Module 6: Egress Routing" egress-routing
+
+        echo "=== All modules submitted. Exiting. ==="
+    volumes:
+      - ./flink-processing/target:/opt/flink/usrlib:ro
+    networks:
+      - cardiofit-lite
+    restart: "no"
+
+networks:
+  cardiofit-lite:
+    external: true
+
+volumes:
+  outbox_pg_data:
+  neo4j_e2e_data:
+  elasticsearch_e2e_data:
+  clickhouse_e2e_data:

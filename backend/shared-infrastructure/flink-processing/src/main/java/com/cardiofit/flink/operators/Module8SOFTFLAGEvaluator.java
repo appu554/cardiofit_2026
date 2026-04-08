@@ -1,6 +1,10 @@
 package com.cardiofit.flink.operators;
 
 import com.cardiofit.flink.models.*;
+import com.cardiofit.flink.thresholds.CIDThresholdResolver;
+import com.cardiofit.flink.thresholds.CIDThresholdResolver.ResolvedThreshold;
+import com.cardiofit.flink.thresholds.CIDThresholdSet;
+import com.cardiofit.flink.thresholds.ThresholdProvenance;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -23,23 +27,29 @@ public final class Module8SOFTFLAGEvaluator {
     private static final int FASTING_DURATION_THRESHOLD = 16; // CID-17 hours
 
     /**
-     * Evaluate all 7 SOFT_FLAG rules.
-     * @param state current patient comorbidity state
-     * @param sbpTargetMmHg patient's SBP target (from KB-20), nullable
+     * Evaluate all 7 SOFT_FLAG rules with externalized thresholds.
      */
-    public static List<CIDAlert> evaluate(ComorbidityState state, Double sbpTargetMmHg) {
+    public static List<CIDAlert> evaluate(ComorbidityState state, Double sbpTargetMmHg,
+                                           CIDThresholdSet thresholds) {
         List<CIDAlert> alerts = new ArrayList<>();
         if (state == null) return alerts;
 
         evaluateCID11(state, alerts);
-        evaluateCID12(state, alerts);
-        evaluateCID13(state, sbpTargetMmHg, alerts);
-        evaluateCID14(state, alerts);
+        evaluateCID12(state, thresholds, alerts);
+        evaluateCID13(state, sbpTargetMmHg, thresholds, alerts);
+        evaluateCID14(state, thresholds, alerts);
         evaluateCID15(state, alerts);
         evaluateCID16(state, alerts);
-        evaluateCID17(state, alerts);
+        evaluateCID17(state, thresholds, alerts);
 
         return alerts;
+    }
+
+    /**
+     * Backward-compatible overload — delegates with hardcoded defaults.
+     */
+    public static List<CIDAlert> evaluate(ComorbidityState state, Double sbpTargetMmHg) {
+        return evaluate(state, sbpTargetMmHg, CIDThresholdSet.hardcodedDefaults());
     }
 
     /** CID-11: Genital infection history + SGLT2i. */
@@ -47,28 +57,41 @@ public final class Module8SOFTFLAGEvaluator {
         if (!state.hasDrugClass("SGLT2I")) return;
         if (!state.isGenitalInfectionHistory()) return;
 
+        // Purely boolean — no externalized thresholds, no provenance
         alerts.add(CIDAlert.create(CIDRuleId.CID_11, state.getPatientId(),
             "WARNING: Patient has genital infection history. SGLT2i may increase recurrence.",
             state.getMedicationsByClass("SGLT2I"),
             "Monitor closely. Consider prophylactic antifungal if recurrence occurs.", null));
     }
 
-    /** CID-12: Polypharmacy burden >= 8 medications. */
-    private static void evaluateCID12(ComorbidityState state, List<CIDAlert> alerts) {
+    /** CID-12: Polypharmacy burden >= threshold medications. */
+    private static void evaluateCID12(ComorbidityState state, CIDThresholdSet thresholds,
+                                      List<CIDAlert> alerts) {
         int count = state.getActiveMedicationCount();
-        if (count < POLYPHARMACY_THRESHOLD) return;
 
-        alerts.add(CIDAlert.create(CIDRuleId.CID_12, state.getPatientId(),
+        ResolvedThreshold polyThreshold = CIDThresholdResolver.resolve(
+                "POLYPHARMACY_THRESHOLD", CIDSeverity.SOFT_FLAG,
+                null, // no per-patient polypharmacy threshold
+                (double) thresholds.getPolypharmacyThreshold(),
+                (double) POLYPHARMACY_THRESHOLD,
+                false); // higher count threshold = more sensitive (fewer alerts)
+
+        if (count < polyThreshold.getValue()) return;
+
+        CIDAlert alert = CIDAlert.create(CIDRuleId.CID_12, state.getPatientId(),
             String.format("WARNING: Polypharmacy burden high (%d daily medications). " +
                 "Consider deprescribing review before adding.", count),
             new ArrayList<>(state.getActiveMedications().keySet()),
-            "Review medication list. Assess adherence risk. Consider deprescribing.", null));
+            "Review medication list. Assess adherence risk. Consider deprescribing.", null);
+        alert.setThresholdProvenance(List.of(polyThreshold.getProvenance()));
+        alerts.add(alert);
     }
 
     /** CID-13: Elderly + intensive BP target. */
-    private static void evaluateCID13(ComorbidityState state, Double sbpTarget, List<CIDAlert> alerts) {
-        if (state.getAge() == null || state.getAge() < ELDERLY_AGE_THRESHOLD) return;
-        if (sbpTarget == null || sbpTarget >= SBP_TARGET_INTENSIVE) return;
+    private static void evaluateCID13(ComorbidityState state, Double sbpTarget,
+                                      CIDThresholdSet thresholds, List<CIDAlert> alerts) {
+        if (state.getAge() == null || state.getAge() < thresholds.getElderlyAgeThreshold()) return;
+        if (sbpTarget == null || sbpTarget >= thresholds.getSbpTargetIntensive()) return;
 
         boolean hasRisk = false;
         if (state.getEGFRCurrent() != null && state.getEGFRCurrent() < 45.0) hasRisk = true;
@@ -77,29 +100,64 @@ public final class Module8SOFTFLAGEvaluator {
 
         if (!hasRisk) return;
 
-        alerts.add(CIDAlert.create(CIDRuleId.CID_13, state.getPatientId(),
+        // Provenance for the age and SBP target thresholds consulted
+        List<ThresholdProvenance> provenance = new ArrayList<>();
+        ResolvedThreshold ageThreshold = CIDThresholdResolver.resolve(
+                "ELDERLY_AGE_THRESHOLD", CIDSeverity.SOFT_FLAG,
+                null,
+                (double) thresholds.getElderlyAgeThreshold(),
+                (double) ELDERLY_AGE_THRESHOLD,
+                false);
+        provenance.add(ageThreshold.getProvenance());
+
+        ResolvedThreshold sbpIntensive = CIDThresholdResolver.resolve(
+                "SBP_TARGET_INTENSIVE", CIDSeverity.SOFT_FLAG,
+                null,
+                thresholds.getSbpTargetIntensive(),
+                SBP_TARGET_INTENSIVE);
+        provenance.add(sbpIntensive.getProvenance());
+
+        CIDAlert alert = CIDAlert.create(CIDRuleId.CID_13, state.getPatientId(),
             String.format("WARNING: Intensive SBP target (<%.0f) may increase adverse events " +
                 "in this elderly patient (age %d). Consider relaxing to <140 mmHg.", sbpTarget, state.getAge()),
             List.of(),
-            "Review BP target per ADA 2026 frailty guidance. Consider <140 mmHg.", null));
+            "Review BP target per ADA 2026 frailty guidance. Consider <140 mmHg.", null);
+        alert.setThresholdProvenance(provenance);
+        alerts.add(alert);
     }
 
     /** CID-14: Metformin + eGFR 30-35 + declining trajectory. */
-    private static void evaluateCID14(ComorbidityState state, List<CIDAlert> alerts) {
+    private static void evaluateCID14(ComorbidityState state, CIDThresholdSet thresholds,
+                                      List<CIDAlert> alerts) {
         if (!state.hasDrugClass("METFORMIN")) return;
         Double eGFR = state.getEGFRCurrent();
         if (eGFR == null) return;
-        if (eGFR < EGFR_METFORMIN_LOW || eGFR > EGFR_METFORMIN_HIGH) return;
+
+        ResolvedThreshold lowThreshold = CIDThresholdResolver.resolve(
+                "EGFR_METFORMIN_LOW", CIDSeverity.SOFT_FLAG,
+                state.getPersonalizedEGFRMetforminLow(),
+                thresholds.getEgfrMetforminLow(),
+                EGFR_METFORMIN_LOW);
+
+        ResolvedThreshold highThreshold = CIDThresholdResolver.resolve(
+                "EGFR_METFORMIN_HIGH", CIDSeverity.SOFT_FLAG,
+                null, // no per-patient high threshold
+                thresholds.getEgfrMetforminHigh(),
+                EGFR_METFORMIN_HIGH);
+
+        if (eGFR < lowThreshold.getValue() || eGFR > highThreshold.getValue()) return;
 
         // Check declining trajectory
         Double decline = state.getEGFRDeclinePercent();
         if (decline == null || decline <= 0) return; // not declining
 
-        alerts.add(CIDAlert.create(CIDRuleId.CID_14, state.getPatientId(),
+        CIDAlert alert = CIDAlert.create(CIDRuleId.CID_14, state.getPatientId(),
             String.format("WARNING: eGFR approaching metformin threshold (30). Current: %.0f. " +
                 "Plan for dose reduction at 30-45, discontinuation at <30.", eGFR),
             state.getMedicationsByClass("METFORMIN"),
-            "Consider SGLT2i as glucose-lowering replacement if eGFR permits.", null));
+            "Consider SGLT2i as glucose-lowering replacement if eGFR permits.", null);
+        alert.setThresholdProvenance(List.of(lowThreshold.getProvenance(), highThreshold.getProvenance()));
+        alerts.add(alert);
     }
 
     /** CID-15: SGLT2i + NSAID use. */
@@ -110,6 +168,7 @@ public final class Module8SOFTFLAGEvaluator {
         meds.addAll(state.getMedicationsByClass("SGLT2I"));
         meds.addAll(state.getMedicationsByClass("NSAID"));
 
+        // Purely boolean — no provenance
         alerts.add(CIDAlert.create(CIDRuleId.CID_15, state.getPatientId(),
             "WARNING: NSAIDs + SGLT2i increase AKI risk and reduce SGLT2i renal benefit.",
             meds,
@@ -125,22 +184,34 @@ public final class Module8SOFTFLAGEvaluator {
         meds.addAll(state.getMedicationsByClass("CORTICOSTEROID"));
         meds.addAll(state.getMedicationsByClass("FLUDROCORTISONE"));
 
+        // Purely boolean — no provenance
         alerts.add(CIDAlert.create(CIDRuleId.CID_16, state.getPatientId(),
             "WARNING: Patient is salt-sensitive. Sodium-retaining drug may elevate BP.",
             meds,
             "Monitor BP closely after initiation.", null));
     }
 
-    /** CID-17: SGLT2i + fasting period > 16 hours. */
-    private static void evaluateCID17(ComorbidityState state, List<CIDAlert> alerts) {
+    /** CID-17: SGLT2i + fasting period > threshold hours. */
+    private static void evaluateCID17(ComorbidityState state, CIDThresholdSet thresholds,
+                                      List<CIDAlert> alerts) {
         if (!state.hasDrugClass("SGLT2I")) return;
         if (!state.isActiveFastingPeriod()) return;
-        if (state.getActiveFastingDurationHours() < FASTING_DURATION_THRESHOLD) return;
 
-        alerts.add(CIDAlert.create(CIDRuleId.CID_17, state.getPatientId(),
+        ResolvedThreshold fastingThreshold = CIDThresholdResolver.resolve(
+                "FASTING_DURATION_THRESHOLD", CIDSeverity.SOFT_FLAG,
+                null,
+                (double) thresholds.getFastingDurationThreshold(),
+                (double) FASTING_DURATION_THRESHOLD,
+                false); // higher threshold = more sensitive (fewer alerts)
+
+        if (state.getActiveFastingDurationHours() < fastingThreshold.getValue()) return;
+
+        CIDAlert alert = CIDAlert.create(CIDRuleId.CID_17, state.getPatientId(),
             String.format("WARNING: Extended fasting (%dh) on SGLT2i increases DKA and dehydration risk.",
                 state.getActiveFastingDurationHours()),
             state.getMedicationsByClass("SGLT2I"),
-            "Advise adequate hydration during non-fasting hours. Consider holding SGLT2i during fasts >20h.", null));
+            "Advise adequate hydration during non-fasting hours. Consider holding SGLT2i during fasts >20h.", null);
+        alert.setThresholdProvenance(List.of(fastingThreshold.getProvenance()));
+        alerts.add(alert);
     }
 }

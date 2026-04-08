@@ -66,9 +66,23 @@ func main() {
 		}
 	}
 
-	// Initialize safety engine (deterministic, no external deps)
-	safetyEngine := safety.NewEngine()
-	logger.Info("Safety engine initialized", zap.Int("hard_stops", 11), zap.Int("soft_flags", 8))
+	// Initialize safety engine — fetches rules from KB-24 at startup.
+	// The service will NOT start until safety rules are loaded and validated.
+	// This prevents a fail-open scenario where no rules = no hard stops.
+	kb24Client := safety.NewKB24Client(cfg.KB24URL, logger)
+	safetyEngine := safety.NewEngine(kb24Client, logger)
+	logger.Info("Safety engine created, warming up from KB-24...",
+		zap.String("kb24_url", cfg.KB24URL),
+	)
+
+	warmCtx, warmCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer warmCancel()
+	if err := safetyEngine.WarmUp(warmCtx); err != nil {
+		logger.Fatal("Safety engine warmup failed — refusing to start without safety rules",
+			zap.Error(err),
+			zap.String("kb24_url", cfg.KB24URL),
+		)
+	}
 
 	// Load flow graph
 	var flowEngine *flow.Engine

@@ -28,6 +28,8 @@ public class MealPatternState implements Serializable {
     @JsonProperty("patientId")
     private String patientId;
 
+    /** @deprecated Retained for serialization compatibility. Weekly summary tier is now
+     *  computed as the worst tier across that week's records in buildSummary(). */
     @JsonProperty("dataTier")
     private DataTier dataTier;
 

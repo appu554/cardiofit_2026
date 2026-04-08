@@ -68,6 +68,15 @@ public class ComorbidityState implements Serializable {
     // --- Potassium Trajectory ---
     private Double previousPotassium;
 
+    // --- Per-Patient Personalized Thresholds (Layer 1, from KB-20) ---
+    // Nullable: null means "no personalized value available, use guideline/hardcoded"
+    private Double personalizedPotassiumThreshold;    // CID-02 (CKD G4 → 5.0)
+    private Double personalizedGlucoseHypoThreshold;  // CID-03 (elderly → 70)
+    private Double personalizedSBPHypotensionThreshold; // CID-05
+    private Double personalizedEGFRDropThresholdPct;  // CID-01
+    private Double personalizedSBPTarget;              // CID-13 (resolves TODO)
+    private Double personalizedEGFRMetforminLow;       // CID-14
+
     // --- Suppression History ---
     private Map<String, Long> suppressionHistory = new LinkedHashMap<>();
 
@@ -155,6 +164,19 @@ public class ComorbidityState implements Serializable {
         Long lastEmission = suppressionHistory.get(suppressionKey);
         if (lastEmission == null) return false;
         return (currentTime - lastEmission) < 72 * 60 * 60 * 1000L;
+    }
+
+    /**
+     * Check suppression with a custom window (used for HALT short-dedup).
+     * @param suppressionKey alert suppression key
+     * @param currentTime current event time
+     * @param windowMs suppression window in milliseconds
+     * @return true if last emission was within the window
+     */
+    public boolean isSuppressedWithWindow(String suppressionKey, long currentTime, long windowMs) {
+        Long lastEmission = suppressionHistory.get(suppressionKey);
+        if (lastEmission == null) return false;
+        return (currentTime - lastEmission) < windowMs;
     }
 
     public void recordSuppression(String suppressionKey, long currentTime) {
@@ -429,4 +451,18 @@ public class ComorbidityState implements Serializable {
     public void setLastUpdated(long v) { this.lastUpdated = v; }
     public long getTotalEventsProcessed() { return totalEventsProcessed; }
     public void setTotalEventsProcessed(long v) { this.totalEventsProcessed = v; }
+
+    // --- Personalized Threshold Accessors ---
+    public Double getPersonalizedPotassiumThreshold() { return personalizedPotassiumThreshold; }
+    public void setPersonalizedPotassiumThreshold(Double v) { this.personalizedPotassiumThreshold = v; }
+    public Double getPersonalizedGlucoseHypoThreshold() { return personalizedGlucoseHypoThreshold; }
+    public void setPersonalizedGlucoseHypoThreshold(Double v) { this.personalizedGlucoseHypoThreshold = v; }
+    public Double getPersonalizedSBPHypotensionThreshold() { return personalizedSBPHypotensionThreshold; }
+    public void setPersonalizedSBPHypotensionThreshold(Double v) { this.personalizedSBPHypotensionThreshold = v; }
+    public Double getPersonalizedEGFRDropThresholdPct() { return personalizedEGFRDropThresholdPct; }
+    public void setPersonalizedEGFRDropThresholdPct(Double v) { this.personalizedEGFRDropThresholdPct = v; }
+    public Double getPersonalizedSBPTarget() { return personalizedSBPTarget; }
+    public void setPersonalizedSBPTarget(Double v) { this.personalizedSBPTarget = v; }
+    public Double getPersonalizedEGFRMetforminLow() { return personalizedEGFRMetforminLow; }
+    public void setPersonalizedEGFRMetforminLow(Double v) { this.personalizedEGFRMetforminLow = v; }
 }

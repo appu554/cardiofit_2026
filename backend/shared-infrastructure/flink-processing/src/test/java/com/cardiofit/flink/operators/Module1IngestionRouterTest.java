@@ -70,8 +70,8 @@ public class Module1IngestionRouterTest {
     @Test
     @DisplayName("Valid event flows to main output with correct timestamp")
     void testValidEventFlowsToMainOutput() throws Exception {
-        // Arrange - create valid raw event
-        long timestamp = 1640995200000L;
+        // Arrange - create valid raw event (use recent timestamp to avoid clamping)
+        long timestamp = System.currentTimeMillis() - (1000 * 60 * 60); // 1 hour ago — within 30d window
         RawEvent rawEvent = ClinicalEventBuilder.vitalsRaw("patient-001", timestamp, 78, 120);
 
         // Act - process the event
@@ -83,7 +83,7 @@ public class Module1IngestionRouterTest {
         CanonicalEvent output = (CanonicalEvent) harness.extractOutputValues().get(0);
         assertThat(output).isNotNull();
         assertThat(output.getPatientId()).isEqualTo("patient-001");
-        assertThat(output.getEventType()).isEqualTo(EventType.VITAL_SIGNS);
+        assertThat(output.getEventType()).isEqualTo(EventType.VITAL_SIGN);
         assertThat(output.getEventTime()).isEqualTo(timestamp);
         assertThat(output.getPayload()).containsKeys("heart_rate", "systolic_bp");
 
@@ -93,9 +93,9 @@ public class Module1IngestionRouterTest {
         assertThat(output.getMetadata().getLocation()).isEqualTo("Test Ward");
         assertThat(output.getMetadata().getDeviceId()).isEqualTo("TEST-DEVICE-001");
 
-        // Verify DLQ is empty
+        // Verify DLQ is empty (getSideOutput returns null when no side output was emitted)
         assertThat(harness.getSideOutput(new org.apache.flink.util.OutputTag<RawEvent>("dlq-events"){}))
-            .isEmpty();
+            .isNullOrEmpty();
     }
 
     // ====================================================================
@@ -139,7 +139,7 @@ public class Module1IngestionRouterTest {
     // ====================================================================
 
     @Test
-    @DisplayName("Schema validation rejects events with missing required fields")
+    @DisplayName("Schema validation rejects missing fields and clamps out-of-range timestamps")
     void testSchemaValidationRejectsMissingFields() throws Exception {
         // Test Case 3a: Missing patient ID
         Map<String, Object> payload = new HashMap<>();
@@ -190,39 +190,69 @@ public class Module1IngestionRouterTest {
         assertThat(harness.getSideOutput(new org.apache.flink.util.OutputTag<RawEvent>("dlq-events"){}))
             .hasSize(3);  // Now 3 events in DLQ
 
-        // Test Case 3d: Timestamp too far in future (> 1 hour)
+        // Test Case 3d: Timestamp too far in future (> 1 hour) — should be CLAMPED, not rejected (C1 fix)
         long futureTime = System.currentTimeMillis() + (2 * 60 * 60 * 1000); // +2 hours
 
         RawEvent futureTimestamp = RawEvent.builder()
             .id("test-003d")
             .patientId("patient-004")
             .type("vital_signs")
-            .eventTime(futureTime)  // Too far in future
+            .eventTime(futureTime)  // Too far in future — will be clamped to now+1h
             .payload(payload)
             .build();
 
         harness.processElement(futureTimestamp, futureTime);
 
-        // Should route to DLQ
+        // After C1 fix: future timestamps are CLAMPED to now+1h, NOT rejected to DLQ
+        // DLQ should still have only 3 events (null patientId, blank patientId, zero timestamp)
         assertThat(harness.getSideOutput(new org.apache.flink.util.OutputTag<RawEvent>("dlq-events"){}))
-            .hasSize(4);  // Now 4 events in DLQ
+            .hasSize(3);  // Unchanged — future timestamp is clamped, not DLQ'd
 
-        // Test Case 3e: Timestamp too old (> 30 days)
+        // Verify the clamped event appeared in main output
+        List<CanonicalEvent> mainOutput = harness.extractOutputValues().stream()
+            .filter(obj -> obj instanceof CanonicalEvent)
+            .map(obj -> (CanonicalEvent) obj)
+            .collect(Collectors.toList());
+        assertThat(mainOutput).isNotEmpty();
+
+        CanonicalEvent clampedFuture = mainOutput.stream()
+            .filter(e -> "patient-004".equals(e.getPatientId()))
+            .findFirst().orElse(null);
+        assertThat(clampedFuture).isNotNull();
+        // Clamped timestamp should be <= now + 1h (with 5s tolerance for test execution)
+        long maxAllowed = System.currentTimeMillis() + (60 * 60 * 1000) + 5000;
+        assertThat(clampedFuture.getEventTime()).isLessThanOrEqualTo(maxAllowed);
+
+        // Test Case 3e: Timestamp too old (> 30 days) — should be CLAMPED, not rejected (C1 fix)
         long oldTime = System.currentTimeMillis() - (31L * 24 * 60 * 60 * 1000); // -31 days
 
         RawEvent oldTimestamp = RawEvent.builder()
             .id("test-003e")
             .patientId("patient-005")
             .type("vital_signs")
-            .eventTime(oldTime)  // Too old
+            .eventTime(oldTime)  // Too old — will be clamped to 30d boundary
             .payload(payload)
             .build();
 
         harness.processElement(oldTimestamp, oldTime);
 
-        // Should route to DLQ
+        // After C1 fix: old timestamps are CLAMPED to 30d boundary, NOT rejected to DLQ
         assertThat(harness.getSideOutput(new org.apache.flink.util.OutputTag<RawEvent>("dlq-events"){}))
-            .hasSize(5);  // Now 5 events in DLQ
+            .hasSize(3);  // Still 3 — old timestamp is clamped, not DLQ'd
+
+        // Verify the clamped event appeared in main output
+        List<CanonicalEvent> allOutput = harness.extractOutputValues().stream()
+            .filter(obj -> obj instanceof CanonicalEvent)
+            .map(obj -> (CanonicalEvent) obj)
+            .collect(Collectors.toList());
+
+        CanonicalEvent clampedOld = allOutput.stream()
+            .filter(e -> "patient-005".equals(e.getPatientId()))
+            .findFirst().orElse(null);
+        assertThat(clampedOld).isNotNull();
+        // Clamped timestamp should be >= now - 30d (with 5s tolerance)
+        long minAllowed = System.currentTimeMillis() - (30L * 24 * 60 * 60 * 1000) - 5000;
+        assertThat(clampedOld.getEventTime()).isGreaterThanOrEqualTo(minAllowed);
     }
 
     // ====================================================================
@@ -261,7 +291,7 @@ public class Module1IngestionRouterTest {
         // Verify all events were processed for the same patient
         canonicalEvents.forEach(event -> {
             assertThat(event.getPatientId()).isEqualTo("patient-006");
-            assertThat(event.getEventType()).isEqualTo(EventType.VITAL_SIGNS);
+            assertThat(event.getEventType()).isEqualTo(EventType.VITAL_SIGN);
         });
 
         // Verify watermark advanced

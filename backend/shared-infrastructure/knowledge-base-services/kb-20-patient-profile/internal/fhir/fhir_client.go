@@ -61,6 +61,7 @@ func (c *FHIRClient) GetObservation(fhirID string) (map[string]interface{}, erro
 }
 
 // SearchObservations searches for Observations by patient and LOINC code.
+// Follows FHIR Bundle pagination to return all matching results.
 func (c *FHIRClient) SearchObservations(patientID, loincCode string) ([]map[string]interface{}, error) {
 	params := url.Values{
 		"patient": {patientID},
@@ -70,30 +71,7 @@ func (c *FHIRClient) SearchObservations(patientID, loincCode string) ([]map[stri
 	}
 
 	reqURL := c.baseURL + "/Observation?" + params.Encode()
-	body, err := c.doRequestWithRetry("GET", reqURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var bundle map[string]interface{}
-	if err := json.Unmarshal(body, &bundle); err != nil {
-		return nil, fmt.Errorf("failed to parse FHIR Bundle: %w", err)
-	}
-
-	entries, _ := bundle["entry"].([]interface{})
-	var results []map[string]interface{}
-	for _, entry := range entries {
-		entryMap, ok := entry.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		resource, ok := entryMap["resource"].(map[string]interface{})
-		if ok {
-			results = append(results, resource)
-		}
-	}
-
-	return results, nil
+	return c.fetchAllPages(reqURL, "Observation")
 }
 
 // GetMedicationRequest retrieves a FHIR MedicationRequest resource by ID.
@@ -169,30 +147,75 @@ func (c *FHIRClient) searchResourcesSince(resourceType string, since time.Time) 
 	}
 
 	reqURL := c.baseURL + "/" + resourceType + "?" + params.Encode()
-	body, err := c.doRequestWithRetry("GET", reqURL, nil)
-	if err != nil {
-		return nil, err
+	return c.fetchAllPages(reqURL, resourceType)
+}
+
+// fetchAllPages follows FHIR Bundle pagination (link.next) to collect all resources.
+// Safety cap of 50 pages (5000 resources at _count=100) prevents runaway loops.
+func (c *FHIRClient) fetchAllPages(initialURL, resourceType string) ([]map[string]interface{}, error) {
+	const maxPages = 50
+	var allResults []map[string]interface{}
+	nextURL := initialURL
+
+	for page := 0; page < maxPages && nextURL != ""; page++ {
+		body, err := c.doRequestWithRetry("GET", nextURL, nil)
+		if err != nil {
+			return allResults, err
+		}
+
+		var bundle map[string]interface{}
+		if err := json.Unmarshal(body, &bundle); err != nil {
+			return allResults, fmt.Errorf("failed to parse FHIR Bundle: %w", err)
+		}
+
+		entries, _ := bundle["entry"].([]interface{})
+		for _, entry := range entries {
+			entryMap, ok := entry.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			resource, ok := entryMap["resource"].(map[string]interface{})
+			if ok {
+				allResults = append(allResults, resource)
+			}
+		}
+
+		// Follow pagination: look for link with relation "next"
+		nextURL = extractNextLink(bundle)
+
+		if nextURL != "" {
+			c.logger.Debug("FHIR pagination: following next page",
+				zap.String("resourceType", resourceType),
+				zap.Int("page", page+1),
+				zap.Int("totalSoFar", len(allResults)))
+		}
 	}
 
-	var bundle map[string]interface{}
-	if err := json.Unmarshal(body, &bundle); err != nil {
-		return nil, fmt.Errorf("failed to parse FHIR Bundle: %w", err)
-	}
+	c.logger.Info("FHIR search completed",
+		zap.String("resourceType", resourceType),
+		zap.Int("totalResources", len(allResults)))
 
-	entries, _ := bundle["entry"].([]interface{})
-	var results []map[string]interface{}
-	for _, entry := range entries {
-		entryMap, ok := entry.(map[string]interface{})
+	return allResults, nil
+}
+
+// extractNextLink finds the "next" pagination URL from a FHIR Bundle's link array.
+func extractNextLink(bundle map[string]interface{}) string {
+	links, ok := bundle["link"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, link := range links {
+		linkMap, ok := link.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		resource, ok := entryMap["resource"].(map[string]interface{})
-		if ok {
-			results = append(results, resource)
+		if rel, _ := linkMap["relation"].(string); rel == "next" {
+			if url, _ := linkMap["url"].(string); url != "" {
+				return url
+			}
 		}
 	}
-
-	return results, nil
+	return ""
 }
 
 // doRequestWithRetry executes an HTTP request with exponential backoff (1s, 2s, 4s)

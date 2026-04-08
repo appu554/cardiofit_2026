@@ -68,6 +68,7 @@ public class Module3_ComprehensiveCDS {
 
         // Sequential processing through all 8 phases
         DataStream<CDSEvent> comprehensiveEvents = enrichedPatientContexts
+            .filter(ctx -> ctx.getPatientId() != null && !ctx.getPatientId().isEmpty())
             .keyBy(EnrichedPatientContext::getPatientId)
             .process(new ComprehensiveCDSProcessor())
             .uid("comprehensive-cds-processor")

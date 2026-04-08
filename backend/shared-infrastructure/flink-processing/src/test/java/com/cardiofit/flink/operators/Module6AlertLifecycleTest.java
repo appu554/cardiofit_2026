@@ -40,13 +40,22 @@ class Module6AlertLifecycleTest {
     }
 
     @Test
+    void createAlert_withEventTime_usesEventTime() {
+        long eventTime = 1700000000000L;
+        ClinicalAlert alert = AlertLifecycleManager.createAlert(
+            "P001", ActionTier.HALT, "SEPSIS", "MODULE_3_CDS", eventTime);
+        assertEquals(eventTime, alert.getCreatedAt());
+        assertEquals(eventTime + (30 * 60 * 1000L), alert.getSlaDeadlineMs());
+    }
+
+    @Test
     void alertFatigue_capsAt10Per24Hours() {
         PatientAlertState state = new PatientAlertState("P001");
         for (int i = 0; i < 10; i++) {
-            assertFalse(AlertLifecycleManager.checkAlertFatigue(state),
+            assertFalse(AlertLifecycleManager.checkAlertFatigue(state, ActionTier.PAUSE),
                 "Alert " + (i+1) + " should not be fatigued");
         }
-        assertTrue(AlertLifecycleManager.checkAlertFatigue(state),
+        assertTrue(AlertLifecycleManager.checkAlertFatigue(state, ActionTier.PAUSE),
             "Alert 11 should trigger fatigue protection");
     }
 
@@ -54,8 +63,8 @@ class Module6AlertLifecycleTest {
     void alertFatigue_resetsAfter24Hours() {
         PatientAlertState state = new PatientAlertState("P001");
         state.setAlertsInLast24Hours(10);
-        state.setAlertWindowStart(System.currentTimeMillis() - 25 * 60 * 60 * 1000L); // 25h ago
-        assertFalse(AlertLifecycleManager.checkAlertFatigue(state),
+        state.setAlertWindowStart(System.currentTimeMillis() - 25 * 60 * 60 * 1000L);
+        assertFalse(AlertLifecycleManager.checkAlertFatigue(state, ActionTier.PAUSE),
             "Fatigue should reset after 24h window expires");
     }
 
@@ -77,5 +86,21 @@ class Module6AlertLifecycleTest {
         AlertLifecycleManager.escalate(alert); // level 2
         assertEquals(2, alert.getEscalationLevel());
         assertEquals("CLINICAL_SUPERVISOR", alert.getAssignedTo());
+    }
+
+    // ── Timer mapping tests ──
+
+    @Test
+    void timerMapping_registerAndPop() {
+        PatientAlertState state = new PatientAlertState("P001");
+        state.registerTimerMapping(1700000000000L, "alert-123");
+        assertEquals("alert-123", state.popTimerMapping(1700000000000L));
+        assertNull(state.popTimerMapping(1700000000000L), "Second pop should return null");
+    }
+
+    @Test
+    void timerMapping_unknownTimestamp_returnsNull() {
+        PatientAlertState state = new PatientAlertState("P001");
+        assertNull(state.popTimerMapping(9999999999999L));
     }
 }

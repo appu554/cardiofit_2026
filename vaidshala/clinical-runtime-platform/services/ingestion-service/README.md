@@ -18,7 +18,7 @@ Wearables        ─┤                                                   ├─
 App Check-in     ─┤                                                   ├──→ Kafka (per-topic routing)
 WhatsApp NLU     ─┤                                                   └──→ DLQ (PostgreSQL)
 ABDM Data Push   ─┤
-HPI (internal)   ─┘
+ABDM Data Push   ─┘
 ```
 
 ## Prerequisites
@@ -144,11 +144,6 @@ The service starts on port **8140** by default.
 | POST | `/whatsapp` | NLU-parsed WhatsApp messages |
 | POST | `/abdm/data-push` | ABDM Health Information push |
 
-### Internal (Service-to-Service)
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/internal/hpi` | HPI slot data from Intake service |
-
 ### Admin
 | Method | Path | Description |
 |--------|------|-------------|
@@ -213,8 +208,141 @@ psql "$DATABASE_URL" -f migrations/001_init.sql       # DLQ table, ingestion_eve
 psql "$DATABASE_URL" -f migrations/002_lab_adapters.sql # Lab webhook tracking
 ```
 
+## API Usage Examples
+
+### Ingest a lab observation
+
+```bash
+curl -X POST http://localhost:8140/fhir/Observation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "tenant_id":  "00000000-0000-0000-0000-000000000001",
+    "loinc_code": "1558-6",
+    "value": 142.0,
+    "unit": "mg/dL",
+    "timestamp": "2026-03-23T08:00:00Z"
+  }'
+```
+
+Response:
+```json
+{
+  "status": "accepted",
+  "observation_id": "d4e5f6a7-...",
+  "fhir_resource_id": "fhir-obs-001",
+  "quality_score": 0.90,
+  "flags": []
+}
+```
+
+### Submit device readings (BP monitor)
+
+```bash
+curl -X POST http://localhost:8140/devices \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "tenant_id":  "00000000-0000-0000-0000-000000000001",
+    "timestamp": "2026-03-23T09:00:00Z",
+    "device": {
+      "device_id": "bp-monitor-001",
+      "device_type": "blood_pressure_monitor",
+      "manufacturer": "Omron",
+      "model": "HEM-7120"
+    },
+    "readings": [
+      {"analyte": "systolic_bp",  "value": 148.0, "unit": "mmHg"},
+      {"analyte": "diastolic_bp", "value": 92.0,  "unit": "mmHg"},
+      {"analyte": "heart_rate",   "value": 78.0,  "unit": "bpm"}
+    ]
+  }'
+```
+
+### Submit an app check-in
+
+```bash
+curl -X POST http://localhost:8140/app-checkin \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "tenant_id":  "00000000-0000-0000-0000-000000000001",
+    "timestamp": "2026-03-23T07:30:00Z",
+    "readings": [
+      {"analyte": "fasting_glucose", "value": 156.0, "unit": "mg/dL"},
+      {"analyte": "weight",          "value": 74.2,  "unit": "kg"}
+    ]
+  }'
+```
+
+### Submit wearable data (Ultrahuman CGM)
+
+```bash
+curl -X POST http://localhost:8140/wearables/ultrahuman \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "tenant_id":  "00000000-0000-0000-0000-000000000001",
+    "device_id": "M1_12345",
+    "sensor_id": "sensor_xyz",
+    "period_start": "2026-03-20T00:00:00Z",
+    "period_end":   "2026-03-23T23:59:59Z",
+    "readings": [
+      {"timestamp": "2026-03-23T08:00:00Z", "glucose_mg_dl": 95.5},
+      {"timestamp": "2026-03-23T08:05:00Z", "glucose_mg_dl": 98.2}
+    ]
+  }'
+```
+
+### Check DLQ status
+
+```bash
+# Count entries by status
+curl http://localhost:8140/admin/dlq/\$count
+
+# List pending entries
+curl "http://localhost:8140/admin/dlq?status=PENDING"
+
+# Replay a failed entry
+curl -X POST http://localhost:8140/fhir/OperationOutcome/<dlq-id>/\$replay
+```
+
+### Health checks
+
+```bash
+curl http://localhost:8140/healthz    # Liveness
+curl http://localhost:8140/readyz     # Readiness (checks DB, Redis, FHIR Store)
+curl http://localhost:8140/metrics    # Prometheus metrics
+```
+
+## Kafka Topics
+
+The Topic Router maps `ObservationType` to Kafka topics. Partition key is always the patient UUID.
+
+| ObservationType | Kafka Topic | Event Type |
+|-----------------|-------------|------------|
+| `VITALS` | `ingestion.vitals` | `VITAL_SIGN` |
+| `LABS` | `ingestion.labs` | `LAB_RESULT` |
+| `MEDICATIONS` | `ingestion.medications` | `MEDICATION_UPDATE` |
+| `PATIENT_REPORTED` | `ingestion.patient-reported` | `PATIENT_REPORT` |
+| `DEVICE_DATA` | `ingestion.device-data` | `DEVICE_READING` |
+| `ABDM_RECORDS` | `ingestion.abdm-records` | `ABDM_RECORD` |
+| `GENERAL` | `ingestion.observations` | `OBSERVATION` |
+
+## API Documentation
+
+- **OpenAPI / Swagger**: [`docs/swagger.yaml`](docs/swagger.yaml) — import into Swagger UI or editor
+- **Postman Collection**: [`docs/postman_collection.json`](docs/postman_collection.json) — import into Postman
+
 ## Testing
 
 ```bash
+# All tests (unit + integration + E2E)
 go test ./...
+
+# E2E Kafka tests only (requires Kafka on localhost:9092)
+go test -v -run TestE2E ./internal/api/ -timeout 120s
+
+# Unit tests only (no external dependencies)
+go test -short ./...
 ```

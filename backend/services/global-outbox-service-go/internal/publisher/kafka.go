@@ -297,20 +297,20 @@ func (kp *KafkaPublisher) handlePublishError(ctx context.Context, event *models.
 	return kp.repo.UpdateEventStatus(ctx, event)
 }
 
-// handleDeliveryReports handles async delivery reports from Kafka
+// handleDeliveryReports handles async delivery reports from Kafka.
+// confluent-kafka-go v2 Producer uses the Events() channel (not Poll).
 func (kp *KafkaPublisher) handleDeliveryReports(ctx context.Context) {
+	events := kp.producer.Events()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-kp.stopChan:
 			return
-		default:
-			ev := kp.producer.Poll(100)
-			if ev == nil {
-				continue
+		case ev, ok := <-events:
+			if !ok {
+				return
 			}
-
 			switch e := ev.(type) {
 			case *kafka.Message:
 				if e.TopicPartition.Error != nil {

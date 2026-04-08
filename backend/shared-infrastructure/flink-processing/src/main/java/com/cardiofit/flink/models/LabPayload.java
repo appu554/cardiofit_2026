@@ -139,6 +139,33 @@ public class LabPayload implements Serializable {
     @JsonAlias({"performinglab", "performing_lab"})
     private String performingLab;
 
+    /**
+     * Canonical clinical concept resolved by KB-7 Terminology (in production)
+     * or hardcoded by the E2E script. Examples: "TROPONIN", "BNP", "LACTATE",
+     * "POTASSIUM", "WBC". Multiple LOINC codes can map to the same concept
+     * (e.g., 42757-5 and 30934-4 both → "BNP").
+     */
+    @JsonProperty("clinicalConcept")
+    @JsonAlias({"clinicalconcept", "clinical_concept"})
+    private String clinicalConcept;
+
+    /**
+     * Concept group for categorisation: CARDIAC, METABOLIC, RENAL,
+     * ELECTROLYTE, HEMATOLOGY, COAGULATION, INFECTION_MARKER
+     */
+    @JsonProperty("conceptGroup")
+    @JsonAlias({"conceptgroup", "concept_group"})
+    private String conceptGroup;
+
+    /**
+     * Concept-level abnormality flag resolved at ingestion time.
+     * Values: "NORMAL", "ELEVATED", "CRITICALLY_ELEVATED", "LOW", "CRITICALLY_LOW", "UNKNOWN"
+     * Different from abnormalFlag which is the raw lab-system flag (N/L/H/LL/HH).
+     */
+    @JsonProperty("abnormalityFlag")
+    @JsonAlias({"abnormalityflag", "abnormality_flag"})
+    private String abnormalityFlag;
+
     public LabPayload() {
         this.resultTime = System.currentTimeMillis();
         this.abnormal = false;
@@ -312,12 +339,37 @@ public class LabPayload implements Serializable {
         this.performingLab = performingLab;
     }
 
+    public String getClinicalConcept() {
+        return clinicalConcept;
+    }
+
+    public void setClinicalConcept(String clinicalConcept) {
+        this.clinicalConcept = clinicalConcept;
+    }
+
+    public String getConceptGroup() {
+        return conceptGroup;
+    }
+
+    public void setConceptGroup(String conceptGroup) {
+        this.conceptGroup = conceptGroup;
+    }
+
+    public String getAbnormalityFlag() {
+        return abnormalityFlag;
+    }
+
+    public void setAbnormalityFlag(String abnormalityFlag) {
+        this.abnormalityFlag = abnormalityFlag;
+    }
+
     /**
-     * Convert to legacy LabResult format for backward compatibility
+     * Convert to LabResult format for state storage.
+     * Propagates concept fields so the aggregator can use concept-driven evaluation.
      */
     public LabResult toLabResult() {
         LabResult lab = new LabResult();
-        lab.setLabCode(loincCode); // Store LOINC code for risk indicator lookups
+        lab.setLabCode(loincCode);
         lab.setLabType(loincCode != null ? loincCode : labName);
         lab.setValue(value);
         lab.setUnit(unit);
@@ -325,6 +377,9 @@ public class LabPayload implements Serializable {
         lab.setReferenceRangeHigh(referenceRangeHigh);
         lab.setAbnormal(abnormal);
         lab.setAbnormalFlag(abnormalFlag);
+        lab.setClinicalConcept(clinicalConcept);
+        lab.setConceptGroup(conceptGroup);
+        lab.setAbnormalityFlag(abnormalityFlag);
         if (resultTime != null) {
             lab.setTimestamp(resultTime);
         }

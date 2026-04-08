@@ -1,5 +1,7 @@
 package com.cardiofit.flink.models;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.util.List;
@@ -10,6 +12,7 @@ import java.util.HashMap;
  * Patient context model representing comprehensive patient state and history
  * Maintained by Module 2: Context Assembly & Enrichment
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class PatientContext implements Serializable, Cloneable {
     private static final long serialVersionUID = 1L;
 
@@ -163,7 +166,7 @@ public class PatientContext implements Serializable, Cloneable {
     }
 
     public Double getWeight() {
-        return currentVitals != null ? (Double) currentVitals.get("weight") : null;
+        return safeDouble(currentVitals, "weight");
     }
 
     public void setWeight(double weight) {
@@ -174,7 +177,7 @@ public class PatientContext implements Serializable, Cloneable {
     }
 
     public Double getHeight() {
-        return currentVitals != null ? (Double) currentVitals.get("height") : null;
+        return safeDouble(currentVitals, "height");
     }
 
     public void setHeight(double height) {
@@ -185,7 +188,7 @@ public class PatientContext implements Serializable, Cloneable {
     }
 
     public Double getCreatinine() {
-        return currentVitals != null ? (Double) currentVitals.get("creatinine") : null;
+        return safeDouble(currentVitals, "creatinine");
     }
 
     public void setCreatinine(double creatinine) {
@@ -345,18 +348,22 @@ public class PatientContext implements Serializable, Cloneable {
         return false; // Default implementation
     }
 
+    @JsonIgnore
     public long getLastUpdateTime() {
         return lastEventTime;
     }
 
+    @JsonIgnore
     public Map<String, Object> getCurrentMedications() {
         return activeMedications;
     }
 
+    @JsonIgnore
     public List<String> getActiveConditions() {
         return chronicConditions;
     }
 
+    @JsonIgnore
     public Map<String, Double> getRiskScores() {
         Map<String, Double> scores = new HashMap<>();
         if (readmissionRiskScore != null) scores.put("readmission", readmissionRiskScore);
@@ -492,6 +499,18 @@ public class PatientContext implements Serializable, Cloneable {
      */
     public boolean hasRiskFactor(String riskFactor) {
         return riskFactors != null && riskFactors.contains(riskFactor);
+    }
+
+    /** Safely extract a Double from a Map that may contain Integer, Long, or Float values. */
+    private static Double safeDouble(Map<String, Object> map, String key) {
+        if (map == null) return null;
+        Object v = map.get(key);
+        if (v == null) return null;
+        if (v instanceof Number) return ((Number) v).doubleValue();
+        if (v instanceof String) {
+            try { return Double.parseDouble((String) v); } catch (NumberFormatException e) { return null; }
+        }
+        return null;
     }
 
     @Override

@@ -30,7 +30,6 @@ func DefaultSourceRegistry() []SourceConfig {
 		{SourceID: "abdm_hiu", SourceType: "ABDM", Name: "ABDM HIU", Format: "FHIR", FreshnessHours: 168, Enabled: true},
 		{SourceID: "app_checkin", SourceType: "PATIENT_REPORTED", Name: "Flutter App Checkin", Format: "JSON", FreshnessHours: 24, Enabled: true},
 		{SourceID: "whatsapp", SourceType: "PATIENT_REPORTED", Name: "WhatsApp NLU", Format: "JSON", FreshnessHours: 24, Enabled: true},
-		{SourceID: "intake_hpi", SourceType: "HPI", Name: "Intake M0 HPI", Format: "JSON", FreshnessHours: 168, Enabled: true},
 	}
 }
 

@@ -1,14 +1,18 @@
 package com.cardiofit.flink.operators;
 
 import com.cardiofit.flink.models.*;
-import org.apache.flink.streaming.api.operators.KeyedProcessOperator;
-import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
+import com.cardiofit.flink.thresholds.ClinicalThresholdSet;
+import com.cardiofit.flink.thresholds.ThresholdBroadcastFunction;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.streaming.api.operators.co.CoBroadcastWithKeyedOperator;
+import org.apache.flink.streaming.util.KeyedTwoInputStreamOperatorTestHarness;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,22 +20,32 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * R9: Integration test that exercises the real KeyedProcessFunction.
- * Uses Flink's test harness to simulate processElement() calls
- * with proper keyed state, watermarks, and side-output collection.
+ * R9: Integration test that exercises the real KeyedBroadcastProcessFunction.
+ * Uses Flink's two-input test harness to simulate processElement() calls
+ * with proper keyed state, watermarks, broadcast state, and side-output collection.
+ *
+ * Since Module 8 now extends ThresholdBroadcastFunction (Phase 4),
+ * we use CoBroadcastWithKeyedOperator + KeyedTwoInputStreamOperatorTestHarness.
+ * The broadcast input (ClinicalThresholdSet) is never sent in these tests,
+ * so getThresholds() falls back to hardcoded defaults.
  */
 class Module8ProcessElementTest {
 
-    private KeyedOneInputStreamOperatorTestHarness<String, CanonicalEvent, CIDAlert> harness;
+    private KeyedTwoInputStreamOperatorTestHarness<String, CanonicalEvent, ClinicalThresholdSet, CIDAlert> harness;
 
     @BeforeEach
     void setUp() throws Exception {
         Module8_ComorbidityEngine engine = new Module8_ComorbidityEngine();
-        harness = new KeyedOneInputStreamOperatorTestHarness<>(
-            new KeyedProcessOperator<>(engine),
-            CanonicalEvent::getPatientId,
-            Types.STRING
-        );
+        CoBroadcastWithKeyedOperator<String, CanonicalEvent, ClinicalThresholdSet, CIDAlert> operator =
+            new CoBroadcastWithKeyedOperator<>(
+                engine,
+                Collections.singletonList(ThresholdBroadcastFunction.THRESHOLD_STATE));
+
+        harness = new KeyedTwoInputStreamOperatorTestHarness<>(
+            operator,
+            (KeySelector<CanonicalEvent, String>) CanonicalEvent::getPatientId,
+            (KeySelector<ClinicalThresholdSet, String>) t -> "broadcast",
+            Types.STRING);
         harness.open();
     }
 
@@ -46,14 +60,14 @@ class Module8ProcessElementTest {
         String patientId = "P-HARNESS-TW";
         long now = System.currentTimeMillis();
 
-        // 1) Medication events to build state
-        harness.processElement(buildMedEvent(patientId, "lisinopril", "ACEI", now - 5000), now - 5000);
-        harness.processElement(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 4000), now - 4000);
-        harness.processElement(buildMedEvent(patientId, "hydrochlorothiazide", "THIAZIDE", now - 3000), now - 3000);
+        // 1) Medication events to build state — use processElement1 for keyed input
+        harness.processElement1(buildMedEvent(patientId, "lisinopril", "ACEI", now - 5000), now - 5000);
+        harness.processElement1(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 4000), now - 4000);
+        harness.processElement1(buildMedEvent(patientId, "hydrochlorothiazide", "THIAZIDE", now - 3000), now - 3000);
 
         // 2) Weight drop >2kg in 7 days (precipitant for CID-01)
-        harness.processElement(buildVitalEvent(patientId, 130.0, null, 80.0, now - 7L * 86_400_000L), now - 7L * 86_400_000L);
-        harness.processElement(buildVitalEvent(patientId, 128.0, null, 77.0, now), now);
+        harness.processElement1(buildVitalEvent(patientId, 130.0, null, 80.0, now - 7L * 86_400_000L), now - 7L * 86_400_000L);
+        harness.processElement1(buildVitalEvent(patientId, 128.0, null, 77.0, now), now);
 
         // 3) Check main output contains CID-01
         List<CIDAlert> mainOutput = harness.extractOutputValues();
@@ -75,10 +89,10 @@ class Module8ProcessElementTest {
         long now = System.currentTimeMillis();
 
         // Single benign medication
-        harness.processElement(buildMedEvent(patientId, "amlodipine", "CCB", now), now);
+        harness.processElement1(buildMedEvent(patientId, "amlodipine", "CCB", now), now);
 
         // Normal vitals
-        harness.processElement(buildVitalEvent(patientId, 125.0, null, null, now), now);
+        harness.processElement1(buildVitalEvent(patientId, 125.0, null, null, now), now);
 
         List<CIDAlert> output = harness.extractOutputValues();
         assertTrue(output.isEmpty(), "Safe patient should produce zero alerts");
@@ -91,10 +105,10 @@ class Module8ProcessElementTest {
         long now = System.currentTimeMillis();
 
         // First event: SGLT2I alone — no CID-15 alert (needs NSAID too)
-        harness.processElement(buildMedEvent(patientId, "empagliflozin", "SGLT2I", now - 2000), now - 2000);
+        harness.processElement1(buildMedEvent(patientId, "empagliflozin", "SGLT2I", now - 2000), now - 2000);
 
         // Second event: NSAID — now SGLT2I + NSAID triggers CID-15 SOFT_FLAG
-        harness.processElement(buildMedEvent(patientId, "ibuprofen", "NSAID", now), now);
+        harness.processElement1(buildMedEvent(patientId, "ibuprofen", "NSAID", now), now);
         List<CIDAlert> output = harness.extractOutputValues();
         assertTrue(output.stream().anyMatch(a -> "CID_15".equals(a.getRuleId())),
             "CID-15 should fire after NSAID added to existing SGLT2I");
@@ -107,13 +121,13 @@ class Module8ProcessElementTest {
         long now = System.currentTimeMillis();
 
         // 1) Thiazide medication
-        harness.processElement(buildMedEvent(patientId, "hydrochlorothiazide", "THIAZIDE", now - 14L * 86_400_000L), now - 14L * 86_400_000L);
+        harness.processElement1(buildMedEvent(patientId, "hydrochlorothiazide", "THIAZIDE", now - 14L * 86_400_000L), now - 14L * 86_400_000L);
 
         // 2) FBG reading 14 days ago: 110 mg/dL
-        harness.processElement(buildLabEvent(patientId, "fbg", 110.0, now - 14L * 86_400_000L), now - 14L * 86_400_000L);
+        harness.processElement1(buildLabEvent(patientId, "fbg", 110.0, now - 14L * 86_400_000L), now - 14L * 86_400_000L);
 
         // 3) FBG reading now: 130 mg/dL (delta = +20, exceeds 15 threshold)
-        harness.processElement(buildLabEvent(patientId, "fbg", 130.0, now), now);
+        harness.processElement1(buildLabEvent(patientId, "fbg", 130.0, now), now);
 
         // 4) Verify CID-06 fires through the full operator pipeline
         List<CIDAlert> output = harness.extractOutputValues();
@@ -121,7 +135,6 @@ class Module8ProcessElementTest {
             "CID-06 should fire when FBG increases >15 mg/dL over 14 days on thiazide");
 
         // 5) Verify it's PAUSE severity (not routed to HALT side-output)
-        // getSideOutput() returns null (not empty list) when no HALT alerts exist
         var sideOutput = harness.getSideOutput(Module8_ComorbidityEngine.HALT_SAFETY_TAG);
         assertTrue(sideOutput == null || sideOutput.stream().noneMatch(r -> "CID_06".equals(r.getValue().getRuleId())),
             "CID-06 is PAUSE severity — should NOT appear in HALT side-output");
@@ -134,13 +147,13 @@ class Module8ProcessElementTest {
         long now = System.currentTimeMillis();
 
         // 1) SGLT2i medication
-        harness.processElement(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 80L * 3600_000L), now - 80L * 3600_000L);
+        harness.processElement1(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 80L * 3600_000L), now - 80L * 3600_000L);
 
         // 2) Keto diet reported 80 hours ago (>72h ago, but keto has no TTL)
-        harness.processElement(buildSymptomEvent(patientId, "KETO_DIET", null, now - 80L * 3600_000L), now - 80L * 3600_000L);
+        harness.processElement1(buildSymptomEvent(patientId, "KETO_DIET", null, now - 80L * 3600_000L), now - 80L * 3600_000L);
 
         // 3) Benign vital event NOW — keto should NOT expire (dietary choice is sticky)
-        harness.processElement(buildVitalEvent(patientId, 120.0, null, null, now), now);
+        harness.processElement1(buildVitalEvent(patientId, 120.0, null, null, now), now);
 
         // 4) CID-04 should fire — keto diet persists until explicit RESOLVED event
         List<CIDAlert> output = harness.extractOutputValues();
@@ -155,8 +168,8 @@ class Module8ProcessElementTest {
         long now = System.currentTimeMillis();
 
         // 1) SGLT2i + keto diet
-        harness.processElement(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 5000), now - 5000);
-        harness.processElement(buildSymptomEvent(patientId, "KETO_DIET", null, now - 4000), now - 4000);
+        harness.processElement1(buildMedEvent(patientId, "dapagliflozin", "SGLT2I", now - 5000), now - 5000);
+        harness.processElement1(buildSymptomEvent(patientId, "KETO_DIET", null, now - 4000), now - 4000);
 
         // 2) Verify CID-04 fires
         List<CIDAlert> output1 = harness.extractOutputValues();
@@ -164,10 +177,9 @@ class Module8ProcessElementTest {
             "CID-04 should fire when SGLT2i + keto diet active");
 
         // 3) Patient reports stopping keto diet
-        harness.processElement(buildSymptomEvent(patientId, "KETO_DIET", "RESOLVED", now), now);
+        harness.processElement1(buildSymptomEvent(patientId, "KETO_DIET", "RESOLVED", now), now);
 
         // 4) CID-04 should NOT appear in new output
-        // extractOutputValues() is non-destructive — use size delta to check new entries
         List<CIDAlert> output2 = harness.extractOutputValues();
         List<CIDAlert> newAlerts = output2.subList(output1.size(), output2.size());
         assertFalse(newAlerts.stream().anyMatch(a -> "CID_04".equals(a.getRuleId())),

@@ -137,8 +137,6 @@ func eventTypeFromObservationType(obsType canonical.ObservationType) string {
 		return "PATIENT_REPORT"
 	case canonical.ObsMedications:
 		return "MEDICATION_UPDATE"
-	case canonical.ObsHPI:
-		return "HPI_SLOT_DATA"
 	case canonical.ObsABDMRecords:
 		return "ABDM_RECORD"
 	default:

@@ -1,7 +1,5 @@
 package safety
 
-import "github.com/cardiofit/intake-onboarding-service/internal/slots"
-
 // RuleType identifies whether a rule is a HARD_STOP or SOFT_FLAG.
 type RuleType string
 
@@ -16,11 +14,6 @@ type RuleResult struct {
 	RuleType RuleType `json:"rule_type"`
 	Reason   string   `json:"reason"`
 }
-
-// RuleFunc is a pure function that evaluates a safety rule against slot values.
-// Returns (triggered, ruleID, reason).
-// Contract: no external calls, no I/O, no LLM, deterministic.
-type RuleFunc func(snap slots.SlotSnapshot) (triggered bool, ruleID string, reason string)
 
 // SafetyResult holds the complete result of a safety evaluation.
 type SafetyResult struct {

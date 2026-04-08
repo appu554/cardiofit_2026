@@ -16,10 +16,15 @@ import com.cardiofit.flink.models.MealPatternSummary;
 import com.cardiofit.flink.models.ActivityResponseRecord;
 import com.cardiofit.flink.models.ClinicalStateChangeEvent;
 import com.cardiofit.flink.models.FitnessPatternSummary;
+import com.cardiofit.flink.models.InterventionDeltaRecord;
+import com.cardiofit.flink.models.InterventionWindowSignal;
 import com.cardiofit.flink.models.KB20StateUpdate;
 import com.cardiofit.flink.models.NotificationRequest;
 import com.cardiofit.flink.operators.*;
+import com.cardiofit.flink.thresholds.ClinicalThresholdSet;
+import com.cardiofit.flink.thresholds.ThresholdBroadcastFunction;
 import com.cardiofit.flink.serialization.PatientIdKeySerializer;
+import com.cardiofit.flink.serialization.JsonDeserializer;
 import com.cardiofit.flink.serialization.SourceTaggingDeserializer;
 import com.cardiofit.flink.sinks.KB20AsyncSinkFunction;
 import com.cardiofit.flink.utils.KafkaConfigLoader;
@@ -35,6 +40,7 @@ import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
 import org.apache.flink.connector.kafka.sink.KafkaSink;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -142,6 +148,16 @@ public class FlinkJobOrchestrator {
             case "fitness-pattern-aggregator":
                 launchFitnessPatternAggregator(env);
                 break;
+            case "intervention-window":
+            case "module12":
+            case "intervention-window-monitor":
+                launchInterventionWindowMonitor(env);
+                break;
+            case "intervention-delta":
+            case "module12b":
+            case "intervention-delta-computer":
+                launchInterventionDeltaComputer(env);
+                break;
             case "clinical-state-sync":
             case "module13":
             case "clinical-state-synchroniser":
@@ -165,10 +181,8 @@ public class FlinkJobOrchestrator {
     private static void configureEnvironment(StreamExecutionEnvironment env, String environmentMode) {
         LOG.info("Configuring Flink environment for mode: {}", environmentMode);
 
-        // Set parallelism based on environment
-        // Reduced from 8 to 2 for initial deployment to avoid RPC coordination overhead
-        int parallelism = "production".equals(environmentMode) ? 2 : 2;
-        env.setParallelism(parallelism);
+        // Parallelism 1: one partition per module, fits all 10 jobs in 16 slots
+        env.setParallelism(1);
 
         // Configure checkpointing for exactly-once processing
         env.enableCheckpointing(30000); // 30 second checkpoints
@@ -192,7 +206,7 @@ public class FlinkJobOrchestrator {
         // Configure for healthcare compliance
         env.getConfig().setGlobalJobParameters(KafkaConfigLoader.getGlobalParameters());
 
-        LOG.info("Environment configured: parallelism={}, checkpointing=30s", parallelism);
+        LOG.info("Environment configured: parallelism=1, checkpointing=30s");
     }
 
     /**
@@ -532,12 +546,30 @@ public class FlinkJobOrchestrator {
             .setValueOnlyDeserializer(new CanonicalEventDeserializer())
             .build();
 
+        // BroadcastStream: Clinical threshold updates from compacted Kafka topic.
+        // When the topic is empty (initial deploy), BroadcastState is empty and
+        // getThresholds() falls back to ClinicalThresholdSet.hardcodedDefaults().
+        KafkaSource<ClinicalThresholdSet> thresholdSource = KafkaSource.<ClinicalThresholdSet>builder()
+            .setBootstrapServers(bootstrap)
+            .setTopics(KafkaTopics.KB_CLINICAL_THRESHOLDS_CHANGES.getTopicName())
+            .setGroupId("flink-module8-threshold-consumer")
+            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setValueOnlyDeserializer(new JsonDeserializer<>(ClinicalThresholdSet.class))
+            .build();
+
+        BroadcastStream<ClinicalThresholdSet> thresholdBroadcast = env
+            .fromSource(thresholdSource,
+                WatermarkStrategy.noWatermarks(),
+                "Kafka Source: Clinical Threshold Updates (Module 8)")
+            .broadcast(ThresholdBroadcastFunction.THRESHOLD_STATE);
+
         SingleOutputStreamOperator<CIDAlert> alerts = env
             .fromSource(source,
                 WatermarkStrategy.<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
                     .withTimestampAssigner((e, ts) -> e.getEventTime()),
                 "Kafka Source: Enriched Patient Events (Module 8)")
             .keyBy(CanonicalEvent::getPatientId)
+            .connect(thresholdBroadcast)
             .process(new Module8_ComorbidityEngine())
             .uid("module8-comorbidity-engine")
             .name("Module 8: Comorbidity Interaction Engine");
@@ -879,6 +911,134 @@ public class FlinkJobOrchestrator {
         LOG.info("Module 11b pipeline configured: source=[{}], sink=[{}]",
                 KafkaTopics.FLINK_ACTIVITY_RESPONSE.getTopicName(),
                 KafkaTopics.FLINK_FITNESS_PATTERNS.getTopicName());
+    }
+
+    /**
+     * Module 12: Intervention Window Monitor.
+     * Dual-source: clinical.intervention-events (lifecycle) + enriched-patient-events-v1 (trajectory).
+     * Outputs InterventionWindowSignal to clinical.intervention-window-signals.
+     * Separate job from Module 12b for failure isolation.
+     */
+    private static void launchInterventionWindowMonitor(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 12: Intervention Window Monitor pipeline (dual-source)");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // Source 1: Intervention lifecycle events (APPROVED, MODIFIED, CANCELLED)
+        KafkaSource<CanonicalEvent> interventionSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.CLINICAL_INTERVENTION_EVENTS.getTopicName())
+                .setGroupId("flink-module12-intervention-events-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+                .build();
+
+        // Source 2: Enriched patient events (trajectory tracking + confounder detection)
+        KafkaSource<CanonicalEvent> enrichedSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+                .setGroupId("flink-module12-enriched-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+                .build();
+
+        WatermarkStrategy<CanonicalEvent> watermark = WatermarkStrategy
+                .<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                .withTimestampAssigner((e, ts) -> e.getEventTime());
+
+        DataStream<CanonicalEvent> interventionStream = env.fromSource(interventionSource, watermark,
+                "Kafka Source: Intervention Events (Module 12)");
+        DataStream<CanonicalEvent> enrichedStream = env.fromSource(enrichedSource, watermark,
+                "Kafka Source: Enriched Patient Events (Module 12)");
+
+        SingleOutputStreamOperator<InterventionWindowSignal> signals = interventionStream
+                .union(enrichedStream)
+                .keyBy(CanonicalEvent::getPatientId)
+                .process(new Module12_InterventionWindowMonitor())
+                .uid("module12-intervention-window-monitor")
+                .name("Module 12: Intervention Window Monitor");
+
+        signals.sinkTo(
+                KafkaSink.<InterventionWindowSignal>builder()
+                        .setBootstrapServers(bootstrap)
+                        .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                        .setTransactionalIdPrefix("m12-intervention-windows")
+                        .setRecordSerializer(
+                                KafkaRecordSerializationSchema.<InterventionWindowSignal>builder()
+                                        .setTopic(KafkaTopics.CLINICAL_INTERVENTION_WINDOW_SIGNALS.getTopicName())
+                                        .setValueSerializationSchema(new JsonSerializer<InterventionWindowSignal>())
+                                        .build())
+                        .build()
+        ).name("Sink: Intervention Window Signals");
+
+        LOG.info("Module 12 pipeline configured: source=[{}, {}], sink=[{}]",
+                KafkaTopics.CLINICAL_INTERVENTION_EVENTS.getTopicName(),
+                KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName(),
+                KafkaTopics.CLINICAL_INTERVENTION_WINDOW_SIGNALS.getTopicName());
+    }
+
+    /**
+     * Module 12b: Intervention Delta Computer.
+     * Dual-source: clinical.intervention-window-signals (M12 output) + enriched-patient-events-v1 (baselines).
+     * Outputs InterventionDeltaRecord to flink.intervention-deltas.
+     * Separate job from Module 12 for failure isolation.
+     */
+    private static void launchInterventionDeltaComputer(StreamExecutionEnvironment env) {
+        LOG.info("Launching Module 12b: Intervention Delta Computer pipeline (dual-source)");
+
+        String bootstrap = KafkaConfigLoader.getBootstrapServers();
+
+        // Source 1: Window signals from Module 12
+        KafkaSource<CanonicalEvent> windowSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.CLINICAL_INTERVENTION_WINDOW_SIGNALS.getTopicName())
+                .setGroupId("flink-module12b-window-signals-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+                .build();
+
+        // Source 2: Enriched patient events (for current vital baselines)
+        KafkaSource<CanonicalEvent> enrichedSource = KafkaSource.<CanonicalEvent>builder()
+                .setBootstrapServers(bootstrap)
+                .setTopics(KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName())
+                .setGroupId("flink-module12b-enriched-v1")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new CanonicalEventDeserializer())
+                .build();
+
+        WatermarkStrategy<CanonicalEvent> watermark = WatermarkStrategy
+                .<CanonicalEvent>forBoundedOutOfOrderness(Duration.ofMinutes(2))
+                .withTimestampAssigner((e, ts) -> e.getEventTime());
+
+        DataStream<CanonicalEvent> windowStream = env.fromSource(windowSource, watermark,
+                "Kafka Source: Intervention Window Signals (Module 12b)");
+        DataStream<CanonicalEvent> enrichedStream = env.fromSource(enrichedSource, watermark,
+                "Kafka Source: Enriched Patient Events (Module 12b)");
+
+        SingleOutputStreamOperator<InterventionDeltaRecord> deltas = windowStream
+                .union(enrichedStream)
+                .keyBy(CanonicalEvent::getPatientId)
+                .process(new Module12b_InterventionDeltaComputer())
+                .uid("module12b-intervention-delta-computer")
+                .name("Module 12b: Intervention Delta Computer");
+
+        deltas.sinkTo(
+                KafkaSink.<InterventionDeltaRecord>builder()
+                        .setBootstrapServers(bootstrap)
+                        .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                        .setTransactionalIdPrefix("m12b-intervention-deltas")
+                        .setRecordSerializer(
+                                KafkaRecordSerializationSchema.<InterventionDeltaRecord>builder()
+                                        .setTopic(KafkaTopics.FLINK_INTERVENTION_DELTAS.getTopicName())
+                                        .setValueSerializationSchema(new JsonSerializer<InterventionDeltaRecord>())
+                                        .build())
+                        .build()
+        ).name("Sink: Intervention Delta Records");
+
+        LOG.info("Module 12b pipeline configured: source=[{}, {}], sink=[{}]",
+                KafkaTopics.CLINICAL_INTERVENTION_WINDOW_SIGNALS.getTopicName(),
+                KafkaTopics.ENRICHED_PATIENT_EVENTS.getTopicName(),
+                KafkaTopics.FLINK_INTERVENTION_DELTAS.getTopicName());
     }
 
     /** Deserializes JSON bytes into an ActivityResponseRecord using Jackson. */

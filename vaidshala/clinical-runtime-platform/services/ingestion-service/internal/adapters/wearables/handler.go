@@ -1,6 +1,8 @@
 package wearables
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -85,4 +87,36 @@ func (h *Handler) HandleIngest(c *gin.Context) {
 		"observation_count": len(observations),
 		"observations":      observations,
 	})
+}
+
+// ConvertPayload deserialises raw JSON for the given provider and returns
+// canonical observations. This is the pipeline-friendly entry point used by
+// the Server-level handler (handleWearableIngest) so that wearable data flows
+// through orchestrator → FHIR Store → Kafka instead of stopping at HTTP.
+func (h *Handler) ConvertPayload(provider string, body []byte) ([]canonical.CanonicalObservation, error) {
+	switch provider {
+	case "health_connect":
+		var payload HealthConnectPayload
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, fmt.Errorf("invalid health_connect payload: %w", err)
+		}
+		return h.healthConnect.Convert(payload)
+
+	case "ultrahuman":
+		var payload UltrahumanCGMPayload
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, fmt.Errorf("invalid ultrahuman payload: %w", err)
+		}
+		return h.ultrahuman.Convert(payload)
+
+	case "apple_health":
+		var payload AppleHealthPayload
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return nil, fmt.Errorf("invalid apple_health payload: %w", err)
+		}
+		return h.appleHealth.Convert(payload)
+
+	default:
+		return nil, fmt.Errorf("unsupported wearable provider: %s", provider)
+	}
 }

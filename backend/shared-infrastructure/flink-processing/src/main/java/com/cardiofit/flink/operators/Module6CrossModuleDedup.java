@@ -32,7 +32,9 @@ public class Module6CrossModuleDedup implements Serializable {
 
         if (tier == ActionTier.ROUTINE) return true;
 
-        String dedupKey = patientId + ":" + tier + ":" + clinicalCategory;
+        // Key by category only — same clinical situation from different modules
+        // at different tiers should still deduplicate (highest tier wins via first arrival)
+        String dedupKey = patientId + ":" + clinicalCategory;
         Long lastEmitted = recentAlertState.get(dedupKey);
 
         long window = switch (tier) {

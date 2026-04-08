@@ -1,0 +1,1138 @@
+openapi: "3.0.3"
+info:
+  title: Ingestion Service API
+  description: |
+    Multi-source clinical data ingestion pipeline for the Vaidshala Clinical Runtime Platform.
+    Receives observations from FHIR endpoints, lab systems, EHR integrations, wearable devices,
+    ABDM Health Information, and patient-reported data — normalises, validates, maps to FHIR R4,
+    and publishes to Kafka.
+  version: "1.0.0"
+  contact:
+    name: CardioFit Engineering
+servers:
+  - url: http://localhost:8140
+    description: Direct (development)
+  - url: http://localhost:8000/api/v1/ingest
+    description: Via API Gateway (production)
+
+tags:
+  - name: Infrastructure
+    description: Health checks, metrics, readiness probes
+  - name: FHIR Inbound
+    description: Direct FHIR-like observation ingestion
+  - name: Lab Webhooks
+    description: Lab partner webhook receivers
+  - name: EHR Adapters
+    description: EHR system integrations (FHIR Bundle, HL7v2)
+  - name: Devices
+    description: IoT/medical device data ingestion
+  - name: Wearables
+    description: Wearable device data (Health Connect, Ultrahuman, Apple HealthKit)
+  - name: Patient Reported
+    description: Patient self-report (app check-in, WhatsApp NLU)
+  - name: ABDM
+    description: Ayushman Bharat Digital Mission health data exchange
+  - name: DLQ
+    description: Dead Letter Queue management
+
+paths:
+  # ── Infrastructure ──────────────────────────────────────────────
+  /healthz:
+    get:
+      tags: [Infrastructure]
+      summary: Liveness probe
+      operationId: healthz
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: ingestion-service
+
+  /readyz:
+    get:
+      tags: [Infrastructure]
+      summary: Readiness probe
+      description: Checks PostgreSQL, Redis, and FHIR Store connectivity
+      operationId: readyz
+      responses:
+        "200":
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: One or more dependencies unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+  /startupz:
+    get:
+      tags: [Infrastructure]
+      summary: Startup probe
+      operationId: startupz
+      responses:
+        "200":
+          description: Service has started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started:
+                    type: boolean
+                    example: true
+                  service:
+                    type: string
+                    example: ingestion-service
+
+  /metrics:
+    get:
+      tags: [Infrastructure]
+      summary: Prometheus metrics
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ── FHIR Inbound ────────────────────────────────────────────────
+  /fhir/Observation:
+    post:
+      tags: [FHIR Inbound]
+      summary: Ingest a FHIR-like observation
+      description: |
+        Accepts a clinical observation, runs it through the full pipeline
+        (normalise → validate → FHIR map → route), writes to FHIR Store
+        (if enabled), and publishes to Kafka. The `handleFHIRObservation`
+        handler sets ObservationType=GENERAL, so messages route to
+        `ingestion.observations`.
+      operationId: postFHIRObservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FHIRObservationRequest"
+            example:
+              patient_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              loinc_code: "1558-6"
+              value: 142.0
+              unit: "mg/dL"
+              timestamp: "2026-03-23T08:00:00Z"
+      responses:
+        "201":
+          description: Observation accepted and processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservationAcceptedResponse"
+        "400":
+          description: Invalid JSON or missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Observation rejected by pipeline (sent to DLQ)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RejectedResponse"
+
+  /fhir/DiagnosticReport:
+    post:
+      tags: [FHIR Inbound]
+      summary: Ingest a FHIR DiagnosticReport (stub)
+      operationId: postFHIRDiagnosticReport
+      responses:
+        "501":
+          description: Not implemented (Phase 6)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StubResponse"
+
+  /fhir/MedicationStatement:
+    post:
+      tags: [FHIR Inbound]
+      summary: Ingest a FHIR MedicationStatement (stub)
+      operationId: postFHIRMedicationStatement
+      responses:
+        "501":
+          description: Not implemented (Phase 6)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StubResponse"
+
+  /fhir:
+    post:
+      tags: [FHIR Inbound]
+      summary: FHIR Transaction Bundle (stub)
+      operationId: postFHIRBundle
+      responses:
+        "501":
+          description: Not implemented
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StubResponse"
+
+  # ── Lab Webhooks ────────────────────────────────────────────────
+  /labs/{labId}:
+    post:
+      tags: [Lab Webhooks]
+      summary: Lab partner webhook
+      description: |
+        Receives lab results from partner APIs. Each lab has its own parser.
+        Requires `X-API-Key` header matching `LAB_API_KEY_{UPPER_LAB_ID}`.
+      operationId: postLabWebhook
+      parameters:
+        - name: labId
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [thyrocare, redcliffe, srl_agilus, dr_lal, metropolis, orange_health, generic_csv]
+        - name: X-API-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Lab-specific payload (varies by adapter)
+      responses:
+        "202":
+          description: Lab results accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: accepted
+                  observation_count:
+                    type: integer
+                    example: 5
+        "401":
+          description: Invalid or missing API key
+        "404":
+          description: Unknown lab ID
+
+  # ── EHR Adapters ────────────────────────────────────────────────
+  /ehr/fhir:
+    post:
+      tags: [EHR Adapters]
+      summary: FHIR R4 Bundle passthrough from EHR
+      operationId: postEHRFHIR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FHIRBundleRequest"
+      responses:
+        "202":
+          description: Bundle accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationOutcomeSuccess"
+        "400":
+          description: Invalid request body
+        "422":
+          description: FHIR parse failure
+
+  /ehr/hl7v2:
+    post:
+      tags: [EHR Adapters]
+      summary: HL7v2 MLLP message ingest (stub)
+      operationId: postEHRHL7v2
+      responses:
+        "501":
+          description: Not implemented
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationOutcomeError"
+
+  # ── Devices ─────────────────────────────────────────────────────
+  /devices:
+    post:
+      tags: [Devices]
+      summary: IoT/medical device data
+      description: |
+        Accepts BLE medical device readings relayed from the Flutter app.
+        Each reading becomes a separate CanonicalObservation with
+        ObservationType=DEVICE_DATA, routed to `ingestion.device-data`.
+      operationId: postDeviceIngest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceIngestRequest"
+            example:
+              patient_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              timestamp: "2026-03-23T09:00:00Z"
+              device:
+                device_id: "bp-monitor-001"
+                device_type: "blood_pressure_monitor"
+                manufacturer: "Omron"
+                model: "HEM-7120"
+              readings:
+                - analyte: systolic_bp
+                  value: 148.0
+                  unit: mmHg
+                - analyte: diastolic_bp
+                  value: 92.0
+                  unit: mmHg
+                - analyte: heart_rate
+                  value: 78.0
+                  unit: bpm
+      responses:
+        "201":
+          description: Device readings accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchAcceptedResponse"
+        "400":
+          description: Invalid JSON or missing required fields
+
+  # ── Wearables ───────────────────────────────────────────────────
+  /wearables/{provider}:
+    post:
+      tags: [Wearables]
+      summary: Wearable device data
+      description: |
+        Accepts data from Health Connect, Ultrahuman CGM, or Apple HealthKit.
+        Each provider has a dedicated parser.
+      operationId: postWearableIngest
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [health_connect, ultrahuman, apple_health]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/HealthConnectRequest"
+                - $ref: "#/components/schemas/UltrahumanRequest"
+                - $ref: "#/components/schemas/AppleHealthRequest"
+      responses:
+        "200":
+          description: Wearable data accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: accepted
+                  observation_count:
+                    type: integer
+                    example: 7
+        "400":
+          description: Invalid JSON
+        "422":
+          description: Conversion failure
+
+  # ── Patient Reported ────────────────────────────────────────────
+  /app-checkin:
+    post:
+      tags: [Patient Reported]
+      summary: Patient self-report from Flutter app
+      description: |
+        Accepts structured vitals/lab readings from the patient app.
+        Vitals analytes (systolic_bp, weight, etc.) route to `ingestion.vitals`;
+        other analytes route to `ingestion.patient-reported`.
+        All readings get the `MANUAL_ENTRY` flag.
+      operationId: postAppCheckin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppCheckinRequest"
+            example:
+              patient_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              tenant_id: "00000000-0000-0000-0000-000000000001"
+              timestamp: "2026-03-23T07:30:00Z"
+              readings:
+                - analyte: fasting_glucose
+                  value: 156.0
+                  unit: mg/dL
+                - analyte: weight
+                  value: 74.2
+                  unit: kg
+      responses:
+        "201":
+          description: Check-in accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchAcceptedResponse"
+        "400":
+          description: Invalid JSON
+
+  /whatsapp:
+    post:
+      tags: [Patient Reported]
+      summary: NLU-parsed WhatsApp messages
+      description: |
+        Receives pre-parsed WhatsApp messages from the Tier-1 NLU service.
+        Entities with NLU confidence < 0.70 get the `LOW_QUALITY` flag.
+      operationId: postWhatsApp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WhatsAppRequest"
+      responses:
+        "201":
+          description: WhatsApp entities accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: accepted
+                  processed:
+                    type: integer
+                    example: 2
+        "400":
+          description: Invalid JSON
+
+  # ── ABDM ────────────────────────────────────────────────────────
+  /abdm/data-push:
+    post:
+      tags: [ABDM]
+      summary: ABDM health data push
+      description: |
+        Receives encrypted FHIR bundles from ABDM HIP/HIU gateway.
+        Decrypts using X25519 + ChaCha20Poly1305, parses FHIR resources,
+        converts to CanonicalObservation, and routes to Kafka.
+        Requires `ABDM_PRIVATE_KEY` env var to be configured.
+      operationId: postABDMDataPush
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ABDMDataPushRequest"
+      responses:
+        "202":
+          description: ABDM data accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: accepted
+                  transaction_id:
+                    type: string
+                  entries_processed:
+                    type: integer
+                  entries_failed:
+                    type: integer
+        "400":
+          description: Invalid key material
+        "403":
+          description: Consent expired or invalid
+        "501":
+          description: X25519 keys not configured
+
+  # ── DLQ ─────────────────────────────────────────────────────────
+  /fhir/OperationOutcome:
+    get:
+      tags: [DLQ]
+      summary: List pending DLQ entries (FHIR format)
+      operationId: listDLQFHIR
+      responses:
+        "200":
+          description: FHIR Bundle of OperationOutcome resources
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /fhir/OperationOutcome/{id}/$replay:
+    post:
+      tags: [DLQ]
+      summary: Replay a DLQ entry
+      operationId: replayDLQEntry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Entry replayed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: replayed
+                  dlq_id:
+                    type: string
+                    format: uuid
+
+  /admin/dlq:
+    get:
+      tags: [DLQ]
+      summary: List DLQ entries with filtering
+      operationId: listDLQ
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, REPLAYED, DISCARDED]
+        - name: error_class
+          in: query
+          schema:
+            type: string
+            enum: [PARSE, NORMALIZATION, VALIDATION, MAPPING, PUBLISH, FHIR_WRITE]
+        - name: source_type
+          in: query
+          schema:
+            type: string
+            enum: [EHR, LAB, DEVICE, WEARABLE, PATIENT_REPORTED, ABDM]
+      responses:
+        "200":
+          description: Filtered DLQ entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DLQEntry"
+                  count:
+                    type: integer
+
+  /admin/dlq/{id}:
+    get:
+      tags: [DLQ]
+      summary: Get a single DLQ entry
+      operationId: getDLQEntry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: DLQ entry found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DLQEntry"
+        "404":
+          description: Entry not found
+
+  /admin/dlq/{id}/$discard:
+    post:
+      tags: [DLQ]
+      summary: Discard a DLQ entry permanently
+      operationId: discardDLQEntry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Entry discarded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: discarded
+
+  /admin/dlq/$count:
+    get:
+      tags: [DLQ]
+      summary: Count DLQ entries by status
+      operationId: countDLQ
+      responses:
+        "200":
+          description: DLQ counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  counts:
+                    type: object
+                    properties:
+                      PENDING:
+                        type: integer
+                      REPLAYED:
+                        type: integer
+                      DISCARDED:
+                        type: integer
+
+  /$source-status:
+    get:
+      tags: [Infrastructure]
+      summary: Source connectivity status (stub)
+      operationId: sourceStatus
+      responses:
+        "501":
+          description: Not implemented
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StubResponse"
+
+# ── Schemas ─────────────────────────────────────────────────────
+components:
+  schemas:
+    FHIRObservationRequest:
+      type: object
+      required: [patient_id, loinc_code, value, unit]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        loinc_code:
+          type: string
+          description: LOINC code (e.g. "1558-6" for fasting glucose)
+        value:
+          type: number
+          format: double
+        unit:
+          type: string
+          description: Unit of measure (e.g. "mg/dL", "mmHg")
+        timestamp:
+          type: string
+          format: date-time
+          description: Defaults to now if omitted
+
+    ObservationAcceptedResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: accepted
+        observation_id:
+          type: string
+          format: uuid
+        fhir_resource_id:
+          type: string
+          description: ID from FHIR Store (empty if FHIR_ENABLED=false)
+        quality_score:
+          type: number
+          format: double
+          example: 0.90
+        flags:
+          type: array
+          items:
+            type: string
+            enum: [CRITICAL_VALUE, IMPLAUSIBLE, LOW_QUALITY, UNMAPPED_CODE, STALE, DUPLICATE, MANUAL_ENTRY]
+
+    DeviceIngestRequest:
+      type: object
+      required: [patient_id, device, readings]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        device:
+          type: object
+          required: [device_id, device_type]
+          properties:
+            device_id:
+              type: string
+            device_type:
+              type: string
+              enum: [blood_pressure_monitor, glucometer, scale, pulse_oximeter, thermometer]
+            manufacturer:
+              type: string
+            model:
+              type: string
+            firmware_version:
+              type: string
+        readings:
+          type: array
+          items:
+            type: object
+            required: [analyte, value, unit]
+            properties:
+              analyte:
+                type: string
+                description: "e.g. systolic_bp, diastolic_bp, heart_rate, glucose, weight, spo2"
+              value:
+                type: number
+                format: double
+              unit:
+                type: string
+
+    AppCheckinRequest:
+      type: object
+      required: [patient_id, readings]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        readings:
+          type: array
+          items:
+            type: object
+            required: [analyte, value, unit]
+            properties:
+              analyte:
+                type: string
+                description: |
+                  Vitals: systolic_bp, diastolic_bp, heart_rate, spo2, temperature, weight, height, bmi.
+                  Labs: fasting_glucose, hba1c, creatinine, potassium, etc.
+              value:
+                type: number
+                format: double
+              unit:
+                type: string
+
+    WhatsAppRequest:
+      type: object
+      required: [patient_id, intent, entities]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        intent:
+          type: string
+          enum: [report_glucose, report_fasting, report_bp, report_weight, report_symptom, report_hba1c, report_heart_rate]
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              value:
+                type: number
+              text:
+                type: string
+              unit:
+                type: string
+        confidence:
+          type: number
+          format: double
+          description: NLU confidence (0.0-1.0). Below 0.70 adds LOW_QUALITY flag.
+        raw_text:
+          type: string
+
+    HealthConnectRequest:
+      type: object
+      required: [patient_id, records]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+        records:
+          type: array
+          items:
+            type: object
+            required: [record_type, values, unit]
+            properties:
+              record_type:
+                type: string
+                enum: [HeartRate, BloodPressure, Steps, Weight, BloodGlucose, OxygenSaturation, BodyTemperature, SleepSession, ActiveCaloriesBurned]
+              package_name:
+                type: string
+              device_model:
+                type: string
+              start_time:
+                type: string
+                format: date-time
+              end_time:
+                type: string
+                format: date-time
+              values:
+                type: object
+                properties:
+                  value:
+                    type: number
+              unit:
+                type: string
+
+    UltrahumanRequest:
+      type: object
+      required: [patient_id, device_id, readings]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+        sensor_id:
+          type: string
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        readings:
+          type: array
+          minItems: 12
+          items:
+            type: object
+            required: [timestamp, glucose_mg_dl]
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              glucose_mg_dl:
+                type: number
+                format: double
+
+    AppleHealthRequest:
+      type: object
+      required: [patient_id, samples]
+      properties:
+        patient_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        device_id:
+          type: string
+        samples:
+          type: array
+          items:
+            type: object
+            required: [sample_type, value, unit]
+            properties:
+              sample_type:
+                type: string
+              value:
+                type: number
+                format: double
+              unit:
+                type: string
+              start_date:
+                type: string
+                format: date-time
+              end_date:
+                type: string
+                format: date-time
+              source_name:
+                type: string
+              device_model:
+                type: string
+
+    FHIRBundleRequest:
+      type: object
+      required: [resourceType, type, entry]
+      properties:
+        resourceType:
+          type: string
+          enum: [Bundle]
+        type:
+          type: string
+          enum: [transaction, searchset]
+        entry:
+          type: array
+          items:
+            type: object
+            properties:
+              resource:
+                type: object
+
+    ABDMDataPushRequest:
+      type: object
+      required: [transaction_id, consent_id, key_material, entries]
+      properties:
+        transaction_id:
+          type: string
+        consent_id:
+          type: string
+        key_material:
+          type: object
+          properties:
+            sender_public_key:
+              type: string
+              format: byte
+              description: Base64-encoded 32-byte X25519 public key
+            nonce:
+              type: string
+              format: byte
+              description: Base64-encoded 24-byte nonce
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              care_context_ref:
+                type: string
+              content:
+                type: string
+                format: byte
+                description: Base64-encoded ChaCha20Poly1305 encrypted FHIR bundle
+
+    BatchAcceptedResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: accepted
+        processed:
+          type: integer
+          example: 3
+        total:
+          type: integer
+          example: 3
+
+    DLQEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        error_class:
+          type: string
+          enum: [PARSE, NORMALIZATION, VALIDATION, MAPPING, PUBLISH, FHIR_WRITE]
+        source_type:
+          type: string
+          enum: [EHR, LAB, DEVICE, WEARABLE, PATIENT_REPORTED, ABDM]
+        source_id:
+          type: string
+        raw_payload:
+          type: string
+          format: byte
+        error_message:
+          type: string
+        retry_count:
+          type: integer
+        status:
+          type: string
+          enum: [PENDING, REPLAYED, DISCARDED]
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    KafkaEnvelope:
+      type: object
+      description: Standard Kafka message wrapper
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum: [LAB_RESULT, VITAL_SIGN, DEVICE_READING, PATIENT_REPORT, MEDICATION_UPDATE, ABDM_RECORD, OBSERVATION]
+        sourceType:
+          type: string
+        patientId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        fhirResourceType:
+          type: string
+        fhirResourceId:
+          type: string
+        payload:
+          type: object
+          properties:
+            loinc_code:
+              type: string
+            value:
+              type: number
+            unit:
+              type: string
+            observation_type:
+              type: string
+        qualityScore:
+          type: number
+          format: double
+        flags:
+          type: array
+          items:
+            type: string
+        traceId:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+    RejectedResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "observation rejected -- check DLQ for details"
+        dlq_url:
+          type: string
+          example: "/fhir/OperationOutcome?category=dlq"
+
+    StubResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: not_implemented
+        endpoint:
+          type: string
+        message:
+          type: string
+
+    OperationOutcomeSuccess:
+      type: object
+      properties:
+        resourceType:
+          type: string
+          example: OperationOutcome
+        issue:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                example: information
+              code:
+                type: string
+                example: informational
+              diagnostics:
+                type: string
+                example: bundle accepted
+              details:
+                type: object
+                properties:
+                  observation_count:
+                    type: integer
+
+    OperationOutcomeError:
+      type: object
+      properties:
+        resourceType:
+          type: string
+          example: OperationOutcome
+        issue:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                example: error
+              code:
+                type: string
+                example: not-supported
+              diagnostics:
+                type: string
+
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        service:
+          type: string
+          example: ingestion-service
+        checks:
+          type: object
+          properties:
+            postgresql:
+              type: string
+            redis:
+              type: string
+            fhir_store:
+              type: string

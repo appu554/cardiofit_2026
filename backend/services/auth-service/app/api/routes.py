@@ -172,14 +172,14 @@ async def login(request: LoginRequest):
         # Call Auth0 token endpoint
         token_url = f"https://{settings.AUTH0_DOMAIN}/oauth/token"
         payload = {
-            "grant_type": "password",
+            "grant_type": "http://auth0.com/oauth/grant-type/password-realm",
             "username": request.username,
             "password": request.password,
             "client_id": settings.AUTH0_CLIENT_ID,
             "client_secret": settings.AUTH0_CLIENT_SECRET,
             "audience": settings.AUTH0_API_AUDIENCE,
-            "scope": "openid profile email offline_access",  # Added offline_access for refresh tokens
-            "connection": "Username-Password-Authentication"
+            "scope": "openid profile email offline_access",
+            "realm": "Username-Password-Authentication"
         }
 
         logger.info(f"Sending request to Auth0: {token_url}")
@@ -1159,14 +1159,14 @@ async def login_for_access_token(username: str, password: str):
         # Call Auth0 token endpoint
         token_url = f"https://{settings.AUTH0_DOMAIN}/oauth/token"
         payload = {
-            "grant_type": "password",
+            "grant_type": "http://auth0.com/oauth/grant-type/password-realm",
             "username": username,
             "password": password,
             "client_id": settings.AUTH0_CLIENT_ID,
             "client_secret": settings.AUTH0_CLIENT_SECRET,
             "audience": settings.AUTH0_API_AUDIENCE,
             "scope": "openid profile email",
-            "connection": "Username-Password-Authentication"  # Add connection parameter
+            "realm": "Username-Password-Authentication"
         }
 
         # Debug information

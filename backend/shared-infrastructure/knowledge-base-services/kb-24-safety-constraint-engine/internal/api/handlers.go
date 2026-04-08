@@ -17,21 +17,24 @@ import (
 
 // Handlers holds handler dependencies.
 type Handlers struct {
-	evaluator *services.SafetyTriggerEvaluator
-	publisher services.KafkaPublisher
-	log       *zap.Logger
+	evaluator        *services.SafetyTriggerEvaluator
+	intakeRuleLoader *services.IntakeRuleLoader
+	publisher        services.KafkaPublisher
+	log              *zap.Logger
 }
 
 // NewHandlers creates a Handlers instance with the given dependencies.
 func NewHandlers(
 	evaluator *services.SafetyTriggerEvaluator,
+	intakeRuleLoader *services.IntakeRuleLoader,
 	publisher services.KafkaPublisher,
 	log *zap.Logger,
 ) *Handlers {
 	return &Handlers{
-		evaluator: evaluator,
-		publisher: publisher,
-		log:       log,
+		evaluator:        evaluator,
+		intakeRuleLoader: intakeRuleLoader,
+		publisher:        publisher,
+		log:              log,
 	}
 }
 
@@ -92,6 +95,21 @@ func (h *Handlers) HandleEvaluate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// HandleIntakeTriggers returns all intake safety trigger definitions.
+// GET /api/v1/intake-triggers
+// Used by the intake-onboarding-service to load safety rules at startup.
+func (h *Handlers) HandleIntakeTriggers(c *gin.Context) {
+	if h.intakeRuleLoader == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "intake rules not loaded"})
+		return
+	}
+	rules := h.intakeRuleLoader.Rules()
+	c.JSON(http.StatusOK, gin.H{
+		"rules": rules,
+		"count": len(rules),
+	})
 }
 
 // HandleClearSession processes a POST /api/v1/sessions/:id/clear request.

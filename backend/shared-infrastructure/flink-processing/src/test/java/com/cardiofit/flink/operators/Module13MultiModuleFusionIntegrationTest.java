@@ -96,6 +96,11 @@ class Module13MultiModuleFusionIntegrationTest {
         state.current().fbg = 105.0;
         state.current().hba1c = 6.5;
         state.current().egfr = 70.0;
+        // Ensure CV domain is non-positive so IMPROVING classification is reached
+        // (requires all domain velocities <= 0). Set meanSBP below Stage 1 threshold
+        // and arv below elevated threshold to zero out absolute BP severity.
+        state.current().meanSBP = 130.0;
+        state.previous().meanSBP = 142.0;
 
         CKMRiskVelocity velocity = Module13CKMRiskComputer.compute(state);
 

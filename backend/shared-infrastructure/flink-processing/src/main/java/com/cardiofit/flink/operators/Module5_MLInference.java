@@ -133,8 +133,9 @@ public class Module5_MLInference {
         // ========================================
         LOG.info("Adding MIMIC-IV real ML inference pipeline");
 
-        // Add EnrichedPatientContext source from Module 2
-        DataStream<EnrichedPatientContext> enrichedContext = createEnrichedPatientContextSource(env);
+        // Gap 7 fix: Reuse the same CDS stream instead of creating a second
+        // Kafka consumer on the same topic (was: createEnrichedPatientContextSource(env))
+        DataStream<EnrichedPatientContext> enrichedContext = cdsEvents;
 
         // Adapt to PatientContextSnapshot for MIMIC-IV models
         PatientContextAdapter adapter = new PatientContextAdapter();
@@ -978,7 +979,7 @@ public class Module5_MLInference {
         return KafkaSink.<MLPrediction>builder()
             .setBootstrapServers(getBootstrapServers())
             .setRecordSerializer(KafkaRecordSerializationSchema.builder()
-                .setTopic("ml-risk-alerts.v1")  // FIXED: Dedicated topic for ML risk predictions
+                .setTopic(KafkaTopics.ML_RISK_ALERTS.getTopicName())
                 .setKeySerializationSchema((MLPrediction prediction) ->
                     prediction.getPatientId().getBytes(java.nio.charset.StandardCharsets.UTF_8))
                 .setValueSerializationSchema(new MLPredictionSerializer())
@@ -994,7 +995,7 @@ public class Module5_MLInference {
             .setBootstrapServers(KafkaConfigLoader.getBootstrapServers())
             .setRecordSerializer(
                 KafkaRecordSerializationSchema.builder()
-                    .setTopic("prediction-audit.v1")
+                    .setTopic(KafkaTopics.PREDICTION_AUDIT.getTopicName())
                     .setValueSerializationSchema(new MLPredictionSerializer())
                     .build()
             )

@@ -159,22 +159,33 @@ public class Module7_BPVariabilityEngine
         // 7-day window
         List<DailyBPSummary> window7 = state.getSummariesInWindow(7, now);
         m.setDaysWithDataIn7d(window7.size());
+        m.setContributingDates7d(window7.stream().map(DailyBPSummary::getDateKey)
+                .collect(java.util.stream.Collectors.toList()));
         if (window7.size() >= 3) {
             m.setSbp7dAvg(Module7ARVComputer.computeMeanSBP(window7));
             m.setDbp7dAvg(Module7ARVComputer.computeMeanDBP(window7));
             m.setSdSbp7d(Module7ARVComputer.computeSD(window7));
             m.setCvSbp7d(Module7ARVComputer.computeCV(window7));
-            m.setArvSbp7d(Module7ARVComputer.computeARV(window7));
         }
+
+        // PRIMARY ARV: reading-level per Mena et al. (2005) / ESH 2023
+        // Uses ALL sequential readings sorted by timestamp (morning-evening oscillation preserved)
+        java.util.List<Double> readings7d = state.getReadingSBPsInWindow(7, now);
+        m.setArvSbp7d(Module7ARVComputer.computeReadingLevelARV(readings7d));
 
         // 30-day window
         List<DailyBPSummary> window30 = state.getSummariesInWindow(30, now);
         m.setDaysWithDataIn30d(window30.size());
+        m.setContributingDates30d(window30.stream().map(DailyBPSummary::getDateKey)
+                .collect(java.util.stream.Collectors.toList()));
         if (window30.size() >= 7) {
-            m.setArvSbp30d(Module7ARVComputer.computeARV(window30));
             m.setSdSbp30d(Module7ARVComputer.computeSD(window30));
             m.setCvSbp30d(Module7ARVComputer.computeCV(window30));
         }
+
+        // PRIMARY ARV 30-day: reading-level
+        java.util.List<Double> readings30d = state.getReadingSBPsInWindow(30, now);
+        m.setArvSbp30d(Module7ARVComputer.computeReadingLevelARV(readings30d));
 
         // Variability classification (7-day ARV is primary)
         m.setVariabilityClassification7d(VariabilityClassification.fromARV(m.getArvSbp7d()).name());
@@ -185,8 +196,9 @@ public class Module7_BPVariabilityEngine
         // BP control status
         m.setBpControlStatus(Module7BPControlClassifier.classifyControl(window7).name());
 
-        // Morning surge
+        // Morning surge — both individual daily AND 7-day average classifications
         m.setMorningSurgeToday(Module7SurgeDetector.computeTodaySurge(window7, now));
+        m.setSurgeTodayClassification(SurgeClassification.fromSurge(m.getMorningSurgeToday()).name());
         m.setMorningSurge7dAvg(Module7SurgeDetector.compute7DayAvgSurge(window7));
         m.setSurgeClassification(SurgeClassification.fromSurge(m.getMorningSurge7dAvg()).name());
 

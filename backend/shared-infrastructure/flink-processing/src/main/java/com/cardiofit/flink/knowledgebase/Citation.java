@@ -28,8 +28,8 @@ public class Citation implements Serializable {
     private String firstAuthor;
     private String journal;
     private Integer publicationYear;
-    private Integer volume;
-    private Integer issue;
+    private String volume;     // String to support "25 Suppl 2", "1-2" etc.
+    private String issue;      // String to support "Suppl 2", "1-2" etc.
     private String pages;
 
     // Study characteristics
@@ -169,11 +169,11 @@ public class Citation implements Serializable {
     public Integer getPublicationYear() { return publicationYear; }
     public void setPublicationYear(Integer publicationYear) { this.publicationYear = publicationYear; }
 
-    public Integer getVolume() { return volume; }
-    public void setVolume(Integer volume) { this.volume = volume; }
+    public String getVolume() { return volume; }
+    public void setVolume(String volume) { this.volume = volume; }
 
-    public Integer getIssue() { return issue; }
-    public void setIssue(Integer issue) { this.issue = issue; }
+    public String getIssue() { return issue; }
+    public void setIssue(String issue) { this.issue = issue; }
 
     public String getPages() { return pages; }
     public void setPages(String pages) { this.pages = pages; }
@@ -247,7 +247,7 @@ public class Citation implements Serializable {
      * Get volume as string (test compatibility)
      */
     public String getVolumeString() {
-        return volume != null ? volume.toString() : null;
+        return volume;
     }
 
     /**
@@ -255,11 +255,7 @@ public class Citation implements Serializable {
      */
     public void setVolumeString(String volumeStr) {
         if (volumeStr != null && !volumeStr.trim().isEmpty()) {
-            try {
-                volume = Integer.parseInt(volumeStr.trim());
-            } catch (NumberFormatException e) {
-                // Ignore invalid volume
-            }
+            this.volume = volumeStr.trim();
         }
     }
 

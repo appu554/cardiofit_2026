@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -59,6 +60,19 @@ func (s *Server) handleReadyz(c *gin.Context) {
 		}
 	} else {
 		checks["fhir_store"] = "not_configured"
+	}
+
+	// Safety rules — no rules loaded = service must not accept traffic.
+	if s.safetyEngine != nil {
+		if s.safetyEngine.HasRules() {
+			hs, sf := s.safetyEngine.RuleCounts()
+			checks["safety_rules"] = fmt.Sprintf("ok (hard_stops=%d, soft_flags=%d)", hs, sf)
+		} else {
+			checks["safety_rules"] = "unhealthy: no rules loaded"
+			healthy = false
+		}
+	} else {
+		checks["safety_rules"] = "not_configured"
 	}
 
 	status := http.StatusOK

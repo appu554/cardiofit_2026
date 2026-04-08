@@ -43,7 +43,7 @@ public class KafkaConfigLoader {
      */
     public static Properties getConsumerConfig(String groupId) {
         Properties props = new Properties();
-        props.setProperty("bootstrap.servers", INTERNAL_BOOTSTRAP_SERVERS);
+        props.setProperty("bootstrap.servers", getBootstrapServers());
         props.setProperty("group.id", groupId);
         props.setProperty("enable.auto.commit", "false");
         props.setProperty("auto.offset.reset", "latest");
@@ -69,7 +69,7 @@ public class KafkaConfigLoader {
      */
     public static Properties getProducerConfig() {
         Properties props = new Properties();
-        props.setProperty("bootstrap.servers", INTERNAL_BOOTSTRAP_SERVERS);
+        props.setProperty("bootstrap.servers", getBootstrapServers());
 
         // Producer optimizations for high throughput
         props.setProperty("compression.type", "snappy");
@@ -122,9 +122,14 @@ public class KafkaConfigLoader {
     }
 
     /**
-     * Get bootstrap servers string based on environment (Docker vs local).
+     * Get bootstrap servers string. Checks KAFKA_BOOTSTRAP_SERVERS env var first,
+     * then falls back to Docker/local defaults.
      */
     public static String getBootstrapServers() {
+        String envServers = System.getenv("KAFKA_BOOTSTRAP_SERVERS");
+        if (envServers != null && !envServers.isEmpty()) {
+            return envServers;
+        }
         return isRunningInDocker() ? INTERNAL_BOOTSTRAP_SERVERS : EXTERNAL_BOOTSTRAP_SERVERS;
     }
 
@@ -144,8 +149,7 @@ public class KafkaConfigLoader {
         org.apache.flink.configuration.Configuration config = new org.apache.flink.configuration.Configuration();
 
         // Set healthcare-specific configuration
-        config.setString("kafka.bootstrap.servers",
-                         isRunningInDocker() ? INTERNAL_BOOTSTRAP_SERVERS : EXTERNAL_BOOTSTRAP_SERVERS);
+        config.setString("kafka.bootstrap.servers", getBootstrapServers());
         config.setString("kafka.schema.registry.url",
                          isRunningInDocker() ? INTERNAL_SCHEMA_REGISTRY : EXTERNAL_SCHEMA_REGISTRY);
         config.setString("environment.mode", "production");

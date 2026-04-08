@@ -28,6 +28,7 @@ public class ClinicalThresholdSet implements Serializable {
     private MEWSParams mews;
     private RiskScoringConfig riskScoring;
     private HighRiskCategories highRisk;
+    private CIDThresholdSet cidThresholds;
     private String version;
     private long loadedAtEpochMs;
 
@@ -50,6 +51,9 @@ public class ClinicalThresholdSet implements Serializable {
 
     public HighRiskCategories getHighRisk() { return highRisk; }
     public void setHighRisk(HighRiskCategories highRisk) { this.highRisk = highRisk; }
+
+    public CIDThresholdSet getCidThresholds() { return cidThresholds; }
+    public void setCidThresholds(CIDThresholdSet cidThresholds) { this.cidThresholds = cidThresholds; }
 
     public String getVersion() { return version; }
     public void setVersion(String version) { this.version = version; }
@@ -76,6 +80,7 @@ public class ClinicalThresholdSet implements Serializable {
         set.setMews(MEWSParams.defaults());
         set.setRiskScoring(RiskScoringConfig.defaults());
         set.setHighRisk(HighRiskCategories.defaults());
+        set.setCidThresholds(CIDThresholdSet.hardcodedDefaults());
         return set;
     }
 

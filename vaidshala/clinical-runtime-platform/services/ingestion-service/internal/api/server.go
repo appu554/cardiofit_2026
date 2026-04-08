@@ -98,9 +98,11 @@ func NewServer(
 		}
 	}
 
-	// Kafka producer (fallback when outbox is disabled or init failed)
+	// Kafka producer — always initialised when brokers are configured.
+	// Acts as primary path when outbox is disabled, and as fallback when
+	// outbox publish fails at runtime (outbox-then-Kafka pattern).
 	var kafkaProducer *kafkapkg.Producer
-	if outboxPublisher == nil && len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Brokers[0] != "" {
+	if len(cfg.Kafka.Brokers) > 0 && cfg.Kafka.Brokers[0] != "" {
 		kafkaProducer = kafkapkg.NewProducer(cfg.Kafka.Brokers, logger)
 	}
 
@@ -177,6 +179,26 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 			return
 		}
 		c.Next()
+	}
+}
+
+// Close releases resources held by the server's publishers. The caller (main)
+// should invoke this during graceful shutdown to drain outbox SDK connections
+// and flush any pending Kafka writes.
+func (s *Server) Close() {
+	if s.outboxPublisher != nil {
+		if err := s.outboxPublisher.Close(); err != nil {
+			s.logger.Error("outbox publisher close failed", zap.Error(err))
+		} else {
+			s.logger.Info("outbox publisher closed")
+		}
+	}
+	if s.kafkaProducer != nil {
+		if err := s.kafkaProducer.Close(); err != nil {
+			s.logger.Error("kafka producer close failed", zap.Error(err))
+		} else {
+			s.logger.Info("kafka producer closed")
+		}
 	}
 }
 

@@ -16,8 +16,12 @@ public final class AlertLifecycleManager {
 
     private AlertLifecycleManager() {}
 
+    /**
+     * Create alert using event time for consistency (not wall clock).
+     */
     public static ClinicalAlert createAlert(String patientId, ActionTier tier,
-                                             String clinicalCategory, String sourceModule) {
+                                             String clinicalCategory, String sourceModule,
+                                             long eventTime) {
         ClinicalAlert alert = new ClinicalAlert();
         alert.setAlertId(UUID.randomUUID().toString());
         alert.setPatientId(patientId);
@@ -25,31 +29,48 @@ public final class AlertLifecycleManager {
         alert.setClinicalCategory(clinicalCategory);
         alert.setSourceModule(sourceModule);
         alert.setState(AlertState.ACTIVE);
-        alert.setCreatedAt(System.currentTimeMillis());
+        alert.setCreatedAt(eventTime);
 
-        // SLA deadline
+        // SLA deadline based on event time
         long sla = tier.getSlaMs();
-        alert.setSlaDeadlineMs(sla > 0 ? alert.getCreatedAt() + sla : -1L);
+        alert.setSlaDeadlineMs(sla > 0 ? eventTime + sla : -1L);
 
         return alert;
     }
 
+    /** Backward-compatible overload using wall clock (for tests/legacy callers). */
+    public static ClinicalAlert createAlert(String patientId, ActionTier tier,
+                                             String clinicalCategory, String sourceModule) {
+        return createAlert(patientId, tier, clinicalCategory, sourceModule, System.currentTimeMillis());
+    }
+
     /**
      * Check alert fatigue: cap at 10 alerts per 24-hour window per patient.
+     * HALT-tier alerts are NEVER suppressed — patient safety overrides fatigue protection.
+     * The counter still increments for monitoring/reporting purposes.
+     *
+     * @param state  per-patient alert state
+     * @param tier   the action tier of the incoming alert
      * @return true if fatigued (should suppress), false if OK to emit
      */
-    public static boolean checkAlertFatigue(PatientAlertState state) {
+    public static boolean checkAlertFatigue(PatientAlertState state, ActionTier tier) {
         long now = System.currentTimeMillis();
         if (now - state.getAlertWindowStart() > 24 * 60 * 60 * 1000L) {
             state.setAlertsInLast24Hours(0);
             state.setAlertWindowStart(now);
         }
-        if (state.getAlertsInLast24Hours() >= MAX_ALERTS_PER_24H) {
-            LOG.warn("Alert fatigue threshold for patient {} — {} alerts in 24h. Suppressing.",
-                state.getPatientId(), state.getAlertsInLast24Hours());
+        state.setAlertsInLast24Hours(state.getAlertsInLast24Hours() + 1);
+
+        // HALT alerts ALWAYS pass — immediate patient safety cannot be suppressed
+        if (tier == ActionTier.HALT) {
+            return false;
+        }
+
+        if (state.getAlertsInLast24Hours() > MAX_ALERTS_PER_24H) {
+            LOG.warn("Alert fatigue threshold for patient {} — {} alerts in 24h. Suppressing {} alert.",
+                state.getPatientId(), state.getAlertsInLast24Hours(), tier);
             return true;
         }
-        state.setAlertsInLast24Hours(state.getAlertsInLast24Hours() + 1);
         return false;
     }
 

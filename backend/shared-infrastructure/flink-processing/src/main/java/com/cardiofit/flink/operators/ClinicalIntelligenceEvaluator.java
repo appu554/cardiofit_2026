@@ -98,6 +98,11 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
         calculateClinicalScores(state, patientId);
 
         // ========================================================================
+        // STEP 1.5: Map Chronic Conditions to Risk Flags
+        // ========================================================================
+        mapChronicConditionsToRiskFlags(state, patientId);
+
+        // ========================================================================
         // STEP 2: Update Risk Indicators Based on Current Vitals
         // ========================================================================
         updateRiskIndicators(state, patientId);
@@ -166,7 +171,7 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
 
         // Get WBC for infection marker (LOINC: 6690-2)
         LabResult wbc = labs.get("6690-2");
-        boolean hasInfectionMarker = wbc != null &&
+        boolean hasInfectionMarker = wbc != null && wbc.getValue() != null &&
                 (wbc.getValue() > 12000 || wbc.getValue() < 4000);
 
         // Progressive sepsis detection
@@ -281,7 +286,7 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
         if (indicators == null) return;
 
         Map<String, LabResult> labs = state.getRecentLabs();
-        Map<String, Object> vitals = state.getLatestVitals();
+        Map<String, Object> vitals = normalizeVitalKeys(state.getLatestVitals());
 
         // Get cardiac biomarkers
         LabResult troponin = labs.get("10839-9");  // LOINC: Troponin I
@@ -294,7 +299,7 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
 
         // Get hemodynamic status
         Integer heartRate = extractInteger(vitals, "heartrate");
-        Integer systolicBP = extractInteger(vitals, "systolicbloodpressure");
+        Integer systolicBP = extractInteger(vitals, "systolicBP");
 
         // Primary ACS Detection: Elevated Troponin
         if (indicators.isElevatedTroponin() && troponinValue != null) {
@@ -926,10 +931,11 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
      * @param patientId Patient identifier for logging
      */
     private void updateRiskIndicators(PatientContextState state, String patientId) {
-        Map<String, Object> vitals = state.getLatestVitals();
-        if (vitals == null || vitals.isEmpty()) {
+        Map<String, Object> rawVitals = state.getLatestVitals();
+        if (rawVitals == null || rawVitals.isEmpty()) {
             return;
         }
+        Map<String, Object> vitals = normalizeVitalKeys(rawVitals);
 
         RiskIndicators indicators = state.getRiskIndicators();
         if (indicators == null) {
@@ -985,10 +991,10 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
         }
 
         // Blood Pressure Thresholds
-        Integer sbp = extractInteger(vitals, "systolicbp");
+        Integer sbp = extractInteger(vitals, "systolicBP");
         if (sbp != null) {
             indicators.setHypotension(sbp < 90);
-            indicators.setHypertension(sbp > 140);
+            indicators.setHypertension(sbp >= 140);
 
             if (sbp >= 140) {
                 indicators.setBloodPressureTrend(TrendDirection.ELEVATED);
@@ -1007,6 +1013,50 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
             logger.info("Risk indicators detected for {}: tachycardia={}, fever={}, hypoxia={}, tachypnea={}",
                     patientId, indicators.isTachycardia(), indicators.isFever(),
                     indicators.isHypoxia(), indicators.isTachypnea());
+        }
+    }
+
+    /**
+     * Map FHIR chronic conditions to boolean risk indicator flags.
+     * Uses ICD-10 code prefixes and display name matching for robustness.
+     */
+    private void mapChronicConditionsToRiskFlags(PatientContextState state, String patientId) {
+        List<Condition> conditions = state.getChronicConditions();
+        if (conditions == null || conditions.isEmpty()) {
+            return;
+        }
+
+        RiskIndicators indicators = state.getRiskIndicators();
+        if (indicators == null) {
+            return;
+        }
+
+        for (Condition condition : conditions) {
+            String code = condition.getCode() != null ? condition.getCode().toUpperCase() : "";
+            String display = condition.getDisplay() != null ? condition.getDisplay().toLowerCase() : "";
+
+            // Diabetes: ICD-10 E08-E13 or display contains "diabetes"
+            if (code.startsWith("E08") || code.startsWith("E09") || code.startsWith("E10")
+                    || code.startsWith("E11") || code.startsWith("E12") || code.startsWith("E13")
+                    || display.contains("diabetes") || display.contains("prediabetes")) {
+                indicators.setHasDiabetes(true);
+            }
+
+            // CKD: ICD-10 N18 or display contains "chronic kidney" / "ckd"
+            if (code.startsWith("N18") || display.contains("chronic kidney") || display.contains("ckd")) {
+                indicators.setHasChronicKidneyDisease(true);
+            }
+
+            // Heart failure: ICD-10 I50 or display contains "heart failure"
+            if (code.startsWith("I50") || display.contains("heart failure")) {
+                indicators.setHasHeartFailure(true);
+            }
+        }
+
+        if (indicators.isHasDiabetes() || indicators.isHasChronicKidneyDisease() || indicators.isHasHeartFailure()) {
+            logger.debug("Chronic condition flags for {}: diabetes={}, CKD={}, HF={}",
+                    patientId, indicators.isHasDiabetes(), indicators.isHasChronicKidneyDisease(),
+                    indicators.isHasHeartFailure());
         }
     }
 
@@ -1292,9 +1342,11 @@ public class ClinicalIntelligenceEvaluator extends ProcessFunction<EnrichedPatie
                     normalized.put("oxygenSaturation", value);
                     break;
                 case "systolicbp":
+                case "systolicbloodpressure":
                     normalized.put("systolicBP", value);
                     break;
                 case "diastolicbp":
+                case "diastolicbloodpressure":
                     normalized.put("diastolicBP", value);
                     break;
                 case "heartrate":

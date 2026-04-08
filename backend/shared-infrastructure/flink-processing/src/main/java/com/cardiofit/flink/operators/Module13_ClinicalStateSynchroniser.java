@@ -29,6 +29,8 @@ public class Module13_ClinicalStateSynchroniser
     private static final long DAILY_TIMER_INTERVAL_MS = 24 * 3_600_000L;
     private static final long SNAPSHOT_ROTATION_INTERVAL_MS = 7 * 86_400_000L;
     private static final int IDLE_QUIESCENCE_THRESHOLD = 30;
+    /** Minimum distinct modules seen before freezing a cold-start baseline snapshot. */
+    static final int COLD_START_MODULE_THRESHOLD = 3;
 
     private transient ValueState<ClinicalStateSummary> summaryState;
     private transient Module13Metrics metrics;
@@ -76,6 +78,36 @@ public class Module13_ClinicalStateSynchroniser
             return;
         }
         state.recordModuleSeen(sourceModule, event.getEventTime());
+
+        // 1a. Cold-start baseline freeze: if no previous snapshot exists and ≥3 distinct
+        // modules have reported, freeze current snapshot as baseline so velocity computation
+        // can begin without waiting for the full 7-day rotation timer.
+        if (!state.hasVelocityData() && state.getModuleLastSeenMs().size() >= COLD_START_MODULE_THRESHOLD) {
+            state.rotateSnapshots(ctx.timerService().currentProcessingTime());
+            state.setLastRotationEventTimeMs(event.getEventTime());
+            LOG.info("Cold-start baseline frozen for patient {}: {} modules seen, snapshot rotated early",
+                    event.getPatientId(), state.getModuleLastSeenMs().size());
+            metrics.recordSnapshotRotation();
+        }
+
+        // 1c. Event-time-driven snapshot rotation: when event timestamps span ≥7 days since
+        // last rotation, rotate again. This ensures velocity computation works correctly both
+        // in production (continuous flow) and in burst/E2E tests (simulated timestamps).
+        // The processing-time rotation timer (step 10) remains as a safety net.
+        if (state.hasVelocityData() && state.getLastRotationEventTimeMs() > 0
+                && event.getEventTime() - state.getLastRotationEventTimeMs() >= SNAPSHOT_ROTATION_INTERVAL_MS) {
+            state.rotateSnapshots(ctx.timerService().currentProcessingTime());
+            state.setLastRotationEventTimeMs(event.getEventTime());
+            LOG.info("Event-time snapshot rotation for patient {}: event-time gap={}d",
+                    event.getPatientId(),
+                    (event.getEventTime() - state.getLastRotationEventTimeMs()) / 86_400_000L);
+            metrics.recordSnapshotRotation();
+        }
+
+        // 1b. A1: Extract personalised targets for enriched lab events (instance method — needs pilotConfig/metrics)
+        if ("enriched".equals(sourceModule)) {
+            extractPersonalizedTargets(event.getPayload(), state);
+        }
 
         // 2. Compute data completeness
         Module13DataCompletenessMonitor.Result completeness =
@@ -152,7 +184,7 @@ public class Module13_ClinicalStateSynchroniser
                     .operation(KB20StateUpdate.UpdateOperation.REPLACE)
                     .sourceModule("module13")
                     .fieldPath("ckm_risk_velocity")
-                    .value(velocity)
+                    .value(velocityToMap(velocity))
                     .updateTimestamp(now)
                     .build());
             state.getCoalescingBuffer().add(KB20StateUpdate.builder()
@@ -275,10 +307,11 @@ public class Module13_ClinicalStateSynchroniser
             }
 
         } else if (timestamp == state.getSnapshotRotationTimerMs()) {
-            // 7-day snapshot rotation for velocity computation
+            // 7-day snapshot rotation for velocity computation (processing-time safety net)
             state.rotateSnapshots(timestamp);
+            state.setLastRotationEventTimeMs(timestamp); // Sync event-time marker to wall-clock
             metrics.recordSnapshotRotation();
-            LOG.info("Snapshot rotated for patient {}: previous snapshot captured at {}",
+            LOG.info("Snapshot rotated (processing-time) for patient {}: captured at {}",
                     state.getPatientId(), timestamp);
 
             // Re-register rotation timer
@@ -290,7 +323,8 @@ public class Module13_ClinicalStateSynchroniser
         summaryState.update(state);
     }
 
-    private String routeAndUpdateState(CanonicalEvent event, ClinicalStateSummary state, long processingTime) {
+    /** Package-visible for CrossModuleTestHarness. Zero-functional-change refactor. */
+    static String routeAndUpdateState(CanonicalEvent event, ClinicalStateSummary state, long processingTime) {
         Map<String, Object> payload = event.getPayload();
         if (payload == null) return null;
 
@@ -327,58 +361,61 @@ public class Module13_ClinicalStateSynchroniser
         }
     }
 
-    private void updateFromBPVariability(Map<String, Object> payload, ClinicalStateSummary state) {
-        state.current().arv = toDouble(payload.get("arv"));
-        String vc = payload.get("variability_classification") != null
-                ? payload.get("variability_classification").toString() : null;
+    static void updateFromBPVariability(Map<String, Object> payload, ClinicalStateSummary state) {
+        // Module 7 (BPVariabilityMetrics) field names: arv_sbp_7d, sbp_7d_avg, etc.
+        state.current().arv = firstNonNull(payload, "arv_sbp_7d", "arv");
+        String vc = firstString(payload, "variability_classification_7d", "variability_classification");
         if (vc != null) {
             try { state.current().variabilityClass = VariabilityClassification.valueOf(vc); }
             catch (IllegalArgumentException ignored) {}
         }
-        state.current().meanSBP = toDouble(payload.get("mean_sbp"));
-        state.current().meanDBP = toDouble(payload.get("mean_dbp"));
-        if (payload.get("morning_surge_magnitude") != null) {
-            state.current().morningSurgeMagnitude = toDouble(payload.get("morning_surge_magnitude"));
+        state.current().meanSBP = firstNonNull(payload, "sbp_7d_avg", "mean_sbp");
+        state.current().meanDBP = firstNonNull(payload, "dbp_7d_avg", "mean_dbp");
+        Double surge = firstNonNull(payload, "morning_surge_today", "morning_surge_magnitude");
+        if (surge != null) {
+            state.current().morningSurgeMagnitude = surge;
         }
-        if (payload.get("dip_classification") != null) {
-            try { state.current().dipClass = DipClassification.valueOf(payload.get("dip_classification").toString()); }
+        String dipStr = firstString(payload, "dip_classification");
+        if (dipStr != null) {
+            try { state.current().dipClass = DipClassification.valueOf(dipStr); }
             catch (IllegalArgumentException ignored) {}
         }
     }
 
-    private void updateFromEngagement(Map<String, Object> payload, ClinicalStateSummary state) {
+    static void updateFromEngagement(Map<String, Object> payload, ClinicalStateSummary state) {
         state.setPreviousEngagementScore(state.current().engagementScore);
-        state.current().engagementScore = toDouble(payload.get("composite_score"));
-        String level = payload.get("engagement_level") != null
-                ? payload.get("engagement_level").toString() : null;
+        // Module 9 EngagementSignal emits camelCase: compositeScore, engagementLevel, dataTier
+        state.current().engagementScore = firstNonNull(payload, "compositeScore", "composite_score");
+        String level = firstString(payload, "engagementLevel", "engagement_level");
         if (level != null) {
             try { state.current().engagementLevel = EngagementLevel.valueOf(level); }
             catch (IllegalArgumentException ignored) {}
         }
-        state.setLatestPhenotype(payload.get("phenotype") != null ? payload.get("phenotype").toString() : null);
-        state.setDataTier(payload.get("data_tier") != null ? payload.get("data_tier").toString() : null);
+        state.setLatestPhenotype(firstString(payload, "phenotype"));
+        state.setDataTier(firstString(payload, "dataTier", "data_tier"));
     }
 
-    private void updateFromMealPatterns(Map<String, Object> payload, ClinicalStateSummary state) {
-        state.current().meanIAUC = toDouble(payload.get("mean_iauc"));
-        state.current().medianExcursion = toDouble(payload.get("median_excursion"));
-        String sc = payload.get("salt_sensitivity_class") != null
-                ? payload.get("salt_sensitivity_class").toString() : null;
+    static void updateFromMealPatterns(Map<String, Object> payload, ClinicalStateSummary state) {
+        // Module 10b MealPatternSummary emits camelCase: meanIAUC, medianExcursion, etc.
+        state.current().meanIAUC = firstNonNull(payload, "meanIAUC", "mean_iauc");
+        state.current().medianExcursion = firstNonNull(payload, "medianExcursion", "median_excursion");
+        String sc = firstString(payload, "saltSensitivityClass", "salt_sensitivity_class");
         if (sc != null) {
             try { state.current().saltSensitivity = SaltSensitivityClass.valueOf(sc); }
             catch (IllegalArgumentException ignored) {}
         }
-        state.current().saltBeta = toDouble(payload.get("salt_beta"));
+        state.current().saltBeta = firstNonNull(payload, "saltBeta", "salt_beta");
     }
 
-    private void updateFromFitnessPatterns(Map<String, Object> payload, ClinicalStateSummary state) {
-        state.current().estimatedVO2max = toDouble(payload.get("estimated_vo2max"));
-        state.current().vo2maxTrend = toDouble(payload.get("vo2max_trend"));
-        state.current().totalMetMinutes = toDouble(payload.get("total_met_minutes"));
-        state.current().meanExerciseGlucoseDelta = toDouble(payload.get("mean_exercise_glucose_delta"));
+    static void updateFromFitnessPatterns(Map<String, Object> payload, ClinicalStateSummary state) {
+        // Module 11b FitnessPatternSummary emits camelCase: estimatedVO2max, vo2maxTrend, etc.
+        state.current().estimatedVO2max = firstNonNull(payload, "estimatedVO2max", "estimated_vo2max");
+        state.current().vo2maxTrend = firstNonNull(payload, "vo2maxTrend", "vo2max_trend");
+        state.current().totalMetMinutes = firstNonNull(payload, "totalMetMinutes", "total_met_minutes");
+        state.current().meanExerciseGlucoseDelta = firstNonNull(payload, "meanExerciseGlucoseDelta", "mean_exercise_glucose_delta");
     }
 
-    private void updateFromInterventionWindow(Map<String, Object> payload, ClinicalStateSummary state) {
+    static void updateFromInterventionWindow(Map<String, Object> payload, ClinicalStateSummary state) {
         String interventionId = payload.get("intervention_id") != null
                 ? payload.get("intervention_id").toString() : null;
         String signalType = payload.get("signal_type") != null
@@ -409,7 +446,7 @@ public class Module13_ClinicalStateSynchroniser
         }
     }
 
-    private void updateFromInterventionDelta(Map<String, Object> payload, ClinicalStateSummary state, long processingTime) {
+    static void updateFromInterventionDelta(Map<String, Object> payload, ClinicalStateSummary state, long processingTime) {
         ClinicalStateSummary.InterventionDeltaSummary delta = new ClinicalStateSummary.InterventionDeltaSummary();
         delta.setInterventionId(payload.get("intervention_id") != null
                 ? payload.get("intervention_id").toString() : null);
@@ -430,7 +467,7 @@ public class Module13_ClinicalStateSynchroniser
     }
 
     /** PIPE-7: Update CID alert state from Module 8 comorbidity alerts */
-    private void updateFromComorbidityAlert(Map<String, Object> payload, ClinicalStateSummary state) {
+    static void updateFromComorbidityAlert(Map<String, Object> payload, ClinicalStateSummary state) {
         String ruleId = payload.get("ruleId") != null ? payload.get("ruleId").toString() : "";
         String severity = payload.get("severity") != null ? payload.get("severity").toString() : "";
 
@@ -445,10 +482,8 @@ public class Module13_ClinicalStateSynchroniser
         state.setLastCIDAlertTimestamp(System.currentTimeMillis());
     }
 
-    private void updateFromLabResult(Map<String, Object> payload, ClinicalStateSummary state) {
-        // A1: Extract personalised targets from KB-20 enrichment (when available)
-        extractPersonalizedTargets(payload, state);
-
+    static void updateFromLabResult(Map<String, Object> payload, ClinicalStateSummary state) {
+        // NOTE: extractPersonalizedTargets moved to processElement (needs instance fields)
         String labType = payload.get("lab_type") != null ? payload.get("lab_type").toString() : "";
         Double value = toDouble(payload.get("value"));
         if (value == null) return;
@@ -517,6 +552,18 @@ public class Module13_ClinicalStateSynchroniser
         long now = ctx.timerService().currentProcessingTime();
         if (lastEmitted != null && (now - lastEmitted) < 24 * 3_600_000L) return;
 
+        // Suppress DATA_ABSENCE during initial state-building window (configurable, default 24h).
+        // Prevents noise from burst-inject patterns and cold-start scenarios.
+        if (state.getStateCreatedMs() > 0
+                && (now - state.getStateCreatedMs()) < pilotConfig.getAbsenceSuppressionWindowMs()) {
+            return;
+        }
+
+        // Context-aware action override: if completeness is low but available data
+        // shows critical clinical values, escalate to clinical review instead of
+        // defaulting to an engagement nudge (which could mask a clinical emergency).
+        String actionOverride = resolveDataAbsenceAction(state, type);
+
         ClinicalStateChangeEvent absenceEvent = ClinicalStateChangeEvent.builder()
                 .changeId(UUID.randomUUID().toString())
                 .patientId(state.getPatientId())
@@ -527,6 +574,7 @@ public class Module13_ClinicalStateSynchroniser
                 .ckmVelocityAtChange(velocity)
                 .dataCompletenessAtChange(state.getDataCompletenessScore())
                 .confidenceScore(state.getDataCompletenessScore())
+                .recommendedAction(actionOverride)
                 .processingTimestamp(now)
                 .build();
         if (!pilotConfig.isDryRun()) {
@@ -538,7 +586,33 @@ public class Module13_ClinicalStateSynchroniser
         } else {
             metrics.recordDataAbsenceWarning();
         }
-        LOG.warn("Data absence detected: patient={}, type={}", state.getPatientId(), type);
+        LOG.warn("Data absence detected: patient={}, type={}, action={}", state.getPatientId(), type, actionOverride);
+    }
+
+    /**
+     * Determine the appropriate recommended action for a data absence event.
+     * If available data shows critical clinical values (Stage 2 HTN, high HbA1c,
+     * CKD G3a, CID halts), escalate to clinical review rather than an engagement nudge.
+     */
+    static String resolveDataAbsenceAction(ClinicalStateSummary state, ClinicalStateChangeType type) {
+        // CRITICAL absence always escalates
+        if (type == ClinicalStateChangeType.DATA_ABSENCE_CRITICAL) {
+            return type.getRecommendedAction();
+        }
+
+        // For WARNING: check if available data shows critical values that warrant escalation
+        ClinicalStateSummary.MetricSnapshot snap = state.current();
+        boolean hasCriticalBP = snap.meanSBP != null && snap.meanSBP >= 160.0;
+        boolean hasCriticalGlycaemic = (snap.hba1c != null && snap.hba1c >= 8.0)
+                || (snap.fbg != null && snap.fbg >= 140.0);
+        boolean hasCriticalRenal = snap.egfr != null && snap.egfr < 45.0;
+        boolean hasCIDHalts = state.getActiveCIDHaltCount() > 0;
+
+        if (hasCriticalBP || hasCriticalGlycaemic || hasCriticalRenal || hasCIDHalts) {
+            return "INCOMPLETE_DATA_WITH_CRITICAL_VALUES — escalate to clinical review, do not send engagement nudge";
+        }
+
+        return type.getRecommendedAction(); // default: "Generate engagement check card"
     }
 
     private static Double toDouble(Object v) {
@@ -552,5 +626,52 @@ public class Module13_ClinicalStateSynchroniser
         if (v instanceof Number) return ((Number) v).longValue();
         try { return Long.parseLong(v.toString()); }
         catch (NumberFormatException e) { return 0L; }
+    }
+
+    /**
+     * Try multiple payload keys in order, return the first non-null value as Double.
+     * Handles the field-name mismatch between upstream module output (camelCase / specific names)
+     * and legacy Module 13 expectations (snake_case / generic names).
+     */
+    static Double firstNonNull(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Double d = toDouble(payload.get(key));
+            if (d != null) return d;
+        }
+        return null;
+    }
+
+    /**
+     * Try multiple payload keys in order, return the first non-null value as String.
+     */
+    static String firstString(Map<String, Object> payload, String... keys) {
+        for (String key : keys) {
+            Object v = payload.get(key);
+            if (v != null) return v.toString();
+        }
+        return null;
+    }
+
+    /**
+     * Convert CKMRiskVelocity to a Kryo-safe Map&lt;String,Object&gt; for KB-20 side output.
+     * Avoids EnumMap&lt;CKMRiskDomain&gt; which Kryo cannot deep-copy through the chained operator.
+     */
+    static Map<String, Object> velocityToMap(CKMRiskVelocity v) {
+        if (v == null) return null;
+        Map<String, Object> m = new LinkedHashMap<>();
+        Map<String, Double> domainMap = new LinkedHashMap<>();
+        for (Map.Entry<CKMRiskDomain, Double> e : v.getDomainVelocities().entrySet()) {
+            domainMap.put(e.getKey().name(), e.getValue());
+        }
+        m.put("domain_velocities", domainMap);
+        m.put("composite_score", v.getCompositeScore());
+        m.put("composite_classification",
+                v.getCompositeClassification() != null ? v.getCompositeClassification().name() : "UNKNOWN");
+        m.put("cross_domain_amplification", v.isCrossDomainAmplification());
+        m.put("amplification_factor", v.getAmplificationFactor());
+        m.put("domains_deteriorating", v.getDomainsDeteriorating());
+        m.put("computation_timestamp", v.getComputationTimestamp());
+        m.put("data_completeness", v.getDataCompleteness());
+        return m;
     }
 }

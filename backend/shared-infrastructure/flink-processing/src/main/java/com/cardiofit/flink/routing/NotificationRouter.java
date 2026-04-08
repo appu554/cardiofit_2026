@@ -23,8 +23,7 @@ public final class NotificationRouter {
                 NotificationRequest.Channel.FCM_PUSH,
                 NotificationRequest.Channel.EMAIL
             );
-            case SOFT_FLAG -> List.of(NotificationRequest.Channel.DASHBOARD_ONLY);
-            case ROUTINE -> List.of(NotificationRequest.Channel.DASHBOARD_ONLY);
+            case SOFT_FLAG, ROUTINE -> List.of(NotificationRequest.Channel.DASHBOARD_ONLY);
         };
     }
 }

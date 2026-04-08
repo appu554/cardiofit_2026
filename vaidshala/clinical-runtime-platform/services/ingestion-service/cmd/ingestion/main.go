@@ -112,5 +112,8 @@ func main() {
 		logger.Error("server forced shutdown", zap.Error(err))
 	}
 
+	// Close publishers (outbox SDK + Kafka writers) to drain pending writes
+	srv.Close()
+
 	logger.Info("ingestion service stopped")
 }

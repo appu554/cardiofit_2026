@@ -1,17 +1,16 @@
 module global-outbox-service-go
 
-go 1.21
+go 1.24
 
 require (
-	github.com/gofiber/fiber/v2 v2.52.0
-	github.com/jackc/pgx/v5 v5.5.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.3.0
-	google.golang.org/grpc v1.60.1
-	google.golang.org/protobuf v1.32.0
+	github.com/gofiber/fiber/v2 v2.52.0
+	github.com/google/uuid v1.5.0
+	github.com/jackc/pgx/v5 v5.5.1
 	github.com/prometheus/client_golang v1.17.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.18.2
-	github.com/google/uuid v1.5.0
+	google.golang.org/grpc v1.60.1
 )
 
 require (
@@ -29,6 +28,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
+	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
@@ -54,6 +54,7 @@ require (
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
+	google.golang.org/protobuf v1.32.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -37,7 +37,7 @@ async def _verify_ws_token(token: str) -> dict | None:
     # Call Auth Service /verify
     try:
         auth_url = settings.AUTH_SERVICE_URL or "http://localhost:8001/api"
-        verify_url = f"{auth_url}/api/auth/verify" if "/api" not in auth_url else f"{auth_url}/api/auth/verify"
+        verify_url = f"{auth_url}/api/auth/verify" if "/api" not in auth_url else f"{auth_url}/auth/verify"
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(verify_url, headers={"Authorization": f"Bearer {token}"})
             if resp.status_code != 200:

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 @strawberry.type
 class Mutation:
     @strawberry.mutation
-    async def login(self, info, username: str, password: str) -> AuthResponse:
+    async def login(self, info: strawberry.types.Info, username: str, password: str) -> AuthResponse:
         # Call auth service to login
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -152,7 +152,7 @@ class Mutation:
 
     # Note mutations
     @strawberry.mutation
-    async def create_note(self, info, note_data: NoteInput) -> Optional[Note]:
+    async def create_note(self, info: strawberry.types.Info, note_data: NoteInput) -> Optional[Note]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -181,7 +181,7 @@ class Mutation:
 
     # FHIR resource mutations
     @strawberry.mutation
-    async def create_observation(self, info, observation_data: ObservationInput) -> Optional[LabResult]:
+    async def create_observation(self, info: strawberry.types.Info, observation_data: ObservationInput) -> Optional[LabResult]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -215,7 +215,7 @@ class Mutation:
             return None
 
     @strawberry.mutation
-    async def create_condition(self, info, condition_data: ConditionInput) -> Optional[Condition]:
+    async def create_condition(self, info: strawberry.types.Info, condition_data: ConditionInput) -> Optional[Condition]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -249,7 +249,7 @@ class Mutation:
             return None
 
     @strawberry.mutation
-    async def create_medication_request(self, info, medication_data: MedicationRequestInput) -> Optional[MedicationRequest]:
+    async def create_medication_request(self, info: strawberry.types.Info, medication_data: MedicationRequestInput) -> Optional[MedicationRequest]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -283,7 +283,7 @@ class Mutation:
             return None
 
     @strawberry.mutation
-    async def create_diagnostic_report(self, info, report_data: DiagnosticReportInput) -> Optional[DiagnosticReport]:
+    async def create_diagnostic_report(self, info: strawberry.types.Info, report_data: DiagnosticReportInput) -> Optional[DiagnosticReport]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")

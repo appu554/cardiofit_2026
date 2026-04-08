@@ -1,0 +1,339 @@
+{
+	"info": {
+		"name": "CardioFit API Gateway",
+		"description": "API Gateway endpoints for the Clinical Synthesis Hub.\n\n## Setup\n1. Set `gateway_url` variable (default: http://localhost:8000)\n2. Set `auth_service_url` variable (default: http://localhost:8001)\n3. Run \"Auth > OTP Send\" then \"Auth > OTP Verify\" to get a JWT\n4. The JWT is auto-saved to `jwt_token` variable\n\n## Roles\n- `patient`: Patient App routes\n- `physician`/`doctor`: Doctor Dashboard routes\n- `admin`: Metrics + admin routes",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{"key": "gateway_url", "value": "http://localhost:8000"},
+		{"key": "auth_service_url", "value": "http://localhost:8001"},
+		{"key": "jwt_token", "value": ""},
+		{"key": "patient_id", "value": "test-patient-001"},
+		{"key": "card_id", "value": "card-001"},
+		{"key": "tenant_id", "value": "cardiofit-default"}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [{"key": "token", "value": "{{jwt_token}}"}]
+	},
+	"item": [
+		{
+			"name": "Health & Discovery",
+			"item": [
+				{
+					"name": "Gateway Health",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/health",
+						"auth": {"type": "noauth"}
+					}
+				},
+				{
+					"name": "OpenAPI Schema",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/openapi.json",
+						"auth": {"type": "noauth"}
+					}
+				},
+				{
+					"name": "Swagger UI (browser)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/docs",
+						"auth": {"type": "noauth"}
+					}
+				}
+			]
+		},
+		{
+			"name": "Auth (Public)",
+			"description": "Public authentication endpoints — no JWT required.",
+			"item": [
+				{
+					"name": "OTP Send",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var json = pm.response.json();",
+									"    if (json.otpId) pm.collectionVariables.set('otp_id', json.otpId);",
+									"    pm.test('OTP sent', () => pm.expect(json.otpId || json.message).to.exist);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/auth/otp/send",
+						"auth": {"type": "noauth"},
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+919876543210\",\n  \"tenantId\": \"cardiofit-default\"\n}"
+						}
+					}
+				},
+				{
+					"name": "OTP Verify → Get JWT",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var json = pm.response.json();",
+									"    var token = json.accessToken || json.access_token || json.token;",
+									"    if (token) {",
+									"        pm.collectionVariables.set('jwt_token', token);",
+									"        pm.test('JWT saved', () => pm.expect(token).to.be.a('string'));",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/auth/otp/verify",
+						"auth": {"type": "noauth"},
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"phone\": \"+919876543210\",\n  \"otp\": \"123456\",\n  \"tenantId\": \"cardiofit-default\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Token Refresh",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/auth/refresh",
+						"auth": {"type": "noauth"},
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refreshToken\": \"your-refresh-token-here\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Tenant Branding (public)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/tenants/{{tenant_id}}/branding",
+						"auth": {"type": "noauth"}
+					}
+				}
+			]
+		},
+		{
+			"name": "Patient App",
+			"description": "Patient-facing endpoints. Requires JWT with `patient` role.\n\nSet `patient_id` variable before running.",
+			"item": [
+				{
+					"name": "Health Score (KB-26)",
+					"event": [{"listen": "test", "script": {"exec": ["pm.test('Status 200 or 502', () => pm.expect([200,502]).to.include(pm.response.code));"]}}],
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/health-score"
+					}
+				},
+				{
+					"name": "Actions Today (KB-23)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/actions/today"
+					}
+				},
+				{
+					"name": "Health Drive (KB-25)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/health-drive"
+					}
+				},
+				{
+					"name": "Progress (KB-20)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/progress"
+					}
+				},
+				{
+					"name": "Cause-Effect (KB-26)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/cause-effect"
+					}
+				},
+				{
+					"name": "Timeline (KB-20)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/timeline"
+					}
+				},
+				{
+					"name": "Insights (KB-26)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/insights"
+					}
+				},
+				{
+					"name": "Daily Check-in (KB-22)",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/checkin",
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"daily\",\n  \"responses\": [\n    {\"nodeId\": \"P1\", \"answer\": \"no_symptoms\"}\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "ABDM Verify",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/patient/{{patient_id}}/abdm/verify",
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"healthId\": \"12-3456-7890-1234\",\n  \"otp\": \"123456\"\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Doctor Dashboard",
+			"description": "Physician-facing endpoints. Requires JWT with `physician`/`doctor`/`nurse`/`admin` role.\n\nSet `patient_id` variable before running.",
+			"item": [
+				{
+					"name": "Patient Summary (KB-20)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/doctor/patients/{{patient_id}}/summary"
+					}
+				},
+				{
+					"name": "Metabolic Risk Index (KB-26)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/doctor/patients/{{patient_id}}/mri"
+					}
+				},
+				{
+					"name": "Decision Cards (KB-23)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/doctor/patients/{{patient_id}}/cards"
+					}
+				},
+				{
+					"name": "Card Action (KB-23)",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/doctor/cards/{{card_id}}/action",
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"action\": \"approve\",\n  \"notes\": \"Reviewed — patient stable on current regimen\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Safety Traces (V-MCU)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/doctor/traces/{{patient_id}}"
+					}
+				},
+				{
+					"name": "Channel B Inputs (KB-20)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/doctor/patients/{{patient_id}}/channel-b-inputs"
+					}
+				},
+				{
+					"name": "Channel C Inputs (KB-20)",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/v1/doctor/patients/{{patient_id}}/channel-c-inputs"
+					}
+				},
+				{
+					"name": "GraphQL Query (Apollo)",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/v1/doctor/graphql",
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"{ __typename }\"\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"description": "Admin-only endpoints. Requires JWT with `admin` role.",
+			"item": [
+				{
+					"name": "Prometheus Metrics",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/metrics"
+					}
+				}
+			]
+		},
+		{
+			"name": "Legacy Proxy",
+			"description": "Existing catch-all proxy routes. These were available before the upgrade.",
+			"item": [
+				{
+					"name": "Auth Service — Login",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/auth/login",
+						"auth": {"type": "noauth"},
+						"header": [{"key": "Content-Type", "value": "application/json"}],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"admin@cardiofit.in\",\n  \"password\": \"your-password\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Auth Service — Verify Token",
+					"request": {
+						"method": "POST",
+						"url": "{{gateway_url}}/api/auth/verify"
+					}
+				},
+				{
+					"name": "FHIR — Get Patient",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/fhir/Patient/{{patient_id}}"
+					}
+				},
+				{
+					"name": "FHIR — Get Observations",
+					"request": {
+						"method": "GET",
+						"url": "{{gateway_url}}/api/fhir/Observation?patient={{patient_id}}"
+					}
+				}
+			]
+		}
+	]
+}

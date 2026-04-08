@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CardioFit Intake-Onboarding Service",
-    "description": "Full E2E collection for the Intake-Onboarding Service.\n\nFlow: Enroll → Fill Slots (50) → Safety → Submit Review → Approve → Check-in → Check-in Slots\n\n**Setup**: Run \"1. Enroll Patient\" first — it auto-sets `patient_id` and `encounter_id` variables for subsequent requests.",
+    "description": "Full E2E collection for the Intake-Onboarding Service.\n\nFlow: Create Patient → Create Encounter → Enroll → Fill Slots (50) → Safety → Submit Review → Approve → Check-in → Check-in Slots\n\n**Test Patient**: Venkatesh Iyer, 65M, South Indian, T2DM x15 years, CKD 3a, HTN, dyslipidemia, 8 medications.\n\n**Setup**: Run requests in order — test scripts auto-set `patient_id`, `encounter_id`, etc.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -41,30 +41,24 @@
       ]
     },
     {
-      "name": "1. Enrollment",
+      "name": "1. Patient Registration & Enrollment",
+      "description": "5-step flow: Create Patient (with demographics) → Lookup Patient → Create Encounter → Enroll → Edit Demographics\n\nPatient: Venkatesh Iyer, 65M, Chennai, T2DM x15y, CKD 3a",
       "item": [
         {
-          "name": "1.1 Enroll Patient",
+          "name": "1.1 Create Patient (Venkatesh Iyer)",
           "event": [
             {
               "listen": "test",
               "script": {
                 "exec": [
-                  "if (pm.response.code === 201) {",
-                  "    var json = pm.response.json();",
+                  "var json = pm.response.json();",
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
                   "    pm.collectionVariables.set('patient_id', json.patient_id);",
-                  "    pm.collectionVariables.set('encounter_id', json.encounter_id);",
-                  "    pm.test('Patient enrolled', function() {",
-                  "        pm.expect(json.status).to.eql('enrolled');",
-                  "    });",
                   "    pm.test('Has patient_id', function() {",
                   "        pm.expect(json.patient_id).to.be.a('string');",
                   "    });",
-                  "    pm.test('Has encounter_id', function() {",
-                  "        pm.expect(json.encounter_id).to.be.a('string');",
-                  "    });",
-                  "    pm.test('Returns next_node', function() {",
-                  "        pm.expect(json.next_node.node_id).to.eql('demographics_basic');",
+                  "    pm.test('Status is created or existing', function() {",
+                  "        pm.expect(['created', 'existing']).to.include(json.status);",
                   "    });",
                   "}"
                 ]
@@ -73,23 +67,152 @@
           ],
           "request": {
             "method": "POST",
-            "url": "{{base_url}}/fhir/Patient/$enroll",
+            "url": "{{base_url}}/fhir/Patient",
             "header": [
               { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"given_name\": \"Ravi\",\n  \"family_name\": \"Kumar\",\n  \"phone\": \"+919876543210\",\n  \"abha_id\": \"91-2345-6789-0123\",\n  \"channel_type\": \"CORPORATE\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+              "raw": "{\n  \"given_name\": \"Venkatesh\",\n  \"family_name\": \"Iyer\",\n  \"phone\": \"+919841234567\",\n  \"abha_id\": \"91-8765-4321-0987\",\n  \"email\": \"venkatesh.iyer@email.com\",\n  \"age\": 65,\n  \"gender\": \"male\",\n  \"ethnicity\": \"south_asian\",\n  \"primary_language\": \"ta\"\n}"
+            }
+          }
+        },
+        {
+          "name": "1.1b Lookup Patient by Phone",
+          "description": "Search for a patient by phone number. Returns patient_id and basic info if found.",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/fhir/Patient?phone=%2B919841234567",
+            "header": []
+          }
+        },
+        {
+          "name": "1.1c Lookup Patient by Email",
+          "description": "Search for a patient by email. Returns patient_id and basic info if found.",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/fhir/Patient?email=venkatesh.iyer@email.com",
+            "header": []
+          }
+        },
+        {
+          "name": "1.2 Create Encounter (intake)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('encounter_id', json.encounter_id);",
+                  "    pm.test('Has encounter_id', function() {",
+                  "        pm.expect(json.encounter_id).to.be.a('string');",
+                  "    });",
+                  "    pm.test('Type is intake', function() {",
+                  "        pm.expect(json.type).to.eql('intake');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}/Encounter",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"intake\"\n}"
+            }
+          }
+        },
+        {
+          "name": "1.2b Create Encounter (lab)",
+          "description": "Example: lab visit for blood work",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}/Encounter",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"lab\"\n}"
+            }
+          }
+        },
+        {
+          "name": "1.2c Create Encounter (checkup)",
+          "description": "Example: routine follow-up checkup",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}/Encounter",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"checkup\"\n}"
+            }
+          }
+        },
+        {
+          "name": "1.3 Enroll in Program",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var json = pm.response.json();",
+                  "    pm.test('Patient enrolled', function() {",
+                  "        pm.expect(json.status).to.eql('enrolled');",
+                  "    });",
+                  "    pm.test('Returns next_node', function() {",
+                  "        pm.expect(json.next_node.node_id).to.eql('body_measurements');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}/$enroll",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"encounter_id\": \"{{encounter_id}}\",\n  \"channel_type\": \"CORPORATE\",\n  \"tenant_id\": \"{{tenant_id}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "1.4 Edit Patient Demographics",
+          "description": "PUT to update identity-level fields. Venkatesh Iyer: 65M, South Asian, Tamil speaker.",
+          "request": {
+            "method": "PUT",
+            "url": "{{base_url}}/fhir/Patient/{{patient_id}}",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"age\": 65,\n  \"gender\": \"male\",\n  \"ethnicity\": \"south_asian\",\n  \"primary_language\": \"ta\",\n  \"given_name\": \"Venkatesh\",\n  \"family_name\": \"Iyer\"\n}"
             }
           }
         }
       ]
     },
     {
-      "name": "2. Fill Slots — Demographics",
+      "name": "2. Fill Slots — Body Measurements",
+      "description": "Venkatesh Iyer: 170cm, 78kg, BMI 27.0, not pregnant. Demographics (age, sex, ethnicity, language) are now set at patient creation.",
       "item": [
         {
-          "name": "2.1 age",
+          "name": "2.1 height (170 cm)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -99,12 +222,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"age\",\n  \"value\": 58,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"height\",\n  \"value\": 170,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "2.2 sex",
+          "name": "2.2 weight (78 kg)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -114,12 +237,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"sex\",\n  \"value\": \"male\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"weight\",\n  \"value\": 78,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "2.3 height",
+          "name": "2.3 bmi (27.0)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -129,42 +252,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"height\",\n  \"value\": 172,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"bmi\",\n  \"value\": 27.0,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "2.4 weight",
-          "request": {
-            "method": "POST",
-            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"weight\",\n  \"value\": 82.5,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
-            }
-          }
-        },
-        {
-          "name": "2.5 bmi",
-          "request": {
-            "method": "POST",
-            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"bmi\",\n  \"value\": 27.9,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
-            }
-          }
-        },
-        {
-          "name": "2.6 pregnant",
+          "name": "2.4 pregnant (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -178,43 +271,14 @@
             }
           }
         },
-        {
-          "name": "2.7 ethnicity (optional)",
-          "request": {
-            "method": "POST",
-            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"ethnicity\",\n  \"value\": \"south_asian\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
-            }
-          }
-        },
-        {
-          "name": "2.8 primary_language (optional)",
-          "request": {
-            "method": "POST",
-            "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-Patient-ID", "value": "{{patient_id}}" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"primary_language\",\n  \"value\": \"hindi\",\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
-            }
-          }
-        }
       ]
     },
     {
       "name": "3. Fill Slots — Glycemic",
+      "description": "T2DM x15 years, uncontrolled (HbA1c 8.4%), on insulin + OHA, 1 hypo episode",
       "item": [
         {
-          "name": "3.1 diabetes_type",
+          "name": "3.1 diabetes_type (type2)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -229,7 +293,7 @@
           }
         },
         {
-          "name": "3.2 fbg",
+          "name": "3.2 fbg (156 mg/dL — elevated)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -239,12 +303,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"fbg\",\n  \"value\": 145,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"fbg\",\n  \"value\": 156,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "3.3 hba1c",
+          "name": "3.3 hba1c (8.4% — uncontrolled)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -254,12 +318,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"hba1c\",\n  \"value\": 8.2,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"hba1c\",\n  \"value\": 8.4,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "3.4 ppbg (optional)",
+          "name": "3.4 ppbg (228 mg/dL — elevated)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -269,12 +333,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"ppbg\",\n  \"value\": 210,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"ppbg\",\n  \"value\": 228,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.97,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "3.5 diabetes_duration_years (optional)",
+          "name": "3.5 diabetes_duration_years (15)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -284,12 +348,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"diabetes_duration_years\",\n  \"value\": 12,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"diabetes_duration_years\",\n  \"value\": 15,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "3.6 insulin",
+          "name": "3.6 insulin (true — glargine 24U HS)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -304,7 +368,7 @@
           }
         },
         {
-          "name": "3.7 hypoglycemia_episodes (optional)",
+          "name": "3.7 hypoglycemia_episodes (1 in 3 months)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -314,7 +378,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"hypoglycemia_episodes\",\n  \"value\": 2,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"hypoglycemia_episodes\",\n  \"value\": 1,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         }
@@ -322,9 +386,10 @@
     },
     {
       "name": "4. Fill Slots — Renal",
+      "description": "CKD stage 3a: eGFR 52, creatinine 1.3, UACR 180 (microalbuminuria)",
       "item": [
         {
-          "name": "4.1 egfr",
+          "name": "4.1 egfr (52 — CKD 3a)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -334,12 +399,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"egfr\",\n  \"value\": 55,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"egfr\",\n  \"value\": 52,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "4.2 serum_creatinine",
+          "name": "4.2 serum_creatinine (1.3 mg/dL)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -349,12 +414,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"serum_creatinine\",\n  \"value\": 1.4,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"serum_creatinine\",\n  \"value\": 1.3,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "4.3 uacr (optional)",
+          "name": "4.3 uacr (180 mg/g — microalbuminuria)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -364,12 +429,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"uacr\",\n  \"value\": 150,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"uacr\",\n  \"value\": 180,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.90,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "4.4 dialysis",
+          "name": "4.4 dialysis (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -384,7 +449,7 @@
           }
         },
         {
-          "name": "4.5 serum_potassium (optional)",
+          "name": "4.5 serum_potassium (4.5 mEq/L)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -394,7 +459,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"serum_potassium\",\n  \"value\": 4.2,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"serum_potassium\",\n  \"value\": 4.5,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         }
@@ -402,9 +467,10 @@
     },
     {
       "name": "5. Fill Slots — Cardiac",
+      "description": "HTN stage 1 (148/86), HR 78, NYHA II, LVEF 50%, no AF, no MI/stroke",
       "item": [
         {
-          "name": "5.1 systolic_bp",
+          "name": "5.1 systolic_bp (148 mmHg — stage 1 HTN)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -414,12 +480,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"systolic_bp\",\n  \"value\": 142,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"systolic_bp\",\n  \"value\": 148,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "5.2 diastolic_bp",
+          "name": "5.2 diastolic_bp (86 mmHg)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -429,12 +495,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"diastolic_bp\",\n  \"value\": 88,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"diastolic_bp\",\n  \"value\": 86,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.98,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "5.3 heart_rate (optional)",
+          "name": "5.3 heart_rate (78 bpm)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -444,12 +510,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"heart_rate\",\n  \"value\": 76,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"heart_rate\",\n  \"value\": 78,\n  \"extraction_mode\": \"DEVICE\",\n  \"confidence\": 0.97,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "5.4 nyha_class (optional)",
+          "name": "5.4 nyha_class (2 — mild symptoms)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -464,7 +530,7 @@
           }
         },
         {
-          "name": "5.5 mi_stroke_days (optional)",
+          "name": "5.5 mi_stroke_days (0 — no history)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -479,7 +545,7 @@
           }
         },
         {
-          "name": "5.6 lvef (optional)",
+          "name": "5.6 lvef (50% — borderline)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -489,12 +555,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"lvef\",\n  \"value\": 45,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"lvef\",\n  \"value\": 50,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.90,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "5.7 atrial_fibrillation (optional)",
+          "name": "5.7 atrial_fibrillation (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -512,9 +578,10 @@
     },
     {
       "name": "6. Fill Slots — Lipid",
+      "description": "Dyslipidemia: TC 232, LDL 148, HDL 36 (low), TG 210 (high), on atorvastatin 40mg",
       "item": [
         {
-          "name": "6.1 total_cholesterol",
+          "name": "6.1 total_cholesterol (232 mg/dL)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -524,12 +591,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"total_cholesterol\",\n  \"value\": 220,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"total_cholesterol\",\n  \"value\": 232,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "6.2 ldl",
+          "name": "6.2 ldl (148 mg/dL — above target)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -539,12 +606,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"ldl\",\n  \"value\": 140,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"ldl\",\n  \"value\": 148,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "6.3 hdl",
+          "name": "6.3 hdl (36 mg/dL — low)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -554,12 +621,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"hdl\",\n  \"value\": 38,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"hdl\",\n  \"value\": 36,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "6.4 triglycerides",
+          "name": "6.4 triglycerides (210 mg/dL — elevated)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -569,12 +636,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"triglycerides\",\n  \"value\": 195,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"triglycerides\",\n  \"value\": 210,\n  \"extraction_mode\": \"REGEX\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "6.5 on_statin (optional)",
+          "name": "6.5 on_statin (true — atorvastatin 40mg)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -592,9 +659,10 @@
     },
     {
       "name": "7. Fill Slots — Medications",
+      "description": "Polypharmacy: 8 medications, sulfonamide allergy, vitamin D + calcium supplements, adherence 0.65",
       "item": [
         {
-          "name": "7.1 current_medications",
+          "name": "7.1 current_medications (8 drugs)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -604,12 +672,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"current_medications\",\n  \"value\": [\"metformin 1000mg BD\", \"glimepiride 2mg OD\", \"insulin glargine 20U\", \"atorvastatin 20mg\", \"telmisartan 40mg\", \"aspirin 75mg\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"current_medications\",\n  \"value\": [\"metformin 1000mg BD\", \"glimepiride 2mg OD\", \"insulin glargine 24U HS\", \"telmisartan 40mg OD\", \"amlodipine 5mg OD\", \"atorvastatin 40mg HS\", \"aspirin 75mg OD\", \"pantoprazole 40mg OD\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.88,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "7.2 medication_count",
+          "name": "7.2 medication_count (8)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -619,12 +687,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"medication_count\",\n  \"value\": 6,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"medication_count\",\n  \"value\": 8,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "7.3 adherence_score (optional)",
+          "name": "7.3 adherence_score (0.65 — suboptimal)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -634,12 +702,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"adherence_score\",\n  \"value\": 0.7,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"adherence_score\",\n  \"value\": 0.65,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "7.4 allergies",
+          "name": "7.4 allergies (sulfonamides)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -649,12 +717,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"allergies\",\n  \"value\": [\"sulfonamides\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.9,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"allergies\",\n  \"value\": [\"sulfonamides\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.95,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "7.5 supplement_list (optional)",
+          "name": "7.5 supplement_list (vitamin D3 + calcium)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -664,7 +732,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"supplement_list\",\n  \"value\": [\"vitamin D3\", \"omega-3\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"supplement_list\",\n  \"value\": [\"vitamin D3 60000IU weekly\", \"calcium 500mg BD\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.90,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         }
@@ -672,9 +740,10 @@
     },
     {
       "name": "8. Fill Slots — Lifestyle",
+      "description": "Former smoker (quit 10y), occasional alcohol, vegetarian, 60min exercise/week, poor sleep 5.5h",
       "item": [
         {
-          "name": "8.1 smoking_status",
+          "name": "8.1 smoking_status (former — quit 10 years)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -689,7 +758,7 @@
           }
         },
         {
-          "name": "8.2 alcohol_use",
+          "name": "8.2 alcohol_use (occasional)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -704,7 +773,7 @@
           }
         },
         {
-          "name": "8.3 exercise_minutes_week (optional)",
+          "name": "8.3 exercise_minutes_week (60 — walks only)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -714,12 +783,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"exercise_minutes_week\",\n  \"value\": 90,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"exercise_minutes_week\",\n  \"value\": 60,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "8.4 diet_type (optional)",
+          "name": "8.4 diet_type (vegetarian)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -734,7 +803,7 @@
           }
         },
         {
-          "name": "8.5 sleep_hours (optional)",
+          "name": "8.5 sleep_hours (5.5 — poor)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -744,12 +813,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"sleep_hours\",\n  \"value\": 6.5,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"sleep_hours\",\n  \"value\": 5.5,\n  \"extraction_mode\": \"BUTTON\",\n  \"confidence\": 1.0,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "8.6 active_substance_abuse",
+          "name": "8.6 active_substance_abuse (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -764,7 +833,7 @@
           }
         },
         {
-          "name": "8.7 falls_history (optional)",
+          "name": "8.7 falls_history (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -782,9 +851,10 @@
     },
     {
       "name": "9. Fill Slots — Symptoms",
+      "description": "No cancer/transplant/cognitive issues, diabetic neuropathy, GERD, HTN, CKD comorbidities",
       "item": [
         {
-          "name": "9.1 active_cancer",
+          "name": "9.1 active_cancer (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -799,7 +869,7 @@
           }
         },
         {
-          "name": "9.2 organ_transplant",
+          "name": "9.2 organ_transplant (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -814,7 +884,7 @@
           }
         },
         {
-          "name": "9.3 cognitive_impairment (optional)",
+          "name": "9.3 cognitive_impairment (false)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -829,7 +899,7 @@
           }
         },
         {
-          "name": "9.4 bariatric_surgery_months (optional)",
+          "name": "9.4 bariatric_surgery_months (0 — none)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -844,7 +914,7 @@
           }
         },
         {
-          "name": "9.5 primary_complaint (optional)",
+          "name": "9.5 primary_complaint (neuropathy + fatigue)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -854,12 +924,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"primary_complaint\",\n  \"value\": \"Uncontrolled blood sugar and fatigue\",\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.8,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"primary_complaint\",\n  \"value\": \"Persistent fatigue, tingling and numbness in both feet for 3 months, frequent urination at night\",\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         },
         {
-          "name": "9.6 comorbidities (optional)",
+          "name": "9.6 comorbidities (5 conditions)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/Encounter/{{encounter_id}}/$fill-slot",
@@ -869,7 +939,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"comorbidities\",\n  \"value\": [\"hypertension\", \"dyslipidemia\", \"CKD stage 3a\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.85,\n  \"source_channel\": \"APP\"\n}"
+              "raw": "{\n  \"slot_name\": \"comorbidities\",\n  \"value\": [\"hypertension\", \"dyslipidemia\", \"CKD stage 3a\", \"diabetic peripheral neuropathy\", \"GERD\"],\n  \"extraction_mode\": \"NLU\",\n  \"confidence\": 0.88,\n  \"source_channel\": \"APP\"\n}"
             }
           }
         }
@@ -920,7 +990,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"hard_stop_count\": 0,\n  \"soft_flag_count\": 1,\n  \"age\": 58,\n  \"med_count\": 6,\n  \"egfr_value\": 55\n}"
+              "raw": "{\n  \"hard_stop_count\": 0,\n  \"soft_flag_count\": 3,\n  \"age\": 65,\n  \"med_count\": 8,\n  \"egfr_value\": 52\n}"
             }
           }
         },
@@ -946,7 +1016,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_names\": [\"egfr\", \"serum_creatinine\"],\n  \"notes\": \"Please recheck renal values — eGFR and creatinine seem inconsistent\"\n}"
+              "raw": "{\n  \"slot_names\": [\"egfr\", \"serum_creatinine\", \"uacr\"],\n  \"notes\": \"UACR 180 with eGFR 52 suggests A2 category — please verify if UACR was fasting morning sample\"\n}"
             }
           }
         },
@@ -961,15 +1031,15 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"reason\": \"Complex comorbidities requiring senior physician review\",\n  \"notes\": \"CKD 3a + uncontrolled diabetes + 6 medications — needs specialist review\"\n}"
+              "raw": "{\n  \"reason\": \"Complex polypharmacy with CKD 3a and suboptimal adherence\",\n  \"notes\": \"8 medications with 0.65 adherence score, eGFR 52, on glimepiride + insulin — needs nephrologist + endocrinologist review for potential deprescribing\"\n}"
             }
           }
         }
       ]
     },
     {
-      "name": "12. Check-in (M0-CI)",
-      "description": "Requires patient to be in ENROLLED state (run Approve first).",
+      "name": "12. Check-in (M0-CI Cycle 1)",
+      "description": "Biweekly check-in data — 2 weeks after enrollment. Slight improvement in glycemic control, BP better controlled.",
       "item": [
         {
           "name": "12.1 Start Check-in Session",
@@ -1005,7 +1075,7 @@
           }
         },
         {
-          "name": "12.2 Fill fbg",
+          "name": "12.2 Fill fbg (142 — improving)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1014,12 +1084,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"fbg\",\n  \"value\": 138,\n  \"extraction_mode\": \"DEVICE\"\n}"
+              "raw": "{\n  \"slot_name\": \"fbg\",\n  \"value\": 142,\n  \"extraction_mode\": \"DEVICE\"\n}"
             }
           }
         },
         {
-          "name": "12.3 Fill ppbg",
+          "name": "12.3 Fill ppbg (205 — improving)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1028,12 +1098,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"ppbg\",\n  \"value\": 198,\n  \"extraction_mode\": \"DEVICE\"\n}"
+              "raw": "{\n  \"slot_name\": \"ppbg\",\n  \"value\": 205,\n  \"extraction_mode\": \"DEVICE\"\n}"
             }
           }
         },
         {
-          "name": "12.4 Fill hba1c",
+          "name": "12.4 Fill hba1c (8.2 — slight drop)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1042,12 +1112,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"hba1c\",\n  \"value\": 7.9,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+              "raw": "{\n  \"slot_name\": \"hba1c\",\n  \"value\": 8.2,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
             }
           }
         },
         {
-          "name": "12.5 Fill systolic_bp",
+          "name": "12.5 Fill systolic_bp (138 — better controlled)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1056,12 +1126,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"systolic_bp\",\n  \"value\": 136,\n  \"extraction_mode\": \"DEVICE\"\n}"
+              "raw": "{\n  \"slot_name\": \"systolic_bp\",\n  \"value\": 138,\n  \"extraction_mode\": \"DEVICE\"\n}"
             }
           }
         },
         {
-          "name": "12.6 Fill diastolic_bp",
+          "name": "12.6 Fill diastolic_bp (82)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1070,12 +1140,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"diastolic_bp\",\n  \"value\": 84,\n  \"extraction_mode\": \"DEVICE\"\n}"
+              "raw": "{\n  \"slot_name\": \"diastolic_bp\",\n  \"value\": 82,\n  \"extraction_mode\": \"DEVICE\"\n}"
             }
           }
         },
         {
-          "name": "12.7 Fill weight",
+          "name": "12.7 Fill weight (77.5 — lost 0.5 kg)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1084,12 +1154,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"weight\",\n  \"value\": 81.8,\n  \"extraction_mode\": \"DEVICE\"\n}"
+              "raw": "{\n  \"slot_name\": \"weight\",\n  \"value\": 77.5,\n  \"extraction_mode\": \"DEVICE\"\n}"
             }
           }
         },
         {
-          "name": "12.8 Fill egfr",
+          "name": "12.8 Fill egfr (53 — stable)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1098,12 +1168,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"egfr\",\n  \"value\": 57,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+              "raw": "{\n  \"slot_name\": \"egfr\",\n  \"value\": 53,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
             }
           }
         },
         {
-          "name": "12.9 Fill medication_adherence",
+          "name": "12.9 Fill medication_adherence (0.75 — improved)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1112,12 +1182,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"medication_adherence\",\n  \"value\": 0.8,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+              "raw": "{\n  \"slot_name\": \"medication_adherence\",\n  \"value\": 0.75,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
             }
           }
         },
         {
-          "name": "12.10 Fill physical_activity_minutes (opt)",
+          "name": "12.10 Fill physical_activity_minutes (90 — increased)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1126,12 +1196,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"physical_activity_minutes\",\n  \"value\": 120,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+              "raw": "{\n  \"slot_name\": \"physical_activity_minutes\",\n  \"value\": 90,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
             }
           }
         },
         {
-          "name": "12.11 Fill sleep_hours (opt)",
+          "name": "12.11 Fill sleep_hours (6 — slightly improved)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1140,12 +1210,12 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"sleep_hours\",\n  \"value\": 7,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+              "raw": "{\n  \"slot_name\": \"sleep_hours\",\n  \"value\": 6,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
             }
           }
         },
         {
-          "name": "12.12 Fill symptom_severity (opt)",
+          "name": "12.12 Fill symptom_severity (4 — moderate)",
           "request": {
             "method": "POST",
             "url": "{{base_url}}/fhir/CheckinSession/{{checkin_session_id}}/$checkin-slot",
@@ -1154,7 +1224,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"slot_name\": \"symptom_severity\",\n  \"value\": 3,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
+              "raw": "{\n  \"slot_name\": \"symptom_severity\",\n  \"value\": 4,\n  \"extraction_mode\": \"PATIENT_REPORTED\"\n}"
             }
           }
         }

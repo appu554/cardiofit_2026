@@ -45,6 +45,8 @@ import java.util.stream.Collectors;
  * @version 1.0.0
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Disabled("Superseded by Module5OnnxIntegrationTest (55-feature v3.0.0 pipeline). " +
+    "This benchmark uses the old 70-feature ClinicalFeatureExtractor and v1.0.0 model paths.")
 @DisplayName("Module 5: ML Inference Performance Benchmarks")
 public class Module5PerformanceBenchmark {
 

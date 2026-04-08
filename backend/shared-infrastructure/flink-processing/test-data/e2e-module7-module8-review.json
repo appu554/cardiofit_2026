@@ -1,0 +1,333 @@
+{
+  "meta": {
+    "title": "Flink E2E Test — Module 7 (BP Variability) + Module 8 (Comorbidity Interaction)",
+    "run_id": "e2e-m7m8-1775060610",
+    "date": "2026-04-01T16:26:08Z",
+    "score": "10/10 checks passed",
+    "infrastructure": {
+      "kafka": "cardiofit-kafka-lite @ kafka-lite:29092",
+      "flink_jobmanager": "cardiofit-flink-jobmanager (Flink 2.x)",
+      "flink_taskmanager": "cardiofit-flink-taskmanager"
+    },
+    "topics": {
+      "module7_input": "ingestion.vitals",
+      "module7_output": "flink.bp-variability-metrics",
+      "module8_input": "enriched-patient-events-v1",
+      "module8_output": "alerts.comorbidity-interactions",
+      "safety_critical": "ingestion.safety-critical"
+    }
+  },
+
+  "module7_bp_variability": {
+    "description": "Module 7 receives BPReading JSON on ingestion.vitals, computes 7d/30d variability metrics, morning surge, dipping, crisis detection, and white-coat/masked HTN detection. Emits BPVariabilityMetrics to flink.bp-variability-metrics. Crisis/acute-surge readings are side-output to ingestion.safety-critical.",
+
+    "input": {
+      "topic": "ingestion.vitals",
+      "total_readings": 39,
+      "scenarios": [
+        {
+          "scenario": "S1 — Morning Surge (Uncontrolled HTN)",
+          "patient_id": "P-M7-SURGE-060610",
+          "clinical_profile": "Uncontrolled hypertensive with morning surge pattern. 7 days of morning (high ~152-155) + evening (low ~116-117) readings.",
+          "expected_outcome": "Surge classification detected, variability metrics computed over 7d window",
+          "readings": [
+            {"systolic": 155, "diastolic": 92, "time_context": "MORNING", "day": "day-7", "source": "HOME_CUFF"},
+            {"systolic": 116, "diastolic": 74, "time_context": "EVENING", "day": "day-7", "source": "HOME_CUFF"},
+            {"systolic": 152, "diastolic": 92, "time_context": "MORNING", "day": "day-6", "source": "HOME_CUFF"},
+            {"systolic": 117, "diastolic": 74, "time_context": "EVENING", "day": "day-6", "source": "HOME_CUFF"},
+            {"systolic": 154, "diastolic": 92, "time_context": "MORNING", "day": "day-5", "source": "HOME_CUFF"},
+            {"systolic": 116, "diastolic": 74, "time_context": "EVENING", "day": "day-5", "source": "HOME_CUFF"},
+            {"systolic": 152, "diastolic": 92, "time_context": "MORNING", "day": "day-4", "source": "HOME_CUFF"},
+            {"systolic": 117, "diastolic": 74, "time_context": "EVENING", "day": "day-4", "source": "HOME_CUFF"},
+            {"systolic": 155, "diastolic": 92, "time_context": "MORNING", "day": "day-3", "source": "HOME_CUFF"},
+            {"systolic": 116, "diastolic": 74, "time_context": "EVENING", "day": "day-3", "source": "HOME_CUFF"},
+            {"systolic": 153, "diastolic": 92, "time_context": "MORNING", "day": "day-2", "source": "HOME_CUFF"},
+            {"systolic": 117, "diastolic": 74, "time_context": "EVENING", "day": "day-2", "source": "HOME_CUFF"},
+            {"systolic": 152, "diastolic": 92, "time_context": "MORNING", "day": "day-1", "source": "HOME_CUFF"},
+            {"systolic": 116, "diastolic": 74, "time_context": "EVENING", "day": "day-1", "source": "HOME_CUFF"},
+            {"systolic": 155, "diastolic": 94, "time_context": "MORNING", "day": "today", "source": "HOME_CUFF"}
+          ]
+        },
+        {
+          "scenario": "S2 — Well-Controlled Patient",
+          "patient_id": "P-M7-CTRL-060610",
+          "clinical_profile": "Well-controlled hypertensive. 5 days of stable readings: morning ~122-125, evening ~118-120.",
+          "expected_outcome": "BP control status = CONTROLLED, low variability, no crisis/surge flags",
+          "readings": [
+            {"systolic": 125, "diastolic": 79, "time_context": "MORNING", "day": "day-5", "source": "HOME_CUFF"},
+            {"systolic": 118, "diastolic": 75, "time_context": "EVENING", "day": "day-5", "source": "HOME_CUFF"},
+            {"systolic": 124, "diastolic": 80, "time_context": "MORNING", "day": "day-4", "source": "HOME_CUFF"},
+            {"systolic": 119, "diastolic": 75, "time_context": "EVENING", "day": "day-4", "source": "HOME_CUFF"},
+            {"systolic": 122, "diastolic": 78, "time_context": "MORNING", "day": "day-3", "source": "HOME_CUFF"},
+            {"systolic": 120, "diastolic": 75, "time_context": "EVENING", "day": "day-3", "source": "HOME_CUFF"},
+            {"systolic": 124, "diastolic": 80, "time_context": "MORNING", "day": "day-2", "source": "HOME_CUFF"},
+            {"systolic": 119, "diastolic": 75, "time_context": "EVENING", "day": "day-2", "source": "HOME_CUFF"},
+            {"systolic": 123, "diastolic": 79, "time_context": "MORNING", "day": "day-1", "source": "HOME_CUFF"},
+            {"systolic": 118, "diastolic": 75, "time_context": "EVENING", "day": "day-1", "source": "HOME_CUFF"},
+            {"systolic": 120, "diastolic": 76, "time_context": "MORNING", "day": "today", "source": "HOME_CUFF"}
+          ]
+        },
+        {
+          "scenario": "S3 — Hypertensive Crisis",
+          "patient_id": "P-M7-CRISIS-060610",
+          "clinical_profile": "Patient with a sudden spike to SBP=192/DBP=112 (SBP >= 180 threshold). Heart rate elevated at 105.",
+          "expected_outcome": "crisis_flag=true, reading routed to ingestion.safety-critical via side-output",
+          "readings": [
+            {"systolic": 135, "diastolic": 85, "time_context": null, "day": "2h ago", "source": "HOME_CUFF"},
+            {"systolic": 192, "diastolic": 112, "time_context": null, "day": "now", "source": "HOME_CUFF", "heart_rate": 105}
+          ]
+        },
+        {
+          "scenario": "S4 — White-Coat Hypertension",
+          "patient_id": "P-M7-WC-060610",
+          "clinical_profile": "High clinic readings (~155-158) but normal home readings (~122-124). 5 days of alternating clinic/home pairs.",
+          "expected_outcome": "white_coat_suspected=true, clinic_home_gap_sbp > 20 mmHg",
+          "readings": [
+            {"systolic": 157, "diastolic": 92, "time_context": "MORNING", "day": "day-5", "source": "CLINIC"},
+            {"systolic": 122, "diastolic": 78, "time_context": "EVENING", "day": "day-5", "source": "HOME_CUFF"},
+            {"systolic": 156, "diastolic": 92, "time_context": "MORNING", "day": "day-4", "source": "CLINIC"},
+            {"systolic": 123, "diastolic": 78, "time_context": "EVENING", "day": "day-4", "source": "HOME_CUFF"},
+            {"systolic": 155, "diastolic": 92, "time_context": "MORNING", "day": "day-3", "source": "CLINIC"},
+            {"systolic": 124, "diastolic": 78, "time_context": "EVENING", "day": "day-3", "source": "HOME_CUFF"},
+            {"systolic": 157, "diastolic": 92, "time_context": "MORNING", "day": "day-2", "source": "CLINIC"},
+            {"systolic": 122, "diastolic": 78, "time_context": "EVENING", "day": "day-2", "source": "HOME_CUFF"},
+            {"systolic": 156, "diastolic": 92, "time_context": "MORNING", "day": "day-1", "source": "CLINIC"},
+            {"systolic": 123, "diastolic": 78, "time_context": "EVENING", "day": "day-1", "source": "HOME_CUFF"},
+            {"systolic": 158, "diastolic": 95, "time_context": "MORNING", "day": "today", "source": "CLINIC"}
+          ]
+        }
+      ]
+    },
+
+    "output": {
+      "flink.bp-variability-metrics": {
+        "total_events": 39,
+        "patients": ["P-M7-SURGE-060610", "P-M7-CTRL-060610", "P-M7-CRISIS-060610", "P-M7-WC-060610"],
+        "description": "One BPVariabilityMetrics emitted per input BPReading. Each contains: 7d/30d ARV/SD/CV, variability classification, morning surge, dip ratio, BP control status, white-coat/masked flags, crisis flag, data quality depth.",
+        "sample_output_fields": {
+          "patient_id": "string",
+          "correlation_id": "string",
+          "computed_at": "epoch_millis",
+          "trigger_sbp": "double",
+          "trigger_dbp": "double",
+          "trigger_source": "HOME_CUFF | CLINIC | CUFFLESS",
+          "trigger_time_context": "MORNING | EVENING | NIGHT | DAYTIME",
+          "arv_sbp_7d": "double (average real variability over 7 days)",
+          "sd_sbp_7d": "double (standard deviation of SBP over 7 days)",
+          "cv_sbp_7d": "double (coefficient of variation = SD/mean)",
+          "variability_classification_7d": "LOW | MODERATE | HIGH | VERY_HIGH | INSUFFICIENT_DATA",
+          "morning_surge_today": "double (today morning avg - last night avg)",
+          "morning_surge_7d_avg": "double (7-day rolling average of morning surge)",
+          "surge_classification": "NORMAL | ELEVATED | EXAGGERATED | INSUFFICIENT_DATA",
+          "dip_ratio": "double (night avg / day avg)",
+          "dip_classification": "EXTREME_DIPPER | NORMAL_DIPPER | NON_DIPPER | REVERSE_DIPPER | INSUFFICIENT_DATA",
+          "sbp_7d_avg": "double",
+          "dbp_7d_avg": "double",
+          "bp_control_status": "CONTROLLED | STAGE_1 | STAGE_2 | CRISIS | INSUFFICIENT_DATA",
+          "white_coat_suspected": "boolean",
+          "masked_htn_suspected": "boolean",
+          "clinic_home_gap_sbp": "double (clinic avg - home avg SBP)",
+          "crisis_flag": "boolean (true if SBP >= 180 or DBP >= 120)",
+          "acute_surge_flag": "boolean",
+          "context_depth": "INITIAL | BUILDING | ESTABLISHED",
+          "total_readings_in_state": "int",
+          "days_with_data_in_7d": "int",
+          "days_with_data_in_30d": "int"
+        }
+      },
+      "ingestion.safety-critical (BP)": {
+        "total_events": 1,
+        "description": "Crisis readings (SBP >= 180 or DBP >= 120) are side-output to safety-critical topic for immediate physician notification.",
+        "events": [
+          {
+            "patient_id": "P-M7-CRISIS-060610",
+            "systolic": 192.0,
+            "diastolic": 112.0,
+            "heart_rate": 105,
+            "routed_because": "SBP 192 >= 180 threshold"
+          }
+        ]
+      }
+    },
+
+    "checks": {
+      "module7.metrics_emitted": {"status": "PASS", "detail": "39 metrics emitted (1 per input reading)"},
+      "module7.multiple_patients": {"status": "PASS", "detail": "4 distinct patients detected"},
+      "module7.crisis_detected": {"status": "PASS", "detail": "1 crisis flagged, 1 routed to safety-critical"}
+    }
+  },
+
+  "module8_comorbidity_interaction": {
+    "description": "Module 8 receives CanonicalEvent JSON on enriched-patient-events-v1. Maintains per-patient ComorbidityState (active medications, labs, vitals, symptoms). Evaluates 17 CID rules (CID-01..CID-17) on each event. Emits CIDAlert to alerts.comorbidity-interactions. HALT-severity alerts are side-output to ingestion.safety-critical.",
+
+    "input": {
+      "topic": "enriched-patient-events-v1",
+      "total_events": 13,
+      "scenarios": [
+        {
+          "scenario": "S1 — CID-01 Triple Whammy (HALT)",
+          "patient_id": "P-M8-TW-060610",
+          "clinical_profile": "Patient on triple nephrotoxic combination: RASi (ramipril) + SGLT2i (empagliflozin) + diuretic (chlorthalidone). Weight dropped >2 kg in 7 days (dehydration precipitant).",
+          "rule": "CID-01",
+          "severity": "HALT",
+          "recommended_action": "Immediately hold diuretic, recheck renal function within 48h",
+          "events": [
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "ramipril", "drug_class": "ACEI", "dose_mg": 10.0, "timing": "14 days ago"},
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "empagliflozin", "drug_class": "SGLT2I", "dose_mg": 10.0, "timing": "14 days ago"},
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "chlorthalidone", "drug_class": "THIAZIDE", "dose_mg": 12.5, "timing": "14 days ago"},
+            {"eventType": "VITAL_SIGN", "weight": 75.0, "systolic_bp": 130, "timing": "7 days ago"},
+            {"eventType": "VITAL_SIGN", "weight": 72.0, "systolic_bp": 128, "timing": "now (triggers rule)"}
+          ]
+        },
+        {
+          "scenario": "S2 — CID-04 Euglycemic DKA (HALT)",
+          "patient_id": "P-M8-DKA-060610",
+          "clinical_profile": "Patient on SGLT2i (dapagliflozin) reporting nausea — euglycemic DKA risk even with normal glucose. Module 8 accepts 'NAUSEA' or 'VOMITING' as separate symptom types.",
+          "rule": "CID-04",
+          "severity": "HALT",
+          "recommended_action": "Check blood ketones immediately, hold SGLT2i pending results",
+          "events": [
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "dapagliflozin", "drug_class": "SGLT2I", "dose_mg": 10.0, "timing": "7 days ago"},
+            {"eventType": "PATIENT_REPORTED", "symptom_type": "NAUSEA", "timing": "6 hours ago"},
+            {"eventType": "LAB_RESULT", "lab_type": "glucose", "value": 140.0, "timing": "now (triggers rule)"}
+          ]
+        },
+        {
+          "scenario": "S3 — CID-06 Thiazide Glucose Rise (PAUSE)",
+          "patient_id": "P-M8-FBG-060610",
+          "clinical_profile": "Patient on thiazide (hydrochlorothiazide) with fasting blood glucose rising from 110 to 130 mg/dL (delta +20, exceeds 15 mg/dL threshold).",
+          "rule": "CID-06",
+          "severity": "PAUSE",
+          "recommended_action": "Review thiazide necessity, consider alternative antihypertensive, recheck FBG in 4 weeks",
+          "events": [
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "hydrochlorothiazide", "drug_class": "THIAZIDE", "dose_mg": 25.0, "timing": "21 days ago"},
+            {"eventType": "LAB_RESULT", "lab_type": "fbg", "value": 110.0, "timing": "14 days ago (baseline)"},
+            {"eventType": "LAB_RESULT", "lab_type": "fbg", "value": 130.0, "timing": "now (triggers rule, delta=+20)"}
+          ]
+        },
+        {
+          "scenario": "S4 — CID-15 SGLT2I + NSAID (SOFT_FLAG)",
+          "patient_id": "P-M8-NSAID-060610",
+          "clinical_profile": "Patient on SGLT2i (empagliflozin) prescribed NSAID (ibuprofen). NSAIDs reduce SGLT2i efficacy and increase AKI risk.",
+          "rule": "CID-15",
+          "severity": "SOFT_FLAG",
+          "recommended_action": "Consider NSAID alternatives, monitor renal function if continued",
+          "events": [
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "empagliflozin", "drug_class": "SGLT2I", "dose_mg": 10.0, "timing": "7 days ago"},
+            {"eventType": "MEDICATION_ORDERED", "drug_name": "ibuprofen", "drug_class": "NSAID", "dose_mg": 400.0, "timing": "now (triggers rule)"}
+          ]
+        }
+      ]
+    },
+
+    "output": {
+      "alerts.comorbidity-interactions": {
+        "total_alerts": 5,
+        "description": "CIDAlert objects with alertId, patientId, ruleId, severity, triggerSummary, medicationsInvolved, recommendedAction, suppressionKey, createdAt, correlationId.",
+        "alerts": [
+          {
+            "ruleId": "CID_01",
+            "severity": "HALT",
+            "patientId": "P-M8-TW-060610",
+            "triggerSummary": "HALT: Triple whammy AKI risk. Patient on RASi + SGLT2i + diuretic with weight drop >2kg in 7 days",
+            "medicationsInvolved": ["ramipril", "empagliflozin", "chlorthalidone"],
+            "routed_to_safety_critical": true
+          },
+          {
+            "ruleId": "CID_04",
+            "severity": "HALT",
+            "patientId": "P-M8-DKA-060610",
+            "triggerSummary": "HALT: Euglycemic DKA risk. Patient on SGLT2i with nausea/vomiting symptoms",
+            "medicationsInvolved": ["dapagliflozin"],
+            "routed_to_safety_critical": true,
+            "note": "Fired twice — once on NAUSEA symptom event, once on glucose LAB_RESULT event (both independently trigger CID-04 evaluation)"
+          },
+          {
+            "ruleId": "CID_06",
+            "severity": "PAUSE",
+            "patientId": "P-M8-FBG-060610",
+            "triggerSummary": "PAUSE: Thiazide-associated glucose rise. FBG increased 20 mg/dL (threshold: 15)",
+            "medicationsInvolved": ["hydrochlorothiazide"],
+            "routed_to_safety_critical": false
+          },
+          {
+            "ruleId": "CID_15",
+            "severity": "SOFT_FLAG",
+            "patientId": "P-M8-NSAID-060610",
+            "triggerSummary": "WARNING: NSAIDs + SGLT2i increase AKI risk and reduce SGLT2i efficacy",
+            "medicationsInvolved": ["empagliflozin", "ibuprofen"],
+            "routed_to_safety_critical": false
+          }
+        ]
+      },
+      "ingestion.safety-critical (CID HALT)": {
+        "total_events": 3,
+        "description": "HALT-severity CID alerts are side-output to safety-critical for immediate physician notification. Only HALT severity triggers this — PAUSE and SOFT_FLAG do not.",
+        "events": [
+          {"ruleId": "CID_01", "severity": "HALT", "patientId": "P-M8-TW-060610"},
+          {"ruleId": "CID_04", "severity": "HALT", "patientId": "P-M8-DKA-060610"},
+          {"ruleId": "CID_04", "severity": "HALT", "patientId": "P-M8-DKA-060610"}
+        ]
+      }
+    },
+
+    "checks": {
+      "module8.alerts_emitted": {"status": "PASS", "detail": "5 alerts emitted"},
+      "module8.cid01_fired": {"status": "PASS", "detail": "CID-01 Triple Whammy HALT fired"},
+      "module8.cid04_fired": {"status": "PASS", "detail": "CID-04 Euglycemic DKA HALT fired (x2)"},
+      "module8.cid06_fired": {"status": "PASS", "detail": "CID-06 Thiazide FBG PAUSE fired"},
+      "module8.cid15_fired": {"status": "PASS", "detail": "CID-15 SGLT2I+NSAID SOFT_FLAG fired"},
+      "module8.halt_via_safety": {"status": "PASS", "detail": "3 HALT alerts routed to safety-critical side-output"},
+      "module8.severity_mix": {"status": "PASS", "detail": "3 HALT + 1 PAUSE + 1 SOFT_FLAG"}
+    }
+  },
+
+  "flink_orchestrator_fixes": {
+    "description": "Fixes applied to FlinkJobOrchestrator.java for Flink 2.x compatibility during this e2e test session.",
+    "fixes": [
+      {
+        "issue": "Flink 2.x duplicate transactionalIdPrefix",
+        "error": "IllegalStateException: Found duplicate transactionalIdPrefix for multiple Kafka sinks: null",
+        "fix": "Each KafkaSink gets unique transactionalIdPrefix + DeliveryGuarantee.AT_LEAST_ONCE",
+        "prefixes": ["m7-metrics", "m7-crisis", "m7-surge", "m8-comorbidity-alerts", "m8-halt-safety"]
+      },
+      {
+        "issue": "NullPointerException on malformed BPReading",
+        "error": "Assigned key must not be null (from .keyBy(BPReading::getPatientId))",
+        "fix": "Null-safe BPReadingDeserializer with try-catch + .filter(r -> r != null && r.getPatientId() != null) before keyBy"
+      },
+      {
+        "issue": "Module 8 missed pre-existing events",
+        "error": "OffsetsInitializer.latest() skipped events produced before job submission",
+        "fix": "Changed to OffsetsInitializer.earliest()"
+      }
+    ]
+  },
+
+  "cid_rule_reference": {
+    "description": "All 17 CID rules implemented in Module 8, aligned with DD#7 spec and evaluator source code. Rules tested in this e2e run marked with *.",
+    "HALT_rules": [
+      {"rule": "CID-01*", "name": "Triple Whammy AKI", "trigger": "ACEi/ARB + SGLT2i + diuretic + precipitant (weight drop >2kg/7d OR eGFR decline >15%/14d OR illness)"},
+      {"rule": "CID-02", "name": "Hyperkalemia Cascade", "trigger": "ACEi/ARB + finerenone + K+ >5.3 AND rising trajectory"},
+      {"rule": "CID-03", "name": "Hypoglycemia Masking", "trigger": "Insulin/SU + beta-blocker + glucose <60 + NO symptom report (masked)"},
+      {"rule": "CID-04*", "name": "Euglycemic DKA", "trigger": "SGLT2i + (nausea/vomiting OR keto/low-carb diet)"},
+      {"rule": "CID-05", "name": "Severe Hypotension Risk", "trigger": ">=3 antihypertensives + SGLT2i + SBP <95 (or SBP drop >30 from 7d avg)"}
+    ],
+    "PAUSE_rules": [
+      {"rule": "CID-06*", "name": "Thiazide Glucose Rise", "trigger": "Thiazide active + FBG delta >15 mg/dL in 14 days"},
+      {"rule": "CID-07", "name": "ACEi/ARB Renal Dip", "trigger": "ACEi/ARB + eGFR drop >25% + >6 weeks since initiation"},
+      {"rule": "CID-08", "name": "Statin Myalgia", "trigger": "Statin active + new muscle pain/myalgia symptoms"},
+      {"rule": "CID-09", "name": "GLP-1RA GI Intolerance", "trigger": "GLP-1RA + persistent GI symptoms (>=48h) + weight drop >1.5 kg/7d"},
+      {"rule": "CID-10", "name": "Dual Deterioration", "trigger": "Concurrent glucose AND BP worsening (>10 mg/dL, >10 mmHg) without medication change in past 14d"}
+    ],
+    "SOFT_FLAG_rules": [
+      {"rule": "CID-11", "name": "Genital Infection + SGLT2i", "trigger": "History of genital infection + SGLT2i active"},
+      {"rule": "CID-12", "name": "Polypharmacy Burden", "trigger": ">=8 active medications simultaneously"},
+      {"rule": "CID-13", "name": "Elderly + Intensive BP Target", "trigger": "Age >=75 + SBP target <130 mmHg"},
+      {"rule": "CID-14", "name": "Metformin eGFR Borderline", "trigger": "Metformin + eGFR 30-35 + declining trajectory"},
+      {"rule": "CID-15*", "name": "SGLT2i + NSAID AKI Risk", "trigger": "SGLT2i + NSAID co-prescribed (increases AKI risk, reduces SGLT2i efficacy)"},
+      {"rule": "CID-16", "name": "Salt Sensitivity Signal", "trigger": "Salt-sensitive patient profile + sodium-retaining drug active"},
+      {"rule": "CID-17", "name": "SGLT2i Fasting Risk", "trigger": "SGLT2i + fasting period >16 hours"}
+    ]
+  }
+}

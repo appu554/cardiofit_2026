@@ -1,0 +1,460 @@
+{
+  "info": {
+    "name": "Ingestion Service API",
+    "description": "Multi-source clinical data ingestion pipeline for the Vaidshala Clinical Runtime Platform.\n\nDefault port: 8140\nGateway prefix: /api/v1/ingest",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8140",
+      "type": "string"
+    },
+    {
+      "key": "patientId",
+      "value": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "type": "string"
+    },
+    {
+      "key": "tenantId",
+      "value": "00000000-0000-0000-0000-000000000001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Infrastructure",
+      "item": [
+        {
+          "name": "Liveness Probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": ["{{baseUrl}}"],
+              "path": ["healthz"]
+            }
+          }
+        },
+        {
+          "name": "Readiness Probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": ["{{baseUrl}}"],
+              "path": ["readyz"]
+            }
+          }
+        },
+        {
+          "name": "Startup Probe",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/startupz",
+              "host": ["{{baseUrl}}"],
+              "path": ["startupz"]
+            }
+          }
+        },
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["metrics"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "FHIR Inbound",
+      "item": [
+        {
+          "name": "POST FHIR Observation (Fasting Glucose)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"loinc_code\": \"1558-6\",\n  \"value\": 142.0,\n  \"unit\": \"mg/dL\",\n  \"timestamp\": \"2026-03-23T08:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/fhir/Observation",
+              "host": ["{{baseUrl}}"],
+              "path": ["fhir", "Observation"]
+            },
+            "description": "Ingest a fasting glucose observation. Routes to ingestion.observations via Kafka."
+          }
+        },
+        {
+          "name": "POST FHIR Observation (Critical K+)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"loinc_code\": \"2823-3\",\n  \"value\": 6.8,\n  \"unit\": \"mEq/L\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/fhir/Observation",
+              "host": ["{{baseUrl}}"],
+              "path": ["fhir", "Observation"]
+            },
+            "description": "Potassium 6.8 mEq/L (critical high). Expect CRITICAL_VALUE flag in response and Kafka envelope."
+          }
+        },
+        {
+          "name": "POST FHIR Observation (eGFR Critical Low)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"loinc_code\": \"33914-3\",\n  \"value\": 12.0,\n  \"unit\": \"mL/min/1.73m2\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/fhir/Observation",
+              "host": ["{{baseUrl}}"],
+              "path": ["fhir", "Observation"]
+            },
+            "description": "eGFR 12 (renal failure). Expect CRITICAL_VALUE flag (threshold <= 15)."
+          }
+        },
+        {
+          "name": "POST FHIR Observation (Unit Conversion mmol/L)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"loinc_code\": \"1558-6\",\n  \"value\": 7.0,\n  \"unit\": \"mmol/L\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/fhir/Observation",
+              "host": ["{{baseUrl}}"],
+              "path": ["fhir", "Observation"]
+            },
+            "description": "Glucose 7.0 mmol/L should be normalised to 126.0 mg/dL by the pipeline."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Devices",
+      "item": [
+        {
+          "name": "POST Device Readings (BP Monitor)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"timestamp\": \"2026-03-23T09:00:00Z\",\n  \"device\": {\n    \"device_id\": \"bp-monitor-001\",\n    \"device_type\": \"blood_pressure_monitor\",\n    \"manufacturer\": \"Omron\",\n    \"model\": \"HEM-7120\"\n  },\n  \"readings\": [\n    {\"analyte\": \"systolic_bp\", \"value\": 148.0, \"unit\": \"mmHg\"},\n    {\"analyte\": \"diastolic_bp\", \"value\": 92.0, \"unit\": \"mmHg\"},\n    {\"analyte\": \"heart_rate\", \"value\": 78.0, \"unit\": \"bpm\"}\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/devices",
+              "host": ["{{baseUrl}}"],
+              "path": ["devices"]
+            },
+            "description": "Submit 3 BP monitor readings. Each becomes a separate Kafka message on ingestion.device-data."
+          }
+        },
+        {
+          "name": "POST Device Readings (Glucometer)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"timestamp\": \"2026-03-23T08:15:00Z\",\n  \"device\": {\n    \"device_id\": \"glucometer-001\",\n    \"device_type\": \"glucometer\",\n    \"manufacturer\": \"Accu-Chek\",\n    \"model\": \"Guide\"\n  },\n  \"readings\": [\n    {\"analyte\": \"glucose\", \"value\": 156.0, \"unit\": \"mg/dL\"}\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/devices",
+              "host": ["{{baseUrl}}"],
+              "path": ["devices"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wearables",
+      "item": [
+        {
+          "name": "POST Health Connect Records",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"device_id\": \"pixel_6_pro\",\n  \"records\": [\n    {\n      \"record_type\": \"HeartRate\",\n      \"package_name\": \"com.google.android.apps.fitness\",\n      \"device_model\": \"Pixel 6 Pro\",\n      \"start_time\": \"2026-03-23T08:00:00Z\",\n      \"end_time\": \"2026-03-23T08:01:00Z\",\n      \"values\": {\"value\": 72.0},\n      \"unit\": \"bpm\"\n    },\n    {\n      \"record_type\": \"Steps\",\n      \"package_name\": \"com.google.android.apps.fitness\",\n      \"start_time\": \"2026-03-23T06:00:00Z\",\n      \"end_time\": \"2026-03-23T08:00:00Z\",\n      \"values\": {\"value\": 4500},\n      \"unit\": \"steps\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/wearables/health_connect",
+              "host": ["{{baseUrl}}"],
+              "path": ["wearables", "health_connect"]
+            }
+          }
+        },
+        {
+          "name": "POST Ultrahuman CGM Readings",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"device_id\": \"M1_12345\",\n  \"sensor_id\": \"sensor_xyz\",\n  \"period_start\": \"2026-03-20T00:00:00Z\",\n  \"period_end\": \"2026-03-23T23:59:59Z\",\n  \"readings\": [\n    {\"timestamp\": \"2026-03-23T08:00:00Z\", \"glucose_mg_dl\": 95.5},\n    {\"timestamp\": \"2026-03-23T08:05:00Z\", \"glucose_mg_dl\": 98.2},\n    {\"timestamp\": \"2026-03-23T08:10:00Z\", \"glucose_mg_dl\": 102.1},\n    {\"timestamp\": \"2026-03-23T08:15:00Z\", \"glucose_mg_dl\": 110.3},\n    {\"timestamp\": \"2026-03-23T08:20:00Z\", \"glucose_mg_dl\": 115.8},\n    {\"timestamp\": \"2026-03-23T08:25:00Z\", \"glucose_mg_dl\": 108.4},\n    {\"timestamp\": \"2026-03-23T08:30:00Z\", \"glucose_mg_dl\": 99.7},\n    {\"timestamp\": \"2026-03-23T08:35:00Z\", \"glucose_mg_dl\": 93.1},\n    {\"timestamp\": \"2026-03-23T08:40:00Z\", \"glucose_mg_dl\": 88.6},\n    {\"timestamp\": \"2026-03-23T08:45:00Z\", \"glucose_mg_dl\": 91.2},\n    {\"timestamp\": \"2026-03-23T08:50:00Z\", \"glucose_mg_dl\": 94.8},\n    {\"timestamp\": \"2026-03-23T08:55:00Z\", \"glucose_mg_dl\": 97.3}\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/wearables/ultrahuman",
+              "host": ["{{baseUrl}}"],
+              "path": ["wearables", "ultrahuman"]
+            },
+            "description": "Submit 12 CGM readings. Computes TIR, TAR, TBR, CV, MAG, GMI, MeanGlucose."
+          }
+        },
+        {
+          "name": "POST Apple HealthKit Samples",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"device_id\": \"iphone_14_pro\",\n  \"samples\": [\n    {\n      \"sample_type\": \"HKQuantityTypeIdentifierHeartRate\",\n      \"value\": 68.0,\n      \"unit\": \"bpm\",\n      \"start_date\": \"2026-03-23T07:00:00Z\",\n      \"end_date\": \"2026-03-23T07:01:00Z\",\n      \"source_name\": \"Apple Watch\",\n      \"device_model\": \"Apple Watch Series 9\"\n    },\n    {\n      \"sample_type\": \"HKQuantityTypeIdentifierOxygenSaturation\",\n      \"value\": 97.0,\n      \"unit\": \"%\",\n      \"start_date\": \"2026-03-23T07:00:00Z\",\n      \"end_date\": \"2026-03-23T07:01:00Z\",\n      \"source_name\": \"Apple Watch\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/wearables/apple_health",
+              "host": ["{{baseUrl}}"],
+              "path": ["wearables", "apple_health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patient Reported",
+      "item": [
+        {
+          "name": "POST App Check-in",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"timestamp\": \"2026-03-23T07:30:00Z\",\n  \"readings\": [\n    {\"analyte\": \"fasting_glucose\", \"value\": 156.0, \"unit\": \"mg/dL\"},\n    {\"analyte\": \"weight\", \"value\": 74.2, \"unit\": \"kg\"},\n    {\"analyte\": \"systolic_bp\", \"value\": 138.0, \"unit\": \"mmHg\"},\n    {\"analyte\": \"diastolic_bp\", \"value\": 88.0, \"unit\": \"mmHg\"}\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/app-checkin",
+              "host": ["{{baseUrl}}"],
+              "path": ["app-checkin"]
+            },
+            "description": "Patient self-report. Vitals (weight, BP) route to ingestion.vitals; glucose routes to ingestion.patient-reported."
+          }
+        },
+        {
+          "name": "POST WhatsApp NLU Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": \"{{patientId}}\",\n  \"tenant_id\": \"{{tenantId}}\",\n  \"message_id\": \"wamsg_12345\",\n  \"timestamp\": \"2026-03-23T10:00:00Z\",\n  \"intent\": \"report_glucose\",\n  \"entities\": [\n    {\n      \"type\": \"glucose_value\",\n      \"value\": 165.0,\n      \"text\": \"sugar 165\",\n      \"unit\": \"mg/dL\"\n    }\n  ],\n  \"confidence\": 0.92,\n  \"raw_text\": \"mera sugar 165 aaya hai\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/whatsapp",
+              "host": ["{{baseUrl}}"],
+              "path": ["whatsapp"]
+            },
+            "description": "NLU-parsed WhatsApp message. Confidence < 0.70 adds LOW_QUALITY flag."
+          }
+        }
+      ]
+    },
+    {
+      "name": "EHR Adapters",
+      "item": [
+        {
+          "name": "POST EHR FHIR Bundle",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/fhir+json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resourceType\": \"Bundle\",\n  \"type\": \"transaction\",\n  \"entry\": [\n    {\n      \"resource\": {\n        \"resourceType\": \"Observation\",\n        \"id\": \"obs-001\",\n        \"status\": \"final\",\n        \"subject\": {\"reference\": \"Patient/{{patientId}}\"},\n        \"code\": {\n          \"coding\": [{\n            \"system\": \"http://loinc.org\",\n            \"code\": \"2339-0\",\n            \"display\": \"Glucose [Mass/volume] in Blood\"\n          }]\n        },\n        \"valueQuantity\": {\n          \"value\": 142.0,\n          \"unit\": \"mg/dL\",\n          \"system\": \"http://unitsofmeasure.org\",\n          \"code\": \"mg/dL\"\n        },\n        \"effectiveDateTime\": \"2026-03-23T08:00:00Z\"\n      }\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ehr/fhir",
+              "host": ["{{baseUrl}}"],
+              "path": ["ehr", "fhir"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Lab Webhooks",
+      "item": [
+        {
+          "name": "POST Thyrocare Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-API-Key", "value": "{{thyrocareApiKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_id\": \"TC-2026-001\",\n  \"patient_name\": \"Test Patient\",\n  \"tests\": [\n    {\n      \"test_code\": \"FBS\",\n      \"test_name\": \"Fasting Blood Sugar\",\n      \"result\": \"142\",\n      \"unit\": \"mg/dL\",\n      \"normal_range\": \"70-100\"\n    },\n    {\n      \"test_code\": \"HBA1C\",\n      \"test_name\": \"HbA1c\",\n      \"result\": \"7.2\",\n      \"unit\": \"%\",\n      \"normal_range\": \"4.0-5.6\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/labs/thyrocare",
+              "host": ["{{baseUrl}}"],
+              "path": ["labs", "thyrocare"]
+            },
+            "description": "Lab-specific payload format. Requires X-API-Key matching LAB_API_KEY_THYROCARE."
+          }
+        }
+      ]
+    },
+    {
+      "name": "DLQ Management",
+      "item": [
+        {
+          "name": "GET DLQ Count by Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/dlq/$count",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "dlq", "$count"]
+            }
+          }
+        },
+        {
+          "name": "GET DLQ Entries (Pending)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/dlq?status=PENDING",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "dlq"],
+              "query": [
+                { "key": "status", "value": "PENDING" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET DLQ Entries (by Error Class)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/dlq?error_class=VALIDATION",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "dlq"],
+              "query": [
+                { "key": "error_class", "value": "VALIDATION" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET Single DLQ Entry",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/dlq/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "dlq", ":id"],
+              "variable": [
+                { "key": "id", "value": "" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "POST Replay DLQ Entry",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fhir/OperationOutcome/:id/$replay",
+              "host": ["{{baseUrl}}"],
+              "path": ["fhir", "OperationOutcome", ":id", "$replay"],
+              "variable": [
+                { "key": "id", "value": "" }
+              ]
+            },
+            "description": "Marks a DLQ entry for reprocessing through the pipeline."
+          }
+        },
+        {
+          "name": "POST Discard DLQ Entry",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/dlq/:id/$discard",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "dlq", ":id", "$discard"],
+              "variable": [
+                { "key": "id", "value": "" }
+              ]
+            },
+            "description": "Permanently discards a DLQ entry (will not be retried)."
+          }
+        },
+        {
+          "name": "GET DLQ as FHIR OperationOutcome",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fhir/OperationOutcome",
+              "host": ["{{baseUrl}}"],
+              "path": ["fhir", "OperationOutcome"]
+            },
+            "description": "Returns pending DLQ entries in FHIR OperationOutcome Bundle format."
+          }
+        }
+      ]
+    }
+  ]
+}

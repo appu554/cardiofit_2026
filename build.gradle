@@ -1,0 +1,99 @@
+plugins {
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+group = 'com.cardiokinetics'
+version = '1.0.0'
+sourceCompatibility = '17'
+
+repositories {
+    mavenCentral()
+    maven { url 'https://packages.confluent.io/maven/' }
+}
+
+ext {
+    flinkVersion = '1.18.1'
+    kafkaVersion = '3.7.0'
+    testcontainersVersion = '1.19.7'
+    jacksonVersion = '2.16.1'
+}
+
+dependencies {
+    // ── Flink Runtime (for MiniCluster) ──
+    testImplementation "org.apache.flink:flink-streaming-java:${flinkVersion}"
+    testImplementation "org.apache.flink:flink-test-utils:${flinkVersion}"
+    testImplementation "org.apache.flink:flink-runtime:${flinkVersion}:tests"
+    testImplementation "org.apache.flink:flink-connector-kafka:3.1.0-1.18"
+
+    // ── Kafka ──
+    testImplementation "org.apache.kafka:kafka-clients:${kafkaVersion}"
+
+    // ── Testcontainers ──
+    testImplementation "org.testcontainers:testcontainers:${testcontainersVersion}"
+    testImplementation "org.testcontainers:kafka:${testcontainersVersion}"
+    testImplementation "org.testcontainers:junit-jupiter:${testcontainersVersion}"
+
+    // ── Test Framework ──
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testImplementation 'org.assertj:assertj-core:3.25.3'
+
+    // ── JSON ──
+    testImplementation "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    testImplementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:${jacksonVersion}"
+
+    // ── Your production Flink jobs (unmodified) ──
+    // Point these at your actual module JARs:
+    testImplementation project(':module7-bp-variability')
+    testImplementation project(':module8-comorbidity')
+    testImplementation project(':module9-engagement')
+    testImplementation project(':module10-meal-response')
+    testImplementation project(':module10b-meal-patterns')
+    testImplementation project(':module11-activity-response')
+    testImplementation project(':module11b-fitness-patterns')
+    testImplementation project(':module13-clinical-state-sync')
+}
+
+test {
+    useJUnitPlatform {
+        // Default: exclude slow tests (M9/M10/M11 real-time waits)
+        excludeTags 'slow'
+    }
+
+    // JVM args for Flink MiniCluster
+    jvmArgs = [
+        '--add-opens', 'java.base/java.util=ALL-UNNAMED',
+        '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+        '-Xmx2g'
+    ]
+
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = true
+        exceptionFormat = 'full'
+    }
+}
+
+// Separate task to include slow tests (timer-dependent M9/M10/M11)
+tasks.register('testSlow', Test) {
+    useJUnitPlatform {
+        includeTags 'slow'
+    }
+    systemProperty 'include.slow', 'true'
+
+    jvmArgs = [
+        '--add-opens', 'java.base/java.util=ALL-UNNAMED',
+        '--add-opens', 'java.base/java.lang=ALL-UNNAMED',
+        '-Xmx2g'
+    ]
+
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = true
+    }
+}
+
+// Full E2E: fast + slow tests
+tasks.register('testE2EFull') {
+    dependsOn test, testSlow
+}

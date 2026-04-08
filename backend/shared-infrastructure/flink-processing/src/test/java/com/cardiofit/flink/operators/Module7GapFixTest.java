@@ -107,9 +107,9 @@ class Module7GapFixTest {
             System.currentTimeMillis() + 30 * 60 * 1000L);
         assertTrue(Module7CrisisDetector.isAcuteSurge(prev, current),
             "SBP delta 40 in 30min should be acute surge");
-        // But 180 is not > 180, so not a crisis
-        assertFalse(Module7CrisisDetector.isCrisis(current),
-            "SBP=180 is NOT > 180, so not a crisis");
+        // 180 is >= 180, so it IS a crisis per ACC/AHA
+        assertTrue(Module7CrisisDetector.isCrisis(current),
+            "SBP=180 IS >= 180, so it is a crisis per ACC/AHA");
     }
 
     @Test

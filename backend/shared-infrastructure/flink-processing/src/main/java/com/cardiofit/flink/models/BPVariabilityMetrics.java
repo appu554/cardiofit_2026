@@ -3,6 +3,7 @@ package com.cardiofit.flink.models;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Complete output model for Module 7 BP Variability Engine.
@@ -53,6 +54,7 @@ public class BPVariabilityMetrics implements Serializable {
 
     // — 5. Morning surge —
     @JsonProperty("morning_surge_today") private Double morningSurgeToday;
+    @JsonProperty("surge_today_classification") private String surgeTodayClassification;
     @JsonProperty("morning_surge_7d_avg") private Double morningSurge7dAvg;
     @JsonProperty("surge_classification") private String surgeClassification;
 
@@ -85,6 +87,10 @@ public class BPVariabilityMetrics implements Serializable {
     @JsonProperty("total_readings_in_state") private int totalReadingsInState;
     @JsonProperty("days_with_data_in_7d") private int daysWithDataIn7d;
     @JsonProperty("days_with_data_in_30d") private int daysWithDataIn30d;
+
+    // — 11. ARV audit trail —
+    @JsonProperty("contributing_dates_7d") private List<String> contributingDates7d; // date keys in ARV-7d computation
+    @JsonProperty("contributing_dates_30d") private List<String> contributingDates30d; // date keys in ARV-30d computation
 
     public BPVariabilityMetrics() {}
 
@@ -133,6 +139,8 @@ public class BPVariabilityMetrics implements Serializable {
     // Morning surge
     public Double getMorningSurgeToday() { return morningSurgeToday; }
     public void setMorningSurgeToday(Double v) { this.morningSurgeToday = v; }
+    public String getSurgeTodayClassification() { return surgeTodayClassification; }
+    public void setSurgeTodayClassification(String v) { this.surgeTodayClassification = v; }
     public Double getMorningSurge7dAvg() { return morningSurge7dAvg; }
     public void setMorningSurge7dAvg(Double v) { this.morningSurge7dAvg = v; }
     public String getSurgeClassification() { return surgeClassification; }
@@ -183,4 +191,10 @@ public class BPVariabilityMetrics implements Serializable {
     public void setDaysWithDataIn7d(int v) { this.daysWithDataIn7d = v; }
     public int getDaysWithDataIn30d() { return daysWithDataIn30d; }
     public void setDaysWithDataIn30d(int v) { this.daysWithDataIn30d = v; }
+
+    // ARV audit trail
+    public List<String> getContributingDates7d() { return contributingDates7d; }
+    public void setContributingDates7d(List<String> v) { this.contributingDates7d = v; }
+    public List<String> getContributingDates30d() { return contributingDates30d; }
+    public void setContributingDates30d(List<String> v) { this.contributingDates30d = v; }
 }

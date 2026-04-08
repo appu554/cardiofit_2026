@@ -64,7 +64,7 @@ type Config struct {
 	Kafka               KafkaConfig
 	WhatsApp            WhatsAppConfig
 	ABDM                ABDMConfig
-	IngestionServiceURL string
+	KB24URL             string // KB-24 Safety Constraint Engine base URL
 	Environment         string
 	LogLevel            string
 }
@@ -134,7 +134,7 @@ func Load() *Config {
 			ClientSecret: getEnv("ABDM_CLIENT_SECRET", ""),
 			IsSandbox:    getEnvAsBool("ABDM_SANDBOX", true),
 		},
-		IngestionServiceURL: getEnv("INGESTION_SERVICE_URL", "http://localhost:8140"),
+		KB24URL: getEnv("KB24_URL", "http://localhost:8201"),
 		Environment:         getEnv("ENVIRONMENT", "development"),
 		LogLevel:            getEnv("LOG_LEVEL", "info"),
 	}

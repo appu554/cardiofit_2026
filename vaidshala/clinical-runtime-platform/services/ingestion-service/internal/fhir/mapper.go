@@ -42,7 +42,7 @@ func (m *CompositeMapper) MapToFHIR(ctx context.Context, obs *canonical.Canonica
 		return MapObservation(obs)
 
 	case canonical.ObsVitals, canonical.ObsDeviceData, canonical.ObsPatientReported,
-		canonical.ObsHPI, canonical.ObsABDMRecords, canonical.ObsGeneral:
+		canonical.ObsABDMRecords, canonical.ObsGeneral:
 		m.logger.Debug("mapping to Observation",
 			zap.String("type", string(obs.ObservationType)),
 			zap.String("patient_id", obs.PatientID.String()),

@@ -68,6 +68,7 @@ public class ClinicalStateChangeEvent implements Serializable {
         public Builder domain(CKMRiskDomain d) { e.domain = d; return this; }
         public Builder triggerModule(String m) { e.triggerModule = m; return this; }
         public Builder ckmVelocityAtChange(CKMRiskVelocity v) { e.ckmVelocityAtChange = v; return this; }
+        public Builder recommendedAction(String a) { e.recommendedAction = a; return this; }
         public Builder originatingSignals(List<String> s) { e.originatingSignals = s; return this; }
         public Builder dataCompletenessAtChange(double d) { e.dataCompletenessAtChange = d; return this; }
         public Builder confidenceScore(double c) { e.confidenceScore = c; return this; }

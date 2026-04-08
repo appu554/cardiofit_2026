@@ -12,17 +12,19 @@ import (
 
 // Server holds the Gin router and all service dependencies.
 type Server struct {
-	Router    *gin.Engine
-	cfg       *config.Config
-	evaluator *services.SafetyTriggerEvaluator
-	publisher services.KafkaPublisher
-	log       *zap.Logger
+	Router           *gin.Engine
+	cfg              *config.Config
+	evaluator        *services.SafetyTriggerEvaluator
+	intakeRuleLoader *services.IntakeRuleLoader
+	publisher        services.KafkaPublisher
+	log              *zap.Logger
 }
 
 // NewServer creates a new API server with the given dependencies.
 func NewServer(
 	cfg *config.Config,
 	evaluator *services.SafetyTriggerEvaluator,
+	intakeRuleLoader *services.IntakeRuleLoader,
 	publisher services.KafkaPublisher,
 	log *zap.Logger,
 ) *Server {
@@ -34,17 +36,18 @@ func NewServer(
 	router.Use(gin.Recovery())
 
 	return &Server{
-		Router:    router,
-		cfg:       cfg,
-		evaluator: evaluator,
-		publisher: publisher,
-		log:       log,
+		Router:           router,
+		cfg:              cfg,
+		evaluator:        evaluator,
+		intakeRuleLoader: intakeRuleLoader,
+		publisher:        publisher,
+		log:              log,
 	}
 }
 
 // RegisterRoutes wires up all HTTP endpoints.
 func (s *Server) RegisterRoutes() {
-	h := NewHandlers(s.evaluator, s.publisher, s.log)
+	h := NewHandlers(s.evaluator, s.intakeRuleLoader, s.publisher, s.log)
 
 	// Health check
 	s.Router.GET("/health", h.HandleHealth)
@@ -54,5 +57,6 @@ func (s *Server) RegisterRoutes() {
 	{
 		v1.POST("/evaluate", h.HandleEvaluate)
 		v1.POST("/sessions/:id/clear", h.HandleClearSession)
+		v1.GET("/intake-triggers", h.HandleIntakeTriggers)
 	}
 }

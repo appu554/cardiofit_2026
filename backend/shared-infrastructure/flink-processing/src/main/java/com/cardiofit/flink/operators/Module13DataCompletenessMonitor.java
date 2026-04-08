@@ -12,16 +12,17 @@ public final class Module13DataCompletenessMonitor {
     private static final long WARNING_ABSENCE_MS = 7 * 86_400_000L;
 
     private static final String[] TRACKED_MODULES = {
-            "module7", "module9", "module10b", "module11b", "module12", "module12b", "enriched"
+            "module7", "module8", "module9", "module10b", "module11b", "module12", "module12b", "enriched"
     };
 
     private static final Map<String, Map<String, Double>> TIER_WEIGHTS = new HashMap<>();
     static {
         Map<String, Double> cgm = new HashMap<>();
         cgm.put("module7", 0.15);
-        cgm.put("module9", 0.15);
+        cgm.put("module8", 0.10);
+        cgm.put("module9", 0.10);
         cgm.put("module10b", 0.20);
-        cgm.put("module11b", 0.15);
+        cgm.put("module11b", 0.10);
         cgm.put("module12", 0.10);
         cgm.put("module12b", 0.10);
         cgm.put("enriched", 0.15);
@@ -29,12 +30,13 @@ public final class Module13DataCompletenessMonitor {
 
         Map<String, Double> smbg = new HashMap<>();
         smbg.put("module7", 0.15);
-        smbg.put("module9", 0.15);
+        smbg.put("module8", 0.10);
+        smbg.put("module9", 0.10);
         smbg.put("module10b", 0.10);
         smbg.put("module11b", 0.10);
         smbg.put("module12", 0.10);
         smbg.put("module12b", 0.10);
-        smbg.put("enriched", 0.30);
+        smbg.put("enriched", 0.25);
         TIER_WEIGHTS.put("TIER_2_SMBG", smbg);
         TIER_WEIGHTS.put("TIER_3_SMBG", smbg);
     }

@@ -89,19 +89,6 @@ func TestRouter_MedicationsToIngestionMedications(t *testing.T) {
 	assert.Equal(t, "ingestion.medications", topic)
 }
 
-func TestRouter_HPIToIngestionHPI(t *testing.T) {
-	r := NewTopicRouter(testLogger())
-	obs := &canonical.CanonicalObservation{
-		ID:              uuid.New(),
-		PatientID:       uuid.New(),
-		ObservationType: canonical.ObsHPI,
-		Timestamp:       time.Now(),
-	}
-
-	topic, _, err := r.Route(context.Background(), obs)
-	require.NoError(t, err)
-	assert.Equal(t, "ingestion.hpi", topic)
-}
 
 func TestRouter_ABDMRecordsToIngestionABDM(t *testing.T) {
 	r := NewTopicRouter(testLogger())
@@ -144,4 +131,32 @@ func TestRouter_PartitionKeyIsPatientID(t *testing.T) {
 	_, key, err := r.Route(context.Background(), obs)
 	require.NoError(t, err)
 	assert.Equal(t, patientID.String(), key)
+}
+
+func TestRouter_NilPatientIDReturnsError(t *testing.T) {
+	r := NewTopicRouter(testLogger())
+	obs := &canonical.CanonicalObservation{
+		ID:              uuid.New(),
+		PatientID:       uuid.Nil,
+		ObservationType: canonical.ObsLabs,
+		Timestamp:       time.Now(),
+	}
+
+	_, _, err := r.Route(context.Background(), obs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil patient_id")
+}
+
+func TestRouter_UnknownTypeFallsBackToObservations(t *testing.T) {
+	r := NewTopicRouter(testLogger())
+	obs := &canonical.CanonicalObservation{
+		ID:              uuid.New(),
+		PatientID:       uuid.New(),
+		ObservationType: canonical.ObservationType("UNKNOWN_TYPE"),
+		Timestamp:       time.Now(),
+	}
+
+	topic, _, err := r.Route(context.Background(), obs)
+	require.NoError(t, err)
+	assert.Equal(t, "ingestion.observations", topic)
 }

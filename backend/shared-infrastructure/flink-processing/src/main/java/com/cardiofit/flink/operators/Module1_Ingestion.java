@@ -402,6 +402,10 @@ public class Module1_Ingestion {
     }
 
     private static String getBootstrapServers() {
+        String envServers = System.getenv("KAFKA_BOOTSTRAP_SERVERS");
+        if (envServers != null && !envServers.isEmpty()) {
+            return envServers;
+        }
         return KafkaConfigLoader.isRunningInDocker()
             ? "kafka:29092"
             : "localhost:9092";

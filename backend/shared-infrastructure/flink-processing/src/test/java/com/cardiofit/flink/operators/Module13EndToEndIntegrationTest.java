@@ -608,6 +608,8 @@ class Module13EndToEndIntegrationTest {
             state.previous().morningSurgeMagnitude = null;
             state.current().engagementScore = null;
             state.previous().engagementScore = null;
+            state.current().variabilityClass = null;
+            state.previous().variabilityClass = null;
             state.getRecentInterventionDeltas().clear();
 
             // Only metabolic data: FBG deterioration

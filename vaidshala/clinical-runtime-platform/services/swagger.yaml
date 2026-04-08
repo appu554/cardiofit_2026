@@ -53,14 +53,14 @@ paths:
   # INTAKE-ONBOARDING SERVICE
   # ═══════════════════════════════════════════════════════════════════
 
-  /intake/fhir/Patient/$enroll:
+  /intake/fhir/Patient:
     post:
       tags: [Intake — Enrollment]
-      summary: Start patient enrollment
+      summary: Register a new patient
       description: |
-        Creates a Patient and Encounter in the FHIR Store, persists enrollment to PostgreSQL,
-        and returns the first flow node (demographics_basic) with its required slots.
-      operationId: enrollPatient
+        Creates a Patient in the FHIR Store. If a patient with the same phone already exists,
+        returns the existing patient_id with status "existing" (HTTP 200). New patients get HTTP 201.
+      operationId: createPatient
       security:
         - BearerAuth: []
       requestBody:
@@ -68,11 +68,195 @@ paths:
         content:
           application/json:
             schema:
+              $ref: '#/components/schemas/CreatePatientRequest'
+            example:
+              given_name: Venkatesh
+              family_name: Iyer
+              phone: "+919841234567"
+              abha_id: "91-8765-4321-0987"
+              email: "venkatesh.iyer@email.com"
+              age: 65
+              gender: male
+              ethnicity: south_asian
+              primary_language: ta
+      responses:
+        '201':
+          description: Patient created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [created]
+                  patient_id:
+                    type: string
+                    format: uuid
+        '200':
+          description: Patient already exists (same phone)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [existing]
+                  patient_id:
+                    type: string
+                    format: uuid
+                  message:
+                    type: string
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Patient:
+    get:
+      tags: [Intake — Enrollment]
+      summary: Lookup patient by phone or email
+      description: |
+        Searches the FHIR Store for a patient by phone number or email address.
+        Returns the patient ID and basic demographics if found. Useful for the app
+        to check if a patient is already registered before creating a new one.
+      operationId: searchPatient
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: phone
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Phone number to search (e.g., +919841234567)
+          example: "+919841234567"
+        - name: email
+          in: query
+          required: false
+          schema:
+            type: string
+            format: email
+          description: Email address to search
+          example: "venkatesh.iyer@email.com"
+      responses:
+        '200':
+          description: Patient found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [found]
+                  patient_id:
+                    type: string
+                    format: uuid
+                  given_name:
+                    type: string
+                  family_name:
+                    type: string
+                  gender:
+                    type: string
+                  birth_date:
+                    type: string
+                    format: date
+        '404':
+          description: No patient found with the given identifier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [not_found]
+                  message:
+                    type: string
+        '400':
+          description: Neither phone nor email provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Patient/{patientId}/Encounter:
+    post:
+      tags: [Intake — Enrollment]
+      summary: Create an encounter for a patient
+      description: |
+        Creates a FHIR Encounter for an existing patient. Each visit (intake, lab draw, check-up,
+        follow-up) is a separate Encounter under the same Patient.
+      operationId: createEncounter
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [intake, lab, checkup, followup]
+                  description: The type of clinical encounter
+            example:
+              type: intake
+      responses:
+        '201':
+          description: Encounter created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [created]
+                  encounter_id:
+                    type: string
+                    format: uuid
+                  patient_id:
+                    type: string
+                    format: uuid
+                  type:
+                    type: string
+        '400':
+          description: Invalid patient ID or encounter type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Patient/{patientId}/$enroll:
+    post:
+      tags: [Intake — Enrollment]
+      summary: Enroll patient into intake program
+      description: |
+        Enrolls an existing patient (with an existing encounter) into the intake care program.
+        Creates enrollment in PostgreSQL and publishes to Kafka.
+        If the patient already has an active enrollment, returns it with status "already_enrolled".
+      operationId: enrollPatient
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
               $ref: '#/components/schemas/EnrollRequest'
             example:
-              given_name: Rajesh
-              family_name: Kumar
-              phone: "+919876543210"
+              encounter_id: "dda05060-b7b1-4f6d-a50f-c683e2b191a1"
               channel_type: CORPORATE
               tenant_id: "00000000-0000-0000-0000-000000000001"
       responses:
@@ -82,8 +266,107 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EnrollResponse'
+        '200':
+          description: Patient already enrolled (returns existing enrollment)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [already_enrolled]
+                  patient_id:
+                    type: string
+                    format: uuid
+                  encounter_id:
+                    type: string
+                    format: uuid
+                  state:
+                    type: string
         '400':
           description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /intake/fhir/Patient/{patientId}:
+    put:
+      tags: [Intake — Enrollment]
+      summary: Edit patient demographics
+      description: |
+        Updates identity-level demographics on the FHIR Patient resource.
+        All fields are optional — only provided fields are patched.
+        Writes to FHIR Store, PostgreSQL slot_events, and Kafka (triple-sink).
+      operationId: updatePatientDemographics
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PatientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                age:
+                  type: integer
+                  description: "Age in years → stored as Patient.birthDate"
+                  example: 65
+                gender:
+                  type: string
+                  enum: [male, female, other, unknown, m, f]
+                  description: "Biological sex → stored as Patient.gender"
+                  example: male
+                ethnicity:
+                  type: string
+                  description: "Ethnicity → stored as Patient.extension"
+                  example: south_asian
+                primary_language:
+                  type: string
+                  description: "Primary language (BCP-47) → stored as Patient.communication"
+                  example: hi
+                given_name:
+                  type: string
+                  description: "Given name (optional update)"
+                  example: Venkatesh
+                family_name:
+                  type: string
+                  description: "Family name (optional update)"
+                  example: Iyer
+            example:
+              age: 65
+              gender: male
+              ethnicity: south_asian
+              primary_language: hi
+      responses:
+        '200':
+          description: Patient demographics updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [updated]
+                  patient_id:
+                    type: string
+                    format: uuid
+                  updated_fields:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: Invalid patient ID or no fields provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: FHIR Store or database error
           content:
             application/json:
               schema:
@@ -956,23 +1239,54 @@ components:
 
     # ── Intake Schemas ──
 
-    EnrollRequest:
+    CreatePatientRequest:
       type: object
       required: [given_name, family_name, phone]
       properties:
         given_name:
           type: string
-          example: Rajesh
+          example: Venkatesh
         family_name:
           type: string
-          example: Kumar
+          example: Iyer
         phone:
           type: string
           pattern: '^\+\d{10,15}$'
-          example: "+919876543210"
+          example: "+919841234567"
         abha_id:
           type: string
           description: Ayushman Bharat Health Account ID (optional)
+        email:
+          type: string
+          format: email
+          description: Email address (optional, stored as Patient.telecom)
+          example: "venkatesh.iyer@email.com"
+        age:
+          type: integer
+          description: "Age in years → stored as Patient.birthDate"
+          example: 65
+        gender:
+          type: string
+          enum: [male, female, other, unknown, m, f]
+          description: "Biological sex → stored as Patient.gender"
+          example: male
+        ethnicity:
+          type: string
+          description: "Ethnicity → stored as Patient.extension"
+          example: south_asian
+        primary_language:
+          type: string
+          description: "Primary language (BCP-47) → stored as Patient.communication"
+          example: ta
+
+    EnrollRequest:
+      type: object
+      required: [encounter_id, tenant_id]
+      properties:
+        encounter_id:
+          type: string
+          format: uuid
+          description: Encounter ID from POST /fhir/Patient/:id/Encounter
         channel_type:
           type: string
           enum: [CORPORATE, INSURANCE, GOVERNMENT]
@@ -998,12 +1312,12 @@ components:
           properties:
             node_id:
               type: string
-              example: demographics_basic
+              example: body_measurements
             slots:
               type: array
               items:
                 type: string
-              example: [age, sex, height, weight, bmi, pregnant]
+              example: [height, weight, bmi, pregnant]
 
     FillSlotRequest:
       type: object

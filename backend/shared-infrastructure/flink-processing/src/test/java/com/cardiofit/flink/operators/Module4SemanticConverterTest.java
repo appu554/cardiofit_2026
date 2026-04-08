@@ -64,6 +64,61 @@ public class Module4SemanticConverterTest {
         assertTrue(result.isEmpty());
     }
 
+    // ── Vital Sign Normalization — Production Key Format ─────────
+
+    @Test
+    void normalizeVitalSigns_productionKeys_systolicbloodpressure() {
+        // Production PatientContextAggregator stores "systolicbloodpressure" not "systolicbp"
+        Map<String, Object> vitals = new HashMap<>();
+        vitals.put("heartrate", 68);
+        vitals.put("systolicbloodpressure", 120);
+        vitals.put("diastolicbloodpressure", 78);
+        vitals.put("respiratoryrate", 16);
+        vitals.put("temperature", 37.0);
+        vitals.put("oxygensaturation", 96);
+
+        Map<String, Object> result = Module4SemanticConverter.normalizeVitalSigns(vitals);
+
+        assertEquals(6, result.size(), "All 6 vitals should be mapped from production keys");
+        assertEquals(120, result.get("systolic_bp"),
+            "systolicbloodpressure must map to systolic_bp");
+        assertEquals(78, result.get("diastolic_bp"),
+            "diastolicbloodpressure must map to diastolic_bp");
+        assertEquals(68, result.get("heart_rate"));
+    }
+
+    @Test
+    void normalizeVitalSigns_shortKeysPreferredOverLong_whenBothPresent() {
+        // Edge case: if both key formats exist, systolicbloodpressure takes precedence
+        // (checked first) since it's the production format
+        Map<String, Object> vitals = new HashMap<>();
+        vitals.put("systolicbloodpressure", 142);
+        vitals.put("systolicbp", 130); // should be ignored
+
+        Map<String, Object> result = Module4SemanticConverter.normalizeVitalSigns(vitals);
+
+        assertEquals(142, result.get("systolic_bp"),
+            "Production key (systolicbloodpressure) should take precedence");
+    }
+
+    @Test
+    void normalizeVitalSigns_demographicsExcluded() {
+        // Production data includes age and gender inside latestVitals
+        // These are demographics, NOT vital signs — must be excluded
+        Map<String, Object> vitals = new HashMap<>();
+        vitals.put("heartrate", 82);
+        vitals.put("systolicbloodpressure", 142);
+        vitals.put("diastolicbloodpressure", 92);
+        vitals.put("age", 50);
+        vitals.put("gender", "female");
+
+        Map<String, Object> result = Module4SemanticConverter.normalizeVitalSigns(vitals);
+
+        assertNull(result.get("age"), "age must not be in normalized vitals");
+        assertNull(result.get("gender"), "gender must not be in normalized vitals");
+        assertEquals(3, result.size(), "Only HR, SBP, DBP should be mapped (no demographics)");
+    }
+
     // ── Lab Value Extraction ─────────────────────────────────────
 
     @Test

@@ -179,8 +179,8 @@ public class Module4TestBuilder {
     public static PatientContextState moderateRiskPatientState(String patientId) {
         PatientContextState state = new PatientContextState(patientId);
         state.getLatestVitals().put("heartrate", 102);
-        state.getLatestVitals().put("systolicbp", 95);
-        state.getLatestVitals().put("diastolicbp", 62);
+        state.getLatestVitals().put("systolicbloodpressure", 95);
+        state.getLatestVitals().put("diastolicbloodpressure", 62);
         state.getLatestVitals().put("respiratoryrate", 22);
         state.getLatestVitals().put("temperature", 38.2);
         state.getLatestVitals().put("oxygensaturation", 94);
@@ -213,8 +213,8 @@ public class Module4TestBuilder {
     public static PatientContextState highRiskSepticPatientState(String patientId) {
         PatientContextState state = new PatientContextState(patientId);
         state.getLatestVitals().put("heartrate", 125);
-        state.getLatestVitals().put("systolicbp", 82);
-        state.getLatestVitals().put("diastolicbp", 50);
+        state.getLatestVitals().put("systolicbloodpressure", 82);
+        state.getLatestVitals().put("diastolicbloodpressure", 50);
         state.getLatestVitals().put("respiratoryrate", 28);
         state.getLatestVitals().put("temperature", 39.5);
         state.getLatestVitals().put("oxygensaturation", 88);
@@ -254,8 +254,8 @@ public class Module4TestBuilder {
     public static PatientContextState lowRiskPatientState(String patientId) {
         PatientContextState state = new PatientContextState(patientId);
         state.getLatestVitals().put("heartrate", 72);
-        state.getLatestVitals().put("systolicbp", 122);
-        state.getLatestVitals().put("diastolicbp", 78);
+        state.getLatestVitals().put("systolicbloodpressure", 122);
+        state.getLatestVitals().put("diastolicbloodpressure", 78);
         state.getLatestVitals().put("respiratoryrate", 14);
         state.getLatestVitals().put("temperature", 36.8);
         state.getLatestVitals().put("oxygensaturation", 98);

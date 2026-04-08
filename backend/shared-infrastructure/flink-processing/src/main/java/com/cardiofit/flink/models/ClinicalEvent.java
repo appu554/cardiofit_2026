@@ -53,12 +53,20 @@ public class ClinicalEvent implements Serializable {
 
     // ── Convenience accessors across all source types ──
 
+    /** Sentinel value: NEWS2 score was not computed / not available. */
+    public static final int NEWS2_ABSENT = -1;
+
+    /**
+     * Returns NEWS2 score, or {@link #NEWS2_ABSENT} if not available.
+     * Callers must distinguish "score is 0" (patient stable) from "score absent"
+     * (no vitals data to compute a score).
+     */
     public int getNews2Score() {
         if (cdsEvent != null && cdsEvent.getPatientState() != null
                 && cdsEvent.getPatientState().getNews2Score() != null) {
             return cdsEvent.getPatientState().getNews2Score();
         }
-        return 0;
+        return NEWS2_ABSENT;
     }
 
     public int getQsofaScore() {
@@ -163,7 +171,8 @@ public class ClinicalEvent implements Serializable {
             if (hasActiveAlert("ANTICOAGULATION")) return "ANTICOAGULATION";
             if (hasActiveAlert("AKI")) return "AKI";
             if (getQsofaScore() >= 2 || hasActiveAlert("SEPSIS")) return "SEPSIS";
-            if (getNews2Score() >= 7) return "DETERIORATION";
+            int n2 = getNews2Score();
+            if (n2 != NEWS2_ABSENT && n2 >= 7) return "DETERIORATION";
             return "CDS_GENERAL";
         }
         return "UNKNOWN";

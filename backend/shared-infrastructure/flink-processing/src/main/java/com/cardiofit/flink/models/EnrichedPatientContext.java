@@ -1,5 +1,6 @@
 package com.cardiofit.flink.models;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.time.Instant;
@@ -24,6 +25,7 @@ import java.util.HashMap;
  * - Neo4j for knowledge graph storage
  * - Elasticsearch for search indexing
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class EnrichedPatientContext implements Serializable {
     private static final long serialVersionUID = 1L;
 
@@ -99,6 +101,14 @@ public class EnrichedPatientContext implements Serializable {
      */
     @JsonProperty("dataTier")
     private String dataTier;
+
+    /**
+     * Source system that produced the original event.
+     * Propagated from CanonicalEvent.sourceSystem via GenericEvent.source.
+     * Examples: "gcp-fhir-store", "epic-ehr", "philips_monitor"
+     */
+    @JsonProperty("sourceSystem")
+    private String sourceSystem;
 
     public EnrichedPatientContext() {
         this.processingTime = System.currentTimeMillis();
@@ -212,6 +222,14 @@ public class EnrichedPatientContext implements Serializable {
 
     public void setDataTier(String dataTier) {
         this.dataTier = dataTier;
+    }
+
+    public String getSourceSystem() {
+        return sourceSystem;
+    }
+
+    public void setSourceSystem(String sourceSystem) {
+        this.sourceSystem = sourceSystem;
     }
 
     /**

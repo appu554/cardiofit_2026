@@ -1,6 +1,8 @@
 package com.cardiofit.flink.models;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.time.Instant;
@@ -8,8 +10,13 @@ import java.util.Map;
 
 /**
  * Canonical event model representing standardized healthcare events
- * after validation and transformation
+ * after validation and transformation.
+ *
+ * ignoreUnknown = true ensures forward compatibility: when Module 1/1b adds
+ * new fields, downstream modules (Module 2, 3, etc.) won't crash on
+ * deserialization of events with unknown properties.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class CanonicalEvent implements Serializable {
     private static final long serialVersionUID = 1L;
 
@@ -17,6 +24,7 @@ public class CanonicalEvent implements Serializable {
     private String id;
 
     @JsonProperty("patientId")
+    @JsonAlias("patient_id")
     private String patientId;
 
     @JsonProperty("encounterId")
@@ -191,6 +199,7 @@ public class CanonicalEvent implements Serializable {
     }
 
     // Helper class for clinical context
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ClinicalContext implements Serializable {
         private String department;
         private String unit;
@@ -218,6 +227,7 @@ public class CanonicalEvent implements Serializable {
     }
 
     // Helper class for ingestion metadata
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class IngestionMetadata implements Serializable {
         private int ingestionNode;
         private String version;
@@ -240,6 +250,7 @@ public class CanonicalEvent implements Serializable {
     }
 
     // Helper class for event metadata (device, location, source tracking)
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class EventMetadata implements Serializable {
         private static final long serialVersionUID = 1L;
 

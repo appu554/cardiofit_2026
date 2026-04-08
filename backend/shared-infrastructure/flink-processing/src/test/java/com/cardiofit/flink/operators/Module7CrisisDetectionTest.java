@@ -38,19 +38,19 @@ class Module7CrisisDetectionTest {
     }
 
     @Test
-    void exactlyAt180_notCrisis() {
+    void exactlyAt180_isCrisis() {
         BPReading reading = Module7TestBuilder.reading("P001", 180, 110,
             System.currentTimeMillis(), "MORNING", "HOME_CUFF");
-        assertFalse(Module7CrisisDetector.isCrisis(reading),
-            "SBP exactly 180 is borderline — threshold is > 180, not >= 180");
+        assertTrue(Module7CrisisDetector.isCrisis(reading),
+            "SBP exactly 180 is crisis per ACC/AHA (threshold is >= 180)");
     }
 
     @Test
-    void exactlyAt120DBP_notCrisis() {
+    void exactlyAt120DBP_isCrisis() {
         BPReading reading = Module7TestBuilder.reading("P001", 170, 120,
             System.currentTimeMillis(), "MORNING", "HOME_CUFF");
-        assertFalse(Module7CrisisDetector.isCrisis(reading),
-            "DBP exactly 120 is borderline — threshold is > 120, not >= 120");
+        assertTrue(Module7CrisisDetector.isCrisis(reading),
+            "DBP exactly 120 is crisis per ACC/AHA (threshold is >= 120)");
     }
 
     @Test

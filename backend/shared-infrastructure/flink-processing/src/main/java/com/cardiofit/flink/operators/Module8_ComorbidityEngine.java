@@ -1,19 +1,24 @@
 package com.cardiofit.flink.operators;
 
+import com.cardiofit.flink.config.Module8PilotConfig;
 import com.cardiofit.flink.models.*;
+import com.cardiofit.flink.thresholds.CIDThresholdSet;
+import com.cardiofit.flink.thresholds.ClinicalThresholdSet;
+import com.cardiofit.flink.thresholds.ThresholdBroadcastFunction;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.state.StateTtlConfig;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Module 8: Comorbidity Interaction Detector — main operator.
@@ -31,14 +36,34 @@ import java.util.Map;
  * State TTL: 31 days.
  */
 public class Module8_ComorbidityEngine
-        extends KeyedProcessFunction<String, CanonicalEvent, CIDAlert> {
+        extends ThresholdBroadcastFunction<String, CanonicalEvent, CIDAlert> {
 
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(Module8_ComorbidityEngine.class);
 
+    private Module8PilotConfig pilotConfig;
+
     // Side-output for HALT alerts → ingestion.safety-critical
     public static final OutputTag<CIDAlert> HALT_SAFETY_TAG =
         new OutputTag<>("safety-critical-cid", TypeInformation.of(CIDAlert.class));
+
+    /**
+     * Event types that can change CID-relevant state (meds, labs, vitals, symptoms).
+     * Only these types trigger CID rule evaluation. Other events (DEVICE_READING,
+     * APP_SESSION, GOAL_COMPLETED, etc.) update counters but skip evaluation —
+     * they cannot change medication/lab/symptom state so re-evaluating would
+     * just produce duplicate alerts from stale conditions.
+     */
+    private static final Set<EventType> CID_RELEVANT_EVENTS = EnumSet.of(
+        EventType.MEDICATION_ORDERED,
+        EventType.MEDICATION_ADMINISTERED,
+        EventType.MEDICATION_PRESCRIBED,
+        EventType.MEDICATION_DISCONTINUED,
+        EventType.MEDICATION_MISSED,
+        EventType.LAB_RESULT,
+        EventType.VITAL_SIGN,
+        EventType.PATIENT_REPORTED
+    );
 
     private transient ValueState<ComorbidityState> comorbidityState;
 
@@ -55,12 +80,13 @@ public class Module8_ComorbidityEngine
             .build();
         stateDesc.enableTimeToLive(ttl);
         comorbidityState = getRuntimeContext().getState(stateDesc);
+        pilotConfig = Module8PilotConfig.fromEnvironment();
 
         LOG.info("Module8_ComorbidityEngine initialized");
     }
 
     @Override
-    public void processElement(CanonicalEvent event, Context ctx,
+    public void processElement(CanonicalEvent event, ReadOnlyContext ctx,
                                 Collector<CIDAlert> out) throws Exception {
         // 1. Get or create state
         ComorbidityState state = comorbidityState.value();
@@ -71,22 +97,45 @@ public class Module8_ComorbidityEngine
         // 2. Update state from event
         updateStateFromEvent(state, event);
 
+        // 2a. Extract personalized thresholds from KB-20 enrichment (feature-gated)
+        extractPersonalizedThresholds(event.getPayload(), state);
+
         long now = event.getEventTimestamp();
 
-        // 3. Evaluate HALT rules (always first, never suppressed)
-        List<CIDAlert> haltAlerts = Module8HALTEvaluator.evaluate(state, now);
+        // 2b. Only evaluate CID rules when a clinically relevant event arrives.
+        // DEVICE_READING, APP_SESSION, GOAL_COMPLETED etc. don't change meds/labs/symptoms
+        // so re-evaluating would just produce duplicate alerts from stale conditions.
+        if (!CID_RELEVANT_EVENTS.contains(event.getEventType())) {
+            state.setLastUpdated(now);
+            state.setTotalEventsProcessed(state.getTotalEventsProcessed() + 1);
+            comorbidityState.update(state);
+            return;
+        }
+
+        // 3. Evaluate HALT rules (4h dedup to prevent alert fatigue)
+        // Resolve CID thresholds from BroadcastState (Layer 2) with hardcoded fallback (Layer 3)
+        ClinicalThresholdSet thresholds = getThresholds(ctx.getBroadcastState(THRESHOLD_STATE));
+        CIDThresholdSet cidThresholds = thresholds.getCidThresholds() != null
+            ? thresholds.getCidThresholds() : CIDThresholdSet.hardcodedDefaults();
+
+        List<CIDAlert> haltAlerts = Module8HALTEvaluator.evaluate(state, now, cidThresholds);
         for (CIDAlert alert : haltAlerts) {
             alert.setCorrelationId(event.getCorrelationId());
-            LOG.warn("Module8: HALT alert {} for patient {}. {}",
-                alert.getRuleId(), event.getPatientId(), alert.getTriggerSummary());
-            ctx.output(HALT_SAFETY_TAG, alert);
-            // Also emit to main output for KB-23 card generation
-            out.collect(alert);
-            Module8SuppressionManager.recordEmission(alert, state, now);
+            if (!Module8SuppressionManager.shouldSuppress(alert, state, now)) {
+                LOG.warn("Module8: HALT alert {} for patient {}. {}",
+                    alert.getRuleId(), event.getPatientId(), alert.getTriggerSummary());
+                ctx.output(HALT_SAFETY_TAG, alert);
+                // Also emit to main output for KB-23 card generation
+                out.collect(alert);
+                Module8SuppressionManager.recordEmission(alert, state, now);
+            } else {
+                LOG.debug("Module8: HALT alert {} suppressed (4h dedup) for patient {}",
+                    alert.getRuleId(), event.getPatientId());
+            }
         }
 
         // 4. Evaluate PAUSE rules
-        List<CIDAlert> pauseAlerts = Module8PAUSEEvaluator.evaluate(state, now);
+        List<CIDAlert> pauseAlerts = Module8PAUSEEvaluator.evaluate(state, now, cidThresholds);
         for (CIDAlert alert : pauseAlerts) {
             alert.setCorrelationId(event.getCorrelationId());
             if (!Module8SuppressionManager.shouldSuppress(alert, state, now)) {
@@ -98,10 +147,9 @@ public class Module8_ComorbidityEngine
         }
 
         // 5. Evaluate SOFT_FLAG rules
-        // SBP target is not available from the event — would need KB-20 lookup.
-        // For now, pass null (CID-13 will only fire if target is provided via state extension).
-        Double sbpTarget = null; // TODO: integrate KB-20 patient target via broadcast state
-        List<CIDAlert> softAlerts = Module8SOFTFLAGEvaluator.evaluate(state, sbpTarget);
+        // SBP target sourced from KB-20 personalized targets (Phase 3)
+        Double sbpTarget = state.getPersonalizedSBPTarget();
+        List<CIDAlert> softAlerts = Module8SOFTFLAGEvaluator.evaluate(state, sbpTarget, cidThresholds);
         for (CIDAlert alert : softAlerts) {
             alert.setCorrelationId(event.getCorrelationId());
             if (!Module8SuppressionManager.shouldSuppress(alert, state, now)) {
@@ -248,6 +296,55 @@ public class Module8_ComorbidityEngine
             LOG.warn("Module8: failed to update state from event for patient {}. Error: {}",
                 state.getPatientId(), e.getMessage());
         }
+    }
+
+    /**
+     * Extract per-patient personalized CID thresholds from KB-20 enrichment payload.
+     *
+     * Follows the Module 13 pattern: reads from "kb20_personalized_targets" map
+     * injected by KB-20's KafkaOutboxRelay during event enrichment.
+     *
+     * Feature-gated via Module8PilotConfig. When disabled (default), this is a no-op
+     * and all personalized fields in ComorbidityState remain null — evaluators fall
+     * back to guideline/hardcoded thresholds via CIDThresholdResolver.
+     */
+    @SuppressWarnings("unchecked")
+    private void extractPersonalizedThresholds(Map<String, Object> payload, ComorbidityState state) {
+        if (pilotConfig == null || !pilotConfig.isPersonalizedThresholdsEnabled()) return;
+        if (!pilotConfig.isPatientInPilot(state.getPatientId())) return;
+        if (payload == null) return;
+
+        Object targetsObj = payload.get("kb20_personalized_targets");
+        if (targetsObj == null) return;
+
+        Map<String, Object> targets;
+        if (targetsObj instanceof Map) {
+            targets = (Map<String, Object>) targetsObj;
+        } else {
+            return;
+        }
+
+        Double potassiumThreshold = getDoubleField(targets, "potassium_threshold");
+        if (potassiumThreshold != null) state.setPersonalizedPotassiumThreshold(potassiumThreshold);
+
+        Double glucoseHypoThreshold = getDoubleField(targets, "glucose_hypo_threshold");
+        if (glucoseHypoThreshold != null) state.setPersonalizedGlucoseHypoThreshold(glucoseHypoThreshold);
+
+        Double sbpHypotensionThreshold = getDoubleField(targets, "sbp_hypotension_threshold");
+        if (sbpHypotensionThreshold != null) state.setPersonalizedSBPHypotensionThreshold(sbpHypotensionThreshold);
+
+        Double egfrDropThreshold = getDoubleField(targets, "egfr_drop_threshold_pct");
+        if (egfrDropThreshold != null) state.setPersonalizedEGFRDropThresholdPct(egfrDropThreshold);
+
+        Double sbpTarget = getDoubleField(targets, "sbp_target");
+        if (sbpTarget != null) state.setPersonalizedSBPTarget(sbpTarget);
+
+        Double egfrMetforminLow = getDoubleField(targets, "egfr_metformin_low");
+        if (egfrMetforminLow != null) state.setPersonalizedEGFRMetforminLow(egfrMetforminLow);
+
+        LOG.debug("Module8: personalized CID thresholds updated for patient {}: K+={}, glucose={}, SBP-hypo={}, eGFR-drop={}, SBP-target={}, eGFR-met={}",
+                state.getPatientId(), potassiumThreshold, glucoseHypoThreshold,
+                sbpHypotensionThreshold, egfrDropThreshold, sbpTarget, egfrMetforminLow);
     }
 
     private static void clearSymptomFlag(ComorbidityState state, String symptom) {

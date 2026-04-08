@@ -43,6 +43,8 @@ import java.util.*;
  * @version 1.0.0
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Disabled("Superseded by Module5OnnxIntegrationTest (55-feature v3.0.0 pipeline). " +
+    "This test uses the old 70-feature ClinicalFeatureExtractor and v1.0.0 model paths.")
 @DisplayName("Module 5: ML Inference Integration Tests")
 public class Module5IntegrationTest {
 

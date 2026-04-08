@@ -26,6 +26,14 @@ public class PatientBPState implements Serializable {
     private static final int MAX_CUFFLESS_BUFFER = 50;
     private List<Double> cufflessSBPBuffer = new ArrayList<>();
 
+    // Reading-level clinical SBP buffer for Mena et al. ARV computation.
+    // Stores parallel (timestamp, sbp) arrays so ARV is computed across ALL sequential
+    // readings sorted by time, not daily averages (which destroy within-day variability).
+    // Capped at 200 readings (~30 days at ~6 readings/day).
+    private static final int MAX_CLINICAL_READING_BUFFER = 200;
+    private List<Long> readingTimestamps = new ArrayList<>();
+    private List<Double> readingSBPs = new ArrayList<>();
+
     public PatientBPState() {}
     public PatientBPState(String patientId) { this.patientId = patientId; }
 
@@ -41,6 +49,15 @@ public class PatientBPState implements Serializable {
         summary.addReading(reading);
         lastReadingTime = Math.max(lastReadingTime, reading.getTimestamp());
         totalReadingsProcessed++;
+
+        // Append to reading-level buffer for Mena et al. ARV computation
+        readingTimestamps.add(reading.getTimestamp());
+        readingSBPs.add(reading.getSystolic());
+        if (readingTimestamps.size() > MAX_CLINICAL_READING_BUFFER) {
+            readingTimestamps.remove(0);
+            readingSBPs.remove(0);
+        }
+
         evictOlderThan30Days(reading.getTimestamp());
     }
 
@@ -54,7 +71,7 @@ public class PatientBPState implements Serializable {
     public List<DailyBPSummary> getSummariesInWindow(int windowDays, long referenceTime) {
         LocalDate refDate = Instant.ofEpochMilli(referenceTime)
             .atZone(ZoneOffset.UTC).toLocalDate();
-        LocalDate cutoff = refDate.minusDays(windowDays);
+        LocalDate cutoff = refDate.minusDays(windowDays - 1);
 
         List<DailyBPSummary> result = new ArrayList<>();
         for (Map.Entry<String, DailyBPSummary> entry : dailySummaries.entrySet()) {
@@ -107,6 +124,22 @@ public class PatientBPState implements Serializable {
         return sumAbsDiff / (cufflessSBPBuffer.size() - 1);
     }
 
+    /**
+     * Get reading-level SBP values within the last N days, sorted chronologically.
+     * Used for Mena et al. (2005) ARV: mean(|SBP[i+1] - SBP[i]|) across ALL readings.
+     */
+    public List<Double> getReadingSBPsInWindow(int windowDays, long referenceTime) {
+        long cutoffMs = referenceTime - (long) windowDays * 86400000L;
+        List<Double> result = new ArrayList<>();
+        for (int i = 0; i < readingTimestamps.size(); i++) {
+            long ts = readingTimestamps.get(i);
+            if (ts >= cutoffMs && ts <= referenceTime) {
+                result.add(readingSBPs.get(i));
+            }
+        }
+        return result; // already in chronological order (insertion order preserved)
+    }
+
     public String getContextDepth() {
         if (totalReadingsProcessed <= 1) return "INITIAL";
         List<DailyBPSummary> recent = getSummariesInWindow(7, lastReadingTime);
@@ -125,4 +158,8 @@ public class PatientBPState implements Serializable {
     public void setTotalReadingsProcessed(int v) { totalReadingsProcessed = v; }
     public List<Double> getCufflessSBPBuffer() { return cufflessSBPBuffer; }
     public void setCufflessSBPBuffer(List<Double> v) { this.cufflessSBPBuffer = v; }
+    public List<Long> getReadingTimestamps() { return readingTimestamps; }
+    public void setReadingTimestamps(List<Long> v) { this.readingTimestamps = v; }
+    public List<Double> getReadingSBPs() { return readingSBPs; }
+    public void setReadingSBPs(List<Double> v) { this.readingSBPs = v; }
 }

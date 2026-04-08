@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,10 +30,10 @@ type ServiceRegistry struct {
 }
 
 // NewServiceRegistry creates a new service registry
-func NewServiceRegistry(pool *pgxpool.Pool, config *config.PlatformConfig, logger *logrus.Logger) *ServiceRegistry {
+func NewServiceRegistry(pool *pgxpool.Pool, cfg *config.PlatformConfig, logger *logrus.Logger) *ServiceRegistry {
 	return &ServiceRegistry{
 		pool:     pool,
-		config:   config,
+		config:   cfg,
 		logger:   logger,
 		services: make(map[string]*config.ServiceRegistration),
 		stopChan: make(chan struct{}),

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 @strawberry.type
 class Query:
     @strawberry.field
-    async def me(self, info) -> Optional[User]:
+    async def me(self, info: strawberry.types.Info) -> Optional[User]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -39,7 +39,7 @@ class Query:
 
     # Patient queries
     @strawberry.field
-    async def patient(self, info, id: str) -> Optional[Patient]:
+    async def patient(self, info: strawberry.types.Info, id: str) -> Optional[Patient]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -79,7 +79,7 @@ class Query:
             return None
 
     @strawberry.field
-    async def search_patients(self, info, name: Optional[str] = None) -> List[Patient]:
+    async def search_patients(self, info: strawberry.types.Info, name: Optional[str] = None) -> List[Patient]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -124,7 +124,7 @@ class Query:
 
     # Notes queries
     @strawberry.field
-    async def patient_notes(self, info, patient_id: str) -> List[Note]:
+    async def patient_notes(self, info: strawberry.types.Info, patient_id: str) -> List[Note]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -147,7 +147,7 @@ class Query:
 
     # FHIR resource queries
     @strawberry.field
-    async def patient_observations(self, info, patient_id: str, code: Optional[str] = None) -> List[LabResult]:
+    async def patient_observations(self, info: strawberry.types.Info, patient_id: str, code: Optional[str] = None) -> List[LabResult]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -187,7 +187,7 @@ class Query:
         return await handle_request(auth_header, fetch_observations)
 
     @strawberry.field
-    async def patient_conditions(self, info, patient_id: str) -> List[Condition]:
+    async def patient_conditions(self, info: strawberry.types.Info, patient_id: str) -> List[Condition]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -222,7 +222,7 @@ class Query:
         return await handle_request(auth_header, fetch_conditions)
 
     @strawberry.field
-    async def patient_medications(self, info, patient_id: str) -> List[MedicationRequest]:
+    async def patient_medications(self, info: strawberry.types.Info, patient_id: str) -> List[MedicationRequest]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -253,7 +253,7 @@ class Query:
             return result
 
     @strawberry.field
-    async def patient_diagnostic_reports(self, info, patient_id: str) -> List[DiagnosticReport]:
+    async def patient_diagnostic_reports(self, info: strawberry.types.Info, patient_id: str) -> List[DiagnosticReport]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -284,7 +284,7 @@ class Query:
             return result
 
     @strawberry.field
-    async def patient_encounters(self, info, patient_id: str) -> List[Encounter]:
+    async def patient_encounters(self, info: strawberry.types.Info, patient_id: str) -> List[Encounter]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -315,7 +315,7 @@ class Query:
             return result
 
     @strawberry.field
-    async def patient_documents(self, info, patient_id: str) -> List[DocumentReference]:
+    async def patient_documents(self, info: strawberry.types.Info, patient_id: str) -> List[DocumentReference]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")
@@ -346,7 +346,7 @@ class Query:
             return result
 
     @strawberry.field
-    async def patient_timeline(self, info, patient_id: str) -> Optional[PatientTimeline]:
+    async def patient_timeline(self, info: strawberry.types.Info, patient_id: str) -> Optional[PatientTimeline]:
         # Get authorization header from request
         context = info.context
         auth_header = context.get("request").headers.get("Authorization")

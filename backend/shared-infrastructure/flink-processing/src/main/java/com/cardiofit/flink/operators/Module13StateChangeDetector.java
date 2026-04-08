@@ -35,6 +35,16 @@ public final class Module13StateChangeDetector {
     private static final double ENGAGEMENT_COLLAPSE_DELTA = 0.35;
     private static final int FUTILITY_CONSECUTIVE_COUNT = 2;
 
+    /**
+     * Minimum data completeness (confidence) required to emit HIGH-priority
+     * state change events. At 0.50 (4 of 8 source modules), we have enough
+     * signal to justify "generate urgent review card within 4 hours".
+     * CRITICAL events (RENAL_RAPID_DECLINE) bypass this gate — patient safety
+     * trumps data quality. INFO/LOW/MEDIUM events are informational and pass
+     * through ungated.
+     */
+    static final double HIGH_PRIORITY_CONFIDENCE_THRESHOLD = 0.50;
+
     private Module13StateChangeDetector() {}
 
     /**
@@ -195,6 +205,14 @@ public final class Module13StateChangeDetector {
 
         Long lastEmitted = state.getLastEmittedChangeTimestamps().get(type);
         if (lastEmitted != null && (currentTs - lastEmitted) < DEDUP_WINDOW_MS) {
+            return;
+        }
+
+        // Confidence gating: HIGH-priority events require minimum data completeness.
+        // CRITICAL events bypass (patient safety). INFO/LOW/MEDIUM pass through.
+        double confidence = state.getDataCompletenessScore();
+        if (type.isHighOrAbove() && !type.isCritical()
+                && confidence < HIGH_PRIORITY_CONFIDENCE_THRESHOLD) {
             return;
         }
 

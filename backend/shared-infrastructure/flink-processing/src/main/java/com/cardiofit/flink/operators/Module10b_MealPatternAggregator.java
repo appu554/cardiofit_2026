@@ -66,7 +66,6 @@ public class Module10b_MealPatternAggregator
         MealPatternState state = patternState.value();
         if (state == null) {
             state = new MealPatternState(record.getPatientId());
-            state.setDataTier(record.getDataTier());
         }
 
         state.addMealRecord(record);
@@ -115,7 +114,15 @@ public class Module10b_MealPatternAggregator
         MealPatternSummary summary = new MealPatternSummary();
         summary.setSummaryId("m10b-" + UUID.randomUUID());
         summary.setPatientId(state.getPatientId());
-        summary.setDataTier(state.getDataTier());
+        // Conservative (worst) tier across this week's records.
+        // With per-session tiers a patient may mix CGM days and SMBG days,
+        // so the summary reports the minimum capability tier actually seen.
+        DataTier worstTier = records.stream()
+            .map(MealResponseRecord::getDataTier)
+            .filter(t -> t != null)
+            .reduce((a, b) -> a.ordinal() > b.ordinal() ? a : b)
+            .orElse(DataTier.TIER_3_SMBG);
+        summary.setDataTier(worstTier);
         summary.setTotalMealsInPeriod(records.size());
 
         // Period range

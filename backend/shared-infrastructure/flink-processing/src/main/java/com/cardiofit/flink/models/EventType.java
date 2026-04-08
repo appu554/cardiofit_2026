@@ -1,5 +1,7 @@
 package com.cardiofit.flink.models;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+
 /**
  * Enumeration of canonical event types in the CardioFit healthcare system
  */
@@ -45,6 +47,10 @@ public enum EventType {
     DEVICE_MALFUNCTION,
     DEVICE_MAINTENANCE,
 
+    // Continuous monitoring events (V4)
+    CGM_READING,            // Continuous glucose monitor readings
+    MEDICATION_LIST,        // Medication reconciliation / full list snapshot
+
     // Patient-reported and document events (V4)
     PATIENT_REPORTED,       // Symptoms, meal logs, exercise, mood — from patient app/WhatsApp
     CLINICAL_DOCUMENT,      // ABDM discharge summaries, prescriptions, immunization records
@@ -70,8 +76,12 @@ public enum EventType {
     UNKNOWN;
 
     /**
-     * Map a raw event type string to canonical EventType
+     * Map a raw event type string to canonical EventType.
+     * {@code @JsonCreator} ensures Jackson uses this fault-tolerant mapper
+     * instead of strict {@code valueOf()}, preventing deserialization crashes
+     * on unknown event types.
      */
+    @JsonCreator
     public static EventType fromString(String rawType) {
         if (rawType == null || rawType.trim().isEmpty()) {
             return UNKNOWN;
@@ -106,6 +116,8 @@ public enum EventType {
                 return MEDICATION_ORDERED;
 
             case "MEDICATION.ADMINISTERED":
+            case "MEDICATION_ADMINISTRATION":
+            case "MEDICATION_ADMINISTERED":
             case "MED_ADMIN":
             case "DRUG_ADMINISTERED":
                 return MEDICATION_ADMINISTERED;
@@ -123,6 +135,16 @@ public enum EventType {
             case "MONITOR_DATA":
             case "SENSOR_DATA":
                 return DEVICE_READING;
+
+            case "CGM":
+            case "CGM_READING":
+            case "CONTINUOUS_GLUCOSE":
+                return CGM_READING;
+
+            case "MEDICATION_LIST":
+            case "MEDICATION_RECONCILIATION":
+            case "MED_LIST":
+                return MEDICATION_LIST;
 
             case "DEVICE.ALARM":
             case "MONITOR_ALARM":
@@ -172,6 +194,8 @@ public enum EventType {
             case DRUG_INTERACTION:
             case PATIENT_REPORTED:
             case CLINICAL_DOCUMENT:
+            case CGM_READING:
+            case MEDICATION_LIST:
                 return true;
             default:
                 return false;

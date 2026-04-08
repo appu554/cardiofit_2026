@@ -52,7 +52,7 @@ public class ClinicalStateSummary implements Serializable {
     }
 
     // --- Dedup: last-emitted state change per type (24h window) ---
-    private Map<ClinicalStateChangeType, Long> lastEmittedChangeTimestamps = new EnumMap<>(ClinicalStateChangeType.class);
+    private Map<ClinicalStateChangeType, Long> lastEmittedChangeTimestamps = new HashMap<>();
 
     // --- Per-module last-seen timestamps ---
     private Map<String, Long> moduleLastSeenMs = new HashMap<>();
@@ -64,11 +64,19 @@ public class ClinicalStateSummary implements Serializable {
     // --- Daily data absence timer ---
     private long dailyTimerMs = -1L;
 
-    // --- Snapshot rotation timer (7-day interval) ---
+    // --- Snapshot rotation timer (7-day interval, processing-time) ---
     private long snapshotRotationTimerMs = -1L;
+
+    // --- Event-time snapshot rotation (for correct velocity in burst/E2E tests) ---
+    // Tracks the event-time at which the last snapshot rotation occurred.
+    // When an incoming event's event-time exceeds this by ≥7 days, rotation fires.
+    private long lastRotationEventTimeMs = -1L;
 
     // --- Idle-patient quiescence ---
     private int consecutiveZeroCompletenessDays = 0;
+
+    // --- State creation timestamp (for DATA_ABSENCE suppression during initial state-building) ---
+    private long stateCreatedMs;
 
     private long lastUpdated;
 
@@ -76,7 +84,8 @@ public class ClinicalStateSummary implements Serializable {
 
     public ClinicalStateSummary(String patientId) {
         this.patientId = patientId;
-        this.lastUpdated = System.currentTimeMillis();
+        this.stateCreatedMs = System.currentTimeMillis();
+        this.lastUpdated = this.stateCreatedMs;
     }
 
     public MetricSnapshot current() { return currentSnapshot; }
@@ -130,6 +139,9 @@ public class ClinicalStateSummary implements Serializable {
     public void setDailyTimerMs(long v) { this.dailyTimerMs = v; }
     public long getSnapshotRotationTimerMs() { return snapshotRotationTimerMs; }
     public void setSnapshotRotationTimerMs(long v) { this.snapshotRotationTimerMs = v; }
+    public long getLastRotationEventTimeMs() { return lastRotationEventTimeMs; }
+    public void setLastRotationEventTimeMs(long v) { this.lastRotationEventTimeMs = v; }
+    public long getStateCreatedMs() { return stateCreatedMs; }
     public int getConsecutiveZeroCompletenessDays() { return consecutiveZeroCompletenessDays; }
     public void setConsecutiveZeroCompletenessDays(int v) { this.consecutiveZeroCompletenessDays = v; }
     public long getLastUpdated() { return lastUpdated; }

@@ -67,39 +67,6 @@ class HumanName:
     suffix: Optional[List[str]] = None
     text: Optional[str] = None
 
-    @strawberry.field
-    def family(self, info) -> Optional[str]:
-        # Handle both direct access and dictionary access
-        if hasattr(self, '_family'):
-            return self._family
-        elif isinstance(getattr(self, 'family', None), str):
-            return self.family
-        elif isinstance(self, dict) and 'family' in self:
-            return self['family']
-        return None
-
-    @strawberry.field
-    def given(self, info) -> Optional[List[str]]:
-        # Handle both direct access and dictionary access
-        if hasattr(self, '_given'):
-            return self._given
-        elif isinstance(getattr(self, 'given', None), list):
-            return self.given
-        elif isinstance(self, dict) and 'given' in self:
-            return self['given']
-        return None
-
-    @strawberry.field
-    def use(self, info) -> Optional[str]:
-        # Handle both direct access and dictionary access
-        if hasattr(self, '_use'):
-            return self._use
-        elif isinstance(getattr(self, 'use', None), str):
-            return self.use
-        elif isinstance(self, dict) and 'use' in self:
-            return self['use']
-        return None
-
 @strawberry.type
 class ContactPoint:
     system: Optional[str] = None

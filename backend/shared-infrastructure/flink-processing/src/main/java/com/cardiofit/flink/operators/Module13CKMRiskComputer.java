@@ -31,6 +31,17 @@ public final class Module13CKMRiskComputer {
     private static final double SURGE_DELTA_RANGE = 20.0;
     private static final double ENGAGEMENT_DELTA_RANGE = 0.4;
 
+    // --- Absolute severity thresholds for current-state contribution ---
+    // Cardiovascular: ARV > 16 = HIGH, meanSBP > 160 = Stage 2 uncontrolled
+    private static final double ARV_HIGH_THRESHOLD = 16.0;
+    private static final double ARV_ELEVATED_THRESHOLD = 12.0;
+    private static final double SBP_STAGE2_THRESHOLD = 160.0;
+    private static final double SBP_STAGE1_THRESHOLD = 140.0;
+    private static final double SURGE_ELEVATED_THRESHOLD = 20.0;
+    // Metabolic: FBG > 140 = alarming, HbA1c > 8.0 = poor control
+    private static final double FBG_ALARMING_THRESHOLD = 140.0;
+    private static final double HBA1C_POOR_THRESHOLD = 8.0;
+
     // --- Population-level defaults (overridden by A1 personalised targets when available) ---
     static final double DEFAULT_SBP_KIDNEY_THRESHOLD = 140.0;
 
@@ -141,30 +152,71 @@ public final class Module13CKMRiskComputer {
     }
 
     /**
-     * Metabolic velocity: 0.35*deltaFBG + 0.30*deltaHbA1c + 0.20*deltaMealIAUC + 0.15*deltaWeight
-     * Positive delta (current > previous) = deteriorating. Negative = improving.
+     * Metabolic velocity: combines delta-based and absolute-severity signals.
+     *
+     * Delta signals:
+     *   0.25*deltaFBG + 0.20*deltaHbA1c + 0.15*deltaMealIAUC + 0.10*deltaWeight
+     * Absolute severity signals:
+     *   0.20*currentGlycaemicSeverity + 0.10*currentWeightSeverity
+     *
+     * Prevents velocity=0.0 when FBG is persistently above 140 mg/dL or HbA1c > 8%.
      */
     static double computeMetabolicVelocity(ClinicalStateSummary.MetricSnapshot prev,
             ClinicalStateSummary.MetricSnapshot curr, ClinicalStateSummary state) {
         double totalWeight = 0.0;
         double weighted = 0.0;
 
+        // --- Delta-based signals ---
+
         if (prev.fbg != null && curr.fbg != null) {
-            weighted += 0.35 * clamp((curr.fbg - prev.fbg) / FBG_DELTA_RANGE);
-            totalWeight += 0.35;
+            weighted += 0.25 * clamp((curr.fbg - prev.fbg) / FBG_DELTA_RANGE);
+            totalWeight += 0.25;
         }
         if (prev.hba1c != null && curr.hba1c != null) {
-            weighted += 0.30 * clamp((curr.hba1c - prev.hba1c) / HBA1C_DELTA_RANGE);
-            totalWeight += 0.30;
-        }
-        if (prev.meanIAUC != null && curr.meanIAUC != null) {
-            weighted += 0.20 * clamp((curr.meanIAUC - prev.meanIAUC) / IAUC_DELTA_RANGE);
+            weighted += 0.20 * clamp((curr.hba1c - prev.hba1c) / HBA1C_DELTA_RANGE);
             totalWeight += 0.20;
         }
-        if (prev.weight != null && curr.weight != null) {
-            weighted += 0.15 * clamp((curr.weight - prev.weight) / WEIGHT_DELTA_RANGE);
+        if (prev.meanIAUC != null && curr.meanIAUC != null) {
+            weighted += 0.15 * clamp((curr.meanIAUC - prev.meanIAUC) / IAUC_DELTA_RANGE);
             totalWeight += 0.15;
         }
+        if (prev.weight != null && curr.weight != null) {
+            weighted += 0.10 * clamp((curr.weight - prev.weight) / WEIGHT_DELTA_RANGE);
+            totalWeight += 0.10;
+        }
+
+        // --- Absolute severity signals ---
+
+        // Glycaemic severity: combines FBG + HbA1c current values
+        if (curr.fbg != null || curr.hba1c != null) {
+            double glycSeverity = 0.0;
+            if (curr.fbg != null) {
+                // Use personalised FBG target if available, else default 110
+                double fbgTarget = state.getPersonalizedFBGTarget() != null
+                        ? state.getPersonalizedFBGTarget() : 110.0;
+                glycSeverity += curr.fbg > FBG_ALARMING_THRESHOLD ? 1.0
+                        : (curr.fbg > fbgTarget ? 0.4 : 0.0);
+            }
+            if (curr.hba1c != null) {
+                // Use personalised HbA1c target if available, else default 7.0
+                double hba1cTarget = state.getPersonalizedHbA1cTarget() != null
+                        ? state.getPersonalizedHbA1cTarget() : 7.0;
+                glycSeverity += curr.hba1c > HBA1C_POOR_THRESHOLD ? 1.0
+                        : (curr.hba1c > hba1cTarget ? 0.4 : 0.0);
+            }
+            // Normalise: max raw = 2.0
+            weighted += 0.20 * clamp(glycSeverity / 2.0);
+            totalWeight += 0.20;
+        }
+
+        // Weight/BMI severity (BMI > 30 = obese)
+        if (curr.bmi != null) {
+            double weightSeverity = curr.bmi > 35.0 ? 1.0
+                    : (curr.bmi > 30.0 ? 0.5 : 0.0);
+            weighted += 0.10 * weightSeverity;
+            totalWeight += 0.10;
+        }
+
         return totalWeight == 0 ? Double.NaN : clamp(weighted / totalWeight);
     }
 
@@ -208,38 +260,88 @@ public final class Module13CKMRiskComputer {
     }
 
     /**
-     * Cardiovascular velocity: 0.30*deltaARV + 0.25*deltaLDL + 0.20*deltaSurge + 0.15*deltaEngagement + 0.10*intervention_effectiveness
+     * Cardiovascular velocity: combines delta-based and absolute-severity signals.
+     *
+     * Delta signals (change between snapshots):
+     *   0.20*deltaARV + 0.15*deltaLDL + 0.10*deltaSurge + 0.10*deltaEngagement + 0.05*intervention
+     * Absolute severity signals (current snapshot state):
+     *   0.20*currentBPSeverity + 0.10*currentVariabilityClass + 0.10*currentSurgeSeverity
+     *
+     * The absolute-severity component prevents velocity=0.0 when a patient is persistently
+     * in a dangerous state (e.g., ARV=17 HIGH + SBP=167 Stage 2) but the delta is small
+     * because both snapshots are similarly bad.
      */
     static double computeCardiovascularVelocity(ClinicalStateSummary.MetricSnapshot prev,
             ClinicalStateSummary.MetricSnapshot curr, ClinicalStateSummary state) {
         double totalWeight = 0.0;
         double weighted = 0.0;
 
+        // --- Delta-based signals (trend between snapshot windows) ---
+
         if (prev.arv != null && curr.arv != null) {
-            weighted += 0.30 * clamp((curr.arv - prev.arv) / ARV_DELTA_RANGE);
-            totalWeight += 0.30;
+            weighted += 0.20 * clamp((curr.arv - prev.arv) / ARV_DELTA_RANGE);
+            totalWeight += 0.20;
         }
         if (prev.ldl != null && curr.ldl != null) {
-            weighted += 0.25 * clamp((curr.ldl - prev.ldl) / LDL_DELTA_RANGE);
-            totalWeight += 0.25;
+            weighted += 0.15 * clamp((curr.ldl - prev.ldl) / LDL_DELTA_RANGE);
+            totalWeight += 0.15;
         }
         if (prev.morningSurgeMagnitude != null && curr.morningSurgeMagnitude != null) {
-            weighted += 0.20 * clamp((curr.morningSurgeMagnitude - prev.morningSurgeMagnitude) / SURGE_DELTA_RANGE);
-            totalWeight += 0.20;
+            weighted += 0.10 * clamp((curr.morningSurgeMagnitude - prev.morningSurgeMagnitude) / SURGE_DELTA_RANGE);
+            totalWeight += 0.10;
         }
         if (prev.engagementScore != null && curr.engagementScore != null) {
             // Inverted: engagement drop = positive velocity (deteriorating)
-            weighted += 0.15 * clamp((prev.engagementScore - curr.engagementScore) / ENGAGEMENT_DELTA_RANGE);
-            totalWeight += 0.15;
+            weighted += 0.10 * clamp((prev.engagementScore - curr.engagementScore) / ENGAGEMENT_DELTA_RANGE);
+            totalWeight += 0.10;
         }
         if (!state.getRecentInterventionDeltas().isEmpty()) {
             long insufficient = state.getRecentInterventionDeltas().stream()
                     .filter(d -> d.getAttribution() == TrajectoryAttribution.INTERVENTION_INSUFFICIENT)
                     .count();
             double ratio = (double) insufficient / state.getRecentInterventionDeltas().size();
-            weighted += 0.10 * clamp(ratio * 2 - 1);
+            weighted += 0.05 * clamp(ratio * 2 - 1);
+            totalWeight += 0.05;
+        }
+
+        // --- Absolute severity signals (current clinical state) ---
+
+        // BP severity: combines ARV (variability) + meanSBP (control)
+        if (curr.arv != null || curr.meanSBP != null) {
+            double bpSeverity = 0.0;
+            if (curr.arv != null) {
+                bpSeverity += curr.arv > ARV_HIGH_THRESHOLD ? 1.0
+                        : (curr.arv > ARV_ELEVATED_THRESHOLD ? 0.5 : 0.0);
+            }
+            if (curr.meanSBP != null) {
+                bpSeverity += curr.meanSBP > SBP_STAGE2_THRESHOLD ? 1.0
+                        : (curr.meanSBP > SBP_STAGE1_THRESHOLD ? 0.4 : 0.0);
+            }
+            // Normalise combined severity to [0, 1]: max raw = 2.0
+            weighted += 0.20 * clamp(bpSeverity / 2.0);
+            totalWeight += 0.20;
+        }
+
+        // Variability classification severity
+        if (curr.variabilityClass != null) {
+            double varSeverity;
+            switch (curr.variabilityClass) {
+                case HIGH: varSeverity = 1.0; break;
+                case ELEVATED: varSeverity = 0.5; break;
+                default: varSeverity = 0.0;
+            }
+            weighted += 0.10 * varSeverity;
             totalWeight += 0.10;
         }
+
+        // Morning surge absolute severity
+        if (curr.morningSurgeMagnitude != null) {
+            double surgeSeverity = curr.morningSurgeMagnitude > SURGE_ELEVATED_THRESHOLD ? 1.0
+                    : (curr.morningSurgeMagnitude > 15.0 ? 0.4 : 0.0);
+            weighted += 0.10 * surgeSeverity;
+            totalWeight += 0.10;
+        }
+
         return totalWeight == 0 ? Double.NaN : clamp(weighted / totalWeight);
     }
 

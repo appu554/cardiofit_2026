@@ -33,18 +33,13 @@ func (s *Server) setupRoutes() {
 	s.Router.POST("/devices", s.handleDeviceIngest)                         // Phase 2
 	s.Router.POST("/app-checkin", s.handleAppCheckin)                       // Phase 2
 	s.Router.POST("/whatsapp", s.handleWhatsAppIngest)                      // Phase 2
-	s.Router.POST("/wearables/:provider", s.wearableHandler.HandleIngest) // Phase 5
+	s.Router.POST("/wearables/:provider", s.handleWearableIngest) // Phase 5 — pipeline-integrated
 	if s.abdmHandler != nil {
 		s.Router.POST("/abdm/data-push", s.abdmHandler.HandleDataPush)  // Phase 4
 	} else {
 		s.Router.POST("/abdm/data-push", s.stubHandler("ABDM data push — configure X25519 keys")) // Phase 4
 	}
 
-	// Internal (service-to-service)
-	internal := s.Router.Group("/internal")
-	{
-		internal.POST("/hpi", s.handleHPIIngest) // Phase 2
-	}
 
 	// Admin/Dashboard
 	s.Router.GET("/$source-status", s.stubHandler("Source status"))

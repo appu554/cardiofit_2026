@@ -122,7 +122,7 @@ func TestDetectedIssueFromSafetyResult_SoftFlag(t *testing.T) {
 }
 
 func TestPatientResource(t *testing.T) {
-	raw, err := NewPatientResource("John", "Doe", "+919876543210", "")
+	raw, err := NewPatientResource("John", "Doe", "+919876543210", "", "")
 	if err != nil {
 		t.Fatalf("NewPatientResource failed: %v", err)
 	}

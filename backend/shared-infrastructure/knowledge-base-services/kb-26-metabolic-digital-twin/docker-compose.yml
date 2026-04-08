@@ -2,7 +2,10 @@ version: '3.8'
 
 services:
   kb-26-mdt:
-    build: .
+    build:
+      context: ..
+      dockerfile: kb-26-metabolic-digital-twin/Dockerfile
+    container_name: kb-26-mdt
     ports:
       - "8137:8137"
     environment:
@@ -10,28 +13,48 @@ services:
       - REDIS_URL=redis://kb26-redis:6379
       - ENVIRONMENT=development
       - LOG_LEVEL=info
-      - KB20_URL=http://host.docker.internal:8131
-      - KB21_URL=http://host.docker.internal:8133
-      - KB25_URL=http://host.docker.internal:8136
+      - KB20_URL=http://kb20-service:8131
+      - KB21_URL=http://kb-21-behavioral-intelligence:8133
+      - KB25_URL=http://kb-25-lkg:8136
     depends_on:
       - kb26-postgres
       - kb26-redis
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8137/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - kb26-network
+      - kb-network
 
   kb26-postgres:
     image: postgres:16-alpine
     ports:
-      - "5440:5432"
+      - "5466:5432"
     environment:
       POSTGRES_USER: kb_user
       POSTGRES_PASSWORD: kb26_password
       POSTGRES_DB: kb26_mdt
     volumes:
       - kb26_pgdata:/var/lib/postgresql/data
+    networks:
+      - kb26-network
 
   kb26-redis:
     image: redis:7-alpine
     ports:
-      - "6391:6379"
+      - "6426:6379"
+    networks:
+      - kb26-network
 
 volumes:
   kb26_pgdata:
+
+networks:
+  kb26-network:
+    driver: bridge
+  kb-network:
+    external: true
+    name: kb-network

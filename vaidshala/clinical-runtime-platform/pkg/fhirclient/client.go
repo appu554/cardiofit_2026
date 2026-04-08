@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -238,12 +239,13 @@ func (c *Client) Update(resourceType, id string, body []byte) ([]byte, error) {
 
 // Search queries FHIR resources with query parameters.
 func (c *Client) Search(resourceType string, params map[string]string) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/%s?", c.baseURL, resourceType)
+	qv := url.Values{}
 	for k, v := range params {
-		url += k + "=" + v + "&"
+		qv.Set(k, v)
 	}
+	searchURL := fmt.Sprintf("%s/%s?%s", c.baseURL, resourceType, qv.Encode())
 
-	resp, err := doWithRetry(c.httpClient, http.MethodGet, url, nil,
+	resp, err := doWithRetry(c.httpClient, http.MethodGet, searchURL, nil,
 		map[string]string{"Accept": "application/fhir+json"}, c.logger)
 	if err != nil {
 		return nil, err

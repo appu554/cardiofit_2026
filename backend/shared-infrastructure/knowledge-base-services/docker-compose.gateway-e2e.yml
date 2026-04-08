@@ -1,0 +1,86 @@
+# docker-compose.gateway-e2e.yml
+# ─────────────────────────────────────────────────────────────
+# Auth Service + API Gateway for E2E testing
+# KB services are started via their own docker-compose.yml files
+# (use start-all-kbs.sh to orchestrate everything)
+#
+# Usage:
+#   docker compose -f docker-compose.gateway-e2e.yml -p gateway-stack up -d --build
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  # ==================== AUTH SERVICE ====================
+
+  auth-service:
+    build:
+      context: ../../services/auth-service
+      dockerfile: Dockerfile
+    container_name: auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=development
+      # Auth0 Configuration
+      - AUTH0_DOMAIN=dev-hfw6wda5wtf8l13c.au.auth0.com
+      - AUTH0_API_AUDIENCE=https://clinical-synthesis-hub-api
+      - AUTH0_CLIENT_ID=VEgtmxUiZaNZ2zcwJTtacl1TXX06JySO
+      - AUTH0_CLIENT_SECRET=4uUy5SobR7Bu524rgCyi4s0PdaFqgtNsIS_hQvJMMJoILXJrztR4pHe44zbc66DM
+      - AUTH0_MGMT_CLIENT_ID=9d5hRhmglajcvkjpb0nszUpd9sVcJoDt
+      - AUTH0_MGMT_CLIENT_SECRET=pJIxemdvWtiqTEzNb4OCFiuKjYoD3ZvQ4eoRMTVuo4CNAcNvOEQ_euhTf71o59tH
+      - DEBUG=true
+    # Override Dockerfile CMD to use port 8001 (CardioFit convention)
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+  # ==================== API GATEWAY ====================
+
+  api-gateway:
+    build:
+      context: ../../services/api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      # Auth Service — single source of truth for JWT verification
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      # Vaidshala Clinical Runtime KB URLs (Docker container names)
+      - KB20_SERVICE_URL=http://kb20-service:8131
+      - KB22_SERVICE_URL=http://kb22-hpi-engine:8132
+      - KB23_SERVICE_URL=http://kb23-decision-cards:8134
+      - KB25_SERVICE_URL=http://kb-25-lkg:8136
+      - KB26_SERVICE_URL=http://kb-26-mdt:8137
+      # Redis (uses any available Redis on kb-network, e.g. kb20-redis)
+      - REDIS_URL=redis://kb20-redis:6379/15
+      - REDIS_RATE_LIMIT_ENABLED=false
+      - METRICS_ENABLED=true
+      # CORS for local dev
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 25s
+    restart: unless-stopped
+    networks:
+      - kb-network
+
+networks:
+  kb-network:
+    external: true
+    name: kb-network

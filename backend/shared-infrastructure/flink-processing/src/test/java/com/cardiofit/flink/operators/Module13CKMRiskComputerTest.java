@@ -129,10 +129,12 @@ class Module13CKMRiskComputerTest {
 
         CKMRiskVelocity result = Module13CKMRiskComputer.compute(state);
 
-        // HbA1c delta = -0.5 / 1.0 range = -0.5, weighted by 0.30, normalized by 0.30 = -0.5
+        // HbA1c delta = -0.5 / 1.0 range = -0.5, weight 0.20 → -0.10
+        // Glycaemic severity: hba1c=7.0 <= 7.0 target → 0.0, weight 0.20
+        // totalWeight = 0.40, weighted = -0.10, velocity = -0.10 / 0.40 = -0.25
         double metabolicV = result.getDomainVelocity(CKMRiskDomain.METABOLIC);
-        assertEquals(-0.5, metabolicV, 0.05,
-                "With only HbA1c available, velocity should be -0.5 (improving)");
+        assertEquals(-0.25, metabolicV, 0.05,
+                "With only HbA1c available, velocity should be -0.25 (improving, severity-normalised)");
     }
 
     // --- Test 9: Small mixed movements → STABLE composite ---

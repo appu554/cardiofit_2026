@@ -43,6 +43,9 @@ public class Module13PilotConfig implements Serializable {
     private final boolean dryRun;
     private final String pilotPatientPrefix;
     private final int maxStateChangesPerEvent;
+    /** Suppress DATA_ABSENCE emissions for this many ms after patient state creation.
+     *  Set to 0 for E2E tests that want to verify absence detection logic. Default: 24h. */
+    private final long absenceSuppressionWindowMs;
 
     /** Reads all flags from environment variables with safe defaults. */
     public static Module13PilotConfig fromEnvironment() {
@@ -55,10 +58,12 @@ public class Module13PilotConfig implements Serializable {
         String pilotPrefix = System.getenv("MODULE13_PILOT_PATIENT_PREFIX");
         if (pilotPrefix == null) pilotPrefix = "";
         int maxChanges = intEnv("MODULE13_MAX_STATE_CHANGES_PER_EVENT", 10);
+        long absenceSuppressionMs = longEnv("MODULE13_ABSENCE_SUPPRESSION_WINDOW_MS",
+                24 * 3_600_000L); // default 24h
 
         Module13PilotConfig config = new Module13PilotConfig(
                 enabled, ckmVelocity, stateChanges, kb20Writeback,
-                personalizedTargets, dryRun, pilotPrefix, maxChanges);
+                personalizedTargets, dryRun, pilotPrefix, maxChanges, absenceSuppressionMs);
 
         LOG.info("Module 13 Pilot Config: enabled={}, ckm={}, stateChanges={}, kb20={}, " +
                         "personalised={}, dryRun={}, pilotPrefix='{}', maxChanges={}",
@@ -70,13 +75,15 @@ public class Module13PilotConfig implements Serializable {
 
     /** All-defaults config for unit tests and non-pilot environments. */
     public static Module13PilotConfig defaults() {
-        return new Module13PilotConfig(true, true, true, true, true, false, "", 10);
+        return new Module13PilotConfig(true, true, true, true, true, false, "", 10,
+                24 * 3_600_000L);
     }
 
     private Module13PilotConfig(boolean enabled, boolean ckmVelocityEnabled,
                                 boolean stateChangesEnabled, boolean kb20WritebackEnabled,
                                 boolean personalizedTargetsEnabled, boolean dryRun,
-                                String pilotPatientPrefix, int maxStateChangesPerEvent) {
+                                String pilotPatientPrefix, int maxStateChangesPerEvent,
+                                long absenceSuppressionWindowMs) {
         this.enabled = enabled;
         this.ckmVelocityEnabled = ckmVelocityEnabled;
         this.stateChangesEnabled = stateChangesEnabled;
@@ -85,6 +92,7 @@ public class Module13PilotConfig implements Serializable {
         this.dryRun = dryRun;
         this.pilotPatientPrefix = pilotPatientPrefix;
         this.maxStateChangesPerEvent = maxStateChangesPerEvent;
+        this.absenceSuppressionWindowMs = absenceSuppressionWindowMs;
     }
 
     // --- Guard methods (called from synchroniser) ---
@@ -109,11 +117,21 @@ public class Module13PilotConfig implements Serializable {
 
     public String getPilotPatientPrefix() { return pilotPatientPrefix; }
 
+    /** Suppression window (ms) after state creation during which DATA_ABSENCE is not emitted. */
+    public long getAbsenceSuppressionWindowMs() { return absenceSuppressionWindowMs; }
+
     // --- Helpers ---
 
     private static boolean boolEnv(String key, boolean defaultValue) {
         String val = System.getenv(key);
         return val != null ? Boolean.parseBoolean(val) : defaultValue;
+    }
+
+    private static long longEnv(String key, long defaultValue) {
+        String val = System.getenv(key);
+        if (val == null) return defaultValue;
+        try { return Long.parseLong(val); }
+        catch (NumberFormatException e) { return defaultValue; }
     }
 
     private static int intEnv(String key, int defaultValue) {

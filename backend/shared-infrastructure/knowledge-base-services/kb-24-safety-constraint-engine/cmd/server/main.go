@@ -73,14 +73,22 @@ func main() {
 		publisher = services.NewLogOnlyPublisher(logger)
 	}
 
-	// 5. Create the core evaluator
+	// 5. Load intake safety rules (served via /api/v1/intake-triggers)
+	intakeRulesPath := envOrDefault("INTAKE_RULES_PATH", "./configs/intake_safety_rules.yaml")
+	intakeRuleLoader := services.NewIntakeRuleLoader(intakeRulesPath, logger)
+	if err := intakeRuleLoader.Load(); err != nil {
+		logger.Warn("failed to load intake safety rules", zap.Error(err))
+	}
+	intakeRulesCount := intakeRuleLoader.Count()
+
+	// 6. Create the core evaluator
 	evaluator := services.NewSafetyTriggerEvaluator(nodeLoader, logger)
 
-	// 6. Create and configure HTTP server
-	server := api.NewServer(cfg, evaluator, publisher, logger)
+	// 7. Create and configure HTTP server
+	server := api.NewServer(cfg, evaluator, intakeRuleLoader, publisher, logger)
 	server.RegisterRoutes()
 
-	// 7. Log startup banner
+	// 8. Log startup banner
 	fmt.Printf(`
 ========================================
 KB-24 Safety Constraint Engine
@@ -89,15 +97,17 @@ Service:     kb-24-safety-constraint-engine
 Port:        %s
 Environment: %s
 Nodes:       %d loaded
+Intake Rules: %d loaded
 Kafka:       %v
 ========================================
 
 API Endpoints:
   POST   /api/v1/evaluate              Evaluate safety triggers
   POST   /api/v1/sessions/:id/clear    Clear session state
+  GET    /api/v1/intake-triggers        Get intake safety rules
   GET    /health                        Health check
 ========================================
-`, cfg.Port, cfg.Environment, nodesLoaded, cfg.KafkaEnabled)
+`, cfg.Port, cfg.Environment, nodesLoaded, intakeRulesCount, cfg.KafkaEnabled)
 
 	// 8. Start HTTP server
 	httpServer := &http.Server{
@@ -139,4 +149,11 @@ API Endpoints:
 	}
 
 	logger.Info("KB-24 Safety Constraint Engine stopped")
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

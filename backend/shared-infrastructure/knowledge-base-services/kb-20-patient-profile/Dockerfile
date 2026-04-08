@@ -1,14 +1,18 @@
 # Build stage
+# Context must be knowledge-base-services/ (parent) so shared/ is accessible
 FROM golang:1.24-alpine AS builder
 
 RUN apk add --no-cache git
 
+# Copy shared module first (required by go.mod replace directive)
+COPY shared/ /shared/
+
 WORKDIR /app
 
-COPY go.mod go.sum ./
+COPY kb-20-patient-profile/go.mod kb-20-patient-profile/go.sum ./
 RUN go mod download
 
-COPY . .
+COPY kb-20-patient-profile/ .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
 # Runtime stage

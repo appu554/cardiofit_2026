@@ -127,6 +127,75 @@ class Module13StateChangeDetectorTest {
     }
 
     @Test
+    void detect_highPriorityGated_belowConfidenceThreshold() {
+        // CKM_RISK_ESCALATION is HIGH priority. At 0.375 confidence (3/8 modules),
+        // it should be suppressed — not enough signal for "urgent review within 4h".
+        ClinicalStateSummary state = Module13TestBuilder.stateWithVelocity("p1",
+                CKMRiskVelocity.CompositeClassification.STABLE);
+        state.setDataCompletenessScore(0.375); // below 0.50 threshold
+
+        CKMRiskVelocity newVelocity = CKMRiskVelocity.builder()
+                .domainVelocity(CKMRiskDomain.RENAL, 0.6)
+                .compositeClassification(CKMRiskVelocity.CompositeClassification.DETERIORATING)
+                .compositeScore(0.6)
+                .dataCompleteness(0.375)
+                .computationTimestamp(Module13TestBuilder.BASE_TIME + Module13TestBuilder.DAY_MS)
+                .build();
+
+        List<ClinicalStateChangeEvent> events = Module13StateChangeDetector.detect(
+                state, newVelocity, Module13TestBuilder.BASE_TIME + Module13TestBuilder.DAY_MS);
+
+        assertTrue(events.stream().noneMatch(e ->
+                e.getChangeType() == ClinicalStateChangeType.CKM_RISK_ESCALATION),
+                "HIGH-priority CKM_RISK_ESCALATION should be suppressed at 0.375 confidence");
+    }
+
+    @Test
+    void detect_criticalBypassesConfidenceGate() {
+        // RENAL_RAPID_DECLINE is CRITICAL priority. It should fire even at low confidence
+        // because patient safety trumps data quality.
+        ClinicalStateSummary state = Module13TestBuilder.stateWithBaselines("p1");
+        state.setDataCompletenessScore(0.25); // very low confidence
+        state.current().egfr = 38.0; // below 45.0 threshold
+
+        CKMRiskVelocity velocity = CKMRiskVelocity.builder()
+                .compositeClassification(CKMRiskVelocity.CompositeClassification.STABLE)
+                .dataCompleteness(0.25)
+                .computationTimestamp(Module13TestBuilder.BASE_TIME)
+                .build();
+
+        List<ClinicalStateChangeEvent> events = Module13StateChangeDetector.detect(
+                state, velocity, Module13TestBuilder.BASE_TIME);
+
+        assertTrue(events.stream().anyMatch(e ->
+                e.getChangeType() == ClinicalStateChangeType.RENAL_RAPID_DECLINE),
+                "CRITICAL RENAL_RAPID_DECLINE should bypass confidence gate");
+    }
+
+    @Test
+    void detect_highPriorityEmitted_aboveConfidenceThreshold() {
+        // CKM_RISK_ESCALATION should fire at 0.625 confidence (5/8 modules)
+        ClinicalStateSummary state = Module13TestBuilder.stateWithVelocity("p1",
+                CKMRiskVelocity.CompositeClassification.STABLE);
+        state.setDataCompletenessScore(0.625); // above 0.50 threshold
+
+        CKMRiskVelocity newVelocity = CKMRiskVelocity.builder()
+                .domainVelocity(CKMRiskDomain.RENAL, 0.6)
+                .compositeClassification(CKMRiskVelocity.CompositeClassification.DETERIORATING)
+                .compositeScore(0.6)
+                .dataCompleteness(0.625)
+                .computationTimestamp(Module13TestBuilder.BASE_TIME + Module13TestBuilder.DAY_MS)
+                .build();
+
+        List<ClinicalStateChangeEvent> events = Module13StateChangeDetector.detect(
+                state, newVelocity, Module13TestBuilder.BASE_TIME + Module13TestBuilder.DAY_MS);
+
+        assertTrue(events.stream().anyMatch(e ->
+                e.getChangeType() == ClinicalStateChangeType.CKM_RISK_ESCALATION),
+                "HIGH-priority event should emit at 0.625 confidence");
+    }
+
+    @Test
     void detect_dedup_sameChangeNotEmittedTwiceIn24Hours() {
         ClinicalStateSummary state = Module13TestBuilder.stateWithBaselines("p1");
         state.current().fbg = 105.0;

@@ -21,6 +21,7 @@ type SlotDefinition struct {
 	LOINCCode string   `json:"loinc_code"`
 	DataType  DataType `json:"data_type"`
 	Required  bool     `json:"required"`
+	Derived   bool     `json:"derived,omitempty"` // Server-computed; cannot be client-submitted.
 	Unit      string   `json:"unit,omitempty"`
 	Label     string   `json:"label"`
 }
@@ -34,7 +35,7 @@ var slotTable = []SlotDefinition{
 	{Name: "sex", Domain: "demographics", LOINCCode: "76689-9", DataType: DataTypeCodedChoice, Required: true, Label: "Biological sex"},
 	{Name: "height", Domain: "demographics", LOINCCode: "8302-2", DataType: DataTypeNumeric, Required: true, Unit: "cm", Label: "Height"},
 	{Name: "weight", Domain: "demographics", LOINCCode: "29463-7", DataType: DataTypeNumeric, Required: true, Unit: "kg", Label: "Weight"},
-	{Name: "bmi", Domain: "demographics", LOINCCode: "39156-5", DataType: DataTypeNumeric, Required: true, Unit: "kg/m2", Label: "BMI"},
+	{Name: "bmi", Domain: "demographics", LOINCCode: "39156-5", DataType: DataTypeNumeric, Required: true, Derived: true, Unit: "kg/m2", Label: "BMI"},
 	{Name: "pregnant", Domain: "demographics", LOINCCode: "82810-3", DataType: DataTypeBoolean, Required: true, Label: "Currently pregnant"},
 	{Name: "ethnicity", Domain: "demographics", LOINCCode: "69490-1", DataType: DataTypeCodedChoice, Required: false, Label: "Ethnicity"},
 	{Name: "primary_language", Domain: "demographics", LOINCCode: "54899-0", DataType: DataTypeCodedChoice, Required: false, Label: "Primary language"},
@@ -139,4 +140,26 @@ func RequiredSlots() []SlotDefinition {
 		}
 	}
 	return out
+}
+
+// patientSlots are demographics that live on the FHIR Patient resource,
+// not as Observation resources.
+var patientSlots = map[string]bool{
+	"age":              true, // → Patient.birthDate (calculated)
+	"sex":              true, // → Patient.gender
+	"ethnicity":        true, // → Patient.extension (ethnicity)
+	"primary_language": true, // → Patient.communication[].language
+}
+
+// IsPatientSlot returns true if this slot should be written to the
+// FHIR Patient resource instead of creating an Observation.
+func IsPatientSlot(slotName string) bool {
+	return patientSlots[slotName]
+}
+
+// IsDerivedSlot returns true if this slot is server-computed and must
+// not be submitted by the client directly.
+func IsDerivedSlot(slotName string) bool {
+	sd, ok := slotIndex[slotName]
+	return ok && sd.Derived
 }

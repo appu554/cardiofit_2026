@@ -127,12 +127,14 @@ public class Module13TestBuilder {
         s.setDataTier("TIER_2_SMBG");
         s.setChannel("CORPORATE");
         s.recordModuleSeen("module7", BASE_TIME);
+        s.recordModuleSeen("module8", BASE_TIME);
         s.recordModuleSeen("module9", BASE_TIME);
         s.recordModuleSeen("module10b", BASE_TIME);
         s.recordModuleSeen("module11b", BASE_TIME);
         s.recordModuleSeen("enriched", BASE_TIME);
         s.recordModuleSeen("module12", BASE_TIME);
         s.recordModuleSeen("module12b", BASE_TIME);
+        s.setDataCompletenessScore(0.875); // 7/8 modules seen — above HIGH-priority gate threshold
         s.setLastUpdated(BASE_TIME);
         return s;
     }
@@ -190,6 +192,29 @@ public class Module13TestBuilder {
                 .build();
         s.setLastComputedVelocity(velocity);
         return s;
+    }
+
+    /** Module 8: Comorbidity interaction alert event */
+    public static CanonicalEvent comorbidityAlertEvent(String patientId, long timestamp,
+            String ruleId, String severity) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("source_module", "module8");
+        payload.put("ruleId", ruleId);
+        payload.put("severity", severity);
+        return baseEvent(patientId, EventType.CLINICAL_DOCUMENT, timestamp, payload);
+    }
+
+    /** Lab result with KB-20 personalised targets embedded in payload */
+    public static CanonicalEvent labEventWithPersonalizedTargets(String patientId, long timestamp,
+            String labType, double value, Map<String, Object> kb20Targets) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("source_module", "enriched");
+        payload.put("lab_type", labType);
+        payload.put("value", value);
+        if (kb20Targets != null) {
+            payload.put("kb20_personalized_targets", kb20Targets);
+        }
+        return baseEvent(patientId, EventType.LAB_RESULT, timestamp, payload);
     }
 
     // ---- Private helpers ----

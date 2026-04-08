@@ -34,7 +34,7 @@ func NewSyncWorker(client *FHIRClient, kb7 *KB7Client, db *gorm.DB, logger *zap.
 		logger:     logger,
 		eventBus:   eventBus,
 		interval:   5 * time.Minute,
-		lastSynced: time.Now().UTC().Add(-24 * time.Hour), // initial: look back 24h
+		lastSynced: time.Now().UTC().Add(-30 * 24 * time.Hour), // initial: look back 30 days
 		done:       make(chan struct{}),
 	}
 }

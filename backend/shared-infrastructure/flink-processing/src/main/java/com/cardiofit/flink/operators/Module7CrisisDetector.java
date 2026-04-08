@@ -7,7 +7,7 @@ import com.cardiofit.flink.models.BPReading;
  * before any windowed computation.
  *
  * Crisis thresholds (per ACC/AHA):
- *   SBP > 180 mmHg OR DBP > 120 mmHg
+ *   SBP >= 180 mmHg OR DBP >= 120 mmHg
  *
  * Acute surge detection:
  *   SBP increase > 30 mmHg within < 1 hour
@@ -18,12 +18,12 @@ public final class Module7CrisisDetector {
 
     private Module7CrisisDetector() {}
 
-    /** Strict inequality: > 180 / > 120 (not >=). */
+    /** Inclusive threshold per ACC/AHA: SBP >= 180 OR DBP >= 120. */
     public static boolean isCrisis(BPReading reading) {
         if (reading == null || reading.getSystolic() == null || reading.getDiastolic() == null) {
             return false;
         }
-        return reading.getSystolic() > 180.0 || reading.getDiastolic() > 120.0;
+        return reading.getSystolic() >= 180.0 || reading.getDiastolic() >= 120.0;
     }
 
     /**

@@ -115,6 +115,7 @@ func (s *Server) handleFHIRObservation(c *gin.Context) {
 			break
 		}
 	}
+	published := false
 	if s.outboxPublisher != nil {
 		var pubErr error
 		if isCritical {
@@ -123,9 +124,12 @@ func (s *Server) handleFHIRObservation(c *gin.Context) {
 			pubErr = s.outboxPublisher.Publish(c.Request.Context(), &results[0], fhirResourceID)
 		}
 		if pubErr != nil {
-			s.logger.Error("outbox publish failed", zap.Error(pubErr))
+			s.logger.Error("outbox publish failed — falling back to Kafka", zap.Error(pubErr))
+		} else {
+			published = true
 		}
-	} else if s.kafkaProducer != nil && s.topicRouter != nil {
+	}
+	if !published && s.kafkaProducer != nil && s.topicRouter != nil {
 		topic, key, err := s.topicRouter.Route(c.Request.Context(), &results[0])
 		if err == nil {
 			_ = s.kafkaProducer.Publish(
@@ -372,9 +376,10 @@ func (s *Server) publishResult(c *gin.Context, obs *canonical.CanonicalObservati
 		}
 	}
 
-	// Publish via outbox (preferred) or direct Kafka (fallback).
+	// Publish via outbox (preferred) with Kafka fallback on failure.
 	// Outbox path uses SaveAndPublish / SaveAndPublishBatch for at-least-once
 	// delivery via the Global Outbox Service's polling publisher.
+	published := false
 	if s.outboxPublisher != nil {
 		var err error
 		if isCritical {
@@ -384,16 +389,18 @@ func (s *Server) publishResult(c *gin.Context, obs *canonical.CanonicalObservati
 		}
 		if err != nil {
 			metrics.DLQMessages.WithLabelValues("OUTBOX", string(obs.SourceType)).Inc()
-			s.logger.Error("outbox publish failed",
+			s.logger.Error("outbox publish failed — falling back to direct Kafka",
 				zap.String("patient_id", obs.PatientID.String()),
 				zap.Error(err),
 			)
+			// Fall through to Kafka below
+		} else {
+			published = true
 		}
-		return
 	}
 
-	// Fallback: direct Kafka (used when OUTBOX_ENABLED=false or SDK init failed)
-	if s.kafkaProducer != nil && s.topicRouter != nil {
+	// Fallback: direct Kafka (used when OUTBOX_ENABLED=false, SDK init failed, or outbox write failed)
+	if !published && s.kafkaProducer != nil && s.topicRouter != nil {
 		topic, key, err := s.topicRouter.Route(c.Request.Context(), obs)
 		if err == nil {
 			resourceType := "Observation"

@@ -28,6 +28,7 @@ RUN addgroup -S sce && adduser -S sce -G sce
 WORKDIR /app
 
 COPY --from=builder /bin/kb24-sce /app/kb24-sce
+COPY --from=builder /app/configs /app/configs
 
 # Default node definitions mount point
 RUN mkdir -p /app/nodes && chown -R sce:sce /app

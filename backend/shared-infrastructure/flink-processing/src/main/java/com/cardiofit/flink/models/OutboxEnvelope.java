@@ -138,6 +138,9 @@ public class OutboxEnvelope implements Serializable {
         @JsonProperty("fhir_resource_id")
         private String fhirResourceId;
 
+        @JsonProperty("encounter_id")
+        private String encounterId;
+
         // Default constructor for Jackson
         public IngestionEventData() {}
 
@@ -180,6 +183,9 @@ public class OutboxEnvelope implements Serializable {
 
         public String getFhirResourceId() { return fhirResourceId; }
         public void setFhirResourceId(String fhirResourceId) { this.fhirResourceId = fhirResourceId; }
+
+        public String getEncounterId() { return encounterId; }
+        public void setEncounterId(String encounterId) { this.encounterId = encounterId; }
 
         @Override
         public String toString() {

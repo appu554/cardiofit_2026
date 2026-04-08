@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.io.Serializable;
-import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -40,7 +40,7 @@ public class CKMRiskVelocity implements Serializable {
     private double dataCompleteness;
 
     public CKMRiskVelocity() {
-        this.domainVelocities = new EnumMap<>(CKMRiskDomain.class);
+        this.domainVelocities = new HashMap<>();
         this.amplificationFactor = 1.0;
     }
 

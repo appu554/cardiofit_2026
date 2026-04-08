@@ -1,5 +1,7 @@
 package com.cardiofit.flink.models;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.time.Instant;
@@ -18,43 +20,44 @@ import java.util.Map;
  * - Module 3: Adds semantic enrichment (potentialInteractions, applicableProtocols)
  * - Module 4: Consumes for CEP pattern matching using riskIndicators
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class EnrichedEvent implements Serializable {
     private static final long serialVersionUID = 2L;  // Updated for new fields
 
-    @JsonProperty("id")
+    @JsonProperty("eventId")
     private String id;
 
-    @JsonProperty("patient_id")
+    @JsonProperty("patientId")
     private String patientId;
 
-    @JsonProperty("encounter_id")
+    @JsonProperty("encounterId")
     private String encounterId;
 
-    @JsonProperty("event_type")
+    @JsonProperty("eventType")
     private EventType eventType;
 
-    @JsonProperty("event_time")
+    @JsonProperty("timestamp")
     private long eventTime;
 
-    @JsonProperty("processing_time")
+    @JsonProperty("processingTime")
     private long processingTime;
 
-    @JsonProperty("source_system")
+    @JsonProperty("sourceSystem")
     private String sourceSystem;
 
     @JsonProperty("payload")
     private Map<String, Object> payload;
 
-    @JsonProperty("patient_context")
+    @JsonProperty("clinicalContext")
     private PatientContext patientContext;
 
-    @JsonProperty("enrichment_data")
+    @JsonProperty("enrichmentData")
     private Map<String, Object> enrichmentData;
 
-    @JsonProperty("enrichment_version")
+    @JsonProperty("enrichmentVersion")
     private String enrichmentVersion;
 
-    @JsonProperty("correlation_id")
+    @JsonProperty("correlationId")
     private String correlationId;
 
     // ========== NEW FIELDS - Module 2 Enrichment ==========
@@ -65,7 +68,7 @@ public class EnrichedEvent implements Serializable {
      * Examples: HR > 140, SBP < 90, Temp > 38.3°C
      * Populated by: Module 2 (Context Assembly & Enrichment)
      */
-    @JsonProperty("immediate_alerts")
+    @JsonProperty("immediateAlerts")
     private List<SimpleAlert> immediateAlerts;
 
     /**
@@ -74,7 +77,7 @@ public class EnrichedEvent implements Serializable {
      * Examples: "HYPERTENSIVE CRISIS", "SEVERE SEPSIS RISK", "ACUTE HYPOXIA"
      * Populated by: Module 2 based on highest severity alert or risk assessment
      */
-    @JsonProperty("primary_clinical_finding")
+    @JsonProperty("primaryClinicalFinding")
     private String primaryClinicalFinding;
 
     /**
@@ -83,7 +86,7 @@ public class EnrichedEvent implements Serializable {
      * Enables patterns like: event.riskIndicators.tachycardia && event.riskIndicators.hypotension
      * Populated by: Module 2 buildRiskIndicators() method
      */
-    @JsonProperty("risk_indicators")
+    @JsonProperty("riskIndicators")
     private RiskIndicators riskIndicators;
 
     /**
@@ -91,7 +94,7 @@ public class EnrichedEvent implements Serializable {
      * Key examples: "mews_score" -> 5.0, "qsofa_score" -> 2.0, "news2_score" -> 7.0, "sofa_score" -> 3.0
      * Populated by: Module 2 calculateClinicalScores() method
      */
-    @JsonProperty("clinical_scores")
+    @JsonProperty("clinicalScores")
     private Map<String, Double> clinicalScores;
 
     // ========== NEW FIELDS - Module 3 Semantic Enrichment ==========
@@ -102,7 +105,7 @@ public class EnrichedEvent implements Serializable {
      * Empty list if no interactions detected
      * Populated by: Module 3 (Semantic Enrichment)
      */
-    @JsonProperty("potential_interactions")
+    @JsonProperty("potentialInteractions")
     private List<DrugInteraction> potentialInteractions;
 
     /**
@@ -110,7 +113,7 @@ public class EnrichedEvent implements Serializable {
      * Examples: "sepsis_bundle", "aki_prevention", "vte_prophylaxis", "glycemic_control"
      * Populated by: Module 3 (Semantic Enrichment)
      */
-    @JsonProperty("applicable_protocols")
+    @JsonProperty("applicableProtocols")
     private List<String> applicableProtocols;
 
     // Default constructor
@@ -308,6 +311,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Get the acuity score from enrichment data
      */
+    @JsonIgnore
     public double getAcuityScore() {
         if (enrichmentData != null && enrichmentData.containsKey("acuity_score")) {
             Object score = enrichmentData.get("acuity_score");
@@ -321,6 +325,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Check if this event indicates a critical condition
      */
+    @JsonIgnore
     public boolean isCritical() {
         return getAcuityScore() > 75.0 || eventType.isCritical();
     }
@@ -328,6 +333,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Get the context age in hours
      */
+    @JsonIgnore
     public double getContextAgeHours() {
         if (enrichmentData != null && enrichmentData.containsKey("context_age_hours")) {
             Object age = enrichmentData.get("context_age_hours");
@@ -341,6 +347,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Check if this event has any immediate alerts
      */
+    @JsonIgnore
     public boolean hasImmediateAlerts() {
         return immediateAlerts != null && !immediateAlerts.isEmpty();
     }
@@ -348,6 +355,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Check if this event has critical immediate alerts
      */
+    @JsonIgnore
     public boolean hasCriticalAlerts() {
         if (immediateAlerts == null) return false;
         return immediateAlerts.stream()
@@ -365,6 +373,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Check if this event has any drug interactions
      */
+    @JsonIgnore
     public boolean hasDrugInteractions() {
         return potentialInteractions != null && !potentialInteractions.isEmpty();
     }
@@ -372,6 +381,7 @@ public class EnrichedEvent implements Serializable {
     /**
      * Check if this event has high severity drug interactions
      */
+    @JsonIgnore
     public boolean hasHighSeverityInteractions() {
         if (potentialInteractions == null) return false;
         return potentialInteractions.stream()

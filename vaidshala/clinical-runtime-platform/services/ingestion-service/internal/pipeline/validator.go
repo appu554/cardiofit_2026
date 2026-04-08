@@ -82,7 +82,6 @@ var sourceQualityBase = map[canonical.SourceType]float64{
 	canonical.SourceDevice:          0.90,
 	canonical.SourceWearable:        0.80,
 	canonical.SourcePatientReported: 0.70,
-	canonical.SourceHPI:             0.75,
 }
 
 // DefaultValidator checks clinical ranges, flags critical/implausible values,

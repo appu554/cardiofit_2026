@@ -21,8 +21,13 @@ class Module4SemanticConverter {
 
     /**
      * Normalize vital sign keys from Module 2 format to CEP pattern format.
-     * Module 2 stores as: heartrate, systolicbp, diastolicbp, respiratoryrate, oxygensaturation, temperature
+     * Module 2 stores vitals with varying key formats depending on the source:
+     * - PatientContextAggregator: systolicbloodpressure, diastolicbloodpressure
+     * - Direct payload mapping: systolicbp, diastolicbp
      * CEP patterns expect: heart_rate, systolic_bp, diastolic_bp, respiratory_rate, oxygen_saturation, temperature
+     *
+     * Demographic fields (age, gender) in latestVitals are intentionally excluded —
+     * they are not vital signs and should not reach CEP pattern matching.
      */
     static Map<String, Object> normalizeVitalSigns(Map<String, Object> latestVitals) {
         if (latestVitals == null || latestVitals.isEmpty()) {
@@ -34,11 +39,16 @@ class Module4SemanticConverter {
         if (latestVitals.get("heartrate") != null) {
             vitalSigns.put("heart_rate", latestVitals.get("heartrate"));
         }
-        if (latestVitals.get("systolicbp") != null) {
-            vitalSigns.put("systolic_bp", latestVitals.get("systolicbp"));
+        // Handle both key formats: systolicbloodpressure (PatientContextAggregator) and systolicbp (direct)
+        Object systolic = latestVitals.get("systolicbloodpressure");
+        if (systolic == null) systolic = latestVitals.get("systolicbp");
+        if (systolic != null) {
+            vitalSigns.put("systolic_bp", systolic);
         }
-        if (latestVitals.get("diastolicbp") != null) {
-            vitalSigns.put("diastolic_bp", latestVitals.get("diastolicbp"));
+        Object diastolic = latestVitals.get("diastolicbloodpressure");
+        if (diastolic == null) diastolic = latestVitals.get("diastolicbp");
+        if (diastolic != null) {
+            vitalSigns.put("diastolic_bp", diastolic);
         }
         if (latestVitals.get("respiratoryrate") != null) {
             vitalSigns.put("respiratory_rate", latestVitals.get("respiratoryrate"));
@@ -49,6 +59,7 @@ class Module4SemanticConverter {
         if (latestVitals.get("oxygensaturation") != null) {
             vitalSigns.put("oxygen_saturation", latestVitals.get("oxygensaturation"));
         }
+        // Note: age, gender, and other demographic fields are intentionally NOT mapped
 
         return vitalSigns;
     }

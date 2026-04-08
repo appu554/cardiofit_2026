@@ -39,6 +39,18 @@ public class LabResult implements Serializable {
     @JsonProperty("abnormalFlag")
     private String abnormalFlag; // "H" (high), "L" (low), "N" (normal)
 
+    /** Canonical clinical concept from KB-7 (e.g., "BNP", "TROPONIN", "LACTATE") */
+    @JsonProperty("clinicalConcept")
+    private String clinicalConcept;
+
+    /** Concept group: CARDIAC, METABOLIC, RENAL, ELECTROLYTE, HEMATOLOGY, COAGULATION, INFECTION_MARKER */
+    @JsonProperty("conceptGroup")
+    private String conceptGroup;
+
+    /** Concept-level abnormality: NORMAL, ELEVATED, CRITICALLY_ELEVATED, LOW, CRITICALLY_LOW, UNKNOWN */
+    @JsonProperty("abnormalityFlag")
+    private String abnormalityFlag;
+
     public LabResult() {
         this.timestamp = System.currentTimeMillis();
     }
@@ -113,6 +125,15 @@ public class LabResult implements Serializable {
 
     public String getAbnormalFlag() { return abnormalFlag; }
     public void setAbnormalFlag(String abnormalFlag) { this.abnormalFlag = abnormalFlag; }
+
+    public String getClinicalConcept() { return clinicalConcept; }
+    public void setClinicalConcept(String clinicalConcept) { this.clinicalConcept = clinicalConcept; }
+
+    public String getConceptGroup() { return conceptGroup; }
+    public void setConceptGroup(String conceptGroup) { this.conceptGroup = conceptGroup; }
+
+    public String getAbnormalityFlag() { return abnormalityFlag; }
+    public void setAbnormalityFlag(String abnormalityFlag) { this.abnormalityFlag = abnormalityFlag; }
 
     @Override
     public String toString() {
