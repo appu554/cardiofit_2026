@@ -482,10 +482,18 @@ public class Module13_ClinicalStateSynchroniser
         state.setLastCIDAlertTimestamp(System.currentTimeMillis());
     }
 
+    @SuppressWarnings("unchecked")
     static void updateFromLabResult(Map<String, Object> payload, ClinicalStateSummary state) {
         // NOTE: extractPersonalizedTargets moved to processElement (needs instance fields)
-        String labType = payload.get("lab_type") != null ? payload.get("lab_type").toString() : "";
-        Double value = toDouble(payload.get("value"));
+        // Enriched events carry lab fields inside a nested "payload" sub-map
+        // (SourceTaggingDeserializer flattens the whole JSON into the CanonicalEvent payload,
+        //  so the original event's "payload" field appears as a nested Map).
+        Map<String, Object> data = payload;
+        if (payload.get("lab_type") == null && payload.get("payload") instanceof Map) {
+            data = (Map<String, Object>) payload.get("payload");
+        }
+        String labType = data.get("lab_type") != null ? data.get("lab_type").toString() : "";
+        Double value = toDouble(data.get("value"));
         if (value == null) return;
 
         switch (labType) {

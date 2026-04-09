@@ -146,10 +146,12 @@ RAJESH_BP = {
     7:  [( 170,104, 82, "MORNING","HOME_CUFF"), (146, 90, 77, "EVENING","HOME_CUFF"),
          (152, 94, 76, "NIGHT",  "HOME_CUFF")],
     8:  [( 172,104, 82, "MORNING","HOME_CUFF"), (150, 94, 78, "EVENING","HOME_CUFF")],
-    9:  [( 176,106, 83, "MORNING","HOME_CUFF"), (155, 96, 79, "EVENING","HOME_CUFF")],
+    9:  [( 176,106, 83, "MORNING","HOME_CUFF"), (155, 96, 79, "EVENING","HOME_CUFF"),
+         (160,100, 78, "NIGHT",  "HOME_CUFF")],   # 3rd NIGHT → dip classification now possible
     10: [( 178,108, 83, "MORNING","HOME_CUFF")],  # NO evening — engagement declining
     11: [( 182,110, 84, "MORNING","HOME_CUFF"), (160,100, 80, "EVENING","HOME_CUFF")],
-    12: [( 180,108, 84, "MORNING","HOME_CUFF")],  # NO evening — further decline
+    12: [( 180,108, 84, "MORNING","HOME_CUFF"),
+         (168,102, 80, "NIGHT",  "HOME_CUFF")],   # 4th NIGHT reading — further dip data
     13: [(164,100, 80, "EVENING","HOME_CUFF")],    # NO morning, single reluctant evening
     14: [( 174,104, 82, "MORNING","HOME_CUFF")],   # Single morning, day 14
 }
