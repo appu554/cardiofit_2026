@@ -1,197 +1,244 @@
-# Flink Stream Processing Infrastructure
+# Flink Clinical Intelligence Pipeline
 
-## Overview
+Apache Flink stream processing for the CardioFit platform. Processes patient vitals, labs, medications, and engagement signals through 10 clinical intelligence modules (M7-M13) to produce BP variability metrics, comorbidity safety alerts, meal/activity responses, intervention tracking, and CKM risk velocity scores.
 
-Apache Flink serves as the **GLOBAL** stream processing infrastructure for the entire CardioFit platform. It operates as a peer to the Runtime Layer, processing events directly from ALL microservices and knowledge bases.
-
-## Architectural Position
+## Architecture
 
 ```
-backend/
-└── shared-infrastructure/
-    ├── flink-processing/    # THIS COMPONENT (Global Stream Processing)
-    └── runtime-layer/       # Peer component (Query & Storage Infrastructure)
+                     enriched-patient-events-v1
+                              │
+          ┌───────────────────┼───────────────────────────┐
+          │                   │                           │
+       ┌──▼──┐  ┌──▼──┐  ┌──▼──┐  ┌──▼───┐  ┌──▼───┐  ┌──▼──┐
+       │ M7  │  │ M8  │  │ M9  │  │ M10  │  │ M11  │  │ M12 │
+       │ BP  │  │ CID │  │ Eng │  │ Meal │  │ Act  │  │ Int │
+       └──┬──┘  └──┬──┘  └──┬──┘  └──┬───┘  └──┬───┘  └──┬──┘
+          │        │        │        │          │         │
+          └────────┴────────┴────────┴──────────┴─────────┘
+                              │
+                        ┌─────▼─────┐
+                        │    M13    │
+                        │ Clinical  │
+                        │ State Sync│
+                        └─────┬─────┘
+                              │
+                   clinical.state-change-events
 ```
 
-## Why Flink is at Shared-Infrastructure Level
+## Modules
 
-1. **Direct Service Integration**: Flink receives events directly from all microservices via Kafka, not through the runtime layer
-2. **Global State Management**: Maintains patient context across ALL services
-3. **Knowledge Broadcasting**: Distributes semantic mesh to all processing tasks
-4. **Independent Scaling**: Can be scaled independently of runtime layer components
-5. **Operational Independence**: Managed as a separate infrastructure component
+| Module | Name | Kafka Output Topic | Timer |
+|--------|------|-------------------|-------|
+| **M7** | BP Variability Engine | `flink.bp-variability-metrics` | Event-time |
+| **M8** | Comorbidity Interaction | `alerts.comorbidity-interactions` | Event-time |
+| **M9** | Engagement Monitor | `flink.engagement-signals` | Daily 23:59 UTC |
+| **M10** | Meal Response Correlator | `flink.meal-response` | Meal + 3h05m |
+| **M10b** | Meal Pattern Aggregator | `flink.meal-patterns` | Weekly Monday |
+| **M11** | Activity Response | `flink.activity-response` | Activity + 2h05m |
+| **M11b** | Fitness Pattern Aggregator | `flink.fitness-patterns` | Weekly Monday |
+| **M12** | Intervention Window Monitor | `clinical.intervention-window-signals` | Processing-time |
+| **M12b** | Intervention Delta Computer | `flink.intervention-deltas` | On WINDOW_CLOSED |
+| **M13** | Clinical State Synchroniser | `clinical.state-change-events` | 7-day rotation |
 
-## Core Responsibilities
+## Quick Start
 
-### 1. Clinical Pattern Detection
-- **Pattern 1**: Clinical Pathway Adherence (Protocol deviation detection)
-- **Pattern 2**: Aggregate Lab Trend Analysis (Population health insights)
-- **Pattern 3**: Real-time Drug Interaction Monitoring
-- **Pattern 4**: Sepsis Early Warning System
+### Prerequisites
 
-### 2. Event Enrichment Pipeline
-- Patient context assembly from multiple services
-- Semantic mesh integration (KB-3/4/5/6/7 knowledge)
-- Real-time enrichment with clinical intelligence
+- Docker + Docker Compose
+- Maven 3.9+ / Java 17+
+- Kafka running on `cardiofit-lite` network:
+  ```bash
+  cd ../kafka && docker compose -f docker-compose.hpi-lite.yml up -d
+  ```
 
-### 3. CDC Stream Processing
-- Knowledge base change propagation
-- Semantic mesh updates
-- Protocol synchronization
+### One-Command Deploy
 
-### 4. Multi-Sink Distribution
-- Critical alerts → Notification services
-- Enriched events → FHIR Store
-- Analytics data → ClickHouse
-- Audit trails → Evidence Envelope service
-
-## Directory Structure
-
-```
-flink-processing/
-├── clinical-patterns/       # Clinical intelligence patterns
-│   ├── pathway-adherence/   # Pattern 1: Protocol compliance
-│   ├── lab-trends/          # Pattern 2: Trend analysis
-│   ├── drug-interactions/   # Pattern 3: DDI monitoring
-│   └── early-warning/       # Pattern 4: Sepsis detection
-├── cdc-pipeline/           # Change Data Capture processing
-│   ├── debezium-consumer/   # Consumes DB changes
-│   ├── knowledge-sync/      # Syncs to semantic mesh
-│   └── version-manager/     # Manages knowledge versions
-├── stream-enrichment/      # Event enrichment pipeline
-│   ├── context-assembly/    # Patient context builder
-│   ├── semantic-broadcast/  # Knowledge distribution
-│   └── multi-sink-router/   # Output routing
-├── deployment/             # Deployment configurations
-│   ├── docker/              # Docker images
-│   ├── kubernetes/          # K8s manifests
-│   └── flink-conf/          # Flink configurations
-├── docs/                   # Documentation
-│   ├── patterns/            # Pattern specifications
-│   ├── api/                 # Stream APIs
-│   └── operations/          # Operational guides
-├── src/                    # Source code (Java/Scala)
-│   └── main/
-│       └── java/
-│           └── com/
-│               └── cardiofit/
-│                   └── flink/
-└── pom.xml                 # Maven configuration
-```
-
-## Integration Points
-
-### Input Sources (Kafka Topics)
-
-```yaml
-# From ALL microservices
-patient.events.all:
-  - patient-service
-  - medication-service
-  - observation-service
-  - encounter-service
-
-# From knowledge bases (via CDC)
-kb.changes.all:
-  - kb-3-protocols
-  - kb-4-safety
-  - kb-5-interactions
-  - kb-6-evidence
-  - kb-7-terminology
-```
-
-### Output Destinations
-
-```yaml
-# To Runtime Layer components
-- Neo4j (patient_data stream)
-- ClickHouse (analytics)
-- Redis (cache warming)
-
-# Direct to services
-- Notification service (alerts)
-- FHIR Store (clinical records)
-- Evidence Envelope (audit)
-
-# To dashboards
-- Grafana (metrics)
-- Clinical dashboard (insights)
-```
-
-## Deployment
-
-### Standalone Deployment
 ```bash
-cd backend/shared-infrastructure/flink-processing
-docker-compose -f deployment/docker/docker-compose.yml up -d
+make deploy
 ```
 
-### Integration with Platform
+This runs: `build JAR` -> `start Flink` -> `create Kafka topics` -> `submit 10 jobs` -> `verify`
+
+### Step-by-Step (if you prefer manual)
+
 ```bash
-# Start Flink alongside runtime-layer
-cd backend/shared-infrastructure
-./start-shared-infrastructure.sh
+# 1. Build
+make build-quick
+
+# 2. Start Flink (JobManager + TaskManager + auto-submitter)
+make start-e2e
+
+# 3. Wait for Flink to be ready
+make wait-flink
+
+# 4. Create all Kafka topics
+make create-topics
+
+# 5. Submit all 10 module jobs
+make submit-all
+
+# 6. Verify
+make verify
 ```
 
-## Key Differentiators from Runtime Layer
+## Makefile Reference
 
-| Aspect | Flink Processing | Runtime Layer |
-|--------|-----------------|---------------|
-| **Purpose** | Stream processing & pattern detection | Query routing & data storage |
-| **Timing** | Real-time event processing | Request/response queries |
-| **State** | Distributed patient context | Graph & analytical databases |
-| **Input** | Event streams from Kafka | API calls from services |
-| **Output** | Alerts, enriched events | Query results, cached data |
-| **Scaling** | Horizontal (TaskManagers) | Service-specific scaling |
+### Deployment
 
-## Clinical Patterns Implementation
+| Command | Description |
+|---------|-------------|
+| `make deploy` | Full deploy: build + start + topics + submit + verify |
+| `make deploy-prod` | Production deploy (2 TaskManagers, 3x replication) |
+| `make redeploy` | Rebuild JAR + restart jobs (keeps Flink running) |
+| `make stop` | Stop all Flink containers |
+| `make clean` | Stop + remove build artifacts |
 
-### Pattern 1: Clinical Pathway Adherence
-- **Location**: `clinical-patterns/pathway-adherence/`
-- **Function**: Detects deviations from KB-3 protocols
-- **Input**: Medication, diagnosis, and procedure events
-- **Output**: Pathway deviation alerts with recommendations
+### Monitoring
 
-### Pattern 2: Aggregate Lab Trend Analysis
-- **Location**: `clinical-patterns/lab-trends/`
-- **Function**: Identifies population health trends
-- **Input**: Lab results over sliding windows
-- **Output**: Cohort insights and risk predictions
+| Command | Description |
+|---------|-------------|
+| `make status` | Job status + container health |
+| `make health` | Flink slot availability + job counts |
+| `make jobs` | List running jobs (compact) |
+| `make topic-counts` | Message counts per M7-M13 output topic |
+| `make logs` | Tail TaskManager logs |
 
-## Performance Requirements
+### Operations
 
-- **Event Processing Latency**: < 500ms end-to-end
-- **Throughput**: 100,000 events/second
-- **State Size**: Up to 10GB per TaskManager
-- **Checkpoint Interval**: 30 seconds
-- **Exactly-Once Semantics**: Enabled for critical paths
+| Command | Description |
+|---------|-------------|
+| `make submit-all` | Submit all 10 module jobs |
+| `make cancel-all` | Cancel all running jobs |
+| `make create-topics` | Create all M7-M13 Kafka topics |
+| `make reset-topics` | Delete + recreate output topics (with confirmation) |
+| `make list-topics` | List relevant Kafka topics |
 
-## Monitoring
+### Testing
 
-### Metrics Exposed
-- `flink_event_processing_latency`
-- `flink_pattern_detection_rate`
-- `flink_state_size_bytes`
-- `flink_checkpoint_duration`
-- `flink_kafka_lag`
+| Command | Description |
+|---------|-------------|
+| `make test` | Run all unit tests |
+| `make test-m13` | Run Module 13 tests only |
+| `make e2e` | Generate dataset + run 3-patient 14-day E2E test |
 
-### Dashboards
+## Docker Compose Files
+
+| File | Use Case | Services |
+|------|----------|----------|
+| `docker-compose.e2e-flink.yml` | Development / E2E testing | 1 JobManager, 1 TaskManager, auto-submitter, Kafka UI |
+| `docker-compose.yml` | Production | 1 JobManager, 2 TaskManagers, Prometheus, Grafana |
+
+### E2E Stack (Development)
+
+```bash
+docker compose -f docker-compose.e2e-flink.yml up -d
+```
+
+- Flink Web UI: http://localhost:8181
+- Kafka UI: http://localhost:9080
+- Memory: ~2.5 GB (768 MB JobManager + 2 GB TaskManager)
+- Auto-submits all 10 M7-M13 jobs on startup
+- Connects to external Kafka on `cardiofit-lite` network
+
+### Production Stack
+
+```bash
+docker compose up -d
+```
+
 - Flink Web UI: http://localhost:8081
-- Prometheus metrics: http://localhost:9249/metrics
-- Grafana dashboards: http://localhost:3000
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000
+- Memory: ~14 GB (2 GB JobManager + 6 GB per TaskManager x 2)
+- RocksDB state backend with exactly-once checkpointing (30s)
+- Requires manual job submission: `make submit-all-prod`
 
-## Team Ownership
+## Kafka Topics
 
-- **Stream Processing Team**: Owns Flink infrastructure
-- **Clinical Intelligence Team**: Owns pattern implementations
-- **Platform Team**: Owns integration with runtime-layer
+### Input Topics (consumed by M7-M13)
 
-## Related Components
+| Topic | Producer | Consumers |
+|-------|----------|-----------|
+| `ingestion.vitals` | Ingestion Service | M7 |
+| `enriched-patient-events-v1` | Module 1b | M7, M8, M9, M10, M11, M12, M13 |
+| `clinical.intervention-events` | Clinical Service | M12, M12b |
 
-- **Runtime Layer**: Peer infrastructure component for storage/query
-- **Kafka**: Event streaming backbone
-- **Knowledge Bases**: Source of clinical intelligence
-- **Microservices**: Event producers
+### Output Topics (produced by M7-M13)
 
----
-*This component represents the real-time intelligence layer of CardioFit, processing millions of clinical events to detect patterns, ensure safety, and improve patient outcomes.*
+| Topic | Module | Partitions | Retention |
+|-------|--------|------------|-----------|
+| `flink.bp-variability-metrics` | M7 | 8 | 30d |
+| `alerts.comorbidity-interactions` | M8 | 4 | 90d |
+| `flink.engagement-signals` | M9 | 4 | 30d |
+| `flink.meal-response` | M10 | 8 | 30d |
+| `flink.meal-patterns` | M10b | 4 | 90d |
+| `flink.activity-response` | M11 | 8 | 30d |
+| `flink.fitness-patterns` | M11b | 4 | 90d |
+| `clinical.intervention-window-signals` | M12 | 4 | 90d |
+| `flink.intervention-deltas` | M12b | 4 | 90d |
+| `clinical.state-change-events` | M13 | 4 | 90d |
+
+## E2E Testing
+
+The 3-patient 14-day E2E test validates all modules with clinically realistic data:
+
+| Patient | Role | Key Features Tested |
+|---------|------|-------------------|
+| **Rajesh Kumar** | Deteriorator | HTN escalation, triple-whammy AKI, DKA risk, engagement collapse, CKM amplification |
+| **Priya Sharma** | Improver | BP control improving, positive reinforcement, ARB initiation tracking |
+| **Amit Patel** | Edge Case | Masked HTN, non-dipper, acute surge, no false CID-02 |
+
+```bash
+# Run full E2E
+make e2e
+
+# Or step by step
+python3 e2e_14day_generator.py --start-date 2026-04-09
+python3 scripts/flink_e2e_3patient_14day.py --process-wait 50 --consume-timeout 20
+```
+
+**Expected results:** 11/11 hard PASS, 18/25 total (7 soft failures are timer-dependent modules that need wall-clock time).
+
+## Service Ports
+
+| Service | Port | URL |
+|---------|------|-----|
+| Flink Web UI (E2E) | 8181 | http://localhost:8181 |
+| Flink Web UI (Prod) | 8081 | http://localhost:8081 |
+| Flink RPC | 6123 | - |
+| Kafka UI | 9080 | http://localhost:9080 |
+| Prometheus | 9090 | http://localhost:9090 |
+| Grafana | 3000 | http://localhost:3000 |
+| Flink Metrics (Prometheus) | 9249 | http://localhost:9249/metrics |
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFKA_BOOTSTRAP_SERVERS` | `kafka-lite:29092` | Kafka broker addresses |
+| `MODULE13_ENABLED` | `true` | Master kill-switch for M13 |
+| `MODULE13_DRY_RUN` | `false` | Log state changes without emitting |
+| `MODULE13_KB20_WRITEBACK_ENABLED` | `false` | Write M13 state back to KB-20 |
+| `MODULE13_PERSONALIZED_TARGETS_ENABLED` | `false` | Use KB-20 personalised thresholds |
+| `USE_GOOGLE_HEALTHCARE_API` | `false` | FHIR store integration |
+
+### Flink Configuration
+
+Production defaults in `config/flink-conf.yaml`:
+- State backend: RocksDB
+- Checkpointing: 60s, exactly-once
+- Parallelism: 8
+- TaskManager memory: 6 GB
+- TaskManager slots: 4
+
+## Performance
+
+- Event processing latency: < 500ms end-to-end
+- Throughput: 100,000 events/second
+- State size: up to 10 GB per TaskManager
+- Checkpoint interval: 30-60 seconds
+- M7 output: 1:1 with BP input (one metric per reading)
+- M8 suppression: 4h HALT window, 72h PAUSE/SOFT_FLAG window
+- M13 snapshot rotation: 7-day event-time intervals
