@@ -208,9 +208,16 @@ public final class Module13StateChangeDetector {
             return;
         }
 
+        // Minimum completeness gate: suppress ALL events when no upstream modules
+        // have reported (data_completeness == 0). Zero completeness means the
+        // snapshot is empty — any "state change" is noise, not signal.
+        double confidence = state.getDataCompletenessScore();
+        if (confidence <= 0.0) {
+            return;
+        }
+
         // Confidence gating: HIGH-priority events require minimum data completeness.
         // CRITICAL events bypass (patient safety). INFO/LOW/MEDIUM pass through.
-        double confidence = state.getDataCompletenessScore();
         if (type.isHighOrAbove() && !type.isCritical()
                 && confidence < HIGH_PRIORITY_CONFIDENCE_THRESHOLD) {
             return;
