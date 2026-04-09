@@ -70,7 +70,7 @@ func TestFourPillar_RenalContraindication_OverridesDualDomain(t *testing.T) {
 	}
 
 	// Urgency must be IMMEDIATE despite "GC-HC" dual-domain
-	urgency := CalculateDualDomainUrgency("GC-HC", pillarResult, &gatingReport)
+	urgency := CalculateDualDomainUrgency("GC-HC", pillarResult, &gatingReport, nil)
 	if urgency != UrgencyImmediate {
 		t.Errorf("urgency: want IMMEDIATE, got %s", urgency)
 	}

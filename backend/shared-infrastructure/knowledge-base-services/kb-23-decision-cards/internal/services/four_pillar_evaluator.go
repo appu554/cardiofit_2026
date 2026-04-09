@@ -42,13 +42,14 @@ type EducationPillarInput struct {
 
 // FourPillarInput is the combined input for four-pillar evaluation.
 type FourPillarInput struct {
-	PatientID       string                       `json:"patient_id"`
-	DualDomainState string                       `json:"dual_domain_state"`
-	Medication      MedicationPillarInput        `json:"medication"`
-	Monitoring      MonitoringPillarInput        `json:"monitoring"`
-	Lifestyle       LifestylePillarInput         `json:"lifestyle"`
-	Education       EducationPillarInput         `json:"education"`
-	RenalGating     *models.PatientGatingReport  `json:"renal_gating,omitempty"`
+	PatientID       string                         `json:"patient_id"`
+	DualDomainState string                         `json:"dual_domain_state"`
+	Medication      MedicationPillarInput          `json:"medication"`
+	Monitoring      MonitoringPillarInput          `json:"monitoring"`
+	Lifestyle       LifestylePillarInput           `json:"lifestyle"`
+	Education       EducationPillarInput           `json:"education"`
+	RenalGating     *models.PatientGatingReport    `json:"renal_gating,omitempty"`
+	InertiaReport   *models.PatientInertiaReport   `json:"inertia_report,omitempty"`
 }
 
 // PillarResult is the evaluation output for a single pillar.
@@ -128,6 +129,33 @@ func evaluateMedicationPillar(input FourPillarInput) PillarResult {
 		return p
 	}
 
+	// Therapeutic inertia escalation
+	if input.InertiaReport != nil {
+		if input.InertiaReport.HasDualDomainInertia {
+			p.Status = PillarUrgentGap
+			p.Reason = "dual-domain therapeutic inertia — concordant uncontrolled status"
+			p.Actions = []string{
+				"escalate medication review for both glycaemic and hemodynamic domains",
+				"consider combination intensification strategy",
+			}
+			return p
+		}
+		if input.InertiaReport.MostSevere != nil {
+			sev := input.InertiaReport.MostSevere.Severity
+			if sev == models.SeveritySevere || sev == models.SeverityCritical {
+				p.Status = PillarUrgentGap
+				p.Reason = "severe/critical therapeutic inertia in " + string(input.InertiaReport.MostSevere.Domain)
+				p.Actions = []string{
+					"urgent medication intensification required",
+					"review barriers to treatment escalation",
+				}
+				return p
+			}
+		}
+		// Mild/moderate inertia downgrades ON_TRACK to GAP (checked after
+		// guideline and adherence evaluation below to avoid masking those).
+	}
+
 	// Guideline adherence check
 	if !input.Medication.OnGuidelineMeds {
 		p.Status = PillarGap
@@ -141,6 +169,14 @@ func evaluateMedicationPillar(input FourPillarInput) PillarResult {
 		p.Status = PillarGap
 		p.Reason = "medication adherence below 80%"
 		p.Actions = []string{"assess barriers to adherence", "consider simplifying regimen"}
+		return p
+	}
+
+	// Mild/moderate inertia downgrades ON_TRACK to GAP
+	if input.InertiaReport != nil && input.InertiaReport.HasAnyInertia {
+		p.Status = PillarGap
+		p.Reason = "therapeutic inertia detected despite adequate adherence"
+		p.Actions = []string{"review treatment targets and consider intensification"}
 		return p
 	}
 
