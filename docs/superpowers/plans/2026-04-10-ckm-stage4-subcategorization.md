@@ -59,7 +59,7 @@ All KB service paths are relative to `backend/shared-infrastructure/knowledge-ba
 
 ---
 
-- [ ] **Step 1: Create CKM Stage V2 model**
+- [x] **Step 1: Create CKM Stage V2 model**
 
 Create `kb-20-patient-profile/internal/models/ckm_stage_v2.go`:
 
@@ -210,7 +210,7 @@ type CKMStageResult struct {
 
 ---
 
-- [ ] **Step 2: Create migration SQL**
+- [x] **Step 2: Create migration SQL**
 
 Create `kb-20-patient-profile/migrations/005_ckm_substage.sql`:
 
@@ -259,7 +259,7 @@ ALTER TABLE patient_profiles
 
 ---
 
-- [ ] **Step 3: Add V2 fields to PatientProfile model**
+- [x] **Step 3: Add V2 fields to PatientProfile model**
 
 Modify `kb-20-patient-profile/internal/models/patient_profile.go` — add after the existing `CKMStage int` field (line 71):
 
@@ -286,7 +286,7 @@ And modify `kb-20-patient-profile/internal/models/ckm_stage.go` — add at top a
 
 ---
 
-- [ ] **Step 4: Write CKM classifier tests**
+- [x] **Step 4: Write CKM classifier tests**
 
 Create `kb-20-patient-profile/internal/services/ckm_classifier_test.go`:
 
@@ -443,7 +443,7 @@ func TestClassifyCKM_Hierarchy_4c_Trumps_4b(t *testing.T) {
 
 ---
 
-- [ ] **Step 5: Implement CKM classifier**
+- [x] **Step 5: Implement CKM classifier**
 
 Create `kb-20-patient-profile/internal/services/ckm_classifier.go`:
 
@@ -626,7 +626,7 @@ func ClassifyCKMStage(input CKMClassifierInput) models.CKMStageResult {
 
 ---
 
-- [ ] **Step 6: Run classifier tests**
+- [x] **Step 6: Run classifier tests**
 
 ```bash
 cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
@@ -637,7 +637,7 @@ Expected: All 12 tests PASS.
 
 ---
 
-- [ ] **Step 7: Commit Phase K1**
+- [x] **Step 7: Commit Phase K1**
 
 ```bash
 cd /Volumes/Vaidshala/cardiofit
@@ -661,7 +661,7 @@ etiology flag. Migration: existing Stage 4 -> 4a with review_needed."
 
 ---
 
-- [ ] **Step 8: Create Stage 4 pathway definitions YAML**
+- [x] **Step 8: Create Stage 4 pathway definitions YAML**
 
 Create `backend/shared-infrastructure/market-configs/shared/ckm_stage4_pathways.yaml`:
 
@@ -777,7 +777,7 @@ stage_4c:
 
 ---
 
-- [ ] **Step 9: Create India and Australia Stage 4 overrides**
+- [x] **Step 9: Create India and Australia Stage 4 overrides**
 
 Create `backend/shared-infrastructure/market-configs/india/ckm_stage4_overrides.yaml`:
 
@@ -847,7 +847,7 @@ nvdpa_integration:
 
 ---
 
-- [ ] **Step 10: Write failing test for HF medication gate**
+- [x] **Step 10: Write failing test for HF medication gate**
 
 Create `kb-23-decision-cards/internal/services/hf_medication_gate_test.go`:
 
@@ -919,7 +919,7 @@ func TestHFGate_Pioglitazone_Blocked_4c_HFpEF(t *testing.T) {
 
 ---
 
-- [ ] **Step 11: Implement HF medication gate**
+- [x] **Step 11: Implement HF medication gate**
 
 Create `kb-23-decision-cards/internal/services/hf_medication_gate.go`:
 
@@ -1003,7 +1003,7 @@ func (g *HFMedicationGate) CheckContraindication(drugClass, ckmStage, hfType str
 
 ---
 
-- [ ] **Step 12: Write failing test for mandatory medication checker**
+- [x] **Step 12: Write failing test for mandatory medication checker**
 
 Create `kb-23-decision-cards/internal/services/mandatory_med_checker_test.go`:
 
@@ -1088,7 +1088,7 @@ func TestMandatoryMeds_4c_HFpEF_OnlySGLT2i(t *testing.T) {
 
 ---
 
-- [ ] **Step 13: Implement mandatory medication checker**
+- [x] **Step 13: Implement mandatory medication checker**
 
 Create `kb-23-decision-cards/internal/services/mandatory_med_checker.go`:
 
@@ -1262,7 +1262,7 @@ func (c *MandatoryMedChecker) checkHFMandatory(
 
 ---
 
-- [ ] **Step 14: Run Phase K2 tests**
+- [x] **Step 14: Run Phase K2 tests**
 
 ```bash
 cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
@@ -1273,7 +1273,7 @@ Expected: All 10 tests PASS (6 HF gate + 4 mandatory med).
 
 ---
 
-- [ ] **Step 15: Integrate HF gate into conflict detector**
+- [x] **Step 15: Integrate HF gate into conflict detector**
 
 Modify `kb-23-decision-cards/internal/services/conflict_detector.go` — add HF medication gating to `DetectAllConflicts`. Add after the stale eGFR check:
 
@@ -1309,7 +1309,7 @@ Note: `DetectAllConflicts` needs two new parameters: `ckmStage string` and `hfTy
 
 ---
 
-- [ ] **Step 16: Commit Phase K2**
+- [x] **Step 16: Commit Phase K2**
 
 ```bash
 cd /Volumes/Vaidshala/cardiofit
@@ -1337,7 +1337,7 @@ indigenous rheumatic screening)."
 
 ---
 
-- [ ] **Step 17: Write failing test for MHRI substage adjustment**
+- [x] **Step 17: Write failing test for MHRI substage adjustment**
 
 Create `kb-26-metabolic-digital-twin/internal/services/ckm_mhri_adjustment_test.go`:
 
@@ -1393,7 +1393,7 @@ func TestMHRI_Stage2_NoAdjustment(t *testing.T) {
 
 ---
 
-- [ ] **Step 18: Implement MHRI substage adjustment**
+- [x] **Step 18: Implement MHRI substage adjustment**
 
 Create `kb-26-metabolic-digital-twin/internal/services/ckm_mhri_adjustment.go`:
 
@@ -1483,7 +1483,7 @@ func ComputeCKMSubstageAdjustment(ckmStage, hfType, nyhaClass string) MHRISubsta
 
 ---
 
-- [ ] **Step 19: Run Phase K3 tests**
+- [x] **Step 19: Run Phase K3 tests**
 
 ```bash
 cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
@@ -1494,7 +1494,7 @@ Expected: All 4 tests PASS.
 
 ---
 
-- [ ] **Step 20: Full regression across all 3 services**
+- [x] **Step 20: Full regression across all 3 services**
 
 ```bash
 cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
@@ -1511,7 +1511,7 @@ Expected: All tests PASS, zero regressions.
 
 ---
 
-- [ ] **Step 21: Final commit**
+- [x] **Step 21: Final commit**
 
 ```bash
 cd /Volumes/Vaidshala/cardiofit
