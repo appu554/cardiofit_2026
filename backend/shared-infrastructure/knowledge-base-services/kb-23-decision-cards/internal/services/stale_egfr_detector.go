@@ -84,3 +84,81 @@ func DetectStaleEGFR(renal models.RenalStatus, cfg StaleEGFRConfig, onRenalSensi
 
 	return result
 }
+
+// ---------------------------------------------------------------------------
+// StalePotassiumResult — output of the stale-potassium detection
+// ---------------------------------------------------------------------------
+
+// StalePotassiumResult describes whether a patient's potassium measurement
+// is overdue given their K+-affecting medication profile.
+type StalePotassiumResult struct {
+	IsStale        bool   `json:"is_stale"`
+	DaysSince      int    `json:"days_since"`
+	ExpectedMaxDays int   `json:"expected_max_days"`
+	Severity       string `json:"severity"` // OK | WARNING | CRITICAL
+	Action         string `json:"action"`
+}
+
+// DetectStalePotassium evaluates potassium measurement freshness for patients
+// on K+-affecting medications. Per KDIGO 2024:
+//   - ACEi/ARB + MRA combination → monthly (30 days)
+//   - Any single K+-affecting drug at eGFR <45 → monthly (30 days)
+//   - Any single K+-affecting drug at eGFR ≥45 → quarterly (90 days)
+//   - No K+-affecting drugs → no potassium monitoring required
+//
+// Returns a zero-value result (IsStale=false, Severity="") if potassium
+// monitoring is not clinically indicated.
+func DetectStalePotassium(
+	renal models.RenalStatus,
+	onKAffectingDrug bool,
+	onMultipleKAffectingDrugs bool,
+) StalePotassiumResult {
+	// If not on K+-affecting drugs, potassium monitoring not required
+	if !onKAffectingDrug {
+		return StalePotassiumResult{Severity: "OK"}
+	}
+
+	// If potassium was never measured, flag immediately
+	if renal.PotassiumMeasuredAt == nil {
+		return StalePotassiumResult{
+			IsStale:  true,
+			Severity: "CRITICAL",
+			Action:   "Potassium never measured — check urgently given K+-affecting medication",
+		}
+	}
+
+	now := time.Now()
+	daysSince := int(math.Round(now.Sub(*renal.PotassiumMeasuredAt).Hours() / 24))
+
+	// Determine expected interval
+	expectedMax := 90 // quarterly default for single K+-drug at eGFR ≥45
+
+	if onMultipleKAffectingDrugs {
+		expectedMax = 30 // monthly for combination (ACEi/ARB + MRA/FINERENONE)
+	} else if renal.EGFR < 45 {
+		expectedMax = 30 // monthly when eGFR <45 on any K+-drug
+	}
+
+	result := StalePotassiumResult{
+		DaysSince:       daysSince,
+		ExpectedMaxDays: expectedMax,
+	}
+
+	if daysSince <= expectedMax {
+		result.Severity = "OK"
+		return result
+	}
+
+	result.IsStale = true
+	if daysSince > expectedMax*2 {
+		result.Severity = "CRITICAL"
+		result.Action = fmt.Sprintf("Potassium is %d days old on K+-affecting medication (expected every %d days); check urgently before continuing",
+			daysSince, expectedMax)
+	} else {
+		result.Severity = "WARNING"
+		result.Action = fmt.Sprintf("Potassium is %d days old (expected every %d days per KDIGO); schedule serum potassium",
+			daysSince, expectedMax)
+	}
+
+	return result
+}

@@ -52,3 +52,49 @@ func TestGMIDiscrepancy_Flagged(t *testing.T) {
 		t.Errorf("expected delta 0.8, got %.2f", result.Delta)
 	}
 }
+
+func TestComputeGlucoseDomainScoreWithConfidence_CGM_NoDiscrepancy(t *testing.T) {
+	a1c := 7.0
+	result := ComputeGlucoseDomainScoreWithConfidence(CGMGlucoseInput{
+		HasCGM: true, SufficientData: true,
+		TIRPct: 75, CVPct: 30, GRI: 12, TBRL2Pct: 0,
+		GMI: 6.9, HbA1c: &a1c, // delta 0.1 < 0.5 → no discrepancy
+	})
+	if result.Confidence != "HIGH" {
+		t.Errorf("expected HIGH confidence when GMI-HbA1c aligned, got %s", result.Confidence)
+	}
+	if result.GMIDiscrepancyDetected {
+		t.Error("should not flag discrepancy when delta < 0.5")
+	}
+	if result.DataSource != "CGM" {
+		t.Errorf("expected CGM data source, got %s", result.DataSource)
+	}
+}
+
+func TestComputeGlucoseDomainScoreWithConfidence_CGM_WithDiscrepancy(t *testing.T) {
+	a1c := 9.0
+	result := ComputeGlucoseDomainScoreWithConfidence(CGMGlucoseInput{
+		HasCGM: true, SufficientData: true,
+		TIRPct: 75, CVPct: 28, GRI: 10, TBRL2Pct: 0,
+		GMI: 7.1, HbA1c: &a1c, // delta 1.9 > 0.5 → discrepancy!
+	})
+	if result.Confidence != "MODERATE" {
+		t.Errorf("expected MODERATE confidence when GMI-HbA1c diverge, got %s", result.Confidence)
+	}
+	if !result.GMIDiscrepancyDetected {
+		t.Error("should flag discrepancy when delta > 0.5")
+	}
+}
+
+func TestComputeGlucoseDomainScoreWithConfidence_Snapshot(t *testing.T) {
+	a1c := 7.5
+	result := ComputeGlucoseDomainScoreWithConfidence(CGMGlucoseInput{
+		HasCGM: false, HbA1c: &a1c,
+	})
+	if result.Confidence != "MODERATE" {
+		t.Errorf("expected MODERATE for snapshot, got %s", result.Confidence)
+	}
+	if result.DataSource != "SNAPSHOT" {
+		t.Errorf("expected SNAPSHOT data source, got %s", result.DataSource)
+	}
+}

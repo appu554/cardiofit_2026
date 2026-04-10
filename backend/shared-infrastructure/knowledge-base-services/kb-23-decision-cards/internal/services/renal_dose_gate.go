@@ -127,15 +127,33 @@ func (g *RenalDoseGate) Evaluate(med ActiveMedication, rs models.RenalStatus) mo
 
 	// ------- 5. Dose reduction -------
 	if rule.DoseReduceBelow > 0 && rs.EGFR < rule.DoseReduceBelow {
+		if rule.MaxDoseReducedMg > 0 {
+			// If patient is already at or below the reduced max dose,
+			// they're compliant — escalate monitoring instead of flagging dose reduce.
+			// Example: Rajesh on Metformin 1000mg BD at eGFR 42 — already at max
+			// safe dose of 1000mg, so verdict is MONITOR_ESCALATE not DOSE_REDUCE.
+			if med.CurrentDoseMg > 0 && med.CurrentDoseMg <= rule.MaxDoseReducedMg {
+				base.Verdict = models.VerdictMonitorEscalate
+				base.Reason = fmt.Sprintf("eGFR %.1f below dose-reduce threshold %.1f for %s, but current dose %.0f mg is within safe limit %.0f mg",
+					rs.EGFR, rule.DoseReduceBelow, med.DrugClass, med.CurrentDoseMg, rule.MaxDoseReducedMg)
+				base.ClinicalAction = fmt.Sprintf("dose is appropriate (%.0f mg ≤ %.0f mg max); continue with increased monitoring",
+					med.CurrentDoseMg, rule.MaxDoseReducedMg)
+				base.MonitoringRequired = buildMonitoringList(rule)
+				base.MonitoringFrequency = "monthly"
+				return base
+			}
+			base.Verdict = models.VerdictDoseReduce
+			base.Reason = fmt.Sprintf("eGFR %.1f below dose-reduce threshold %.1f for %s",
+				rs.EGFR, rule.DoseReduceBelow, med.DrugClass)
+			base.MaxSafeDoseMg = &rule.MaxDoseReducedMg
+			base.ClinicalAction = fmt.Sprintf("reduce dose to max %.0f mg", rule.MaxDoseReducedMg)
+			base.MonitoringFrequency = "monthly"
+			return base
+		}
 		base.Verdict = models.VerdictDoseReduce
 		base.Reason = fmt.Sprintf("eGFR %.1f below dose-reduce threshold %.1f for %s",
 			rs.EGFR, rule.DoseReduceBelow, med.DrugClass)
-		if rule.MaxDoseReducedMg > 0 {
-			base.MaxSafeDoseMg = &rule.MaxDoseReducedMg
-			base.ClinicalAction = fmt.Sprintf("reduce dose to max %.0f mg", rule.MaxDoseReducedMg)
-		} else {
-			base.ClinicalAction = "reduce dose per specialist guidance"
-		}
+		base.ClinicalAction = "reduce dose per specialist guidance"
 		base.MonitoringFrequency = "monthly"
 		return base
 	}

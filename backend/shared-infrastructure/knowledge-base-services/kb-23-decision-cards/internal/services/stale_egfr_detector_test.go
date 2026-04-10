@@ -100,3 +100,65 @@ func TestStaleEGFR_RenalSensitiveMedTightensMonitoring(t *testing.T) {
 		t.Errorf("expected WARNING severity, got %s", result.Severity)
 	}
 }
+
+// ===========================================================================
+// Stale Potassium Tests
+// ===========================================================================
+
+func TestStalePotassium_NotOnKDrug_NoMonitoringNeeded(t *testing.T) {
+	rs := models.RenalStatus{EGFR: 50}
+	result := DetectStalePotassium(rs, false, false)
+	if result.IsStale {
+		t.Error("should not flag stale K+ when not on K+-affecting drug")
+	}
+}
+
+func TestStalePotassium_NeverMeasured_Critical(t *testing.T) {
+	rs := models.RenalStatus{EGFR: 40, PotassiumMeasuredAt: nil}
+	result := DetectStalePotassium(rs, true, false)
+	if !result.IsStale {
+		t.Error("expected stale when K+ never measured on K+-affecting drug")
+	}
+	if result.Severity != "CRITICAL" {
+		t.Errorf("expected CRITICAL, got %s", result.Severity)
+	}
+}
+
+func TestStalePotassium_CombinationTherapy_Monthly(t *testing.T) {
+	// ACEi + MRA combo: 45 days since K+ → stale (30-day max for combo)
+	kDate := time.Now().AddDate(0, 0, -45)
+	k := 4.5
+	rs := models.RenalStatus{EGFR: 50, Potassium: &k, PotassiumMeasuredAt: &kDate}
+	result := DetectStalePotassium(rs, true, true)
+	if !result.IsStale {
+		t.Error("expected stale: 45 days on combo therapy (30-day max)")
+	}
+	if result.ExpectedMaxDays != 30 {
+		t.Errorf("expected 30-day max for combination, got %d", result.ExpectedMaxDays)
+	}
+}
+
+func TestStalePotassium_SingleDrug_LowEGFR_Monthly(t *testing.T) {
+	// Single ACEi at eGFR 38: 35 days → stale (30-day max when eGFR <45)
+	kDate := time.Now().AddDate(0, 0, -35)
+	k := 4.8
+	rs := models.RenalStatus{EGFR: 38, Potassium: &k, PotassiumMeasuredAt: &kDate}
+	result := DetectStalePotassium(rs, true, false)
+	if !result.IsStale {
+		t.Error("expected stale: 35 days on single K+-drug at eGFR <45")
+	}
+	if result.ExpectedMaxDays != 30 {
+		t.Errorf("expected 30-day max at eGFR <45, got %d", result.ExpectedMaxDays)
+	}
+}
+
+func TestStalePotassium_SingleDrug_NormalEGFR_Quarterly(t *testing.T) {
+	// Single ACEi at eGFR 65: 60 days → not stale (90-day max)
+	kDate := time.Now().AddDate(0, 0, -60)
+	k := 4.2
+	rs := models.RenalStatus{EGFR: 65, Potassium: &k, PotassiumMeasuredAt: &kDate}
+	result := DetectStalePotassium(rs, true, false)
+	if result.IsStale {
+		t.Error("should not flag stale: 60 days at eGFR 65 (90-day max)")
+	}
+}

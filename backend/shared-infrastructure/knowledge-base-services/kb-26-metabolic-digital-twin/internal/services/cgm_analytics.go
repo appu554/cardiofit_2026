@@ -5,6 +5,14 @@ import "math"
 // CGMGlucoseInput collects the signals needed for CGM-aware glucose domain scoring.
 // When HasCGM is true and SufficientData is true, the scorer uses TIR/CV/GRI/TBR.
 // Otherwise it falls back to snapshot scoring from FBG/HbA1c.
+// CGMGlucoseScoringResult is the output of ComputeGlucoseDomainScore.
+type CGMGlucoseScoringResult struct {
+	Score      float64 `json:"score"`
+	Confidence string  `json:"confidence"` // HIGH, MODERATE, LOW
+	DataSource string  `json:"data_source"` // CGM, SNAPSHOT
+	GMIDiscrepancyDetected bool `json:"gmi_discrepancy_detected,omitempty"`
+}
+
 type CGMGlucoseInput struct {
 	HasCGM         bool
 	SufficientData bool
@@ -12,9 +20,10 @@ type CGMGlucoseInput struct {
 	CVPct          float64
 	GRI            float64
 	TBRL2Pct       float64
+	GMI            float64  // CGM-derived GMI (only meaningful when HasCGM)
 	FBG            *float64
 	PPBG           *float64
-	HbA1c          *float64
+	HbA1c          *float64 // lab HbA1c — used for cross-check against GMI
 }
 
 // GMIDiscrepancyResult reports whether the CGM-derived GMI diverges
@@ -45,11 +54,48 @@ const (
 //   - TBR safety     (15%): 100 if TBRL2=0, hard penalty for severe hypo
 //
 // When no CGM: snapshot scoring from FBG and HbA1c.
+//
+// GMI-HbA1c cross-check: if CGM-based GMI and lab HbA1c diverge by >0.5%,
+// the confidence is downgraded to MODERATE (data integrity concern —
+// hemoglobin variant, anemia, or assay interference possible).
 func ComputeGlucoseDomainScore(input CGMGlucoseInput) float64 {
+	return ComputeGlucoseDomainScoreWithConfidence(input).Score
+}
+
+// ComputeGlucoseDomainScoreWithConfidence returns score + confidence + discrepancy flag.
+func ComputeGlucoseDomainScoreWithConfidence(input CGMGlucoseInput) CGMGlucoseScoringResult {
 	if input.HasCGM && input.SufficientData {
-		return computeCGMScore(input)
+		score := computeCGMScore(input)
+		confidence := "HIGH"
+		discrepancy := false
+
+		// Cross-check GMI against lab HbA1c when both available
+		if input.GMI > 0 && input.HbA1c != nil {
+			disc := DetectGMIDiscrepancy(input.GMI, *input.HbA1c)
+			if disc.Flagged {
+				confidence = "MODERATE"
+				discrepancy = true
+			}
+		}
+
+		return CGMGlucoseScoringResult{
+			Score:                  score,
+			Confidence:             confidence,
+			DataSource:             "CGM",
+			GMIDiscrepancyDetected: discrepancy,
+		}
 	}
-	return computeSnapshotScore(input)
+
+	score := computeSnapshotScore(input)
+	confidence := "MODERATE"
+	if input.FBG == nil && input.HbA1c == nil {
+		confidence = "LOW"
+	}
+	return CGMGlucoseScoringResult{
+		Score:      score,
+		Confidence: confidence,
+		DataSource: "SNAPSHOT",
+	}
 }
 
 func computeCGMScore(input CGMGlucoseInput) float64 {

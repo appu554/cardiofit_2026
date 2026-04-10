@@ -283,3 +283,40 @@ func TestEvaluatePatient_MultiMed(t *testing.T) {
 
 	_ = fmt.Sprintf("report: %+v", report) // ensure no unused import
 }
+
+// ---------------------------------------------------------------------------
+// Rajesh scenario: already at reduced dose → MONITOR_ESCALATE not DOSE_REDUCE
+// ---------------------------------------------------------------------------
+
+func TestGate_Metformin_AlreadyAtReducedDose_MonitorEscalate(t *testing.T) {
+	// Rajesh: eGFR 42, Metformin 1000mg BD → already at max safe dose (1000mg)
+	// Should be MONITOR_ESCALATE, not DOSE_REDUCE
+	gate := setupTestGate(t)
+	med := ActiveMedication{DrugClass: "METFORMIN", DrugName: "Metformin 500mg", CurrentDoseMg: 1000}
+	rs := renal(42.0, 7, nil) // eGFR 42 < 45 (dose-reduce threshold)
+
+	result := gate.Evaluate(med, rs)
+
+	if result.Verdict != models.VerdictMonitorEscalate {
+		t.Errorf("Rajesh scenario: eGFR 42 + Metformin 1000mg (= max safe dose) should be MONITOR_ESCALATE, got %s", result.Verdict)
+	}
+	if result.MonitoringFrequency != "monthly" {
+		t.Errorf("expected monthly monitoring, got %s", result.MonitoringFrequency)
+	}
+}
+
+func TestGate_Metformin_AboveReducedDose_DoseReduce(t *testing.T) {
+	// Same eGFR but patient on 2000mg → needs reduction to 1000mg
+	gate := setupTestGate(t)
+	med := ActiveMedication{DrugClass: "METFORMIN", DrugName: "Metformin 500mg", CurrentDoseMg: 2000}
+	rs := renal(42.0, 7, nil)
+
+	result := gate.Evaluate(med, rs)
+
+	if result.Verdict != models.VerdictDoseReduce {
+		t.Errorf("eGFR 42 + Metformin 2000mg should be DOSE_REDUCE, got %s", result.Verdict)
+	}
+	if result.MaxSafeDoseMg == nil || *result.MaxSafeDoseMg != 1000 {
+		t.Error("expected MaxSafeDoseMg = 1000")
+	}
+}
