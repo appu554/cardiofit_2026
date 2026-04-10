@@ -147,7 +147,7 @@ func TestEnrichedConflict_CombinesAllSafety(t *testing.T) {
 		{DrugClass: "ACEi", DrugName: "Ramipril 5mg", CurrentDoseMg: 5},
 	}
 
-	report := DetectAllConflicts(gate, formulary, "patient-renal-02", renal, meds, -20)
+	report := DetectAllConflicts(gate, formulary, "patient-renal-02", renal, meds, -20, "", "")
 
 	// HasSafetyBlock must be true (METFORMIN contraindicated at eGFR 28 < 30)
 	if !report.HasSafetyBlock {

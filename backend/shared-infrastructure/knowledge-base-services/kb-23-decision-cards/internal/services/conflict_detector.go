@@ -8,12 +8,19 @@ import "kb-23-decision-cards/internal/models"
 
 // EnrichedConflictReport aggregates renal gating, anticipatory alerts, and
 // stale-eGFR detection into a single safety report for the card builder.
+// HFBlockResult records an HF-contraindicated drug that was blocked.
+type HFBlockResult struct {
+	DrugClass string `json:"drug_class"`
+	Reason    string `json:"reason"`
+}
+
 type EnrichedConflictReport struct {
-	RenalGating        *models.PatientGatingReport `json:"renal_gating,omitempty"`
-	AnticipatoryAlerts []AnticipatoryAlert          `json:"anticipatory_alerts,omitempty"`
-	StaleEGFR          *StaleEGFRResult             `json:"stale_egfr,omitempty"`
-	HasSafetyBlock     bool                         `json:"has_safety_block"`
-	BlockedDrugClasses []string                     `json:"blocked_drug_classes,omitempty"`
+	RenalGating         *models.PatientGatingReport `json:"renal_gating,omitempty"`
+	AnticipatoryAlerts  []AnticipatoryAlert          `json:"anticipatory_alerts,omitempty"`
+	StaleEGFR           *StaleEGFRResult             `json:"stale_egfr,omitempty"`
+	HFContraindications []HFBlockResult              `json:"hf_contraindications,omitempty"`
+	HasSafetyBlock      bool                         `json:"has_safety_block"`
+	BlockedDrugClasses  []string                     `json:"blocked_drug_classes,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -34,6 +41,8 @@ func DetectAllConflicts(
 	renal models.RenalStatus,
 	meds []ActiveMedication,
 	egfrSlope float64,
+	ckmStage string,
+	hfType string,
 ) EnrichedConflictReport {
 	report := EnrichedConflictReport{}
 
@@ -60,6 +69,22 @@ func DetectAllConflicts(
 	// Critical stale eGFR also triggers safety block
 	if staleResult.Severity == "CRITICAL" {
 		report.HasSafetyBlock = true
+	}
+
+	// HF medication gating (Stage 4c)
+	if ckmStage == "4c" {
+		hfGate := NewHFMedicationGate()
+		for _, m := range meds {
+			blocked, reason := hfGate.CheckContraindication(m.DrugClass, ckmStage, hfType)
+			if blocked {
+				report.HasSafetyBlock = true
+				report.HFContraindications = append(report.HFContraindications, HFBlockResult{
+					DrugClass: m.DrugClass,
+					Reason:    reason,
+				})
+				report.BlockedDrugClasses = append(report.BlockedDrugClasses, m.DrugClass)
+			}
+		}
 	}
 
 	return report
