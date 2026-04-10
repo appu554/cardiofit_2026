@@ -68,7 +68,11 @@ type PatientProfile struct {
 	MHRIDataQuality string   `gorm:"size:10" json:"mhri_data_quality,omitempty"`
 
 	// ============= V4: CKM Stage (AHA Cardiovascular-Kidney-Metabolic) =============
-	CKMStage       int      `gorm:"default:0" json:"ckm_stage"`
+	// Deprecated: Use CKMStageV2 (string "0"-"4c") instead. Kept for backward compat.
+	CKMStage                int               `gorm:"default:0" json:"ckm_stage"`
+	CKMStageV2              string            `gorm:"column:ckm_stage_v2;type:varchar(5)" json:"ckm_stage_v2"`
+	CKMSubstageMetadata     *SubstageMetadata `gorm:"column:ckm_substage_metadata;type:jsonb" json:"ckm_substage_metadata,omitempty"`
+	CKMSubstageReviewNeeded bool              `gorm:"column:ckm_substage_review_needed;default:false" json:"ckm_substage_review_needed"`
 	HasClinicalCVD bool     `gorm:"default:false" json:"has_clinical_cvd"`
 	ASCVDRisk10y   *float64 `gorm:"type:decimal(5,2)" json:"ascvd_risk_10y,omitempty"`
 	DiabetesYears  *int     `json:"diabetes_years,omitempty"`

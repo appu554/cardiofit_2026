@@ -1,5 +1,9 @@
 package models
 
+// Deprecated: This file contains the legacy integer-based CKM staging.
+// New code should use CKMStageValue from ckm_stage_v2.go and
+// ClassifyCKMStage from services/ckm_classifier.go.
+
 const (
 	CKMStage0 = 0 // No CKM risk factors
 	CKMStage1 = 1 // Excess adiposity, dyslipidemia, or metabolic syndrome
