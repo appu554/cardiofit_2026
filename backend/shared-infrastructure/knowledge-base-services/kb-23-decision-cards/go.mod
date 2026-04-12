@@ -12,6 +12,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
+	kb-26-metabolic-digital-twin v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -51,7 +52,6 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
-	github.com/xdg-go/scram v1.2.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/arch v0.22.0 // indirect
@@ -63,7 +63,6 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
-	kb-26-metabolic-digital-twin v0.0.0-00010101000000-000000000000 // indirect
 )
 
 replace kb-26-metabolic-digital-twin => ../kb-26-metabolic-digital-twin

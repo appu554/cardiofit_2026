@@ -35,9 +35,11 @@ func EvaluateTrajectoryCards(traj *dtModels.DecomposedTrajectory) []TrajectoryCa
 	if traj.ConcordantDeterioration {
 		var decliningDomains []string
 		// Iterate AllMHRIDomains for deterministic ordering.
+		// Use Trend field (not raw slope) to stay consistent with KB-26's
+		// DomainsDeteriorating count — avoids title/rationale mismatch.
 		for _, domain := range dtModels.AllMHRIDomains {
 			ds := traj.DomainSlopes[domain]
-			if ds.SlopePerDay < -0.3 {
+			if ds.Trend == dtModels.TrendDeclining || ds.Trend == dtModels.TrendRapidDeclining {
 				decliningDomains = append(decliningDomains, string(domain))
 			}
 		}
@@ -131,6 +133,7 @@ func EvaluateTrajectoryCards(traj *dtModels.DecomposedTrajectory) []TrajectoryCa
 	}
 
 	// 5. Domain category crossing.
+	// Only surface worsening crossings; improvements do not warrant a decision card.
 	for _, crossing := range traj.DomainCrossings {
 		if crossing.Direction == dtModels.DirectionWorsened {
 			cards = append(cards, TrajectoryCard{
@@ -141,6 +144,9 @@ func EvaluateTrajectoryCards(traj *dtModels.DecomposedTrajectory) []TrajectoryCa
 				Rationale: fmt.Sprintf("%s domain crossed from %s to %s status. "+
 					"This threshold crossing may indicate need for therapy adjustment.",
 					crossing.Domain, crossing.PrevCategory, crossing.CurrCategory),
+				Actions: []string{
+					fmt.Sprintf("Review %s domain for therapy adjustment in light of category change", crossing.Domain),
+				},
 				Domain: string(crossing.Domain),
 			})
 		}
