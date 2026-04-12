@@ -1,0 +1,104 @@
+package api
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"kb-26-metabolic-digital-twin/internal/models"
+	"kb-26-metabolic-digital-twin/internal/services"
+)
+
+// getDomainTrajectory computes and returns the decomposed MHRI trajectory for a patient.
+// GET /api/v1/kb26/mri/:patientId/domain-trajectory
+func (s *Server) getDomainTrajectory(c *gin.Context) {
+	patientID, err := uuid.Parse(c.Param("patientId"))
+	if err != nil {
+		sendError(c, http.StatusBadRequest, "invalid patient ID", "INVALID_PATIENT_ID", nil)
+		return
+	}
+
+	// Fetch recent MRI scores (up to 10 most recent).
+	mriScores, err := s.mriScorer.GetHistory(patientID, 10)
+	if err != nil {
+		s.logger.Error("failed to fetch MRI history", zap.Error(err))
+		sendError(c, http.StatusInternalServerError, "failed to fetch MRI history", "DB_ERROR", nil)
+		return
+	}
+
+	if len(mriScores) < 2 {
+		sendSuccess(c, gin.H{
+			"status":      "INSUFFICIENT_DATA",
+			"message":     "need at least 2 MRI scores for trajectory computation",
+			"data_points": len(mriScores),
+		}, map[string]interface{}{
+			"patient_id": patientID.String(),
+		})
+		return
+	}
+
+	// GetHistory returns DESC order; reverse to chronological (oldest → newest)
+	// so OLS regression sees time increasing.
+	points := make([]models.DomainTrajectoryPoint, len(mriScores))
+	for i, score := range mriScores {
+		j := len(mriScores) - 1 - i
+		points[j] = models.DomainTrajectoryPoint{
+			Timestamp:       score.ComputedAt,
+			CompositeScore:  score.Score,
+			GlucoseScore:    score.GlucoseDomain,
+			CardioScore:     score.CardioDomain,
+			BodyCompScore:   score.BodyCompDomain,
+			BehavioralScore: score.BehavioralDomain,
+		}
+	}
+
+	// Compute decomposed trajectory.
+	trajectory := services.ComputeDecomposedTrajectory(patientID.String(), points)
+
+	// Persist snapshot to history table (idempotent per patient per day).
+	if err := s.persistDomainTrajectorySnapshot(patientID, &trajectory); err != nil {
+		// Persistence failure should not block the response — log and continue.
+		s.logger.Warn("failed to persist domain trajectory snapshot",
+			zap.String("patient_id", patientID.String()),
+			zap.Error(err))
+	}
+
+	sendSuccess(c, trajectory, map[string]interface{}{
+		"patient_id":  patientID.String(),
+		"data_points": len(points),
+	})
+}
+
+// persistDomainTrajectorySnapshot writes a single DomainTrajectoryHistory row.
+// Uses FirstOrCreate with Where+Assign to keep one snapshot per patient per day.
+func (s *Server) persistDomainTrajectorySnapshot(patientID uuid.UUID, traj *models.DecomposedTrajectory) error {
+	if s.db == nil {
+		return nil // no-op if DB not wired (e.g., in tests)
+	}
+
+	history := models.DomainTrajectoryHistory{
+		ID:              uuid.New().String(),
+		PatientID:       patientID,
+		SnapshotDate:    time.Now().UTC().Truncate(24 * time.Hour),
+		WindowDays:      traj.WindowDays,
+		CompositeSlope:  traj.CompositeSlope,
+		GlucoseSlope:    traj.DomainSlopes[models.DomainGlucose].SlopePerDay,
+		CardioSlope:     traj.DomainSlopes[models.DomainCardio].SlopePerDay,
+		BodyCompSlope:   traj.DomainSlopes[models.DomainBodyComp].SlopePerDay,
+		BehavioralSlope: traj.DomainSlopes[models.DomainBehavioral].SlopePerDay,
+		HasDiscordance:  traj.HasDiscordantTrend,
+		CreatedAt:       time.Now(),
+	}
+	if traj.DominantDriver != nil {
+		history.DominantDriver = string(*traj.DominantDriver)
+	}
+
+	// Upsert: one snapshot per patient per day.
+	return s.db.DB.
+		Where("patient_id = ? AND snapshot_date = ?", history.PatientID, history.SnapshotDate).
+		Assign(history).
+		FirstOrCreate(&history).Error
+}

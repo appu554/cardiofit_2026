@@ -42,6 +42,7 @@ func (s *Server) setupRoutes() {
 		v1.GET("/mri/:patientId", s.getMRI)
 		v1.GET("/mri/:patientId/history", s.getMRIHistory)
 		v1.GET("/mri/:patientId/decomposition", s.getMRIDecomposition)
+		v1.GET("/mri/:patientId/domain-trajectory", s.getDomainTrajectory)
 		v1.POST("/mri/simulate", s.simulateMRI)
 
 		// PREVENT (10-year CVD risk)
