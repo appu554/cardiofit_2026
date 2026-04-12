@@ -176,6 +176,38 @@ func TestPathwayLoader_QueryMandatory_NonStage4(t *testing.T) {
 	}
 }
 
+func TestPathwayLoader_QueryMandatory_4c_HFmrEF(t *testing.T) {
+	configDir := setupTestPathwayDir(t)
+	loader := NewPathwayLoader(configDir)
+	if err := loader.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	meds, err := loader.QueryMandatory("4c", "HFmrEF")
+	if err != nil {
+		t.Fatalf("QueryMandatory failed: %v", err)
+	}
+
+	// HFmrEF emerging evidence: SGLT2i + ACEi/ARB mandatory.
+	// Beta-blocker and MRA are NOT mandatory (extrapolated, not direct evidence).
+	classes := make(map[string]bool)
+	for _, m := range meds {
+		classes[m.Class] = true
+	}
+
+	if !classes["SGLT2i"] {
+		t.Error("HFmrEF mandatory should include SGLT2i (DELIVER subgroup)")
+	}
+	// Beta-blocker should NOT be mandatory for HFmrEF (extrapolated from HFrEF only)
+	if classes["BETA_BLOCKER_HF"] || classes["BETA_BLOCKER"] {
+		t.Error("HFmrEF should NOT have beta-blocker as mandatory — only extrapolated evidence")
+	}
+	// MRA should NOT be mandatory for HFmrEF
+	if classes["MRA"] {
+		t.Error("HFmrEF should NOT have MRA as mandatory — only extrapolated evidence")
+	}
+}
+
 func TestPathwayLoader_NotLoaded(t *testing.T) {
 	loader := NewPathwayLoader("/nonexistent")
 

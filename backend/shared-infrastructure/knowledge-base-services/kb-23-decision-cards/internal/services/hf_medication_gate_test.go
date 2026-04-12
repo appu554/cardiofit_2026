@@ -54,3 +54,27 @@ func TestHFGate_Pioglitazone_Blocked_4c_HFpEF(t *testing.T) {
 		t.Error("pioglitazone should be blocked in ALL HF types including HFpEF")
 	}
 }
+
+func TestHFGate_Alogliptin_Blocked_4c(t *testing.T) {
+	gate := NewHFMedicationGate()
+	blocked, reason := gate.CheckContraindication("ALOGLIPTIN", "4c", "HFrEF")
+	if !blocked {
+		t.Error("alogliptin should be blocked in 4c — EXAMINE trial HF signal")
+	}
+	if reason == "" {
+		t.Error("expected reason citing EXAMINE trial")
+	}
+	// Also blocked in HFpEF (conservative — applies to ALL HF types)
+	blocked2, _ := gate.CheckContraindication("ALOGLIPTIN", "4c", "HFpEF")
+	if !blocked2 {
+		t.Error("alogliptin should be blocked in ALL HF types including HFpEF")
+	}
+}
+
+func TestHFGate_NonDHP_CCB_Allowed_4c_HFpEF(t *testing.T) {
+	gate := NewHFMedicationGate()
+	blocked, _ := gate.CheckContraindication("NON_DHP_CCB", "4c", "HFpEF")
+	if blocked {
+		t.Error("non-DHP CCB should be allowed in HFpEF — used for AF rate control")
+	}
+}
