@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 // MHRIDomain identifies each of the four MHRI domains.
 type MHRIDomain string
@@ -14,6 +18,29 @@ const (
 
 // AllMHRIDomains lists all four domains for iteration.
 var AllMHRIDomains = []MHRIDomain{DomainGlucose, DomainCardio, DomainBodyComp, DomainBehavioral}
+
+// Trend classifications (used in DomainSlope.Trend and DecomposedTrajectory.CompositeTrend).
+const (
+	TrendRapidImproving  = "RAPID_IMPROVING"
+	TrendImproving       = "IMPROVING"
+	TrendStable          = "STABLE"
+	TrendDeclining       = "DECLINING"
+	TrendRapidDeclining  = "RAPID_DECLINING"
+	TrendInsufficient    = "INSUFFICIENT_DATA"
+)
+
+// Confidence levels for OLS R² goodness-of-fit.
+const (
+	ConfidenceHigh     = "HIGH"
+	ConfidenceModerate = "MODERATE"
+	ConfidenceLow      = "LOW"
+)
+
+// Direction values for DomainCategoryCrossing.
+const (
+	DirectionWorsened = "WORSENED"
+	DirectionImproved = "IMPROVED"
+)
 
 // DomainTrajectoryPoint stores a single snapshot of all domain scores at a point in time.
 type DomainTrajectoryPoint struct {
@@ -78,29 +105,29 @@ type DecomposedTrajectory struct {
 	CompositeEndScore       float64                    `json:"composite_end_score"`
 	DomainSlopes            map[MHRIDomain]DomainSlope `json:"domain_slopes"`
 	DominantDriver          *MHRIDomain                `json:"dominant_driver,omitempty"`
-	DriverContribution      float64                    `json:"driver_contribution,omitempty"`
+	DriverContribution      float64                    `json:"driver_contribution"`
 	Divergences             []DivergencePattern        `json:"divergences,omitempty"`
 	LeadingIndicators       []LeadingIndicator         `json:"leading_indicators,omitempty"`
 	DomainCrossings         []DomainCategoryCrossing   `json:"domain_crossings,omitempty"`
 	HasDiscordantTrend      bool                       `json:"has_discordant_trend"`
 	ConcordantDeterioration bool                       `json:"concordant_deterioration"`
-	DomainsDeterioration    int                        `json:"domains_deteriorating"`
+	DomainsDeteriorating    int                        `json:"domains_deteriorating"`
 }
 
 // DomainTrajectoryHistory stores decomposed snapshots for trend-over-time analysis.
 type DomainTrajectoryHistory struct {
 	ID              string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID       string    `gorm:"size:100;index:idx_dth_patient,priority:1;not null" json:"patient_id"`
+	PatientID       uuid.UUID `gorm:"type:uuid;index:idx_dth_patient,priority:1;not null" json:"patient_id"`
 	SnapshotDate    time.Time `gorm:"index:idx_dth_patient,priority:2,sort:desc;not null" json:"snapshot_date"`
-	WindowDays      int       `json:"window_days"`
-	CompositeSlope  float64   `json:"composite_slope"`
-	GlucoseSlope    float64   `json:"glucose_slope"`
-	CardioSlope     float64   `json:"cardio_slope"`
-	BodyCompSlope   float64   `json:"body_comp_slope"`
-	BehavioralSlope float64   `json:"behavioral_slope"`
-	HasDiscordance  bool      `json:"has_discordance"`
-	DominantDriver  string    `json:"dominant_driver,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	WindowDays      int       `gorm:"not null" json:"window_days"`
+	CompositeSlope  float64   `gorm:"type:decimal(6,3)" json:"composite_slope"`
+	GlucoseSlope    float64   `gorm:"type:decimal(6,3)" json:"glucose_slope"`
+	CardioSlope     float64   `gorm:"type:decimal(6,3)" json:"cardio_slope"`
+	BodyCompSlope   float64   `gorm:"type:decimal(6,3)" json:"body_comp_slope"`
+	BehavioralSlope float64   `gorm:"type:decimal(6,3)" json:"behavioral_slope"`
+	HasDiscordance  bool      `gorm:"default:false" json:"has_discordance"`
+	DominantDriver  string    `gorm:"size:20" json:"dominant_driver,omitempty"`
+	CreatedAt       time.Time `gorm:"not null;default:now()" json:"created_at"`
 }
 
 func (DomainTrajectoryHistory) TableName() string { return "domain_trajectory_history" }
