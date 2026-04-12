@@ -18,10 +18,12 @@ type MaskedHTNCard struct {
 
 // EvaluateMaskedHTNCards generates decision cards from a BP context classification.
 // Card priority order:
-//  1. MASKED_HTN_MORNING_SURGE_COMPOUND (IMMEDIATE — compound risk)
+//  1. MASKED_HTN_MORNING_SURGE_COMPOUND (IMMEDIATE — compound risk, masked phenotypes)
+//  1b. SUSTAINED_HTN_MORNING_SURGE (URGENT — both contexts elevated + morning surge)
 //  2. MASKED_HYPERTENSION (IMMEDIATE if DM/CKD amplified, URGENT otherwise)
 //  3. MASKED_UNCONTROLLED (URGENT — treated but not controlled at home)
 //  4. WHITE_COAT_HYPERTENSION (ROUTINE — avoid overtreatment)
+//  4b. WHITE_COAT_UNCONTROLLED (ROUTINE — treated patient, clinic elevated, home controlled)
 //  5. SELECTION_BIAS_WARNING (ROUTINE — reading quality caveat)
 //  6. MEDICATION_TIMING (ROUTINE — chronotherapy suggestion)
 func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
@@ -47,6 +49,27 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"24-hour ABPM to characterise morning surge amplitude",
 				"Review medication timing — consider evening/bedtime dosing of long-acting agent",
 				"Urgent cardiology review if home SBP >160 mmHg in morning window",
+			},
+		})
+	}
+
+	// 1b. Sustained HTN + morning surge — still compound risk, but URGENT (not IMMEDIATE)
+	// because both contexts already elevated (not hidden).
+	if c.MorningSurgeCompound && c.Phenotype == models.PhenotypeSustainedHTN {
+		cards = append(cards, MaskedHTNCard{
+			CardType: "SUSTAINED_HTN_MORNING_SURGE",
+			Urgency:  "URGENT",
+			Title:    "Sustained Hypertension with Abnormal Morning Surge",
+			Rationale: fmt.Sprintf(
+				"Both clinic (%.0f) and home (%.0f) BP elevated with abnormal morning surge (>20 mmHg). "+
+					"Morning surge on top of sustained hypertension significantly increases stroke risk "+
+					"during the morning cardiovascular event window (06:00–12:00) — Kario 2019 (JACC).",
+				c.ClinicSBPMean, c.HomeSBPMean),
+			Actions: []string{
+				"Consider bedtime dosing of long-acting antihypertensive (chronotherapy)",
+				"Evaluate for obstructive sleep apnea — strong association with exaggerated morning surge",
+				"Prefer 24-hour-coverage agents: long-acting ARB or dihydropyridine CCB",
+				"Consider 24-hour ABPM to characterise surge amplitude",
 			},
 		})
 	}
@@ -121,6 +144,27 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Continue home monitoring — reassess if home readings consistently rise above 135/85 mmHg",
 				"Lifestyle counselling (sodium, exercise, stress) remains appropriate",
 				"Consider ABPM for formal confirmation if clinical decision is complex",
+			},
+		})
+	}
+
+	// 4b. White-coat uncontrolled — treated patient with elevated clinic BP but controlled home BP.
+	if c.Phenotype == models.PhenotypeWhiteCoatUncontrolled {
+		cards = append(cards, MaskedHTNCard{
+			CardType: "WHITE_COAT_UNCONTROLLED",
+			Urgency:  "ROUTINE",
+			Title:    "White-Coat Effect — Clinic BP Elevated but Home BP Controlled on Therapy",
+			Rationale: fmt.Sprintf(
+				"Patient on antihypertensive therapy. Clinic BP %.0f/%.0f mmHg elevated; "+
+					"home mean %.0f mmHg normal. White-coat effect: %.0f mmHg. "+
+					"Home readings confirm treatment is adequate — the clinic elevation reflects "+
+					"the clinic environment, not true treatment failure.",
+				c.ClinicSBPMean, c.ClinicDBPMean, c.HomeSBPMean, c.WhiteCoatEffect),
+			Actions: []string{
+				"Do NOT escalate antihypertensive therapy based on clinic reading alone",
+				"Consider REDUCING dose if patient reports symptomatic hypotension (dizziness, fatigue)",
+				"Continue structured home monitoring — reassess if home readings rise above 135/85 mmHg",
+				"Document white-coat effect in chart to prevent future overtreatment",
 			},
 		})
 	}

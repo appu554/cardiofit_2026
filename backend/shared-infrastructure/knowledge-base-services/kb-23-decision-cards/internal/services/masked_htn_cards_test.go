@@ -183,3 +183,69 @@ func TestMaskedHTNCards_Normotensive_NoUrgentCards(t *testing.T) {
 		}
 	}
 }
+
+func TestMaskedHTNCards_WhiteCoatUncontrolled_AvoidEscalation(t *testing.T) {
+	classification := &models.BPContextClassification{
+		Phenotype:           models.PhenotypeWhiteCoatUncontrolled,
+		ClinicSBPMean:       150,
+		ClinicDBPMean:       92,
+		HomeSBPMean:         128,
+		HomeDBPMean:         80,
+		WhiteCoatEffect:     22,
+		OnAntihypertensives: true,
+		Confidence:          "HIGH",
+	}
+
+	cards := EvaluateMaskedHTNCards(classification)
+	found := false
+	for _, c := range cards {
+		if c.CardType == "WHITE_COAT_UNCONTROLLED" {
+			found = true
+			if c.Urgency != "ROUTINE" {
+				t.Errorf("expected ROUTINE urgency, got %s", c.Urgency)
+			}
+			// Must warn against escalation
+			foundEscalationWarning := false
+			for _, a := range c.Actions {
+				if strings.Contains(a, "NOT escalate") || strings.Contains(a, "REDUCING") {
+					foundEscalationWarning = true
+				}
+			}
+			if !foundEscalationWarning {
+				t.Error("expected action warning against escalation or recommending dose reduction")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected WHITE_COAT_UNCONTROLLED card")
+	}
+}
+
+func TestMaskedHTNCards_SustainedHTN_MorningSurge(t *testing.T) {
+	classification := &models.BPContextClassification{
+		Phenotype:            models.PhenotypeSustainedHTN,
+		ClinicSBPMean:        155,
+		ClinicDBPMean:        94,
+		HomeSBPMean:          148,
+		HomeDBPMean:          90,
+		MorningSurgeCompound: true,
+		Confidence:           "HIGH",
+	}
+
+	cards := EvaluateMaskedHTNCards(classification)
+	found := false
+	for _, c := range cards {
+		if c.CardType == "SUSTAINED_HTN_MORNING_SURGE" {
+			found = true
+			if c.Urgency != "URGENT" {
+				t.Errorf("expected URGENT urgency (not IMMEDIATE — both contexts already elevated), got %s", c.Urgency)
+			}
+			if !strings.Contains(c.Rationale, "morning surge") {
+				t.Error("expected rationale to mention morning surge")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected SUSTAINED_HTN_MORNING_SURGE card")
+	}
+}
