@@ -25,29 +25,16 @@ func detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models
 			var improving, declining models.DomainSlope
 			if slopeA.SlopePerDay > improvingThreshold && slopeB.SlopePerDay < decliningThreshold {
 				improving = slopeA
+				improving.Domain = domains[i]
 				declining = slopeB
+				declining.Domain = domains[j]
 			} else if slopeB.SlopePerDay > improvingThreshold && slopeA.SlopePerDay < decliningThreshold {
 				improving = slopeB
+				improving.Domain = domains[j]
 				declining = slopeA
+				declining.Domain = domains[i]
 			} else {
 				continue
-			}
-
-			// Ensure Domain field is populated (defensive — caller may pass slopes
-			// from map iteration where Domain wasn't explicitly set).
-			if improving.Domain == "" {
-				if slopeA.SlopePerDay > improvingThreshold {
-					improving.Domain = domains[i]
-				} else {
-					improving.Domain = domains[j]
-				}
-			}
-			if declining.Domain == "" {
-				if slopeA.SlopePerDay < decliningThreshold {
-					declining.Domain = domains[i]
-				} else {
-					declining.Domain = domains[j]
-				}
 			}
 
 			divergenceRate := math.Abs(improving.SlopePerDay) + math.Abs(declining.SlopePerDay)

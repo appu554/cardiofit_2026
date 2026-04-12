@@ -59,17 +59,56 @@ func TestDetectDivergence_NoDivergence_AllStable(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDetectDivergence_MultiplePairs(t *testing.T) {
+	// Two improving + two declining domains, deliberately chosen so each pair
+	// is in the mechanism map: GLUCOSE↑ vs CARDIO↓ AND BEHAVIORAL↑ vs BODY_COMP↓.
 	slopes := map[models.MHRIDomain]models.DomainSlope{
 		models.DomainGlucose:    {Domain: models.DomainGlucose, SlopePerDay: 1.0, Trend: models.TrendRapidImproving},
 		models.DomainCardio:     {Domain: models.DomainCardio, SlopePerDay: -0.8, Trend: models.TrendDeclining},
-		models.DomainBodyComp:   {Domain: models.DomainBodyComp, SlopePerDay: 0.5, Trend: models.TrendImproving},
-		models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: -0.6, Trend: models.TrendDeclining},
+		models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: 0.6, Trend: models.TrendImproving},
+		models.DomainBodyComp:   {Domain: models.DomainBodyComp, SlopePerDay: -0.5, Trend: models.TrendDeclining},
 	}
 
 	divergences := detectDivergences(slopes)
 	if len(divergences) < 2 {
-		t.Errorf("expected >= 2 divergences (glucose/cardio + bodycomp/behavioral), got %d", len(divergences))
+		t.Fatalf("expected >= 2 divergences, got %d", len(divergences))
 	}
+
+	// Build a set of (improving, declining) pairs found.
+	type pair struct{ imp, dec models.MHRIDomain }
+	found := make(map[pair]bool)
+	for _, d := range divergences {
+		found[pair{d.ImprovingDomain, d.DecliningDomain}] = true
+	}
+
+	// Verify the expected pairs are present (and have specific mechanisms, not the fallback).
+	expectGlucoseCardio := pair{models.DomainGlucose, models.DomainCardio}
+	expectBehavioralBodyComp := pair{models.DomainBehavioral, models.DomainBodyComp}
+
+	if !found[expectGlucoseCardio] {
+		t.Errorf("expected GLUCOSE→CARDIO divergence pair to be detected")
+	}
+	if !found[expectBehavioralBodyComp] {
+		t.Errorf("expected BEHAVIORAL→BODY_COMP divergence pair to be detected")
+	}
+
+	// Verify the GLUCOSE→CARDIO mechanism is the specific clinical hypothesis (not the fallback).
+	for _, d := range divergences {
+		if d.ImprovingDomain == models.DomainGlucose && d.DecliningDomain == models.DomainCardio {
+			if !containsSubstring(d.PossibleMechanism, "SGLT2i") {
+				t.Errorf("expected GLUCOSE→CARDIO mechanism to mention SGLT2i, got: %s", d.PossibleMechanism)
+			}
+		}
+	}
+}
+
+// containsSubstring is a tiny helper for substring checking in divergence tests.
+func containsSubstring(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
