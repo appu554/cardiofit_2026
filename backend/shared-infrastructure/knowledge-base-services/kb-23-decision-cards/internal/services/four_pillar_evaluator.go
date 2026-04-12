@@ -48,8 +48,9 @@ type FourPillarInput struct {
 	Monitoring      MonitoringPillarInput          `json:"monitoring"`
 	Lifestyle       LifestylePillarInput           `json:"lifestyle"`
 	Education       EducationPillarInput           `json:"education"`
-	RenalGating     *models.PatientGatingReport    `json:"renal_gating,omitempty"`
-	InertiaReport   *models.PatientInertiaReport   `json:"inertia_report,omitempty"`
+	RenalGating     *models.PatientGatingReport     `json:"renal_gating,omitempty"`
+	InertiaReport   *models.PatientInertiaReport    `json:"inertia_report,omitempty"`
+	BPContext       *models.BPContextClassification `json:"bp_context,omitempty"`
 }
 
 // PillarResult is the evaluation output for a single pillar.
@@ -154,6 +155,35 @@ func evaluateMedicationPillar(input FourPillarInput) PillarResult {
 		}
 		// Mild/moderate inertia downgrades ON_TRACK to GAP (checked after
 		// guideline and adherence evaluation below to avoid masking those).
+	}
+
+	// Masked hypertension: clinic BP looks fine but home BP is elevated.
+	// White-coat HTN: opposite — avoid overtreatment based on clinic-only readings.
+	if input.BPContext != nil {
+		switch input.BPContext.Phenotype {
+		case models.PhenotypeMaskedHTN, models.PhenotypeMaskedUncontrolled:
+			p.Status = PillarGap
+			if input.BPContext.DiabetesAmplification || input.BPContext.MorningSurgeCompound {
+				p.Status = PillarUrgentGap
+			}
+			p.Reason = "masked hypertension — home BP elevated despite normal clinic readings"
+			p.Actions = []string{
+				"treat based on HOME BP targets, not clinic readings",
+			}
+			if input.BPContext.DiabetesAmplification {
+				p.Actions = append(p.Actions,
+					"DM + masked HTN: 3.2x target organ damage risk — immediate action")
+			}
+			return p
+
+		case models.PhenotypeWhiteCoatHTN, models.PhenotypeWhiteCoatUncontrolled:
+			p.Status = PillarGap
+			p.Reason = "white-coat effect — do not intensify based on clinic BP alone"
+			p.Actions = []string{
+				"continue home monitoring; lifestyle intervention appropriate",
+			}
+			return p
+		}
 	}
 
 	// Guideline adherence check
