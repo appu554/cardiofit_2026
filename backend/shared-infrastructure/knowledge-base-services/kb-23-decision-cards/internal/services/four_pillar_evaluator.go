@@ -1,6 +1,11 @@
 package services
 
-import "kb-23-decision-cards/internal/models"
+import (
+	"fmt"
+
+	"kb-23-decision-cards/internal/models"
+	dtModels "kb-26-metabolic-digital-twin/pkg/trajectory"
+)
 
 // ---------------------------------------------------------------------------
 // PillarStatus — evaluation outcome for a single pillar
@@ -48,9 +53,10 @@ type FourPillarInput struct {
 	Monitoring      MonitoringPillarInput          `json:"monitoring"`
 	Lifestyle       LifestylePillarInput           `json:"lifestyle"`
 	Education       EducationPillarInput           `json:"education"`
-	RenalGating     *models.PatientGatingReport     `json:"renal_gating,omitempty"`
-	InertiaReport   *models.PatientInertiaReport    `json:"inertia_report,omitempty"`
-	BPContext       *models.BPContextClassification `json:"bp_context,omitempty"`
+	RenalGating          *models.PatientGatingReport     `json:"renal_gating,omitempty"`
+	InertiaReport        *models.PatientInertiaReport    `json:"inertia_report,omitempty"`
+	BPContext            *models.BPContextClassification `json:"bp_context,omitempty"`
+	DecomposedTrajectory *dtModels.DecomposedTrajectory  `json:"decomposed_trajectory,omitempty"`
 }
 
 // PillarResult is the evaluation output for a single pillar.
@@ -229,6 +235,32 @@ func evaluateMonitoringPillar(input FourPillarInput) PillarResult {
 		p.Reason = "eGFR measurement overdue"
 		p.Actions = []string{"schedule renal function panel"}
 		return p
+	}
+
+	// Trajectory-based monitoring recommendations.
+	// Order mirrors trajectory card priority: concordant > discordant > behavioral lead.
+	if input.DecomposedTrajectory != nil {
+		dt := input.DecomposedTrajectory
+		if dt.ConcordantDeterioration {
+			p.Status = PillarUrgentGap
+			p.Reason = fmt.Sprintf("concordant deterioration: %d domains declining — increase monitoring frequency", dt.DomainsDeteriorating)
+			p.Actions = []string{"increase monitoring frequency across all domains"}
+			return p
+		}
+		if dt.HasDiscordantTrend {
+			p.Status = PillarGap
+			p.Reason = "discordant trajectory: domains moving in opposite directions"
+			p.Actions = []string{"investigate cross-domain medication effects"}
+			return p
+		}
+		for _, lead := range dt.LeadingIndicators {
+			if lead.LeadingDomain == dtModels.DomainBehavioral {
+				p.Status = PillarGap
+				p.Reason = "behavioral leading indicator: engagement collapse detected"
+				p.Actions = []string{"clinical outreach recommended before clinical domains deteriorate further"}
+				return p
+			}
+		}
 	}
 
 	p.Status = PillarOnTrack
