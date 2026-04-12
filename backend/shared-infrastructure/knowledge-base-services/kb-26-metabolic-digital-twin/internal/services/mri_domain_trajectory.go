@@ -2,6 +2,7 @@ package services
 
 import (
 	"math"
+	"sort"
 	"time"
 
 	"kb-26-metabolic-digital-twin/internal/models"
@@ -28,6 +29,12 @@ const (
 	categoryOptimal  = 70.0
 	categoryMild     = 55.0
 	categoryModerate = 40.0
+)
+
+// Leading indicator detection thresholds (see plan: Task 4 / leading_indicator config).
+const (
+	leadingIndicatorMinDataPoints   = 5    // need at least 5 points for lead-lag analysis
+	leadingIndicatorMinBehavioralSlope = -0.5 // behavioral must be declining meaningfully
 )
 
 // ComputeDecomposedTrajectory computes per-domain OLS trajectories and derived analytics.
@@ -218,7 +225,11 @@ func detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map
 	last := points[len(points)-1]
 	var crossings []models.DomainCategoryCrossing
 
-	for domain, extractor := range extractors {
+	for _, domain := range models.AllMHRIDomains {
+		extractor, ok := extractors[domain]
+		if !ok {
+			continue
+		}
 		startScore := extractor(first)
 		endScore := extractor(last)
 		startCat := categorizeDomainScore(startScore)
@@ -243,12 +254,12 @@ func detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map
 }
 
 func detectLeadingIndicators(points []models.DomainTrajectoryPoint, slopes map[models.MHRIDomain]models.DomainSlope) []models.LeadingIndicator {
-	if len(points) < 5 {
+	if len(points) < leadingIndicatorMinDataPoints {
 		return nil
 	}
 
 	behSlope := slopes[models.DomainBehavioral]
-	if behSlope.SlopePerDay >= -0.5 {
+	if behSlope.SlopePerDay >= leadingIndicatorMinBehavioralSlope {
 		return nil
 	}
 
@@ -296,11 +307,9 @@ func extractScores(points []models.DomainTrajectoryPoint, extractor func(models.
 }
 
 func sortTrajectoryPoints(pts []models.DomainTrajectoryPoint) {
-	for i := 1; i < len(pts); i++ {
-		for j := i; j > 0 && pts[j].Timestamp.Before(pts[j-1].Timestamp); j-- {
-			pts[j], pts[j-1] = pts[j-1], pts[j]
-		}
-	}
+	sort.Slice(pts, func(i, j int) bool {
+		return pts[i].Timestamp.Before(pts[j].Timestamp)
+	})
 }
 
 func roundTo3(v float64) float64 { return math.Round(v*1000) / 1000 }

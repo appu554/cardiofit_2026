@@ -235,4 +235,17 @@ func TestDomainTrajectory_RajeshKumar(t *testing.T) {
 	if len(result.DomainCrossings) < 2 {
 		t.Errorf("expected >= 2 category crossings, got %d", len(result.DomainCrossings))
 	}
+
+	// Behavioral leading indicator should fire — behavioral collapsing faster
+	// than glucose/cardio. This is the headline feature.
+	if len(result.LeadingIndicators) == 0 {
+		t.Error("expected behavioral leading indicator to be detected for Rajesh scenario")
+	} else {
+		if result.LeadingIndicators[0].LeadingDomain != models.DomainBehavioral {
+			t.Errorf("expected leading domain BEHAVIORAL, got %s", result.LeadingIndicators[0].LeadingDomain)
+		}
+		if len(result.LeadingIndicators[0].LaggingDomains) == 0 {
+			t.Error("expected at least one lagging clinical domain")
+		}
+	}
 }
