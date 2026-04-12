@@ -127,9 +127,7 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 		}
 	}
 
-	// Detect divergence patterns.
-	// NOTE: detectDivergences stub below will be replaced by real implementation in Task 6
-	// (domain_divergence.go). Remove this stub from this file when Task 6 is implemented.
+	// Detect divergence patterns (defined in domain_divergence.go).
 	result.Divergences = detectDivergences(result.DomainSlopes)
 	result.HasDiscordantTrend = len(result.Divergences) > 0
 
