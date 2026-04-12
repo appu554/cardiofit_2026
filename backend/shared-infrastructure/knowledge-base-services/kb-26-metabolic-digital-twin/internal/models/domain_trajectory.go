@@ -1,0 +1,106 @@
+package models
+
+import "time"
+
+// MHRIDomain identifies each of the four MHRI domains.
+type MHRIDomain string
+
+const (
+	DomainGlucose    MHRIDomain = "GLUCOSE"
+	DomainCardio     MHRIDomain = "CARDIO"
+	DomainBodyComp   MHRIDomain = "BODY_COMP"
+	DomainBehavioral MHRIDomain = "BEHAVIORAL"
+)
+
+// AllMHRIDomains lists all four domains for iteration.
+var AllMHRIDomains = []MHRIDomain{DomainGlucose, DomainCardio, DomainBodyComp, DomainBehavioral}
+
+// DomainTrajectoryPoint stores a single snapshot of all domain scores at a point in time.
+type DomainTrajectoryPoint struct {
+	Timestamp       time.Time `json:"timestamp"`
+	CompositeScore  float64   `json:"composite_score"`
+	GlucoseScore    float64   `json:"glucose_score"`
+	CardioScore     float64   `json:"cardio_score"`
+	BodyCompScore   float64   `json:"body_comp_score"`
+	BehavioralScore float64   `json:"behavioral_score"`
+}
+
+// DomainSlope captures the OLS regression result for a single domain.
+type DomainSlope struct {
+	Domain      MHRIDomain `json:"domain"`
+	SlopePerDay float64    `json:"slope_per_day"`
+	Trend       string     `json:"trend"`
+	StartScore  float64    `json:"start_score"`
+	EndScore    float64    `json:"end_score"`
+	DeltaScore  float64    `json:"delta_score"`
+	R2          float64    `json:"r_squared"`
+	Confidence  string     `json:"confidence"`
+}
+
+// DivergencePattern describes when two domains move in opposite directions.
+type DivergencePattern struct {
+	ImprovingDomain   MHRIDomain `json:"improving_domain"`
+	DecliningDomain   MHRIDomain `json:"declining_domain"`
+	ImprovingSlope    float64    `json:"improving_slope"`
+	DecliningSlope    float64    `json:"declining_slope"`
+	DivergenceRate    float64    `json:"divergence_rate"`
+	ClinicalConcern   string     `json:"clinical_concern"`
+	PossibleMechanism string     `json:"possible_mechanism"`
+}
+
+// LeadingIndicator describes when behavioral domain decline precedes clinical domain decline.
+type LeadingIndicator struct {
+	LeadingDomain  MHRIDomain   `json:"leading_domain"`
+	LaggingDomains []MHRIDomain `json:"lagging_domains"`
+	LeadDays       int          `json:"lead_days"`
+	Confidence     string       `json:"confidence"`
+	Interpretation string       `json:"interpretation"`
+}
+
+// DomainCategoryCrossing detects when a domain crosses an MHRI category boundary.
+type DomainCategoryCrossing struct {
+	Domain       MHRIDomain `json:"domain"`
+	PrevCategory string     `json:"prev_category"`
+	CurrCategory string     `json:"curr_category"`
+	Direction    string     `json:"direction"`
+	CrossingDate time.Time  `json:"crossing_date"`
+}
+
+// DecomposedTrajectory is the full output of the domain decomposition engine.
+type DecomposedTrajectory struct {
+	PatientID               string                     `json:"patient_id"`
+	WindowDays              int                        `json:"window_days"`
+	DataPoints              int                        `json:"data_points"`
+	ComputedAt              time.Time                  `json:"computed_at"`
+	CompositeSlope          float64                    `json:"composite_slope_per_day"`
+	CompositeTrend          string                     `json:"composite_trend"`
+	CompositeStartScore     float64                    `json:"composite_start_score"`
+	CompositeEndScore       float64                    `json:"composite_end_score"`
+	DomainSlopes            map[MHRIDomain]DomainSlope `json:"domain_slopes"`
+	DominantDriver          *MHRIDomain                `json:"dominant_driver,omitempty"`
+	DriverContribution      float64                    `json:"driver_contribution,omitempty"`
+	Divergences             []DivergencePattern        `json:"divergences,omitempty"`
+	LeadingIndicators       []LeadingIndicator         `json:"leading_indicators,omitempty"`
+	DomainCrossings         []DomainCategoryCrossing   `json:"domain_crossings,omitempty"`
+	HasDiscordantTrend      bool                       `json:"has_discordant_trend"`
+	ConcordantDeterioration bool                       `json:"concordant_deterioration"`
+	DomainsDeterioration    int                        `json:"domains_deteriorating"`
+}
+
+// DomainTrajectoryHistory stores decomposed snapshots for trend-over-time analysis.
+type DomainTrajectoryHistory struct {
+	ID              string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	PatientID       string    `gorm:"size:100;index:idx_dth_patient,priority:1;not null" json:"patient_id"`
+	SnapshotDate    time.Time `gorm:"index:idx_dth_patient,priority:2,sort:desc;not null" json:"snapshot_date"`
+	WindowDays      int       `json:"window_days"`
+	CompositeSlope  float64   `json:"composite_slope"`
+	GlucoseSlope    float64   `json:"glucose_slope"`
+	CardioSlope     float64   `json:"cardio_slope"`
+	BodyCompSlope   float64   `json:"body_comp_slope"`
+	BehavioralSlope float64   `json:"behavioral_slope"`
+	HasDiscordance  bool      `json:"has_discordance"`
+	DominantDriver  string    `json:"dominant_driver,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+func (DomainTrajectoryHistory) TableName() string { return "domain_trajectory_history" }
