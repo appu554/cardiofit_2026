@@ -314,10 +314,3 @@ func sortTrajectoryPoints(pts []models.DomainTrajectoryPoint) {
 
 func roundTo3(v float64) float64 { return math.Round(v*1000) / 1000 }
 func roundTo1(v float64) float64 { return math.Round(v*10) / 10 }
-
-// detectDivergences is a temporary stub — will be replaced by the real implementation
-// in domain_divergence.go (Task 6). When Task 6 is implemented, REMOVE this stub
-// from this file first to avoid a duplicate function declaration.
-func detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models.DivergencePattern {
-	return nil
-}
