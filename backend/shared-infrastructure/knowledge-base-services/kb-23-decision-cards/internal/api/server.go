@@ -34,6 +34,7 @@ type Server struct {
 	kb19Publisher       *services.KB19Publisher
 	kb20Client          *services.KB20Client
 	kb21Client          *services.KB21Client
+	kb26BPContextClient *services.KB26BPContextClient
 	hypoHandler         *services.HypoglycaemiaHandler
 	behavioralHandler   *services.BehavioralGapHandler
 	perturbationService *services.PerturbationService
@@ -89,6 +90,11 @@ func (s *Server) InitServices() {
 	s.kb19Publisher = services.NewKB19Publisher(s.cfg, s.metrics, s.log)
 	s.kb20Client = services.NewKB20Client(s.cfg, s.metrics, s.log)
 	s.kb21Client = services.NewKB21Client(s.cfg, s.cache, s.metrics, s.log)
+	s.kb26BPContextClient = services.NewKB26BPContextClient(
+		s.cfg.KB26URL,
+		s.cfg.KB26Timeout(),
+		s.log,
+	)
 	s.perturbationService = services.NewPerturbationService(s.db, s.cache, s.metrics, s.log)
 	s.hysteresisEngine = services.NewHysteresisEngine(s.db, s.metrics, s.log)
 	s.cardBuilder = services.NewCardBuilder(

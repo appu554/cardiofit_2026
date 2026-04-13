@@ -38,11 +38,13 @@ type Config struct {
 	KB20URL string // Patient Profile
 	KB21URL string // Behavioural Intelligence
 	KB22URL string // HPI Engine
+	KB26URL string // Metabolic Digital Twin
 
 	// Cross-KB Timeouts (milliseconds)
 	KB19TimeoutMS int
 	KB20TimeoutMS int
 	KB21TimeoutMS int
+	KB26TimeoutMS int
 
 	// Confidence Thresholds (defaults - overridden per template)
 	DefaultFirmPosterior        float64
@@ -88,10 +90,12 @@ func Load() *Config {
 		KB20URL: envOrDefault("KB20_URL", "http://localhost:8131"),
 		KB21URL: envOrDefault("KB21_URL", "http://localhost:8133"),
 		KB22URL: envOrDefault("KB22_URL", "http://localhost:8132"),
+		KB26URL: envOrDefault("KB26_URL", "http://localhost:8137"),
 
 		KB19TimeoutMS: envIntOrDefault("KB19_TIMEOUT_MS", 500),
 		KB20TimeoutMS: envIntOrDefault("KB20_TIMEOUT_MS", 200),
 		KB21TimeoutMS: envIntOrDefault("KB21_TIMEOUT_MS", 200),
+		KB26TimeoutMS: envIntOrDefault("KB26_TIMEOUT_MS", 3000),
 
 		DefaultFirmPosterior:        envFloatOrDefault("DEFAULT_FIRM_POSTERIOR", 0.75),
 		DefaultFirmMedicationChange: envFloatOrDefault("DEFAULT_FIRM_MEDICATION_CHANGE", 0.82),
@@ -117,6 +121,7 @@ func (c *Config) GetAddr() string { return fmt.Sprintf(":%s", c.Port) }
 func (c *Config) KB19Timeout() time.Duration { return time.Duration(c.KB19TimeoutMS) * time.Millisecond }
 func (c *Config) KB20Timeout() time.Duration { return time.Duration(c.KB20TimeoutMS) * time.Millisecond }
 func (c *Config) KB21Timeout() time.Duration { return time.Duration(c.KB21TimeoutMS) * time.Millisecond }
+func (c *Config) KB26Timeout() time.Duration { return time.Duration(c.KB26TimeoutMS) * time.Millisecond }
 
 // HysteresisWindow returns the lookback window for N-01 downgrade confirmation.
 func (c *Config) HysteresisWindow() time.Duration {
