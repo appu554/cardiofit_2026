@@ -162,3 +162,121 @@ func TestBPContextRepository_FetchHistory_OrderedDesc(t *testing.T) {
 		t.Errorf("expected newest first; got %v", history[0].SnapshotDate)
 	}
 }
+
+// setupTwinStateTable creates the twin_states table in the given SQLite DB using
+// manual DDL. AutoMigrate is deliberately avoided because TwinState uses
+// gen_random_uuid() (PostgreSQL-specific) and jsonb column types that SQLite
+// cannot handle.
+func setupTwinStateTable(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, _ := db.DB()
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS twin_states (
+			id            TEXT PRIMARY KEY,
+			patient_id    TEXT NOT NULL,
+			state_version INTEGER NOT NULL,
+			update_source TEXT NOT NULL,
+			updated_at    DATETIME NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_twin_state_updated_at ON twin_states(updated_at DESC)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := sqlDB.Exec(stmt); err != nil {
+			t.Fatalf("DDL exec: %v", err)
+		}
+	}
+}
+
+func TestBPContextRepository_ListActivePatientIDs(t *testing.T) {
+	db := setupBPContextTestDB(t)
+	setupTwinStateTable(t, db)
+
+	now := time.Now().UTC()
+	id1 := uuid.New()
+	id2 := uuid.New()
+	id3 := uuid.New()
+
+	type twinRow struct {
+		ID           string
+		PatientID    string
+		StateVersion int
+		UpdateSource string
+		UpdatedAt    time.Time
+	}
+	seed := func(patientID uuid.UUID, daysAgo int) {
+		row := twinRow{
+			ID:           uuid.New().String(),
+			PatientID:    patientID.String(),
+			StateVersion: 1,
+			UpdateSource: "TEST",
+			UpdatedAt:    now.AddDate(0, 0, -daysAgo),
+		}
+		if err := db.Table("twin_states").Create(&row).Error; err != nil {
+			t.Fatalf("seed patient %s: %v", patientID, err)
+		}
+	}
+
+	seed(id1, 5)  // active: 5 days ago
+	seed(id2, 1)  // active: 1 day ago
+	seed(id3, 60) // inactive: 60 days ago
+
+	repo := NewBPContextRepository(db)
+	active, err := repo.ListActivePatientIDs(30 * 24 * time.Hour)
+	if err != nil {
+		t.Fatalf("ListActivePatientIDs: %v", err)
+	}
+
+	if len(active) != 2 {
+		t.Errorf("expected 2 active patients, got %d", len(active))
+	}
+
+	got := map[string]bool{}
+	for _, p := range active {
+		got[p] = true
+	}
+	if !got[id1.String()] || !got[id2.String()] {
+		t.Errorf("expected active set to contain %s and %s, got %v", id1, id2, got)
+	}
+	if got[id3.String()] {
+		t.Errorf("inactive patient %s should not be in result", id3)
+	}
+}
+
+func TestBPContextRepository_ListActivePatientIDs_DeduplicatesMultipleSnapshots(t *testing.T) {
+	db := setupBPContextTestDB(t)
+	setupTwinStateTable(t, db)
+
+	now := time.Now().UTC()
+	patientID := uuid.New()
+
+	type twinRow struct {
+		ID           string
+		PatientID    string
+		StateVersion int
+		UpdateSource string
+		UpdatedAt    time.Time
+	}
+
+	// Three snapshots for the same patient — query must return one row.
+	for i := 0; i < 3; i++ {
+		row := twinRow{
+			ID:           uuid.New().String(),
+			PatientID:    patientID.String(),
+			StateVersion: i + 1,
+			UpdateSource: "TEST",
+			UpdatedAt:    now.AddDate(0, 0, -i),
+		}
+		if err := db.Table("twin_states").Create(&row).Error; err != nil {
+			t.Fatalf("seed snapshot %d: %v", i, err)
+		}
+	}
+
+	repo := NewBPContextRepository(db)
+	active, err := repo.ListActivePatientIDs(30 * 24 * time.Hour)
+	if err != nil {
+		t.Fatalf("ListActivePatientIDs: %v", err)
+	}
+	if len(active) != 1 {
+		t.Errorf("expected 1 deduplicated patient, got %d", len(active))
+	}
+}

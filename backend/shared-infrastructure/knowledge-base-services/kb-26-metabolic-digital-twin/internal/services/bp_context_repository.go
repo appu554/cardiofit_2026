@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -67,4 +68,22 @@ func (r *BPContextRepository) FetchHistory(patientID string, limit int) ([]model
 		return nil, err
 	}
 	return snapshots, nil
+}
+
+// ListActivePatientIDs returns distinct patient IDs from twin_state whose
+// most recent update is within the given activity window. The query
+// dedups via SELECT DISTINCT — three snapshots for the same patient
+// return one ID. IDs are returned as strings to match the BP context
+// orchestrator's signature.
+func (r *BPContextRepository) ListActivePatientIDs(window time.Duration) ([]string, error) {
+	cutoff := time.Now().UTC().Add(-window)
+	var ids []string
+	err := r.db.Model(&models.TwinState{}).
+		Distinct("patient_id").
+		Where("updated_at > ?", cutoff).
+		Pluck("patient_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
