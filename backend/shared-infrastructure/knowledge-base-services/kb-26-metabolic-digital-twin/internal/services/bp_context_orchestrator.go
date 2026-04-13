@@ -26,6 +26,14 @@ type KB21Fetcher interface {
 	FetchEngagement(ctx context.Context, patientID string) (*clients.KB21EngagementProfile, error)
 }
 
+// KB19EventPublisher is the narrow interface the orchestrator needs from
+// the KB-19 client. Defined here (not in the clients package) so tests
+// can stub it without importing the real client.
+type KB19EventPublisher interface {
+	PublishMaskedHTNDetected(ctx context.Context, patientID, phenotype, urgency string) error
+	PublishPhenotypeChanged(ctx context.Context, patientID, oldPhenotype, newPhenotype string) error
+}
+
 // BPContextOrchestrator coordinates upstream fetches, classification, and
 // persistence for a single patient's BP context analysis.
 type BPContextOrchestrator struct {
@@ -35,6 +43,7 @@ type BPContextOrchestrator struct {
 	thresholds *config.BPContextThresholds
 	log        *zap.Logger
 	metrics    *metrics.Collector
+	kb19       KB19EventPublisher
 }
 
 // NewBPContextOrchestrator wires the orchestrator dependencies.
@@ -45,6 +54,7 @@ func NewBPContextOrchestrator(
 	thresholds *config.BPContextThresholds,
 	log *zap.Logger,
 	metricsCollector *metrics.Collector,
+	kb19 KB19EventPublisher,
 ) *BPContextOrchestrator {
 	return &BPContextOrchestrator{
 		kb20:       kb20,
@@ -53,6 +63,7 @@ func NewBPContextOrchestrator(
 		thresholds: thresholds,
 		log:        log,
 		metrics:    metricsCollector,
+		kb19:       kb19,
 	}
 }
 
@@ -101,6 +112,18 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 	result := ClassifyBPContext(input, o.thresholds)
 	result.PatientID = patientID
 
+	// Capture the prior phenotype BEFORE saving — SaveSnapshot upserts on
+	// (patient_id, snapshot_date), so a same-day reclassification overwrites
+	// yesterday's row and we'd lose the comparison if we fetched after.
+	var oldPhenotype models.BPContextPhenotype
+	prior, fetchErr := o.repo.FetchLatest(patientID)
+	if fetchErr != nil {
+		o.log.Warn("prior snapshot fetch failed; treating as first detection",
+			zap.String("patient_id", patientID), zap.Error(fetchErr))
+	} else if prior != nil {
+		oldPhenotype = prior.Phenotype
+	}
+
 	// Persist snapshot. If persistence fails, log but do not block the
 	// classification result — the caller still gets the analysis.
 	snapshot := &models.BPContextHistory{
@@ -122,7 +145,52 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 	if o.metrics != nil {
 		o.metrics.BPPhenotypeTotal.WithLabelValues(string(result.Phenotype)).Inc()
 	}
+
+	o.emitPhenotypeEvents(ctx, patientID, oldPhenotype, result.Phenotype)
+
 	return &result, nil
+}
+
+// emitPhenotypeEvents publishes events to KB-19 when the classification
+// represents a new detection or a phenotype transition.
+//
+//   oldPhenotype empty + new is masked variant -> MASKED_HTN_DETECTED
+//   oldPhenotype != newPhenotype -> BP_PHENOTYPE_CHANGED
+//   oldPhenotype == newPhenotype -> no event
+//
+// Failures are logged but do not affect the caller — events are
+// best-effort, the snapshot is the source of truth.
+func (o *BPContextOrchestrator) emitPhenotypeEvents(
+	ctx context.Context,
+	patientID string,
+	oldPhenotype models.BPContextPhenotype,
+	newPhenotype models.BPContextPhenotype,
+) {
+	if o.kb19 == nil {
+		return
+	}
+
+	isNewDetection := oldPhenotype == "" && (newPhenotype == models.PhenotypeMaskedHTN || newPhenotype == models.PhenotypeMaskedUncontrolled)
+	isTransition := oldPhenotype != "" && oldPhenotype != newPhenotype
+
+	if isNewDetection {
+		urgency := "URGENT"
+		if newPhenotype == models.PhenotypeMaskedUncontrolled {
+			urgency = "URGENT"
+		}
+		if err := o.kb19.PublishMaskedHTNDetected(ctx, patientID, string(newPhenotype), urgency); err != nil {
+			o.log.Warn("KB-19 MASKED_HTN_DETECTED publish failed",
+				zap.String("patient_id", patientID), zap.Error(err))
+		}
+		return
+	}
+
+	if isTransition {
+		if err := o.kb19.PublishPhenotypeChanged(ctx, patientID, string(oldPhenotype), string(newPhenotype)); err != nil {
+			o.log.Warn("KB-19 BP_PHENOTYPE_CHANGED publish failed",
+				zap.String("patient_id", patientID), zap.Error(err))
+		}
+	}
 }
 
 // buildBPContextInputFromProfile constructs synthetic BPReading slices

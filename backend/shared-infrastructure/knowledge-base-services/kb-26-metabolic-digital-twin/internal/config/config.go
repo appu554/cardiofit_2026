@@ -19,6 +19,7 @@ type Config struct {
 	LogLevel    string
 
 	// Cross-KB integration
+	KB19ProtocolURL        string
 	KB20PatientProfileURL  string
 	KB21BehavioralURL      string
 	KB25LifestyleURL       string
@@ -81,6 +82,7 @@ func Load() (*Config, error) {
 		},
 
 		// Cross-KB URLs
+		KB19ProtocolURL:       getEnv("KB19_URL", "http://localhost:8103"),
 		KB20PatientProfileURL: getEnv("KB20_URL", "http://localhost:8131"),
 		KB21BehavioralURL:     getEnv("KB21_URL", "http://localhost:8133"),
 		KB25LifestyleURL:      getEnv("KB25_URL", "http://localhost:8136"),

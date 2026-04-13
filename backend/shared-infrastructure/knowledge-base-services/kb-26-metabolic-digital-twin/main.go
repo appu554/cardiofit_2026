@@ -103,10 +103,11 @@ func main() {
 			zap.String("market", cfg.MarketCode), zap.Error(err))
 		// bpThresholds is nil; orchestrator will fall back to defaultBPContextThresholds()
 	}
+	kb19Client := clients.NewKB19Client(cfg.KB19ProtocolURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	kb20Client := clients.NewKB20Client(cfg.KB20PatientProfileURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	kb21Client := clients.NewKB21Client(cfg.KB21BehavioralURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	bpContextRepo := services.NewBPContextRepository(db.DB)
-	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector)
+	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client)
 
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
