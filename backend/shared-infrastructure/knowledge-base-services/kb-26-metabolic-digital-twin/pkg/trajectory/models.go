@@ -2,6 +2,7 @@ package trajectory
 
 import (
 	"kb-26-metabolic-digital-twin/internal/models"
+	"kb-26-metabolic-digital-twin/internal/services"
 )
 
 // Domain identifiers.
@@ -41,8 +42,14 @@ const (
 )
 
 // Struct type aliases — fully interchangeable with the internal types.
+type DomainTrajectoryPoint  = models.DomainTrajectoryPoint
 type DomainSlope            = models.DomainSlope
 type DivergencePattern      = models.DivergencePattern
 type LeadingIndicator       = models.LeadingIndicator
 type DomainCategoryCrossing = models.DomainCategoryCrossing
 type DecomposedTrajectory   = models.DecomposedTrajectory
+
+// Compute is the public wrapper around services.ComputeDecomposedTrajectory,
+// exposed here so cross-module consumers (e.g. KB-23 integration tests) can
+// exercise the full KB-26 pipeline without importing internal packages.
+var Compute = services.ComputeDecomposedTrajectory

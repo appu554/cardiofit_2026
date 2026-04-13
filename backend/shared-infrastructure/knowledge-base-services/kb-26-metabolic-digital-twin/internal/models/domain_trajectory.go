@@ -79,7 +79,6 @@ type DivergencePattern struct {
 type LeadingIndicator struct {
 	LeadingDomain  MHRIDomain   `json:"leading_domain"`
 	LaggingDomains []MHRIDomain `json:"lagging_domains"`
-	LeadDays       int          `json:"lead_days"`
 	Confidence     string       `json:"confidence"`
 	Interpretation string       `json:"interpretation"`
 }
@@ -117,8 +116,8 @@ type DecomposedTrajectory struct {
 // DomainTrajectoryHistory stores decomposed snapshots for trend-over-time analysis.
 type DomainTrajectoryHistory struct {
 	ID              string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID       uuid.UUID `gorm:"type:uuid;index:idx_dth_patient,priority:1;not null" json:"patient_id"`
-	SnapshotDate    time.Time `gorm:"index:idx_dth_patient,priority:2,sort:desc;not null" json:"snapshot_date"`
+	PatientID       uuid.UUID `gorm:"type:uuid;index:idx_dth_patient,priority:1;uniqueIndex:uq_dth_patient_date,priority:1;not null" json:"patient_id"`
+	SnapshotDate    time.Time `gorm:"type:date;index:idx_dth_patient,priority:2,sort:desc;uniqueIndex:uq_dth_patient_date,priority:2;not null" json:"snapshot_date"`
 	WindowDays      int       `gorm:"not null" json:"window_days"`
 	CompositeSlope  float64   `gorm:"type:decimal(6,3)" json:"composite_slope"`
 	GlucoseSlope    float64   `gorm:"type:decimal(6,3)" json:"glucose_slope"`

@@ -60,7 +60,7 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 	sortTrajectoryPoints(sorted)
 
 	first, last := sorted[0], sorted[len(sorted)-1]
-	result.WindowDays = int(last.Timestamp.Sub(first.Timestamp).Hours() / 24)
+	result.WindowDays = int(math.Round(last.Timestamp.Sub(first.Timestamp).Hours() / 24))
 
 	// Compute composite trajectory.
 	compositeScores := extractScores(sorted, func(p models.DomainTrajectoryPoint) float64 { return p.CompositeScore })
@@ -103,7 +103,7 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 		}
 
 		weightedDecline := math.Abs(slope) * domainWeights[domain]
-		if slope < 0 && weightedDecline > maxWeightedDecline {
+		if slope < decliningThreshold && weightedDecline > maxWeightedDecline {
 			maxWeightedDecline = weightedDecline
 			d := domain
 			dominantDriver = &d
@@ -118,7 +118,7 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 		result.DominantDriver = dominantDriver
 		totalWeightedDecline := 0.0
 		for domain, ds := range result.DomainSlopes {
-			if ds.SlopePerDay < 0 {
+			if ds.SlopePerDay < decliningThreshold {
 				totalWeightedDecline += math.Abs(ds.SlopePerDay) * domainWeights[domain]
 			}
 		}
