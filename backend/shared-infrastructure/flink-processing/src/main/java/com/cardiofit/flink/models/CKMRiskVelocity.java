@@ -58,6 +58,21 @@ public class CKMRiskVelocity implements Serializable {
     public long getComputationTimestamp() { return computationTimestamp; }
     public double getDataCompleteness() { return dataCompleteness; }
 
+    // Setters required for Flink POJO serializer (avoids Kryo fallback).
+    // Without these, Flink's TypeExtractor classifies CKMRiskVelocity as
+    // GenericType and uses Kryo, which fails on the enum-keyed
+    // domainVelocities map with "ClassCastException: CKMRiskDomain != null".
+    public void setDomainVelocities(Map<CKMRiskDomain, Double> v) {
+        this.domainVelocities = v != null ? v : new HashMap<>();
+    }
+    public void setCompositeScore(double s) { this.compositeScore = s; }
+    public void setCompositeClassification(CompositeClassification c) { this.compositeClassification = c; }
+    public void setCrossDomainAmplification(boolean a) { this.crossDomainAmplification = a; }
+    public void setAmplificationFactor(double f) { this.amplificationFactor = f; }
+    public void setDomainsDeteriorating(int d) { this.domainsDeteriorating = d; }
+    public void setComputationTimestamp(long t) { this.computationTimestamp = t; }
+    public void setDataCompleteness(double d) { this.dataCompleteness = d; }
+
     public static class Builder {
         private final CKMRiskVelocity v = new CKMRiskVelocity();
 

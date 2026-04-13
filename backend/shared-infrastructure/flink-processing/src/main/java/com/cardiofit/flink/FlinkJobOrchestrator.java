@@ -374,40 +374,52 @@ public class FlinkJobOrchestrator {
         }
     }
 
-    /** Serializes a ClinicalAction to JSON bytes. */
+    /**
+     * Serializes a ClinicalAction to JSON bytes.
+     * Uses static singleton ObjectMapper to prevent Metaspace leak on job restart.
+     */
     private static class ClinicalActionSerializer implements SerializationSchema<ClinicalAction> {
-        private transient ObjectMapper mapper;
+        private static final ObjectMapper SHARED_MAPPER = new ObjectMapper()
+                .registerModule(new JavaTimeModule());
 
         @Override
         public void open(InitializationContext context) {
-            mapper = new ObjectMapper();
-            mapper.registerModule(new JavaTimeModule());
+            // No-op: SHARED_MAPPER is a static singleton.
         }
 
         @Override
         public byte[] serialize(ClinicalAction element) {
             try {
-                return mapper.writeValueAsBytes(element);
+                return SHARED_MAPPER.writeValueAsBytes(element);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to serialize ClinicalAction", e);
             }
         }
     }
 
-    /** Generic JSON serializer for side-output model types. */
+    /**
+     * Generic JSON serializer for side-output model types.
+     *
+     * Uses a static singleton ObjectMapper to prevent JVM Metaspace leaks.
+     * Each ObjectMapper instantiation loads ~100 Jackson classes via reflection;
+     * with Flink's per-job ChildFirstClassLoader, repeated job restarts
+     * accumulate classes in Metaspace until the TaskManager OOMs (observed
+     * after ~500 restarts on production workload). ObjectMapper is thread-safe
+     * after configuration, so a single shared instance is correct and safe.
+     */
     private static class JsonSerializer<T> implements SerializationSchema<T> {
-        private transient ObjectMapper mapper;
+        private static final ObjectMapper SHARED_MAPPER = new ObjectMapper()
+                .registerModule(new JavaTimeModule());
 
         @Override
         public void open(InitializationContext context) {
-            mapper = new ObjectMapper();
-            mapper.registerModule(new JavaTimeModule());
+            // No-op: SHARED_MAPPER is a static singleton.
         }
 
         @Override
         public byte[] serialize(T element) {
             try {
-                return mapper.writeValueAsBytes(element);
+                return SHARED_MAPPER.writeValueAsBytes(element);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to serialize " + element.getClass().getSimpleName(), e);
             }
