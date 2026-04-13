@@ -150,7 +150,6 @@ func TestClassifyBPContext_MaskedHTN_CKDAmplification(t *testing.T) {
 		},
 		HomeReadings: generateHomeReadings(14, 144, 90),
 		HasCKD:       true,
-		EGFR:         42,
 	}
 
 	result := ClassifyBPContext(input)
@@ -273,7 +272,6 @@ func TestClassifyBPContext_RajeshKumar(t *testing.T) {
 		HomeReadings:        generateHomeReadings(14, 158, 96),
 		IsDiabetic:          true,
 		HasCKD:              true,
-		EGFR:                42,
 		OnAntihypertensives: true,
 		MorningSurge7dAvg:   28,
 	}

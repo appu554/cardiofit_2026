@@ -35,12 +35,12 @@ type BPReading struct {
 
 // BPContextInput is the input to the clinic-home BP classifier.
 type BPContextInput struct {
+	PatientID           string
 	ClinicReadings      []BPReading
 	HomeReadings        []BPReading
 	OnAntihypertensives bool
 	IsDiabetic          bool
 	HasCKD              bool
-	EGFR                float64
 	EngagementPhenotype string
 	MorningSurge7dAvg   float64
 }
@@ -48,6 +48,7 @@ type BPContextInput struct {
 // ClassifyBPContext performs the clinic-home BP discordance analysis.
 func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
 	result := models.BPContextClassification{
+		PatientID:           input.PatientID,
 		ComputedAt:          time.Now(),
 		OnAntihypertensives: input.OnAntihypertensives,
 		IsDiabetic:          input.IsDiabetic,
@@ -155,6 +156,9 @@ func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
 }
 
 func computeBPMeans(readings []BPReading) (float64, float64) {
+	if len(readings) == 0 {
+		return 0, 0
+	}
 	var sumSBP, sumDBP float64
 	for _, r := range readings {
 		sumSBP += r.SBP
@@ -218,6 +222,9 @@ func detectMedicationTimingPattern(homeReadings []BPReading) string {
 }
 
 func meanFloat(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
 	s := 0.0
 	for _, v := range vals {
 		s += v
