@@ -194,4 +194,6 @@ const (
 	EventUnacknowledgedUrgentCard EventType = "UNACKNOWLEDGED_URGENT_CARD"
 	EventMCUGateReaffirmation     EventType = "MCU_GATE_REAFFIRMATION_NEEDED"
 	EventSLABreach                EventType = "SLA_BREACH"
+	EventMaskedHTNDetected        EventType = "MASKED_HTN_DETECTED"
+	EventBPPhenotypeChanged       EventType = "BP_PHENOTYPE_CHANGED"
 )

@@ -79,6 +79,52 @@ func (p *KB19Publisher) PublishSafetyAlert(patientID uuid.UUID, sessionID *uuid.
 	}
 }
 
+// PublishMaskedHTNDetected publishes when a patient is newly classified as
+// masked HTN or masked uncontrolled — the highest clinical priority because
+// these phenotypes are invisible to clinic-only measurement.
+func (p *KB19Publisher) PublishMaskedHTNDetected(patientID uuid.UUID, phenotype string, urgency string) error {
+	event := models.KB19Event{
+		EventType:   models.EventMaskedHTNDetected,
+		PatientID:   patientID,
+		BPPhenotype: phenotype,
+		Urgency:     urgency,
+		Timestamp:   time.Now(),
+	}
+	if err := p.publishEvent(event); err != nil {
+		p.log.Error("MASKED_HTN_DETECTED publish failed",
+			zap.String("patient_id", patientID.String()),
+			zap.String("phenotype", phenotype),
+			zap.Error(err),
+		)
+		p.metrics.KB19PublishErrors.Inc()
+		return err
+	}
+	return nil
+}
+
+// PublishPhenotypeChanged publishes when a patient's BP context phenotype
+// changes from one classification to another (e.g. WCH -> SH after 6 months).
+func (p *KB19Publisher) PublishPhenotypeChanged(patientID uuid.UUID, oldPhenotype, newPhenotype string) error {
+	event := models.KB19Event{
+		EventType:    models.EventBPPhenotypeChanged,
+		PatientID:    patientID,
+		OldPhenotype: oldPhenotype,
+		NewPhenotype: newPhenotype,
+		Timestamp:    time.Now(),
+	}
+	if err := p.publishEvent(event); err != nil {
+		p.log.Error("BP_PHENOTYPE_CHANGED publish failed",
+			zap.String("patient_id", patientID.String()),
+			zap.String("old_phenotype", oldPhenotype),
+			zap.String("new_phenotype", newPhenotype),
+			zap.Error(err),
+		)
+		p.metrics.KB19PublishErrors.Inc()
+		return err
+	}
+	return nil
+}
+
 func (p *KB19Publisher) publishEvent(event models.KB19Event) error {
 	start := time.Now()
 

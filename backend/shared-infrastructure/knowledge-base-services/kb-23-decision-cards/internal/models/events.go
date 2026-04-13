@@ -28,6 +28,14 @@ type KB19Event struct {
 	Severity          string `json:"severity,omitempty"`
 	RecommendedAction string `json:"recommended_action,omitempty"`
 
+	// MASKED_HTN_DETECTED fields
+	BPPhenotype string `json:"bp_phenotype,omitempty"`
+	Urgency     string `json:"urgency,omitempty"`
+
+	// BP_PHENOTYPE_CHANGED fields
+	OldPhenotype string `json:"old_phenotype,omitempty"`
+	NewPhenotype string `json:"new_phenotype,omitempty"`
+
 	Timestamp time.Time `json:"timestamp"`
 }
 
