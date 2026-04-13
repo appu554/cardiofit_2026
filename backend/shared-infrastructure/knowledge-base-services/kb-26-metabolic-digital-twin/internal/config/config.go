@@ -26,6 +26,10 @@ type Config struct {
 	KB22SignalTimeoutMS    int
 	KB23DecisionCardsURL   string
 
+	// BP context market configuration
+	MarketConfigDir string
+	MarketCode      string
+
 	// Twin computation
 	ObservationWindowDays int
 	BurnInWeeks           int
@@ -83,6 +87,10 @@ func Load() (*Config, error) {
 		KB22HPIURL:           getEnv("KB22_URL", "http://localhost:8132"),
 		KB22SignalTimeoutMS:  getEnvAsInt("KB22_SIGNAL_TIMEOUT_MS", 500),
 		KB23DecisionCardsURL: getEnv("KB23_URL", "http://localhost:8134"),
+
+		// BP context market configuration
+		MarketConfigDir: getEnv("MARKET_CONFIG_DIR", "../../market-configs"),
+		MarketCode:      getEnv("MARKET_CODE", "shared"),
 
 		// Twin computation defaults
 		ObservationWindowDays: getEnvAsInt("OBSERVATION_WINDOW_DAYS", 14),

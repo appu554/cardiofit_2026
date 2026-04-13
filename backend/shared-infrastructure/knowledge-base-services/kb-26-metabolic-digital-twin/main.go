@@ -96,8 +96,20 @@ func main() {
 	quarterlyAggregator := services.NewQuarterlyAggregator(db.DB, logger)
 	_ = quarterlyAggregator // available for scheduled jobs; not wired into request pipeline
 
+	// 7b. Initialize BP context orchestrator (Phase 2)
+	bpThresholds, err := config.LoadBPContextThresholds(cfg.MarketConfigDir, cfg.MarketCode)
+	if err != nil {
+		logger.Warn("BP context thresholds load failed; using defaults",
+			zap.String("market", cfg.MarketCode), zap.Error(err))
+		// bpThresholds is nil; orchestrator will fall back to defaultBPContextThresholds()
+	}
+	kb20Client := clients.NewKB20Client(cfg.KB20PatientProfileURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
+	kb21Client := clients.NewKB21Client(cfg.KB21BehavioralURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
+	bpContextRepo := services.NewBPContextRepository(db.DB)
+	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger)
+
 	// 8. Create HTTP server
-	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
+	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
 
 	// 9. Start HTTP server
 	go func() {
