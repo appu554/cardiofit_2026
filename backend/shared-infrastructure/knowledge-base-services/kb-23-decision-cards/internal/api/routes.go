@@ -35,5 +35,11 @@ func (s *Server) RegisterRoutes() {
 
 		// Gate Management (Phase 4)
 		v1.POST("/cards/:id/mcu-gate-resume", s.handleMCUGateResume)
+
+		// Composite Card Synthesis trigger (Phase 4 P9)
+		// Called by KB-26 after each BP context classification to fold
+		// active cards (masked HTN, medication timing, selection bias,
+		// etc.) into a single CompositeCardSignal.
+		v1.POST("/composite-cards/synthesize/:patientId", s.handleCompositeSynthesize)
 	}
 }

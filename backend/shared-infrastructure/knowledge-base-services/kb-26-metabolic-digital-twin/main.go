@@ -113,6 +113,10 @@ func main() {
 	kb19Client := clients.NewKB19Client(cfg.KB19ProtocolURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger, metricsCollector)
 	kb20Client := clients.NewKB20Client(cfg.KB20PatientProfileURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	kb21Client := clients.NewKB21Client(cfg.KB21BehavioralURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
+	// Phase 4 P9: KB-23 client triggers composite card synthesis after each
+	// successful BP context classification. Best-effort — orchestrator
+	// swallows failures so composite outages never block classification.
+	kb23Client := clients.NewKB23Client(cfg.KB23DecisionCardsURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	bpContextRepo := services.NewBPContextRepository(db.DB)
 
 	// BP context phenotype stability engine (Phase 4 P2)
@@ -126,7 +130,7 @@ func main() {
 	}
 	bpStabilityEngine := stability.NewEngine(bpStabilityPolicy)
 
-	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client, bpStabilityEngine)
+	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client, bpStabilityEngine, kb23Client)
 
 	// 7c. BP context daily batch scheduler (Phase 3)
 	bpBatchJob := services.NewBPContextDailyBatch(

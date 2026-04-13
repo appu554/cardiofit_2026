@@ -47,10 +47,29 @@ func newOrchestrator(t *testing.T, kb20 KB20Fetcher, kb21 KB21Fetcher) *BPContex
 
 func newOrchestratorWithPublisher(t *testing.T, kb20 KB20Fetcher, kb21 KB21Fetcher, kb19 KB19EventPublisher) *BPContextOrchestrator {
 	t.Helper()
+	return newOrchestratorFull(t, kb20, kb21, kb19, nil)
+}
+
+// newOrchestratorFull is the Phase 4 P9 variant that also injects a KB-23
+// composite trigger stub. Tests that only care about KB-19 events can keep
+// using newOrchestratorWithPublisher; the composite-trigger tests use this.
+func newOrchestratorFull(t *testing.T, kb20 KB20Fetcher, kb21 KB21Fetcher, kb19 KB19EventPublisher, kb23 KB23CompositeTrigger) *BPContextOrchestrator {
+	t.Helper()
 	db := setupBPContextTestDB(t) // from bp_context_repository_test.go
 	repo := NewBPContextRepository(db)
 	thresholds := defaultBPContextThresholds()
-	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, kb19, nil) // nil stability engine
+	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, kb19, nil, kb23) // nil stability engine
+}
+
+// stubKB23CompositeTrigger implements KB23CompositeTrigger for tests.
+type stubKB23CompositeTrigger struct {
+	calls []string // patient IDs
+	err   error    // optional injection: return this error from every call
+}
+
+func (s *stubKB23CompositeTrigger) TriggerCompositeSynthesize(ctx context.Context, patientID string) error {
+	s.calls = append(s.calls, patientID)
+	return s.err
 }
 
 func TestBPContextOrchestrator_MaskedHTN_Persists(t *testing.T) {
@@ -420,7 +439,7 @@ func newOrchestratorWithStability(
 	engine := stability.NewEngine(policy)
 	return NewBPContextOrchestrator(
 		kb20, kb21, repo, thresholds,
-		zap.NewNop(), nil, kb19, engine,
+		zap.NewNop(), nil, kb19, engine, nil,
 	)
 }
 
@@ -565,5 +584,94 @@ func TestBPContextOrchestrator_RealReadings_MorningEveningDifferential_FiresMedT
 	// The key assertion: MedicationTimingHypothesis must be non-empty.
 	if result.MedicationTimingHypothesis == "" {
 		t.Errorf("expected non-empty MedicationTimingHypothesis (morning-evening differential), got empty")
+	}
+}
+
+// Phase 4 P9: verify that a successful classification triggers KB-23
+// composite card synthesis exactly once per patient, passes the right
+// patient id through, and never propagates KB-23 errors back to the
+// caller (best-effort contract).
+
+func TestBPContextOrchestrator_P9_TriggersCompositeSynthesisOnClassify(t *testing.T) {
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-composite",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	kb23 := &stubKB23CompositeTrigger{}
+	orch := newOrchestratorFull(t, kb20, kb21, kb19, kb23)
+
+	if _, err := orch.Classify(context.Background(), "p-composite"); err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+
+	if len(kb23.calls) != 1 {
+		t.Fatalf("expected KB-23 composite trigger to be called once, got %d", len(kb23.calls))
+	}
+	if kb23.calls[0] != "p-composite" {
+		t.Errorf("expected patient id 'p-composite', got %q", kb23.calls[0])
+	}
+}
+
+func TestBPContextOrchestrator_P9_CompositeTriggerFailureIsSwallowed(t *testing.T) {
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-err",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	kb23 := &stubKB23CompositeTrigger{err: &simulatedErr{msg: "KB-23 down"}}
+	orch := newOrchestratorFull(t, kb20, kb21, kb19, kb23)
+
+	// Classification must succeed even though the trigger returns an error —
+	// composite synthesis is best-effort per P9 design.
+	result, err := orch.Classify(context.Background(), "p-err")
+	if err != nil {
+		t.Fatalf("classify should swallow KB-23 error, got %v", err)
+	}
+	if result == nil {
+		t.Fatal("classify returned nil result on KB-23 error")
+	}
+	if len(kb23.calls) != 1 {
+		t.Errorf("expected single trigger attempt even on error, got %d", len(kb23.calls))
+	}
+}
+
+func TestBPContextOrchestrator_P9_NilTriggerIsNoop(t *testing.T) {
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-nil",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	orch := newOrchestratorFull(t, kb20, kb21, kb19, nil) // explicit nil
+
+	if _, err := orch.Classify(context.Background(), "p-nil"); err != nil {
+		t.Fatalf("classify with nil composite trigger should succeed, got %v", err)
 	}
 }

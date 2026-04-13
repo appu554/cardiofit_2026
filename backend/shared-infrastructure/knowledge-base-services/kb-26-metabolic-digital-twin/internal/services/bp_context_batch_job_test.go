@@ -41,7 +41,7 @@ func setupBatchJobTest(t *testing.T, kb20Profile *clients.KB20PatientProfile) (*
 	kb20 := &stubKB20Client{profile: kb20Profile}
 	kb21 := &stubKB21Client{}
 	thresholds := defaultBPContextThresholds()
-	inner := NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, nil, nil) // nil stability engine
+	inner := NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, nil, nil, nil) // nil stability engine, nil KB-23 trigger
 
 	tracker := &trackingClassifier{inner: inner}
 	job := NewBPContextDailyBatch(repo, tracker, 30*24*time.Hour, 4, zap.NewNop(), nil)

@@ -36,6 +36,15 @@ type KB19EventPublisher interface {
 	PublishPhenotypeChanged(ctx context.Context, patientID, oldPhenotype, newPhenotype string) error
 }
 
+// KB23CompositeTrigger is the narrow interface the orchestrator needs from
+// the KB-23 client for Phase 4 P9: trigger composite card synthesis after
+// a successful classification so masked HTN + medication timing +
+// selection bias cards fold into one CompositeCardSignal with the most
+// restrictive MCU gate. Best-effort — failures are logged, not returned.
+type KB23CompositeTrigger interface {
+	TriggerCompositeSynthesize(ctx context.Context, patientID string) error
+}
+
 // BPContextOrchestrator coordinates upstream fetches, classification, and
 // persistence for a single patient's BP context analysis.
 type BPContextOrchestrator struct {
@@ -46,10 +55,13 @@ type BPContextOrchestrator struct {
 	log        *zap.Logger
 	metrics    *metrics.Collector
 	kb19       KB19EventPublisher
+	kb23       KB23CompositeTrigger
 	stability  *stability.Engine
 }
 
-// NewBPContextOrchestrator wires the orchestrator dependencies.
+// NewBPContextOrchestrator wires the orchestrator dependencies. kb23 is
+// optional — pass nil to disable the Phase 4 P9 composite synthesis
+// trigger (for tests or local dev without a KB-23 dependency).
 func NewBPContextOrchestrator(
 	kb20 KB20Fetcher,
 	kb21 KB21Fetcher,
@@ -59,6 +71,7 @@ func NewBPContextOrchestrator(
 	metricsCollector *metrics.Collector,
 	kb19 KB19EventPublisher,
 	stabilityEngine *stability.Engine,
+	kb23 KB23CompositeTrigger,
 ) *BPContextOrchestrator {
 	return &BPContextOrchestrator{
 		kb20:       kb20,
@@ -68,6 +81,7 @@ func NewBPContextOrchestrator(
 		log:        log,
 		metrics:    metricsCollector,
 		kb19:       kb19,
+		kb23:       kb23,
 		stability:  stabilityEngine,
 	}
 }
@@ -204,7 +218,26 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 
 	o.emitPhenotypeEvents(ctx, patientID, oldPhenotype, result.Phenotype)
 
+	// Phase 4 P9: ask KB-23 to fold any active cards into a single
+	// composite signal. Best-effort — composite failures never block
+	// classification. The snapshot + KB-19 event remain the source of
+	// truth for downstream consumers.
+	o.triggerCompositeSynthesis(ctx, patientID)
+
 	return &result, nil
+}
+
+// triggerCompositeSynthesis calls KB-23 to aggregate active cards for the
+// patient into a CompositeCardSignal. Phase 4 P9 wiring — see
+// KB23CompositeTrigger. Failures are logged and swallowed.
+func (o *BPContextOrchestrator) triggerCompositeSynthesis(ctx context.Context, patientID string) {
+	if o.kb23 == nil {
+		return
+	}
+	if err := o.kb23.TriggerCompositeSynthesize(ctx, patientID); err != nil {
+		o.log.Warn("KB-23 composite synthesise trigger failed",
+			zap.String("patient_id", patientID), zap.Error(err))
+	}
 }
 
 // emitPhenotypeEvents publishes events to KB-19 when the classification
