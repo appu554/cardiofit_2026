@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"kb-23-decision-cards/internal/services"
 )
 
 // handleCompositeSynthesize handles POST /api/v1/composite-cards/synthesize/:patientId
@@ -32,6 +34,44 @@ func (s *Server) handleCompositeSynthesize(c *gin.Context) {
 	if s.compositeService == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "composite_service_unavailable"})
 		return
+	}
+
+	// V4: Fetch, evaluate, and persist trajectory cards before aggregation.
+	// Graceful-degrade: 404 and INSUFFICIENT_DATA both return (nil, nil) — skip silently.
+	if s.kb26TrajectoryClient != nil {
+		if traj, err := s.kb26TrajectoryClient.GetTrajectory(c.Request.Context(), patientIDRaw); err == nil && traj != nil {
+			for _, card := range services.EvaluateTrajectoryCards(traj) {
+				dc := services.BuildTrajectoryDecisionCard(card, patientIDRaw)
+				if err := s.db.DB.WithContext(c.Request.Context()).Create(dc).Error; err != nil {
+					s.log.Warn("failed to persist trajectory card",
+						zap.String("patient_id", patientIDRaw),
+						zap.String("card_type", card.CardType),
+						zap.Error(err))
+				}
+			}
+		} else if err != nil {
+			s.log.Warn("failed to fetch domain trajectory from KB-26",
+				zap.String("patient_id", patientIDRaw), zap.Error(err))
+		}
+	}
+
+	// V4: Fetch, evaluate, and persist masked HTN cards before aggregation.
+	// Graceful-degrade: 404 returns (nil, nil) — skip silently.
+	if s.kb26BPContextClient != nil {
+		if bpCtx, err := s.kb26BPContextClient.Classify(c.Request.Context(), patientIDRaw); err == nil && bpCtx != nil {
+			for _, card := range services.EvaluateMaskedHTNCards(bpCtx) {
+				dc := services.BuildMaskedHTNDecisionCard(card, patientIDRaw)
+				if err := s.db.DB.WithContext(c.Request.Context()).Create(dc).Error; err != nil {
+					s.log.Warn("failed to persist masked HTN card",
+						zap.String("patient_id", patientIDRaw),
+						zap.String("card_type", card.CardType),
+						zap.Error(err))
+				}
+			}
+		} else if err != nil {
+			s.log.Warn("failed to fetch BP context from KB-26",
+				zap.String("patient_id", patientIDRaw), zap.Error(err))
+		}
 	}
 
 	composite, err := s.compositeService.Synthesize(c.Request.Context(), patientID)

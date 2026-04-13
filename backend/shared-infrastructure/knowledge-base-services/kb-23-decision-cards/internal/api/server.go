@@ -34,7 +34,8 @@ type Server struct {
 	kb19Publisher       *services.KB19Publisher
 	kb20Client          *services.KB20Client
 	kb21Client          *services.KB21Client
-	kb26BPContextClient *services.KB26BPContextClient
+	kb26BPContextClient  *services.KB26BPContextClient
+	kb26TrajectoryClient *services.KB26TrajectoryClient
 	hypoHandler         *services.HypoglycaemiaHandler
 	behavioralHandler   *services.BehavioralGapHandler
 	perturbationService *services.PerturbationService
@@ -91,6 +92,11 @@ func (s *Server) InitServices() {
 	s.kb20Client = services.NewKB20Client(s.cfg, s.metrics, s.log)
 	s.kb21Client = services.NewKB21Client(s.cfg, s.cache, s.metrics, s.log)
 	s.kb26BPContextClient = services.NewKB26BPContextClient(
+		s.cfg.KB26URL,
+		s.cfg.KB26Timeout(),
+		s.log,
+	)
+	s.kb26TrajectoryClient = services.NewKB26TrajectoryClient(
 		s.cfg.KB26URL,
 		s.cfg.KB26Timeout(),
 		s.log,
