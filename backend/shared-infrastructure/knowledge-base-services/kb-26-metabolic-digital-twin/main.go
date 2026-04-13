@@ -103,7 +103,7 @@ func main() {
 			zap.String("market", cfg.MarketCode), zap.Error(err))
 		// bpThresholds is nil; orchestrator will fall back to defaultBPContextThresholds()
 	}
-	kb19Client := clients.NewKB19Client(cfg.KB19ProtocolURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
+	kb19Client := clients.NewKB19Client(cfg.KB19ProtocolURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger, metricsCollector)
 	kb20Client := clients.NewKB20Client(cfg.KB20PatientProfileURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	kb21Client := clients.NewKB21Client(cfg.KB21BehavioralURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	bpContextRepo := services.NewBPContextRepository(db.DB)

@@ -44,7 +44,7 @@ func setupBatchJobTest(t *testing.T, kb20Profile *clients.KB20PatientProfile) (*
 	inner := NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, nil)
 
 	tracker := &trackingClassifier{inner: inner}
-	job := NewBPContextDailyBatch(repo, tracker, 30*24*time.Hour, 4, zap.NewNop())
+	job := NewBPContextDailyBatch(repo, tracker, 30*24*time.Hour, 4, zap.NewNop(), nil)
 	return job, repo, tracker
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"kb-26-metabolic-digital-twin/internal/metrics"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
@@ -27,6 +28,7 @@ type BPContextDailyBatch struct {
 	activeWindow time.Duration
 	concurrency  int
 	log          *zap.Logger
+	metrics      *metrics.Collector
 }
 
 // NewBPContextDailyBatch constructs the job.
@@ -38,6 +40,7 @@ func NewBPContextDailyBatch(
 	activeWindow time.Duration,
 	concurrency int,
 	log *zap.Logger,
+	metricsCollector *metrics.Collector,
 ) *BPContextDailyBatch {
 	if concurrency < 1 {
 		concurrency = 1
@@ -48,6 +51,7 @@ func NewBPContextDailyBatch(
 		activeWindow: activeWindow,
 		concurrency:  concurrency,
 		log:          log,
+		metrics:      metricsCollector,
 	}
 }
 
@@ -60,6 +64,13 @@ func (j *BPContextDailyBatch) Name() string { return "bp_context_daily" }
 // graceful shutdown — the method returns context.Canceled as soon as the
 // context is done.
 func (j *BPContextDailyBatch) Run(ctx context.Context) error {
+	start := time.Now()
+	defer func() {
+		if j.metrics != nil {
+			j.metrics.BPBatchDuration.Observe(time.Since(start).Seconds())
+		}
+	}()
+
 	// Fast-path: don't bother listing patients if already cancelled.
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -67,6 +78,9 @@ func (j *BPContextDailyBatch) Run(ctx context.Context) error {
 
 	patientIDs, err := j.repo.ListActivePatientIDs(j.activeWindow)
 	if err != nil {
+		if j.metrics != nil {
+			j.metrics.BPBatchErrors.Inc()
+		}
 		return err
 	}
 
@@ -113,9 +127,15 @@ func (j *BPContextDailyBatch) Run(ctx context.Context) error {
 					zap.String("patient_id", patientID),
 					zap.Error(classErr))
 				errored.Add(1)
+				if j.metrics != nil {
+					j.metrics.BPBatchPatientsTotal.WithLabelValues("error").Inc()
+				}
 				return
 			}
 			processed.Add(1)
+			if j.metrics != nil {
+				j.metrics.BPBatchPatientsTotal.WithLabelValues("success").Inc()
+			}
 		}(pid)
 	}
 

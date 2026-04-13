@@ -25,7 +25,7 @@ func TestKB19Client_PublishPhenotypeChanged_PostsCorrectEnvelope(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewKB19Client(server.URL, 1*time.Second, zap.NewNop())
+	client := NewKB19Client(server.URL, 1*time.Second, zap.NewNop(), nil)
 	err := client.PublishPhenotypeChanged(context.Background(), "p1", "WHITE_COAT_HTN", "SUSTAINED_HTN")
 	if err != nil {
 		t.Fatalf("publish failed: %v", err)
@@ -53,7 +53,7 @@ func TestKB19Client_PublishMaskedHTNDetected_IncludesUrgency(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewKB19Client(server.URL, 1*time.Second, zap.NewNop())
+	client := NewKB19Client(server.URL, 1*time.Second, zap.NewNop(), nil)
 	err := client.PublishMaskedHTNDetected(context.Background(), "p1", "MASKED_HTN", "IMMEDIATE")
 	if err != nil {
 		t.Fatalf("publish failed: %v", err)
@@ -75,7 +75,7 @@ func TestKB19Client_PublishPhenotypeChanged_ServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewKB19Client(server.URL, 1*time.Second, zap.NewNop())
+	client := NewKB19Client(server.URL, 1*time.Second, zap.NewNop(), nil)
 	err := client.PublishPhenotypeChanged(context.Background(), "p1", "WHITE_COAT_HTN", "SUSTAINED_HTN")
 	if err == nil {
 		t.Error("expected error on 500")
@@ -84,7 +84,7 @@ func TestKB19Client_PublishPhenotypeChanged_ServerError(t *testing.T) {
 
 func TestKB19Client_NetworkError_DoesNotPanic(t *testing.T) {
 	// Pointing at an unreachable URL should return an error, not panic.
-	client := NewKB19Client("http://127.0.0.1:1", 100*time.Millisecond, zap.NewNop())
+	client := NewKB19Client("http://127.0.0.1:1", 100*time.Millisecond, zap.NewNop(), nil)
 	err := client.PublishPhenotypeChanged(context.Background(), "p1", "WHITE_COAT_HTN", "SUSTAINED_HTN")
 	if err == nil {
 		t.Error("expected error from unreachable server")

@@ -35,6 +35,12 @@ type Config struct {
 	ObservationWindowDays int
 	BurnInWeeks           int
 
+	// BP context daily batch scheduler (Phase 3)
+	BPBatchEnabled     bool
+	BPBatchHourUTC     int
+	BPBatchConcurrency int
+	BPActiveWindowDays int
+
 	// Performance
 	QueryTimeout    time.Duration
 	MaxConnections  int
@@ -97,6 +103,12 @@ func Load() (*Config, error) {
 		// Twin computation defaults
 		ObservationWindowDays: getEnvAsInt("OBSERVATION_WINDOW_DAYS", 14),
 		BurnInWeeks:           getEnvAsInt("BURN_IN_WEEKS", 12),
+
+		// BP context daily batch scheduler (Phase 3)
+		BPBatchEnabled:     getEnv("BP_BATCH_ENABLED", "true") == "true",
+		BPBatchHourUTC:     getEnvAsInt("BP_BATCH_HOUR_UTC", 2),
+		BPBatchConcurrency: getEnvAsInt("BP_BATCH_CONCURRENCY", 10),
+		BPActiveWindowDays: getEnvAsInt("BP_ACTIVE_WINDOW_DAYS", 30),
 
 		// Performance
 		QueryTimeout:    getEnvAsDuration("QUERY_TIMEOUT", "10s"),

@@ -82,6 +82,12 @@ func (p *KB19Publisher) PublishSafetyAlert(patientID uuid.UUID, sessionID *uuid.
 // PublishMaskedHTNDetected publishes when a patient is newly classified as
 // masked HTN or masked uncontrolled — the highest clinical priority because
 // these phenotypes are invisible to clinic-only measurement.
+//
+// Deprecated: BP context phenotype events are published by KB-26's
+// BPContextOrchestrator directly via its own KB-19 client (Phase 3).
+// This method is retained for future use cases where KB-23 might need
+// to publish unrelated events with the same envelope shape, but is not
+// called by any production code path as of Phase 3.
 func (p *KB19Publisher) PublishMaskedHTNDetected(patientID uuid.UUID, phenotype string, urgency string) error {
 	event := models.KB19Event{
 		EventType:   models.EventMaskedHTNDetected,
@@ -104,6 +110,12 @@ func (p *KB19Publisher) PublishMaskedHTNDetected(patientID uuid.UUID, phenotype 
 
 // PublishPhenotypeChanged publishes when a patient's BP context phenotype
 // changes from one classification to another (e.g. WCH -> SH after 6 months).
+//
+// Deprecated: BP context phenotype events are published by KB-26's
+// BPContextOrchestrator directly via its own KB-19 client (Phase 3).
+// This method is retained for future use cases where KB-23 might need
+// to publish unrelated events with the same envelope shape, but is not
+// called by any production code path as of Phase 3.
 func (p *KB19Publisher) PublishPhenotypeChanged(patientID uuid.UUID, oldPhenotype, newPhenotype string) error {
 	event := models.KB19Event{
 		EventType:    models.EventBPPhenotypeChanged,

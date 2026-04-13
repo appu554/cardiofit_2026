@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"kb-26-metabolic-digital-twin/internal/metrics"
 )
 
 // KB19Event is the envelope KB-19 expects on POST /api/v1/events.
@@ -30,14 +32,17 @@ type KB19Client struct {
 	baseURL string
 	client  *http.Client
 	log     *zap.Logger
+	metrics *metrics.Collector
 }
 
-// NewKB19Client constructs a client.
-func NewKB19Client(baseURL string, timeout time.Duration, log *zap.Logger) *KB19Client {
+// NewKB19Client constructs a client. The metrics collector is optional;
+// pass nil in tests.
+func NewKB19Client(baseURL string, timeout time.Duration, log *zap.Logger, metricsCollector *metrics.Collector) *KB19Client {
 	return &KB19Client{
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: timeout},
 		log:     log,
+		metrics: metricsCollector,
 	}
 }
 
@@ -64,14 +69,27 @@ func (c *KB19Client) PublishPhenotypeChanged(ctx context.Context, patientID, old
 }
 
 func (c *KB19Client) post(ctx context.Context, event KB19Event) error {
+	start := time.Now()
+	defer func() {
+		if c.metrics != nil {
+			c.metrics.KB19PublishLatency.Observe(time.Since(start).Seconds())
+		}
+	}()
+
 	body, err := json.Marshal(event)
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.KB19PublishErrors.Inc()
+		}
 		return fmt.Errorf("marshal KB-19 event: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/v1/events", c.baseURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
+		if c.metrics != nil {
+			c.metrics.KB19PublishErrors.Inc()
+		}
 		return fmt.Errorf("build KB-19 request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -79,12 +97,18 @@ func (c *KB19Client) post(ctx context.Context, event KB19Event) error {
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.log.Warn("KB-19 publish failed", zap.String("url", url), zap.Error(err))
+		if c.metrics != nil {
+			c.metrics.KB19PublishErrors.Inc()
+		}
 		return fmt.Errorf("KB-19 POST: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
+		if c.metrics != nil {
+			c.metrics.KB19PublishErrors.Inc()
+		}
 		return fmt.Errorf("KB-19 returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 

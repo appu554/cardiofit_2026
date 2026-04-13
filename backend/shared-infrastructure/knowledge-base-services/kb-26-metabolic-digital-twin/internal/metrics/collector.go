@@ -19,6 +19,15 @@ type Collector struct {
 	BPPhenotypeTotal  *prometheus.CounterVec
 	BPClassifyLatency prometheus.Histogram
 	BPClassifyErrors  prometheus.Counter
+
+	// BP context batch metrics (Phase 3)
+	BPBatchDuration      prometheus.Histogram
+	BPBatchPatientsTotal *prometheus.CounterVec // labels: outcome (success|error)
+	BPBatchErrors        prometheus.Counter
+
+	// KB-19 publisher metrics (Phase 3)
+	KB19PublishLatency prometheus.Histogram
+	KB19PublishErrors  prometheus.Counter
 }
 
 func NewCollector() *Collector {
@@ -82,6 +91,31 @@ func NewCollector() *Collector {
 				Help: "Total number of BP context classification failures",
 			},
 		),
+		BPBatchDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb26_bp_batch_duration_seconds",
+			Help:    "End-to-end duration of one BP context daily batch run",
+			Buckets: prometheus.ExponentialBuckets(1, 2, 10), // 1s -> 1024s
+		}),
+		BPBatchPatientsTotal: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "kb26_bp_batch_patients_total",
+				Help: "Patients processed by the BP context batch, by outcome",
+			},
+			[]string{"outcome"},
+		),
+		BPBatchErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb26_bp_batch_errors_total",
+			Help: "Number of fatal BP batch failures (does not include per-patient errors)",
+		}),
+		KB19PublishLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb26_kb19_publish_latency_seconds",
+			Help:    "Latency of POST to KB-19 /api/v1/events from KB-26",
+			Buckets: prometheus.DefBuckets,
+		}),
+		KB19PublishErrors: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb26_kb19_publish_errors_total",
+			Help: "Number of failed KB-19 event publishes",
+		}),
 	}
 }
 
