@@ -88,6 +88,21 @@ func (r *BPContextRepository) ListActivePatientIDs(window time.Duration) ([]stri
 	return ids, nil
 }
 
+// FetchHistorySince returns all snapshots for a patient with snapshot_date
+// on or after the given time. Results are ordered oldest-first, matching
+// the stability engine's expected History ordering (latest last).
+func (r *BPContextRepository) FetchHistorySince(patientID string, since time.Time) ([]models.BPContextHistory, error) {
+	var snapshots []models.BPContextHistory
+	err := r.db.
+		Where("patient_id = ? AND snapshot_date >= ?", patientID, since).
+		Order("snapshot_date ASC").
+		Find(&snapshots).Error
+	if err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
 // DB returns the underlying GORM handle. Intended for tests and admin
 // utilities that need raw query access; production code should call
 // repository methods.

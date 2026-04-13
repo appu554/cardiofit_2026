@@ -242,6 +242,44 @@ func TestBPContextRepository_ListActivePatientIDs(t *testing.T) {
 	}
 }
 
+func TestBPContextRepository_FetchHistorySince_FiltersByTime(t *testing.T) {
+	db := setupBPContextTestDB(t)
+	repo := NewBPContextRepository(db)
+
+	now := time.Now().UTC()
+
+	// 3 snapshots: 40 days ago, 20 days ago, 5 days ago
+	for i, daysAgo := range []int{40, 20, 5} {
+		_ = i
+		snapshot := &models.BPContextHistory{
+			ID:           uuid.New().String(),
+			PatientID:    "p1",
+			SnapshotDate: now.AddDate(0, 0, -daysAgo),
+			Phenotype:    models.PhenotypeSustainedHTN,
+			Confidence:   "HIGH",
+		}
+		if err := repo.SaveSnapshot(snapshot); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+
+	// Query last 30 days — should return 2 snapshots (the 20-day and 5-day rows)
+	history, err := repo.FetchHistorySince("p1", now.AddDate(0, 0, -30))
+	if err != nil {
+		t.Fatalf("FetchHistorySince: %v", err)
+	}
+	if len(history) != 2 {
+		t.Errorf("expected 2 snapshots in last 30 days, got %d", len(history))
+	}
+	// Oldest first — first row should be the 20-day snapshot
+	if len(history) >= 2 {
+		diff := history[1].SnapshotDate.Sub(history[0].SnapshotDate)
+		if diff < 0 {
+			t.Errorf("expected oldest first, got newest first")
+		}
+	}
+}
+
 func TestBPContextRepository_ListActivePatientIDs_DeduplicatesMultipleSnapshots(t *testing.T) {
 	db := setupBPContextTestDB(t)
 	setupTwinStateTable(t, db)

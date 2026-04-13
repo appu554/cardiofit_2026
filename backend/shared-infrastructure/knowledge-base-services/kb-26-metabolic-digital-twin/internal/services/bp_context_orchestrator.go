@@ -12,6 +12,7 @@ import (
 	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/metrics"
 	"kb-26-metabolic-digital-twin/internal/models"
+	"kb-26-metabolic-digital-twin/pkg/stability"
 )
 
 // KB20Fetcher is the narrow interface the orchestrator needs from KB-20.
@@ -45,6 +46,7 @@ type BPContextOrchestrator struct {
 	log        *zap.Logger
 	metrics    *metrics.Collector
 	kb19       KB19EventPublisher
+	stability  *stability.Engine
 }
 
 // NewBPContextOrchestrator wires the orchestrator dependencies.
@@ -56,6 +58,7 @@ func NewBPContextOrchestrator(
 	log *zap.Logger,
 	metricsCollector *metrics.Collector,
 	kb19 KB19EventPublisher,
+	stabilityEngine *stability.Engine,
 ) *BPContextOrchestrator {
 	return &BPContextOrchestrator{
 		kb20:       kb20,
@@ -65,6 +68,7 @@ func NewBPContextOrchestrator(
 		log:        log,
 		metrics:    metricsCollector,
 		kb19:       kb19,
+		stability:  stabilityEngine,
 	}
 }
 
@@ -145,6 +149,37 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 		oldPhenotype = prior.Phenotype
 	}
 
+	// Phase 4 P2: Stability check. Fetch recent history and evaluate
+	// the proposed transition. If damped, keep the prior phenotype.
+	// The stability engine is nil-safe — no engine means no dampening.
+	if o.stability != nil && oldPhenotype != "" {
+		historyRows, histErr := o.repo.FetchHistorySince(patientID, time.Now().UTC().AddDate(0, 0, -60))
+		if histErr != nil {
+			o.log.Warn("stability history fetch failed; skipping dampening",
+				zap.String("patient_id", patientID), zap.Error(histErr))
+		} else {
+			history := buildStabilityHistory(historyRows)
+			override := detectOverrideEvent(profile)
+			decision := o.stability.Evaluate(
+				history,
+				string(result.Phenotype),
+				time.Now().UTC(),
+				override,
+			)
+			if decision.Decision == stability.DecisionDamp {
+				o.log.Info("BP phenotype transition damped",
+					zap.String("patient_id", patientID),
+					zap.String("proposed", string(result.Phenotype)),
+					zap.String("current", string(oldPhenotype)),
+					zap.String("reason", decision.Reason))
+				// Revert to the prior phenotype. The snapshot will be saved
+				// with the old phenotype, preserving stability.
+				result.Phenotype = oldPhenotype
+				result.Confidence = "DAMPED"
+			}
+		}
+	}
+
 	// Persist snapshot. If persistence fails, log but do not block the
 	// classification result — the caller still gets the analysis.
 	snapshot := &models.BPContextHistory{
@@ -212,6 +247,30 @@ func (o *BPContextOrchestrator) emitPhenotypeEvents(
 				zap.String("patient_id", patientID), zap.Error(err))
 		}
 	}
+}
+
+// buildStabilityHistory converts repository snapshot rows into the generic
+// History shape the stability engine consumes. Snapshots are assumed to
+// arrive oldest-first from FetchHistorySince.
+func buildStabilityHistory(rows []models.BPContextHistory) stability.History {
+	entries := make([]stability.Entry, 0, len(rows))
+	for _, r := range rows {
+		entries = append(entries, stability.Entry{
+			State:     string(r.Phenotype),
+			EnteredAt: r.SnapshotDate,
+		})
+	}
+	return stability.History{Entries: entries}
+}
+
+// detectOverrideEvent returns true when the patient profile indicates a
+// clinical event that should bypass stability dwell/flap checks. Phase 4
+// stub: always returns false. Phase 5 wires this to a real medication
+// change signal from KB-20 (see the MedicationChangeDate field when it
+// exists on KB20PatientProfile).
+func detectOverrideEvent(profile *clients.KB20PatientProfile) bool {
+	// Phase 4 P2 placeholder — no override detection yet.
+	return false
 }
 
 // buildBPContextInputFromProfile constructs synthetic BPReading slices

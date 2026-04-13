@@ -9,6 +9,7 @@ import (
 
 	"kb-26-metabolic-digital-twin/internal/clients"
 	"kb-26-metabolic-digital-twin/internal/models"
+	"kb-26-metabolic-digital-twin/pkg/stability"
 )
 
 // stubKB20Client implements the KB20Fetcher interface for tests.
@@ -49,7 +50,7 @@ func newOrchestratorWithPublisher(t *testing.T, kb20 KB20Fetcher, kb21 KB21Fetch
 	db := setupBPContextTestDB(t) // from bp_context_repository_test.go
 	repo := NewBPContextRepository(db)
 	thresholds := defaultBPContextThresholds()
-	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, kb19)
+	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, kb19, nil) // nil stability engine
 }
 
 func TestBPContextOrchestrator_MaskedHTN_Persists(t *testing.T) {
@@ -400,6 +401,109 @@ func TestBPContextOrchestrator_RealReadings_Empty_FallsBackToSynthetic(t *testin
 	}
 	if result.Phenotype != models.PhenotypeMaskedHTN {
 		t.Errorf("expected MASKED_HTN (fallback path), got %s", result.Phenotype)
+	}
+}
+
+// newOrchestratorWithStability is like newOrchestratorWithPublisher but
+// also injects a real stability engine for Phase 4 P2 tests.
+func newOrchestratorWithStability(
+	t *testing.T,
+	kb20 KB20Fetcher,
+	kb21 KB21Fetcher,
+	kb19 KB19EventPublisher,
+	policy stability.Policy,
+) *BPContextOrchestrator {
+	t.Helper()
+	db := setupBPContextTestDB(t)
+	repo := NewBPContextRepository(db)
+	thresholds := defaultBPContextThresholds()
+	engine := stability.NewEngine(policy)
+	return NewBPContextOrchestrator(
+		kb20, kb21, repo, thresholds,
+		zap.NewNop(), nil, kb19, engine,
+	)
+}
+
+func TestBPContextOrchestrator_Stability_DampsFlappingWithinDwell(t *testing.T) {
+	// Classifier would produce MASKED_HTN on day 1, then SUSTAINED_NORMOTENSION
+	// on day 2. With a 14-day dwell policy, day 2's transition must be damped
+	// and the phenotype must remain MASKED_HTN.
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p1",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+
+	orch := newOrchestratorWithStability(t, kb20, kb21, kb19, stability.Policy{
+		MinDwell:           14 * 24 * time.Hour,
+		FlapWindow:         30 * 24 * time.Hour,
+		MaxFlapsBeforeLock: 3,
+	})
+
+	// Day 1: classify as MASKED_HTN
+	result1, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("first classify: %v", err)
+	}
+	if result1.Phenotype != models.PhenotypeMaskedHTN {
+		t.Fatalf("expected MASKED_HTN on day 1, got %s", result1.Phenotype)
+	}
+
+	// Flip the profile so the classifier would now produce SUSTAINED_NORMOTENSION
+	kb20.profile.SBP14dMean = ptrFloat(120)
+	kb20.profile.DBP14dMean = ptrFloat(75)
+
+	// Day 2 (simulated by same-day reclassify via upsert): stability engine
+	// should damp the transition because <14 days elapsed.
+	result2, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("second classify: %v", err)
+	}
+	if result2.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("expected dampened MASKED_HTN (was MH, would flap to SN), got %s", result2.Phenotype)
+	}
+	if result2.Confidence != "DAMPED" {
+		t.Errorf("expected DAMPED confidence marker, got %s", result2.Confidence)
+	}
+}
+
+func TestBPContextOrchestrator_Stability_NoEngineNoDampening(t *testing.T) {
+	// Regression guard: nil stability engine means existing Phase 3
+	// behavior — transitions are accepted immediately.
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p1",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	orch := newOrchestratorWithPublisher(t, kb20, kb21, kb19) // nil engine
+
+	result, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+	if result.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("expected MASKED_HTN, got %s", result.Phenotype)
+	}
+	if result.Confidence == "DAMPED" {
+		t.Errorf("confidence should not be DAMPED when engine is nil")
 	}
 }
 

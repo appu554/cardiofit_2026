@@ -19,6 +19,7 @@ import (
 	"kb-26-metabolic-digital-twin/internal/metrics"
 	"kb-26-metabolic-digital-twin/internal/models"
 	"kb-26-metabolic-digital-twin/internal/services"
+	"kb-26-metabolic-digital-twin/pkg/stability"
 
 	"go.uber.org/zap"
 )
@@ -113,7 +114,19 @@ func main() {
 	kb20Client := clients.NewKB20Client(cfg.KB20PatientProfileURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	kb21Client := clients.NewKB21Client(cfg.KB21BehavioralURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	bpContextRepo := services.NewBPContextRepository(db.DB)
-	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client)
+
+	// BP context phenotype stability engine (Phase 4 P2)
+	// MinDwell 14 days: phenotype must be held 2 weeks before transition
+	// FlapWindow 30 days: oscillation lookback
+	// MaxFlapsBeforeLock 3: after 3 state changes in 30d, lock transitions
+	bpStabilityPolicy := stability.Policy{
+		MinDwell:           14 * 24 * time.Hour,
+		FlapWindow:         30 * 24 * time.Hour,
+		MaxFlapsBeforeLock: 3,
+	}
+	bpStabilityEngine := stability.NewEngine(bpStabilityPolicy)
+
+	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client, bpStabilityEngine)
 
 	// 7c. BP context daily batch scheduler (Phase 3)
 	bpBatchJob := services.NewBPContextDailyBatch(
