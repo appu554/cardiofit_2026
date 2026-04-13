@@ -71,6 +71,7 @@ func (s *Server) setupRoutes() {
 			patient.POST("/:id/labs", s.addLab)
 			patient.GET("/:id/labs", s.getLabs)
 			patient.GET("/:id/labs/egfr", s.getEGFRHistory)
+			patient.GET("/:id/bp-readings", s.listBPReadings)
 
 			// Medications
 			patient.POST("/:id/medications", s.addMedication)

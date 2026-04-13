@@ -36,6 +36,7 @@ type Server struct {
 	protocolService   *services.ProtocolService
 	protocolRegistry  *services.ProtocolRegistry
 	eventBus          services.EventPublisher
+	bpReadingQuery    *services.BPReadingQuery
 	logger            *zap.Logger
 }
 
@@ -83,6 +84,7 @@ func NewServer(
 		protocolService:   protocolSvc,
 		protocolRegistry:  protocolReg,
 		eventBus:          eventBus,
+		bpReadingQuery:    services.NewBPReadingQuery(db.DB),
 		logger:            logger,
 	}
 
