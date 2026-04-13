@@ -312,3 +312,86 @@ func TestMaskedHTNCards_SelectionBias_Demotes_NoAmplification_FromUrgentToRoutin
 		t.Errorf("expected ROUTINE urgency (demoted from URGENT due to selection bias), got %s", maskedCard.Urgency)
 	}
 }
+
+func TestConfidenceStringToTier_High(t *testing.T) {
+	if got := confidenceStringToTier("HIGH"); got != models.TierFirm {
+		t.Errorf("HIGH -> TierFirm, got %s", got)
+	}
+}
+
+func TestConfidenceStringToTier_Moderate(t *testing.T) {
+	if got := confidenceStringToTier("MODERATE"); got != models.TierProbable {
+		t.Errorf("MODERATE -> TierProbable, got %s", got)
+	}
+}
+
+func TestConfidenceStringToTier_Low(t *testing.T) {
+	if got := confidenceStringToTier("LOW"); got != models.TierPossible {
+		t.Errorf("LOW -> TierPossible, got %s", got)
+	}
+}
+
+func TestConfidenceStringToTier_Damped(t *testing.T) {
+	if got := confidenceStringToTier("DAMPED"); got != models.TierUncertain {
+		t.Errorf("DAMPED -> TierUncertain, got %s", got)
+	}
+}
+
+func TestConfidenceStringToTier_Unknown_DefaultsToUncertain(t *testing.T) {
+	if got := confidenceStringToTier("WEIRD"); got != models.TierUncertain {
+		t.Errorf("unknown -> TierUncertain, got %s", got)
+	}
+	if got := confidenceStringToTier(""); got != models.TierUncertain {
+		t.Errorf("empty -> TierUncertain, got %s", got)
+	}
+}
+
+func TestMaskedHTNCards_IncludeConfidenceTier_HighConfidence(t *testing.T) {
+	classification := &models.BPContextClassification{
+		Phenotype:     models.PhenotypeMaskedHTN,
+		ClinicSBPMean: 128,
+		ClinicDBPMean: 78,
+		HomeSBPMean:   148,
+		HomeDBPMean:   92,
+		Confidence:    "HIGH",
+	}
+
+	cards := EvaluateMaskedHTNCards(classification)
+	var maskedCard *MaskedHTNCard
+	for i := range cards {
+		if cards[i].CardType == "MASKED_HYPERTENSION" {
+			maskedCard = &cards[i]
+		}
+	}
+	if maskedCard == nil {
+		t.Fatal("expected MASKED_HYPERTENSION card")
+	}
+	if maskedCard.ConfidenceTier != models.TierFirm {
+		t.Errorf("HIGH confidence classification should produce TierFirm card, got %s", maskedCard.ConfidenceTier)
+	}
+}
+
+func TestMaskedHTNCards_IncludeConfidenceTier_Damped(t *testing.T) {
+	// DAMPED confidence (from stability engine) should produce TierUncertain
+	// so the downstream UX can show "we're watching this, not acting on it yet".
+	classification := &models.BPContextClassification{
+		Phenotype:   models.PhenotypeMaskedHTN,
+		ClinicSBPMean: 128,
+		HomeSBPMean:   148,
+		Confidence:  "DAMPED",
+	}
+
+	cards := EvaluateMaskedHTNCards(classification)
+	var maskedCard *MaskedHTNCard
+	for i := range cards {
+		if cards[i].CardType == "MASKED_HYPERTENSION" {
+			maskedCard = &cards[i]
+		}
+	}
+	if maskedCard == nil {
+		t.Fatal("expected MASKED_HYPERTENSION card")
+	}
+	if maskedCard.ConfidenceTier != models.TierUncertain {
+		t.Errorf("DAMPED confidence should produce TierUncertain, got %s", maskedCard.ConfidenceTier)
+	}
+}

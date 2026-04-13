@@ -10,11 +10,37 @@ import (
 
 // MaskedHTNCard represents a decision card for masked/white-coat hypertension phenotypes.
 type MaskedHTNCard struct {
-	CardType  string   `json:"card_type"`
-	Urgency   string   `json:"urgency"`
-	Title     string   `json:"title"`
-	Rationale string   `json:"rationale"`
-	Actions   []string `json:"actions"`
+	CardType       string                `json:"card_type"`
+	Urgency        string                `json:"urgency"`
+	Title          string                `json:"title"`
+	Rationale      string                `json:"rationale"`
+	Actions        []string              `json:"actions"`
+	ConfidenceTier models.ConfidenceTier `json:"confidence_tier"`
+}
+
+// confidenceStringToTier maps the BP context classifier's string-based
+// confidence ("HIGH"/"MODERATE"/"LOW"/"DAMPED") to KB-23's ConfidenceTier
+// enum. Used only by masked HTN cards — existing HTN safety templates
+// retain bypasses_confidence_gate=true and are unchanged.
+//
+//	HIGH     -> TierFirm      (full data sufficiency, no selection bias)
+//	MODERATE -> TierProbable  (sufficient data but not optimal)
+//	LOW      -> TierPossible  (bias risk or minimal data)
+//	DAMPED   -> TierUncertain (stability engine dampened a flappy transition)
+//	unknown  -> TierUncertain (defensive default)
+func confidenceStringToTier(confidence string) models.ConfidenceTier {
+	switch confidence {
+	case "HIGH":
+		return models.TierFirm
+	case "MODERATE":
+		return models.TierProbable
+	case "LOW":
+		return models.TierPossible
+	case "DAMPED":
+		return models.TierUncertain
+	default:
+		return models.TierUncertain
+	}
 }
 
 // EvaluateMaskedHTNCards generates decision cards from a BP context classification.
@@ -51,6 +77,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Review medication timing — consider evening/bedtime dosing of long-acting agent",
 				"Urgent cardiology review if home SBP >160 mmHg in morning window",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -72,6 +99,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Prefer 24-hour-coverage agents: long-acting ARB or dihydropyridine CCB",
 				"Consider 24-hour ABPM to characterise surge amplitude",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -124,6 +152,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Assess for end-organ damage: renal function, retinopathy, LVH",
 				"Review home monitoring technique and device accuracy",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -138,15 +167,16 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 		}
 
 		cards = append(cards, MaskedHTNCard{
-			CardType: "MASKED_UNCONTROLLED",
-			Urgency:  "URGENT",
-			Title:    "Masked Uncontrolled HTN — Therapy Appears Inadequate at Home",
+			CardType:  "MASKED_UNCONTROLLED",
+			Urgency:   "URGENT",
+			Title:     "Masked Uncontrolled HTN — Therapy Appears Inadequate at Home",
 			Rationale: rationale,
 			Actions: []string{
 				"Review current antihypertensive regimen — dose or agent adjustment likely required",
 				"Check medication adherence: home readings pattern vs dosing schedule",
 				"Consider ambulatory BP monitoring (ABPM) to quantify 24-hour burden",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -168,6 +198,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Lifestyle counselling (sodium, exercise, stress) remains appropriate",
 				"Consider ABPM for formal confirmation if clinical decision is complex",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -189,6 +220,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Continue structured home monitoring — reassess if home readings rise above 135/85 mmHg",
 				"Document white-coat effect in chart to prevent future overtreatment",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -219,6 +251,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Validate home BP device against clinic sphygmomanometer",
 				"Do not change therapy based on this classification alone — repeat structured HBPM first",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
@@ -238,6 +271,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 				"Reassess home BP after 4 weeks of timing change before escalating dose",
 				"ABPM post-change to confirm circadian pattern normalisation",
 			},
+			ConfidenceTier: confidenceStringToTier(c.Confidence),
 		})
 	}
 
