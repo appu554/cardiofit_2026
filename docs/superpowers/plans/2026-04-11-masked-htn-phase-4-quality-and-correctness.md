@@ -12,6 +12,20 @@
 
 ---
 
+## Status Snapshot — 2026-04-13
+
+- [x] **P1 — Graceful HTTP Shutdown + Batch Drain:** Implemented in `kb-26-metabolic-digital-twin/main.go` and `internal/services/batch_scheduler*.go` with passing tests.
+- [x] **P3 — Per-Reading BP Storage Wiring:** KB-20 query/endpoint + KB-26 client/orchestrator wiring landed; classifier now uses real LabEntry readings with synthetic fallback.
+- [x] **P2 — Phenotype Stability Engine:** Shared `pkg/stability` package plus orchestrator/repository wiring completed; dwell + flap dampening active.
+- [x] **P8 — Confidence Tier Mapping:** `masked_htn_cards.go` maps classifier confidence → `ConfidenceTier` with unit tests.
+- [x] **P5 — Operational Runbook:** `docs/runbooks/masked-htn-operations.md` shipped with all 8 Prometheus alert thresholds, 4-phase canary plan, rollback procedure, common failure runbooks, manual ops, glossary, and escalation contacts.
+- [x] **P7 — Card YAML Fragment Migration:** 8 templates under `templates/bp_context/` now drive rationale + action text via `MaskedHTNCardBuilder` + `TemplateLoader`/`FragmentLoader`; hardcoded fallbacks retained for loader-nil callers.
+- [x] **P9 — Composite Card Aggregation Wiring:** KB-23 exposes `POST /api/v1/composite-cards/synthesize/:patientId`; KB-26 orchestrator best-effort-triggers it after every successful `Classify` via new `KB23Client`.
+
+**Phase 4 complete.** All 7 sub-projects shipped.
+
+---
+
 ## Locked Decisions
 
 These are NOT open questions in this plan. They are fixed constraints derived from the Phase 4 exploration and the reviewer's findings.
