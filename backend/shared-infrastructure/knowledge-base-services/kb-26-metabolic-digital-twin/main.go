@@ -61,6 +61,7 @@ func main() {
 		&models.RelapseEvent{},
 		&models.QuarterlySummary{},
 		&models.PREVENTScore{},
+		&models.BPContextHistory{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
