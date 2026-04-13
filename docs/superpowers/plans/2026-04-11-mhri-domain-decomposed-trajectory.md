@@ -135,7 +135,7 @@ type DecomposedTrajectory struct {
 	DomainCrossings     []DomainCategoryCrossing     `json:"domain_crossings,omitempty"`
 	HasDiscordantTrend  bool                         `json:"has_discordant_trend"`
 	ConcordantDeterioration bool                     `json:"concordant_deterioration"`
-	DomainsDeterioration    int                      `json:"domains_deteriorating"`
+	DomainsDeteriorating    int                      `json:"domains_deteriorating"`
 }
 
 // DomainTrajectoryHistory stores decomposed snapshots for trend-over-time analysis.
@@ -343,8 +343,8 @@ func TestDomainTrajectory_AllDomainsImproving(t *testing.T) {
 	if result.HasDiscordantTrend {
 		t.Error("expected HasDiscordantTrend = false for all-improving")
 	}
-	if result.DomainsDeterioration != 0 {
-		t.Errorf("expected 0 domains deteriorating, got %d", result.DomainsDeterioration)
+	if result.DomainsDeteriorating != 0 {
+		t.Errorf("expected 0 domains deteriorating, got %d", result.DomainsDeteriorating)
 	}
 }
 
@@ -365,8 +365,8 @@ func TestDomainTrajectory_ConcordantDeterioration(t *testing.T) {
 	if !result.ConcordantDeterioration {
 		t.Error("expected ConcordantDeterioration = true")
 	}
-	if result.DomainsDeterioration < 2 {
-		t.Errorf("expected >= 2 domains deteriorating, got %d", result.DomainsDeterioration)
+	if result.DomainsDeteriorating < 2 {
+		t.Errorf("expected >= 2 domains deteriorating, got %d", result.DomainsDeteriorating)
 	}
 }
 
@@ -485,8 +485,8 @@ func TestDomainTrajectory_RajeshKumar(t *testing.T) {
 	}
 
 	// Three domains declining
-	if result.DomainsDeterioration < 3 {
-		t.Errorf("expected >= 3 domains deteriorating, got %d", result.DomainsDeterioration)
+	if result.DomainsDeteriorating < 3 {
+		t.Errorf("expected >= 3 domains deteriorating, got %d", result.DomainsDeteriorating)
 	}
 	if !result.ConcordantDeterioration {
 		t.Error("expected ConcordantDeterioration = true")
@@ -646,7 +646,7 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 		}
 	}
 
-	result.DomainsDeterioration = decliningCount
+	result.DomainsDeteriorating = decliningCount
 	result.ConcordantDeterioration = decliningCount >= 2
 
 	// Dominant driver calculation.
@@ -1180,7 +1180,7 @@ func TestTrajectoryCards_ConcordantDeterioration(t *testing.T) {
 		CompositeTrend:          "DECLINING",
 		CompositeSlope:          -1.5,
 		ConcordantDeterioration: true,
-		DomainsDeterioration:    3,
+		DomainsDeteriorating:    3,
 		DomainSlopes: map[dtModels.MHRIDomain]dtModels.DomainSlope{
 			dtModels.DomainGlucose:    {Trend: "DECLINING", SlopePerDay: -0.8},
 			dtModels.DomainCardio:     {Trend: "RAPID_DECLINING", SlopePerDay: -1.5},
@@ -1405,14 +1405,14 @@ func EvaluateTrajectoryCards(traj *dtModels.DecomposedTrajectory) []TrajectoryCa
 		}
 
 		urgency := "URGENT"
-		if traj.DomainsDeterioration >= 3 {
+		if traj.DomainsDeteriorating >= 3 {
 			urgency = "IMMEDIATE"
 		}
 
 		cards = append(cards, TrajectoryCard{
 			CardType: "CONCORDANT_DETERIORATION",
 			Urgency:  urgency,
-			Title:    fmt.Sprintf("Multi-Domain Deterioration — %d Domains Declining", traj.DomainsDeterioration),
+			Title:    fmt.Sprintf("Multi-Domain Deterioration — %d Domains Declining", traj.DomainsDeteriorating),
 			Rationale: fmt.Sprintf("Simultaneous decline across %s. Concordant multi-domain "+
 				"deterioration indicates systemic worsening — risk is multiplicative, not additive "+
 				"(AHA CKM Framework). Composite MHRI slope: %.2f/day.",
@@ -1591,7 +1591,7 @@ In the `evaluateMonitoringPillar` function, before the final `p.Status = PillarO
 		dt := input.DecomposedTrajectory
 		if dt.ConcordantDeterioration {
 			p.Status = PillarUrgentGap
-			p.Reason = fmt.Sprintf("concordant deterioration: %d domains declining — increase monitoring frequency", dt.DomainsDeterioration)
+			p.Reason = fmt.Sprintf("concordant deterioration: %d domains declining — increase monitoring frequency", dt.DomainsDeteriorating)
 			p.Actions = append(p.Actions, "increase monitoring frequency across all domains")
 			return p
 		}
@@ -1636,7 +1636,7 @@ func evaluateMonitoringPillar(input FourPillarInput) PillarResult {
 		dt := input.DecomposedTrajectory
 		if dt.ConcordantDeterioration {
 			p.Status = PillarUrgentGap
-			p.Reason = fmt.Sprintf("concordant deterioration: %d domains declining — increase monitoring frequency", dt.DomainsDeterioration)
+			p.Reason = fmt.Sprintf("concordant deterioration: %d domains declining — increase monitoring frequency", dt.DomainsDeteriorating)
 			p.Actions = append(p.Actions, "increase monitoring frequency across all domains")
 			return p
 		}
@@ -1937,4 +1937,22 @@ pillar integration.
 | 11 | API Handler + Route | 1 create + 1 modify | compile check |
 | 12 | Full Regression | — | all 17 pass |
 
-**Total: 12 tasks, 9 created files, 3 modified files, 17 new tests**
+**Total: 12 tasks, 9 created files, 3 modified files, 18 new tests (incl. integration test added in final review)**
+
+---
+
+## Known Gap (Phase 1 Follow-up)
+
+**Runtime wiring of trajectory cards and four-pillar trajectory input is not connected to any HTTP handler.**
+
+- `EvaluateTrajectoryCards()` is reachable only from tests.
+- `FourPillarInput.DecomposedTrajectory` has no populator — callers constructing `FourPillarInput` today do not fetch the trajectory.
+- The KB-26 endpoint `/api/v1/kb26/mri/:patientId/domain-trajectory` works standalone, so dashboards and shadow-mode analytics can consume it directly.
+
+This matches the same gap in the parallel Masked HTN feature:
+- `EvaluateMaskedHTNCards()` is also only called from tests.
+- `FourPillarInput.BPContext` also has no populator in KB-23 handlers.
+
+**Both features share the same architectural gap by design** — they ship as computable components and defer the "card orchestration" layer to a Phase 1 task that wires BOTH features into a unified card-generation pipeline (likely via `CompositeCardService`). Merging trajectory-only wiring now would create inconsistency with HTN.
+
+**Phase 1 task (out of scope for this plan):** Create a KB-23 handler that (a) fetches both `DecomposedTrajectory` from KB-26 and `BPContextClassification` from KB-26, (b) populates `FourPillarInput` with both, (c) calls `EvaluateTrajectoryCards` + `EvaluateMaskedHTNCards`, and (d) feeds the combined output into the existing `CompositeCardService` 72-hour aggregation window.
