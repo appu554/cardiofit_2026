@@ -5,24 +5,34 @@ import (
 	"math"
 	"time"
 
+	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
-// Default thresholds — overridden by market config at runtime.
-const (
-	defaultClinicSBP          = 140.0
-	defaultClinicDBP          = 90.0
-	defaultClinicSBP_DM       = 130.0
-	defaultClinicDBP_DM       = 80.0
-	defaultHomeSBP            = 135.0
-	defaultHomeDBP            = 85.0
-	minClinicReadings         = 2
-	minHomeReadings           = 12
-	minHomeDays               = 4
-	significantWCE            = 15.0
-	morningSurgeCompoundLimit = 20.0
-	minHomeForConfidence      = 20
-)
+// morningSurgeCompoundLimit is from clinical literature (ESH 2023) and is not
+// market-tunable, so it stays as a package-level constant rather than moving
+// into BPContextThresholds.
+const morningSurgeCompoundLimit = 20.0
+
+// defaultBPContextThresholds returns the ESH 2023 / ISH 2020 reference values
+// used when no market config is loaded. Tests pass nil and get these via
+// the same code path production uses.
+func defaultBPContextThresholds() *config.BPContextThresholds {
+	return &config.BPContextThresholds{
+		ClinicSBPElevated:        140.0,
+		ClinicDBPElevated:        90.0,
+		ClinicSBPElevatedDM:      130.0,
+		ClinicDBPElevatedDM:      80.0,
+		HomeSBPElevated:          135.0,
+		HomeDBPElevated:          85.0,
+		MinClinicReadings:        2,
+		MinHomeReadings:          12,
+		MinHomeDays:              4,
+		WCEClinicallySignificant: 15.0,
+		MinHomeForConfidence:     20,
+		FlagIfReadingsBelow:      12,
+	}
+}
 
 // BPReading represents a single blood pressure measurement.
 type BPReading struct {
@@ -46,7 +56,12 @@ type BPContextInput struct {
 }
 
 // ClassifyBPContext performs the clinic-home BP discordance analysis.
-func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
+// Pass nil for thresholds to use ESH 2023 / ISH 2020 reference defaults.
+func ClassifyBPContext(input BPContextInput, thresholds *config.BPContextThresholds) models.BPContextClassification {
+	if thresholds == nil {
+		thresholds = defaultBPContextThresholds()
+	}
+
 	result := models.BPContextClassification{
 		PatientID:           input.PatientID,
 		ComputedAt:          time.Now(),
@@ -56,21 +71,21 @@ func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
 	}
 
 	// Set thresholds (diabetic patients use stricter clinic thresholds per ISH 2020)
-	clinicSBPThresh := defaultClinicSBP
-	clinicDBPThresh := defaultClinicDBP
+	clinicSBPThresh := thresholds.ClinicSBPElevated
+	clinicDBPThresh := thresholds.ClinicDBPElevated
 	if input.IsDiabetic {
-		clinicSBPThresh = defaultClinicSBP_DM
-		clinicDBPThresh = defaultClinicDBP_DM
+		clinicSBPThresh = thresholds.ClinicSBPElevatedDM
+		clinicDBPThresh = thresholds.ClinicDBPElevatedDM
 	}
 	result.ClinicSBPThreshold = clinicSBPThresh
 	result.ClinicDBPThreshold = clinicDBPThresh
-	result.HomeSBPThreshold = defaultHomeSBP
-	result.HomeDBPThreshold = defaultHomeDBP
+	result.HomeSBPThreshold = thresholds.HomeSBPElevated
+	result.HomeDBPThreshold = thresholds.HomeDBPElevated
 
 	// Check data sufficiency
-	result.SufficientClinic = len(input.ClinicReadings) >= minClinicReadings
+	result.SufficientClinic = len(input.ClinicReadings) >= thresholds.MinClinicReadings
 	homeDistinctDays := countDistinctDays(input.HomeReadings)
-	result.SufficientHome = len(input.HomeReadings) >= minHomeReadings && homeDistinctDays >= minHomeDays
+	result.SufficientHome = len(input.HomeReadings) >= thresholds.MinHomeReadings && homeDistinctDays >= thresholds.MinHomeDays
 	result.ClinicReadingCount = len(input.ClinicReadings)
 	result.HomeReadingCount = len(input.HomeReadings)
 	result.HomeDaysWithData = homeDistinctDays
@@ -98,7 +113,7 @@ func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
 
 	// Classify against thresholds
 	result.ClinicAboveThreshold = result.ClinicSBPMean >= clinicSBPThresh || result.ClinicDBPMean >= clinicDBPThresh
-	result.HomeAboveThreshold = result.HomeSBPMean >= defaultHomeSBP || result.HomeDBPMean >= defaultHomeDBP
+	result.HomeAboveThreshold = result.HomeSBPMean >= thresholds.HomeSBPElevated || result.HomeDBPMean >= thresholds.HomeDBPElevated
 
 	switch {
 	case result.ClinicAboveThreshold && result.HomeAboveThreshold:
@@ -139,12 +154,12 @@ func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
 		"MEASUREMENT_AVOIDANT": true,
 		"CRISIS_ONLY_MEASURER": true,
 	}
-	if biasRiskPhenotypes[input.EngagementPhenotype] && len(input.HomeReadings) < minHomeForConfidence {
+	if biasRiskPhenotypes[input.EngagementPhenotype] && len(input.HomeReadings) < thresholds.MinHomeForConfidence {
 		result.SelectionBiasRisk = true
 	}
 
 	// Confidence assessment
-	result.Confidence = assessBPConfidence(result, input)
+	result.Confidence = assessBPConfidence(result, input, thresholds)
 
 	// Medication timing hypothesis
 	if input.OnAntihypertensives && isElevated {
@@ -176,11 +191,11 @@ func countDistinctDays(readings []BPReading) int {
 	return len(days)
 }
 
-func assessBPConfidence(result models.BPContextClassification, input BPContextInput) string {
+func assessBPConfidence(result models.BPContextClassification, input BPContextInput, thresholds *config.BPContextThresholds) string {
 	if result.SelectionBiasRisk {
 		return "LOW"
 	}
-	if len(input.ClinicReadings) >= 3 && len(input.HomeReadings) >= minHomeForConfidence &&
+	if len(input.ClinicReadings) >= 3 && len(input.HomeReadings) >= thresholds.MinHomeForConfidence &&
 		countDistinctDays(input.HomeReadings) >= 7 {
 		return "HIGH"
 	}

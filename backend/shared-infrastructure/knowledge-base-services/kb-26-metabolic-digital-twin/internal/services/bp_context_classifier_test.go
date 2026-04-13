@@ -18,7 +18,7 @@ func TestClassifyBPContext_SustainedHTN(t *testing.T) {
 		HomeReadings: generateHomeReadings(14, 142, 88),
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeSustainedHTN {
 		t.Errorf("expected SUSTAINED_HTN, got %s", result.Phenotype)
 	}
@@ -39,7 +39,7 @@ func TestClassifyBPContext_MaskedHTN(t *testing.T) {
 		HomeReadings: generateHomeReadings(14, 148, 92),
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeMaskedHTN {
 		t.Errorf("expected MASKED_HTN, got %s", result.Phenotype)
 	}
@@ -63,7 +63,7 @@ func TestClassifyBPContext_WhiteCoatHTN(t *testing.T) {
 		HomeReadings: generateHomeReadings(14, 125, 78),
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeWhiteCoatHTN {
 		t.Errorf("expected WHITE_COAT_HTN, got %s", result.Phenotype)
 	}
@@ -81,7 +81,7 @@ func TestClassifyBPContext_SustainedNormotension(t *testing.T) {
 		HomeReadings: generateHomeReadings(14, 120, 75),
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeSustainedNormotension {
 		t.Errorf("expected SUSTAINED_NORMOTENSION, got %s", result.Phenotype)
 	}
@@ -99,7 +99,7 @@ func TestClassifyBPContext_MaskedUncontrolled(t *testing.T) {
 		OnAntihypertensives: true,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeMaskedUncontrolled {
 		t.Errorf("expected MASKED_UNCONTROLLED, got %s", result.Phenotype)
 	}
@@ -115,7 +115,7 @@ func TestClassifyBPContext_WhiteCoatUncontrolled(t *testing.T) {
 		OnAntihypertensives: true,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeWhiteCoatUncontrolled {
 		t.Errorf("expected WHITE_COAT_UNCONTROLLED, got %s", result.Phenotype)
 	}
@@ -133,7 +133,7 @@ func TestClassifyBPContext_MaskedHTN_DiabeticAmplification(t *testing.T) {
 		IsDiabetic:   true,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeMaskedHTN {
 		t.Errorf("expected MASKED_HTN, got %s", result.Phenotype)
 	}
@@ -152,7 +152,7 @@ func TestClassifyBPContext_MaskedHTN_CKDAmplification(t *testing.T) {
 		HasCKD:       true,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if !result.CKDAmplification {
 		t.Error("expected CKDAmplification = true")
 	}
@@ -168,7 +168,7 @@ func TestClassifyBPContext_MaskedHTN_MorningSurgeCompound(t *testing.T) {
 		MorningSurge7dAvg: 28,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if !result.MorningSurgeCompound {
 		t.Error("expected MorningSurgeCompound = true")
 	}
@@ -186,7 +186,7 @@ func TestClassifyBPContext_SelectionBias_MeasurementAvoidant(t *testing.T) {
 		EngagementPhenotype: "MEASUREMENT_AVOIDANT",
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if !result.SelectionBiasRisk {
 		t.Error("expected SelectionBiasRisk = true")
 	}
@@ -206,7 +206,7 @@ func TestClassifyBPContext_InsufficientHome(t *testing.T) {
 		HomeReadings: generateHomeReadings(2, 138, 86),
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeInsufficientData {
 		t.Errorf("expected INSUFFICIENT_DATA, got %s", result.Phenotype)
 	}
@@ -221,7 +221,7 @@ func TestClassifyBPContext_InsufficientClinic(t *testing.T) {
 		HomeReadings:   generateHomeReadings(14, 138, 86),
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeInsufficientData {
 		t.Errorf("expected INSUFFICIENT_DATA, got %s", result.Phenotype)
 	}
@@ -255,7 +255,7 @@ func TestClassifyBPContext_MedicationTimingHypothesis(t *testing.T) {
 		OnAntihypertensives: true,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.MedicationTimingHypothesis == "" {
 		t.Error("expected non-empty MedicationTimingHypothesis")
 	}
@@ -276,7 +276,7 @@ func TestClassifyBPContext_RajeshKumar(t *testing.T) {
 		MorningSurge7dAvg:   28,
 	}
 
-	result := ClassifyBPContext(input)
+	result := ClassifyBPContext(input, nil)
 	if result.Phenotype != models.PhenotypeSustainedHTN {
 		t.Errorf("expected SUSTAINED_HTN, got %s", result.Phenotype)
 	}
