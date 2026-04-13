@@ -27,9 +27,10 @@ type BatchJob interface {
 // is intentionally generic so future jobs (e.g. quarterly_aggregator)
 // can be added without rewriting the scheduler.
 type BatchScheduler struct {
-	jobs []BatchJob
-	mu   sync.RWMutex
-	log  *zap.Logger
+	jobs  []BatchJob
+	mu    sync.RWMutex
+	log   *zap.Logger
+	runWg sync.WaitGroup
 }
 
 // NewBatchScheduler constructs an empty scheduler.
@@ -49,6 +50,9 @@ func (s *BatchScheduler) Register(job BatchJob) {
 // does NOT prevent subsequent jobs from running — each is isolated.
 // Returns the FIRST error encountered, or nil if all succeeded.
 func (s *BatchScheduler) RunOnce(ctx context.Context) error {
+	s.runWg.Add(1)
+	defer s.runWg.Done()
+
 	s.mu.RLock()
 	jobs := make([]BatchJob, len(s.jobs))
 	copy(jobs, s.jobs)
@@ -102,4 +106,12 @@ func (s *BatchScheduler) StartLoop(ctx context.Context, interval time.Duration) 
 			}
 		}
 	}
+}
+
+// Drain blocks until any currently-executing RunOnce calls return. Idle
+// schedulers return immediately. Used by main.go during graceful shutdown
+// to ensure in-flight batch work completes (or is interrupted via context
+// cancellation) before the process exits.
+func (s *BatchScheduler) Drain() {
+	s.runWg.Wait()
 }

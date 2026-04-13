@@ -114,3 +114,48 @@ func TestBatchScheduler_StartLoop_RespectsContextCancel(t *testing.T) {
 		t.Errorf("expected at least 1 run, got %d", job.runs.Load())
 	}
 }
+
+func TestBatchScheduler_Drain_WaitsForInFlightRun(t *testing.T) {
+	job := &stubBatchJob{name: "slow", delay: 200 * time.Millisecond}
+	sched := NewBatchScheduler(zap.NewNop())
+	sched.Register(job)
+
+	// Start a long-running RunOnce in a goroutine.
+	runDone := make(chan struct{})
+	go func() {
+		_ = sched.RunOnce(context.Background())
+		close(runDone)
+	}()
+
+	// Give the run a chance to start.
+	time.Sleep(20 * time.Millisecond)
+
+	// Drain should block until the in-flight run finishes.
+	drainStart := time.Now()
+	sched.Drain()
+	drainDuration := time.Since(drainStart)
+
+	if drainDuration < 100*time.Millisecond {
+		t.Errorf("Drain returned too early: %v (expected at least 100ms)", drainDuration)
+	}
+
+	// RunOnce should have completed by now.
+	select {
+	case <-runDone:
+		// Good
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("RunOnce did not complete after Drain returned")
+	}
+}
+
+func TestBatchScheduler_Drain_NoOpWhenIdle(t *testing.T) {
+	sched := NewBatchScheduler(zap.NewNop())
+	sched.Register(&stubBatchJob{name: "idle"})
+
+	// Drain when nothing is running should return immediately.
+	drainStart := time.Now()
+	sched.Drain()
+	if time.Since(drainStart) > 10*time.Millisecond {
+		t.Errorf("idle Drain blocked unexpectedly: %v", time.Since(drainStart))
+	}
+}

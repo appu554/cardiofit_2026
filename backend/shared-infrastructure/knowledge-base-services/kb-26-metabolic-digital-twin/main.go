@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -130,10 +131,17 @@ func main() {
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
 
 	// 9. Start HTTP server
+	httpServer := &http.Server{
+		Addr:         ":" + cfg.Server.Port,
+		Handler:      server.Router,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	go func() {
-		addr := ":" + cfg.Server.Port
-		logger.Info("HTTP server starting", zap.String("address", addr))
-		if err := server.Router.Run(addr); err != nil {
+		logger.Info("HTTP server starting", zap.String("addr", httpServer.Addr))
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("HTTP server failed", zap.Error(err))
 		}
 	}()
@@ -206,12 +214,25 @@ func main() {
 	// 11. Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
 
+	logger.Info("Shutdown signal received", zap.String("signal", sig.String()))
 	logger.Info("Shutting down KB-26 Metabolic Digital Twin Service")
-	cancel() // propagate shutdown to scheduler, consumer, all goroutines
-	// Give goroutines a moment to exit cleanly before the defer chain runs.
-	time.Sleep(500 * time.Millisecond)
+
+	// Cancel top-level context — propagates to scheduler, Kafka consumer, etc.
+	cancel()
+
+	// Drain in-flight batch work (waits for any currently-executing RunOnce)
+	batchScheduler.Drain()
+
+	// Graceful HTTP shutdown — waits for in-flight requests with a 15s deadline
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.Error("HTTP server shutdown error", zap.Error(err))
+	} else {
+		logger.Info("HTTP server shutdown completed")
+	}
 }
 
 // computeNextScheduleInterval returns the duration until the next
