@@ -14,6 +14,11 @@ type Collector struct {
 	twinUpdate         *prometheus.HistogramVec
 	simulationDuration *prometheus.HistogramVec
 	calibrationDuration *prometheus.HistogramVec
+
+	// BP context classification metrics (Phase 2)
+	BPPhenotypeTotal  *prometheus.CounterVec
+	BPClassifyLatency prometheus.Histogram
+	BPClassifyErrors  prometheus.Counter
 }
 
 func NewCollector() *Collector {
@@ -56,6 +61,26 @@ func NewCollector() *Collector {
 				Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1.0},
 			},
 			[]string{},
+		),
+		BPPhenotypeTotal: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "kb26_bp_phenotype_total",
+				Help: "Total number of BP context classifications by phenotype",
+			},
+			[]string{"phenotype"},
+		),
+		BPClassifyLatency: promauto.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "kb26_bp_classify_latency_seconds",
+				Help:    "Latency of BP context classification end-to-end",
+				Buckets: prometheus.DefBuckets,
+			},
+		),
+		BPClassifyErrors: promauto.NewCounter(
+			prometheus.CounterOpts{
+				Name: "kb26_bp_classify_errors_total",
+				Help: "Total number of BP context classification failures",
+			},
 		),
 	}
 }

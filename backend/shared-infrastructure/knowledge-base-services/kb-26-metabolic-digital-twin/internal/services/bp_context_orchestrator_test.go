@@ -37,7 +37,7 @@ func newOrchestrator(t *testing.T, kb20 KB20Fetcher, kb21 KB21Fetcher) *BPContex
 	db := setupBPContextTestDB(t) // from bp_context_repository_test.go
 	repo := NewBPContextRepository(db)
 	thresholds := defaultBPContextThresholds()
-	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop())
+	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil)
 }
 
 func TestBPContextOrchestrator_MaskedHTN_Persists(t *testing.T) {

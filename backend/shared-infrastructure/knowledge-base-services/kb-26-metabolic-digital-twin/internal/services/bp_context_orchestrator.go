@@ -10,6 +10,7 @@ import (
 
 	"kb-26-metabolic-digital-twin/internal/clients"
 	"kb-26-metabolic-digital-twin/internal/config"
+	"kb-26-metabolic-digital-twin/internal/metrics"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
@@ -33,6 +34,7 @@ type BPContextOrchestrator struct {
 	repo       *BPContextRepository
 	thresholds *config.BPContextThresholds
 	log        *zap.Logger
+	metrics    *metrics.Collector
 }
 
 // NewBPContextOrchestrator wires the orchestrator dependencies.
@@ -42,6 +44,7 @@ func NewBPContextOrchestrator(
 	repo *BPContextRepository,
 	thresholds *config.BPContextThresholds,
 	log *zap.Logger,
+	metricsCollector *metrics.Collector,
 ) *BPContextOrchestrator {
 	return &BPContextOrchestrator{
 		kb20:       kb20,
@@ -49,6 +52,7 @@ func NewBPContextOrchestrator(
 		repo:       repo,
 		thresholds: thresholds,
 		log:        log,
+		metrics:    metricsCollector,
 	}
 }
 
@@ -56,11 +60,24 @@ func NewBPContextOrchestrator(
 // from KB-20 (required) and KB-21 (best-effort), runs the Phase 1
 // classifier, and persists the result.
 func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) (*models.BPContextClassification, error) {
+	start := time.Now()
+	defer func() {
+		if o.metrics != nil {
+			o.metrics.BPClassifyLatency.Observe(time.Since(start).Seconds())
+		}
+	}()
+
 	profile, err := o.kb20.FetchProfile(ctx, patientID)
 	if err != nil {
+		if o.metrics != nil {
+			o.metrics.BPClassifyErrors.Inc()
+		}
 		return nil, fmt.Errorf("fetch KB-20 profile: %w", err)
 	}
 	if profile == nil {
+		if o.metrics != nil {
+			o.metrics.BPClassifyErrors.Inc()
+		}
 		return nil, fmt.Errorf("patient %s not found in KB-20", patientID)
 	}
 
@@ -102,6 +119,9 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 			zap.Error(err))
 	}
 
+	if o.metrics != nil {
+		o.metrics.BPPhenotypeTotal.WithLabelValues(string(result.Phenotype)).Inc()
+	}
 	return &result, nil
 }
 
