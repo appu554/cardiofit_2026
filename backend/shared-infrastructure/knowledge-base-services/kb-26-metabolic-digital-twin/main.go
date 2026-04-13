@@ -141,6 +141,16 @@ func main() {
 	// 9a. Start BP context daily batch scheduler (Phase 3)
 	if cfg.BPBatchEnabled {
 		go func() {
+			// Per-market batch hour recommendations — log a warning if the
+			// configured hour overlaps local clinic hours for the market.
+			recommendedHour := recommendedBatchHourForMarket(cfg.MarketCode)
+			if recommendedHour != -1 && cfg.BPBatchHourUTC != recommendedHour {
+				logger.Warn("BP batch hour may overlap local clinic hours",
+					zap.String("market", cfg.MarketCode),
+					zap.Int("configured_hour_utc", cfg.BPBatchHourUTC),
+					zap.Int("recommended_hour_utc", recommendedHour))
+			}
+
 			// Align first run to BP_BATCH_HOUR_UTC, then loop every 24h.
 			delay := computeNextScheduleInterval(time.Now().UTC(), cfg.BPBatchHourUTC)
 			logger.Info("BP context batch scheduler waiting for first run",
@@ -213,4 +223,25 @@ func computeNextScheduleInterval(now time.Time, hourUTC int) time.Duration {
 		next = next.Add(24 * time.Hour)
 	}
 	return next.Sub(now)
+}
+
+// recommendedBatchHourForMarket returns the UTC hour that minimises
+// overlap with local clinic hours in each supported market.
+//
+//	india     -> 22:00 UTC (03:30 IST — pre-dawn)
+//	australia -> 14:00 UTC (00:00 AEST — midnight)
+//	shared    -> 02:00 UTC (default — assumes US/EU clinic flow)
+//
+// Returns -1 for unknown markets so the warning is suppressed.
+func recommendedBatchHourForMarket(market string) int {
+	switch market {
+	case "india":
+		return 22
+	case "australia":
+		return 14
+	case "shared", "":
+		return 2
+	default:
+		return -1
+	}
 }
