@@ -16,18 +16,19 @@ import (
 
 // Server is the HTTP server for KB-26 Metabolic Digital Twin Service.
 type Server struct {
-	Router         *gin.Engine
-	config         *config.Config
-	db             *database.Database
-	cache          *cache.RedisClient
-	metrics        *metrics.Collector
-	logger         *zap.Logger
-	twinUpdater     *services.TwinUpdater
-	calibrator      *services.BayesianCalibrator
-	eventProcessor  *services.EventProcessor
-	mriScorer       *services.MRIScorer
-	preventScorer   *services.PREVENTScorer
-	relapseDetector *services.RelapseDetector
+	Router                *gin.Engine
+	config                *config.Config
+	db                    *database.Database
+	cache                 *cache.RedisClient
+	metrics               *metrics.Collector
+	logger                *zap.Logger
+	bpContextOrchestrator *services.BPContextOrchestrator
+	twinUpdater           *services.TwinUpdater
+	calibrator            *services.BayesianCalibrator
+	eventProcessor        *services.EventProcessor
+	mriScorer             *services.MRIScorer
+	preventScorer         *services.PREVENTScorer
+	relapseDetector       *services.RelapseDetector
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -37,6 +38,7 @@ func NewServer(
 	cacheClient *cache.RedisClient,
 	metricsCollector *metrics.Collector,
 	logger *zap.Logger,
+	bpContextOrchestrator *services.BPContextOrchestrator,
 	twinUpdater *services.TwinUpdater,
 	calibrator *services.BayesianCalibrator,
 	eventProcessor *services.EventProcessor,
@@ -52,18 +54,19 @@ func NewServer(
 	router.Use(gin.Recovery())
 
 	s := &Server{
-		Router:         router,
-		config:         cfg,
-		db:             db,
-		cache:          cacheClient,
-		metrics:        metricsCollector,
-		logger:         logger,
-		twinUpdater:    twinUpdater,
-		calibrator:     calibrator,
-		eventProcessor:  eventProcessor,
-		mriScorer:       mriScorer,
-		preventScorer:   preventScorer,
-		relapseDetector: relapseDetector,
+		Router:                router,
+		config:                cfg,
+		db:                    db,
+		cache:                 cacheClient,
+		metrics:               metricsCollector,
+		logger:                logger,
+		bpContextOrchestrator: bpContextOrchestrator,
+		twinUpdater:           twinUpdater,
+		calibrator:            calibrator,
+		eventProcessor:        eventProcessor,
+		mriScorer:             mriScorer,
+		preventScorer:         preventScorer,
+		relapseDetector:       relapseDetector,
 	}
 
 	s.setupMiddleware()

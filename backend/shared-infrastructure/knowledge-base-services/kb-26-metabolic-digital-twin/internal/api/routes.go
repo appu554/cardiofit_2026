@@ -45,6 +45,9 @@ func (s *Server) setupRoutes() {
 		v1.GET("/mri/:patientId/domain-trajectory", s.getDomainTrajectory)
 		v1.POST("/mri/simulate", s.simulateMRI)
 
+		// BP context classification (masked HTN / white-coat / true HTN)
+		v1.POST("/bp-context/:patientId", s.classifyBPContext)
+
 		// PREVENT (10-year CVD risk)
 		v1.GET("/prevent/:patientId", s.getPREVENT)
 
