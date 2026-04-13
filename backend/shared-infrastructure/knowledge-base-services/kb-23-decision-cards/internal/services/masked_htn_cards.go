@@ -86,6 +86,28 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 			}
 		}
 
+		// Selection bias dampening: if home readings come from a measurement-
+		// avoidant or crisis-only-measurement patient, the masked HTN signal
+		// may be selection bias rather than true masked HTN. Demote urgency
+		// by one level so the card still surfaces but doesn't trigger
+		// IMMEDIATE clinical action on questionable data. The SELECTION_BIAS_WARNING
+		// card (appended separately) explains why.
+		demotedDueToBias := false
+		if c.SelectionBiasRisk {
+			switch urgency {
+			case "IMMEDIATE":
+				urgency = "URGENT"
+				demotedDueToBias = true
+			case "URGENT":
+				urgency = "ROUTINE"
+				demotedDueToBias = true
+			}
+		}
+
+		if demotedDueToBias {
+			riskMultiplier += " Urgency reduced due to selection bias risk — verify with structured monitoring before acting."
+		}
+
 		cards = append(cards, MaskedHTNCard{
 			CardType: "MASKED_HYPERTENSION",
 			Urgency:  urgency,

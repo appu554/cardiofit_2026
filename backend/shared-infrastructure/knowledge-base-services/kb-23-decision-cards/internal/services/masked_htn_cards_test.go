@@ -249,3 +249,66 @@ func TestMaskedHTNCards_SustainedHTN_MorningSurge(t *testing.T) {
 		t.Error("expected SUSTAINED_HTN_MORNING_SURGE card")
 	}
 }
+
+func TestMaskedHTNCards_SelectionBias_Demotes_DM_FromImmediateToUrgent(t *testing.T) {
+	classification := &models.BPContextClassification{
+		Phenotype:             models.PhenotypeMaskedHTN,
+		ClinicSBPMean:         128,
+		ClinicDBPMean:         78,
+		HomeSBPMean:           148,
+		HomeDBPMean:           92,
+		ClinicHomeGapSBP:      -20,
+		DiabetesAmplification: true,
+		IsDiabetic:            true,
+		SelectionBiasRisk:     true, // <-- the new condition
+		EngagementPhenotype:   "MEASUREMENT_AVOIDANT",
+		HomeReadingCount:      8,
+		Confidence:            "LOW",
+	}
+
+	cards := EvaluateMaskedHTNCards(classification)
+	var maskedCard *MaskedHTNCard
+	for i := range cards {
+		if cards[i].CardType == "MASKED_HYPERTENSION" {
+			maskedCard = &cards[i]
+		}
+	}
+	if maskedCard == nil {
+		t.Fatal("expected MASKED_HYPERTENSION card")
+	}
+	if maskedCard.Urgency != "URGENT" {
+		t.Errorf("expected URGENT urgency (demoted from IMMEDIATE due to selection bias), got %s", maskedCard.Urgency)
+	}
+	if !strings.Contains(maskedCard.Rationale, "selection bias") {
+		t.Errorf("expected rationale to mention selection bias demotion, got: %s", maskedCard.Rationale)
+	}
+}
+
+func TestMaskedHTNCards_SelectionBias_Demotes_NoAmplification_FromUrgentToRoutine(t *testing.T) {
+	classification := &models.BPContextClassification{
+		Phenotype:           models.PhenotypeMaskedHTN,
+		ClinicSBPMean:       128,
+		ClinicDBPMean:       78,
+		HomeSBPMean:         148,
+		HomeDBPMean:         92,
+		ClinicHomeGapSBP:    -20,
+		SelectionBiasRisk:   true,
+		EngagementPhenotype: "MEASUREMENT_AVOIDANT",
+		HomeReadingCount:    8,
+		Confidence:          "LOW",
+	}
+
+	cards := EvaluateMaskedHTNCards(classification)
+	var maskedCard *MaskedHTNCard
+	for i := range cards {
+		if cards[i].CardType == "MASKED_HYPERTENSION" {
+			maskedCard = &cards[i]
+		}
+	}
+	if maskedCard == nil {
+		t.Fatal("expected MASKED_HYPERTENSION card")
+	}
+	if maskedCard.Urgency != "ROUTINE" {
+		t.Errorf("expected ROUTINE urgency (demoted from URGENT due to selection bias), got %s", maskedCard.Urgency)
+	}
+}
