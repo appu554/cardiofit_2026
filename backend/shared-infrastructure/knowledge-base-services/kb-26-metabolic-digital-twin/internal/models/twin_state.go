@@ -14,7 +14,7 @@ type TwinState struct {
 	PatientID    uuid.UUID `gorm:"type:uuid;not null;index:idx_twin_patient,priority:1" json:"patient_id"`
 	StateVersion int       `gorm:"not null" json:"state_version"`
 	UpdateSource string    `gorm:"size:50;not null" json:"update_source"`
-	UpdatedAt    time.Time `gorm:"not null;default:now();index:idx_twin_patient,priority:2,sort:desc" json:"updated_at"`
+	UpdatedAt    time.Time `gorm:"not null;default:now();index:idx_twin_patient,priority:2,sort:desc;index:idx_twin_state_updated_at,sort:desc" json:"updated_at"`
 
 	// Tier 1: Directly Measured
 	FBG7dMean        *float64   `json:"fbg_7d_mean,omitempty"`
