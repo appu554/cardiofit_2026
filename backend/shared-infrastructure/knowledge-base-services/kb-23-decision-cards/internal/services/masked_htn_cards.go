@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"kb-23-decision-cards/internal/models"
@@ -81,7 +82,7 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 		if c.DiabetesAmplification || c.CKDAmplification {
 			urgency = "IMMEDIATE"
 			if c.DiabetesAmplification {
-				riskMultiplier = " Diabetes amplification: 3.2x CV risk multiplier vs masked HTN alone (JACC 2021)."
+				riskMultiplier = " Diabetes amplification: 3.2x CV risk multiplier vs masked HTN alone (Leitao 2015, Diabetologia)."
 			}
 		}
 
@@ -91,10 +92,10 @@ func EvaluateMaskedHTNCards(c *models.BPContextClassification) []MaskedHTNCard {
 			Title:    fmt.Sprintf("Masked Hypertension — Clinic BP Normal, Home Mean %.0f mmHg", c.HomeSBPMean),
 			Rationale: fmt.Sprintf(
 				"Clinic BP %.0f/%.0f mmHg (normal) but home mean %.0f mmHg (elevated). "+
-					"Clinic-home gap: %.0f mmHg. Masked hypertension carries higher CV risk than "+
+					"Home BP exceeds clinic by %.0f mmHg. Masked hypertension carries higher CV risk than "+
 					"sustained hypertension because treatment is deferred.%s",
 				c.ClinicSBPMean, c.ClinicDBPMean, c.HomeSBPMean,
-				c.ClinicHomeGapSBP, riskMultiplier),
+				math.Abs(c.ClinicHomeGapSBP), riskMultiplier),
 			Actions: []string{
 				"Do not rely on clinic BP alone — initiate or intensify antihypertensive therapy",
 				"Target home BP <130/80 mmHg (AHA/ACC 2023)",
