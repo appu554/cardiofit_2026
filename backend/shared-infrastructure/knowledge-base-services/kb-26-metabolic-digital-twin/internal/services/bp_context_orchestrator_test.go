@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -12,12 +13,18 @@ import (
 
 // stubKB20Client implements the KB20Fetcher interface for tests.
 type stubKB20Client struct {
-	profile *clients.KB20PatientProfile
-	err     error
+	profile  *clients.KB20PatientProfile
+	err      error
+	readings []clients.KB20BPReading // Phase 4 P3 addition
+	readErr  error                   // Phase 4 P3 addition
 }
 
 func (s *stubKB20Client) FetchProfile(ctx context.Context, patientID string) (*clients.KB20PatientProfile, error) {
 	return s.profile, s.err
+}
+
+func (s *stubKB20Client) FetchBPReadings(ctx context.Context, patientID string, since time.Time) ([]clients.KB20BPReading, error) {
+	return s.readings, s.readErr
 }
 
 // stubKB21Client implements the KB21Fetcher interface for tests.
@@ -290,5 +297,169 @@ func TestBPContextOrchestrator_NilPublisher_NoEventsNoErrors(t *testing.T) {
 
 	if _, err := orch.Classify(context.Background(), "p1"); err != nil {
 		t.Fatalf("classify with nil publisher should not error: %v", err)
+	}
+}
+
+func TestBPContextOrchestrator_RealReadings_UsesBuildFromReadings(t *testing.T) {
+	now := time.Now().UTC()
+	// Build 14 home readings + 2 clinic readings, all high at home + normal at clinic
+	// (classic masked HTN pattern).
+	var readings []clients.KB20BPReading
+	for i := 0; i < 14; i++ {
+		readings = append(readings, clients.KB20BPReading{
+			PatientID:  "p1",
+			SBP:        148,
+			DBP:        92,
+			Source:     "HOME_CUFF",
+			MeasuredAt: now.Add(-time.Duration(i*12) * time.Hour),
+		})
+	}
+	readings = append(readings,
+		clients.KB20BPReading{
+			PatientID: "p1", SBP: 128, DBP: 78, Source: "CLINIC",
+			MeasuredAt: now.Add(-7 * 24 * time.Hour),
+		},
+		clients.KB20BPReading{
+			PatientID: "p1", SBP: 130, DBP: 80, Source: "CLINIC",
+			MeasuredAt: now.Add(-14 * 24 * time.Hour),
+		},
+	)
+
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p1",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+		readings: readings,
+	}
+	kb21 := &stubKB21Client{}
+	orch := newOrchestrator(t, kb20, kb21)
+
+	result, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if result.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("expected MASKED_HTN from real readings, got %s", result.Phenotype)
+	}
+}
+
+func TestBPContextOrchestrator_RealReadings_FetchError_FallsBackToSynthetic(t *testing.T) {
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p1",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+		readErr: errSimulated(),
+	}
+	kb21 := &stubKB21Client{}
+	orch := newOrchestrator(t, kb20, kb21)
+
+	result, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("Classify should fall back gracefully, got %v", err)
+	}
+	// Still classifies as MASKED_HTN via the synthetic path
+	if result.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("expected MASKED_HTN (fallback path), got %s", result.Phenotype)
+	}
+}
+
+func TestBPContextOrchestrator_RealReadings_Empty_FallsBackToSynthetic(t *testing.T) {
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p1",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+		readings: []clients.KB20BPReading{}, // empty — fall back
+	}
+	kb21 := &stubKB21Client{}
+	orch := newOrchestrator(t, kb20, kb21)
+
+	result, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if result.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("expected MASKED_HTN (fallback path), got %s", result.Phenotype)
+	}
+}
+
+func TestBPContextOrchestrator_RealReadings_MorningEveningDifferential_FiresMedTiming(t *testing.T) {
+	// Simulate a patient on antihypertensives whose morning BPs are
+	// significantly higher than evening — this should trigger the
+	// medication timing hypothesis, which was dead code before P3.4.
+	now := time.Now().UTC()
+	var readings []clients.KB20BPReading
+	for i := 0; i < 7; i++ {
+		// Morning reading at 08:00 UTC each day (HIGH)
+		morning := time.Date(now.Year(), now.Month(), now.Day()-i, 8, 0, 0, 0, time.UTC)
+		readings = append(readings, clients.KB20BPReading{
+			PatientID: "p1", SBP: 148, DBP: 92, Source: "HOME_CUFF",
+			MeasuredAt: morning,
+		})
+		// Evening reading at 20:00 UTC each day (NORMAL)
+		evening := time.Date(now.Year(), now.Month(), now.Day()-i, 20, 0, 0, 0, time.UTC)
+		readings = append(readings, clients.KB20BPReading{
+			PatientID: "p1", SBP: 125, DBP: 78, Source: "HOME_CUFF",
+			MeasuredAt: evening,
+		})
+	}
+	// 2 clinic readings (normal — afternoon visits)
+	readings = append(readings,
+		clients.KB20BPReading{
+			PatientID: "p1", SBP: 128, DBP: 80, Source: "CLINIC",
+			MeasuredAt: now.Add(-7 * 24 * time.Hour),
+		},
+		clients.KB20BPReading{
+			PatientID: "p1", SBP: 130, DBP: 78, Source: "CLINIC",
+			MeasuredAt: now.Add(-14 * 24 * time.Hour),
+		},
+	)
+
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p1",
+			SBP14dMean:       ptrFloat(137), // avg of 148+125
+			DBP14dMean:       ptrFloat(85),
+			ClinicSBPMean:    ptrFloat(129),
+			ClinicDBPMean:    ptrFloat(79),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+			OnHTNMeds:        true,
+		},
+		readings: readings,
+	}
+	kb21 := &stubKB21Client{}
+	orch := newOrchestrator(t, kb20, kb21)
+
+	result, err := orch.Classify(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	// Phenotype should be MASKED_UNCONTROLLED (on meds + home elevated + clinic normal)
+	// OR MASKED_HTN depending on the exact means — either is acceptable.
+	// The key assertion: MedicationTimingHypothesis must be non-empty.
+	if result.MedicationTimingHypothesis == "" {
+		t.Errorf("expected non-empty MedicationTimingHypothesis (morning-evening differential), got empty")
 	}
 }

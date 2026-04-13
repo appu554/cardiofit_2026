@@ -19,6 +19,7 @@ import (
 // importing the real client.
 type KB20Fetcher interface {
 	FetchProfile(ctx context.Context, patientID string) (*clients.KB20PatientProfile, error)
+	FetchBPReadings(ctx context.Context, patientID string, since time.Time) ([]clients.KB20BPReading, error)
 }
 
 // KB21Fetcher is the narrow interface the orchestrator needs from KB-21.
@@ -108,7 +109,27 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 		engagementPhenotype = clients.MapEngagementToBPPhenotype(engagement.Phenotype, composite)
 	}
 
-	input := buildBPContextInputFromProfile(profile, engagementPhenotype)
+	// Phase 4 P3: Fetch real per-reading BP data from KB-20. If available,
+	// this replaces the Phase 2 synthetic-readings hack and enables the
+	// medication timing hypothesis to fire correctly. If the fetch fails
+	// or returns empty, fall back to the synthetic path so the classifier
+	// still produces a result — this keeps the feature working during
+	// rollout when KB-20's /bp-readings endpoint may not yet be deployed.
+	var realReadings []clients.KB20BPReading
+	since := time.Now().UTC().AddDate(0, 0, -30)
+	realReadings, fetchErr := o.kb20.FetchBPReadings(ctx, patientID, since)
+	if fetchErr != nil {
+		o.log.Warn("real BP reading fetch failed; falling back to synthetic",
+			zap.String("patient_id", patientID), zap.Error(fetchErr))
+		realReadings = nil
+	}
+
+	var input BPContextInput
+	if len(realReadings) > 0 {
+		input = buildBPContextInputFromReadings(profile, realReadings, engagementPhenotype)
+	} else {
+		input = buildBPContextInputFromProfile(profile, engagementPhenotype)
+	}
 	result := ClassifyBPContext(input, o.thresholds)
 	result.PatientID = patientID
 
@@ -245,5 +266,59 @@ func buildBPContextInputFromProfile(profile *clients.KB20PatientProfile, engagem
 		}
 	}
 
+	return input
+}
+
+// buildBPContextInputFromReadings constructs a BPContextInput from real
+// per-reading data fetched from KB-20's /bp-readings endpoint. This is
+// the Phase 4 replacement for buildBPContextInputFromProfile's synthetic
+// readings. It correctly populates TimeContext (MORNING/EVENING) so the
+// medication timing hypothesis can fire, and distinguishes clinic vs
+// home readings by the KB-20 Source field.
+func buildBPContextInputFromReadings(
+	profile *clients.KB20PatientProfile,
+	readings []clients.KB20BPReading,
+	engagementPhenotype string,
+) BPContextInput {
+	input := BPContextInput{
+		PatientID:           profile.PatientID,
+		IsDiabetic:          profile.IsDiabetic,
+		HasCKD:              profile.HasCKD,
+		OnAntihypertensives: profile.OnHTNMeds,
+		EngagementPhenotype: engagementPhenotype,
+	}
+	if profile.MorningSurge7dAvg != nil {
+		input.MorningSurge7dAvg = *profile.MorningSurge7dAvg
+	}
+
+	for _, r := range readings {
+		bp := BPReading{
+			SBP:       r.SBP,
+			DBP:       r.DBP,
+			Source:    r.Source,
+			Timestamp: r.MeasuredAt,
+		}
+		// Tag time context for the medication timing hypothesis.
+		// Morning window: 05:00-11:00 local (but we use UTC hour here;
+		// Phase 5 should apply patient timezone).
+		hour := r.MeasuredAt.Hour()
+		switch {
+		case hour >= 5 && hour < 11:
+			bp.TimeContext = "MORNING"
+		case hour >= 17 && hour < 23:
+			bp.TimeContext = "EVENING"
+		}
+
+		// Source-based clinic vs home routing.
+		switch r.Source {
+		case "CLINIC", "OFFICE", "HOSPITAL":
+			input.ClinicReadings = append(input.ClinicReadings, bp)
+		default:
+			// HOME_CUFF, HOME_WRIST, PATIENT_REPORTED, and empty (unknown)
+			// all go to the home bucket. This matches KB-20's source mapping
+			// in market-configs/shared/bp_context_thresholds.yaml.
+			input.HomeReadings = append(input.HomeReadings, bp)
+		}
+	}
 	return input
 }
