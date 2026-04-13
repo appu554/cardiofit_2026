@@ -33,6 +33,11 @@ func main() {
 
 	logger.Info("Starting KB-26 Metabolic Digital Twin Service")
 
+	// Top-level cancellable context for graceful shutdown — propagated to
+	// scheduler, Kafka consumer, and any other long-running goroutine.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// 2. Load configuration
 	cfg, err := config.Load()
 	if err != nil {
@@ -109,6 +114,18 @@ func main() {
 	bpContextRepo := services.NewBPContextRepository(db.DB)
 	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client)
 
+	// 7c. BP context daily batch scheduler (Phase 3)
+	bpBatchJob := services.NewBPContextDailyBatch(
+		bpContextRepo,
+		bpContextOrch,
+		time.Duration(cfg.BPActiveWindowDays)*24*time.Hour,
+		cfg.BPBatchConcurrency,
+		logger,
+		metricsCollector,
+	)
+	batchScheduler := services.NewBatchScheduler(logger)
+	batchScheduler.Register(bpBatchJob)
+
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
 
@@ -121,6 +138,27 @@ func main() {
 		}
 	}()
 
+	// 9a. Start BP context daily batch scheduler (Phase 3)
+	if cfg.BPBatchEnabled {
+		go func() {
+			// Align first run to BP_BATCH_HOUR_UTC, then loop every 24h.
+			delay := computeNextScheduleInterval(time.Now().UTC(), cfg.BPBatchHourUTC)
+			logger.Info("BP context batch scheduler waiting for first run",
+				zap.Duration("delay", delay),
+				zap.Int("hour_utc", cfg.BPBatchHourUTC),
+				zap.Int("concurrency", cfg.BPBatchConcurrency),
+				zap.Int("active_window_days", cfg.BPActiveWindowDays))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return
+			}
+			batchScheduler.StartLoop(ctx, 24*time.Hour)
+		}()
+	} else {
+		logger.Info("BP context batch scheduler disabled (BP_BATCH_ENABLED=false)")
+	}
+
 	// 9b. Start Kafka signal consumer (feature-flagged)
 	if os.Getenv("KB26_KAFKA_ENABLED") == "true" {
 		brokerEnv := os.Getenv("KAFKA_BROKERS")
@@ -129,7 +167,7 @@ func main() {
 		}
 		brokers := strings.Split(brokerEnv, ",")
 		signalConsumer := services.NewSignalConsumer(brokers, logger)
-		consumerCtx, consumerCancel := context.WithCancel(context.Background())
+		consumerCtx, consumerCancel := context.WithCancel(ctx)
 		defer consumerCancel()
 		// NOTE: No-op handler — routing validates the pipeline end-to-end but
 		// does not process signals yet. Wire eventProcessor.HandleSignal here
@@ -161,4 +199,18 @@ func main() {
 	<-quit
 
 	logger.Info("Shutting down KB-26 Metabolic Digital Twin Service")
+	cancel() // propagate shutdown to scheduler, consumer, all goroutines
+	// Give goroutines a moment to exit cleanly before the defer chain runs.
+	time.Sleep(500 * time.Millisecond)
+}
+
+// computeNextScheduleInterval returns the duration until the next
+// occurrence of the given UTC hour (0-23). If the current time is already
+// past that hour today, it returns the duration until tomorrow's occurrence.
+func computeNextScheduleInterval(now time.Time, hourUTC int) time.Duration {
+	next := time.Date(now.Year(), now.Month(), now.Day(), hourUTC, 0, 0, 0, time.UTC)
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next.Sub(now)
 }
