@@ -1,8 +1,12 @@
 package services
 
 import (
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"kb-23-decision-cards/internal/models"
 )
@@ -20,7 +24,7 @@ func TestMaskedHTNCards_MaskedHTN_Diabetic_Immediate(t *testing.T) {
 		Confidence:            "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "MASKED_HYPERTENSION" {
@@ -50,7 +54,7 @@ func TestMaskedHTNCards_WhiteCoatHTN_AvoidOvertreatment(t *testing.T) {
 		Confidence:       "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "WHITE_COAT_HYPERTENSION" {
@@ -80,7 +84,7 @@ func TestMaskedHTNCards_MUCH_TreatedPatient(t *testing.T) {
 		Confidence:          "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "MASKED_UNCONTROLLED" {
@@ -107,7 +111,7 @@ func TestMaskedHTNCards_CompoundRisk_MH_MorningSurge(t *testing.T) {
 		Confidence:           "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "MASKED_HTN_MORNING_SURGE_COMPOUND" {
@@ -131,7 +135,7 @@ func TestMaskedHTNCards_SelectionBias_FlagsUncertainty(t *testing.T) {
 		EngagementPhenotype: "MEASUREMENT_AVOIDANT",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "SELECTION_BIAS_WARNING" {
@@ -155,7 +159,7 @@ func TestMaskedHTNCards_MedicationTiming(t *testing.T) {
 		Confidence:                 "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "MEDICATION_TIMING" {
@@ -176,7 +180,7 @@ func TestMaskedHTNCards_Normotensive_NoUrgentCards(t *testing.T) {
 		Confidence: "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	for _, c := range cards {
 		if c.Urgency == "IMMEDIATE" || c.Urgency == "URGENT" {
 			t.Errorf("normotensive patient should not receive urgent cards, got %s (%s)", c.Urgency, c.CardType)
@@ -196,7 +200,7 @@ func TestMaskedHTNCards_WhiteCoatUncontrolled_AvoidEscalation(t *testing.T) {
 		Confidence:          "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "WHITE_COAT_UNCONTROLLED" {
@@ -232,7 +236,7 @@ func TestMaskedHTNCards_SustainedHTN_MorningSurge(t *testing.T) {
 		Confidence:           "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	found := false
 	for _, c := range cards {
 		if c.CardType == "SUSTAINED_HTN_MORNING_SURGE" {
@@ -266,7 +270,7 @@ func TestMaskedHTNCards_SelectionBias_Demotes_DM_FromImmediateToUrgent(t *testin
 		Confidence:            "LOW",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	var maskedCard *MaskedHTNCard
 	for i := range cards {
 		if cards[i].CardType == "MASKED_HYPERTENSION" {
@@ -298,7 +302,7 @@ func TestMaskedHTNCards_SelectionBias_Demotes_NoAmplification_FromUrgentToRoutin
 		Confidence:          "LOW",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	var maskedCard *MaskedHTNCard
 	for i := range cards {
 		if cards[i].CardType == "MASKED_HYPERTENSION" {
@@ -356,7 +360,7 @@ func TestMaskedHTNCards_IncludeConfidenceTier_HighConfidence(t *testing.T) {
 		Confidence:    "HIGH",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	var maskedCard *MaskedHTNCard
 	for i := range cards {
 		if cards[i].CardType == "MASKED_HYPERTENSION" {
@@ -375,13 +379,13 @@ func TestMaskedHTNCards_IncludeConfidenceTier_Damped(t *testing.T) {
 	// DAMPED confidence (from stability engine) should produce TierUncertain
 	// so the downstream UX can show "we're watching this, not acting on it yet".
 	classification := &models.BPContextClassification{
-		Phenotype:   models.PhenotypeMaskedHTN,
+		Phenotype:     models.PhenotypeMaskedHTN,
 		ClinicSBPMean: 128,
 		HomeSBPMean:   148,
-		Confidence:  "DAMPED",
+		Confidence:    "DAMPED",
 	}
 
-	cards := EvaluateMaskedHTNCards(classification)
+	cards := evaluateMaskedHTNCards(t, classification)
 	var maskedCard *MaskedHTNCard
 	for i := range cards {
 		if cards[i].CardType == "MASKED_HYPERTENSION" {
@@ -394,4 +398,37 @@ func TestMaskedHTNCards_IncludeConfidenceTier_Damped(t *testing.T) {
 	if maskedCard.ConfidenceTier != models.TierUncertain {
 		t.Errorf("DAMPED confidence should produce TierUncertain, got %s", maskedCard.ConfidenceTier)
 	}
+}
+
+var (
+	maskedBuilderOnce sync.Once
+	maskedBuilder     *MaskedHTNCardBuilder
+	maskedBuilderErr  error
+)
+
+func evaluateMaskedHTNCards(t *testing.T, classification *models.BPContextClassification) []MaskedHTNCard {
+	t.Helper()
+	return getMaskedHTNBuilder(t).Evaluate(classification)
+}
+
+func getMaskedHTNBuilder(t *testing.T) *MaskedHTNCardBuilder {
+	t.Helper()
+	maskedBuilderOnce.Do(func() {
+		templatesDir := filepath.Join("..", "..", "templates")
+		loader := NewTemplateLoader(templatesDir, zap.NewNop())
+		if err := loader.Load(); err != nil {
+			maskedBuilderErr = err
+			return
+		}
+		fragmentLoader := NewFragmentLoader(zap.NewNop())
+		fragmentLoader.LoadFromTemplates(loader.List())
+		maskedBuilder = NewMaskedHTNCardBuilder(loader, fragmentLoader, zap.NewNop())
+	})
+	if maskedBuilderErr != nil {
+		t.Fatalf("failed to init masked HTN builder: %v", maskedBuilderErr)
+	}
+	if maskedBuilder == nil {
+		t.Fatalf("masked HTN builder not initialised")
+	}
+	return maskedBuilder
 }
