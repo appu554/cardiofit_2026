@@ -1941,18 +1941,27 @@ pillar integration.
 
 ---
 
-## Known Gap (Phase 1 Follow-up)
+## Phase 1 Wiring — COMPLETED
 
-**Runtime wiring of trajectory cards and four-pillar trajectory input is not connected to any HTTP handler.**
+The runtime wiring gap for both trajectory cards and masked HTN cards has been closed:
 
-- `EvaluateTrajectoryCards()` is reachable only from tests.
-- `FourPillarInput.DecomposedTrajectory` has no populator — callers constructing `FourPillarInput` today do not fetch the trajectory.
-- The KB-26 endpoint `/api/v1/kb26/mri/:patientId/domain-trajectory` works standalone, so dashboards and shadow-mode analytics can consume it directly.
+**Files added/modified**:
+- New `kb-23-decision-cards/internal/services/kb26_trajectory_client.go` — `GetTrajectory()` mirrors existing `kb26_bp_context_client.go`, handles 404 and `INSUFFICIENT_DATA` as graceful nil
+- New `kb-23-decision-cards/internal/services/v4_card_builders.go` — `BuildTrajectoryDecisionCard()` + `BuildMaskedHTNDecisionCard()` convert local card structs to persistent `DecisionCard` rows
+- New `kb-23-decision-cards/internal/services/v4_card_builders_test.go` — 4 unit tests covering urgency→MCUGate mapping and content preservation
+- Modified `kb-23-decision-cards/internal/api/composite_handlers.go` — `handleCompositeSynthesize` now fetches trajectory + BP context from KB-26, evaluates cards, persists them, then runs the existing 72-hour aggregation
+- Modified `kb-23-decision-cards/internal/api/server.go` — `kb26TrajectoryClient` wired into Server via `InitServices`
 
-This matches the same gap in the parallel Masked HTN feature:
-- `EvaluateMaskedHTNCards()` is also only called from tests.
-- `FourPillarInput.BPContext` also has no populator in KB-23 handlers.
+**Integration point**: `POST /api/v1/composite-cards/synthesize/:patientId`
+- Before: queried last 72 hours of cards and aggregated them
+- After: fetches trajectory + BP context → evaluates both features → persists resulting `DecisionCard` rows → aggregates them + any other active cards in the 72-hour window
 
-**Both features share the same architectural gap by design** — they ship as computable components and defer the "card orchestration" layer to a Phase 1 task that wires BOTH features into a unified card-generation pipeline (likely via `CompositeCardService`). Merging trajectory-only wiring now would create inconsistency with HTN.
+**Urgency → MCUGate mapping** (applies to both features):
+| Urgency | MCUGate | SafetyTier |
+|---------|---------|------------|
+| IMMEDIATE | `GateHalt` | `SafetyImmediate` |
+| URGENT | `GatePause` | `SafetyUrgent` |
+| ROUTINE | `GateModify` | `SafetyRoutine` |
+| (default) | `GateSafe` | `SafetyRoutine` |
 
-**Phase 1 task (out of scope for this plan):** Create a KB-23 handler that (a) fetches both `DecomposedTrajectory` from KB-26 and `BPContextClassification` from KB-26, (b) populates `FourPillarInput` with both, (c) calls `EvaluateTrajectoryCards` + `EvaluateMaskedHTNCards`, and (d) feeds the combined output into the existing `CompositeCardService` 72-hour aggregation window.
+**Graceful degradation**: Both KB-26 fetches are non-fatal — 404, INSUFFICIENT_DATA, or transport errors are logged as warnings and the handler continues. If both features fail to fetch, `Synthesize` still runs over any pre-existing cards in the 72-hour window.
