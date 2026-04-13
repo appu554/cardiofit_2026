@@ -69,8 +69,8 @@ type BPContextClassification struct {
 // BPContextHistory stores classification snapshots for progression tracking.
 type BPContextHistory struct {
 	ID            string             `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID     string             `gorm:"size:100;index;not null" json:"patient_id"`
-	SnapshotDate  time.Time          `gorm:"index;not null" json:"snapshot_date"`
+	PatientID     string             `gorm:"size:100;not null;uniqueIndex:idx_bp_ctx_patient_date,priority:1" json:"patient_id"`
+	SnapshotDate  time.Time          `gorm:"not null;uniqueIndex:idx_bp_ctx_patient_date,priority:2" json:"snapshot_date"`
 	Phenotype     BPContextPhenotype `gorm:"size:30;not null" json:"phenotype"`
 	ClinicSBPMean float64            `json:"clinic_sbp_mean"`
 	HomeSBPMean   float64            `json:"home_sbp_mean"`
