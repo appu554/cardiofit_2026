@@ -87,3 +87,8 @@ func (r *BPContextRepository) ListActivePatientIDs(window time.Duration) ([]stri
 	}
 	return ids, nil
 }
+
+// DB returns the underlying GORM handle. Intended for tests and admin
+// utilities that need raw query access; production code should call
+// repository methods.
+func (r *BPContextRepository) DB() *gorm.DB { return r.db }
