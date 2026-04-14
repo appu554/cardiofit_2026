@@ -96,8 +96,18 @@ func (s *Server) persistDomainTrajectorySnapshot(patientID uuid.UUID, traj *mode
 	}
 
 	// Upsert: one snapshot per patient per day.
-	return s.db.DB.
+	err := s.db.DB.
 		Where("patient_id = ? AND snapshot_date = ?", history.PatientID, history.SnapshotDate).
 		Assign(history).
 		FirstOrCreate(&history).Error
+
+	if s.trajectoryMetrics != nil {
+		if err != nil {
+			s.trajectoryMetrics.PersistTotal.WithLabelValues("fail").Inc()
+		} else {
+			s.trajectoryMetrics.PersistTotal.WithLabelValues("ok").Inc()
+		}
+	}
+
+	return err
 }
