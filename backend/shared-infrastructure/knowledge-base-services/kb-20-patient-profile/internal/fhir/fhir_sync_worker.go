@@ -196,18 +196,44 @@ func (w *SyncWorker) syncMedicationRequests(since time.Time) {
 		// Resolve FHIR Patient reference to KB-20 patient_id
 		state.PatientID = w.resolvePatientID(state.PatientID)
 
-		// Check for existing by FHIR ID
+		// Check for existing by FHIR ID.
+		//
+		// This branch handles three distinct clinical events on a single
+		// existing MedicationRequest: dose change (state.IsActive true,
+		// previously active), drug stop (state.IsActive false, previously
+		// active), and re-start (state.IsActive true, previously inactive).
+		// All three are pharmacologically significant and must fire the
+		// stability override — stopping amlodipine shifts BP just as much
+		// as starting it, so the dwell bypass applies uniformly.
+		//
+		// The ChangeType label distinguishes STOP from UPDATE so downstream
+		// consumers (KB-19 protocol orchestrator, KB-23 card generator) can
+		// react to the clinical semantics, not just the database operation.
 		var existing models.MedicationState
 		result := w.db.Where("fhir_medication_request_id = ?", state.FHIRMedicationRequestID).First(&existing)
 		if result.Error == nil {
-			// Update status
+			// Persist the status transition.
 			w.db.Model(&existing).Updates(map[string]interface{}{
 				"is_active": state.IsActive,
 				"atc_code":  state.ATCCode,
 			})
+
+			// Phase 5 P5-2/P5-5: stamp the change timestamp + drug class on
+			// the patient profile regardless of whether this is a dose
+			// change, a stop, or a re-start — all three are events the
+			// stability engine should honour. stampMedicationChange is
+			// unconditional by design; do not add is_active gating here.
 			w.stampMedicationChange(state.PatientID, state.DrugClass)
+
+			// Label the event by clinical semantics, not database op.
+			changeType := "UPDATE"
+			if existing.IsActive && !state.IsActive {
+				changeType = "STOP"
+			} else if !existing.IsActive && state.IsActive {
+				changeType = "RESTART"
+			}
 			w.eventBus.Publish(models.EventMedicationChange, state.PatientID, models.MedicationChangePayload{
-				ChangeType: "UPDATE",
+				ChangeType: changeType,
 				DrugName:   state.DrugName,
 				DrugClass:  state.DrugClass,
 				NewDoseMg:  state.DoseMg.String(),
