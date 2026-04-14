@@ -31,6 +31,9 @@ type Config struct {
 	MarketConfigDir string
 	MarketCode      string
 
+	// Trajectory engine config
+	TrajectoryThresholdsPath string
+
 	// Twin computation
 	ObservationWindowDays int
 	BurnInWeeks           int
@@ -99,6 +102,9 @@ func Load() (*Config, error) {
 		// BP context market configuration
 		MarketConfigDir: getEnv("MARKET_CONFIG_DIR", "../../market-configs"),
 		MarketCode:      getEnv("MARKET_CODE", "shared"),
+
+		// Trajectory engine config
+		TrajectoryThresholdsPath: getEnv("TRAJECTORY_THRESHOLDS_PATH", "market-configs/shared/domain_trajectory_thresholds.yaml"),
 
 		// Twin computation defaults
 		ObservationWindowDays: getEnvAsInt("OBSERVATION_WINDOW_DAYS", 14),

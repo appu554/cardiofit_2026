@@ -1,6 +1,7 @@
 package trajectory
 
 import (
+	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 	"kb-26-metabolic-digital-twin/internal/services"
 )
@@ -49,7 +50,11 @@ type LeadingIndicator       = models.LeadingIndicator
 type DomainCategoryCrossing = models.DomainCategoryCrossing
 type DecomposedTrajectory   = models.DecomposedTrajectory
 
-// Compute is the public wrapper around services.ComputeDecomposedTrajectory,
+// Compute is the public wrapper around TrajectoryEngine.Compute,
 // exposed here so cross-module consumers (e.g. KB-23 integration tests) can
 // exercise the full KB-26 pipeline without importing internal packages.
-var Compute = services.ComputeDecomposedTrajectory
+// Constructs a default engine using DefaultTrajectoryThresholds on each call.
+func Compute(patientID string, points []DomainTrajectoryPoint) DecomposedTrajectory {
+	engine := services.NewTrajectoryEngine(config.DefaultTrajectoryThresholds())
+	return engine.Compute(patientID, points)
+}

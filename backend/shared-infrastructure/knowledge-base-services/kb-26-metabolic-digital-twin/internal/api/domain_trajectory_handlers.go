@@ -9,7 +9,6 @@ import (
 	"go.uber.org/zap"
 
 	"kb-26-metabolic-digital-twin/internal/models"
-	"kb-26-metabolic-digital-twin/internal/services"
 )
 
 // getDomainTrajectory computes and returns the decomposed MHRI trajectory for a patient.
@@ -56,7 +55,7 @@ func (s *Server) getDomainTrajectory(c *gin.Context) {
 	}
 
 	// Compute decomposed trajectory.
-	trajectory := services.ComputeDecomposedTrajectory(patientID.String(), points)
+	trajectory := s.trajectoryEngine.Compute(patientID.String(), points)
 
 	// Persist snapshot to history table (idempotent per patient per day).
 	if err := s.persistDomainTrajectorySnapshot(patientID, &trajectory); err != nil {

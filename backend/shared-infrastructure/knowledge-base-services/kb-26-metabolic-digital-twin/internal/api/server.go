@@ -29,6 +29,7 @@ type Server struct {
 	mriScorer             *services.MRIScorer
 	preventScorer         *services.PREVENTScorer
 	relapseDetector       *services.RelapseDetector
+	trajectoryEngine      *services.TrajectoryEngine
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -53,6 +54,12 @@ func NewServer(
 	router := gin.New()
 	router.Use(gin.Recovery())
 
+	trajectoryThresholds, err := config.LoadTrajectoryThresholds(cfg.TrajectoryThresholdsPath)
+	if err != nil {
+		logger.Warn("failed to load trajectory thresholds, using defaults", zap.Error(err))
+		trajectoryThresholds = config.DefaultTrajectoryThresholds()
+	}
+
 	s := &Server{
 		Router:                router,
 		config:                cfg,
@@ -67,6 +74,7 @@ func NewServer(
 		mriScorer:             mriScorer,
 		preventScorer:         preventScorer,
 		relapseDetector:       relapseDetector,
+		trajectoryEngine:      services.NewTrajectoryEngine(trajectoryThresholds),
 	}
 
 	s.setupMiddleware()
