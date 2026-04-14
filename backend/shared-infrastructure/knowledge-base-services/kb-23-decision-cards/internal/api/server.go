@@ -43,6 +43,7 @@ type Server struct {
 	cardLifecycle       *services.CardLifecycle
 	compositeService    *services.CompositeCardService
 	signalCardBuilder   *services.SignalCardBuilder
+	seasonalContext     *services.SeasonalContext
 }
 
 func NewServer(
@@ -113,6 +114,18 @@ func (s *Server) InitServices() {
 	s.cardLifecycle = services.NewCardLifecycle(s.db, s.mcuGateCache, s.kb19Publisher, s.log)
 	s.compositeService = services.NewCompositeCardService(s.db, s.metrics, s.log)
 	s.signalCardBuilder = services.NewSignalCardBuilder(s.log)
+
+	// Load seasonal calendar for the configured market. Missing file is non-fatal.
+	seasonalCalendarPath := s.cfg.SeasonalCalendarPath
+	if seasonalCalendarPath == "" {
+		seasonalCalendarPath = "market-configs/india/seasonal_calendar.yaml" // default
+	}
+	seasonalCtx, err := services.NewSeasonalContext(s.cfg.Market, seasonalCalendarPath)
+	if err != nil {
+		s.log.Warn("failed to load seasonal calendar, no suppression will apply", zap.Error(err))
+		seasonalCtx, _ = services.NewSeasonalContext(s.cfg.Market, "")
+	}
+	s.seasonalContext = seasonalCtx
 
 	s.log.Info("all services initialized")
 }

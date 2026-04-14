@@ -63,6 +63,10 @@ type Config struct {
 
 	// Monitoring
 	MetricsEnabled bool
+
+	// Seasonal calendar
+	Market               string // e.g. "india", "australia"
+	SeasonalCalendarPath string // path to seasonal_calendar.yaml; empty = no suppression
 }
 
 func Load() *Config {
@@ -110,6 +114,9 @@ func Load() *Config {
 		SafetyAlertPublishTimeout:      envDurationOrDefault("SAFETY_ALERT_PUBLISH_TIMEOUT", 2*time.Second),
 
 		MetricsEnabled: envBoolOrDefault("METRICS_ENABLED", true),
+
+		Market:               envOrDefault("MARKET", "india"),
+		SeasonalCalendarPath: envOrDefault("SEASONAL_CALENDAR_PATH", ""),
 	}
 }
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -40,7 +41,7 @@ func (s *Server) handleCompositeSynthesize(c *gin.Context) {
 	// Graceful-degrade: 404 and INSUFFICIENT_DATA both return (nil, nil) — skip silently.
 	if s.kb26TrajectoryClient != nil {
 		if traj, err := s.kb26TrajectoryClient.GetTrajectory(c.Request.Context(), patientIDRaw); err == nil && traj != nil {
-			for _, card := range services.EvaluateTrajectoryCards(traj) {
+			for _, card := range services.EvaluateTrajectoryCardsWithSeasonalContext(traj, s.seasonalContext, time.Now()) {
 				dc := services.BuildTrajectoryDecisionCard(card, patientIDRaw)
 				if err := s.db.DB.WithContext(c.Request.Context()).Create(dc).Error; err != nil {
 					s.log.Warn("failed to persist trajectory card",
