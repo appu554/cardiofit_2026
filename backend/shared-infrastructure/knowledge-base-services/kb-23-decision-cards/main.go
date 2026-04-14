@@ -112,6 +112,22 @@ func main() {
 		logger.Info("KB-23 priority signal consumer started")
 	}
 
+	// 10c. Phase 6 P6-5: KB-23 BatchScheduler + RenalAnticipatoryBatch
+	// (first KB-23 batch consumer, proves the Phase 5 P5-3 scheduler
+	// abstraction extracts cleanly to a second host service). Currently
+	// ships as a heartbeat — per-patient FindApproachingThresholds /
+	// DetectStaleEGFR invocation is a Phase 6 follow-up that needs a
+	// KB-20 active-renal-patient endpoint and a small orchestrator.
+	batchScheduler := services.NewBatchScheduler(logger)
+	renalAnticipatoryJob := services.NewRenalAnticipatoryBatch(nil, logger)
+	batchScheduler.Register(renalAnticipatoryJob)
+
+	batchCtx, batchCancel := context.WithCancel(context.Background())
+	defer batchCancel()
+	go batchScheduler.StartLoop(batchCtx, 1*time.Hour)
+	logger.Info("KB-23 batch scheduler started",
+		zap.String("registered_jobs", "renal_anticipatory_monthly"))
+
 	// 11. Log startup banner
 	fmt.Printf(`
 ========================================
@@ -187,6 +203,12 @@ API Endpoints:
 		priorityConsumer.Stop()
 		logger.Info("Priority signal consumer stopped")
 	}
+
+	// Phase 6 P6-5: stop the batch scheduler ticker and wait for any
+	// in-flight RunOnce to finish before the process exits.
+	batchCancel()
+	batchScheduler.Drain()
+	logger.Info("Batch scheduler drained")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
