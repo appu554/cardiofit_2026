@@ -28,6 +28,7 @@ func setupBPContextTestDB(t *testing.T) *gorm.DB {
 			patient_id    TEXT NOT NULL,
 			snapshot_date DATETIME NOT NULL,
 			phenotype     TEXT NOT NULL,
+			raw_phenotype TEXT,
 			clinic_sbp_mean REAL,
 			home_sbp_mean   REAL,
 			gap_sbp         REAL,

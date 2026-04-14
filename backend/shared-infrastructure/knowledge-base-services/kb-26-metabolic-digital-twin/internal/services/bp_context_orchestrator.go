@@ -163,6 +163,13 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 		oldPhenotype = prior.Phenotype
 	}
 
+	// Phase 5 P5-1: capture the raw classifier output BEFORE the stability
+	// engine has a chance to revert it. Persisted alongside the stable
+	// phenotype so downstream consumers can detect "the algorithm thinks X
+	// but we're holding at Y" — and so the engine can compute a raw
+	// disagreement rate to override the dwell when warranted.
+	rawPhenotype := result.Phenotype
+
 	// Phase 4 P2: Stability check. Fetch recent history and evaluate
 	// the proposed transition. If damped, keep the prior phenotype.
 	// The stability engine is nil-safe — no engine means no dampening.
@@ -187,7 +194,9 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 					zap.String("current", string(oldPhenotype)),
 					zap.String("reason", decision.Reason))
 				// Revert to the prior phenotype. The snapshot will be saved
-				// with the old phenotype, preserving stability.
+				// with the old phenotype as Phenotype, but rawPhenotype still
+				// carries the un-dampened classifier output so future
+				// disagreement-rate calculations have the signal they need.
 				result.Phenotype = oldPhenotype
 				result.Confidence = "DAMPED"
 			}
@@ -201,6 +210,7 @@ func (o *BPContextOrchestrator) Classify(ctx context.Context, patientID string) 
 		PatientID:     patientID,
 		SnapshotDate:  time.Now().UTC().Truncate(24 * time.Hour),
 		Phenotype:     result.Phenotype,
+		RawPhenotype:  rawPhenotype,
 		ClinicSBPMean: result.ClinicSBPMean,
 		HomeSBPMean:   result.HomeSBPMean,
 		GapSBP:        result.ClinicHomeGapSBP,
@@ -290,20 +300,41 @@ func buildStabilityHistory(rows []models.BPContextHistory) stability.History {
 	for _, r := range rows {
 		entries = append(entries, stability.Entry{
 			State:     string(r.Phenotype),
+			Raw:       string(r.RawPhenotype), // Phase 5 P5-1; "" for pre-migration rows
 			EnteredAt: r.SnapshotDate,
 		})
 	}
 	return stability.History{Entries: entries}
 }
 
+// medicationChangeOverrideWindow is the duration after a medication change
+// during which the stability engine bypasses dwell/flap checks. 7 days is a
+// conservative default that covers time-to-steady-state of most
+// antihypertensives (metoprolol ~1-2d, losartan ~3-6d, amlodipine ~7-8d)
+// without being so wide that long-tail effects keep firing. PK-aware
+// per-drug windows are documented as a Phase 5 follow-up.
+const medicationChangeOverrideWindow = 7 * 24 * time.Hour
+
 // detectOverrideEvent returns true when the patient profile indicates a
-// clinical event that should bypass stability dwell/flap checks. Phase 4
-// stub: always returns false. Phase 5 wires this to a real medication
-// change signal from KB-20 (see the MedicationChangeDate field when it
-// exists on KB20PatientProfile).
+// recent clinical event that should bypass stability dwell/flap checks.
+// Phase 5 P5-2: reads LastMedicationChangeAt from the KB-20 patient profile.
+//
+// Defensive defaults:
+//   - nil profile → false (no override)
+//   - nil LastMedicationChangeAt → false (no signal recorded)
+//   - timestamp older than the override window → false (effect window passed)
+//   - timestamp within the override window → true (bypass dwell/flap)
+//
+// The KB-20 server is responsible for populating LastMedicationChangeAt from
+// FHIR MedicationRequest events (it already publishes EventMedicationChange
+// internally — surfacing the timestamp on the patient profile is the
+// remaining step, scheduled for Phase 5 P5-2 KB-20 wiring).
 func detectOverrideEvent(profile *clients.KB20PatientProfile) bool {
-	// Phase 4 P2 placeholder — no override detection yet.
-	return false
+	if profile == nil || profile.LastMedicationChangeAt == nil {
+		return false
+	}
+	elapsed := time.Since(*profile.LastMedicationChangeAt)
+	return elapsed >= 0 && elapsed <= medicationChangeOverrideWindow
 }
 
 // buildBPContextInputFromProfile constructs synthetic BPReading slices

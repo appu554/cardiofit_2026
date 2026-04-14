@@ -178,3 +178,139 @@ func TestHistory_CountFlapsInWindow_TwoEntriesSameState(t *testing.T) {
 		t.Errorf("expected 0 flaps for repeated same state, got %d", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 P5-1: raw-vs-stable disagreement override of dwell
+//
+// When the stability engine has been damping a transition for several days
+// but the raw classifier output has been consistently agreeing with the
+// proposed transition (not noise), the engine should override the dwell
+// and accept the transition. The override threshold is the fraction of
+// raw entries inside the dwell window that match the proposed state.
+// Implemented as a single new Policy field (MaxDwellOverrideRate) and a
+// new History method (RawMatchRate) — the engine remains the sole arbiter
+// of transitions, no orchestrator escape hatches.
+// ---------------------------------------------------------------------------
+
+func TestHistory_RawMatchRate_NoEntries_ReturnsZero(t *testing.T) {
+	h := History{}
+	if got := h.RawMatchRate(time.Now(), 14*24*time.Hour, "MASKED_HTN"); got != 0 {
+		t.Errorf("expected 0 for empty history, got %f", got)
+	}
+}
+
+func TestHistory_RawMatchRate_AllRawMatchProposed_ReturnsOne(t *testing.T) {
+	now := time.Now()
+	h := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -10)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -7)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -3)},
+	}}
+	if got := h.RawMatchRate(now, 14*24*time.Hour, "MASKED_HTN"); got != 1.0 {
+		t.Errorf("expected rate 1.0, got %f", got)
+	}
+}
+
+func TestHistory_RawMatchRate_PartialMatch_ReturnsFraction(t *testing.T) {
+	now := time.Now()
+	h := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -10)},
+		{State: "NORMOTENSION", Raw: "NORMOTENSION", EnteredAt: now.AddDate(0, 0, -8)}, // mismatch
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -5)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -2)},
+	}}
+	got := h.RawMatchRate(now, 14*24*time.Hour, "MASKED_HTN")
+	if got != 0.75 {
+		t.Errorf("expected 0.75 (3/4), got %f", got)
+	}
+}
+
+func TestHistory_RawMatchRate_IgnoresLegacyEmptyRaw(t *testing.T) {
+	now := time.Now()
+	h := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "", EnteredAt: now.AddDate(0, 0, -12)}, // legacy
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -8)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -3)},
+	}}
+	got := h.RawMatchRate(now, 14*24*time.Hour, "MASKED_HTN")
+	if got != 1.0 {
+		t.Errorf("expected 1.0 (legacy entry skipped), got %f", got)
+	}
+}
+
+func TestHistory_RawMatchRate_OutsideWindow_Excluded(t *testing.T) {
+	now := time.Now()
+	h := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -30)}, // outside 14d
+		{State: "NORMOTENSION", Raw: "NORMOTENSION", EnteredAt: now.AddDate(0, 0, -3)},
+	}}
+	got := h.RawMatchRate(now, 14*24*time.Hour, "MASKED_HTN")
+	if got != 0.0 {
+		t.Errorf("expected 0.0 (only in-window entry doesn't match), got %f", got)
+	}
+}
+
+func TestEngine_DwellOverridden_WhenRawConsistentlyAgreesWithProposed(t *testing.T) {
+	// Patient held at NORMOTENSION for 5 days (less than 14d dwell), but the
+	// raw classifier output has been MASKED_HTN on 4 of the last 5 snapshots.
+	// At a 0.7 (70%) override threshold, the dwell should yield and the
+	// engine should accept the MASKED_HTN transition.
+	eng := NewEngine(Policy{
+		MinDwell:             14 * 24 * time.Hour,
+		MaxDwellOverrideRate: 0.7,
+	})
+	now := time.Now()
+	history := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -5)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -4)},
+		{State: "NORMOTENSION", Raw: "NORMOTENSION", EnteredAt: now.AddDate(0, 0, -3)}, // single dissent
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -2)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -1)},
+	}}
+
+	result := eng.Evaluate(history, "MASKED_HTN", now, false)
+	if result.Decision != DecisionAccept {
+		t.Errorf("expected ACCEPT (raw match rate 4/5 = 0.8 >= 0.7), got %s: %s", result.Decision, result.Reason)
+	}
+}
+
+func TestEngine_DwellHeld_WhenRawAgreementBelowOverrideRate(t *testing.T) {
+	// Same shape but raw agrees on only 2 of 5 snapshots — below 0.7 — dwell holds.
+	eng := NewEngine(Policy{
+		MinDwell:             14 * 24 * time.Hour,
+		MaxDwellOverrideRate: 0.7,
+	})
+	now := time.Now()
+	history := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -5)},
+		{State: "NORMOTENSION", Raw: "NORMOTENSION", EnteredAt: now.AddDate(0, 0, -4)},
+		{State: "NORMOTENSION", Raw: "WHITE_COAT_HTN", EnteredAt: now.AddDate(0, 0, -3)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -2)},
+		{State: "NORMOTENSION", Raw: "NORMOTENSION", EnteredAt: now.AddDate(0, 0, -1)},
+	}}
+
+	result := eng.Evaluate(history, "MASKED_HTN", now, false)
+	if result.Decision != DecisionDamp {
+		t.Errorf("expected DAMP (raw match rate 2/5 = 0.4 < 0.7), got %s: %s", result.Decision, result.Reason)
+	}
+}
+
+func TestEngine_DwellHeld_WhenOverrideRateUnconfigured(t *testing.T) {
+	// Backward compatibility: a Policy that doesn't set MaxDwellOverrideRate
+	// must behave exactly like the pre-Phase-5 engine — dwell always damps.
+	eng := NewEngine(Policy{
+		MinDwell: 14 * 24 * time.Hour,
+		// MaxDwellOverrideRate intentionally omitted (== 0)
+	})
+	now := time.Now()
+	history := History{Entries: []Entry{
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -5)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -4)},
+		{State: "NORMOTENSION", Raw: "MASKED_HTN", EnteredAt: now.AddDate(0, 0, -3)},
+	}}
+
+	result := eng.Evaluate(history, "MASKED_HTN", now, false)
+	if result.Decision != DecisionDamp {
+		t.Errorf("expected DAMP when override rate is 0 (disabled), got %s: %s", result.Decision, result.Reason)
+	}
+}

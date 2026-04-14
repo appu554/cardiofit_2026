@@ -14,18 +14,29 @@ import (
 // KB20PatientProfile is the subset of KB-20's patient profile that KB-26
 // needs for BP context classification. Field names match KB-20's JSON output.
 type KB20PatientProfile struct {
-	PatientID         string   `json:"patient_id"`
-	SBP14dMean        *float64 `json:"sbp_14d_mean,omitempty"`
-	DBP14dMean        *float64 `json:"dbp_14d_mean,omitempty"`
-	ClinicSBPMean     *float64 `json:"clinic_sbp_mean,omitempty"`
-	ClinicDBPMean     *float64 `json:"clinic_dbp_mean,omitempty"`
-	ClinicReadings    int      `json:"clinic_readings_count,omitempty"`
-	HomeReadings      int      `json:"home_readings_count,omitempty"`
-	HomeDaysWithData  int      `json:"home_days_with_data,omitempty"`
-	MorningSurge7dAvg *float64 `json:"morning_surge_7d_avg,omitempty"`
-	IsDiabetic        bool     `json:"is_diabetic,omitempty"`
-	HasCKD            bool     `json:"has_ckd,omitempty"`
-	OnHTNMeds         bool     `json:"on_htn_meds,omitempty"`
+	PatientID         string     `json:"patient_id"`
+	SBP14dMean        *float64   `json:"sbp_14d_mean,omitempty"`
+	DBP14dMean        *float64   `json:"dbp_14d_mean,omitempty"`
+	ClinicSBPMean     *float64   `json:"clinic_sbp_mean,omitempty"`
+	ClinicDBPMean     *float64   `json:"clinic_dbp_mean,omitempty"`
+	ClinicReadings    int        `json:"clinic_readings_count,omitempty"`
+	HomeReadings      int        `json:"home_readings_count,omitempty"`
+	HomeDaysWithData  int        `json:"home_days_with_data,omitempty"`
+	MorningSurge7dAvg *float64   `json:"morning_surge_7d_avg,omitempty"`
+	IsDiabetic        bool       `json:"is_diabetic,omitempty"`
+	HasCKD            bool       `json:"has_ckd,omitempty"`
+	OnHTNMeds         bool       `json:"on_htn_meds,omitempty"`
+
+	// Phase 5 P5-2: timestamp of the most recent antihypertensive
+	// medication change for this patient (start, dose change, switch,
+	// stop). Consumed by the BP context orchestrator's stability
+	// override — recent med changes bypass the dwell so that genuine
+	// post-prescription phenotype shifts aren't suppressed.
+	//
+	// Nil means "no medication change recorded" — older KB-20 deployments
+	// will leave this nil until the upstream population logic ships.
+	// KB-26 treats nil as "no override" (safe default).
+	LastMedicationChangeAt *time.Time `json:"last_medication_change_at,omitempty"`
 }
 
 // KB20Client fetches patient profile data from KB-20 for BP context analysis.

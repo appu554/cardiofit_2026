@@ -119,14 +119,21 @@ func main() {
 	kb23Client := clients.NewKB23Client(cfg.KB23DecisionCardsURL, time.Duration(cfg.KB22SignalTimeoutMS)*time.Millisecond, logger)
 	bpContextRepo := services.NewBPContextRepository(db.DB)
 
-	// BP context phenotype stability engine (Phase 4 P2)
+	// BP context phenotype stability engine (Phase 4 P2 + Phase 5 P5-1)
 	// MinDwell 14 days: phenotype must be held 2 weeks before transition
 	// FlapWindow 30 days: oscillation lookback
 	// MaxFlapsBeforeLock 3: after 3 state changes in 30d, lock transitions
+	// MaxDwellOverrideRate 0.7: if the raw classifier output has agreed
+	// with the proposed transition on >=70% of in-window snapshots, the
+	// dwell yields. This prevents the dwell from indefinitely suppressing
+	// genuine phenotype changes that occur without a discrete override
+	// event (e.g. gradual physiological shifts, sustained measurement
+	// improvements that aren't tied to a medication change).
 	bpStabilityPolicy := stability.Policy{
-		MinDwell:           14 * 24 * time.Hour,
-		FlapWindow:         30 * 24 * time.Hour,
-		MaxFlapsBeforeLock: 3,
+		MinDwell:             14 * 24 * time.Hour,
+		FlapWindow:           30 * 24 * time.Hour,
+		MaxFlapsBeforeLock:   3,
+		MaxDwellOverrideRate: 0.7,
 	}
 	bpStabilityEngine := stability.NewEngine(bpStabilityPolicy)
 

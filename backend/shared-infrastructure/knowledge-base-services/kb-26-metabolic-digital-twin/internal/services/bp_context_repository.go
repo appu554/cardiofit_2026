@@ -32,6 +32,7 @@ func (r *BPContextRepository) SaveSnapshot(snapshot *models.BPContextHistory) er
 		},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"phenotype",
+			"raw_phenotype",
 			"clinic_sbp_mean",
 			"home_sbp_mean",
 			"gap_sbp",

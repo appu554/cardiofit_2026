@@ -51,6 +51,22 @@ func (e *Engine) Evaluate(
 	enteredAt := history.LatestEnteredAt()
 	elapsed := now.Sub(enteredAt)
 	if elapsed < e.policy.MinDwell {
+		// Phase 5 P5-1: before damping, check whether the raw classifier
+		// output has been consistently agreeing with the proposed state.
+		// If the agreement rate within the dwell window meets the
+		// configured threshold, override the dwell. The engine remains
+		// the sole arbiter of transitions — no orchestrator escape hatch.
+		if e.policy.MaxDwellOverrideRate > 0 {
+			rate := history.RawMatchRate(now, e.policy.MinDwell, proposedState)
+			if rate >= e.policy.MaxDwellOverrideRate {
+				return Result{
+					Decision: DecisionAccept,
+					Reason: fmt.Sprintf(
+						"dwell overridden: raw match rate %.0f%% >= %.0f%% threshold",
+						rate*100, e.policy.MaxDwellOverrideRate*100),
+				}
+			}
+		}
 		return Result{
 			Decision: DecisionDamp,
 			Reason: fmt.Sprintf("dwell not met: %s elapsed of %s required",

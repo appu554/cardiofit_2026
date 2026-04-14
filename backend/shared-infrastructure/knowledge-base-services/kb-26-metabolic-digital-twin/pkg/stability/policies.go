@@ -52,11 +52,30 @@ type Policy struct {
 	// engine refuses all subsequent transitions until an override fires.
 	// Set to 0 to disable flap-lock.
 	MaxFlapsBeforeLock int
+
+	// MaxDwellOverrideRate — Phase 5 P5-1. When the dwell would damp a
+	// transition, the engine first computes the fraction of recent raw
+	// classifier outputs (within MinDwell) that match the proposed state.
+	// If that fraction is >= MaxDwellOverrideRate, the dwell is overridden
+	// and the transition is accepted. Set to 0 to disable (preserves
+	// pre-Phase-5 hard-block behaviour). Recommended value: 0.7 (70%).
+	//
+	// This converts the dwell from a hard block to a soft block that yields
+	// to consistent algorithmic disagreement, while keeping the engine as
+	// the sole arbiter of transitions (no orchestrator escape hatches).
+	MaxDwellOverrideRate float64
 }
 
 // Entry is one record in the state history.
+//
+// Raw is the un-dampened classifier output for this snapshot — the state the
+// classifier proposed before the stability engine intervened. When State and
+// Raw differ, the engine damped a transition. Older entries written before
+// Phase 5 P5-1 carry an empty Raw and are treated as "no signal" by the
+// disagreement-rate logic.
 type Entry struct {
 	State     string
+	Raw       string
 	EnteredAt time.Time
 }
 
@@ -106,4 +125,36 @@ func (h *History) CountFlapsInWindow(now time.Time, window time.Duration) int {
 		}
 	}
 	return flaps
+}
+
+// RawMatchRate returns the fraction of in-window entries whose Raw classifier
+// output equals the proposed state. Used by the engine's dwell override
+// logic — see Policy.MaxDwellOverrideRate.
+//
+//   - Entries older than `now - window` are excluded.
+//   - Entries with empty Raw (legacy snapshots written before Phase 5 P5-1)
+//     are excluded from both numerator and denominator.
+//   - Returns 0 when no eligible entries exist.
+func (h *History) RawMatchRate(now time.Time, window time.Duration, proposed string) float64 {
+	if len(h.Entries) == 0 {
+		return 0
+	}
+	cutoff := now.Add(-window)
+	var total, matches float64
+	for _, e := range h.Entries {
+		if e.EnteredAt.Before(cutoff) {
+			continue
+		}
+		if e.Raw == "" {
+			continue
+		}
+		total++
+		if e.Raw == proposed {
+			matches++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return matches / total
 }

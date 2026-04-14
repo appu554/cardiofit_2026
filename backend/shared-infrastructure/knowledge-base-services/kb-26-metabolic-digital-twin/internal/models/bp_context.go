@@ -67,11 +67,21 @@ type BPContextClassification struct {
 }
 
 // BPContextHistory stores classification snapshots for progression tracking.
+//
+// Phenotype is the *stable* phenotype after the stability engine has had its
+// say. RawPhenotype (Phase 5 P5-1) is the raw classifier output before the
+// engine intervened — when Phenotype != RawPhenotype, the engine damped a
+// transition. Storing both lets clinicians and downstream logic see "the
+// algorithm thinks X but we're holding at Y," and lets the engine compute a
+// raw-disagreement rate to override the dwell when warranted (see
+// stability.Policy.MaxDwellOverrideRate). Older snapshots written before
+// Phase 5 P5-1 carry an empty RawPhenotype.
 type BPContextHistory struct {
 	ID            string             `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	PatientID     string             `gorm:"size:100;not null;uniqueIndex:idx_bp_ctx_patient_date,priority:1" json:"patient_id"`
 	SnapshotDate  time.Time          `gorm:"not null;uniqueIndex:idx_bp_ctx_patient_date,priority:2" json:"snapshot_date"`
 	Phenotype     BPContextPhenotype `gorm:"size:30;not null" json:"phenotype"`
+	RawPhenotype  BPContextPhenotype `gorm:"size:30" json:"raw_phenotype,omitempty"`
 	ClinicSBPMean float64            `json:"clinic_sbp_mean"`
 	HomeSBPMean   float64            `json:"home_sbp_mean"`
 	GapSBP        float64            `json:"gap_sbp"`

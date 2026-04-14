@@ -675,3 +675,187 @@ func TestBPContextOrchestrator_P9_NilTriggerIsNoop(t *testing.T) {
 		t.Fatalf("classify with nil composite trigger should succeed, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 P5-1: orchestrator must persist BOTH raw and stable phenotypes
+//
+// When the stability engine accepts a transition, raw == stable. When it
+// damps, raw is the un-dampened classifier output and stable is the held
+// prior phenotype. The history table previously lost the raw signal —
+// these tests pin the new persistence behaviour.
+// ---------------------------------------------------------------------------
+
+func TestBPContextOrchestrator_P5_RawEqualsStable_OnFirstClassification(t *testing.T) {
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-raw-first",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	orch := newOrchestratorFull(t, kb20, kb21, kb19, nil)
+
+	if _, err := orch.Classify(context.Background(), "p-raw-first"); err != nil {
+		t.Fatalf("classify: %v", err)
+	}
+
+	saved, err := orch.repo.FetchLatest("p-raw-first")
+	if err != nil || saved == nil {
+		t.Fatalf("fetch latest snapshot: err=%v saved=%v", err, saved)
+	}
+	if saved.RawPhenotype != saved.Phenotype {
+		t.Errorf("expected raw == stable on first classification, got raw=%q stable=%q",
+			saved.RawPhenotype, saved.Phenotype)
+	}
+	if saved.RawPhenotype == "" {
+		t.Errorf("expected raw_phenotype to be populated, got empty")
+	}
+}
+
+func TestBPContextOrchestrator_P5_RawDifferentFromStable_OnDampedTransition(t *testing.T) {
+	// Day 1 the patient is classified as MASKED_HTN. Day 2 the readings
+	// flip to SUSTAINED_NORMOTENSION but the 14-day dwell hasn't elapsed,
+	// so the engine damps and the stable phenotype reverts to MASKED_HTN.
+	// The day-2 snapshot must persist BOTH the un-dampened raw output
+	// (SUSTAINED_NORMOTENSION) and the held stable phenotype (MASKED_HTN).
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-raw-damp",
+			SBP14dMean:       ptrFloat(148), // home elevated
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128), // clinic normal
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	policy := stability.Policy{MinDwell: 14 * 24 * time.Hour}
+	orch := newOrchestratorWithStabilityPolicy(t, kb20, kb21, kb19, policy)
+
+	// Day 1 → MASKED_HTN (clinic normal, home elevated)
+	day1, err := orch.Classify(context.Background(), "p-raw-damp")
+	if err != nil {
+		t.Fatalf("day 1 classify: %v", err)
+	}
+	if day1.Phenotype != models.PhenotypeMaskedHTN {
+		t.Fatalf("setup error: expected day 1 MASKED_HTN, got %s", day1.Phenotype)
+	}
+
+	// Flip readings: home now normal, clinic still normal → raw becomes SUSTAINED_NORMOTENSION.
+	kb20.profile.SBP14dMean = ptrFloat(120)
+	kb20.profile.DBP14dMean = ptrFloat(75)
+
+	day2, err := orch.Classify(context.Background(), "p-raw-damp")
+	if err != nil {
+		t.Fatalf("day 2 classify: %v", err)
+	}
+	if day2.Phenotype != models.PhenotypeMaskedHTN {
+		t.Fatalf("expected damped stable phenotype to remain MASKED_HTN, got %s", day2.Phenotype)
+	}
+
+	saved, err := orch.repo.FetchLatest("p-raw-damp")
+	if err != nil || saved == nil {
+		t.Fatalf("fetch saved: err=%v", err)
+	}
+	if saved.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("snapshot stable phenotype: expected MASKED_HTN, got %s", saved.Phenotype)
+	}
+	if saved.RawPhenotype != models.PhenotypeSustainedNormotension {
+		t.Errorf("snapshot raw phenotype: expected SUSTAINED_NORMOTENSION, got %s", saved.RawPhenotype)
+	}
+	if saved.RawPhenotype == saved.Phenotype {
+		t.Error("expected raw != stable after dampening, but they matched")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 P5-2: detectOverrideEvent reads the patient profile's medication
+// change timestamp. Within the override window (default 7 days), the
+// stability engine bypasses the dwell/flap checks. Outside the window, or
+// when no medication change is recorded, the override returns false.
+//
+// 7 days is chosen as a conservative default that covers the time-to-steady-
+// state of most antihypertensives without being so wide that long-tail
+// effects of an unrelated med change keep firing. PK-aware per-drug windows
+// are documented as a follow-up in the Phase 5 plan.
+// ---------------------------------------------------------------------------
+
+func TestDetectOverrideEvent_RecentMedChange_ReturnsTrue(t *testing.T) {
+	recently := time.Now().UTC().Add(-2 * 24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		PatientID:               "p1",
+		LastMedicationChangeAt:  &recently,
+	}
+	if !detectOverrideEvent(profile) {
+		t.Error("expected override=true for med change 2 days ago")
+	}
+}
+
+func TestDetectOverrideEvent_StaleMedChange_ReturnsFalse(t *testing.T) {
+	long := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		PatientID:              "p1",
+		LastMedicationChangeAt: &long,
+	}
+	if detectOverrideEvent(profile) {
+		t.Error("expected override=false for med change 30 days ago (outside 7d window)")
+	}
+}
+
+func TestDetectOverrideEvent_NoMedChange_ReturnsFalse(t *testing.T) {
+	profile := &clients.KB20PatientProfile{
+		PatientID:              "p1",
+		LastMedicationChangeAt: nil,
+	}
+	if detectOverrideEvent(profile) {
+		t.Error("expected override=false when LastMedicationChangeAt is nil")
+	}
+}
+
+func TestDetectOverrideEvent_NilProfile_ReturnsFalse(t *testing.T) {
+	if detectOverrideEvent(nil) {
+		t.Error("expected override=false for nil profile (defensive)")
+	}
+}
+
+func TestDetectOverrideEvent_BoundaryExactly7Days_ReturnsTrue(t *testing.T) {
+	// At exactly the 7-day boundary, the override should still fire.
+	// Drugs reach steady state at varying speeds and we want the engine to
+	// remain reactive at the boundary, not strictly less-than.
+	boundary := time.Now().UTC().Add(-7 * 24 * time.Hour).Add(time.Second)
+	profile := &clients.KB20PatientProfile{
+		PatientID:              "p1",
+		LastMedicationChangeAt: &boundary,
+	}
+	if !detectOverrideEvent(profile) {
+		t.Error("expected override=true at the 7-day boundary")
+	}
+}
+
+// newOrchestratorWithStabilityPolicy builds an orchestrator with a custom
+// stability policy. Phase 5 P5-1 tests need this because the dampening
+// behaviour depends on the policy's MinDwell + MaxDwellOverrideRate.
+func newOrchestratorWithStabilityPolicy(
+	t *testing.T,
+	kb20 KB20Fetcher,
+	kb21 KB21Fetcher,
+	kb19 KB19EventPublisher,
+	policy stability.Policy,
+) *BPContextOrchestrator {
+	t.Helper()
+	db := setupBPContextTestDB(t)
+	repo := NewBPContextRepository(db)
+	thresholds := defaultBPContextThresholds()
+	engine := stability.NewEngine(policy)
+	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, kb19, engine, nil)
+}
