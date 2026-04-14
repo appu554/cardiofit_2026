@@ -1,6 +1,8 @@
 package services
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -56,5 +58,57 @@ func TestIntegration_ComputeAndEvaluate_RajeshKumar(t *testing.T) {
 	}
 	if !foundLeading {
 		t.Error("expected BEHAVIORAL_LEADING_INDICATOR card from full pipeline")
+	}
+}
+
+func TestIntegration_SeasonalSuppression_Diwali(t *testing.T) {
+	// Compute a trajectory with glucose declining
+	now := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	points := []dtModels.DomainTrajectoryPoint{
+		{Timestamp: now.Add(-13 * 24 * time.Hour), CompositeScore: 70, GlucoseScore: 70, CardioScore: 65, BodyCompScore: 65, BehavioralScore: 70},
+		{Timestamp: now.Add(-7 * 24 * time.Hour), CompositeScore: 60, GlucoseScore: 55, CardioScore: 65, BodyCompScore: 65, BehavioralScore: 70},
+		{Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 50, GlucoseScore: 40, CardioScore: 65, BodyCompScore: 65, BehavioralScore: 70},
+	}
+	trajectory := dtModels.Compute("e2e-diwali", points)
+
+	// Build a Diwali seasonal context
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "cal.yaml")
+	yamlContent := `
+windows:
+  - name: diwali
+    start: "2026-11-04"
+    end: "2026-11-14"
+    affected_domains: [GLUCOSE]
+    mode: DOWNGRADE_URGENCY
+    rationale: "festival eating"
+`
+	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	seasonalCtx, _ := NewSeasonalContext("india", path)
+
+	// Without seasonal context → glucose rapid decline card at URGENT
+	cardsWithout := EvaluateTrajectoryCardsWithSeasonalContext(&trajectory, nil, now)
+	hadUrgentGlucose := false
+	for _, c := range cardsWithout {
+		if c.CardType == "DOMAIN_RAPID_DECLINE" && c.Domain == "GLUCOSE" && c.Urgency == "URGENT" {
+			hadUrgentGlucose = true
+		}
+	}
+	if !hadUrgentGlucose {
+		t.Fatal("baseline check failed: expected URGENT glucose card without seasonal context")
+	}
+
+	// With Diwali context → glucose rapid decline card downgraded to ROUTINE
+	cardsWith := EvaluateTrajectoryCardsWithSeasonalContext(&trajectory, seasonalCtx, now)
+	hadDowngradedGlucose := false
+	for _, c := range cardsWith {
+		if c.CardType == "DOMAIN_RAPID_DECLINE" && c.Domain == "GLUCOSE" && c.Urgency == "ROUTINE" {
+			hadDowngradedGlucose = true
+		}
+	}
+	if !hadDowngradedGlucose {
+		t.Error("expected glucose card downgraded to ROUTINE during Diwali")
 	}
 }
