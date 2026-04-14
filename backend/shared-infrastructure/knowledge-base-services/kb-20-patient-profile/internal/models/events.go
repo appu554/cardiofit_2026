@@ -20,6 +20,7 @@ const (
 	EventACRWorsening               = "ACR_WORSENING"                // ACR trend changed to WORSENING
 	EventACRTargetMet               = "ACR_TARGET_MET"               // ACR category improved (e.g., A3 -> A2)
 	EventBPVariabilityAlert         = "BP_VARIABILITY_ALERT"         // Wave 3.1: BP variability transitioned to HIGH
+	EventCKMStageTransition         = "CKM_STAGE_TRANSITION"         // Phase 6 P6-6: CKM substage changed (e.g., 3b → 4c)
 
 	// HTN Proposal §3.3 — Core BP events
 	EventBPAlert           = "BP_ALERT"              // bp_status transitions to ABOVE_TARGET or DECLINING
@@ -237,4 +238,23 @@ type LabResultPayload struct {
 	Source           string  `json:"source,omitempty"`
 	ValidationStatus string  `json:"validation_status"`
 	IsDerived        bool    `json:"is_derived"`
+}
+
+// CKMStageTransitionPayload is published when a patient's CKM substage
+// changes (e.g., 3b → 4c). Phase 6 P6-6: KB-23's PrioritySignalConsumer
+// extends its router to dispatch this event type and, on to_stage="4c",
+// invokes MandatoryMedChecker to generate IMMEDIATE GDMT cards.
+//
+// FromStage may be empty when this is the first staging for the patient
+// (no prior stage to compare against). TriggeredByEventType describes what
+// triggered the recomputation (e.g., "ECHO_OBSERVATION", "ASCVD_CONDITION",
+// "MANUAL_RECOMPUTE") so downstream consumers can attribute the change.
+type CKMStageTransitionPayload struct {
+	FromStage             string    `json:"from_stage,omitempty"`
+	ToStage               string    `json:"to_stage"`
+	TransitionDate        time.Time `json:"transition_date"`
+	StagingRationale      string    `json:"staging_rationale,omitempty"`
+	HFType                string    `json:"hf_type,omitempty"`              // populated when ToStage="4c" with LVEF data
+	TriggeredByEventType  string    `json:"triggered_by_event_type,omitempty"`
+	TriggeredByEventID    string    `json:"triggered_by_event_id,omitempty"`
 }

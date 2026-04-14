@@ -164,6 +164,12 @@ func (m *EventSignalMapper) Map(entry models.EventOutboxEntry) (*MappedEvent, er
 	case models.EventHospitalisation:
 		return m.mapAlertSignal(entry, signals.SignalHospitalisation, true) // priority
 
+	// Phase 6 P6-6: CKM substage transitions are routed through the
+	// priority pipeline so KB-23 can react to 4c transitions with
+	// MandatoryMedChecker (GDMT gap detection).
+	case models.EventCKMStageTransition:
+		return m.mapAlertSignal(entry, signals.SignalCKMStageTransition, true) // priority
+
 	default:
 		return nil, nil
 	}

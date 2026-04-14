@@ -148,6 +148,10 @@ func (s *Server) MetricsCollector() *metrics.Collector { return s.metrics }
 // Database returns the database connection (used by Kafka consumer wiring in main).
 func (s *Server) Database() *database.Database { return s.db }
 
+// KB20Client returns the KB-20 client (used by Kafka consumer wiring in main —
+// Phase 6 P6-6 CKM transition handler needs it to fetch patient context).
+func (s *Server) KB20Client() *services.KB20Client { return s.kb20Client }
+
 // requestLogger middleware logs each request.
 func requestLogger(log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {

@@ -95,11 +95,18 @@ func main() {
 		}
 		brokers := strings.Split(brokerEnv, ",")
 
+		// Phase 6 P6-6: MandatoryMedChecker + KB20Client wired into the
+		// priority signal handler so the new CKM_STAGE_TRANSITION
+		// dispatch can fetch patient context and detect GDMT gaps on
+		// 4c transitions. MandatoryMedChecker is stateless — fresh
+		// instance per startup is fine.
 		priorityHandler := services.NewPrioritySignalHandler(
 			server.Database(),
 			server.MCUGateCache(),
 			server.KB19Publisher(),
 			server.HypoHandler(),
+			services.NewMandatoryMedChecker(),
+			server.KB20Client(),
 			server.MetricsCollector(),
 			logger,
 		)

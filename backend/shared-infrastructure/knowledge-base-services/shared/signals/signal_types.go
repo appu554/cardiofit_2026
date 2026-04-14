@@ -35,6 +35,11 @@ const (
 	SignalAdherence       SignalType = "ADHERENCE"        // S20
 	SignalResolution      SignalType = "RESOLUTION"       // S21
 	SignalHospitalisation SignalType = "HOSPITALISATION"  // S22
+
+	// Phase 6 P6-6 — staging transition event (not a clinical signal in
+	// the S1-S22 sense, but uses the same envelope shape so it can flow
+	// through the existing priority signal Kafka pipeline).
+	SignalCKMStageTransition SignalType = "CKM_STAGE_TRANSITION"
 )
 
 // SignalSource identifies the origin of a signal.

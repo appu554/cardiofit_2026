@@ -17,30 +17,38 @@ import (
 
 // PrioritySignalHandler processes priority signals and creates decision cards.
 type PrioritySignalHandler struct {
-	db          *database.Database
-	gateCache   *MCUGateCache
-	kb19        *KB19Publisher
-	hypoHandler *HypoglycaemiaHandler
-	metrics     *metrics.Collector
-	log         *zap.Logger
+	db                   *database.Database
+	gateCache            *MCUGateCache
+	kb19                 *KB19Publisher
+	hypoHandler          *HypoglycaemiaHandler
+	mandatoryMedChecker  *MandatoryMedChecker // Phase 6 P6-6
+	kb20Client           *KB20Client          // Phase 6 P6-6
+	metrics              *metrics.Collector
+	log                  *zap.Logger
 }
 
 // NewPrioritySignalHandler creates a new handler for priority signals.
+// mandatoryMedChecker and kb20Client are optional — pass nil to disable
+// the Phase 6 P6-6 CKM 4c handler (e.g., in unit tests for other routes).
 func NewPrioritySignalHandler(
 	db *database.Database,
 	gateCache *MCUGateCache,
 	kb19 *KB19Publisher,
 	hypoHandler *HypoglycaemiaHandler,
+	mandatoryMedChecker *MandatoryMedChecker,
+	kb20Client *KB20Client,
 	m *metrics.Collector,
 	log *zap.Logger,
 ) *PrioritySignalHandler {
 	return &PrioritySignalHandler{
-		db:          db,
-		gateCache:   gateCache,
-		kb19:        kb19,
-		hypoHandler: hypoHandler,
-		metrics:     m,
-		log:         log,
+		db:                  db,
+		gateCache:           gateCache,
+		kb19:                kb19,
+		hypoHandler:         hypoHandler,
+		mandatoryMedChecker: mandatoryMedChecker,
+		kb20Client:          kb20Client,
+		metrics:             m,
+		log:                 log,
 	}
 }
 
@@ -62,10 +70,94 @@ func (h *PrioritySignalHandler) Handle(ctx context.Context, action PriorityRoute
 		return h.handleAdverseEvent(ctx, env)
 	case RouteHospitalisation:
 		return h.handleHospitalisation(ctx, env)
+	case RouteCKMTransition:
+		return h.handleCKMTransition(ctx, env)
 	default:
 		return nil
 	}
 }
+
+// handleCKMTransition processes a CKM_STAGE_TRANSITION event published by
+// KB-20's outbox relay. Phase 6 P6-6 (Decision 9): on a transition where
+// to_stage="4c", invoke MandatoryMedChecker for GDMT gap detection. Other
+// transitions (3a→3b, 4a→4b, etc.) are visible on the topic for downstream
+// consumers (dashboards, audit) but trigger no KB-23 action — only 4c
+// needs the mandatory-med check.
+//
+// Scope note — this handler currently logs detected gaps rather than
+// persisting them as DecisionCard rows. The KB-23 DecisionCard model is
+// template-driven (TemplateID, NodeID, ClinicianSummary, PatientSummaryEn,
+// SafetyCheckSummary, etc.) and building real cards requires a new
+// "CKM_4C_MANDATORY_MEDICATION" YAML template plus the full card-builder
+// pipeline (~1d follow-up). The Decision 9 abstraction proof — KB-20
+// publishes → KB-23 routes → handler filters for 4c → MandatoryMedChecker
+// invoked → gaps detected — ships fully. Card persistence is the missing
+// last mile and lands as a Phase 6 follow-up alongside the metrics.
+func (h *PrioritySignalHandler) handleCKMTransition(ctx context.Context, env priorityEnvelope) error {
+	var payload struct {
+		FromStage string `json:"from_stage"`
+		ToStage   string `json:"to_stage"`
+		HFType    string `json:"hf_type"`
+		Rationale string `json:"staging_rationale"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal CKM transition payload: %w", err)
+	}
+
+	if payload.ToStage != "4c" {
+		// Non-4c transitions are routed but produce no KB-23 action.
+		// Logged at debug level so the routing remains observable
+		// without spamming logs at the default level.
+		h.log.Debug("CKM stage transition routed but to_stage != 4c (no-op)",
+			zap.String("patient_id", env.PatientID),
+			zap.String("from_stage", payload.FromStage),
+			zap.String("to_stage", payload.ToStage))
+		return nil
+	}
+
+	if h.mandatoryMedChecker == nil || h.kb20Client == nil {
+		// Defensive default: if the dependencies aren't wired (e.g.
+		// in a test harness), log and skip without erroring. Production
+		// must wire both via NewPrioritySignalHandler.
+		h.log.Warn("CKM 4c transition received but MandatoryMedChecker or KB20Client not wired",
+			zap.String("patient_id", env.PatientID))
+		return nil
+	}
+
+	patientCtx, err := h.kb20Client.FetchSummaryContext(ctx, env.PatientID)
+	if err != nil {
+		return fmt.Errorf("fetch KB-20 patient context for CKM 4c: %w", err)
+	}
+	if patientCtx == nil {
+		h.log.Warn("KB-20 returned nil patient context for CKM 4c",
+			zap.String("patient_id", env.PatientID))
+		return nil
+	}
+
+	gaps := h.mandatoryMedChecker.CheckMandatory("4c", payload.HFType, patientCtx.Medications)
+	if len(gaps) == 0 {
+		h.log.Info("CKM 4c transition: no mandatory medication gaps",
+			zap.String("patient_id", env.PatientID),
+			zap.String("from_stage", payload.FromStage))
+		return nil
+	}
+
+	missing := make([]string, 0, len(gaps))
+	for _, gap := range gaps {
+		missing = append(missing, gap.MissingClass)
+	}
+
+	h.log.Info("CKM 4c transition: mandatory medication gaps detected",
+		zap.String("patient_id", env.PatientID),
+		zap.String("from_stage", payload.FromStage),
+		zap.String("hf_type", payload.HFType),
+		zap.Int("gaps_found", len(gaps)),
+		zap.Strings("missing_classes", missing),
+		zap.String("note", "card persistence pending Phase 6 follow-up — needs CKM_4C_MANDATORY_MEDICATION YAML template + card builder wiring"),
+	)
+	return nil
+}
+
 
 // handleHypo delegates to the existing HypoglycaemiaHandler.
 func (h *PrioritySignalHandler) handleHypo(ctx context.Context, env priorityEnvelope) error {

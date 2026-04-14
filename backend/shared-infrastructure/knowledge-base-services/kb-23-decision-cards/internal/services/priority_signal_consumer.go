@@ -19,7 +19,11 @@ const (
 	RoutePotassium       PriorityRouteAction = "POTASSIUM"
 	RouteAdverseEvent    PriorityRouteAction = "ADVERSE_EVENT"
 	RouteHospitalisation PriorityRouteAction = "HOSPITALISATION"
-	RoutePrioritySkip    PriorityRouteAction = "SKIP"
+	// Phase 6 P6-6: CKM substage transitions. KB-20 publishes via
+	// the kafka_outbox_relay; this consumer reacts to 4c transitions
+	// by invoking MandatoryMedChecker for GDMT gap detection.
+	RouteCKMTransition PriorityRouteAction = "CKM_TRANSITION"
+	RoutePrioritySkip  PriorityRouteAction = "SKIP"
 )
 
 // priorityEnvelope is the Kafka message envelope for priority signals.
@@ -53,6 +57,12 @@ func (r *PrioritySignalRouter) Route(data []byte) (PriorityRouteAction, error) {
 		return RouteAdverseEvent, nil
 	case "HOSPITALISATION":
 		return RouteHospitalisation, nil
+	case "CKM_STAGE_TRANSITION":
+		// Phase 6 P6-6: route to the CKM transition handler. The
+		// handler internally filters for to_stage="4c" and acts only
+		// on those (other stage transitions are visible to downstream
+		// consumers via the topic but generate no card from KB-23).
+		return RouteCKMTransition, nil
 	default:
 		return RoutePrioritySkip, nil
 	}

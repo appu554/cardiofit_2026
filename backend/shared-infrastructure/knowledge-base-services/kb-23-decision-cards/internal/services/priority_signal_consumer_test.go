@@ -45,6 +45,13 @@ func TestPrioritySignalRouter_Route(t *testing.T) {
 			expected: RouteHospitalisation,
 		},
 		{
+			// Phase 6 P6-6 Decision 9: CKM stage transitions route to
+			// RouteCKMTransition; the handler internally filters for 4c.
+			name:     "CKM_STAGE_TRANSITION routes to RouteCKMTransition",
+			input:    priorityEnvelope{SignalType: "CKM_STAGE_TRANSITION", PatientID: "p1"},
+			expected: RouteCKMTransition,
+		},
+		{
 			name:     "unknown signal type routes to skip",
 			input:    priorityEnvelope{SignalType: "UNKNOWN_SIGNAL", PatientID: "p1"},
 			expected: RoutePrioritySkip,
