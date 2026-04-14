@@ -165,6 +165,15 @@ func main() {
 	// and is registered in KB-23's BatchScheduler (built in Phase 6 P6-5).
 	// This makes the detector + orchestrator + batch all colocated.
 
+	// Phase 6 P6-4: CGM daily batch — checks every CGM-active patient
+	// once per day at 01:00 UTC and computes a fresh 14-day period
+	// report for any patient whose last report is ≥14 days old.
+	// Currently heartbeat mode (nil repo + nil fetcher) — the
+	// ComputePeriodReport function is fully built and tested, but the
+	// raw reading store + CGM-active patient query are Phase 6 follow-ups.
+	cgmDailyJob := services.NewCGMDailyBatch(nil, nil, logger)
+	batchScheduler.Register(cgmDailyJob)
+
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
 
