@@ -842,6 +842,77 @@ func TestDetectOverrideEvent_BoundaryExactly7Days_ReturnsTrue(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5 P5-5: PK-aware override windows. The detector consults
+// SteadyStateWindow(drugClass) to pick a drug-specific window —
+// amlodipine ~8 days, metoprolol ~2 days, unknown/empty ~7 days default.
+// ---------------------------------------------------------------------------
+
+func TestDetectOverrideEvent_AmlodipineWithinWideWindow_ReturnsTrue(t *testing.T) {
+	// Amlodipine's steady-state window is 8 days. A change 7 days ago is
+	// inside the window — the flat 7-day default (P5-2) would have fired,
+	// but the PK-aware version should also continue firing for one more
+	// day.
+	sevenDays := time.Now().UTC().Add(-7 * 24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		LastMedicationChangeAt:    &sevenDays,
+		LastMedicationChangeClass: "AMLODIPINE",
+	}
+	if !detectOverrideEvent(profile) {
+		t.Error("expected amlodipine override=true at 7 days (inside 8-day window)")
+	}
+}
+
+func TestDetectOverrideEvent_AmlodipineOutsideWideWindow_ReturnsFalse(t *testing.T) {
+	nineDays := time.Now().UTC().Add(-9 * 24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		LastMedicationChangeAt:    &nineDays,
+		LastMedicationChangeClass: "AMLODIPINE",
+	}
+	if detectOverrideEvent(profile) {
+		t.Error("expected amlodipine override=false at 9 days (outside 8-day window)")
+	}
+}
+
+func TestDetectOverrideEvent_MetoprololOutsideNarrowWindow_ReturnsFalse(t *testing.T) {
+	// Metoprolol's steady-state window is 2 days. A change 3 days ago is
+	// outside — the flat 7-day default would have fired, but the PK-aware
+	// version should refuse because the drug has already stabilised.
+	threeDays := time.Now().UTC().Add(-3 * 24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		LastMedicationChangeAt:    &threeDays,
+		LastMedicationChangeClass: "METOPROLOL",
+	}
+	if detectOverrideEvent(profile) {
+		t.Error("expected metoprolol override=false at 3 days (outside 2-day window)")
+	}
+}
+
+func TestDetectOverrideEvent_MetoprololWithinNarrowWindow_ReturnsTrue(t *testing.T) {
+	oneDay := time.Now().UTC().Add(-24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		LastMedicationChangeAt:    &oneDay,
+		LastMedicationChangeClass: "METOPROLOL",
+	}
+	if !detectOverrideEvent(profile) {
+		t.Error("expected metoprolol override=true at 1 day (inside 2-day window)")
+	}
+}
+
+func TestDetectOverrideEvent_EmptyDrugClass_UsesDefaultWindow(t *testing.T) {
+	// When the worker hasn't recorded the class yet (legacy or unknown
+	// drug), the detector falls back to the 7-day default. 5 days ago
+	// should fire.
+	fiveDays := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	profile := &clients.KB20PatientProfile{
+		LastMedicationChangeAt:    &fiveDays,
+		LastMedicationChangeClass: "",
+	}
+	if !detectOverrideEvent(profile) {
+		t.Error("expected override=true at 5 days with empty class (7-day default)")
+	}
+}
+
 // newOrchestratorWithStabilityPolicy builds an orchestrator with a custom
 // stability policy. Phase 5 P5-1 tests need this because the dampening
 // behaviour depends on the policy's MinDwell + MaxDwellOverrideRate.

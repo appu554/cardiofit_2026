@@ -307,34 +307,30 @@ func buildStabilityHistory(rows []models.BPContextHistory) stability.History {
 	return stability.History{Entries: entries}
 }
 
-// medicationChangeOverrideWindow is the duration after a medication change
-// during which the stability engine bypasses dwell/flap checks. 7 days is a
-// conservative default that covers time-to-steady-state of most
-// antihypertensives (metoprolol ~1-2d, losartan ~3-6d, amlodipine ~7-8d)
-// without being so wide that long-tail effects keep firing. PK-aware
-// per-drug windows are documented as a Phase 5 follow-up.
-const medicationChangeOverrideWindow = 7 * 24 * time.Hour
-
 // detectOverrideEvent returns true when the patient profile indicates a
 // recent clinical event that should bypass stability dwell/flap checks.
+//
 // Phase 5 P5-2: reads LastMedicationChangeAt from the KB-20 patient profile.
+// Phase 5 P5-5: picks a PK-aware override window via SteadyStateWindow(class)
+// so fast drugs like metoprolol (~2d) don't keep overriding for a full week,
+// and slow drugs like amlodipine (~8d) get the full response window.
 //
 // Defensive defaults:
 //   - nil profile → false (no override)
 //   - nil LastMedicationChangeAt → false (no signal recorded)
-//   - timestamp older than the override window → false (effect window passed)
-//   - timestamp within the override window → true (bypass dwell/flap)
+//   - empty or unknown drug class → 7-day default window
+//   - timestamp older than the (drug-specific) window → false
+//   - timestamp within the window → true (bypass dwell/flap)
 //
-// The KB-20 server is responsible for populating LastMedicationChangeAt from
-// FHIR MedicationRequest events (it already publishes EventMedicationChange
-// internally — surfacing the timestamp on the patient profile is the
-// remaining step, scheduled for Phase 5 P5-2 KB-20 wiring).
+// The KB-20 server populates LastMedicationChangeAt and LastMedicationChangeClass
+// from FHIR MedicationRequest events — see the Phase 5 FHIR sync worker wiring.
 func detectOverrideEvent(profile *clients.KB20PatientProfile) bool {
 	if profile == nil || profile.LastMedicationChangeAt == nil {
 		return false
 	}
+	window := SteadyStateWindow(profile.LastMedicationChangeClass)
 	elapsed := time.Since(*profile.LastMedicationChangeAt)
-	return elapsed >= 0 && elapsed <= medicationChangeOverrideWindow
+	return elapsed >= 0 && elapsed <= window
 }
 
 // buildBPContextInputFromProfile constructs synthetic BPReading slices

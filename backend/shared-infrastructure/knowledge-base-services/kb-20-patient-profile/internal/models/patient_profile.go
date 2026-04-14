@@ -85,7 +85,7 @@ type PatientProfile struct {
 	// ============= V4: Data Tier =============
 	DataTier string `gorm:"size:20;default:'TIER_3_SMBG'" json:"data_tier"`
 
-	// ============= Phase 5 P5-2: medication change signal =============
+	// ============= Phase 5 P5-2 + P5-5: medication change signal =============
 	// LastMedicationChangeAt is the timestamp of the most recent
 	// antihypertensive medication event for this patient (add, update,
 	// remove). Written by the FHIR sync worker whenever it publishes
@@ -93,6 +93,15 @@ type PatientProfile struct {
 	// to bypass the phenotype dwell window when a recent prescription
 	// change would otherwise be suppressed. Nil means no signal recorded.
 	LastMedicationChangeAt *time.Time `gorm:"column:last_medication_change_at" json:"last_medication_change_at,omitempty"`
+
+	// LastMedicationChangeClass is the drug class of the most recent
+	// medication event (e.g., "AMLODIPINE", "METOPROLOL", "LOSARTAN").
+	// Phase 5 P5-5: enables KB-26 to look up the drug's time-to-steady-
+	// state and set a PK-aware override window — metoprolol stabilises
+	// in 2 days, amlodipine takes 8. Empty when no med change recorded
+	// or when the drug class is unknown; KB-26 falls back to the default
+	// 7-day window in both cases.
+	LastMedicationChangeClass string `gorm:"column:last_medication_change_class;size:40" json:"last_medication_change_class,omitempty"`
 
 	// Metadata
 	Active    bool      `gorm:"default:true" json:"active"`

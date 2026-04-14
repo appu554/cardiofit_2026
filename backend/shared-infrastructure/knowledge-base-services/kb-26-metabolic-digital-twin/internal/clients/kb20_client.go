@@ -37,6 +37,13 @@ type KB20PatientProfile struct {
 	// will leave this nil until the upstream population logic ships.
 	// KB-26 treats nil as "no override" (safe default).
 	LastMedicationChangeAt *time.Time `json:"last_medication_change_at,omitempty"`
+
+	// Phase 5 P5-5: drug class of the most recent medication event.
+	// KB-26 uses this to look up the drug's time-to-steady-state and
+	// size the stability override window accordingly (metoprolol ~2d,
+	// amlodipine ~8d, default 7d for unknown). Empty when no change is
+	// recorded or when the class is unknown.
+	LastMedicationChangeClass string `json:"last_medication_change_class,omitempty"`
 }
 
 // KB20Client fetches patient profile data from KB-20 for BP context analysis.
