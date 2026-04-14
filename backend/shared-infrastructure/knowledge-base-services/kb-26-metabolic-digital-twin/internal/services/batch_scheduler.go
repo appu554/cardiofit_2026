@@ -16,6 +16,13 @@ type BatchJob interface {
 	// and metrics labels.
 	Name() string
 
+	// ShouldRun returns true when the job's cadence matches the given
+	// wall-clock time. Phase 5 P5-3 — lets the scheduler host jobs with
+	// different cadences (daily, weekly, sensor-change) on a single
+	// hourly tick without baking any cadence semantics into the scheduler
+	// itself. The job owns its own "is it time?" logic.
+	ShouldRun(ctx context.Context, now time.Time) bool
+
 	// Run executes one full pass of the job. Implementations must process
 	// all relevant entities and return nil only on full success. Errors
 	// are logged by the scheduler but do not block other registered jobs.
@@ -59,9 +66,18 @@ func (s *BatchScheduler) RunOnce(ctx context.Context) error {
 	s.mu.RUnlock()
 
 	var firstErr error
+	now := time.Now().UTC()
 	for _, job := range jobs {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// Phase 5 P5-3: consult the job's own cadence gate. Jobs whose
+		// ShouldRun returns false are silently skipped — the scheduler
+		// has no opinion about cadence.
+		if !job.ShouldRun(ctx, now) {
+			s.log.Debug("batch job skipped (ShouldRun=false)",
+				zap.String("job", job.Name()))
+			continue
 		}
 		s.log.Info("batch job starting", zap.String("job", job.Name()))
 		start := time.Now()

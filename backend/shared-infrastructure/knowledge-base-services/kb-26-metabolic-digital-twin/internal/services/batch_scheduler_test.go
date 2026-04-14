@@ -12,16 +12,28 @@ import (
 
 // stubBatchJob is a BatchJob that records when it ran and lets tests
 // drive how long it takes / whether it errors.
+//
+// Phase 5 P5-3: adds a shouldRun predicate so the stub can participate
+// in tests that exercise the new ShouldRun gate. When shouldRun is nil,
+// the stub returns true (pre-P5-3 behaviour — fires on every tick).
 type stubBatchJob struct {
 	name      string
 	runs      atomic.Int32
 	delay     time.Duration
 	returnErr error
+	shouldRun func(now time.Time) bool
 	mu        sync.Mutex
 	runTimes  []time.Time
 }
 
 func (s *stubBatchJob) Name() string { return s.name }
+
+func (s *stubBatchJob) ShouldRun(ctx context.Context, now time.Time) bool {
+	if s.shouldRun == nil {
+		return true
+	}
+	return s.shouldRun(now)
+}
 
 func (s *stubBatchJob) Run(ctx context.Context) error {
 	s.mu.Lock()
@@ -157,5 +169,96 @@ func TestBatchScheduler_Drain_NoOpWhenIdle(t *testing.T) {
 	sched.Drain()
 	if time.Since(drainStart) > 10*time.Millisecond {
 		t.Errorf("idle Drain blocked unexpectedly: %v", time.Since(drainStart))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 P5-3: ShouldRun gate tests.
+// ---------------------------------------------------------------------------
+
+func TestBatchScheduler_RunOnce_SkipsJobsWhereShouldRunFalse(t *testing.T) {
+	sched := NewBatchScheduler(zap.NewNop())
+	runs := &stubBatchJob{
+		name:      "runs",
+		shouldRun: func(now time.Time) bool { return true },
+	}
+	skips := &stubBatchJob{
+		name:      "skips",
+		shouldRun: func(now time.Time) bool { return false },
+	}
+	sched.Register(runs)
+	sched.Register(skips)
+
+	if err := sched.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if runs.runs.Load() != 1 {
+		t.Errorf("expected ShouldRun=true job to execute once, got %d", runs.runs.Load())
+	}
+	if skips.runs.Load() != 0 {
+		t.Errorf("expected ShouldRun=false job to be skipped, got %d runs", skips.runs.Load())
+	}
+}
+
+func TestBatchScheduler_RunOnce_TwoConsumers_DifferentCadences(t *testing.T) {
+	// Simulates one BP-daily consumer (fires at hour 2) + one weekly
+	// consumer (fires on Mondays). At Monday 02:00 both should run; at
+	// Tuesday 02:00 only BP; at Monday 09:00 only weekly.
+	sched := NewBatchScheduler(zap.NewNop())
+
+	var simulatedNow time.Time
+	daily := &stubBatchJob{
+		name:      "bp_daily",
+		shouldRun: func(_ time.Time) bool { return simulatedNow.Hour() == 2 },
+	}
+	weekly := &stubBatchJob{
+		name:      "inertia_weekly",
+		shouldRun: func(_ time.Time) bool { return simulatedNow.Weekday() == time.Monday && simulatedNow.Hour() == 2 },
+	}
+	sched.Register(daily)
+	sched.Register(weekly)
+
+	// Monday 02:00 UTC — 2026-04-13 is a Monday.
+	simulatedNow = time.Date(2026, 4, 13, 2, 0, 0, 0, time.UTC)
+	_ = sched.RunOnce(context.Background())
+	if daily.runs.Load() != 1 {
+		t.Errorf("Monday 02:00: expected daily to fire, got %d", daily.runs.Load())
+	}
+	if weekly.runs.Load() != 1 {
+		t.Errorf("Monday 02:00: expected weekly to fire, got %d", weekly.runs.Load())
+	}
+
+	// Tuesday 02:00 UTC — only daily fires.
+	simulatedNow = time.Date(2026, 4, 14, 2, 0, 0, 0, time.UTC)
+	_ = sched.RunOnce(context.Background())
+	if daily.runs.Load() != 2 {
+		t.Errorf("Tuesday 02:00: expected daily total=2, got %d", daily.runs.Load())
+	}
+	if weekly.runs.Load() != 1 {
+		t.Errorf("Tuesday 02:00: expected weekly total still=1 (skipped), got %d", weekly.runs.Load())
+	}
+
+	// Monday 09:00 UTC — neither fires (weekly is gated on 02:00, daily on 02:00).
+	simulatedNow = time.Date(2026, 4, 13, 9, 0, 0, 0, time.UTC)
+	_ = sched.RunOnce(context.Background())
+	if daily.runs.Load() != 2 {
+		t.Errorf("Monday 09:00: expected daily total still=2, got %d", daily.runs.Load())
+	}
+	if weekly.runs.Load() != 1 {
+		t.Errorf("Monday 09:00: expected weekly total still=1, got %d", weekly.runs.Load())
+	}
+}
+
+// Phase 5 P5-3: BPContextDailyBatch gains a BatchHourUTC field and
+// implements ShouldRun returning true only when the current hour matches.
+func TestBPContextDailyBatch_ShouldRun_OnlyAtConfiguredHour(t *testing.T) {
+	// ShouldRun only reads BatchHourUTC; repo/classifier aren't needed.
+	job := &BPContextDailyBatch{BatchHourUTC: 2}
+
+	if !job.ShouldRun(context.Background(), time.Date(2026, 4, 13, 2, 0, 0, 0, time.UTC)) {
+		t.Error("expected ShouldRun=true at hour 2")
+	}
+	if job.ShouldRun(context.Background(), time.Date(2026, 4, 13, 9, 0, 0, 0, time.UTC)) {
+		t.Error("expected ShouldRun=false at hour 9")
 	}
 }

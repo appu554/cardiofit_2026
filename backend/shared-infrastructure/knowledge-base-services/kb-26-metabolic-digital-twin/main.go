@@ -139,7 +139,7 @@ func main() {
 
 	bpContextOrch := services.NewBPContextOrchestrator(kb20Client, kb21Client, bpContextRepo, bpThresholds, logger, metricsCollector, kb19Client, bpStabilityEngine, kb23Client)
 
-	// 7c. BP context daily batch scheduler (Phase 3)
+	// 7c. BP context daily batch scheduler (Phase 3, hour-gated in Phase 5 P5-3)
 	bpBatchJob := services.NewBPContextDailyBatch(
 		bpContextRepo,
 		bpContextOrch,
@@ -148,8 +148,22 @@ func main() {
 		logger,
 		metricsCollector,
 	)
+	// Phase 5 P5-3: scheduler now ticks hourly and each job self-filters
+	// via ShouldRun. The BP job fires only when the current UTC hour
+	// matches the configured BatchHourUTC — replaces the Phase 3
+	// computeNextScheduleInterval / 24h-tick dance with a single gate.
+	bpBatchJob.BatchHourUTC = cfg.BPBatchHourUTC
+
 	batchScheduler := services.NewBatchScheduler(logger)
 	batchScheduler.Register(bpBatchJob)
+
+	// 7d. Phase 5 P5-3: register the inertia weekly batch as a second
+	// consumer of the BatchScheduler. Fires on Mondays via ShouldRun.
+	// Current scope is a heartbeat that lists active patients — the
+	// per-patient inertia scan lands in Phase 6 once the inertia data
+	// assembly (KB-20 glycaemic/hemodynamic/renal pulls) is ready.
+	inertiaBatchJob := services.NewInertiaWeeklyBatch(bpContextRepo, logger)
+	batchScheduler.Register(inertiaBatchJob)
 
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
@@ -170,7 +184,7 @@ func main() {
 		}
 	}()
 
-	// 9a. Start BP context daily batch scheduler (Phase 3)
+	// 9a. Start BP context + inertia batch scheduler (Phase 3, hourly tick in Phase 5 P5-3)
 	if cfg.BPBatchEnabled {
 		go func() {
 			// Per-market batch hour recommendations — log a warning if the
@@ -183,22 +197,20 @@ func main() {
 					zap.Int("recommended_hour_utc", recommendedHour))
 			}
 
-			// Align first run to BP_BATCH_HOUR_UTC, then loop every 24h.
-			delay := computeNextScheduleInterval(time.Now().UTC(), cfg.BPBatchHourUTC)
-			logger.Info("BP context batch scheduler waiting for first run",
-				zap.Duration("delay", delay),
-				zap.Int("hour_utc", cfg.BPBatchHourUTC),
-				zap.Int("concurrency", cfg.BPBatchConcurrency),
+			// Phase 5 P5-3: scheduler ticks hourly; each registered job
+			// self-filters via ShouldRun. BPContextDailyBatch.ShouldRun
+			// returns true only when the current UTC hour matches
+			// BatchHourUTC, InertiaWeeklyBatch.ShouldRun returns true only
+			// on Mondays, and any future consumer brings its own cadence
+			// predicate without touching the scheduler.
+			logger.Info("batch scheduler starting (hourly tick, per-job cadence gate)",
+				zap.Int("bp_hour_utc", cfg.BPBatchHourUTC),
+				zap.Int("bp_concurrency", cfg.BPBatchConcurrency),
 				zap.Int("active_window_days", cfg.BPActiveWindowDays))
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return
-			}
-			batchScheduler.StartLoop(ctx, 24*time.Hour)
+			batchScheduler.StartLoop(ctx, 1*time.Hour)
 		}()
 	} else {
-		logger.Info("BP context batch scheduler disabled (BP_BATCH_ENABLED=false)")
+		logger.Info("batch scheduler disabled (BP_BATCH_ENABLED=false)")
 	}
 
 	// 9b. Start Kafka signal consumer (feature-flagged)
@@ -257,17 +269,6 @@ func main() {
 	} else {
 		logger.Info("HTTP server shutdown completed")
 	}
-}
-
-// computeNextScheduleInterval returns the duration until the next
-// occurrence of the given UTC hour (0-23). If the current time is already
-// past that hour today, it returns the duration until tomorrow's occurrence.
-func computeNextScheduleInterval(now time.Time, hourUTC int) time.Duration {
-	next := time.Date(now.Year(), now.Month(), now.Day(), hourUTC, 0, 0, 0, time.UTC)
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
-	}
-	return next.Sub(now)
 }
 
 // recommendedBatchHourForMarket returns the UTC hour that minimises

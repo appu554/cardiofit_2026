@@ -22,6 +22,13 @@ type BPContextClassifier interface {
 // BPContextDailyBatch classifies every active patient once per run.
 // Active = twin_state.updated_at within the configured activeWindow.
 // Implements the BatchJob interface registered with BatchScheduler.
+//
+// Phase 5 P5-3: BatchHourUTC is the UTC hour at which this job's ShouldRun
+// gate returns true. The scheduler now ticks hourly and lets each job
+// self-filter via ShouldRun, replacing the previous Phase 3 design where
+// main.go pre-computed a day-aligned delay. The default 0 means "fire on
+// every tick" (backwards compatible — tests that construct the job
+// directly don't need to set the hour).
 type BPContextDailyBatch struct {
 	repo         *BPContextRepository
 	classifier   BPContextClassifier
@@ -29,6 +36,10 @@ type BPContextDailyBatch struct {
 	concurrency  int
 	log          *zap.Logger
 	metrics      *metrics.Collector
+
+	// BatchHourUTC is the UTC hour when ShouldRun returns true. When 0,
+	// the job fires on every tick (matches pre-P5-3 behaviour for tests).
+	BatchHourUTC int
 }
 
 // NewBPContextDailyBatch constructs the job.
@@ -57,6 +68,19 @@ func NewBPContextDailyBatch(
 
 // Name implements BatchJob.
 func (j *BPContextDailyBatch) Name() string { return "bp_context_daily" }
+
+// ShouldRun implements BatchJob. Returns true when the current hour
+// matches the configured BatchHourUTC. When BatchHourUTC is zero (the
+// default for tests that construct the job without wiring a production
+// hour), the gate is disabled and ShouldRun returns true on every tick
+// — this preserves the pre-P5-3 behaviour expected by tests that call
+// RunOnce directly without caring about wall-clock alignment.
+func (j *BPContextDailyBatch) ShouldRun(ctx context.Context, now time.Time) bool {
+	if j.BatchHourUTC == 0 {
+		return true
+	}
+	return now.Hour() == j.BatchHourUTC
+}
 
 // Run implements BatchJob. It fetches active patient IDs, classifies each
 // with bounded concurrency, and tolerates per-patient errors (logged but
