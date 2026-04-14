@@ -859,3 +859,102 @@ func newOrchestratorWithStabilityPolicy(
 	engine := stability.NewEngine(policy)
 	return NewBPContextOrchestrator(kb20, kb21, repo, thresholds, zap.NewNop(), nil, kb19, engine, nil)
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 P5-2.6: End-to-end regression guard for the medication-change
+// override. Pins the contract that when KB20PatientProfile supplies a recent
+// LastMedicationChangeAt, the orchestrator's stability engine bypasses the
+// dwell and accepts the new phenotype. Proves the engine + detector + KB-20
+// client field are wired together correctly.
+// ---------------------------------------------------------------------------
+
+func TestBPContextOrchestrator_P5_2_E2E_MedChangeOverridesDwell(t *testing.T) {
+	// Day 1: classify patient as MASKED_HTN (no med change yet).
+	// Day 2: a med change was recorded yesterday. The classifier now flips
+	//        to SUSTAINED_NORMOTENSION. Without the override the dwell
+	//        would damp this transition. With the override it must accept.
+	medChange := time.Now().UTC().Add(-24 * time.Hour)
+
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-p5-2-e2e",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	policy := stability.Policy{MinDwell: 14 * 24 * time.Hour}
+	orch := newOrchestratorWithStabilityPolicy(t, kb20, kb21, kb19, policy)
+
+	// Day 1 → MASKED_HTN (clinic normal, home elevated).
+	day1, err := orch.Classify(context.Background(), "p-p5-2-e2e")
+	if err != nil {
+		t.Fatalf("day 1 classify: %v", err)
+	}
+	if day1.Phenotype != models.PhenotypeMaskedHTN {
+		t.Fatalf("setup error: expected day 1 MASKED_HTN, got %s", day1.Phenotype)
+	}
+
+	// Day 2: readings flip to normotension; med change recorded yesterday.
+	kb20.profile.SBP14dMean = ptrFloat(120)
+	kb20.profile.DBP14dMean = ptrFloat(75)
+	kb20.profile.LastMedicationChangeAt = &medChange
+
+	day2, err := orch.Classify(context.Background(), "p-p5-2-e2e")
+	if err != nil {
+		t.Fatalf("day 2 classify: %v", err)
+	}
+
+	// Without override the dwell would hold MASKED_HTN. With override the
+	// engine must emit DecisionOverride and the orchestrator must accept
+	// the new phenotype.
+	if day2.Phenotype == models.PhenotypeMaskedHTN {
+		t.Errorf("expected override to bypass dwell and accept new phenotype, got %s",
+			day2.Phenotype)
+	}
+}
+
+func TestBPContextOrchestrator_P5_2_E2E_StaleMedChangeDoesNotOverride(t *testing.T) {
+	// Patient had a med change 30 days ago — outside the 7-day override
+	// window. Dwell should hold the transition. Day 2 must remain MASKED_HTN.
+	staleChange := time.Now().UTC().Add(-30 * 24 * time.Hour)
+
+	kb20 := &stubKB20Client{
+		profile: &clients.KB20PatientProfile{
+			PatientID:        "p-p5-2-stale",
+			SBP14dMean:       ptrFloat(148),
+			DBP14dMean:       ptrFloat(92),
+			ClinicSBPMean:    ptrFloat(128),
+			ClinicDBPMean:    ptrFloat(78),
+			ClinicReadings:   2,
+			HomeReadings:     14,
+			HomeDaysWithData: 7,
+		},
+	}
+	kb21 := &stubKB21Client{}
+	kb19 := &stubKB19Publisher{}
+	policy := stability.Policy{MinDwell: 14 * 24 * time.Hour}
+	orch := newOrchestratorWithStabilityPolicy(t, kb20, kb21, kb19, policy)
+
+	if _, err := orch.Classify(context.Background(), "p-p5-2-stale"); err != nil {
+		t.Fatalf("day 1: %v", err)
+	}
+
+	kb20.profile.SBP14dMean = ptrFloat(120)
+	kb20.profile.DBP14dMean = ptrFloat(75)
+	kb20.profile.LastMedicationChangeAt = &staleChange
+
+	day2, err := orch.Classify(context.Background(), "p-p5-2-stale")
+	if err != nil {
+		t.Fatalf("day 2: %v", err)
+	}
+	if day2.Phenotype != models.PhenotypeMaskedHTN {
+		t.Errorf("expected damped MASKED_HTN (stale med change), got %s", day2.Phenotype)
+	}
+}

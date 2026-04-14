@@ -205,6 +205,7 @@ func (w *SyncWorker) syncMedicationRequests(since time.Time) {
 				"is_active": state.IsActive,
 				"atc_code":  state.ATCCode,
 			})
+			w.stampMedicationChange(state.PatientID)
 			w.eventBus.Publish(models.EventMedicationChange, state.PatientID, models.MedicationChangePayload{
 				ChangeType: "UPDATE",
 				DrugName:   state.DrugName,
@@ -216,6 +217,7 @@ func (w *SyncWorker) syncMedicationRequests(since time.Time) {
 		}
 
 		w.db.Create(state)
+		w.stampMedicationChange(state.PatientID)
 		w.eventBus.Publish(models.EventMedicationChange, state.PatientID, models.MedicationChangePayload{
 			ChangeType: "ADD",
 			DrugName:   state.DrugName,
@@ -253,4 +255,23 @@ func (w *SyncWorker) logSync(resourceType, fhirID, action, errMsg string) {
 		Error:        errMsg,
 	}
 	w.db.Create(&entry)
+}
+
+// stampMedicationChange records the most recent antihypertensive medication
+// event on the patient profile. Read by KB-26's BP context stability engine
+// (Phase 5 P5-2) to bypass the phenotype dwell window when a recent
+// prescription change would otherwise be suppressed. Non-fatal: if the
+// update fails, the event still publishes and KB-26 falls back to
+// no-override behaviour (safe default).
+func (w *SyncWorker) stampMedicationChange(patientID string) {
+	if patientID == "" {
+		return
+	}
+	now := time.Now().UTC()
+	if err := w.db.Model(&models.PatientProfile{}).
+		Where("patient_id = ?", patientID).
+		Update("last_medication_change_at", now).Error; err != nil {
+		w.logger.Warn("failed to stamp last_medication_change_at",
+			zap.String("patient_id", patientID), zap.Error(err))
+	}
 }
