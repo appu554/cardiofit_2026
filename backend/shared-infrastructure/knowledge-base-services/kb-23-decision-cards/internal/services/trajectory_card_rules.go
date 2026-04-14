@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	dtModels "kb-26-metabolic-digital-twin/pkg/trajectory"
 )
@@ -153,4 +154,66 @@ func EvaluateTrajectoryCards(traj *dtModels.DecomposedTrajectory) []TrajectoryCa
 	}
 
 	return cards
+}
+
+// EvaluateTrajectoryCardsWithSeasonalContext is the season-aware variant of
+// EvaluateTrajectoryCards. Single-domain cards (DOMAIN_RAPID_DECLINE,
+// DOMAIN_DIVERGENCE, DOMAIN_CATEGORY_CROSSING) can be downgraded or suppressed
+// if the seasonal context marks their domain as affected at `now`.
+// CONCORDANT_DETERIORATION and BEHAVIORAL_LEADING_INDICATOR are never
+// seasonally suppressed — multi-domain risk and engagement collapse are
+// clinically significant regardless of season.
+func EvaluateTrajectoryCardsWithSeasonalContext(
+	traj *dtModels.DecomposedTrajectory,
+	seasonalCtx *SeasonalContext,
+	now time.Time,
+) []TrajectoryCard {
+	if traj == nil {
+		return nil
+	}
+
+	cards := EvaluateTrajectoryCards(traj)
+	if seasonalCtx == nil {
+		return cards
+	}
+
+	filtered := make([]TrajectoryCard, 0, len(cards))
+	for _, card := range cards {
+		// CONCORDANT and BEHAVIORAL_LEADING_INDICATOR always pass through.
+		if card.CardType == "CONCORDANT_DETERIORATION" || card.CardType == "BEHAVIORAL_LEADING_INDICATOR" {
+			filtered = append(filtered, card)
+			continue
+		}
+
+		// Single-domain cards: check seasonal context.
+		if card.Domain == "" {
+			filtered = append(filtered, card)
+			continue
+		}
+
+		domain := dtModels.MHRIDomain(card.Domain)
+		suppress, downgrade, rationale := seasonalCtx.ShouldSuppress(domain, now)
+		if suppress {
+			continue // do not emit
+		}
+		if downgrade {
+			card.Urgency = downgradeUrgency(card.Urgency)
+			card.Rationale += " (seasonal context: " + rationale + ")"
+		}
+		filtered = append(filtered, card)
+	}
+
+	return filtered
+}
+
+// downgradeUrgency returns the next less-urgent urgency level.
+func downgradeUrgency(urgency string) string {
+	switch urgency {
+	case "IMMEDIATE":
+		return "URGENT"
+	case "URGENT":
+		return "ROUTINE"
+	default:
+		return urgency // ROUTINE stays ROUTINE
+	}
 }
