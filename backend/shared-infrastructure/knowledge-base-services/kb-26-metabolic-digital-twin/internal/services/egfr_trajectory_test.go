@@ -173,3 +173,33 @@ func TestProjectTimeToThreshold(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestComputeEGFRTrajectory_ClusteredScores
+// ---------------------------------------------------------------------------
+
+// TestComputeEGFRTrajectory_ClusteredScores is a regression guard against
+// catastrophic cancellation in the OLS R² computation. With 5 readings tightly
+// clustered around 70 with a perfect linear trend, R² should be near 1.0.
+// The single-pass ssTot formula (sumY2 - n*meanY*meanY) would return ~0 due
+// to floating-point cancellation. The current two-pass form is correct and
+// this test catches any future regression to the buggy form.
+func TestComputeEGFRTrajectory_ClusteredScores(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	readings := []EGFRReading{
+		{Value: 70.0001, MeasuredAt: base},
+		{Value: 70.0002, MeasuredAt: base.AddDate(0, 1, 0)},
+		{Value: 70.0003, MeasuredAt: base.AddDate(0, 2, 0)},
+		{Value: 70.0004, MeasuredAt: base.AddDate(0, 3, 0)},
+		{Value: 70.0005, MeasuredAt: base.AddDate(0, 4, 0)},
+	}
+
+	result, err := ComputeEGFRTrajectory(readings)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.RSquared < 0.9 {
+		t.Errorf("expected R² >= 0.9 for perfect linear trend, got %.6f", result.RSquared)
+	}
+}
