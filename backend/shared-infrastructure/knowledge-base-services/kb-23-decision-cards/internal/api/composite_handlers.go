@@ -42,6 +42,9 @@ func (s *Server) handleCompositeSynthesize(c *gin.Context) {
 	if s.kb26TrajectoryClient != nil {
 		if traj, err := s.kb26TrajectoryClient.GetTrajectory(c.Request.Context(), patientIDRaw); err == nil && traj != nil {
 			for _, card := range services.EvaluateTrajectoryCardsWithSeasonalContext(traj, s.seasonalContext, time.Now()) {
+				if s.trajectoryCardMetrics != nil {
+					s.trajectoryCardMetrics.CardEvaluatedTotal.WithLabelValues(card.CardType, card.Urgency).Inc()
+				}
 				dc := services.BuildTrajectoryDecisionCard(card, patientIDRaw)
 				if err := s.db.DB.WithContext(c.Request.Context()).Create(dc).Error; err != nil {
 					s.log.Warn("failed to persist trajectory card",
