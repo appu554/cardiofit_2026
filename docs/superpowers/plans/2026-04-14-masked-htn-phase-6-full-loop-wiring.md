@@ -19,9 +19,9 @@
 - [ ] **P6-3 — Domain Decomposition Wiring:** Partially wired already — `TrajectoryEngine.Compute` + `DomainTrajectoryComputedEvent` publisher already exist. Remaining work: ensure it's invoked from the MHRI recomputation path, add stability check for concordant deterioration detection, confirm Prometheus metrics. Total ~1 day.
 - [ ] **P6-4 — CGM 14-Day Batch + Period Report Computation:** Not started. **Scope larger than originally estimated** — the CGM period report computation itself (raw readings → TIR/TBR/TAR/CV/GMI/GRI/AGP) does not yet exist. Only the post-computed glucose domain score exists. This sub-project ships the computation pipeline AND the batch trigger. Total ~5 days. Consider scope contraction: ship the trigger + TIR/CV computation only, defer full AGP to Phase 7.
 - [ ] **P6-5 — Renal Anticipatory Monthly Batch:** Not started. `FindApproachingThresholds` + `DetectStaleEGFR` exist. Straightforward batch wrapping. Total ~1 day.
-- [ ] **P6-6 — CKM Substaging Event-Driven Trigger:** Not started. `ClassifyCKMStage` exists. Needs event consumer or in-place call from KB-20's clinical event handler. Total ~1.5 days.
+- [ ] **P6-6 — CKM Substaging Event-Driven Trigger:** Not started. `ClassifyCKMStage` exists in KB-20. `MandatoryMedChecker` exists in KB-23 (cross-service — see Decision 9). KB-20 publishes `CKM_STAGE_TRANSITION` to existing `clinical.priority-events.v1` topic; KB-23's existing `PrioritySignalConsumer` is extended to handle the event and trigger `MandatoryMedChecker` on 4c transitions. Total ~2 days (1.5d KB-20 handler + 0.5d KB-23 consumer extension).
 
-**Total remaining effort: ~13.5 days** across 6 sub-projects. Realistic session pacing: 2 sub-projects per session, ~3-4 sessions.
+**Total remaining effort: ~14 days** across 6 sub-projects. Realistic session pacing: 2 sub-projects per session, ~3-4 sessions.
 
 ---
 
@@ -62,6 +62,19 @@ Carried over from Phase 5 as the permanent standard. The implementer's completio
 ### Decision 8: Phase 6 does NOT ship Gap 9-13 work (FHIR outbound, explainability chain, audit event sourcing, circuit breaking, formulary accessibility)
 
 These are documented in the Phase 5 review as post-Phase-6 work. Phase 6 is the **integration phase** — wiring existing detectors into autonomous operation. Gaps 9-13 are compliance / UX / scale concerns that belong to Phase 7+.
+
+### Decision 9: CKM 4c transitions trigger MandatoryMedChecker via event-driven cross-service hop, NOT in-process call
+
+Late recon confirmed `MandatoryMedChecker` exists at [kb-23-decision-cards/internal/services/mandatory_med_checker.go](backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards/internal/services/mandatory_med_checker.go) — but it lives in **KB-23**, not KB-20. P6-6's CKM event handler runs in-process inside KB-20's FHIR sync worker, which cannot import KB-23 internal packages (cross-service boundary).
+
+The integration uses event-driven cross-service handoff, mirroring the P6-2 pattern:
+
+1. KB-20's CKM event handler classifies the new stage in-process via `ClassifyCKMStage`
+2. If the stage changed, KB-20 publishes `CKM_STAGE_TRANSITION` to **`clinical.priority-events.v1`** (the existing topic KB-23 already consumes via `PrioritySignalConsumer`) with payload `{patient_id, from_stage, to_stage, transition_date}`
+3. KB-23's existing `PrioritySignalConsumer` is extended to handle the `CKM_STAGE_TRANSITION` event type. When it receives one with `to_stage == "4c"`, it synchronously invokes `MandatoryMedChecker.CheckPatient(patientID)` and generates IMMEDIATE cards for any missing mandatory medications
+4. Other CKM transitions (e.g. 3a → 3b) are still published but trigger no special action — downstream consumers may use them for dashboards, audit trails, or future sub-projects
+
+This pattern is consistent with the platform direction: **event-driven cross-service triggers over HTTP RPCs**. It reuses the topic that's already running, requires no new endpoint on KB-23, and keeps the services loosely coupled so each can be deployed independently.
 
 ---
 
@@ -447,35 +460,58 @@ A monthly batch that finds patients whose projected eGFR will cross a contraindi
 # Sub-project P6-6: CKM Substaging Event-Driven Trigger
 
 **Priority:** Low volume but important when events occur.
-**Effort:** ~1.5 days.
-**Depends on:** existing `ClassifyCKMStage` in [kb-20/internal/services/ckm_classifier.go](backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile/internal/services/ckm_classifier.go), existing FHIR sync worker pattern from P5-2.
+**Effort:** ~2 days (1.5d KB-20 handler + 0.5d KB-23 consumer extension per Decision 9).
+**Depends on:** existing `ClassifyCKMStage` in [kb-20/internal/services/ckm_classifier.go](backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile/internal/services/ckm_classifier.go), existing `MandatoryMedChecker` in [kb-23/internal/services/mandatory_med_checker.go](backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards/internal/services/mandatory_med_checker.go), existing `PrioritySignalConsumer` in KB-23, existing FHIR sync worker pattern from P5-2.
 
-When KB-20 receives a new `Condition` (MI, HF, stroke) or `Observation` (echo EF, CAC, NT-proBNP), immediately reclassify CKM stage in-process. No new consumer; the trigger fires where the data lands.
+When KB-20 receives a new `Condition` (MI, HF, stroke) or `Observation` (echo EF, CAC, NT-proBNP), immediately reclassify CKM stage in-process. The classification + event publication happens in KB-20; the downstream `MandatoryMedChecker` invocation on 4c transitions happens in KB-23 via the event consumer (per Decision 9).
 
-## Task P6-6.1: Build CKM event handler
+## Task P6-6.1: Build KB-20 CKM event handler + publish CKM_STAGE_TRANSITION
 
 **Files:**
 - Create: `kb-20-patient-profile/internal/services/ckm_event_handler.go`
 - Create: `kb-20-patient-profile/internal/services/ckm_event_handler_test.go`
-- Modify: `kb-20-patient-profile/internal/fhir/fhir_sync_worker.go` — add `stampCKMRecomputation` hook on relevant event types
+- Modify: `kb-20-patient-profile/internal/fhir/fhir_sync_worker.go` — add `recomputeCKMStage` hook on relevant Condition/Observation events
+- Modify: `kb-20-patient-profile/internal/services/kafka_outbox_relay.go` (or wherever event types are defined) — add `CKM_STAGE_TRANSITION` event type if not present
 
 - [ ] **Step 1:** Implement `CKMEventHandler.HandleCondition(condition)` and `HandleObservation(observation)` that:
   1. Build `CKMClassifierInput` from patient profile + new event data
-  2. Call `ClassifyCKMStage(input)`
+  2. Call `ClassifyCKMStage(input)` — confirmed exists at `ckm_classifier.go:43`
   3. Compare to current `PatientProfile.CKMStageV2`
-  4. If changed, update the profile, publish `CKM_STAGE_TRANSITION` to KB-19
-  5. If new stage is `4c`, also trigger `MandatoryMedChecker` to generate IMMEDIATE cards (assuming that function exists — verify in recon)
-- [ ] **Step 2:** In `fhir_sync_worker.go`, after processing a Condition/Observation that affects CKM staging, call the handler.
-- [ ] **Step 3:** Test with a patient who transitions from CKM 3b to CKM 4a after a new Condition arrives. Assert the event publishes and the profile updates.
-- [ ] **Step 4:** Commit.
+  4. If unchanged: no-op (early return, no event published — this prevents false-positive event spam)
+  5. If changed: update `PatientProfile.CKMStageV2`, persist, then publish a `CKM_STAGE_TRANSITION` event to the existing `clinical.priority-events.v1` topic via the kafka_outbox_relay. Payload must include `{patient_id, from_stage, to_stage, transition_date, triggered_by_event_type, triggered_by_event_id}`
+- [ ] **Step 2:** In `fhir_sync_worker.go`, after persisting a new Condition or Observation that could affect CKM staging (MI, HF, stroke conditions; echo EF, CAC, NT-proBNP observations), call `ckmEventHandler.HandleCondition(...)` or `HandleObservation(...)`. Mirror the placement of the P5-2 `stampMedicationChange` call.
+- [ ] **Step 3:** Test with a patient profile seeded at CKM 3b. Inject a new HF Condition. Assert `ClassifyCKMStage` returns `4a` (or whatever the input warrants), the profile updates, and the outbox row contains a `CKM_STAGE_TRANSITION` event with `from_stage="3b" to_stage="4a"`.
+- [ ] **Step 4:** Test with a patient at CKM 3b receiving a Condition that doesn't change the stage — assert no event is published.
+- [ ] **Step 5:** Build + test KB-20. Commit: `feat(kb20): CKM event handler — classify on new Condition/Observation, publish CKM_STAGE_TRANSITION (Phase 6 P6-6)`.
+
+## Task P6-6.2: Extend KB-23 PrioritySignalConsumer to handle CKM_STAGE_TRANSITION
+
+**Files:**
+- Modify: `kb-23-decision-cards/internal/services/priority_signal_consumer.go` — add `CKM_STAGE_TRANSITION` event-type handler
+- Modify: `kb-23-decision-cards/internal/services/priority_signal_consumer_test.go` (or create if missing)
+- Modify: `kb-23-decision-cards/main.go` — wire `MandatoryMedChecker` into the consumer's dependencies if not already present
+
+The KB-23 consumer already subscribes to `clinical.priority-events.v1`. This task extends its event-type dispatch to recognize `CKM_STAGE_TRANSITION` and act on `to_stage == "4c"` transitions specifically.
+
+- [ ] **Step 1:** Read the existing `priority_signal_consumer.go` to understand the dispatch pattern (the consumer currently routes based on `PriorityRouteAction`). Decide: add a new `RouteAction` for `CKM_4C_MANDATORY_MEDS_CHECK`, or pattern-match on event type within the existing handler.
+- [ ] **Step 2:** Write a failing test that delivers a stub `CKM_STAGE_TRANSITION` message with `to_stage="4c"` to the consumer, asserts `MandatoryMedChecker.CheckPatient(patientID)` is called once, and any IMMEDIATE cards returned by the checker are persisted via `DecisionCardRepository`.
+- [ ] **Step 3:** Implement the dispatch. On a `CKM_STAGE_TRANSITION` event with `to_stage="4c"`:
+  1. Call `MandatoryMedChecker.CheckPatient(patientID)`
+  2. For each missing mandatory medication, build an IMMEDIATE card and persist via the existing card repository
+  3. Increment `ckm_4c_mandatory_med_alerts_total{drug_class}` Prometheus counter
+- [ ] **Step 4:** Test the negative case — a `CKM_STAGE_TRANSITION` with `to_stage="3b"` produces no `MandatoryMedChecker` invocation and no cards.
+- [ ] **Step 5:** Wire the `MandatoryMedChecker` instance into the consumer constructor in `main.go` if not already wired.
+- [ ] **Step 6:** Build + test KB-23. Commit: `feat(kb23): PrioritySignalConsumer handles CKM_STAGE_TRANSITION → MandatoryMedChecker on 4c (Phase 6 P6-6)`.
 
 ## P6-6 Verification Questions
 
-1. Does a new MI Condition trigger `ClassifyCKMStage` + `CKM_STAGE_TRANSITION` event?
+1. Does a new MI Condition trigger `ClassifyCKMStage` + publish `CKM_STAGE_TRANSITION` to `clinical.priority-events.v1`?
 2. Does a new echo with reduced EF trigger stage recomputation?
 3. Does an unchanged stage produce NO event (no false positives)?
-4. Does transition to CKM 4c trigger `MandatoryMedChecker`?
-5. Are the Prometheus counters `ckm_stage_transitions_total{from,to}` incremented correctly?
+4. Does a `CKM_STAGE_TRANSITION` event with `to_stage="4c"` cause the KB-23 consumer to invoke `MandatoryMedChecker.CheckPatient(patientID)`?
+5. Does a `CKM_STAGE_TRANSITION` event with `to_stage="3b"` produce no `MandatoryMedChecker` invocation?
+6. Are the Prometheus counters `ckm_stage_transitions_total{from,to}` (KB-20) and `ckm_4c_mandatory_med_alerts_total{drug_class}` (KB-23) incremented correctly?
+7. Are KB-20 and KB-23 full test suites green?
 
 ---
 
@@ -556,7 +592,7 @@ Explicit deferrals:
 | P6-3 Domain Decomposition | Per MHRI recompute | Inline (KB-26) | 1d | ~2 | ~4 |
 | P6-4 CGM Period Report + Batch | Per-patient 14-day | Daily BatchJob (KB-26) | 3d | ~5 | ~10 |
 | P6-5 Renal Anticipatory | Monthly (1st 04:00 UTC) | BatchJob (KB-23) | 1d | ~3 | ~5 |
-| P6-6 CKM Event Handler | Per Condition/Observation | In-process (KB-20) | 1.5d | ~3 | ~6 |
-| **Total** | — | — | **11.5d** | **~26** | **~46** |
+| P6-6 CKM Event Handler + KB-23 consumer extension | Per Condition/Observation + KB-23 priority event | In-process (KB-20) + Kafka consumer extension (KB-23) | 2d | ~5 | ~8 |
+| **Total** | — | — | **12d** | **~28** | **~48** |
 
 Phase 6 brings the platform from "detectors exist, clinicians can query them" to "detectors run autonomously, publish events, dampen flapping, expose metrics." It is the integration phase that unlocks Phase 7's compliance and UX work.
