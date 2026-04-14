@@ -22,14 +22,16 @@ type PrioritySignalHandler struct {
 	kb19                 *KB19Publisher
 	hypoHandler          *HypoglycaemiaHandler
 	mandatoryMedChecker  *MandatoryMedChecker // Phase 6 P6-6
-	kb20Client           *KB20Client          // Phase 6 P6-6
+	kb20Client           *KB20Client          // Phase 6 P6-6 + P6-2
+	renalDoseGate        *RenalDoseGate       // Phase 6 P6-2
 	metrics              *metrics.Collector
 	log                  *zap.Logger
 }
 
 // NewPrioritySignalHandler creates a new handler for priority signals.
-// mandatoryMedChecker and kb20Client are optional — pass nil to disable
-// the Phase 6 P6-6 CKM 4c handler (e.g., in unit tests for other routes).
+// mandatoryMedChecker, kb20Client, and renalDoseGate are optional — pass
+// nil to disable the corresponding Phase 6 handlers (e.g., in unit tests
+// for other routes).
 func NewPrioritySignalHandler(
 	db *database.Database,
 	gateCache *MCUGateCache,
@@ -37,6 +39,7 @@ func NewPrioritySignalHandler(
 	hypoHandler *HypoglycaemiaHandler,
 	mandatoryMedChecker *MandatoryMedChecker,
 	kb20Client *KB20Client,
+	renalDoseGate *RenalDoseGate,
 	m *metrics.Collector,
 	log *zap.Logger,
 ) *PrioritySignalHandler {
@@ -47,6 +50,7 @@ func NewPrioritySignalHandler(
 		hypoHandler:         hypoHandler,
 		mandatoryMedChecker: mandatoryMedChecker,
 		kb20Client:          kb20Client,
+		renalDoseGate:       renalDoseGate,
 		metrics:             m,
 		log:                 log,
 	}
@@ -72,9 +76,119 @@ func (h *PrioritySignalHandler) Handle(ctx context.Context, action PriorityRoute
 		return h.handleHospitalisation(ctx, env)
 	case RouteCKMTransition:
 		return h.handleCKMTransition(ctx, env)
+	case RouteRenalGate:
+		return h.handleRenalGate(ctx, env)
 	default:
 		return nil
 	}
+}
+
+// handleRenalGate processes a new derived eGFR lab event and runs the
+// reactive renal dose gate against the patient's active medications.
+// Phase 6 P6-2: closes the loop where a new creatinine result is the
+// only thing standing between a metformin patient and an undetected
+// contraindication when their eGFR drops below 30.
+//
+// Scope note — like P6-6, this handler currently logs detected gating
+// gaps rather than persisting them as DecisionCards. The DecisionCard
+// model is template-driven (TemplateID, NodeID, ClinicianSummary,
+// SafetyCheckSummary) and building real cards needs new
+// RENAL_CONTRAINDICATION + RENAL_DOSE_REDUCE YAML templates plus the
+// full card-builder pipeline (~1d follow-up). The Decision 9 abstraction
+// proof — KB-20 publishes EGFR_LAB → KB-23 routes → handler runs gate
+// → contraindications detected — ships fully. Card persistence is the
+// missing last mile alongside the Prometheus metrics
+// renal_contraindication_detected_total{drug_class} and
+// renal_reactive_latency_seconds.
+func (h *PrioritySignalHandler) handleRenalGate(ctx context.Context, env priorityEnvelope) error {
+	var payload struct {
+		LabType    string  `json:"lab_type"`
+		Value      float64 `json:"value"`
+		Unit       string  `json:"unit"`
+		MeasuredAt string  `json:"measured_at"`
+		Source     string  `json:"source"`
+		IsDerived  bool    `json:"is_derived"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return fmt.Errorf("unmarshal eGFR lab payload: %w", err)
+	}
+
+	if payload.LabType != "EGFR" {
+		// Defensive: the router already filters on signal_type=EGFR_LAB,
+		// but keep this check so a payload with an unexpected lab_type
+		// can't accidentally trigger gating.
+		h.log.Debug("renal gate handler received non-EGFR payload",
+			zap.String("lab_type", payload.LabType))
+		return nil
+	}
+
+	if h.renalDoseGate == nil || h.kb20Client == nil {
+		h.log.Warn("renal gate event received but RenalDoseGate or KB20Client not wired",
+			zap.String("patient_id", env.PatientID))
+		return nil
+	}
+
+	patientCtx, err := h.kb20Client.FetchSummaryContext(ctx, env.PatientID)
+	if err != nil {
+		return fmt.Errorf("fetch KB-20 patient context for renal gate: %w", err)
+	}
+	if patientCtx == nil {
+		h.log.Warn("KB-20 returned nil patient context for renal gate",
+			zap.String("patient_id", env.PatientID))
+		return nil
+	}
+
+	// Construct ActiveMedication slice from the string medication list
+	// in PatientContext. Drug names + doses aren't carried here, so the
+	// gate evaluates only by drug class — sufficient for contraindication
+	// detection (the formulary keys on drug class). The dose-reduce path
+	// will need richer medication data in a Phase 6 follow-up.
+	meds := make([]ActiveMedication, 0, len(patientCtx.Medications))
+	for _, drugClass := range patientCtx.Medications {
+		meds = append(meds, ActiveMedication{DrugClass: drugClass})
+	}
+
+	measuredAt := time.Now().UTC()
+	if payload.MeasuredAt != "" {
+		if t, parseErr := time.Parse(time.RFC3339, payload.MeasuredAt); parseErr == nil {
+			measuredAt = t
+		}
+	}
+
+	rs := models.RenalStatus{
+		EGFR:           payload.Value,
+		EGFRMeasuredAt: measuredAt,
+	}
+	report := h.renalDoseGate.EvaluatePatient(env.PatientID, rs, meds)
+
+	if !report.HasContraindicated && !report.HasDoseReduce {
+		h.log.Info("renal gate: no contraindications or dose-reduce gaps",
+			zap.String("patient_id", env.PatientID),
+			zap.Float64("egfr", payload.Value),
+			zap.Int("med_count", len(meds)))
+		return nil
+	}
+
+	contraindicated := make([]string, 0)
+	doseReduce := make([]string, 0)
+	for _, r := range report.MedicationResults {
+		switch r.Verdict {
+		case models.VerdictContraindicated:
+			contraindicated = append(contraindicated, r.DrugClass)
+		case models.VerdictDoseReduce:
+			doseReduce = append(doseReduce, r.DrugClass)
+		}
+	}
+
+	h.log.Info("renal gate: gating gaps detected",
+		zap.String("patient_id", env.PatientID),
+		zap.Float64("egfr", payload.Value),
+		zap.String("urgency", report.OverallUrgency),
+		zap.Strings("contraindicated", contraindicated),
+		zap.Strings("dose_reduce", doseReduce),
+		zap.String("note", "card persistence pending Phase 6 follow-up — needs RENAL_CONTRAINDICATION + RENAL_DOSE_REDUCE YAML templates + card builder wiring"),
+	)
+	return nil
 }
 
 // handleCKMTransition processes a CKM_STAGE_TRANSITION event published by

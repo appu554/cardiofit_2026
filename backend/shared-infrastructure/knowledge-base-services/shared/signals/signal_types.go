@@ -40,6 +40,13 @@ const (
 	// the S1-S22 sense, but uses the same envelope shape so it can flow
 	// through the existing priority signal Kafka pipeline).
 	SignalCKMStageTransition SignalType = "CKM_STAGE_TRANSITION"
+
+	// Phase 6 P6-2 — derived eGFR lab event for reactive renal dose
+	// gating. Distinct from SignalCreatinine because eGFR is computed
+	// from creatinine + age + sex, and dispatching on it directly lets
+	// KB-23's renal gate run with the actual filtration value rather
+	// than having to re-derive it.
+	SignalEGFRLab SignalType = "EGFR_LAB"
 )
 
 // SignalSource identifies the origin of a signal.

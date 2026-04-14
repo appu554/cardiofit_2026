@@ -52,6 +52,13 @@ func TestPrioritySignalRouter_Route(t *testing.T) {
 			expected: RouteCKMTransition,
 		},
 		{
+			// Phase 6 P6-2: derived eGFR labs route to the reactive
+			// renal dose gate handler.
+			name:     "EGFR_LAB routes to RouteRenalGate",
+			input:    priorityEnvelope{SignalType: "EGFR_LAB", PatientID: "p1"},
+			expected: RouteRenalGate,
+		},
+		{
 			name:     "unknown signal type routes to skip",
 			input:    priorityEnvelope{SignalType: "UNKNOWN_SIGNAL", PatientID: "p1"},
 			expected: RoutePrioritySkip,

@@ -100,6 +100,19 @@ func main() {
 		// dispatch can fetch patient context and detect GDMT gaps on
 		// 4c transitions. MandatoryMedChecker is stateless — fresh
 		// instance per startup is fine.
+		//
+		// Phase 6 P6-2: RenalDoseGate (built from the renal formulary)
+		// also wired so the new EGFR_LAB dispatch can run reactive
+		// renal dose gating. Formulary load failure logs a warning
+		// and leaves the gate nil — the handler defensively no-ops.
+		var renalGate *services.RenalDoseGate
+		if formulary, ferr := services.LoadRenalFormulary(cfg.TemplatesDir, cfg.Market); ferr == nil {
+			renalGate = services.NewRenalDoseGate(formulary)
+		} else {
+			logger.Warn("renal formulary load failed; reactive renal gate disabled",
+				zap.Error(ferr))
+		}
+
 		priorityHandler := services.NewPrioritySignalHandler(
 			server.Database(),
 			server.MCUGateCache(),
@@ -107,6 +120,7 @@ func main() {
 			server.HypoHandler(),
 			services.NewMandatoryMedChecker(),
 			server.KB20Client(),
+			renalGate,
 			server.MetricsCollector(),
 			logger,
 		)

@@ -23,7 +23,12 @@ const (
 	// the kafka_outbox_relay; this consumer reacts to 4c transitions
 	// by invoking MandatoryMedChecker for GDMT gap detection.
 	RouteCKMTransition PriorityRouteAction = "CKM_TRANSITION"
-	RoutePrioritySkip  PriorityRouteAction = "SKIP"
+	// Phase 6 P6-2: reactive renal dose gating. Every new derived
+	// eGFR lab from KB-20 routes here; the handler runs RenalDoseGate
+	// against the patient's active medications and surfaces any
+	// contraindications/dose-adjust gaps.
+	RouteRenalGate    PriorityRouteAction = "RENAL_GATE"
+	RoutePrioritySkip PriorityRouteAction = "SKIP"
 )
 
 // priorityEnvelope is the Kafka message envelope for priority signals.
@@ -63,6 +68,11 @@ func (r *PrioritySignalRouter) Route(data []byte) (PriorityRouteAction, error) {
 		// on those (other stage transitions are visible to downstream
 		// consumers via the topic but generate no card from KB-23).
 		return RouteCKMTransition, nil
+	case "EGFR_LAB":
+		// Phase 6 P6-2: route to the reactive renal dose gate. Every
+		// new derived eGFR lab triggers a re-evaluation of all
+		// active medications against the renal formulary.
+		return RouteRenalGate, nil
 	default:
 		return RoutePrioritySkip, nil
 	}

@@ -19,6 +19,7 @@ func TestHandleCKMTransition_NonFourCIsNoop(t *testing.T) {
 		nil, // hypoHandler
 		nil, // mandatoryMedChecker
 		nil, // kb20Client
+		nil, // renalDoseGate
 		nil, // metrics
 		zap.NewNop(),
 	)
@@ -64,6 +65,7 @@ func TestHandleCKMTransition_FourCWithoutDependencies_IsDefensiveNoop(t *testing
 		nil, // hypoHandler
 		nil, // mandatoryMedChecker — intentionally nil
 		nil, // kb20Client — intentionally nil
+		nil, // renalDoseGate
 		nil, // metrics
 		zap.NewNop(),
 	)
@@ -88,7 +90,7 @@ func TestHandleCKMTransition_FourCWithoutDependencies_IsDefensiveNoop(t *testing
 // malformed payload surfaces a clear error rather than silently passing.
 func TestHandleCKMTransition_InvalidPayload_ReturnsError(t *testing.T) {
 	handler := NewPrioritySignalHandler(
-		nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
+		nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
 	)
 	env := priorityEnvelope{
 		SignalType: "CKM_STAGE_TRANSITION",
@@ -106,7 +108,7 @@ func TestHandleCKMTransition_InvalidPayload_ReturnsError(t *testing.T) {
 // handler).
 func TestHandleCKMTransition_DispatchedViaHandle(t *testing.T) {
 	handler := NewPrioritySignalHandler(
-		nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
+		nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
 	)
 	envelopeJSON, _ := json.Marshal(priorityEnvelope{
 		SignalType: "CKM_STAGE_TRANSITION",

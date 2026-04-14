@@ -89,6 +89,14 @@ func NewEventSignalMapper() *EventSignalMapper {
 				loincCode:  "2160-0",
 				priority:   func(v float64) bool { return v > 10.0 },
 			},
+			// Phase 6 P6-2: derived eGFR labs always priority-route so
+			// KB-23's reactive renal gate receives them on the same
+			// clinical.priority-events.v1 topic as other safety triggers.
+			"EGFR": {
+				signalType: signals.SignalEGFRLab,
+				loincCode:  "62238-1",
+				priority:   func(v float64) bool { return true },
+			},
 			"ACR": {
 				signalType: signals.SignalACR,
 				loincCode:  "9318-7",

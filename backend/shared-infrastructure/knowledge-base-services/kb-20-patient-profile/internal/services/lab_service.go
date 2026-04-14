@@ -222,6 +222,20 @@ func (s *LabService) deriveEGFR(tx *gorm.DB, patientID string, creatinine float6
 	}
 	tx.Create(egfrEntry)
 
+	// Phase 6 P6-2: publish a routine eGFR lab event so KB-23's reactive
+	// renal dose gate runs on every new derived eGFR — not only on the
+	// threshold-crossing path. Maps to SignalEGFRLab via the
+	// EventSignalMapper, always priority-routed to clinical.priority-events.v1.
+	s.eventBus.PublishTx(tx, models.EventLabResult, patientID, models.LabResultPayload{
+		LabType:          "EGFR",
+		Value:            egfr,
+		Unit:             "mL/min/1.73m²",
+		MeasuredAt:       measuredAt.Format(time.RFC3339),
+		Source:           "CKD-EPI-2021",
+		ValidationStatus: string(models.ValidationAccepted),
+		IsDerived:        true,
+	})
+
 	// F-03: Check medication threshold crossings (event written to outbox in same tx)
 	s.checkThresholdCrossings(tx, patientID, egfr)
 
