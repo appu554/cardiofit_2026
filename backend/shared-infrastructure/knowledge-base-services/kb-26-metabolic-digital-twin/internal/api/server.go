@@ -21,6 +21,7 @@ type Server struct {
 	db                    *database.Database
 	cache                 *cache.RedisClient
 	metrics               *metrics.Collector
+	trajectoryMetrics     *metrics.TrajectoryMetrics
 	logger                *zap.Logger
 	bpContextOrchestrator *services.BPContextOrchestrator
 	twinUpdater           *services.TwinUpdater
@@ -60,12 +61,15 @@ func NewServer(
 		trajectoryThresholds = config.DefaultTrajectoryThresholds()
 	}
 
+	trajMetrics := metrics.NewTrajectoryMetrics()
+
 	s := &Server{
 		Router:                router,
 		config:                cfg,
 		db:                    db,
 		cache:                 cacheClient,
 		metrics:               metricsCollector,
+		trajectoryMetrics:     trajMetrics,
 		logger:                logger,
 		bpContextOrchestrator: bpContextOrchestrator,
 		twinUpdater:           twinUpdater,
@@ -74,7 +78,7 @@ func NewServer(
 		mriScorer:             mriScorer,
 		preventScorer:         preventScorer,
 		relapseDetector:       relapseDetector,
-		trajectoryEngine:      services.NewTrajectoryEngine(trajectoryThresholds, nil),
+		trajectoryEngine:      services.NewTrajectoryEngine(trajectoryThresholds, trajMetrics),
 	}
 
 	s.setupMiddleware()
