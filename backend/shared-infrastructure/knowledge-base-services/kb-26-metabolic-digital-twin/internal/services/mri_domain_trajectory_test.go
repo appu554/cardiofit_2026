@@ -4,12 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
 func defaultEngine() *TrajectoryEngine {
-	return NewTrajectoryEngine(config.DefaultTrajectoryThresholds(), nil)
+	return NewTrajectoryEngine(config.DefaultTrajectoryThresholds(), nil, nil, zap.NewNop())
 }
 
 // ---------------------------------------------------------------------------

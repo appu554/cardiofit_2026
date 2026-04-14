@@ -55,6 +55,6 @@ type DecomposedTrajectory   = models.DecomposedTrajectory
 // exercise the full KB-26 pipeline without importing internal packages.
 // Constructs a default engine using DefaultTrajectoryThresholds on each call.
 func Compute(patientID string, points []DomainTrajectoryPoint) DecomposedTrajectory {
-	engine := services.NewTrajectoryEngine(config.DefaultTrajectoryThresholds(), nil)
+	engine := services.NewTrajectoryEngine(config.DefaultTrajectoryThresholds(), nil, nil, nil)
 	return engine.Compute(patientID, points)
 }

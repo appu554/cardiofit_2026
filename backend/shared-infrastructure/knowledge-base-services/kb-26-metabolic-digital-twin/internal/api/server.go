@@ -78,7 +78,16 @@ func NewServer(
 		mriScorer:             mriScorer,
 		preventScorer:         preventScorer,
 		relapseDetector:       relapseDetector,
-		trajectoryEngine:      services.NewTrajectoryEngine(trajectoryThresholds, trajMetrics),
+		// TODO(kb26-kafka): wire KafkaTrajectoryPublisher once cfg gains a
+		// Kafka.Brokers field. Until then, trajectory events are silently
+		// dropped via the noop publisher — Module 13 must fall back to the
+		// synchronous GET /api/v1/kb26/mri/:patientId/domain-trajectory endpoint.
+		trajectoryEngine: services.NewTrajectoryEngine(
+			trajectoryThresholds,
+			trajMetrics,
+			services.NoopTrajectoryPublisher{},
+			logger,
+		),
 	}
 
 	s.setupMiddleware()

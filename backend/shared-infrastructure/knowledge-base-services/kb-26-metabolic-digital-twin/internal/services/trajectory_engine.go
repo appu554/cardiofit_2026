@@ -1,10 +1,13 @@
 package services
 
 import (
+	"context"
 	"math"
 	"sort"
 	"strconv"
 	"time"
+
+	"go.uber.org/zap"
 
 	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/metrics"
@@ -17,12 +20,28 @@ import (
 type TrajectoryEngine struct {
 	thresholds config.TrajectoryThresholds
 	metrics    *metrics.TrajectoryMetrics // optional, nil-safe
+	publisher  TrajectoryPublisher
+	logger     *zap.Logger
 }
 
 // NewTrajectoryEngine constructs an engine with the given thresholds.
-// Metrics are nil-safe; pass nil for tests that don't care about telemetry.
-func NewTrajectoryEngine(thresholds config.TrajectoryThresholds, m *metrics.TrajectoryMetrics) *TrajectoryEngine {
-	return &TrajectoryEngine{thresholds: thresholds, metrics: m}
+// Metrics, publisher, and logger are nil-safe; pass nil for tests that
+// don't care about telemetry/eventing.
+func NewTrajectoryEngine(
+	thresholds config.TrajectoryThresholds,
+	m *metrics.TrajectoryMetrics,
+	publisher TrajectoryPublisher,
+	logger *zap.Logger,
+) *TrajectoryEngine {
+	if publisher == nil {
+		publisher = NoopTrajectoryPublisher{}
+	}
+	return &TrajectoryEngine{
+		thresholds: thresholds,
+		metrics:    m,
+		publisher:  publisher,
+		logger:     logger,
+	}
 }
 
 // Compute computes per-domain OLS trajectories and derived analytics.
@@ -157,6 +176,13 @@ func (e *TrajectoryEngine) Compute(patientID string, points []models.DomainTraje
 				e.metrics.LeadingIndicatorTotal.WithLabelValues(string(lagging)).Inc()
 			}
 		}
+	}
+
+	// Publish event for downstream consumers (Module 13 Flink state-sync).
+	// Publish failure is non-fatal — log and continue.
+	event := NewDomainTrajectoryComputedEvent(&result)
+	if err := e.publisher.Publish(context.Background(), event); err != nil && e.logger != nil {
+		e.logger.Warn("failed to publish trajectory event", zap.Error(err))
 	}
 
 	return result
