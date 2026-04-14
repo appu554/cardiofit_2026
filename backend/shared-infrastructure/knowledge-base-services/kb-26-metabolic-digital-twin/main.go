@@ -157,13 +157,13 @@ func main() {
 	batchScheduler := services.NewBatchScheduler(logger)
 	batchScheduler.Register(bpBatchJob)
 
-	// 7d. Phase 5 P5-3: register the inertia weekly batch as a second
-	// consumer of the BatchScheduler. Fires on Mondays via ShouldRun.
-	// Current scope is a heartbeat that lists active patients — the
-	// per-patient inertia scan lands in Phase 6 once the inertia data
-	// assembly (KB-20 glycaemic/hemodynamic/renal pulls) is ready.
-	inertiaBatchJob := services.NewInertiaWeeklyBatch(bpContextRepo, logger)
-	batchScheduler.Register(inertiaBatchJob)
+	// Phase 6 P6-1: the inertia weekly batch moved from KB-26 to KB-23.
+	// The Phase 5 P5-3 heartbeat that used to live here was a placeholder
+	// because the detector lives in KB-23 — KB-26 cannot import
+	// KB-23 internals. The canonical InertiaWeeklyBatch now lives at
+	// kb-23-decision-cards/internal/services/inertia_weekly_batch.go
+	// and is registered in KB-23's BatchScheduler (built in Phase 6 P6-5).
+	// This makes the detector + orchestrator + batch all colocated.
 
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)

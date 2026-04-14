@@ -143,11 +143,20 @@ func main() {
 	renalAnticipatoryJob := services.NewRenalAnticipatoryBatch(nil, logger)
 	batchScheduler.Register(renalAnticipatoryJob)
 
+	// Phase 6 P6-1: InertiaWeeklyBatch registered as the second KB-23
+	// batch consumer. Proves the Phase 6 P6-5 scheduler can host two
+	// jobs with different cadences (monthly + weekly). Heartbeat mode
+	// (assembler + orchestrator nil) — per-patient assembly lands in
+	// a Phase 6 follow-up when KB-20 exposes intervention timeline
+	// and KB-26 exposes target status over HTTP.
+	inertiaWeeklyJob := services.NewInertiaWeeklyBatch(nil, nil, nil, logger)
+	batchScheduler.Register(inertiaWeeklyJob)
+
 	batchCtx, batchCancel := context.WithCancel(context.Background())
 	defer batchCancel()
 	go batchScheduler.StartLoop(batchCtx, 1*time.Hour)
 	logger.Info("KB-23 batch scheduler started",
-		zap.String("registered_jobs", "renal_anticipatory_monthly"))
+		zap.String("registered_jobs", "renal_anticipatory_monthly + inertia_weekly"))
 
 	// 11. Log startup banner
 	fmt.Printf(`
