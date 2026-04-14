@@ -37,6 +37,15 @@ func (s *Server) getMRI(c *gin.Context) {
 		s.logger.Error("failed to persist MRI score", zap.Error(err))
 	}
 
+	// Phase 6 P6-3: compute the decomposed domain trajectory automatically
+	// after every MRI persistence. Best-effort — failures log a warning and
+	// continue (the MRI response is the source of truth; trajectory is a
+	// derived analytic that downstream consumers receive via the Kafka
+	// publisher invoked inside TrajectoryEngine.Compute). Closes the
+	// Module 13 empty velocity gap by ensuring trajectory runs on every
+	// natural MRI recomputation, not just on explicit GET requests.
+	s.computeAndPersistTrajectory(patientID)
+
 	resp := gin.H{
 		"score":      result.Score,
 		"category":   result.Category,
