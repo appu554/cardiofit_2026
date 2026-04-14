@@ -9,7 +9,7 @@ import (
 )
 
 func defaultEngine() *TrajectoryEngine {
-	return NewTrajectoryEngine(config.DefaultTrajectoryThresholds())
+	return NewTrajectoryEngine(config.DefaultTrajectoryThresholds(), nil)
 }
 
 // ---------------------------------------------------------------------------

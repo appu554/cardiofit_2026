@@ -74,7 +74,7 @@ func NewServer(
 		mriScorer:             mriScorer,
 		preventScorer:         preventScorer,
 		relapseDetector:       relapseDetector,
-		trajectoryEngine:      services.NewTrajectoryEngine(trajectoryThresholds),
+		trajectoryEngine:      services.NewTrajectoryEngine(trajectoryThresholds, nil),
 	}
 
 	s.setupMiddleware()

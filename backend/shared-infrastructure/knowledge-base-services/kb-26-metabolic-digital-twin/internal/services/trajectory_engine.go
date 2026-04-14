@@ -3,9 +3,11 @@ package services
 import (
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"kb-26-metabolic-digital-twin/internal/config"
+	"kb-26-metabolic-digital-twin/internal/metrics"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
@@ -14,16 +16,24 @@ import (
 // config so callers can override per market.
 type TrajectoryEngine struct {
 	thresholds config.TrajectoryThresholds
+	metrics    *metrics.TrajectoryMetrics // optional, nil-safe
 }
 
 // NewTrajectoryEngine constructs an engine with the given thresholds.
-// Pass config.DefaultTrajectoryThresholds() for the canonical Phase 0 values.
-func NewTrajectoryEngine(thresholds config.TrajectoryThresholds) *TrajectoryEngine {
-	return &TrajectoryEngine{thresholds: thresholds}
+// Metrics are nil-safe; pass nil for tests that don't care about telemetry.
+func NewTrajectoryEngine(thresholds config.TrajectoryThresholds, m *metrics.TrajectoryMetrics) *TrajectoryEngine {
+	return &TrajectoryEngine{thresholds: thresholds, metrics: m}
 }
 
 // Compute computes per-domain OLS trajectories and derived analytics.
 func (e *TrajectoryEngine) Compute(patientID string, points []models.DomainTrajectoryPoint) models.DecomposedTrajectory {
+	start := time.Now()
+	defer func() {
+		if e.metrics != nil {
+			e.metrics.ComputeDuration.Observe(float64(time.Since(start).Milliseconds()))
+		}
+	}()
+
 	result := models.DecomposedTrajectory{
 		PatientID:    patientID,
 		DataPoints:   len(points),
@@ -32,6 +42,9 @@ func (e *TrajectoryEngine) Compute(patientID string, points []models.DomainTraje
 	}
 
 	if len(points) < 2 {
+		if e.metrics != nil {
+			e.metrics.InsufficientData.Inc()
+		}
 		result.CompositeTrend = models.TrendInsufficient
 		for _, d := range models.AllMHRIDomains {
 			result.DomainSlopes[d] = models.DomainSlope{Domain: d, Trend: models.TrendInsufficient}
@@ -101,6 +114,9 @@ func (e *TrajectoryEngine) Compute(patientID string, points []models.DomainTraje
 
 	result.DomainsDeteriorating = decliningCount
 	result.ConcordantDeterioration = decliningCount >= e.thresholds.Concordant.MinDomainsDeclining
+	if result.ConcordantDeterioration && e.metrics != nil {
+		e.metrics.ConcordantDeterioration.WithLabelValues(strconv.Itoa(decliningCount)).Inc()
+	}
 
 	// Dominant driver calculation.
 	if dominantDriver != nil && result.CompositeSlope < 0 {
@@ -119,12 +135,29 @@ func (e *TrajectoryEngine) Compute(patientID string, points []models.DomainTraje
 	// Divergence (method on engine so it reads divergence thresholds from config).
 	result.Divergences = e.detectDivergences(result.DomainSlopes)
 	result.HasDiscordantTrend = len(result.Divergences) > 0
+	if e.metrics != nil {
+		for _, div := range result.Divergences {
+			e.metrics.DivergenceTotal.WithLabelValues(string(div.ImprovingDomain), string(div.DecliningDomain)).Inc()
+		}
+	}
 
 	// Domain category crossings.
 	result.DomainCrossings = e.detectDomainCrossings(sorted, domainExtractors)
+	if e.metrics != nil {
+		for _, c := range result.DomainCrossings {
+			e.metrics.DomainCrossingTotal.WithLabelValues(string(c.Domain), c.Direction).Inc()
+		}
+	}
 
 	// Behavioral leading indicator.
 	result.LeadingIndicators = e.detectLeadingIndicators(sorted, result.DomainSlopes)
+	if e.metrics != nil {
+		for _, lead := range result.LeadingIndicators {
+			for _, lagging := range lead.LaggingDomains {
+				e.metrics.LeadingIndicatorTotal.WithLabelValues(string(lagging)).Inc()
+			}
+		}
+	}
 
 	return result
 }
