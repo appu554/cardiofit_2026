@@ -20,12 +20,20 @@ type InertiaActivePatientLister interface {
 // abstraction hosts jobs with cadences other than the daily BP context.
 //
 // Scope note — this job is intentionally a heartbeat, not a full inertia
-// scan. Real inertia detection needs domain-specific input assembly
-// (glycaemic + hemodynamic + renal data pulls from KB-20) that lives
-// outside the P5 scope. When that wiring ships in Phase 6, the Run
-// method is extended to call kb23Client.TriggerInertiaScan(patientID)
-// per patient; the scheduler/ShouldRun contract proven here stays the
-// same. See docs/superpowers/plans/2026-04-14-masked-htn-phase-5-*.md
+// scan. Real inertia detection needs an InertiaOrchestrator analogous to
+// BPContextOrchestrator: 3-4 upstream client calls per patient to
+// assemble InertiaDetectorInput (glycaemic target status from KB-26,
+// hemodynamic target status from the BP context orchestrator, renal
+// target status from KB-26, intervention timeline from KB-20), then
+// invoke DetectInertia + GenerateInertiaCards, apply stability dampening
+// to the verdict, persist history, publish events. Estimated 2-3 days
+// for the orchestrator; this heartbeat is the placeholder that proves
+// the BatchScheduler hosts the cadence correctly.
+//
+// When Phase 6 ships InertiaOrchestrator, this job's Run method fetches
+// patient IDs and calls orchestrator.EvaluatePatient(ctx, id) per patient
+// — the scheduler/ShouldRun contract proven here stays the same.
+// See docs/superpowers/plans/2026-04-14-masked-htn-phase-5-*.md
 // for the deferred scope.
 type InertiaWeeklyBatch struct {
 	repo InertiaActivePatientLister
