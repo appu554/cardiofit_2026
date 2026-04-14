@@ -5,40 +5,25 @@ import (
 	"sort"
 	"time"
 
+	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
-// MHRI domain weights (must match MHRI scorer weights).
-var domainWeights = map[models.MHRIDomain]float64{
-	models.DomainGlucose:    0.35,
-	models.DomainCardio:     0.25,
-	models.DomainBodyComp:   0.25,
-	models.DomainBehavioral: 0.15,
+// TrajectoryEngine computes per-domain MHRI trajectories. Constructed with
+// a TrajectoryThresholds value; all classification logic reads from this
+// config so callers can override per market.
+type TrajectoryEngine struct {
+	thresholds config.TrajectoryThresholds
 }
 
-// Trend thresholds (score units per day).
-const (
-	rapidImprovingThreshold = 1.0
-	improvingThreshold      = 0.3
-	decliningThreshold      = -0.3
-	rapidDecliningThreshold = -1.0
-)
+// NewTrajectoryEngine constructs an engine with the given thresholds.
+// Pass config.DefaultTrajectoryThresholds() for the canonical Phase 0 values.
+func NewTrajectoryEngine(thresholds config.TrajectoryThresholds) *TrajectoryEngine {
+	return &TrajectoryEngine{thresholds: thresholds}
+}
 
-// Category boundaries (MHRI score ranges).
-const (
-	categoryOptimal  = 70.0
-	categoryMild     = 55.0
-	categoryModerate = 40.0
-)
-
-// Leading indicator detection thresholds (see plan: Task 4 / leading_indicator config).
-const (
-	leadingIndicatorMinDataPoints   = 5    // need at least 5 points for lead-lag analysis
-	leadingIndicatorMinBehavioralSlope = -0.5 // behavioral must be declining meaningfully
-)
-
-// ComputeDecomposedTrajectory computes per-domain OLS trajectories and derived analytics.
-func ComputeDecomposedTrajectory(patientID string, points []models.DomainTrajectoryPoint) models.DecomposedTrajectory {
+// Compute computes per-domain OLS trajectories and derived analytics.
+func (e *TrajectoryEngine) Compute(patientID string, points []models.DomainTrajectoryPoint) models.DecomposedTrajectory {
 	result := models.DecomposedTrajectory{
 		PatientID:    patientID,
 		DataPoints:   len(points),
@@ -57,20 +42,22 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 	// Sort by timestamp.
 	sorted := make([]models.DomainTrajectoryPoint, len(points))
 	copy(sorted, points)
-	sortTrajectoryPoints(sorted)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp.Before(sorted[j].Timestamp)
+	})
 
 	first, last := sorted[0], sorted[len(sorted)-1]
 	result.WindowDays = int(math.Round(last.Timestamp.Sub(first.Timestamp).Hours() / 24))
 
-	// Compute composite trajectory.
+	// Composite trajectory.
 	compositeScores := extractScores(sorted, func(p models.DomainTrajectoryPoint) float64 { return p.CompositeScore })
-	compSlope, _ := computeOLSWithR2(sorted, compositeScores)
+	compSlope, _ := e.computeOLSWithR2(sorted, compositeScores)
 	result.CompositeSlope = roundTo3(compSlope)
-	result.CompositeTrend = classifyDomainTrend(compSlope)
+	result.CompositeTrend = e.classifyTrend(compSlope)
 	result.CompositeStartScore = first.CompositeScore
 	result.CompositeEndScore = last.CompositeScore
 
-	// Compute per-domain trajectories.
+	// Per-domain trajectories.
 	domainExtractors := map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64{
 		models.DomainGlucose:    func(p models.DomainTrajectoryPoint) float64 { return p.GlucoseScore },
 		models.DomainCardio:     func(p models.DomainTrajectoryPoint) float64 { return p.CardioScore },
@@ -82,28 +69,30 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 	var maxWeightedDecline float64
 	var dominantDriver *models.MHRIDomain
 
-	for domain, extractor := range domainExtractors {
+	for _, domain := range models.AllMHRIDomains {
+		extractor := domainExtractors[domain]
 		scores := extractScores(sorted, extractor)
-		slope, r2 := computeOLSWithR2(sorted, scores)
+		slope, r2 := e.computeOLSWithR2(sorted, scores)
 
 		ds := models.DomainSlope{
 			Domain:      domain,
 			SlopePerDay: roundTo3(slope),
-			Trend:       classifyDomainTrend(slope),
+			Trend:       e.classifyTrend(slope),
 			StartScore:  scores[0],
 			EndScore:    scores[len(scores)-1],
 			DeltaScore:  roundTo1(scores[len(scores)-1] - scores[0]),
 			R2:          roundTo3(r2),
-			Confidence:  classifyR2Confidence(r2),
+			Confidence:  e.classifyConfidence(r2),
 		}
 		result.DomainSlopes[domain] = ds
 
-		if slope < decliningThreshold {
+		if slope < e.thresholds.Concordant.MinSlopePerDomain {
 			decliningCount++
 		}
 
-		weightedDecline := math.Abs(slope) * domainWeights[domain]
-		if slope < decliningThreshold && weightedDecline > maxWeightedDecline {
+		weight := e.thresholds.Driver.WeightMap[domain]
+		weightedDecline := math.Abs(slope) * weight
+		if slope < e.thresholds.Trend.Declining && weightedDecline > maxWeightedDecline {
 			maxWeightedDecline = weightedDecline
 			d := domain
 			dominantDriver = &d
@@ -111,15 +100,15 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 	}
 
 	result.DomainsDeteriorating = decliningCount
-	result.ConcordantDeterioration = decliningCount >= 2
+	result.ConcordantDeterioration = decliningCount >= e.thresholds.Concordant.MinDomainsDeclining
 
 	// Dominant driver calculation.
 	if dominantDriver != nil && result.CompositeSlope < 0 {
 		result.DominantDriver = dominantDriver
 		totalWeightedDecline := 0.0
-		for domain, ds := range result.DomainSlopes {
-			if ds.SlopePerDay < decliningThreshold {
-				totalWeightedDecline += math.Abs(ds.SlopePerDay) * domainWeights[domain]
+		for d, ds := range result.DomainSlopes {
+			if ds.SlopePerDay < e.thresholds.Trend.Declining {
+				totalWeightedDecline += math.Abs(ds.SlopePerDay) * e.thresholds.Driver.WeightMap[d]
 			}
 		}
 		if totalWeightedDecline > 0 {
@@ -127,28 +116,29 @@ func ComputeDecomposedTrajectory(patientID string, points []models.DomainTraject
 		}
 	}
 
-	// Detect divergence patterns (defined in domain_divergence.go).
-	result.Divergences = detectDivergences(result.DomainSlopes)
+	// Divergence (method on engine so it reads divergence thresholds from config).
+	result.Divergences = e.detectDivergences(result.DomainSlopes)
 	result.HasDiscordantTrend = len(result.Divergences) > 0
 
-	// Detect domain category crossings.
-	result.DomainCrossings = detectDomainCrossings(sorted, domainExtractors)
+	// Domain category crossings.
+	result.DomainCrossings = e.detectDomainCrossings(sorted, domainExtractors)
 
-	// Detect behavioral leading indicator.
-	result.LeadingIndicators = detectLeadingIndicators(sorted, result.DomainSlopes)
+	// Behavioral leading indicator.
+	result.LeadingIndicators = e.detectLeadingIndicators(sorted, result.DomainSlopes)
 
 	return result
 }
 
 // computeOLSWithR2 runs OLS linear regression returning slope (per day) and R².
-func computeOLSWithR2(points []models.DomainTrajectoryPoint, scores []float64) (float64, float64) {
+// Uses the numerically stable two-pass form for ssTot. (Item 3 fix.)
+func (e *TrajectoryEngine) computeOLSWithR2(points []models.DomainTrajectoryPoint, scores []float64) (float64, float64) {
 	if len(points) < 2 {
 		return 0, 0
 	}
 
 	baseTime := points[0].Timestamp
 	n := float64(len(points))
-	var sumX, sumY, sumXY, sumX2, sumY2 float64
+	var sumX, sumY, sumXY, sumX2 float64
 
 	for i, pt := range points {
 		x := pt.Timestamp.Sub(baseTime).Hours() / 24.0
@@ -157,7 +147,6 @@ func computeOLSWithR2(points []models.DomainTrajectoryPoint, scores []float64) (
 		sumY += y
 		sumXY += x * y
 		sumX2 += x * x
-		sumY2 += y * y
 	}
 
 	denom := n*sumX2 - sumX*sumX
@@ -168,14 +157,18 @@ func computeOLSWithR2(points []models.DomainTrajectoryPoint, scores []float64) (
 	slope := (n*sumXY - sumX*sumY) / denom
 	intercept := (sumY - slope*sumX) / n
 
+	// Two-pass ssTot (numerically stable — Item 3 fix).
 	meanY := sumY / n
-	ssTot := sumY2 - n*meanY*meanY
+	ssTot := 0.0
 	ssRes := 0.0
 	for i, pt := range points {
 		x := pt.Timestamp.Sub(baseTime).Hours() / 24.0
 		predicted := intercept + slope*x
 		residual := scores[i] - predicted
 		ssRes += residual * residual
+
+		delta := scores[i] - meanY
+		ssTot += delta * delta
 	}
 
 	r2 := 0.0
@@ -189,32 +182,45 @@ func computeOLSWithR2(points []models.DomainTrajectoryPoint, scores []float64) (
 	return slope, r2
 }
 
-func classifyDomainTrend(slopePerDay float64) string {
+func (e *TrajectoryEngine) classifyTrend(slopePerDay float64) string {
 	switch {
-	case slopePerDay > rapidImprovingThreshold:
+	case slopePerDay > e.thresholds.Trend.RapidImproving:
 		return models.TrendRapidImproving
-	case slopePerDay > improvingThreshold:
+	case slopePerDay > e.thresholds.Trend.Improving:
 		return models.TrendImproving
-	case slopePerDay >= decliningThreshold:
+	case slopePerDay >= e.thresholds.Trend.Declining:
 		return models.TrendStable
-	case slopePerDay >= rapidDecliningThreshold:
+	case slopePerDay >= e.thresholds.Trend.RapidDeclining:
 		return models.TrendDeclining
 	default:
 		return models.TrendRapidDeclining
 	}
 }
 
-func classifyR2Confidence(r2 float64) string {
-	if r2 >= 0.5 {
+func (e *TrajectoryEngine) classifyConfidence(r2 float64) string {
+	if r2 >= e.thresholds.RSquared.High {
 		return models.ConfidenceHigh
 	}
-	if r2 >= 0.25 {
+	if r2 >= e.thresholds.RSquared.Moderate {
 		return models.ConfidenceModerate
 	}
 	return models.ConfidenceLow
 }
 
-func detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64) []models.DomainCategoryCrossing {
+func (e *TrajectoryEngine) categorizeDomainScore(score float64) string {
+	if score >= e.thresholds.CategoryBoundaries.Optimal {
+		return "OPTIMAL"
+	}
+	if score >= e.thresholds.CategoryBoundaries.Mild {
+		return "MILD"
+	}
+	if score >= e.thresholds.CategoryBoundaries.Moderate {
+		return "MODERATE"
+	}
+	return "HIGH"
+}
+
+func (e *TrajectoryEngine) detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64) []models.DomainCategoryCrossing {
 	if len(points) < 2 {
 		return nil
 	}
@@ -230,8 +236,8 @@ func detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map
 		}
 		startScore := extractor(first)
 		endScore := extractor(last)
-		startCat := categorizeDomainScore(startScore)
-		endCat := categorizeDomainScore(endScore)
+		startCat := e.categorizeDomainScore(startScore)
+		endCat := e.categorizeDomainScore(endScore)
 
 		if startCat != endCat {
 			direction := models.DirectionImproved
@@ -251,20 +257,20 @@ func detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map
 	return crossings
 }
 
-func detectLeadingIndicators(points []models.DomainTrajectoryPoint, slopes map[models.MHRIDomain]models.DomainSlope) []models.LeadingIndicator {
-	if len(points) < leadingIndicatorMinDataPoints {
+func (e *TrajectoryEngine) detectLeadingIndicators(points []models.DomainTrajectoryPoint, slopes map[models.MHRIDomain]models.DomainSlope) []models.LeadingIndicator {
+	if len(points) < e.thresholds.LeadingIndicator.MinDataPoints {
 		return nil
 	}
 
 	behSlope := slopes[models.DomainBehavioral]
-	if behSlope.SlopePerDay >= leadingIndicatorMinBehavioralSlope {
+	if behSlope.SlopePerDay >= e.thresholds.LeadingIndicator.MinBehavioralDeclineSlope {
 		return nil
 	}
 
 	var lagging []models.MHRIDomain
 	for _, domain := range []models.MHRIDomain{models.DomainGlucose, models.DomainCardio} {
 		ds := slopes[domain]
-		if ds.SlopePerDay < decliningThreshold {
+		if ds.SlopePerDay < e.thresholds.Trend.Declining {
 			if behSlope.DeltaScore < ds.DeltaScore {
 				lagging = append(lagging, domain)
 			}
@@ -283,31 +289,12 @@ func detectLeadingIndicators(points []models.DomainTrajectoryPoint, slopes map[m
 	}}
 }
 
-func categorizeDomainScore(score float64) string {
-	if score >= categoryOptimal {
-		return "OPTIMAL"
-	}
-	if score >= categoryMild {
-		return "MILD"
-	}
-	if score >= categoryModerate {
-		return "MODERATE"
-	}
-	return "HIGH"
-}
-
 func extractScores(points []models.DomainTrajectoryPoint, extractor func(models.DomainTrajectoryPoint) float64) []float64 {
 	scores := make([]float64, len(points))
 	for i, p := range points {
 		scores[i] = extractor(p)
 	}
 	return scores
-}
-
-func sortTrajectoryPoints(pts []models.DomainTrajectoryPoint) {
-	sort.Slice(pts, func(i, j int) bool {
-		return pts[i].Timestamp.Before(pts[j].Timestamp)
-	})
 }
 
 func roundTo3(v float64) float64 { return math.Round(v*1000) / 1000 }

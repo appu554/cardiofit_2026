@@ -4,8 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
+
+func defaultEngine() *TrajectoryEngine {
+	return NewTrajectoryEngine(config.DefaultTrajectoryThresholds())
+}
 
 // ---------------------------------------------------------------------------
 // TestDomainTrajectory_GlucoseDeclining_CardioStable
@@ -21,7 +26,7 @@ func TestDomainTrajectory_GlucoseDeclining_CardioStable(t *testing.T) {
 		{Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 56, GlucoseScore: 42, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 71},
 	}
 
-	result := ComputeDecomposedTrajectory("PAT-001", points)
+	result := defaultEngine().Compute("PAT-001", points)
 
 	if result.CompositeTrend != "DECLINING" && result.CompositeTrend != "RAPID_DECLINING" {
 		t.Errorf("expected composite DECLINING or RAPID_DECLINING, got %s", result.CompositeTrend)
@@ -63,7 +68,7 @@ func TestDomainTrajectory_AllDomainsImproving(t *testing.T) {
 		{Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 66, GlucoseScore: 65, CardioScore: 66, BodyCompScore: 64, BehavioralScore: 70},
 	}
 
-	result := ComputeDecomposedTrajectory("PAT-002", points)
+	result := defaultEngine().Compute("PAT-002", points)
 
 	if result.CompositeTrend != "IMPROVING" && result.CompositeTrend != "RAPID_IMPROVING" {
 		t.Errorf("expected composite IMPROVING or RAPID_IMPROVING, got %s", result.CompositeTrend)
@@ -94,7 +99,7 @@ func TestDomainTrajectory_ConcordantDeterioration(t *testing.T) {
 		{Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 52, GlucoseScore: 48, CardioScore: 45, BodyCompScore: 64, BehavioralScore: 55},
 	}
 
-	result := ComputeDecomposedTrajectory("PAT-003", points)
+	result := defaultEngine().Compute("PAT-003", points)
 
 	if !result.ConcordantDeterioration {
 		t.Error("expected ConcordantDeterioration = true")
@@ -114,7 +119,7 @@ func TestDomainTrajectory_InsufficientData(t *testing.T) {
 		{Timestamp: now, CompositeScore: 70, GlucoseScore: 72, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 68},
 	}
 
-	result := ComputeDecomposedTrajectory("PAT-004", points)
+	result := defaultEngine().Compute("PAT-004", points)
 	if result.CompositeTrend != "INSUFFICIENT_DATA" {
 		t.Errorf("expected INSUFFICIENT_DATA for composite, got %s", result.CompositeTrend)
 	}
@@ -141,7 +146,7 @@ func TestDomainTrajectory_NoisyData_LowConfidence(t *testing.T) {
 		{Timestamp: now.Add(-1 * 24 * time.Hour), GlucoseScore: 68, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 64},
 	}
 
-	result := ComputeDecomposedTrajectory("PAT-005", points)
+	result := defaultEngine().Compute("PAT-005", points)
 	glucoseSlope := result.DomainSlopes[models.DomainGlucose]
 	if glucoseSlope.Confidence != "LOW" {
 		t.Errorf("expected LOW confidence for noisy glucose, got %s (R²=%.3f)", glucoseSlope.Confidence, glucoseSlope.R2)
@@ -159,7 +164,7 @@ func TestDomainCategoryCrossing_GlucoseOptimalToMild(t *testing.T) {
 		{Timestamp: now.Add(-1 * 24 * time.Hour), GlucoseScore: 66, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 70, CompositeScore: 68},
 	}
 
-	result := ComputeDecomposedTrajectory("PAT-006", points)
+	result := defaultEngine().Compute("PAT-006", points)
 	if len(result.DomainCrossings) == 0 {
 		t.Fatal("expected at least one domain crossing")
 	}
@@ -189,7 +194,7 @@ func TestDomainCategoryCrossing_GlucoseOptimalToMild(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDomainTrajectory_ZeroPoints(t *testing.T) {
-	result := ComputeDecomposedTrajectory("PAT-007", nil)
+	result := defaultEngine().Compute("PAT-007", nil)
 	if result.CompositeTrend != "INSUFFICIENT_DATA" {
 		t.Errorf("expected INSUFFICIENT_DATA for nil points, got %s", result.CompositeTrend)
 	}
@@ -209,7 +214,7 @@ func TestDomainTrajectory_RajeshKumar(t *testing.T) {
 		{Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 42, GlucoseScore: 35, CardioScore: 38, BodyCompScore: 63, BehavioralScore: 30},
 	}
 
-	result := ComputeDecomposedTrajectory("e2e-rajesh-kumar-002", points)
+	result := defaultEngine().Compute("e2e-rajesh-kumar-002", points)
 
 	if result.CompositeTrend != "DECLINING" && result.CompositeTrend != "RAPID_DECLINING" {
 		t.Errorf("expected DECLINING or RAPID_DECLINING, got %s", result.CompositeTrend)

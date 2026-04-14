@@ -7,15 +7,15 @@ import (
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
-const minDivergenceRate = 0.5
-
 // detectDivergences finds pairs of domains moving in opposite directions.
-// One must be genuinely improving (slope > improvingThreshold), the other
-// genuinely declining (slope < decliningThreshold), and the combined rate
-// must exceed minDivergenceRate.
-func detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models.DivergencePattern {
+// Method on TrajectoryEngine so it can read divergence thresholds from config.
+func (e *TrajectoryEngine) detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models.DivergencePattern {
 	var divergences []models.DivergencePattern
 	domains := models.AllMHRIDomains
+
+	improvingThreshold := e.thresholds.Divergence.MinImprovingSlope
+	decliningThreshold := e.thresholds.Divergence.MinDecliningSlope
+	minRate := e.thresholds.Divergence.MinDivergenceRate
 
 	for i := 0; i < len(domains); i++ {
 		for j := i + 1; j < len(domains); j++ {
@@ -38,7 +38,7 @@ func detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models
 			}
 
 			divergenceRate := math.Abs(improving.SlopePerDay) + math.Abs(declining.SlopePerDay)
-			if divergenceRate < minDivergenceRate {
+			if divergenceRate < minRate {
 				continue
 			}
 
@@ -58,7 +58,7 @@ func detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models
 	return divergences
 }
 
-// inferDivergenceMechanism provides clinical hypotheses for specific divergence pairs.
+// inferDivergenceMechanism remains a free function — no config dependency.
 func inferDivergenceMechanism(improving, declining models.MHRIDomain) string {
 	key := string(improving) + "_" + string(declining)
 	mechanisms := map[string]string{

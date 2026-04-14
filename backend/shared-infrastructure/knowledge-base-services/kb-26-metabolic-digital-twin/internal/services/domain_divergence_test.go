@@ -18,7 +18,7 @@ func TestDetectDivergence_GlucoseImproving_CardioDeclining(t *testing.T) {
 		models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: 0.0, Trend: models.TrendStable},
 	}
 
-	divergences := detectDivergences(slopes)
+	divergences := defaultEngine().detectDivergences(slopes)
 	if len(divergences) != 1 {
 		t.Fatalf("expected 1 divergence, got %d", len(divergences))
 	}
@@ -48,7 +48,7 @@ func TestDetectDivergence_NoDivergence_AllStable(t *testing.T) {
 		models.DomainBehavioral: {SlopePerDay: -0.05},
 	}
 
-	divergences := detectDivergences(slopes)
+	divergences := defaultEngine().detectDivergences(slopes)
 	if len(divergences) != 0 {
 		t.Errorf("expected 0 divergences for all-stable, got %d", len(divergences))
 	}
@@ -68,7 +68,7 @@ func TestDetectDivergence_MultiplePairs(t *testing.T) {
 		models.DomainBodyComp:   {Domain: models.DomainBodyComp, SlopePerDay: -0.5, Trend: models.TrendDeclining},
 	}
 
-	divergences := detectDivergences(slopes)
+	divergences := defaultEngine().detectDivergences(slopes)
 	if len(divergences) < 2 {
 		t.Fatalf("expected >= 2 divergences, got %d", len(divergences))
 	}
@@ -123,7 +123,7 @@ func TestDivergence_ClinicalConcernText(t *testing.T) {
 		models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: 0.0, Trend: models.TrendStable},
 	}
 
-	divergences := detectDivergences(slopes)
+	divergences := defaultEngine().detectDivergences(slopes)
 	if len(divergences) != 1 {
 		t.Fatalf("expected 1 divergence, got %d", len(divergences))
 	}
