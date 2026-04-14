@@ -254,3 +254,33 @@ func TestDomainTrajectory_RajeshKumar(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestDomainTrajectory_ClusteredScores_HighConfidence
+// ---------------------------------------------------------------------------
+
+// TestDomainTrajectory_ClusteredScores_HighConfidence is a regression guard
+// for the two-pass ssTot fix in trajectory_engine.go. With glucose scores
+// tightly clustered around 70 but showing a perfect linear trend, R² should
+// be near 1.0 and confidence should be HIGH. The previous single-pass formula
+// would have returned R² near 0 (LOW confidence) due to catastrophic cancellation.
+func TestDomainTrajectory_ClusteredScores_HighConfidence(t *testing.T) {
+	now := time.Now()
+	points := []models.DomainTrajectoryPoint{
+		{Timestamp: now.Add(-13 * 24 * time.Hour), GlucoseScore: 70.0001, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+		{Timestamp: now.Add(-10 * 24 * time.Hour), GlucoseScore: 70.0002, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+		{Timestamp: now.Add(-7 * 24 * time.Hour),  GlucoseScore: 70.0003, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+		{Timestamp: now.Add(-4 * 24 * time.Hour),  GlucoseScore: 70.0004, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+		{Timestamp: now.Add(-1 * 24 * time.Hour),  GlucoseScore: 70.0005, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+	}
+
+	result := defaultEngine().Compute("PAT-stable", points)
+	glucose := result.DomainSlopes[models.DomainGlucose]
+
+	if glucose.R2 < 0.9 {
+		t.Errorf("expected glucose R² >= 0.9 for perfect linear trend, got %.6f (Confidence=%s)", glucose.R2, glucose.Confidence)
+	}
+	if glucose.Confidence != models.ConfidenceHigh {
+		t.Errorf("expected HIGH confidence, got %s (R²=%.6f)", glucose.Confidence, glucose.R2)
+	}
+}
