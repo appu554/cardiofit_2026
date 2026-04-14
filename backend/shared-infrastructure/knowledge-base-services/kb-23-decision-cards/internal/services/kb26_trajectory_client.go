@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	kbmetrics "kb-23-decision-cards/internal/metrics"
 	dtModels "kb-26-metabolic-digital-twin/pkg/trajectory"
 )
 
@@ -18,14 +19,21 @@ type KB26TrajectoryClient struct {
 	baseURL string
 	client  *http.Client
 	log     *zap.Logger
+	metrics *kbmetrics.TrajectoryCardMetrics // nil-safe
 }
 
 // NewKB26TrajectoryClient constructs a trajectory client.
-func NewKB26TrajectoryClient(baseURL string, timeout time.Duration, log *zap.Logger) *KB26TrajectoryClient {
+func NewKB26TrajectoryClient(
+	baseURL string,
+	timeout time.Duration,
+	log *zap.Logger,
+	m *kbmetrics.TrajectoryCardMetrics,
+) *KB26TrajectoryClient {
 	return &KB26TrajectoryClient{
 		baseURL: baseURL,
 		client:  &http.Client{Timeout: timeout},
 		log:     log,
+		metrics: m,
 	}
 }
 
@@ -52,6 +60,13 @@ type insufficientDataMarker struct {
 // Returns (nil, nil) on 404 or when KB-26 reports INSUFFICIENT_DATA — the
 // caller should treat both as "not enough data yet, skip trajectory cards".
 func (c *KB26TrajectoryClient) GetTrajectory(ctx context.Context, patientID string) (*dtModels.DecomposedTrajectory, error) {
+	start := time.Now()
+	defer func() {
+		if c.metrics != nil {
+			c.metrics.KB26FetchDuration.Observe(float64(time.Since(start).Milliseconds()))
+		}
+	}()
+
 	url := fmt.Sprintf("%s/api/v1/kb26/mri/%s/domain-trajectory", c.baseURL, patientID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -63,20 +78,32 @@ func (c *KB26TrajectoryClient) GetTrajectory(ctx context.Context, patientID stri
 	if err != nil {
 		c.log.Warn("KB-26 trajectory endpoint unreachable",
 			zap.String("url", url), zap.Error(err))
+		if c.metrics != nil {
+			c.metrics.KB26FetchTotal.WithLabelValues("error").Inc()
+		}
 		return nil, fmt.Errorf("KB-26 trajectory fetch: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
+		if c.metrics != nil {
+			c.metrics.KB26FetchTotal.WithLabelValues("not_found").Inc()
+		}
 		return nil, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if c.metrics != nil {
+			c.metrics.KB26FetchTotal.WithLabelValues("error").Inc()
+		}
 		return nil, fmt.Errorf("KB-26 trajectory returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var envelope kb26TrajectoryEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		if c.metrics != nil {
+			c.metrics.KB26FetchTotal.WithLabelValues("error").Inc()
+		}
 		return nil, fmt.Errorf("decode KB-26 trajectory response: %w", err)
 	}
 
@@ -84,12 +111,21 @@ func (c *KB26TrajectoryClient) GetTrajectory(ctx context.Context, patientID stri
 	// are fewer than 2 MRI scores and we cannot compute a trajectory.
 	var marker insufficientDataMarker
 	if err := json.Unmarshal(envelope.Data, &marker); err == nil && marker.Status == "INSUFFICIENT_DATA" {
+		if c.metrics != nil {
+			c.metrics.KB26FetchTotal.WithLabelValues("not_found").Inc()
+		}
 		return nil, nil
 	}
 
 	var traj dtModels.DecomposedTrajectory
 	if err := json.Unmarshal(envelope.Data, &traj); err != nil {
+		if c.metrics != nil {
+			c.metrics.KB26FetchTotal.WithLabelValues("error").Inc()
+		}
 		return nil, fmt.Errorf("unmarshal KB-26 DecomposedTrajectory: %w", err)
+	}
+	if c.metrics != nil {
+		c.metrics.KB26FetchTotal.WithLabelValues("ok").Inc()
 	}
 	return &traj, nil
 }
