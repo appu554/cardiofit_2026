@@ -102,6 +102,13 @@ func (s *Server) setupRoutes() {
 			// slope + active-med data in one round trip.
 			patient.GET("/:id/renal-status", s.getRenalStatus)
 
+			// Phase 7 P7-D: intervention timeline for KB-23's inertia
+			// input assembler. Returns the latest clinical action per
+			// therapeutic-inertia domain (GLYCAEMIC/HEMODYNAMIC/RENAL/
+			// LIPID) so the detector can compute grace-period windows
+			// against real medication events rather than hardcoded nulls.
+			patient.GET("/:id/intervention-timeline", s.getInterventionTimeline)
+
 			// Signals — patient-reported signal ingestion (S4, S15, S16, S18-S22)
 			signals := patient.Group("/:id/signals")
 			{

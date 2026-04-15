@@ -1,0 +1,97 @@
+# KB-23 Decision Card Template: Therapeutic Inertia Detected
+# Triggered when: InertiaOrchestrator.Evaluate runs DetectInertia for a
+#   patient and finds at least one domain with a detected verdict AND
+#   the stability dampening check does not suppress it. Detection
+#   source is the weekly batch (Sundays 03:00 UTC) in production.
+# Purpose: Surface that a clinical domain is uncontrolled AND the
+#   grace period for intervention has elapsed, so the clinician can
+#   escalate therapy at the next visit rather than letting drift persist.
+# Version: 1.0.0
+# Phase: 7 P7-D — Inertia Weekly Batch Activation
+
+template_id: "dc-inertia-detected-v1"
+node_id: "CROSS_NODE"
+differential_id: "INERTIA_DETECTED"
+version: "1.0.0"
+clinical_reviewer: "dr.endocrinology.lead"
+mcu_gate_default: "MODIFY"
+
+card_source: "CLINICAL_SIGNAL"
+
+confidence_thresholds:
+  firm_posterior: 0.0
+  firm_medication_change: 0.0
+  probable_posterior: 0.0
+  possible_posterior: 0.0
+
+recommendations:
+  - rec_type: "MEDICATION_MODIFY"
+    urgency: "URGENT"
+    target: "domain_medication"
+    action_text_en: |
+      ESCALATE therapy in the flagged domain. The patient has been
+      uncontrolled beyond the guideline grace period without an
+      intervention. Options: (1) uptitrate the existing agent to the
+      next dose band, (2) add a class from the guideline-directed
+      pathway, (3) switch to a higher-efficacy agent if the current
+      one is near its ceiling. Document the rationale for the chosen
+      path and schedule a follow-up within 4 weeks to confirm response.
+    action_text_hi: |
+      चिह्नित क्षेत्र में चिकित्सा तीव्र करें। रोगी दिशानिर्देश अनुग्रह
+      अवधि से अधिक समय तक अनियंत्रित है।
+    rationale_en: |
+      Therapeutic inertia — failure to intensify treatment when a
+      clinical target is unmet past the guideline grace period — is
+      the single largest modifiable driver of preventable
+      cardiovascular and renal outcomes in CKM cohorts. Khunti et al.
+      show a ~6-year average delay from first uncontrolled reading to
+      regimen change. Closing this loop at the 3-month mark restores
+      ~80% of the outcome benefit.
+    guideline_ref: "Khunti et al. Diabetes Care 2013; ADA SOC 2025 §9"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 1
+
+  - rec_type: "INVESTIGATION"
+    urgency: "ROUTINE"
+    target: "clinician"
+    action_text_en: |
+      Before escalating, verify the uncontrolled reading is sustained,
+      not a one-off. Order a repeat of the gating measurement (HbA1c
+      for glycaemic, home BP week for hemodynamic, eGFR for renal) and
+      confirm the patient's adherence pattern from KB-21 signals if
+      available. Suppressed intensification is acceptable only when
+      the repeat confirms control or when a non-adherence cause is
+      the primary driver.
+    action_text_hi: |
+      तीव्र करने से पहले पुष्टि करें कि अनियंत्रित रीडिंग स्थिर है।
+    rationale_en: |
+      A single reading can reflect measurement error, illness, or a
+      brief non-adherence window. Escalation based on a non-sustained
+      reading causes overtreatment.
+    guideline_ref: "ADA SOC 2025 §9"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 2
+
+fragments:
+  - fragment_type: "CLINICIAN"
+    text_en: |
+      THERAPEUTIC INERTIA ({{.Domain}}): {{.Severity}} severity,
+      {{.InertiaDurationDays}} days of unaddressed target gap, pattern
+      {{.Pattern}}. Escalate per guideline; repeat the gating measurement
+      to confirm before the next intensification.
+    text_hi: |
+      चिकित्सीय जड़ता ({{.Domain}}): {{.Severity}} गंभीरता,
+      {{.InertiaDurationDays}} दिन।
+    version: "1.0.0"
+  - fragment_type: "PATIENT"
+    text_en: |
+      One of your health targets has been off-track for a while and
+      your care team thinks it's time to adjust your treatment. You
+      may be asked for a follow-up test to confirm the trend and
+      then for a medication change at your next visit.
+    text_hi: |
+      आपका एक स्वास्थ्य लक्ष्य कुछ समय से प्राप्त नहीं हो रहा है।
+      आपकी देखभाल टीम आपके उपचार में समायोजन करना उचित समझती है।
+    version: "1.0.0"

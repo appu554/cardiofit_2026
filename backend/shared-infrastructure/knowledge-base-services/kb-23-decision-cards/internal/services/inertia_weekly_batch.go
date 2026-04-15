@@ -16,6 +16,30 @@ type InertiaActivePatientLister interface {
 	ListInertiaActivePatientIDs(ctx context.Context) ([]string, error)
 }
 
+// renalListerAsInertia adapts a RenalActivePatientLister (which exposes
+// ListRenalActivePatientIDs) to the InertiaActivePatientLister interface
+// (which expects ListInertiaActivePatientIDs). Phase 7 P7-D: the initial
+// inertia population reuses the renal-active lister since patients on
+// renal-sensitive medications are a clinically-meaningful superset of
+// the patients where therapeutic inertia actually matters. A broader
+// "all-active-CKM-patients" lister is a future refinement.
+type renalListerAsInertia struct {
+	inner RenalActivePatientLister
+}
+
+// ListInertiaActivePatientIDs delegates to the wrapped RenalActivePatientLister.
+func (a renalListerAsInertia) ListInertiaActivePatientIDs(ctx context.Context) ([]string, error) {
+	return a.inner.ListRenalActivePatientIDs(ctx)
+}
+
+// NewRenalListerAsInertiaLister wraps a RenalActivePatientLister so it
+// satisfies the InertiaActivePatientLister interface. Used by main.go
+// to feed the P7-D inertia batch the same patient population as the
+// P7-C renal anticipatory batch.
+func NewRenalListerAsInertiaLister(inner RenalActivePatientLister) InertiaActivePatientLister {
+	return renalListerAsInertia{inner: inner}
+}
+
 // InertiaInputAssembler is the narrow dependency the batch needs to
 // construct an InertiaDetectorInput for a given patient. Phase 6
 // follow-up wires this to KB-20 (intervention timeline + active

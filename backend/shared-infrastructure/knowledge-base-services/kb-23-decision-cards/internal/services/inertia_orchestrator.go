@@ -2,46 +2,108 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"kb-23-decision-cards/internal/database"
+	"kb-23-decision-cards/internal/metrics"
 	"kb-23-decision-cards/internal/models"
 )
 
-// InertiaOrchestrator is the thin coordination layer that wraps DetectInertia
-// so a batch job or an HTTP handler can evaluate a patient's inertia without
-// re-deriving the call sequence. Phase 6 P6-1.
+// Phase 7 P7-D: template IDs for the inertia cards.
+const (
+	inertiaDetectedTemplateID           = "dc-inertia-detected-v1"
+	dualDomainInertiaDetectedTemplateID = "dc-dual-domain-inertia-detected-v1"
+)
+
+// InertiaOrchestrator is the coordination layer that wraps DetectInertia,
+// applies stability dampening against the previous week's verdict,
+// persists the current verdict to history, and writes DecisionCards for
+// every detected inertia pattern.
 //
-// The orchestrator is intentionally stateless — it doesn't fetch data from
-// KB-20 or KB-26; callers assemble the InertiaDetectorInput and pass it in.
-// This keeps the orchestrator testable with synthetic inputs and lets
-// different callers assemble the input their own way (batch iterating over
-// a patient list, HTTP handler for single-patient eval, test harness, etc.).
+// Phase 6 P6-1 shipped this as a stateless pass-through that just ran
+// DetectInertia and logged. Phase 7 P7-D now wires:
 //
-// Scope note — production data assembly (fetching glycaemic/hemodynamic/renal
-// target status from KB-26 and intervention timeline from KB-20) is a Phase 6
-// follow-up. The orchestrator + batch structure is the abstraction proof;
-// when the upstream data sources are wired, a new InertiaInputAssembler is
-// added that calls this orchestrator per patient in the batch Run method.
+//   - InertiaVerdictHistory for previous-week lookup + dampening
+//   - TemplateLoader + database for card persistence
+//   - MCUGateCache + KB19Publisher for downstream gate propagation
+//   - metrics.Collector for inertia counters
 type InertiaOrchestrator struct {
-	log *zap.Logger
+	history        InertiaVerdictHistory
+	templateLoader *TemplateLoader
+	db             *database.Database
+	gateCache      *MCUGateCache
+	kb19           *KB19Publisher
+	metrics        *metrics.Collector
+	log            *zap.Logger
 }
 
-// NewInertiaOrchestrator constructs a stateless orchestrator.
-func NewInertiaOrchestrator(log *zap.Logger) *InertiaOrchestrator {
+// NewInertiaOrchestrator constructs the orchestrator. All dependencies
+// are optional for degraded / test modes:
+//
+//   - history nil → dampening disabled, every raw verdict is published
+//   - templateLoader / db nil → card persistence disabled (log-only mode)
+//   - gateCache / kb19 / metrics nil → corresponding side effects skipped
+//
+// Production main.go should wire everything.
+func NewInertiaOrchestrator(
+	history InertiaVerdictHistory,
+	templateLoader *TemplateLoader,
+	db *database.Database,
+	gateCache *MCUGateCache,
+	kb19 *KB19Publisher,
+	m *metrics.Collector,
+	log *zap.Logger,
+) *InertiaOrchestrator {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &InertiaOrchestrator{log: log}
+	return &InertiaOrchestrator{
+		history:        history,
+		templateLoader: templateLoader,
+		db:             db,
+		gateCache:      gateCache,
+		kb19:           kb19,
+		metrics:        m,
+		log:            log,
+	}
 }
 
-// Evaluate runs DetectInertia on the given input and logs the verdict. Phase 6
-// follow-up will extend this to also persist verdict history and publish
-// KB-19 events; for now, the orchestrator is a pure pass-through with
-// structured logging so downstream observability has visibility into
-// per-patient evaluation outcomes.
+// Evaluate runs DetectInertia, applies stability dampening, persists
+// verdicts to history, and writes one DecisionCard per detected verdict
+// (plus a DUAL_DOMAIN_INERTIA_DETECTED card when two or more domains
+// fire in the same week).
+//
+// Errors from card persistence are logged but do not abort the
+// evaluation — the verdict history write still happens so the next
+// week's dampening check sees the current verdict.
 func (o *InertiaOrchestrator) Evaluate(ctx context.Context, input InertiaDetectorInput) models.PatientInertiaReport {
 	report := DetectInertia(input)
+
+	// Stability dampening: if the raw verdict differs from the previous
+	// week's persisted verdict AND the patient's current target status
+	// is unchanged, hold the previous verdict. This suppresses one-week
+	// flip-flop patterns where the patient oscillates between "just
+	// over target" and "just under target" without any clinical change.
+	if o.history != nil {
+		if prev, _, ok := o.history.FetchLatest(input.PatientID); ok {
+			if shouldDampen(prev, report, input) {
+				o.log.Debug("inertia: dampening to previous verdict",
+					zap.String("patient_id", input.PatientID))
+				report = prev
+			}
+		}
+		weekStart := startOfWeek(time.Now())
+		if err := o.history.SaveVerdict(input.PatientID, weekStart, report); err != nil {
+			o.log.Warn("inertia: failed to save verdict history",
+				zap.String("patient_id", input.PatientID),
+				zap.Error(err))
+		}
+	}
 
 	if len(report.Verdicts) == 0 {
 		o.log.Debug("inertia: no verdicts",
@@ -49,18 +111,293 @@ func (o *InertiaOrchestrator) Evaluate(ctx context.Context, input InertiaDetecto
 		return report
 	}
 
-	domains := make([]string, 0, len(report.Verdicts))
+	// Persist one DecisionCard per detected verdict, plus one
+	// dual-domain card when two or more domains fire.
+	detectedCount := 0
 	for _, v := range report.Verdicts {
-		if v.Detected {
-			domains = append(domains, string(v.Domain))
+		if !v.Detected {
+			continue
+		}
+		detectedCount++
+		if err := o.persistInertiaCard(input.PatientID, v); err != nil {
+			o.log.Error("inertia: failed to persist card",
+				zap.String("patient_id", input.PatientID),
+				zap.String("domain", string(v.Domain)),
+				zap.Error(err))
+		} else if o.metrics != nil {
+			o.metrics.InertiaVerdictsDetected.WithLabelValues(string(v.Domain), string(v.Severity)).Inc()
+		}
+	}
+
+	if detectedCount >= 2 {
+		if err := o.persistDualDomainCard(input.PatientID, report); err != nil {
+			o.log.Error("inertia: failed to persist dual-domain card",
+				zap.String("patient_id", input.PatientID),
+				zap.Error(err))
+		} else if o.metrics != nil {
+			o.metrics.DualDomainInertiaDetected.Inc()
 		}
 	}
 
 	o.log.Info("inertia: verdicts detected",
 		zap.String("patient_id", input.PatientID),
-		zap.Int("verdict_count", len(report.Verdicts)),
-		zap.Strings("domains", domains),
-		zap.String("note", "event publication + verdict history pending Phase 6 follow-up"),
+		zap.Int("verdict_count", detectedCount),
+		zap.Bool("dual_domain", detectedCount >= 2),
 	)
 	return report
+}
+
+// shouldDampen returns true when the current raw verdict differs from
+// the previous week's persisted verdict AND the patient's underlying
+// target status has not changed. This is the one-week flip-flop guard.
+//
+// The check is intentionally conservative: if the previous verdict had
+// zero detected domains and the current verdict has ≥1 detected, we do
+// NOT dampen — a new detection is always honoured. Dampening only
+// suppresses oscillation between two previously-seen states.
+func shouldDampen(prev, current models.PatientInertiaReport, input InertiaDetectorInput) bool {
+	prevDetected := countDetected(prev)
+	currDetected := countDetected(current)
+
+	// Never suppress a new detection where the previous week had none.
+	if prevDetected == 0 && currDetected > 0 {
+		return false
+	}
+	// Never suppress a clearance either — if the previous week detected
+	// and the current week does not, clearance is honoured.
+	if prevDetected > 0 && currDetected == 0 {
+		return false
+	}
+	// Both weeks have the same count — check if the detected domain set
+	// flipped. If identical domains fired, no dampening needed.
+	if currDetected == prevDetected && sameDetectedDomains(prev, current) {
+		return false
+	}
+	// Different detected domain sets with same cardinality → flip-flop.
+	// Dampen iff the patient's target status hasn't visibly changed
+	// (simple proxy: none of the DaysUncontrolled counters moved
+	// meaningfully since last week).
+	if input.Glycaemic != nil && input.Glycaemic.DaysUncontrolled > 0 {
+		// Any non-trivial uncontrolled window → allow the new verdict.
+		return false
+	}
+	return true
+}
+
+// countDetected returns the number of verdicts in a report with Detected=true.
+func countDetected(r models.PatientInertiaReport) int {
+	n := 0
+	for _, v := range r.Verdicts {
+		if v.Detected {
+			n++
+		}
+	}
+	return n
+}
+
+// sameDetectedDomains returns true if the two reports have the same
+// set of detected domains (ignoring severity + ordering).
+func sameDetectedDomains(a, b models.PatientInertiaReport) bool {
+	set := map[models.InertiaDomain]bool{}
+	for _, v := range a.Verdicts {
+		if v.Detected {
+			set[v.Domain] = true
+		}
+	}
+	for _, v := range b.Verdicts {
+		if v.Detected {
+			if !set[v.Domain] {
+				return false
+			}
+			delete(set, v.Domain)
+		}
+	}
+	return len(set) == 0
+}
+
+// startOfWeek returns the Monday 00:00 UTC of the week containing t.
+// Used as the week-key for verdict history entries.
+func startOfWeek(t time.Time) time.Time {
+	weekday := int(t.UTC().Weekday())
+	// Go's Weekday: Sunday=0, Monday=1, … Saturday=6. Shift so Monday=0.
+	offset := (weekday + 6) % 7
+	monday := t.UTC().AddDate(0, 0, -offset)
+	return time.Date(monday.Year(), monday.Month(), monday.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// persistInertiaCard builds and persists a single INERTIA_DETECTED
+// DecisionCard for the given verdict.
+func (o *InertiaOrchestrator) persistInertiaCard(patientID string, verdict models.InertiaVerdict) error {
+	if o.templateLoader == nil || o.db == nil {
+		return nil
+	}
+	tmpl, ok := o.templateLoader.Get(inertiaDetectedTemplateID)
+	if !ok {
+		return fmt.Errorf("template %s not loaded", inertiaDetectedTemplateID)
+	}
+	pid, err := uuid.Parse(patientID)
+	if err != nil {
+		return fmt.Errorf("invalid patient_id: %w", err)
+	}
+
+	clinician, patientEn, patientHi := renderInertiaSummaries(tmpl, verdict)
+	notes := clinician
+
+	card := &models.DecisionCard{
+		CardID:                   uuid.New(),
+		PatientID:                pid,
+		TemplateID:               tmpl.TemplateID,
+		NodeID:                   tmpl.NodeID,
+		PrimaryDifferentialID:    "INERTIA_DETECTED_" + string(verdict.Domain),
+		DiagnosticConfidenceTier: models.TierProbable,
+		MCUGate:                  models.GateModify,
+		MCUGateRationale:         clinician,
+		DoseAdjustmentNotes:      &notes,
+		ObservationReliability:   models.ReliabilityHigh,
+		SafetyTier:               severityToSafetyTier(verdict.Severity),
+		CardSource:               models.SourceClinicalSignal,
+		Status:                   models.StatusActive,
+		ClinicianSummary:         clinician,
+		PatientSummaryEn:         patientEn,
+		PatientSummaryHi:         patientHi,
+		CreatedAt:                time.Now(),
+		UpdatedAt:                time.Now(),
+	}
+
+	if err := o.db.DB.Create(card).Error; err != nil {
+		return fmt.Errorf("save inertia card: %w", err)
+	}
+	if o.gateCache != nil {
+		_ = o.gateCache.WriteGate(card)
+	}
+	if o.kb19 != nil {
+		go o.kb19.PublishGateChanged(card)
+	}
+	return nil
+}
+
+// persistDualDomainCard builds and persists a DUAL_DOMAIN_INERTIA_DETECTED
+// card when the patient has ≥2 detected domains in one evaluation.
+func (o *InertiaOrchestrator) persistDualDomainCard(patientID string, report models.PatientInertiaReport) error {
+	if o.templateLoader == nil || o.db == nil {
+		return nil
+	}
+	tmpl, ok := o.templateLoader.Get(dualDomainInertiaDetectedTemplateID)
+	if !ok {
+		return fmt.Errorf("template %s not loaded", dualDomainInertiaDetectedTemplateID)
+	}
+	pid, err := uuid.Parse(patientID)
+	if err != nil {
+		return fmt.Errorf("invalid patient_id: %w", err)
+	}
+
+	detected := make([]string, 0, len(report.Verdicts))
+	for _, v := range report.Verdicts {
+		if v.Detected {
+			detected = append(detected, string(v.Domain))
+		}
+	}
+	clinician, patientEn, patientHi := renderDualDomainSummaries(tmpl, detected)
+	notes := clinician
+
+	card := &models.DecisionCard{
+		CardID:                   uuid.New(),
+		PatientID:                pid,
+		TemplateID:               tmpl.TemplateID,
+		NodeID:                   tmpl.NodeID,
+		PrimaryDifferentialID:    "DUAL_DOMAIN_INERTIA_DETECTED",
+		DiagnosticConfidenceTier: models.TierFirm,
+		MCUGate:                  models.GateModify,
+		MCUGateRationale:         clinician,
+		DoseAdjustmentNotes:      &notes,
+		ObservationReliability:   models.ReliabilityHigh,
+		SafetyTier:               models.SafetyUrgent,
+		CardSource:               models.SourceClinicalSignal,
+		Status:                   models.StatusActive,
+		ClinicianSummary:         clinician,
+		PatientSummaryEn:         patientEn,
+		PatientSummaryHi:         patientHi,
+		CreatedAt:                time.Now(),
+		UpdatedAt:                time.Now(),
+	}
+
+	if err := o.db.DB.Create(card).Error; err != nil {
+		return fmt.Errorf("save dual-domain inertia card: %w", err)
+	}
+	if o.gateCache != nil {
+		_ = o.gateCache.WriteGate(card)
+	}
+	if o.kb19 != nil {
+		go o.kb19.PublishGateChanged(card)
+	}
+	return nil
+}
+
+// renderInertiaSummaries substitutes verdict placeholders into the
+// inertia-detected template.
+func renderInertiaSummaries(tmpl *models.CardTemplate, verdict models.InertiaVerdict) (clinician, patientEn, patientHi string) {
+	data := struct {
+		Domain              string
+		Severity            string
+		InertiaDurationDays string
+		Pattern             string
+	}{
+		Domain:              string(verdict.Domain),
+		Severity:            string(verdict.Severity),
+		InertiaDurationDays: fmt.Sprintf("%d", verdict.InertiaDurationDays),
+		Pattern:             string(verdict.Pattern),
+	}
+	for _, frag := range tmpl.Fragments {
+		switch frag.FragmentType {
+		case models.FragClinician:
+			clinician = executeRenalTemplate(frag.TextEn, data)
+		case models.FragPatient:
+			patientEn = executeRenalTemplate(frag.TextEn, data)
+			patientHi = executeRenalTemplate(frag.TextHi, data)
+		}
+	}
+	if clinician == "" {
+		clinician = fmt.Sprintf("Therapeutic inertia detected: %s domain, %s severity, %d days uncontrolled",
+			verdict.Domain, verdict.Severity, verdict.InertiaDurationDays)
+	}
+	return clinician, patientEn, patientHi
+}
+
+// renderDualDomainSummaries substitutes the detected-domain list into
+// the dual-domain template.
+func renderDualDomainSummaries(tmpl *models.CardTemplate, detectedDomains []string) (clinician, patientEn, patientHi string) {
+	data := struct {
+		DetectedDomains string
+		DomainCount     string
+	}{
+		DetectedDomains: strings.Join(detectedDomains, ", "),
+		DomainCount:     fmt.Sprintf("%d", len(detectedDomains)),
+	}
+	for _, frag := range tmpl.Fragments {
+		switch frag.FragmentType {
+		case models.FragClinician:
+			clinician = executeRenalTemplate(frag.TextEn, data)
+		case models.FragPatient:
+			patientEn = executeRenalTemplate(frag.TextEn, data)
+			patientHi = executeRenalTemplate(frag.TextHi, data)
+		}
+	}
+	if clinician == "" {
+		clinician = fmt.Sprintf("Dual-domain therapeutic inertia: %s — composite risk warrants combined escalation review",
+			strings.Join(detectedDomains, ", "))
+	}
+	return clinician, patientEn, patientHi
+}
+
+// severityToSafetyTier maps the inertia detector's severity bracket to
+// KB-23's SafetyTier enum.
+func severityToSafetyTier(severity models.InertiaSeverity) models.SafetyTier {
+	switch severity {
+	case models.SeverityCritical, models.SeveritySevere:
+		return models.SafetyUrgent
+	case models.SeverityModerate:
+		return models.SafetyRoutine
+	default:
+		return models.SafetyRoutine
+	}
 }

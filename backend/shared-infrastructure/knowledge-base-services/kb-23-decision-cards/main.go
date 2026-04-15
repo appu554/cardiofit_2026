@@ -171,13 +171,40 @@ func main() {
 	}
 	batchScheduler.Register(renalAnticipatoryJob)
 
-	// Phase 6 P6-1: InertiaWeeklyBatch registered as the second KB-23
-	// batch consumer. Proves the Phase 6 P6-5 scheduler can host two
-	// jobs with different cadences (monthly + weekly). Heartbeat mode
-	// (assembler + orchestrator nil) — per-patient assembly lands in
-	// a Phase 6 follow-up when KB-20 exposes intervention timeline
-	// and KB-26 exposes target status over HTTP.
-	inertiaWeeklyJob := services.NewInertiaWeeklyBatch(nil, nil, nil, logger)
+	// Phase 7 P7-D: InertiaWeeklyBatch wired with real orchestrator +
+	// assembler + verdict history. KB-20 intervention-timeline endpoint
+	// and KB-26 target-status endpoint are now live, so the assembler
+	// can fetch everything it needs. In-memory verdict history ships
+	// in this phase; a PostgreSQL-backed store is a Phase 8 follow-up.
+	//
+	// The active-patient lister reuses the same renal-active wrapper
+	// as P7-C: patients on at least one renal-sensitive medication
+	// are the initial inertia population. A broader
+	// "clinically-active" lister is a future refinement.
+	inertiaHistory := services.NewInMemoryInertiaHistory()
+	kb26Client := services.NewKB26Client(cfg, server.MetricsCollector(), logger)
+	inertiaAssembler := services.NewInertiaInputAssembler(
+		server.KB20Client(),
+		server.KB20Client(),
+		kb26Client,
+		logger,
+	)
+	inertiaOrchestrator := services.NewInertiaOrchestrator(
+		inertiaHistory,
+		server.TemplateLoader(),
+		server.Database(),
+		server.MCUGateCache(),
+		server.KB19Publisher(),
+		server.MetricsCollector(),
+		logger,
+	)
+	inertiaActiveLister := services.NewKB20RenalActivePatientLister(server.KB20Client())
+	inertiaWeeklyJob := services.NewInertiaWeeklyBatch(
+		services.NewRenalListerAsInertiaLister(inertiaActiveLister),
+		inertiaAssembler,
+		inertiaOrchestrator,
+		logger,
+	)
 	batchScheduler.Register(inertiaWeeklyJob)
 
 	batchCtx, batchCancel := context.WithCancel(context.Background())

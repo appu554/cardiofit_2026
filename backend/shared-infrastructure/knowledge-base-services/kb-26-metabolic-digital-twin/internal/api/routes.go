@@ -48,6 +48,12 @@ func (s *Server) setupRoutes() {
 		// BP context classification (masked HTN / white-coat / true HTN)
 		v1.POST("/bp-context/:patientId", s.classifyBPContext)
 
+		// Phase 7 P7-D: per-domain target status for KB-23's inertia
+		// input assembler. Stateless compute — caller supplies HbA1c /
+		// SBP / eGFR in the POST body, KB-26 returns DomainTargetStatusResult
+		// for GLYCAEMIC, HEMODYNAMIC, and RENAL domains.
+		v1.POST("/target-status/:patientId", s.getTargetStatus)
+
 		// PREVENT (10-year CVD risk)
 		v1.GET("/prevent/:patientId", s.getPREVENT)
 

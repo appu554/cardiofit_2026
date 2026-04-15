@@ -78,7 +78,7 @@ func TestInertiaWeeklyBatch_Run_HeartbeatMode(t *testing.T) {
 func TestInertiaWeeklyBatch_Run_FullMode_EvaluatesEveryPatient(t *testing.T) {
 	repo := &stubInertiaActivePatientLister{ids: []string{"p1", "p2", "p3"}}
 	assembler := &stubInertiaInputAssembler{}
-	orch := NewInertiaOrchestrator(zap.NewNop())
+	orch := NewInertiaOrchestrator(nil, nil, nil, nil, nil, nil, zap.NewNop())
 	job := NewInertiaWeeklyBatch(repo, assembler, orch, zap.NewNop())
 
 	if err := job.Run(context.Background()); err != nil {
@@ -94,7 +94,7 @@ func TestInertiaWeeklyBatch_Run_AssemblyErrorIsPerPatientIsolated(t *testing.T) 
 	// patients should still be evaluated.
 	repo := &stubInertiaActivePatientLister{ids: []string{"p1", "p2", "p3"}}
 	assembler := &stubInertiaInputAssembler{err: errors.New("simulated assembly failure")}
-	orch := NewInertiaOrchestrator(zap.NewNop())
+	orch := NewInertiaOrchestrator(nil, nil, nil, nil, nil, nil, zap.NewNop())
 	job := NewInertiaWeeklyBatch(repo, assembler, orch, zap.NewNop())
 
 	if err := job.Run(context.Background()); err != nil {
@@ -117,7 +117,7 @@ func TestInertiaWeeklyBatch_Name(t *testing.T) {
 }
 
 func TestInertiaOrchestrator_Evaluate_NoInputProducesEmptyReport(t *testing.T) {
-	orch := NewInertiaOrchestrator(zap.NewNop())
+	orch := NewInertiaOrchestrator(nil, nil, nil, nil, nil, nil, zap.NewNop())
 	report := orch.Evaluate(context.Background(), InertiaDetectorInput{PatientID: "p1"})
 	if report.PatientID != "p1" {
 		t.Errorf("expected report.PatientID=p1, got %q", report.PatientID)

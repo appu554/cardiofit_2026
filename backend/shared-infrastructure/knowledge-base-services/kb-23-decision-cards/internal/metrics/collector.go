@@ -70,6 +70,16 @@ type Collector struct {
 	RenalAnticipatoryAlerts       *prometheus.CounterVec
 	StaleEGFRDetected             *prometheus.CounterVec
 	RenalAnticipatoryBatchDuration prometheus.Histogram
+
+	// Phase 7 P7-D: Inertia weekly batch outcomes.
+	// InertiaVerdictsDetected is labelled by domain (GLYCAEMIC/HEMODYNAMIC/
+	// RENAL) and severity (MILD/MODERATE/SEVERE/CRITICAL).
+	// DualDomainInertiaDetected is a simple counter since dual-domain
+	// is itself the composite signal — a label would be redundant.
+	// InertiaWeeklyBatchDuration records end-to-end batch run time.
+	InertiaVerdictsDetected     *prometheus.CounterVec
+	DualDomainInertiaDetected   prometheus.Counter
+	InertiaWeeklyBatchDuration  prometheus.Histogram
 }
 
 func NewCollector() *Collector {
@@ -215,6 +225,22 @@ func NewCollector() *Collector {
 		RenalAnticipatoryBatchDuration: promauto.NewHistogram(prometheus.HistogramOpts{
 			Name:    "kb23_renal_anticipatory_batch_duration_seconds",
 			Help:    "End-to-end duration of the monthly renal anticipatory batch run",
+			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 3600},
+		}),
+
+		InertiaVerdictsDetected: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_inertia_verdicts_detected_total",
+			Help: "Therapeutic inertia verdicts persisted as cards, by domain and severity (Phase 7 P7-D)",
+		}, []string{"domain", "severity"}),
+
+		DualDomainInertiaDetected: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb23_dual_domain_inertia_detected_total",
+			Help: "Dual-domain inertia cards persisted (composite signal, Phase 7 P7-D)",
+		}),
+
+		InertiaWeeklyBatchDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb23_inertia_weekly_batch_duration_seconds",
+			Help:    "End-to-end duration of the weekly inertia batch run",
 			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 3600},
 		}),
 	}

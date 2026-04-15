@@ -149,6 +149,72 @@ func (c *KB20Client) FetchRenalStatus(ctx context.Context, patientID string) (*K
 	return &env.Data, nil
 }
 
+// KB20InterventionTimeline mirrors the KB-20 InterventionTimelineResult
+// response payload. Phase 7 P7-D.
+type KB20InterventionTimeline struct {
+	PatientID                string                          `json:"PatientID"`
+	ByDomain                 map[string]KB20LatestDomainAction `json:"ByDomain"`
+	AnyChangeInLast12Weeks   bool                            `json:"AnyChangeInLast12Weeks"`
+	TotalActiveInterventions int                             `json:"TotalActiveInterventions"`
+}
+
+// KB20LatestDomainAction mirrors the per-domain latest action returned
+// by KB-20's intervention timeline service.
+type KB20LatestDomainAction struct {
+	InterventionID   string    `json:"InterventionID"`
+	InterventionType string    `json:"InterventionType"`
+	DrugClass        string    `json:"DrugClass"`
+	DrugName         string    `json:"DrugName"`
+	DoseMg           float64   `json:"DoseMg"`
+	ActionDate       time.Time `json:"ActionDate"`
+	DaysSince        int       `json:"DaysSince"`
+}
+
+// kb20EnvelopeInterventionTimeline wraps the KB-20 intervention timeline
+// response under the standard success envelope.
+type kb20EnvelopeInterventionTimeline struct {
+	Success bool                     `json:"success"`
+	Data    KB20InterventionTimeline `json:"data"`
+}
+
+// FetchInterventionTimeline calls KB-20 GET /api/v1/patient/:id/intervention-timeline
+// and returns the latest clinical action per therapeutic-inertia domain.
+// Used by P7-D's InertiaInputAssembler to populate LastIntervention on
+// each DomainInertiaInput. Phase 7 P7-D.
+func (c *KB20Client) FetchInterventionTimeline(ctx context.Context, patientID string) (*KB20InterventionTimeline, error) {
+	start := time.Now()
+	url := fmt.Sprintf("%s/api/v1/patient/%s/intervention-timeline", c.cfg.KB20URL, patientID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create KB-20 intervention-timeline request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.client.Do(req)
+	if c.metrics != nil {
+		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("KB-20 intervention-timeline fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		c.log.Warn("KB-20 intervention-timeline returned non-200",
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(body)))
+		return nil, fmt.Errorf("KB-20 intervention-timeline returned status %d", resp.StatusCode)
+	}
+
+	var env kb20EnvelopeInterventionTimeline
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return nil, fmt.Errorf("decode KB-20 intervention-timeline response: %w", err)
+	}
+	return &env.Data, nil
+}
+
 // FetchRenalActivePatientIDs calls KB-20 GET /api/v1/patients/renal-active
 // and returns the patient IDs of everyone on at least one renal-sensitive
 // medication. Phase 7 P7-C: the population the monthly anticipatory batch
