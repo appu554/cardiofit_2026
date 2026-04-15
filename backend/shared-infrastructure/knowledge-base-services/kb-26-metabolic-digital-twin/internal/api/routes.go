@@ -54,6 +54,11 @@ func (s *Server) setupRoutes() {
 		// for GLYCAEMIC, HEMODYNAMIC, and RENAL domains.
 		v1.POST("/target-status/:patientId", s.getTargetStatus)
 
+		// Phase 7 P7-E Milestone 2: latest CGM period report for a
+		// patient. KB-23's inertia assembler uses this to populate the
+		// CGM_TIR branch of the glycaemic domain inertia input.
+		v1.GET("/cgm-latest/:patientId", s.getCGMLatest)
+
 		// PREVENT (10-year CVD risk)
 		v1.GET("/prevent/:patientId", s.getPREVENT)
 

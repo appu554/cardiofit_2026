@@ -183,9 +183,13 @@ func main() {
 	// "clinically-active" lister is a future refinement.
 	inertiaHistory := services.NewInMemoryInertiaHistory()
 	kb26Client := services.NewKB26Client(cfg, server.MetricsCollector(), logger)
+	// Phase 7 P7-E Milestone 2: kb26Client now doubles as the
+	// InertiaCGMLatestFetcher — the assembler prefers CGM TIR over
+	// HbA1c when a recent CGM period report is available.
 	inertiaAssembler := services.NewInertiaInputAssembler(
 		server.KB20Client(),
 		server.KB20Client(),
+		kb26Client,
 		kb26Client,
 		logger,
 	)

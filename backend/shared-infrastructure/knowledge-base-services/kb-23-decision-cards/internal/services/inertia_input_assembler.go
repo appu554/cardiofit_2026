@@ -31,18 +31,34 @@ type InertiaTargetStatusFetcher interface {
 	FetchTargetStatus(ctx context.Context, patientID string, req KB26TargetStatusRequest) (*KB26TargetStatusResponse, error)
 }
 
+// InertiaCGMLatestFetcher is the narrow interface the assembler needs
+// to pull the latest CGM period report from KB-26. Phase 7 P7-E
+// Milestone 2: when a recent report is available, its TIR replaces
+// the HbA1c-based glycaemic target status with a HIGH-confidence
+// CGM_TIR branch reading.
+type InertiaCGMLatestFetcher interface {
+	FetchLatestCGMReport(ctx context.Context, patientID string) (*KB26CGMLatestReport, error)
+}
+
 // ConcreteInertiaInputAssembler fetches KB-20 + KB-26 data and assembles
-// an InertiaDetectorInput for the given patient. Phase 7 P7-D.
+// an InertiaDetectorInput for the given patient. Phase 7 P7-D + P7-E.
 //
 // The assembler is deliberately not an interface on its own — it is the
 // concrete implementation of the InertiaInputAssembler interface that
 // InertiaWeeklyBatch already consumes. Tests can construct it with stub
 // fetchers; production wires it from main.go with real KB-20/KB-26 clients.
+//
+// Phase 7 P7-E Milestone 2: cgmLatestFetcher is optional — when a
+// patient has CGM period reports available, TIR is preferred over
+// HbA1c for the glycaemic inertia branch (HIGH vs MODERATE confidence).
+// When nil or the fetch returns a nil report, the assembler falls back
+// to the HbA1c-based target status path unchanged.
 type ConcreteInertiaInputAssembler struct {
-	timelineFetcher InertiaInterventionTimelineFetcher
-	contextFetcher  InertiaPatientContextFetcher
-	targetFetcher   InertiaTargetStatusFetcher
-	log             *zap.Logger
+	timelineFetcher  InertiaInterventionTimelineFetcher
+	contextFetcher   InertiaPatientContextFetcher
+	targetFetcher    InertiaTargetStatusFetcher
+	cgmLatestFetcher InertiaCGMLatestFetcher
+	log              *zap.Logger
 }
 
 // NewInertiaInputAssembler constructs the assembler.
@@ -50,16 +66,18 @@ func NewInertiaInputAssembler(
 	timelineFetcher InertiaInterventionTimelineFetcher,
 	contextFetcher InertiaPatientContextFetcher,
 	targetFetcher InertiaTargetStatusFetcher,
+	cgmLatestFetcher InertiaCGMLatestFetcher,
 	log *zap.Logger,
 ) *ConcreteInertiaInputAssembler {
 	if log == nil {
 		log = zap.NewNop()
 	}
 	return &ConcreteInertiaInputAssembler{
-		timelineFetcher: timelineFetcher,
-		contextFetcher:  contextFetcher,
-		targetFetcher:   targetFetcher,
-		log:             log,
+		timelineFetcher:  timelineFetcher,
+		contextFetcher:   contextFetcher,
+		targetFetcher:    targetFetcher,
+		cgmLatestFetcher: cgmLatestFetcher,
+		log:              log,
 	}
 }
 
@@ -138,7 +156,69 @@ func (a *ConcreteInertiaInputAssembler) AssembleInertiaInput(ctx context.Context
 		}
 	}
 
+	// Phase 7 P7-E Milestone 2: CGM TIR override for the glycaemic
+	// domain. When KB-26 has a recent CGM period report for this
+	// patient, replace the HbA1c-driven glycaemic input with a
+	// CGM_TIR reading (HIGH confidence, 14-day window). The inertia
+	// detector honours DataSource="CGM_TIR" via its cgmMinDays=14
+	// branch — the detector's pure logic does not change, only the
+	// input assembly does.
+	if a.cgmLatestFetcher != nil {
+		if cgm, cgmErr := a.cgmLatestFetcher.FetchLatestCGMReport(ctx, patientID); cgmErr == nil && cgm != nil {
+			input.Glycaemic = buildCGMGlycaemicInput(cgm, timeline.ByDomain["GLYCAEMIC"], summary.Medications)
+			a.log.Debug("inertia assembler: CGM_TIR override applied",
+				zap.String("patient_id", patientID),
+				zap.Float64("tir_pct", cgm.TIRPct),
+				zap.String("gri_zone", cgm.GRIZone))
+		} else if cgmErr != nil {
+			a.log.Debug("inertia assembler: CGM latest fetch failed",
+				zap.String("patient_id", patientID),
+				zap.Error(cgmErr))
+		}
+	}
+
 	return input, nil
+}
+
+// buildCGMGlycaemicInput constructs a DomainInertiaInput from a KB-26
+// CGM period report. TIR is the clinical indicator (target: ≥70 per
+// ADA SOC 2025 §6), the period-end date is both the
+// "most-recent-reading" anchor and — when under target — the
+// first-uncontrolled-at proxy. DataSource = CGM_TIR to select the
+// detector's cgmMinDays=14 branch. Pure function — exported for unit
+// testing without a database or HTTP client.
+func buildCGMGlycaemicInput(
+	cgm *KB26CGMLatestReport,
+	timeline KB20LatestDomainAction,
+	meds []string,
+) *DomainInertiaInput {
+	const tirTarget = 70.0
+	input := &DomainInertiaInput{
+		AtTarget:            cgm.TIRPct >= tirTarget,
+		CurrentValue:        cgm.TIRPct,
+		TargetValue:         tirTarget,
+		ConsecutiveReadings: 1,
+		DataSource:          "CGM_TIR",
+		CurrentMeds:         meds,
+	}
+
+	// DaysUncontrolled: approximated by the span from the CGM period
+	// start to today when the patient is off-target. A CGM period
+	// report already aggregates 14 days, so "uncontrolled for at
+	// least 14 days" is the minimum — if the report came in today
+	// with TIR<70, the detector's cgmMinDays=14 threshold is met.
+	if !input.AtTarget {
+		input.DaysUncontrolled = 14
+	}
+
+	// Last intervention from the GLYCAEMIC-domain timeline entry, if
+	// any — matches the HbA1c-path behaviour for consistency.
+	if !timeline.ActionDate.IsZero() {
+		t := timeline.ActionDate
+		input.LastIntervention = &t
+	}
+
+	return input
 }
 
 // buildKB26TargetStatusRequest assembles the POST body for KB-26's

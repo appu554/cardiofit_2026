@@ -69,6 +69,9 @@ func main() {
 		&models.QuarterlySummary{},
 		&models.PREVENTScore{},
 		&models.BPContextHistory{},
+		// Phase 7 P7-E Milestone 2: persistence target for the
+		// CGM analytics consumer.
+		&models.CGMPeriodReport{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -260,15 +263,20 @@ func main() {
 		defer signalConsumer.Stop()
 		logger.Info("KB-26 Kafka signal consumer started")
 
-		// Phase 7 P7-E Milestone 1: CGM analytics consumer subscribes
+		// Phase 7 P7-E Milestone 2: CGM analytics consumer subscribes
 		// to clinical.cgm-analytics.v1 produced by Flink's
-		// Module3_CGMStreamJob. Log-only handler ships now; Milestone 2
-		// replaces it with a repository-backed handler that persists
-		// each event into cgm_period_reports.
+		// Module3_CGMStreamJob and persists each event into
+		// cgm_period_reports. KB-23's inertia input assembler reads
+		// these rows to populate the CGM_TIR branch of the glycaemic
+		// inertia detector.
+		cgmPeriodReportRepo := services.NewCGMPeriodReportRepository(db.DB, logger)
 		cgmAnalyticsConsumer := services.NewCGMAnalyticsConsumer(brokers, logger)
-		cgmAnalyticsConsumer.Start(consumerCtx, services.LogOnlyCGMAnalyticsHandler(logger))
+		cgmAnalyticsConsumer.Start(
+			consumerCtx,
+			services.PersistingCGMAnalyticsHandler(cgmPeriodReportRepo, logger),
+		)
 		defer cgmAnalyticsConsumer.Stop()
-		logger.Info("KB-26 CGM analytics consumer started (log-only mode, Milestone 1)")
+		logger.Info("KB-26 CGM analytics consumer started (persisting to cgm_period_reports)")
 	}
 
 	// 10. Print service info

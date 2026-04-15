@@ -1,3 +1,22 @@
+// PROVISIONAL (Phase 7 P7-E Decision 2): this Go implementation of the
+// CGM period-report compute is a duplicate of the canonical Java
+// implementation at
+// backend/shared-infrastructure/flink-processing/src/main/java/com/cardiofit/flink/operators/Module3_CGMAnalytics.java
+//
+// The Java version is the source of record: it runs inside
+// Module3_CGMStreamJob as the 14-day sliding window compute and its
+// output (CGMAnalyticsEvent) flows through clinical.cgm-analytics.v1
+// to KB-26's cgm_analytics_consumer, which persists it as a
+// CGMPeriodReport row — which is what downstream callers actually read.
+//
+// This Go file remains for two reasons: (1) it preserves the Phase 6
+// P6-4 unit test surface for the pure compute function, useful for
+// regression checks when the Java version changes; (2) the
+// cgm_daily_batch.go heartbeat still imports types from this file.
+// Do NOT extend this file with new clinical logic — add to the Java
+// side. A future Phase 8 consolidation may delete this file once the
+// Flink pipeline is running in production and the daily batch migrates
+// to a pure read-path.
 package services
 
 import (

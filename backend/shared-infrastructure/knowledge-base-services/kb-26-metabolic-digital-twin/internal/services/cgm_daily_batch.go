@@ -1,3 +1,24 @@
+// PROVISIONAL (Phase 7 P7-E Decision 2): this daily batch job is a
+// heartbeat shim that duplicates, in Go, what Module3_CGMStreamJob
+// already does in Flink. The canonical CGM analytics path is:
+//
+//   ingestion.cgm-raw  (Kafka)
+//     → Module3_CGMStreamJob.java  (Flink 14-day sliding window)
+//     → clinical.cgm-analytics.v1  (Kafka)
+//     → cgm_analytics_consumer.go  (KB-26 Kafka consumer)
+//     → cgm_period_reports         (Postgres table via repository)
+//
+// The Phase 6 P6-4 heartbeat in this file was a placeholder for the
+// Flink pipeline that did not exist yet. Now that P7-E ships the
+// Flink job + consumer + persistence path, this daily batch is
+// redundant on the happy path. It remains registered in main.go's
+// BatchScheduler so a local-dev run without Kafka still produces
+// some periodic CGM compute, but a production cluster with
+// KB26_KAFKA_ENABLED=true gets real CGM data via the streaming path.
+//
+// Do NOT extend this file with new clinical logic — add to
+// Module3_CGMStreamJob.java. A Phase 8 consolidation may delete this
+// file outright once the Flink pipeline is the sole production path.
 package services
 
 import (
