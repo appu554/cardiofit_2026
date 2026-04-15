@@ -269,6 +269,16 @@ flink_jobs:
     input: "enriched-patient-events.v1"
     output: "patient-context-snapshots.v1"
 
+  # Phase 7 P7-E: CGM analytics windowed aggregation.
+  # Consumes raw CGM readings on ingestion.cgm-raw, runs
+  # Module3_CGMAnalytics.computeMetrics over a 14-day sliding window
+  # (1-day slide per patient), emits one CGMAnalyticsEvent per patient
+  # per day on clinical.cgm-analytics.v1. Downstream consumer lives in
+  # KB-26 (cgm_period_report persistence + MHRI + inertia TIR branch).
+  cgm_analytics:
+    input: "ingestion.cgm-raw"
+    output: "clinical.cgm-analytics.v1"
+
 # ============================================
 # Stream Processing Topics
 # ============================================
@@ -335,6 +345,12 @@ kb_services:
   # the domain_velocities map. Events are keyed by patient_id so all
   # events for a given patient land on the same partition.
   kb26_domain_trajectory: "kb26.domain_trajectory.v1"
+
+  # Phase 7 P7-E: Module 3 CGM analytics output topic. KB-26's
+  # cgm_analytics_consumer subscribes here and persists each event
+  # into cgm_period_reports. Keyed by patient_id for partition
+  # affinity so all of a patient's period reports land in order.
+  kb26_cgm_analytics: "clinical.cgm-analytics.v1"
 
 # ============================================
 # Dead Letter Queue Topics

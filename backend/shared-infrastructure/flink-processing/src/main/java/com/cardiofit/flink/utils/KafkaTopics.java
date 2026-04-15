@@ -179,7 +179,16 @@ public enum KafkaTopics {
     FLINK_ACTIVITY_RESPONSE("flink.activity-response", 8, 30),
     FLINK_FITNESS_PATTERNS("flink.fitness-patterns", 4, 90),
     FLINK_INTERVENTION_DELTAS("flink.intervention-deltas", 4, 90),
-    CLINICAL_STATE_CHANGE_EVENTS("clinical.state-change-events", 4, 90);
+    CLINICAL_STATE_CHANGE_EVENTS("clinical.state-change-events", 4, 90),
+
+    // Phase 7 P7-E: Module 3 CGM analytics output. One event per
+    // patient per day, published by Module3_CGMStreamJob after the
+    // 14-day sliding window advances. Consumed by KB-26's
+    // cgm_analytics_consumer for persistence into cgm_period_reports.
+    // Partition count matches neighbouring clinical topics (4); retention
+    // 30 days is enough for backfill-on-restart without ballooning
+    // disk (events are ~2KB each, ~day × 10K patients = ~600 MB/month).
+    CLINICAL_CGM_ANALYTICS("clinical.cgm-analytics.v1", 4, 30);
 
     private final String topicName;
     private final int partitions;

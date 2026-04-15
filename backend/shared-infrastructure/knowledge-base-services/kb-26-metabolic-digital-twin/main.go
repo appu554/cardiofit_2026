@@ -259,6 +259,16 @@ func main() {
 		})
 		defer signalConsumer.Stop()
 		logger.Info("KB-26 Kafka signal consumer started")
+
+		// Phase 7 P7-E Milestone 1: CGM analytics consumer subscribes
+		// to clinical.cgm-analytics.v1 produced by Flink's
+		// Module3_CGMStreamJob. Log-only handler ships now; Milestone 2
+		// replaces it with a repository-backed handler that persists
+		// each event into cgm_period_reports.
+		cgmAnalyticsConsumer := services.NewCGMAnalyticsConsumer(brokers, logger)
+		cgmAnalyticsConsumer.Start(consumerCtx, services.LogOnlyCGMAnalyticsHandler(logger))
+		defer cgmAnalyticsConsumer.Stop()
+		logger.Info("KB-26 CGM analytics consumer started (log-only mode, Milestone 1)")
 	}
 
 	// 10. Print service info
