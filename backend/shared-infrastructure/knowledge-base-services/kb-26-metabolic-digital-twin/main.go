@@ -174,8 +174,23 @@ func main() {
 	cgmDailyJob := services.NewCGMDailyBatch(nil, nil, logger)
 	batchScheduler.Register(cgmDailyJob)
 
+	// Phase 7 P7-F: Construct KafkaTrajectoryPublisher up front so both
+	// the HTTP server (TrajectoryEngine) and the SignalConsumer share the
+	// same feature-flag gate. When KB26_KAFKA_ENABLED is unset, we pass nil
+	// and NewServer defaults to NoopTrajectoryPublisher.
+	var trajectoryPublisher services.TrajectoryPublisher
+	if os.Getenv("KB26_KAFKA_ENABLED") == "true" {
+		brokerEnv := os.Getenv("KAFKA_BROKERS")
+		if brokerEnv == "" {
+			logger.Fatal("KB26_KAFKA_ENABLED is set but KAFKA_BROKERS is not configured")
+		}
+		brokers := strings.Split(brokerEnv, ",")
+		trajectoryPublisher = services.NewKafkaTrajectoryPublisher(brokers, "kb26.domain_trajectory.v1", logger)
+		logger.Info("KafkaTrajectoryPublisher wired", zap.String("topic", "kb26.domain_trajectory.v1"))
+	}
+
 	// 8. Create HTTP server
-	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector)
+	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector, trajectoryPublisher)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{

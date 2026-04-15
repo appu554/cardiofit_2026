@@ -47,7 +47,17 @@ func NewServer(
 	mriScorer *services.MRIScorer,
 	preventScorer *services.PREVENTScorer,
 	relapseDetector *services.RelapseDetector,
+	trajectoryPublisher services.TrajectoryPublisher,
 ) *Server {
+	// Phase 7 P7-F: main.go injects a KafkaTrajectoryPublisher when
+	// KB26_KAFKA_ENABLED=true (reusing the same feature flag as the
+	// existing SignalConsumer wiring). When nil — e.g., local dev
+	// without Kafka, or tests that don't exercise the publisher — the
+	// server defaults to NoopTrajectoryPublisher so trajectory events
+	// are silently dropped without crashing the engine.
+	if trajectoryPublisher == nil {
+		trajectoryPublisher = services.NoopTrajectoryPublisher{}
+	}
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -78,14 +88,12 @@ func NewServer(
 		mriScorer:             mriScorer,
 		preventScorer:         preventScorer,
 		relapseDetector:       relapseDetector,
-		// TODO(kb26-kafka): wire KafkaTrajectoryPublisher once cfg gains a
-		// Kafka.Brokers field. Until then, trajectory events are silently
-		// dropped via the noop publisher — Module 13 must fall back to the
-		// synchronous GET /api/v1/kb26/mri/:patientId/domain-trajectory endpoint.
+		// Phase 7 P7-F: trajectoryPublisher is injected by main.go —
+		// KafkaTrajectoryPublisher when KB26_KAFKA_ENABLED=true, noop otherwise.
 		trajectoryEngine: services.NewTrajectoryEngine(
 			trajectoryThresholds,
 			trajMetrics,
-			services.NoopTrajectoryPublisher{},
+			trajectoryPublisher,
 			logger,
 		),
 	}
