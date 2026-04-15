@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -42,6 +43,10 @@ func setupSummaryContextTestDB(t *testing.T) *gorm.DB {
 			egfr TEXT,
 			uacr TEXT,
 			potassium TEXT,
+			ckm_stage_v2 TEXT,
+			ckm_substage_metadata TEXT,
+			engagement_composite TEXT,
+			engagement_status TEXT,
 			active INTEGER DEFAULT 1,
 			created_at DATETIME,
 			updated_at DATETIME
@@ -97,15 +102,18 @@ func setupSummaryContextTestDB(t *testing.T) *gorm.DB {
 func seedSummaryPatient(t *testing.T, db *gorm.DB, patientID string, egfr *float64, weightKg float64, stratum string) {
 	t.Helper()
 	profile := map[string]interface{}{
-		"id":                uuid.New().String(),
-		"patient_id":        patientID,
-		"age":               55,
-		"sex":               "M",
-		"dm_type":           "T2DM",
-		"cv_risk_category":  stratum,
-		"active":            1,
-		"created_at":        time.Now().UTC(),
-		"updated_at":        time.Now().UTC(),
+		"id":               uuid.New().String(),
+		"patient_id":       patientID,
+		"age":              55,
+		"sex":              "M",
+		"bmi":              decimal.NewFromFloat(27.8).String(),
+		"dm_type":          "T2DM",
+		"cv_risk_category": stratum,
+		"ckm_stage_v2":     "3",
+		"engagement_status": "ENGAGED",
+		"active":           1,
+		"created_at":       time.Now().UTC(),
+		"updated_at":       time.Now().UTC(),
 	}
 	if weightKg > 0 {
 		profile["weight_kg"] = decimal.NewFromFloat(weightKg).String()
@@ -174,9 +182,12 @@ func TestSummaryContext_HappyPath(t *testing.T) {
 	seedSummaryLab(t, db, "p-happy", "HBA1C", 8.5, now.AddDate(0, 0, -90))
 	seedSummaryLab(t, db, "p-happy", "HBA1C", 7.9, now.AddDate(0, 0, -10))
 	seedSummaryLab(t, db, "p-happy", "FBG", 145.0, now.AddDate(0, 0, -5))
+	// P8-2: seed a potassium lab to verify LatestPotassium populates
+	// from the lab_entries path (same pattern as HbA1c / FBG).
+	seedSummaryLab(t, db, "p-happy", "POTASSIUM", 4.2, now.AddDate(0, 0, -3))
 
-	svc := NewSummaryContextService(db, zap.NewNop())
-	ctx, err := svc.BuildContext("p-happy")
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(),"p-happy")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
 	}
@@ -190,6 +201,23 @@ func TestSummaryContext_HappyPath(t *testing.T) {
 	if ctx.Stratum != "HIGH" {
 		t.Errorf("Stratum = %q, want HIGH", ctx.Stratum)
 	}
+
+	// Phase 8 P8-2 assertions: demographics, CKM stage, engagement
+	if ctx.Age != 55 {
+		t.Errorf("Age = %d, want 55", ctx.Age)
+	}
+	if ctx.Sex != "M" {
+		t.Errorf("Sex = %q, want M", ctx.Sex)
+	}
+	if ctx.BMI != 27.8 {
+		t.Errorf("BMI = %f, want 27.8", ctx.BMI)
+	}
+	if ctx.CKMStageV2 != "3" {
+		t.Errorf("CKMStageV2 = %q, want 3", ctx.CKMStageV2)
+	}
+	if ctx.EngagementStatus != "ENGAGED" {
+		t.Errorf("EngagementStatus = %q, want ENGAGED", ctx.EngagementStatus)
+	}
 	if ctx.EGFRValue != 65.0 {
 		t.Errorf("EGFRValue = %f, want 65.0", ctx.EGFRValue)
 	}
@@ -201,6 +229,9 @@ func TestSummaryContext_HappyPath(t *testing.T) {
 	}
 	if ctx.LatestFBG != 145.0 {
 		t.Errorf("LatestFBG = %f, want 145.0", ctx.LatestFBG)
+	}
+	if ctx.LatestPotassium != 4.2 {
+		t.Errorf("LatestPotassium = %f, want 4.2", ctx.LatestPotassium)
 	}
 
 	// Active medications only — STATIN (inactive) must be excluded.
@@ -233,9 +264,9 @@ func TestSummaryContext_HappyPath(t *testing.T) {
 // The handler layer maps this to HTTP 404.
 func TestSummaryContext_MissingPatientReturnsError(t *testing.T) {
 	db := setupSummaryContextTestDB(t)
-	svc := NewSummaryContextService(db, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
 
-	ctx, err := svc.BuildContext("p-nonexistent")
+	ctx, err := svc.BuildContext(context.Background(),"p-nonexistent")
 	if err == nil {
 		t.Error("expected error for missing patient, got nil")
 	}
@@ -258,8 +289,8 @@ func TestSummaryContext_PartialData_NoLabs(t *testing.T) {
 	seedSummaryPatient(t, db, "p-no-labs", &egfr, 75.0, "MODERATE")
 	seedSummaryMed(t, db, "p-no-labs", "METFORMIN", "metformin", true)
 
-	svc := NewSummaryContextService(db, zap.NewNop())
-	ctx, err := svc.BuildContext("p-no-labs")
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(),"p-no-labs")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
 	}
@@ -287,8 +318,8 @@ func TestSummaryContext_PartialData_NoMedications(t *testing.T) {
 	egfr := 90.0
 	seedSummaryPatient(t, db, "p-unmedicated", &egfr, 70.0, "LOW")
 
-	svc := NewSummaryContextService(db, zap.NewNop())
-	ctx, err := svc.BuildContext("p-unmedicated")
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(),"p-unmedicated")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
 	}
@@ -309,8 +340,8 @@ func TestSummaryContext_NilEGFRProfile(t *testing.T) {
 	db := setupSummaryContextTestDB(t)
 	seedSummaryPatient(t, db, "p-fresh", nil, 80.0, "LOW")
 
-	svc := NewSummaryContextService(db, zap.NewNop())
-	ctx, err := svc.BuildContext("p-fresh")
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(),"p-fresh")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
 	}
@@ -331,8 +362,8 @@ func TestSummaryContext_DistinctDrugClasses(t *testing.T) {
 	seedSummaryMed(t, db, "p-dupe", "METFORMIN", "metformin IR", true)
 	seedSummaryMed(t, db, "p-dupe", "METFORMIN", "metformin XR", true)
 
-	svc := NewSummaryContextService(db, zap.NewNop())
-	ctx, err := svc.BuildContext("p-dupe")
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(),"p-dupe")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
 	}
@@ -346,9 +377,9 @@ func TestSummaryContext_DistinctDrugClasses(t *testing.T) {
 // WHERE clause.
 func TestSummaryContext_EmptyPatientID(t *testing.T) {
 	db := setupSummaryContextTestDB(t)
-	svc := NewSummaryContextService(db, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, zap.NewNop())
 
-	_, err := svc.BuildContext("")
+	_, err := svc.BuildContext(context.Background(),"")
 	if err == nil {
 		t.Error("expected error for empty patient id, got nil")
 	}
@@ -366,7 +397,15 @@ func TestSummaryContext_EmptyPatientID(t *testing.T) {
 func TestSummaryContext_JSONTagsMatchKB23Contract(t *testing.T) {
 	// Build a SummaryContext with every field populated distinctly
 	// so we can verify each one round-trips under the expected key.
+	// Phase 8 P8-2: includes all the new demographics / CKM / labs /
+	// engagement / CGM fields so the wire contract test is complete.
+	engagement := 0.82
+	tir := 78.5
+	reportAt := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+	cac := 250.0
+	lvef := 35.0
 	ctx := &SummaryContext{
+		// P8-1 core
 		PatientID:              "p-wire",
 		Stratum:                "HIGH",
 		Medications:            []string{"METFORMIN", "ACEi"},
@@ -377,6 +416,25 @@ func TestSummaryContext_JSONTagsMatchKB23Contract(t *testing.T) {
 		HasRecentTransfusion:   true,
 		HasRecentHypoglycaemia: false,
 		WeightKg:               80.0,
+
+		// P8-2 new fields
+		Age:                 58,
+		Sex:                 "F",
+		BMI:                 29.4,
+		CKMStageV2:          "4c",
+		LatestPotassium:     4.1,
+		EngagementComposite: &engagement,
+		EngagementStatus:    "ENGAGED",
+		HasCGM:              true,
+		LatestCGMTIR:        &tir,
+		LatestCGMGRIZone:    "B",
+		CGMReportAt:         &reportAt,
+		CKMSubstageMetadata: &CKMSubstageWire{
+			HFClassification: "HFrEF",
+			LVEFPercent:      &lvef,
+			NYHAClass:        "II",
+			CACScore:         &cac,
+		},
 	}
 
 	// Marshal → raw JSON → re-parse as a map[string]interface{}
@@ -385,9 +443,16 @@ func TestSummaryContext_JSONTagsMatchKB23Contract(t *testing.T) {
 	raw := mustMarshalForTest(t, ctx)
 
 	expectedKeys := []string{
+		// P8-1 core
 		"patient_id", "stratum", "medications", "egfr_value",
 		"latest_hba1c", "latest_fbg", "is_acute_illness",
 		"has_recent_transfusion", "has_recent_hypoglycaemia", "weight_kg",
+		// P8-2 new
+		"age", "sex", "bmi",
+		"ckm_stage_v2", "ckm_substage_metadata",
+		"latest_potassium",
+		"engagement_composite", "engagement_status",
+		"has_cgm", "latest_cgm_tir", "latest_cgm_gri_zone", "cgm_report_at",
 	}
 	for _, key := range expectedKeys {
 		if _, ok := raw[key]; !ok {

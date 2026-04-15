@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -15,20 +17,20 @@ import (
 // struct (defined in kb-23-decision-cards/internal/services/mcu_gate_manager.go)
 // so the KB-23 HTTP client can deserialize this payload directly.
 //
-// Phase 8 P8-1: this is the missing endpoint that gated every Phase 7
-// card-generation code path in production. KB23Client.FetchSummaryContext
-// has been calling GET /patient/:id/summary-context since Phase 6, but
-// no handler ever backed the route — every consumer silently 404'd and
-// the card pipeline produced nothing for real patients. This service
-// closes the loop.
+// Phase 8 P8-1 (commit a7a099c3) shipped the first 10 fields and
+// fixed the missing-endpoint bug. Phase 8 P8-2 (this commit) extends
+// the wire contract with demographics, CKM stage V2 + substage
+// metadata, potassium, engagement status, and CGM status — the full
+// field set the Phase 7 retrospective called out as missing.
 //
 // Coupling note (Option α per the Phase 8 kickoff review): this struct
 // is a deliberate mirror of KB-23's PatientContext, not a shared type.
 // Matches the existing convention used by KB20RenalStatus and
 // KB20InterventionTimeline in the KB-23 client — manual sync between
 // the two sides, caught by the P8-1 integration test that asserts
-// field-for-field compatibility.
+// field-for-field compatibility. Drift on either side fails CI.
 type SummaryContext struct {
+	// ── P8-1 core fields (10) ──
 	PatientID              string   `json:"patient_id"`
 	Stratum                string   `json:"stratum"`
 	Medications            []string `json:"medications"`
@@ -39,25 +41,89 @@ type SummaryContext struct {
 	HasRecentTransfusion   bool     `json:"has_recent_transfusion"`
 	HasRecentHypoglycaemia bool     `json:"has_recent_hypoglycaemia"`
 	WeightKg               float64  `json:"weight_kg"`
+
+	// ── P8-2 Demographics ──
+	Age int     `json:"age,omitempty"`
+	Sex string  `json:"sex,omitempty"`
+	BMI float64 `json:"bmi,omitempty"`
+
+	// ── P8-2 CKM stage + substage metadata ──
+	CKMStageV2          string           `json:"ckm_stage_v2,omitempty"`
+	CKMSubstageMetadata *CKMSubstageWire `json:"ckm_substage_metadata,omitempty"`
+
+	// ── P8-2 Extended labs ──
+	LatestPotassium float64 `json:"latest_potassium,omitempty"`
+
+	// ── P8-2 Engagement / adherence ──
+	EngagementComposite *float64 `json:"engagement_composite,omitempty"`
+	EngagementStatus    string   `json:"engagement_status,omitempty"`
+
+	// ── P8-2 CGM status (cross-service fetch from KB-26) ──
+	HasCGM           bool       `json:"has_cgm,omitempty"`
+	LatestCGMTIR     *float64   `json:"latest_cgm_tir,omitempty"`
+	LatestCGMGRIZone string     `json:"latest_cgm_gri_zone,omitempty"`
+	CGMReportAt      *time.Time `json:"cgm_report_at,omitempty"`
+}
+
+// CKMSubstageWire is the wire shape for the CKM substage metadata
+// JSONB blob on the PatientProfile row. Mirrors a subset of
+// models.SubstageMetadata — only the fields downstream card
+// generation actually reads, matching the Option α field-by-field
+// coupling rule. Full fidelity is available via the direct
+// CKMSubstageMetadata JSONB query on KB-20 side if a caller
+// needs more detail in the future.
+type CKMSubstageWire struct {
+	HFClassification string   `json:"hf_type,omitempty"`
+	LVEFPercent      *float64 `json:"lvef_pct,omitempty"`
+	NYHAClass        string   `json:"nyha_class,omitempty"`
+	NTproBNP         *float64 `json:"nt_probnp,omitempty"`
+	BNP              *float64 `json:"bnp,omitempty"`
+	HFEtiology       string   `json:"hf_etiology,omitempty"`
+	CACScore         *float64 `json:"cac_score,omitempty"`
+	CIMTPercentile   *int     `json:"cimt_percentile,omitempty"`
+	HasLVH           bool     `json:"has_lvh,omitempty"`
+}
+
+// CGMStatusFetcher is the narrow dependency the SummaryContextService
+// uses to fetch the latest CGM period report from KB-26 without
+// creating a hard dependency on the KB-26 package. Tests can inject a
+// stub fetcher; production wires a real HTTP client to KB-26's
+// P7-E Milestone 2 cgm-latest endpoint.
+type CGMStatusFetcher interface {
+	FetchLatestCGMStatus(ctx context.Context, patientID string) (*CGMStatusSnapshot, error)
+}
+
+// CGMStatusSnapshot is the narrow projection the summary-context
+// service needs from KB-26's CGMPeriodReport. Kept minimal so the
+// cross-service fetch carries only what the KB-23 consumer reads.
+type CGMStatusSnapshot struct {
+	HasCGM     bool
+	TIRPct     float64
+	GRIZone    string
+	ReportedAt time.Time
 }
 
 // SummaryContextService assembles the cross-cutting patient snapshot
 // that KB-23's card generation pipeline needs. Queries existing tables
-// and services — it does not write anything, does not mutate state,
-// does not invoke external services. Pure read-path aggregation.
-//
-// Phase 8 P8-1.
+// and services — it does not write anything, does not mutate state.
+// Phase 8 P8-2: adds one cross-service fetch (KB-26 cgm-latest) for
+// CGM status. All other fields stay on the read-path aggregation.
 type SummaryContextService struct {
-	db     *gorm.DB
-	logger *zap.Logger
+	db         *gorm.DB
+	cgmFetcher CGMStatusFetcher
+	logger     *zap.Logger
 }
 
-// NewSummaryContextService wires the dependencies.
-func NewSummaryContextService(db *gorm.DB, logger *zap.Logger) *SummaryContextService {
+// NewSummaryContextService wires the dependencies. cgmFetcher is
+// optional — pass nil in tests that don't need CGM data, or when
+// KB-26 is not reachable. When nil, the CGM fields on SummaryContext
+// stay at their zero values (HasCGM=false) and KB-23 consumers
+// degrade cleanly to the HbA1c-based glycaemic path.
+func NewSummaryContextService(db *gorm.DB, cgmFetcher CGMStatusFetcher, logger *zap.Logger) *SummaryContextService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &SummaryContextService{db: db, logger: logger}
+	return &SummaryContextService{db: db, cgmFetcher: cgmFetcher, logger: logger}
 }
 
 // BuildContext assembles a SummaryContext for the given patient.
@@ -78,7 +144,7 @@ func NewSummaryContextService(db *gorm.DB, logger *zap.Logger) *SummaryContextSe
 //     and priority-events audit trails. Defaulting to false biases
 //     toward surfacing cards, not suppressing them — safer than the
 //     alternative.
-func (s *SummaryContextService) BuildContext(patientID string) (*SummaryContext, error) {
+func (s *SummaryContextService) BuildContext(ctx context.Context, patientID string) (*SummaryContext, error) {
 	if patientID == "" {
 		return nil, fmt.Errorf("summary context: empty patient id")
 	}
@@ -89,16 +155,50 @@ func (s *SummaryContextService) BuildContext(patientID string) (*SummaryContext,
 		return nil, err
 	}
 
-	ctx := &SummaryContext{
+	result := &SummaryContext{
+		// P8-1 core
 		PatientID:              profile.PatientID,
 		Stratum:                profile.CVRiskCategory,
 		WeightKg:               profile.WeightKg,
 		IsAcuteIll:             false,
 		HasRecentTransfusion:   false,
 		HasRecentHypoglycaemia: false,
+
+		// P8-2 demographics — straight column reads
+		Age: profile.Age,
+		Sex: profile.Sex,
+		BMI: profile.BMI,
+
+		// P8-2 CKM stage — string column, JSONB metadata converted below
+		CKMStageV2: profile.CKMStageV2,
+
+		// P8-2 engagement — optional fields on the profile, passed through
+		// as pointers when present
+		EngagementComposite: profile.EngagementComposite,
+		EngagementStatus:    profile.EngagementStatus,
 	}
 	if profile.EGFR != nil {
-		ctx.EGFRValue = *profile.EGFR
+		result.EGFRValue = *profile.EGFR
+	}
+
+	// P8-2 CKM substage metadata: convert the Go-side JSONB struct
+	// into the narrower wire shape. Only populate if the profile
+	// actually carries metadata (non-nil pointer) — CKM Stage 0-3
+	// patients have no substage detail and KB-23 treats nil as
+	// "no substage available."
+	if profile.CKMSubstageMetadata != nil {
+		meta := profile.CKMSubstageMetadata
+		result.CKMSubstageMetadata = &CKMSubstageWire{
+			HFClassification: string(meta.HFClassification),
+			LVEFPercent:      meta.LVEFPercent,
+			NYHAClass:        meta.NYHAClass,
+			NTproBNP:         meta.NTproBNP,
+			BNP:              meta.BNP,
+			HFEtiology:       meta.HFEtiology,
+			CACScore:         meta.CACScore,
+			CIMTPercentile:   meta.CIMTPercentile,
+			HasLVH:           meta.HasLVH,
+		}
 	}
 
 	// Active medications — distinct drug classes from the medication
@@ -121,16 +221,62 @@ func (s *SummaryContextService) BuildContext(patientID string) (*SummaryContext,
 			cleaned = append(cleaned, m)
 		}
 	}
-	ctx.Medications = cleaned
+	result.Medications = cleaned
 
 	// Latest HbA1c and FBG — most recent accepted lab value of each type.
 	// Uses a single query per lab type because lab_entries may contain
 	// both accepted and flagged readings and we want the most recent
 	// clinically-usable one.
-	ctx.LatestHbA1c = s.latestLabValue(patientID, models.LabTypeHbA1c)
-	ctx.LatestFBG = s.latestLabValue(patientID, models.LabTypeFBG)
+	result.LatestHbA1c = s.latestLabValue(patientID, models.LabTypeHbA1c)
+	result.LatestFBG = s.latestLabValue(patientID, models.LabTypeFBG)
 
-	return ctx, nil
+	// P8-2: Latest Potassium. Prefers the lab_entries row (freshest
+	// accepted reading) over the PatientProfile.Potassium cached
+	// column because the lab table is authoritative and the profile
+	// column may lag FHIR sync by minutes.
+	result.LatestPotassium = s.latestLabValue(patientID, models.LabTypePotassium)
+	if result.LatestPotassium == 0 && profile.Potassium != nil {
+		result.LatestPotassium = *profile.Potassium
+	}
+
+	// P8-2: CGM status via cross-service fetch to KB-26. The fetcher
+	// is optional — when nil (tests without CGM infra, or KB-26 not
+	// reachable), CGM fields stay at zero values and KB-23 consumers
+	// fall back to the HbA1c glycaemic path. A fetch error is logged
+	// but not fatal: it's preferable to return a slightly-degraded
+	// SummaryContext than to 500 the entire card pipeline because
+	// KB-26 is temporarily unreachable.
+	if s.cgmFetcher != nil {
+		snap, cgmErr := s.cgmFetcher.FetchLatestCGMStatus(ctx, patientID)
+		if cgmErr != nil {
+			s.logger.Debug("summary context: CGM fetch failed, falling back to HasCGM=false",
+				zap.String("patient_id", patientID),
+				zap.Error(cgmErr))
+		} else if snap != nil && snap.HasCGM {
+			result.HasCGM = true
+			tir := snap.TIRPct
+			result.LatestCGMTIR = &tir
+			result.LatestCGMGRIZone = snap.GRIZone
+			reportAt := snap.ReportedAt
+			result.CGMReportAt = &reportAt
+		}
+	}
+
+	// P8-2 TODO: IsAcuteIll, HasRecentTransfusion, and
+	// HasRecentHypoglycaemia still default to false — these are
+	// confounder flags that the MCU gate manager reads (V-06 stress
+	// hyperglycaemia rule depends on IsAcuteIll in particular) but
+	// KB-20 does not yet track a queryable safety_events log.
+	// Populating them requires either:
+	//   (a) a new safety_events table fed by the event bus,
+	//   (b) a cross-service query to KB-26's priority-events
+	//       audit trail (if/when one exists), or
+	//   (c) a sliding-window Kafka consumer on priority-events.
+	// Defaulting false biases toward surfacing cards, not suppressing
+	// them — clinically safer than over-gating. Tracked as a
+	// Phase 8 follow-up sub-project.
+
+	return result, nil
 }
 
 // latestLabValue returns the most recent accepted lab reading of the

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -60,7 +61,23 @@ func TestKB20Client_FetchSummaryContext_RoundTripsAgainstRealHandler(t *testing.
 	// Minimal mirror of the KB-20 handler. The JSON tags here must
 	// match services.SummaryContext on the KB-20 side exactly — if
 	// they drift, this test catches it deterministically.
+	//
+	// Phase 8 P8-2: extended with every P8-2 field (demographics,
+	// CKM stage + substage metadata, potassium, engagement, CGM
+	// status). Every field here must match both sides of the wire.
+	type mirrorCKMSubstage struct {
+		HFClassification string   `json:"hf_type,omitempty"`
+		LVEFPercent      *float64 `json:"lvef_pct,omitempty"`
+		NYHAClass        string   `json:"nyha_class,omitempty"`
+		NTproBNP         *float64 `json:"nt_probnp,omitempty"`
+		BNP              *float64 `json:"bnp,omitempty"`
+		HFEtiology       string   `json:"hf_etiology,omitempty"`
+		CACScore         *float64 `json:"cac_score,omitempty"`
+		CIMTPercentile   *int     `json:"cimt_percentile,omitempty"`
+		HasLVH           bool     `json:"has_lvh,omitempty"`
+	}
 	type mirrorSummaryContext struct {
+		// P8-1 core
 		PatientID              string   `json:"patient_id"`
 		Stratum                string   `json:"stratum"`
 		Medications            []string `json:"medications"`
@@ -71,13 +88,32 @@ func TestKB20Client_FetchSummaryContext_RoundTripsAgainstRealHandler(t *testing.
 		HasRecentTransfusion   bool     `json:"has_recent_transfusion"`
 		HasRecentHypoglycaemia bool     `json:"has_recent_hypoglycaemia"`
 		WeightKg               float64  `json:"weight_kg"`
+		// P8-2
+		Age                 int                `json:"age,omitempty"`
+		Sex                 string             `json:"sex,omitempty"`
+		BMI                 float64            `json:"bmi,omitempty"`
+		CKMStageV2          string             `json:"ckm_stage_v2,omitempty"`
+		CKMSubstageMetadata *mirrorCKMSubstage `json:"ckm_substage_metadata,omitempty"`
+		LatestPotassium     float64            `json:"latest_potassium,omitempty"`
+		EngagementComposite *float64           `json:"engagement_composite,omitempty"`
+		EngagementStatus    string             `json:"engagement_status,omitempty"`
+		HasCGM              bool               `json:"has_cgm,omitempty"`
+		LatestCGMTIR        *float64           `json:"latest_cgm_tir,omitempty"`
+		LatestCGMGRIZone    string             `json:"latest_cgm_gri_zone,omitempty"`
+		CGMReportAt         *time.Time         `json:"cgm_report_at,omitempty"`
 	}
 
 	// Fully-populated fixture so every consumer-facing field has a
 	// distinct non-zero value. Any field that fails to round-trip
 	// will land as zero on the KB-23 side and fail the assertions
 	// below with a precise error.
+	engagement := 0.85
+	tir := 78.0
+	lvef := 35.0
+	cac := 275.0
+	reportAt := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
 	fixture := mirrorSummaryContext{
+		// P8-1 core
 		PatientID:              "p-integration",
 		Stratum:                "HIGH",
 		Medications:            []string{"METFORMIN", "ACEi", "STATIN"},
@@ -88,6 +124,24 @@ func TestKB20Client_FetchSummaryContext_RoundTripsAgainstRealHandler(t *testing.
 		HasRecentTransfusion:   false,
 		HasRecentHypoglycaemia: true,
 		WeightKg:               82.0,
+		// P8-2
+		Age:                 58,
+		Sex:                 "M",
+		BMI:                 27.5,
+		CKMStageV2:          "4c",
+		LatestPotassium:     4.3,
+		EngagementComposite: &engagement,
+		EngagementStatus:    "ENGAGED",
+		HasCGM:              true,
+		LatestCGMTIR:        &tir,
+		LatestCGMGRIZone:    "B",
+		CGMReportAt:         &reportAt,
+		CKMSubstageMetadata: &mirrorCKMSubstage{
+			HFClassification: "HFrEF",
+			LVEFPercent:      &lvef,
+			NYHAClass:        "II",
+			CACScore:         &cac,
+		},
 	}
 
 	handler := http.NewServeMux()
@@ -153,6 +207,58 @@ func TestKB20Client_FetchSummaryContext_RoundTripsAgainstRealHandler(t *testing.
 	}
 	if got.WeightKg != 82.0 {
 		t.Errorf("WeightKg = %f, want 82.0", got.WeightKg)
+	}
+
+	// ── Phase 8 P8-2 assertions ──
+	if got.Age != 58 {
+		t.Errorf("Age = %d, want 58", got.Age)
+	}
+	if got.Sex != "M" {
+		t.Errorf("Sex = %q, want M", got.Sex)
+	}
+	if got.BMI != 27.5 {
+		t.Errorf("BMI = %f, want 27.5", got.BMI)
+	}
+	if got.CKMStageV2 != "4c" {
+		t.Errorf("CKMStageV2 = %q, want 4c", got.CKMStageV2)
+	}
+	if got.LatestPotassium != 4.3 {
+		t.Errorf("LatestPotassium = %f, want 4.3", got.LatestPotassium)
+	}
+	if got.EngagementComposite == nil || *got.EngagementComposite != 0.85 {
+		t.Errorf("EngagementComposite = %v, want 0.85", got.EngagementComposite)
+	}
+	if got.EngagementStatus != "ENGAGED" {
+		t.Errorf("EngagementStatus = %q, want ENGAGED", got.EngagementStatus)
+	}
+	if !got.HasCGM {
+		t.Error("HasCGM = false, want true")
+	}
+	if got.LatestCGMTIR == nil || *got.LatestCGMTIR != 78.0 {
+		t.Errorf("LatestCGMTIR = %v, want 78.0", got.LatestCGMTIR)
+	}
+	if got.LatestCGMGRIZone != "B" {
+		t.Errorf("LatestCGMGRIZone = %q, want B", got.LatestCGMGRIZone)
+	}
+	if got.CGMReportAt == nil || !got.CGMReportAt.Equal(reportAt) {
+		t.Errorf("CGMReportAt = %v, want %v", got.CGMReportAt, reportAt)
+	}
+
+	// CKM substage metadata — nested struct round-trip
+	if got.CKMSubstageMetadata == nil {
+		t.Fatal("CKMSubstageMetadata = nil, want non-nil")
+	}
+	if got.CKMSubstageMetadata.HFClassification != "HFrEF" {
+		t.Errorf("HFClassification = %q, want HFrEF", got.CKMSubstageMetadata.HFClassification)
+	}
+	if got.CKMSubstageMetadata.LVEFPercent == nil || *got.CKMSubstageMetadata.LVEFPercent != 35.0 {
+		t.Errorf("LVEFPercent = %v, want 35.0", got.CKMSubstageMetadata.LVEFPercent)
+	}
+	if got.CKMSubstageMetadata.NYHAClass != "II" {
+		t.Errorf("NYHAClass = %q, want II", got.CKMSubstageMetadata.NYHAClass)
+	}
+	if got.CKMSubstageMetadata.CACScore == nil || *got.CKMSubstageMetadata.CACScore != 275.0 {
+		t.Errorf("CACScore = %v, want 275.0", got.CKMSubstageMetadata.CACScore)
 	}
 }
 
