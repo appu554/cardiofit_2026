@@ -134,14 +134,41 @@ func main() {
 		logger.Info("KB-23 priority signal consumer started")
 	}
 
-	// 10c. Phase 6 P6-5: KB-23 BatchScheduler + RenalAnticipatoryBatch
-	// (first KB-23 batch consumer, proves the Phase 5 P5-3 scheduler
-	// abstraction extracts cleanly to a second host service). Currently
-	// ships as a heartbeat — per-patient FindApproachingThresholds /
-	// DetectStaleEGFR invocation is a Phase 6 follow-up that needs a
-	// KB-20 active-renal-patient endpoint and a small orchestrator.
+	// 10c. KB-23 BatchScheduler + RenalAnticipatoryBatch.
+	//
+	// Phase 6 P6-5 shipped this as a heartbeat — the scheduler abstraction
+	// proof. Phase 7 P7-C now wires the real orchestrator + real KB-20
+	// client so the monthly job persists DecisionCards for every detected
+	// approaching-threshold alert and stale-eGFR surveillance gap.
+	//
+	// The formulary is re-loaded here (cheap YAML parse) rather than
+	// threaded through from the Kafka branch above, so the batch works
+	// even when KB23_KAFKA_ENABLED is false.
 	batchScheduler := services.NewBatchScheduler(logger)
-	renalAnticipatoryJob := services.NewRenalAnticipatoryBatch(nil, logger)
+
+	var renalAnticipatoryJob *services.RenalAnticipatoryBatch
+	if formulary, ferr := services.LoadRenalFormulary(cfg.TemplatesDir, cfg.Market); ferr == nil {
+		orchestrator := services.NewRenalAnticipatoryOrchestrator(
+			server.KB20Client(),
+			formulary,
+			logger,
+		)
+		renalLister := services.NewKB20RenalActivePatientLister(server.KB20Client())
+		renalAnticipatoryJob = services.NewRenalAnticipatoryBatch(
+			renalLister,
+			orchestrator,
+			server.TemplateLoader(),
+			server.Database(),
+			server.MCUGateCache(),
+			server.KB19Publisher(),
+			server.MetricsCollector(),
+			logger,
+		)
+	} else {
+		logger.Warn("renal formulary load failed; renal anticipatory batch in heartbeat mode",
+			zap.Error(ferr))
+		renalAnticipatoryJob = services.NewRenalAnticipatoryBatch(nil, nil, nil, nil, nil, nil, nil, logger)
+	}
 	batchScheduler.Register(renalAnticipatoryJob)
 
 	// Phase 6 P6-1: InertiaWeeklyBatch registered as the second KB-23

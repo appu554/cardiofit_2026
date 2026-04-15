@@ -9,6 +9,24 @@ import (
 	"kb-patient-profile/internal/models"
 )
 
+// renalSensitiveDrugClasses is the set of drug classes whose active
+// prescription makes a patient "renal-active" for the purposes of the
+// KB-23 anticipatory monthly batch. Keyed on the drug classes that the
+// shared renal_dose_rules.yaml formulary actually tracks (metformin,
+// SGLT2, RAAS, MRA, DOACs). Used by listRenalActivePatients below.
+var renalSensitiveDrugClasses = []string{
+	"METFORMIN",
+	"SGLT2",
+	"SGLT2_INHIBITOR",
+	"ACE_INHIBITOR",
+	"ARB",
+	"ARNI",
+	"MRA",
+	"FINERENONE",
+	"DOAC",
+	"DIGOXIN",
+}
+
 // ---------------------------------------------------------------------------
 // RenalStatusResponse — renal snapshot for KB-23 decision-card consumption
 // ---------------------------------------------------------------------------
@@ -128,4 +146,44 @@ func (s *Server) getRenalStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": resp})
+}
+
+// ---------------------------------------------------------------------------
+// listRenalActivePatients — GET /api/v1/patients/renal-active handler
+// ---------------------------------------------------------------------------
+
+// RenalActivePatientEntry is the minimal projection returned by the
+// renal-active list endpoint. Consumers (KB-23 RenalAnticipatoryBatch)
+// call back to GET /patient/:id/renal-status for the full snapshot of
+// any patient they care about — keeping this list-endpoint payload
+// small avoids scanning join tables for every patient on every run.
+type RenalActivePatientEntry struct {
+	PatientID string `json:"patient_id"`
+}
+
+// listRenalActivePatients returns all active patients who have at least
+// one active medication in the renal-sensitive drug class set. Used by
+// KB-23's monthly renal anticipatory batch to enumerate the population
+// worth running FindApproachingThresholds + DetectStaleEGFR over.
+// Phase 7 P7-C.
+func (s *Server) listRenalActivePatients(c *gin.Context) {
+	// SELECT DISTINCT patient_id FROM medication_states WHERE is_active = true
+	//   AND drug_class IN (renalSensitiveDrugClasses)
+	var patientIDs []string
+	err := s.db.DB.
+		Table("medication_states").
+		Distinct("patient_id").
+		Where("is_active = ? AND drug_class IN ?", true, renalSensitiveDrugClasses).
+		Pluck("patient_id", &patientIDs).Error
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query renal-active patients: " + err.Error()})
+		return
+	}
+
+	entries := make([]RenalActivePatientEntry, 0, len(patientIDs))
+	for _, pid := range patientIDs {
+		entries = append(entries, RenalActivePatientEntry{PatientID: pid})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": entries})
 }

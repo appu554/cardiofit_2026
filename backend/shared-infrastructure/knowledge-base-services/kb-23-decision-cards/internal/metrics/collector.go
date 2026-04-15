@@ -58,6 +58,18 @@ type Collector struct {
 	// can show which GDMT class gaps are most common on 4c transitions.
 	CKMStageTransitions      *prometheus.CounterVec
 	CKM4cMandatoryMedAlerts  *prometheus.CounterVec
+
+	// Phase 7 P7-C: Renal anticipatory monthly batch outcomes.
+	// RenalAnticipatoryAlerts is labelled by drug_class + horizon
+	// (CONTRAINDICATION | DOSE_REDUCE | EFFICACY_CLIFF) so dashboards
+	// can separate out imminent vs distant projected crossings.
+	// StaleEGFR is labelled by CKD stage so dashboards can surface
+	// which cohorts are overdue for surveillance.
+	// RenalAnticipatoryBatchDuration records end-to-end batch run time
+	// in seconds so slow-down regressions are observable.
+	RenalAnticipatoryAlerts       *prometheus.CounterVec
+	StaleEGFRDetected             *prometheus.CounterVec
+	RenalAnticipatoryBatchDuration prometheus.Histogram
 }
 
 func NewCollector() *Collector {
@@ -189,5 +201,21 @@ func NewCollector() *Collector {
 			Name: "kb23_ckm_4c_mandatory_med_alerts_total",
 			Help: "CKM 4c mandatory-medication gap alerts generated, by missing drug class (Phase 7 P7-B)",
 		}, []string{"drug_class"}),
+
+		RenalAnticipatoryAlerts: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_renal_anticipatory_alerts_total",
+			Help: "Anticipatory renal threshold-approaching alerts, by drug class and horizon type (Phase 7 P7-C)",
+		}, []string{"drug_class", "horizon"}),
+
+		StaleEGFRDetected: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_stale_egfr_total",
+			Help: "Stale-eGFR surveillance alerts, by CKD stage (Phase 7 P7-C)",
+		}, []string{"ckd_stage"}),
+
+		RenalAnticipatoryBatchDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb23_renal_anticipatory_batch_duration_seconds",
+			Help:    "End-to-end duration of the monthly renal anticipatory batch run",
+			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 3600},
+		}),
 	}
 }

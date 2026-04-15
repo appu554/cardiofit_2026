@@ -95,6 +95,13 @@ func (s *Server) setupRoutes() {
 			// Engagement season (Patient Engagement Loop)
 			patient.GET("/:id/engagement-season", s.getEngagementSeason)
 
+			// Phase 7 P7-C: renal snapshot for KB-23 decision-card generation.
+			// getRenalStatus has been defined since Phase 6 but was never
+			// wired into the router — activating it now that KB-23's
+			// RenalAnticipatoryOrchestrator needs per-patient eGFR +
+			// slope + active-med data in one round trip.
+			patient.GET("/:id/renal-status", s.getRenalStatus)
+
 			// Signals — patient-reported signal ingestion (S4, S15, S16, S18-S22)
 			signals := patient.Group("/:id/signals")
 			{
@@ -108,6 +115,12 @@ func (s *Server) setupRoutes() {
 				signals.POST("/hospitalisation", s.submitHospitalisationSignal)
 			}
 		}
+
+		// Phase 7 P7-C: list endpoint for the renal-active patient
+		// population (patients with at least one active medication in
+		// the renal-sensitive drug class set). Consumed by KB-23's
+		// monthly RenalAnticipatoryBatch to enumerate candidates.
+		v1.GET("/patients/renal-active", s.listRenalActivePatients)
 
 		// Context modifier registry
 		modifiers := v1.Group("/modifiers")

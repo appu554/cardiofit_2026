@@ -22,7 +22,7 @@ func (s *stubRenalActivePatientLister) ListRenalActivePatientIDs(ctx context.Con
 }
 
 func TestRenalAnticipatoryBatch_ShouldRun_OnlyFirstOfMonthAt04UTC(t *testing.T) {
-	job := NewRenalAnticipatoryBatch(&stubRenalActivePatientLister{}, zap.NewNop())
+	job := NewRenalAnticipatoryBatch(&stubRenalActivePatientLister{}, nil, nil, nil, nil, nil, nil, zap.NewNop())
 
 	cases := []struct {
 		name     string
@@ -48,7 +48,7 @@ func TestRenalAnticipatoryBatch_ShouldRun_OnlyFirstOfMonthAt04UTC(t *testing.T) 
 
 func TestRenalAnticipatoryBatch_Run_ListsActivePatients(t *testing.T) {
 	repo := &stubRenalActivePatientLister{ids: []string{"p1", "p2", "p3"}}
-	job := NewRenalAnticipatoryBatch(repo, zap.NewNop())
+	job := NewRenalAnticipatoryBatch(repo, nil, nil, nil, nil, nil, nil, zap.NewNop())
 
 	if err := job.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -60,7 +60,7 @@ func TestRenalAnticipatoryBatch_Run_ListsActivePatients(t *testing.T) {
 
 func TestRenalAnticipatoryBatch_Run_PropagatesRepoError(t *testing.T) {
 	repo := &stubRenalActivePatientLister{err: context.DeadlineExceeded}
-	job := NewRenalAnticipatoryBatch(repo, zap.NewNop())
+	job := NewRenalAnticipatoryBatch(repo, nil, nil, nil, nil, nil, nil, zap.NewNop())
 
 	if err := job.Run(context.Background()); err == nil {
 		t.Error("expected Run to propagate repo error, got nil")
@@ -68,14 +68,14 @@ func TestRenalAnticipatoryBatch_Run_PropagatesRepoError(t *testing.T) {
 }
 
 func TestRenalAnticipatoryBatch_Run_NilRepoIsNoop(t *testing.T) {
-	job := NewRenalAnticipatoryBatch(nil, zap.NewNop())
+	job := NewRenalAnticipatoryBatch(nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	if err := job.Run(context.Background()); err != nil {
 		t.Errorf("expected nil repo Run to be no-op, got %v", err)
 	}
 }
 
 func TestRenalAnticipatoryBatch_Name(t *testing.T) {
-	job := NewRenalAnticipatoryBatch(&stubRenalActivePatientLister{}, zap.NewNop())
+	job := NewRenalAnticipatoryBatch(&stubRenalActivePatientLister{}, nil, nil, nil, nil, nil, nil, zap.NewNop())
 	if job.Name() != "renal_anticipatory_monthly" {
 		t.Errorf("expected name 'renal_anticipatory_monthly', got %q", job.Name())
 	}

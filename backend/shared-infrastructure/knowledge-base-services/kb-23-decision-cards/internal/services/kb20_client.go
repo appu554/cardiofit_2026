@@ -14,6 +14,46 @@ import (
 	"kb-23-decision-cards/internal/metrics"
 )
 
+// KB20RenalStatus mirrors the KB-20 GET /patient/:id/renal-status response
+// payload. Phase 7 P7-C consumes this struct in the RenalAnticipatoryOrchestrator
+// to feed FindApproachingThresholds + DetectStaleEGFR with a single fetch.
+type KB20RenalStatus struct {
+	PatientID         string             `json:"patient_id"`
+	EGFR              float64            `json:"egfr"`
+	EGFRSlope         float64            `json:"egfr_slope"`
+	EGFRMeasuredAt    time.Time          `json:"egfr_measured_at"`
+	EGFRDataPoints    int                `json:"egfr_data_points"`
+	Potassium         *float64           `json:"potassium,omitempty"`
+	ACR               *float64           `json:"acr,omitempty"`
+	CKDStage          string             `json:"ckd_stage"`
+	IsRapidDecliner   bool               `json:"is_rapid_decliner"`
+	ActiveMedications []KB20MedSummary   `json:"active_medications"`
+}
+
+// KB20MedSummary is the lightweight medication reference returned in
+// KB-20's renal status response. Phase 7 P7-C.
+type KB20MedSummary struct {
+	DrugName  string `json:"drug_name"`
+	DrugClass string `json:"drug_class"`
+	DoseMg    string `json:"dose_mg"`
+	IsActive  bool   `json:"is_active"`
+}
+
+// kb20EnvelopeRenalStatus wraps the KB-20 renal-status response under the
+// standard {"success": true, "data": ...} envelope.
+type kb20EnvelopeRenalStatus struct {
+	Success bool            `json:"success"`
+	Data    KB20RenalStatus `json:"data"`
+}
+
+// kb20EnvelopeRenalActive wraps the KB-20 renal-active list response.
+type kb20EnvelopeRenalActive struct {
+	Success bool `json:"success"`
+	Data    []struct {
+		PatientID string `json:"patient_id"`
+	} `json:"data"`
+}
+
 type KB20Client struct {
 	cfg     *config.Config
 	metrics *metrics.Collector
@@ -69,4 +109,86 @@ func (c *KB20Client) FetchSummaryContext(ctx context.Context, patientID string) 
 
 	result.PatientID = patientID
 	return &result, nil
+}
+
+// FetchRenalStatus calls KB-20 GET /api/v1/patient/:id/renal-status and
+// returns the full renal snapshot (eGFR, slope, measured-at, active
+// medications, CKD stage). Used by P7-C's RenalAnticipatoryOrchestrator
+// to feed FindApproachingThresholds + DetectStaleEGFR in one round trip.
+func (c *KB20Client) FetchRenalStatus(ctx context.Context, patientID string) (*KB20RenalStatus, error) {
+	start := time.Now()
+	url := fmt.Sprintf("%s/api/v1/patient/%s/renal-status", c.cfg.KB20URL, patientID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create KB-20 renal-status request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.client.Do(req)
+	if c.metrics != nil {
+		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("KB-20 renal-status fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		c.log.Warn("KB-20 renal-status returned non-200",
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(body)))
+		return nil, fmt.Errorf("KB-20 renal-status returned status %d", resp.StatusCode)
+	}
+
+	var env kb20EnvelopeRenalStatus
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return nil, fmt.Errorf("decode KB-20 renal-status response: %w", err)
+	}
+	return &env.Data, nil
+}
+
+// FetchRenalActivePatientIDs calls KB-20 GET /api/v1/patients/renal-active
+// and returns the patient IDs of everyone on at least one renal-sensitive
+// medication. Phase 7 P7-C: the population the monthly anticipatory batch
+// iterates over.
+func (c *KB20Client) FetchRenalActivePatientIDs(ctx context.Context) ([]string, error) {
+	start := time.Now()
+	url := fmt.Sprintf("%s/api/v1/patients/renal-active", c.cfg.KB20URL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create KB-20 renal-active request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.client.Do(req)
+	if c.metrics != nil {
+		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("KB-20 renal-active fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		c.log.Warn("KB-20 renal-active returned non-200",
+			zap.Int("status", resp.StatusCode),
+			zap.String("body", string(body)))
+		return nil, fmt.Errorf("KB-20 renal-active returned status %d", resp.StatusCode)
+	}
+
+	var env kb20EnvelopeRenalActive
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return nil, fmt.Errorf("decode KB-20 renal-active response: %w", err)
+	}
+	ids := make([]string, 0, len(env.Data))
+	for _, entry := range env.Data {
+		if entry.PatientID != "" {
+			ids = append(ids, entry.PatientID)
+		}
+	}
+	return ids, nil
 }
