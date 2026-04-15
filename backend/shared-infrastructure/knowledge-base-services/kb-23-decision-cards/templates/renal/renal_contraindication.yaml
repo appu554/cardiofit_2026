@@ -1,0 +1,104 @@
+# KB-23 Decision Card Template: Reactive Renal Contraindication
+# Triggered when: A newly-derived eGFR (from KB-20 lab_service.deriveEGFR)
+#   causes a currently-active medication class to cross a contraindication
+#   threshold (e.g. metformin @ eGFR <30, SGLT2 @ eGFR <20). Detection path
+#   is KB-20 eGFR publish → clinical.priority-events.v1 → KB-23
+#   PrioritySignalHandler.handleRenalGate → RenalDoseGate.EvaluatePatient.
+# Purpose: Halt the contraindicated medication before the next scheduled
+#   dose and surface the gap to the clinician with the evidence trail.
+# Version: 1.0.0
+# Phase: 7 P7-A — Reactive Renal Dose Gating Activation
+
+template_id: "dc-renal-contraindication-v1"
+node_id: "CROSS_NODE"
+differential_id: "RENAL_CONTRAINDICATION"
+version: "1.0.0"
+clinical_reviewer: "dr.nephrology.lead"
+mcu_gate_default: "HALT"
+
+# Generated directly from a priority signal (EGFR_LAB route), not via
+# the standard KB-22 → KB-23 HPI pathway.
+card_source: "CLINICAL_SIGNAL"
+
+# No Bayesian thresholds — priority-signal cards bypass the confidence
+# gate because the trigger (a persisted lab value crossing a formulary
+# threshold) carries its own evidence weight.
+confidence_thresholds:
+  firm_posterior: 0.0
+  firm_medication_change: 0.0
+  probable_posterior: 0.0
+  possible_posterior: 0.0
+
+recommendations:
+  - rec_type: "MEDICATION_HOLD"
+    urgency: "IMMEDIATE"
+    target: "contraindicated_drug_class"
+    action_text_en: |
+      HOLD the contraindicated medication(s) listed in the clinician
+      summary before the next scheduled dose. Confirm the renal function
+      deterioration is sustained (not a single aberrant reading) by
+      repeat creatinine within 72 hours. If the eGFR drop is confirmed
+      and the medication is mandatory for the underlying condition,
+      review alternative agents within the same therapeutic class that
+      do not carry the renal contraindication.
+    action_text_hi: |
+      नैदानिक सारांश में सूचीबद्ध वर्जित दवा(ओं) को अगली निर्धारित खुराक
+      से पहले रोकें। 72 घंटों के भीतर क्रिएटिनिन दोहराकर पुष्टि करें कि
+      गुर्दे के कार्य में गिरावट बनी हुई है।
+    rationale_en: |
+      A newly-derived eGFR crossed the contraindication threshold for an
+      active medication class on this patient's regimen. Continuing the
+      medication risks accumulation and end-organ toxicity (lactic
+      acidosis for metformin, volume depletion for SGLT2i, hyperkalaemia
+      for RAAS + MRA).
+    guideline_ref: "KDIGO CKD 2024 S4; FDA label metformin/SGLT2i renal cutoffs"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 1
+
+  - rec_type: "MONITORING"
+    urgency: "URGENT"
+    target: "clinician"
+    action_text_en: |
+      Renal Monitoring Schedule following contraindication detection:
+        - Day 0:  Document current eGFR, review all nephrotoxic agents
+        - Day 3:  Repeat creatinine + eGFR to confirm sustained drop
+        - Day 14: Reassess CKD staging; decide on permanent discontinuation
+                  vs. resumption once eGFR recovers above threshold
+        - Day 30: Follow-up eGFR and review all renally-cleared medications
+    action_text_hi: |
+      गुर्दे की निगरानी अनुसूची: दिन 3 — क्रिएटिनिन दोहराएं; दिन 14 —
+      CKD स्टेजिंग पुनर्मूल्यांकन; दिन 30 — अनुवर्ती eGFR।
+    rationale_en: |
+      Structured follow-up distinguishes a true renal contraindication
+      from a transient eGFR drop (e.g. dehydration, post-contrast AKI)
+      that would otherwise cause an unnecessary discontinuation.
+    guideline_ref: "KDIGO CKD 2024 S4.4"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 2
+
+# Fragments for clinician/patient summaries. The handler performs text
+# template substitution on these strings at card-build time to inject
+# the runtime eGFR value and the list of contraindicated drug classes.
+fragments:
+  - fragment_type: "CLINICIAN"
+    text_en: |
+      RENAL CONTRAINDICATION: eGFR {{.EGFR}} mL/min/1.73m² crosses
+      contraindication threshold for {{.DrugClasses}}. Hold before next
+      dose; confirm with repeat creatinine in 72h.
+    text_hi: |
+      गुर्दे का विरोधाभास: eGFR {{.EGFR}} mL/min/1.73m² {{.DrugClasses}}
+      के लिए वर्जित सीमा को पार करता है।
+    version: "1.0.0"
+  - fragment_type: "PATIENT"
+    text_en: |
+      A recent kidney function test shows your kidneys are working less
+      well than before. One or more of your medications are no longer
+      safe at this level of kidney function. Your care team is reviewing
+      your medications and will contact you about next steps.
+    text_hi: |
+      हाल ही में गुर्दे के कार्य परीक्षण से पता चला है कि आपके गुर्दे
+      पहले से कम काम कर रहे हैं। आपकी एक या अधिक दवाएं अब इस स्तर पर
+      सुरक्षित नहीं हैं। आपकी देखभाल टीम समीक्षा कर रही है।
+    version: "1.0.0"

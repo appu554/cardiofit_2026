@@ -152,6 +152,11 @@ func (s *Server) Database() *database.Database { return s.db }
 // Phase 6 P6-6 CKM transition handler needs it to fetch patient context).
 func (s *Server) KB20Client() *services.KB20Client { return s.kb20Client }
 
+// TemplateLoader returns the YAML card-template loader (used by Kafka consumer
+// wiring in main — Phase 7 P7-A reactive renal handler needs it to look up
+// renal_contraindication + renal_dose_reduce templates at card-build time).
+func (s *Server) TemplateLoader() *services.TemplateLoader { return s.templateLoader }
+
 // requestLogger middleware logs each request.
 func requestLogger(log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {

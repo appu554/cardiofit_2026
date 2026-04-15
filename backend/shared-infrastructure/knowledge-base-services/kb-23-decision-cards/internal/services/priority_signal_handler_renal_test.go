@@ -13,7 +13,7 @@ import (
 // arrives on the EGFR_LAB route, no gating runs.
 func TestHandleRenalGate_NonEGFRPayload_Noop(t *testing.T) {
 	handler := NewPrioritySignalHandler(
-		nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
 	)
 	payload, _ := json.Marshal(map[string]interface{}{
 		"lab_type": "CREATININE",
@@ -42,6 +42,7 @@ func TestHandleRenalGate_WithoutDependencies_IsDefensiveNoop(t *testing.T) {
 		nil, // mandatoryMedChecker
 		nil, // kb20Client — intentionally nil
 		nil, // renalDoseGate — intentionally nil
+		nil, // templateLoader
 		nil, // metrics
 		zap.NewNop(),
 	)
@@ -67,7 +68,7 @@ func TestHandleRenalGate_WithoutDependencies_IsDefensiveNoop(t *testing.T) {
 // malformed JSON payload surfaces a clear error.
 func TestHandleRenalGate_InvalidPayload_ReturnsError(t *testing.T) {
 	handler := NewPrioritySignalHandler(
-		nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
 	)
 	env := priorityEnvelope{
 		SignalType: "EGFR_LAB",
@@ -85,7 +86,7 @@ func TestHandleRenalGate_InvalidPayload_ReturnsError(t *testing.T) {
 // handler).
 func TestHandleRenalGate_DispatchedViaHandle(t *testing.T) {
 	handler := NewPrioritySignalHandler(
-		nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop(),
 	)
 	envelopeJSON, _ := json.Marshal(priorityEnvelope{
 		SignalType: "EGFR_LAB",

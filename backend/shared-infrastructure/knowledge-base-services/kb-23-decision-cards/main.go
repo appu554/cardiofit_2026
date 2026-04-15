@@ -121,6 +121,7 @@ func main() {
 			services.NewMandatoryMedChecker(),
 			server.KB20Client(),
 			renalGate,
+			server.TemplateLoader(), // Phase 7 P7-A: renal card templates
 			server.MetricsCollector(),
 			logger,
 		)

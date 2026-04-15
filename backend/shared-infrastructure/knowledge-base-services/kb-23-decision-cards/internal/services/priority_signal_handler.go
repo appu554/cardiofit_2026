@@ -1,10 +1,12 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	texttemplate "text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,14 +26,16 @@ type PrioritySignalHandler struct {
 	mandatoryMedChecker  *MandatoryMedChecker // Phase 6 P6-6
 	kb20Client           *KB20Client          // Phase 6 P6-6 + P6-2
 	renalDoseGate        *RenalDoseGate       // Phase 6 P6-2
+	templateLoader       *TemplateLoader      // Phase 7 P7-A
 	metrics              *metrics.Collector
 	log                  *zap.Logger
 }
 
 // NewPrioritySignalHandler creates a new handler for priority signals.
-// mandatoryMedChecker, kb20Client, and renalDoseGate are optional — pass
-// nil to disable the corresponding Phase 6 handlers (e.g., in unit tests
-// for other routes).
+// mandatoryMedChecker, kb20Client, renalDoseGate, and templateLoader are
+// optional — pass nil to disable the corresponding handlers (e.g., in
+// unit tests for other routes, or in bootstrap paths where a dependency
+// is not yet wired).
 func NewPrioritySignalHandler(
 	db *database.Database,
 	gateCache *MCUGateCache,
@@ -40,6 +44,7 @@ func NewPrioritySignalHandler(
 	mandatoryMedChecker *MandatoryMedChecker,
 	kb20Client *KB20Client,
 	renalDoseGate *RenalDoseGate,
+	templateLoader *TemplateLoader,
 	m *metrics.Collector,
 	log *zap.Logger,
 ) *PrioritySignalHandler {
@@ -51,6 +56,7 @@ func NewPrioritySignalHandler(
 		mandatoryMedChecker: mandatoryMedChecker,
 		kb20Client:          kb20Client,
 		renalDoseGate:       renalDoseGate,
+		templateLoader:      templateLoader,
 		metrics:             m,
 		log:                 log,
 	}
@@ -83,24 +89,26 @@ func (h *PrioritySignalHandler) Handle(ctx context.Context, action PriorityRoute
 	}
 }
 
+// Phase 7 P7-A: template IDs for the reactive renal gating cards. These
+// must match the `template_id` keys in templates/renal/*.yaml so the
+// TemplateLoader can resolve them at card-build time.
+const (
+	renalContraindicationTemplateID = "dc-renal-contraindication-v1"
+	renalDoseReduceTemplateID       = "dc-renal-dose-reduce-v1"
+)
+
 // handleRenalGate processes a new derived eGFR lab event and runs the
 // reactive renal dose gate against the patient's active medications.
-// Phase 6 P6-2: closes the loop where a new creatinine result is the
-// only thing standing between a metformin patient and an undetected
-// contraindication when their eGFR drops below 30.
-//
-// Scope note — like P6-6, this handler currently logs detected gating
-// gaps rather than persisting them as DecisionCards. The DecisionCard
-// model is template-driven (TemplateID, NodeID, ClinicianSummary,
-// SafetyCheckSummary) and building real cards needs new
-// RENAL_CONTRAINDICATION + RENAL_DOSE_REDUCE YAML templates plus the
-// full card-builder pipeline (~1d follow-up). The Decision 9 abstraction
-// proof — KB-20 publishes EGFR_LAB → KB-23 routes → handler runs gate
-// → contraindications detected — ships fully. Card persistence is the
-// missing last mile alongside the Prometheus metrics
-// renal_contraindication_detected_total{drug_class} and
-// renal_reactive_latency_seconds.
+// Phase 6 P6-2 closed the detection loop (KB-20 publishes EGFR_LAB →
+// KB-23 routes → handler runs gate). Phase 7 P7-A closes the card
+// persistence loop: detected gaps are now written as DecisionCards
+// via the renal YAML templates, gate cache is updated, and the
+// KB-19 gate-changed event is emitted. The end-to-end latency from
+// signal receipt to persisted card is recorded in the
+// kb23_renal_reactive_latency_seconds histogram.
 func (h *PrioritySignalHandler) handleRenalGate(ctx context.Context, env priorityEnvelope) error {
+	receivedAt := time.Now()
+
 	var payload struct {
 		LabType    string  `json:"lab_type"`
 		Value      float64 `json:"value"`
@@ -141,8 +149,7 @@ func (h *PrioritySignalHandler) handleRenalGate(ctx context.Context, env priorit
 	// Construct ActiveMedication slice from the string medication list
 	// in PatientContext. Drug names + doses aren't carried here, so the
 	// gate evaluates only by drug class — sufficient for contraindication
-	// detection (the formulary keys on drug class). The dose-reduce path
-	// will need richer medication data in a Phase 6 follow-up.
+	// detection (the formulary keys on drug class).
 	meds := make([]ActiveMedication, 0, len(patientCtx.Medications))
 	for _, drugClass := range patientCtx.Medications {
 		meds = append(meds, ActiveMedication{DrugClass: drugClass})
@@ -180,15 +187,194 @@ func (h *PrioritySignalHandler) handleRenalGate(ctx context.Context, env priorit
 		}
 	}
 
-	h.log.Info("renal gate: gating gaps detected",
+	patientID, err := uuid.Parse(env.PatientID)
+	if err != nil {
+		return fmt.Errorf("invalid patient_id for renal card: %w", err)
+	}
+
+	// Persist one card per detection category — contraindication first
+	// (HALT, SafetyImmediate) then dose-reduce (MODIFY, SafetyUrgent).
+	// The two cards are persisted independently so a template-loader
+	// failure on one doesn't suppress the other.
+	if len(contraindicated) > 0 {
+		if err := h.persistRenalCard(
+			patientID,
+			renalContraindicationTemplateID,
+			"RENAL_CONTRAINDICATION",
+			models.GateHalt,
+			models.SafetyImmediate,
+			payload.Value,
+			contraindicated,
+		); err != nil {
+			h.log.Error("failed to persist renal contraindication card",
+				zap.String("patient_id", env.PatientID),
+				zap.Error(err))
+		} else if h.metrics != nil {
+			for _, drugClass := range contraindicated {
+				h.metrics.RenalContraindicationDetected.WithLabelValues(drugClass).Inc()
+			}
+		}
+	}
+
+	if len(doseReduce) > 0 {
+		if err := h.persistRenalCard(
+			patientID,
+			renalDoseReduceTemplateID,
+			"RENAL_DOSE_REDUCE",
+			models.GateModify,
+			models.SafetyUrgent,
+			payload.Value,
+			doseReduce,
+		); err != nil {
+			h.log.Error("failed to persist renal dose-reduce card",
+				zap.String("patient_id", env.PatientID),
+				zap.Error(err))
+		} else if h.metrics != nil {
+			for _, drugClass := range doseReduce {
+				h.metrics.RenalDoseReduceDetected.WithLabelValues(drugClass).Inc()
+			}
+		}
+	}
+
+	if h.metrics != nil {
+		h.metrics.RenalReactiveLatency.Observe(time.Since(receivedAt).Seconds())
+	}
+
+	h.log.Info("renal gate: cards persisted",
 		zap.String("patient_id", env.PatientID),
 		zap.Float64("egfr", payload.Value),
 		zap.String("urgency", report.OverallUrgency),
 		zap.Strings("contraindicated", contraindicated),
 		zap.Strings("dose_reduce", doseReduce),
-		zap.String("note", "card persistence pending Phase 6 follow-up — needs RENAL_CONTRAINDICATION + RENAL_DOSE_REDUCE YAML templates + card builder wiring"),
 	)
 	return nil
+}
+
+// persistRenalCard looks up the given template via the TemplateLoader,
+// renders the clinician + patient summaries, assembles a DecisionCard,
+// persists it, writes the gate cache, and emits the KB-19 gate-changed
+// event. Returns an error if any of those steps fail; the caller
+// records metrics only on success.
+//
+// When templateLoader, db, gateCache, or kb19 are nil (test harness or
+// bootstrap mode where KB-23 runs without the full priority stack), the
+// handler is defensive: it logs a warning and returns nil so a missing
+// dependency can't panic a production pipeline.
+func (h *PrioritySignalHandler) persistRenalCard(
+	patientID uuid.UUID,
+	templateID string,
+	differentialID string,
+	gate models.MCUGate,
+	safetyTier models.SafetyTier,
+	egfr float64,
+	drugClasses []string,
+) error {
+	if h.templateLoader == nil || h.db == nil {
+		h.log.Warn("renal card persistence skipped: templateLoader or db not wired",
+			zap.String("template_id", templateID),
+			zap.Int("drug_class_count", len(drugClasses)))
+		return nil
+	}
+
+	tmpl, ok := h.templateLoader.Get(templateID)
+	if !ok {
+		return fmt.Errorf("template %s not loaded (check templates/renal/*.yaml)", templateID)
+	}
+
+	clinicianSummary, patientSummaryEn, patientSummaryHi := renderRenalSummaries(tmpl, egfr, drugClasses)
+	notes := clinicianSummary
+
+	card := &models.DecisionCard{
+		CardID:                   uuid.New(),
+		PatientID:                patientID,
+		TemplateID:               tmpl.TemplateID,
+		NodeID:                   tmpl.NodeID,
+		PrimaryDifferentialID:    differentialID,
+		DiagnosticConfidenceTier: models.TierFirm,
+		MCUGate:                  gate,
+		MCUGateRationale:         clinicianSummary,
+		DoseAdjustmentNotes:      &notes,
+		ObservationReliability:   models.ReliabilityHigh,
+		SafetyTier:               safetyTier,
+		CardSource:               models.SourceClinicalSignal,
+		Status:                   models.StatusActive,
+		ClinicianSummary:         clinicianSummary,
+		PatientSummaryEn:         patientSummaryEn,
+		PatientSummaryHi:         patientSummaryHi,
+		PendingReaffirmation:     gate == models.GateHalt,
+		CreatedAt:                time.Now(),
+		UpdatedAt:                time.Now(),
+	}
+
+	if err := h.db.DB.Create(card).Error; err != nil {
+		return fmt.Errorf("save renal card: %w", err)
+	}
+
+	if h.gateCache != nil {
+		if err := h.gateCache.WriteGate(card); err != nil {
+			h.log.Error("gate cache write failed for renal card",
+				zap.String("card_id", card.CardID.String()),
+				zap.Error(err))
+		}
+	}
+	if h.kb19 != nil {
+		go h.kb19.PublishGateChanged(card)
+	}
+
+	return nil
+}
+
+// renderRenalSummaries picks the CLINICIAN and PATIENT fragments out of a
+// loaded renal template and substitutes runtime values (eGFR, drug classes)
+// into them via text/template. Pure function — exported for unit testing
+// without a database or template loader.
+func renderRenalSummaries(tmpl *models.CardTemplate, egfr float64, drugClasses []string) (clinician, patientEn, patientHi string) {
+	data := struct {
+		EGFR        string
+		DrugClasses string
+	}{
+		EGFR:        fmt.Sprintf("%.1f", egfr),
+		DrugClasses: strings.Join(drugClasses, ", "),
+	}
+
+	for _, frag := range tmpl.Fragments {
+		switch frag.FragmentType {
+		case models.FragClinician:
+			clinician = executeRenalTemplate(frag.TextEn, data)
+		case models.FragPatient:
+			patientEn = executeRenalTemplate(frag.TextEn, data)
+			patientHi = executeRenalTemplate(frag.TextHi, data)
+		}
+	}
+
+	// Defensive fallback: if a template is somehow missing fragments,
+	// synthesise a baseline clinician summary so the persisted card
+	// still carries enough information to route the clinician to the
+	// triggering eGFR and drug class list.
+	if clinician == "" {
+		clinician = fmt.Sprintf("Renal gating: eGFR %.1f mL/min/1.73m² — affected drug classes: %s",
+			egfr, strings.Join(drugClasses, ", "))
+	}
+	return clinician, patientEn, patientHi
+}
+
+// executeRenalTemplate parses and executes a text/template snippet
+// with the given data, returning the raw string on parse/execute
+// failure so a malformed template never crashes the handler.
+func executeRenalTemplate(raw string, data interface{}) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	tpl, err := texttemplate.New("renal").Parse(raw)
+	if err != nil {
+		return raw
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		return raw
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 // handleCKMTransition processes a CKM_STAGE_TRANSITION event published by

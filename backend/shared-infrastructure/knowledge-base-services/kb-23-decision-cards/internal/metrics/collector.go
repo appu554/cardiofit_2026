@@ -41,6 +41,14 @@ type Collector struct {
 	// Composite cards
 	CompositeCardsCreated prometheus.Counter
 	UrgencyUpgrades       prometheus.Counter
+
+	// Phase 7 P7-A: Reactive renal dose gating outcomes.
+	// Labelled by drug_class so dashboards can separate metformin vs SGLT2i
+	// vs RAAS trajectories. RenalReactiveLatency is measured end-to-end from
+	// priority signal receipt to card persistence.
+	RenalContraindicationDetected *prometheus.CounterVec
+	RenalDoseReduceDetected       *prometheus.CounterVec
+	RenalReactiveLatency          prometheus.Histogram
 }
 
 func NewCollector() *Collector {
@@ -145,6 +153,22 @@ func NewCollector() *Collector {
 		UrgencyUpgrades: promauto.NewCounter(prometheus.CounterOpts{
 			Name: "kb23_urgency_upgrades_total",
 			Help: "Urgency upgrades from 3+ recurrences",
+		}),
+
+		RenalContraindicationDetected: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_renal_contraindication_detected_total",
+			Help: "Reactive renal contraindication cards generated, by drug class (Phase 7 P7-A)",
+		}, []string{"drug_class"}),
+
+		RenalDoseReduceDetected: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_renal_dose_reduce_detected_total",
+			Help: "Reactive renal dose-reduction cards generated, by drug class (Phase 7 P7-A)",
+		}, []string{"drug_class"}),
+
+		RenalReactiveLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb23_renal_reactive_latency_seconds",
+			Help:    "End-to-end latency from EGFR_LAB priority signal receipt to renal card persistence",
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5},
 		}),
 	}
 }
