@@ -144,8 +144,16 @@ func TestKB20Client_FetchSummaryContext_RoundTripsAgainstRealHandler(t *testing.
 		},
 	}
 
+	// Phase 8 P8-4: this mirror handler pins the EXACT production
+	// route /api/v1/patient/:id/summary-context. Previously the
+	// mirror used /patient/:id/summary-context (no api/v1 prefix),
+	// which happened to match the KB-23 client's URL template —
+	// but the KB-20 server only exposes the route under /api/v1.
+	// The test passed because both sides were wrong in matching
+	// ways. Fixing the client URL to include /api/v1 AND tightening
+	// this mirror to require the real path closes the bug forever.
 	handler := http.NewServeMux()
-	handler.HandleFunc("/patient/p-integration/summary-context", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("/api/v1/patient/p-integration/summary-context", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

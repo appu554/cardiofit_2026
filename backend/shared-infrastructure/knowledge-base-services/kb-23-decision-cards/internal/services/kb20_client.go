@@ -72,11 +72,16 @@ func NewKB20Client(cfg *config.Config, m *metrics.Collector, log *zap.Logger) *K
 	}
 }
 
-// FetchSummaryContext calls KB-20 GET /patient/:id/summary-context.
+// FetchSummaryContext calls KB-20 GET /api/v1/patient/:id/summary-context.
 // Returns PatientContext or nil if KB-20 is unavailable (graceful degradation).
+//
+// Phase 8 P8-4 bug fix: the URL template was missing the /api/v1/
+// prefix that every other v1 route on KB-20 uses. The P8-1 integration
+// test masked this because its mirror handler used the same wrong
+// path. The tightened P8-4 integration test pins the real route.
 func (c *KB20Client) FetchSummaryContext(ctx context.Context, patientID string) (*PatientContext, error) {
 	start := time.Now()
-	url := fmt.Sprintf("%s/patient/%s/summary-context", c.cfg.KB20URL, patientID)
+	url := fmt.Sprintf("%s/api/v1/patient/%s/summary-context", c.cfg.KB20URL, patientID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
