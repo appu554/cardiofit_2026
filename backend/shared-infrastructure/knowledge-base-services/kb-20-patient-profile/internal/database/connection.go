@@ -74,6 +74,9 @@ func autoMigrate(db *gorm.DB) error {
 		&models.FHIRSyncLog{},
 		&models.ProtocolState{},
 		&models.ProtocolMetrics{},
+		// Phase 8 P8-5: safety_events audit table feeds the
+		// summary-context confounder flags.
+		&models.SafetyEvent{},
 	)
 }
 

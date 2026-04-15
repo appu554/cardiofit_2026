@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+
+	"kb-patient-profile/internal/models"
 )
 
 // setupSummaryContextTestDB creates an in-memory sqlite DB with the
@@ -74,6 +76,29 @@ func setupSummaryContextTestDB(t *testing.T) *gorm.DB {
 	`).Error
 	if err != nil {
 		t.Fatalf("create medication_states: %v", err)
+	}
+
+	// Phase 8 P8-5: safety_events table for confounder flag tests.
+	// Raw DDL (not GORM AutoMigrate) because sqlite does not
+	// understand the Postgres-specific gen_random_uuid() default
+	// that the production model uses. Column set mirrors the
+	// models.SafetyEvent struct fields exactly so GORM reads work.
+	err = db.Exec(`
+		CREATE TABLE safety_events (
+			id TEXT PRIMARY KEY,
+			patient_id TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			severity TEXT,
+			description TEXT,
+			lab_type TEXT,
+			old_value TEXT,
+			new_value TEXT,
+			observed_at DATETIME NOT NULL,
+			created_at DATETIME
+		)
+	`).Error
+	if err != nil {
+		t.Fatalf("create safety_events table: %v", err)
 	}
 
 	err = db.Exec(`
@@ -186,7 +211,7 @@ func TestSummaryContext_HappyPath(t *testing.T) {
 	// from the lab_entries path (same pattern as HbA1c / FBG).
 	seedSummaryLab(t, db, "p-happy", "POTASSIUM", 4.2, now.AddDate(0, 0, -3))
 
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 	ctx, err := svc.BuildContext(context.Background(),"p-happy")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
@@ -264,7 +289,7 @@ func TestSummaryContext_HappyPath(t *testing.T) {
 // The handler layer maps this to HTTP 404.
 func TestSummaryContext_MissingPatientReturnsError(t *testing.T) {
 	db := setupSummaryContextTestDB(t)
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 
 	ctx, err := svc.BuildContext(context.Background(),"p-nonexistent")
 	if err == nil {
@@ -289,7 +314,7 @@ func TestSummaryContext_PartialData_NoLabs(t *testing.T) {
 	seedSummaryPatient(t, db, "p-no-labs", &egfr, 75.0, "MODERATE")
 	seedSummaryMed(t, db, "p-no-labs", "METFORMIN", "metformin", true)
 
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 	ctx, err := svc.BuildContext(context.Background(),"p-no-labs")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
@@ -318,7 +343,7 @@ func TestSummaryContext_PartialData_NoMedications(t *testing.T) {
 	egfr := 90.0
 	seedSummaryPatient(t, db, "p-unmedicated", &egfr, 70.0, "LOW")
 
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 	ctx, err := svc.BuildContext(context.Background(),"p-unmedicated")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
@@ -340,7 +365,7 @@ func TestSummaryContext_NilEGFRProfile(t *testing.T) {
 	db := setupSummaryContextTestDB(t)
 	seedSummaryPatient(t, db, "p-fresh", nil, 80.0, "LOW")
 
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 	ctx, err := svc.BuildContext(context.Background(),"p-fresh")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
@@ -362,7 +387,7 @@ func TestSummaryContext_DistinctDrugClasses(t *testing.T) {
 	seedSummaryMed(t, db, "p-dupe", "METFORMIN", "metformin IR", true)
 	seedSummaryMed(t, db, "p-dupe", "METFORMIN", "metformin XR", true)
 
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 	ctx, err := svc.BuildContext(context.Background(),"p-dupe")
 	if err != nil {
 		t.Fatalf("BuildContext: %v", err)
@@ -377,7 +402,7 @@ func TestSummaryContext_DistinctDrugClasses(t *testing.T) {
 // WHERE clause.
 func TestSummaryContext_EmptyPatientID(t *testing.T) {
 	db := setupSummaryContextTestDB(t)
-	svc := NewSummaryContextService(db, nil, zap.NewNop())
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
 
 	_, err := svc.BuildContext(context.Background(),"")
 	if err == nil {
@@ -488,4 +513,73 @@ func mustMarshalForTest(t *testing.T, v interface{}) map[string]interface{} {
 		t.Fatalf("json unmarshal: %v", err)
 	}
 	return out
+}
+
+// TestSummaryContext_ConfounderFlags_PopulatedFromSafetyEvents is
+// the Phase 8 P8-5 end-to-end check: seed a patient with an
+// ACUTE_ILLNESS + HYPO_EVENT in the safety_events table, call
+// BuildContext with a real SafetyEventRecorder wired in, and assert
+// that IsAcuteIll + HasRecentHypoglycaemia end up populated on the
+// returned SummaryContext. This closes the loop between the
+// recorder write path and the summary-context read path.
+func TestSummaryContext_ConfounderFlags_PopulatedFromSafetyEvents(t *testing.T) {
+	db := setupSummaryContextTestDB(t)
+	egfr := 65.0
+	seedSummaryPatient(t, db, "p-confounders", &egfr, 80.0, "HIGH")
+
+	// Seed safety events directly via the recorder — matches the
+	// production flow where lab_service + other callers invoke
+	// Record alongside their eventBus.Publish calls.
+	recorder := NewSafetyEventRecorder(db, zap.NewNop())
+	_ = recorder.Record("p-confounders", models.SafetyEventAcuteIllness, "SEVERE",
+		"hospitalisation for CAP", time.Now().UTC().Add(-2*24*time.Hour))
+	_ = recorder.Record("p-confounders", models.SafetyEventHypoEvent, "MODERATE",
+		"nocturnal hypo, resolved with glucose tabs", time.Now().UTC().Add(-10*24*time.Hour))
+	// No transfusion event — HasRecentTransfusion should stay false.
+
+	svc := NewSummaryContextService(db, nil, recorder, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(), "p-confounders")
+	if err != nil {
+		t.Fatalf("BuildContext: %v", err)
+	}
+	if ctx == nil {
+		t.Fatal("expected non-nil context")
+	}
+
+	if !ctx.IsAcuteIll {
+		t.Error("IsAcuteIll = false, want true (ACUTE_ILLNESS event 2d old)")
+	}
+	if ctx.HasRecentTransfusion {
+		t.Error("HasRecentTransfusion = true, want false (no transfusion event)")
+	}
+	if !ctx.HasRecentHypoglycaemia {
+		t.Error("HasRecentHypoglycaemia = false, want true (HYPO_EVENT 10d old)")
+	}
+}
+
+// TestSummaryContext_ConfounderFlags_NilRecorderDegradesCleanly
+// verifies the existing fallback path still works: when the
+// recorder is nil, the confounder flags default to false and
+// BuildContext still returns a usable SummaryContext. Pins the
+// P8-2 nil-safe fallback as a regression guard after P8-5 added
+// the real flag wiring.
+func TestSummaryContext_ConfounderFlags_NilRecorderDegradesCleanly(t *testing.T) {
+	db := setupSummaryContextTestDB(t)
+	egfr := 70.0
+	seedSummaryPatient(t, db, "p-no-recorder", &egfr, 75.0, "MODERATE")
+
+	svc := NewSummaryContextService(db, nil, nil, zap.NewNop())
+	ctx, err := svc.BuildContext(context.Background(), "p-no-recorder")
+	if err != nil {
+		t.Fatalf("BuildContext: %v", err)
+	}
+	if ctx.IsAcuteIll {
+		t.Error("IsAcuteIll should default to false when recorder nil")
+	}
+	if ctx.HasRecentTransfusion {
+		t.Error("HasRecentTransfusion should default to false when recorder nil")
+	}
+	if ctx.HasRecentHypoglycaemia {
+		t.Error("HasRecentHypoglycaemia should default to false when recorder nil")
+	}
 }

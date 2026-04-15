@@ -107,23 +107,38 @@ type CGMStatusSnapshot struct {
 // that KB-23's card generation pipeline needs. Queries existing tables
 // and services — it does not write anything, does not mutate state.
 // Phase 8 P8-2: adds one cross-service fetch (KB-26 cgm-latest) for
-// CGM status. All other fields stay on the read-path aggregation.
+// CGM status. Phase 8 P8-5: adds safety_events query for confounder
+// flag population (IsAcuteIll, HasRecentTransfusion,
+// HasRecentHypoglycaemia).
 type SummaryContextService struct {
-	db         *gorm.DB
-	cgmFetcher CGMStatusFetcher
-	logger     *zap.Logger
+	db             *gorm.DB
+	cgmFetcher     CGMStatusFetcher
+	safetyRecorder *SafetyEventRecorder
+	logger         *zap.Logger
 }
 
-// NewSummaryContextService wires the dependencies. cgmFetcher is
-// optional — pass nil in tests that don't need CGM data, or when
-// KB-26 is not reachable. When nil, the CGM fields on SummaryContext
-// stay at their zero values (HasCGM=false) and KB-23 consumers
-// degrade cleanly to the HbA1c-based glycaemic path.
-func NewSummaryContextService(db *gorm.DB, cgmFetcher CGMStatusFetcher, logger *zap.Logger) *SummaryContextService {
+// NewSummaryContextService wires the dependencies. cgmFetcher and
+// safetyRecorder are both optional — pass nil in tests that don't
+// need them, or when the dependency is not yet reachable. When nil,
+// the corresponding fields on SummaryContext stay at their zero
+// values and KB-23 consumers degrade cleanly (HasCGM=false,
+// confounder flags all false, which biases toward surfacing cards
+// rather than suppressing them).
+func NewSummaryContextService(
+	db *gorm.DB,
+	cgmFetcher CGMStatusFetcher,
+	safetyRecorder *SafetyEventRecorder,
+	logger *zap.Logger,
+) *SummaryContextService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &SummaryContextService{db: db, cgmFetcher: cgmFetcher, logger: logger}
+	return &SummaryContextService{
+		db:             db,
+		cgmFetcher:     cgmFetcher,
+		safetyRecorder: safetyRecorder,
+		logger:         logger,
+	}
 }
 
 // BuildContext assembles a SummaryContext for the given patient.
@@ -155,14 +170,29 @@ func (s *SummaryContextService) BuildContext(ctx context.Context, patientID stri
 		return nil, err
 	}
 
+	// P8-5: derive confounder flags from the safety_events audit
+	// trail. A nil recorder produces all-false (same as the P8-2
+	// default), and a recorder-level failure also produces all-
+	// false — defensive so a DB hiccup on the safety table cannot
+	// break the entire summary-context endpoint. The conservative
+	// direction here is deliberate: all-false biases toward
+	// surfacing cards rather than suppressing them, which is the
+	// safer clinical direction when the confounder signal is
+	// unavailable.
+	var isAcuteIll, hasRecentTransfusion, hasRecentHypoglycaemia bool
+	if s.safetyRecorder != nil {
+		isAcuteIll, hasRecentTransfusion, hasRecentHypoglycaemia =
+			s.safetyRecorder.ConfounderFlags(patientID, time.Now().UTC())
+	}
+
 	result := &SummaryContext{
 		// P8-1 core
 		PatientID:              profile.PatientID,
 		Stratum:                profile.CVRiskCategory,
 		WeightKg:               profile.WeightKg,
-		IsAcuteIll:             false,
-		HasRecentTransfusion:   false,
-		HasRecentHypoglycaemia: false,
+		IsAcuteIll:             isAcuteIll,
+		HasRecentTransfusion:   hasRecentTransfusion,
+		HasRecentHypoglycaemia: hasRecentHypoglycaemia,
 
 		// P8-2 demographics — straight column reads
 		Age: profile.Age,
@@ -262,19 +292,12 @@ func (s *SummaryContextService) BuildContext(ctx context.Context, patientID stri
 		}
 	}
 
-	// P8-2 TODO: IsAcuteIll, HasRecentTransfusion, and
-	// HasRecentHypoglycaemia still default to false — these are
-	// confounder flags that the MCU gate manager reads (V-06 stress
-	// hyperglycaemia rule depends on IsAcuteIll in particular) but
-	// KB-20 does not yet track a queryable safety_events log.
-	// Populating them requires either:
-	//   (a) a new safety_events table fed by the event bus,
-	//   (b) a cross-service query to KB-26's priority-events
-	//       audit trail (if/when one exists), or
-	//   (c) a sliding-window Kafka consumer on priority-events.
-	// Defaulting false biases toward surfacing cards, not suppressing
-	// them — clinically safer than over-gating. Tracked as a
-	// Phase 8 follow-up sub-project.
+	// P8-5: Confounder flags (IsAcuteIll, HasRecentTransfusion,
+	// HasRecentHypoglycaemia) are populated from the safety_events
+	// audit trail via safetyRecorder.ConfounderFlags above. The
+	// table is fed by lab_service safety event publish paths and
+	// other clinical triggers — see safety_event_recorder.go for
+	// the clinical window definitions (7d / 90d / 30d).
 
 	return result, nil
 }

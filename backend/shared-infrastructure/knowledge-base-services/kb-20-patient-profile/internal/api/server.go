@@ -45,6 +45,14 @@ type Server struct {
 	// HbA1c glycaemic path. Set via SetKB26CGMFetcher from main.go.
 	kb26CGMFetcher services.CGMStatusFetcher
 
+	// Phase 8 P8-5: safety event recorder used by the summary-
+	// context handler to derive confounder flags (IsAcuteIll /
+	// HasRecentTransfusion / HasRecentHypoglycaemia). Nil-safe:
+	// when unset, the flags default to false and KB-23 consumers
+	// skip the corresponding MCU gate rules, which is the safer
+	// direction clinically (bias toward surfacing cards).
+	safetyRecorder *services.SafetyEventRecorder
+
 	logger *zap.Logger
 }
 
@@ -93,7 +101,12 @@ func NewServer(
 		protocolRegistry:  protocolReg,
 		eventBus:          eventBus,
 		bpReadingQuery:    services.NewBPReadingQuery(db.DB),
-		logger:            logger,
+		// Phase 8 P8-5: safety event recorder is wired at server
+		// construction because it only needs the db + logger, both
+		// of which are already available. Used by getSummaryContext
+		// to populate the confounder flags.
+		safetyRecorder: services.NewSafetyEventRecorder(db.DB, logger),
+		logger:         logger,
 	}
 
 	s.Router.Use(s.metricsMiddleware())

@@ -28,12 +28,21 @@ func (s *Server) getSummaryContext(c *gin.Context) {
 
 	// Phase 8 P8-3: the CGM fetcher is injected from main.go via
 	// SetKB26CGMFetcher after the KB-26 HTTP client is constructed.
-	// When nil (local dev without KB-26 reachable, or tests), the
-	// service degrades cleanly to HasCGM=false and downstream card
-	// generation falls back to the HbA1c glycaemic path. When
-	// populated, CGM status for the patient comes straight from
-	// KB-26's cgm_period_reports table via the cgm-latest endpoint.
-	svc := services.NewSummaryContextService(s.db.DB, s.kb26CGMFetcher, s.logger)
+	// Phase 8 P8-5: the safety event recorder is wired at server
+	// construction time and derives the confounder flags from the
+	// safety_events table.
+	//
+	// Both dependencies are nil-safe — local dev, tests, or
+	// deployments where KB-26 / safety_events are unavailable all
+	// degrade cleanly (HasCGM=false, confounder flags all false,
+	// falling back to HbA1c glycaemic path + no MCU gate confounder
+	// overrides).
+	svc := services.NewSummaryContextService(
+		s.db.DB,
+		s.kb26CGMFetcher,
+		s.safetyRecorder,
+		s.logger,
+	)
 	summary, err := svc.BuildContext(c.Request.Context(), patientID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
