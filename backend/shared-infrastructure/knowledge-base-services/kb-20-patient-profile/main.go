@@ -169,8 +169,16 @@ func main() {
 		} else {
 			kb7Client := fhir.NewKB7Client(cfg.KB7, logger)
 
+			// Phase 7 P7-B: wire CKMRecomputationService so the sync
+			// worker can re-run CKM staging on every new LVEF / NT-proBNP
+			// / CAC observation. Reuses the existing eventBus — the
+			// publisher writes both the profile state change and the
+			// CKM_STAGE_TRANSITION outbox event inside the same flow.
+			ckmPublisher := services.NewCKMTransitionPublisher(db.DB, eventBus, logger)
+			ckmRecompute := services.NewCKMRecomputationService(db.DB, ckmPublisher, logger)
+
 			// Start FHIR→KB-20 sync worker
-			syncWorker := fhir.NewSyncWorker(fhirClient, kb7Client, db.DB, logger, eventBus)
+			syncWorker := fhir.NewSyncWorker(fhirClient, kb7Client, db.DB, logger, eventBus, ckmRecompute)
 			syncWorker.Start(context.Background())
 			defer syncWorker.Stop()
 			logger.Info("FHIR sync worker started")

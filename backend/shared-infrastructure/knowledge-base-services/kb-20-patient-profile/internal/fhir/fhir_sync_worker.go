@@ -14,28 +14,41 @@ import (
 // SyncWorker polls the Google FHIR Store for new/updated resources and
 // upserts them into KB-20's PostgreSQL tables. Runs as a background goroutine.
 type SyncWorker struct {
-	client     *FHIRClient
-	kb7        *KB7Client
-	db         *gorm.DB
-	logger     *zap.Logger
-	eventBus   *services.EventBus
-	interval   time.Duration
-	lastSynced time.Time
-	cancel     context.CancelFunc
-	done       chan struct{}
+	client         *FHIRClient
+	kb7            *KB7Client
+	db             *gorm.DB
+	logger         *zap.Logger
+	eventBus       *services.EventBus
+	ckmRecompute   *services.CKMRecomputationService // Phase 7 P7-B
+	interval       time.Duration
+	lastSynced     time.Time
+	cancel         context.CancelFunc
+	done           chan struct{}
 }
 
 // NewSyncWorker creates a FHIR→KB-20 sync worker.
-func NewSyncWorker(client *FHIRClient, kb7 *KB7Client, db *gorm.DB, logger *zap.Logger, eventBus *services.EventBus) *SyncWorker {
+// Phase 7 P7-B: ckmRecompute is optional — pass nil in bootstrap paths
+// where CKMRecomputationService isn't wired yet. When nil, the worker
+// falls back to event-only behaviour and the CKM trigger gap remains
+// open (production must always wire this).
+func NewSyncWorker(
+	client *FHIRClient,
+	kb7 *KB7Client,
+	db *gorm.DB,
+	logger *zap.Logger,
+	eventBus *services.EventBus,
+	ckmRecompute *services.CKMRecomputationService,
+) *SyncWorker {
 	return &SyncWorker{
-		client:     client,
-		kb7:        kb7,
-		db:         db,
-		logger:     logger,
-		eventBus:   eventBus,
-		interval:   5 * time.Minute,
-		lastSynced: time.Now().UTC().Add(-30 * 24 * time.Hour), // initial: look back 30 days
-		done:       make(chan struct{}),
+		client:       client,
+		kb7:          kb7,
+		db:           db,
+		logger:       logger,
+		eventBus:     eventBus,
+		ckmRecompute: ckmRecompute,
+		interval:     5 * time.Minute,
+		lastSynced:   time.Now().UTC().Add(-30 * 24 * time.Hour), // initial: look back 30 days
+		done:         make(chan struct{}),
 	}
 }
 
@@ -171,6 +184,24 @@ func (w *SyncWorker) syncObservations(since time.Time) {
 			ValidationStatus: "ACCEPTED",
 			IsDerived:        false,
 		})
+
+		// Phase 7 P7-B: CKM stage recomputation trigger. A newly-persisted
+		// LVEF / NT-proBNP / CAC observation can shift a patient across a
+		// Stage 4 substage boundary (LVEF≤40 → 4c, CAC>0 → 4a) — invoke
+		// the recomputation service so CKMTransitionPublisher fires if
+		// the stage changes. The publisher no-ops on unchanged stage, so
+		// per-LOINC gating is defensive against wasted event traffic but
+		// not strictly required for correctness.
+		if w.ckmRecompute != nil && models.IsCKMStagingRelevant(lab.LabType) {
+			if _, err := w.ckmRecompute.RecomputeAndPublish(lab.PatientID, lab.FHIRObservationID); err != nil {
+				w.logger.Warn("CKM recomputation failed after observation sync",
+					zap.String("patient_id", lab.PatientID),
+					zap.String("lab_type", lab.LabType),
+					zap.String("fhir_observation_id", lab.FHIRObservationID),
+					zap.Error(err))
+			}
+		}
+
 		w.logSync("Observation", lab.FHIRObservationID, "CREATED", "")
 	}
 

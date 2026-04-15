@@ -89,12 +89,13 @@ func (h *PrioritySignalHandler) Handle(ctx context.Context, action PriorityRoute
 	}
 }
 
-// Phase 7 P7-A: template IDs for the reactive renal gating cards. These
-// must match the `template_id` keys in templates/renal/*.yaml so the
-// TemplateLoader can resolve them at card-build time.
+// Phase 7 P7-A / P7-B: template IDs for priority-signal cards. Each
+// constant must match the `template_id` key in its YAML file so the
+// TemplateLoader can resolve it at card-build time.
 const (
 	renalContraindicationTemplateID = "dc-renal-contraindication-v1"
 	renalDoseReduceTemplateID       = "dc-renal-dose-reduce-v1"
+	ckm4cMandatoryMedTemplateID     = "dc-ckm-4c-mandatory-medication-v1"
 )
 
 // handleRenalGate processes a new derived eGFR lab event and runs the
@@ -378,21 +379,11 @@ func executeRenalTemplate(raw string, data interface{}) string {
 }
 
 // handleCKMTransition processes a CKM_STAGE_TRANSITION event published by
-// KB-20's outbox relay. Phase 6 P6-6 (Decision 9): on a transition where
-// to_stage="4c", invoke MandatoryMedChecker for GDMT gap detection. Other
-// transitions (3a→3b, 4a→4b, etc.) are visible on the topic for downstream
-// consumers (dashboards, audit) but trigger no KB-23 action — only 4c
-// needs the mandatory-med check.
-//
-// Scope note — this handler currently logs detected gaps rather than
-// persisting them as DecisionCard rows. The KB-23 DecisionCard model is
-// template-driven (TemplateID, NodeID, ClinicianSummary, PatientSummaryEn,
-// SafetyCheckSummary, etc.) and building real cards requires a new
-// "CKM_4C_MANDATORY_MEDICATION" YAML template plus the full card-builder
-// pipeline (~1d follow-up). The Decision 9 abstraction proof — KB-20
+// KB-20's outbox relay. Phase 6 P6-6 landed the detection loop (KB-20
 // publishes → KB-23 routes → handler filters for 4c → MandatoryMedChecker
-// invoked → gaps detected — ships fully. Card persistence is the missing
-// last mile and lands as a Phase 6 follow-up alongside the metrics.
+// invoked → gaps detected). Phase 7 P7-B closes the card persistence
+// loop via the CKM_4C_MANDATORY_MEDICATION YAML template and records
+// kb23_ckm_stage_transitions_total / kb23_ckm_4c_mandatory_med_alerts_total.
 func (h *PrioritySignalHandler) handleCKMTransition(ctx context.Context, env priorityEnvelope) error {
 	var payload struct {
 		FromStage string `json:"from_stage"`
@@ -402,6 +393,18 @@ func (h *PrioritySignalHandler) handleCKMTransition(ctx context.Context, env pri
 	}
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		return fmt.Errorf("unmarshal CKM transition payload: %w", err)
+	}
+
+	// Always-on audit counter: every transition observed on the priority
+	// topic is tallied by from→to stage, regardless of whether KB-23 takes
+	// action. This keeps the outbox → router → handler pipeline observable
+	// even for non-4c transitions that are currently no-ops.
+	if h.metrics != nil {
+		fromLabel := payload.FromStage
+		if fromLabel == "" {
+			fromLabel = "unknown"
+		}
+		h.metrics.CKMStageTransitions.WithLabelValues(fromLabel, payload.ToStage).Inc()
 	}
 
 	if payload.ToStage != "4c" {
@@ -447,15 +450,129 @@ func (h *PrioritySignalHandler) handleCKMTransition(ctx context.Context, env pri
 		missing = append(missing, gap.MissingClass)
 	}
 
-	h.log.Info("CKM 4c transition: mandatory medication gaps detected",
+	patientID, err := uuid.Parse(env.PatientID)
+	if err != nil {
+		return fmt.Errorf("invalid patient_id for CKM 4c card: %w", err)
+	}
+
+	if err := h.persistCKM4cCard(patientID, payload.FromStage, payload.HFType, missing); err != nil {
+		h.log.Error("failed to persist CKM 4c mandatory-med card",
+			zap.String("patient_id", env.PatientID),
+			zap.Error(err))
+		return nil
+	}
+
+	if h.metrics != nil {
+		for _, drugClass := range missing {
+			h.metrics.CKM4cMandatoryMedAlerts.WithLabelValues(drugClass).Inc()
+		}
+	}
+
+	h.log.Info("CKM 4c transition: card persisted",
 		zap.String("patient_id", env.PatientID),
 		zap.String("from_stage", payload.FromStage),
 		zap.String("hf_type", payload.HFType),
 		zap.Int("gaps_found", len(gaps)),
 		zap.Strings("missing_classes", missing),
-		zap.String("note", "card persistence pending Phase 6 follow-up — needs CKM_4C_MANDATORY_MEDICATION YAML template + card builder wiring"),
 	)
 	return nil
+}
+
+// persistCKM4cCard looks up the CKM_4C_MANDATORY_MEDICATION template,
+// renders fragments with {{.FromStage}} / {{.HFType}} / {{.MissingClasses}},
+// assembles a DecisionCard, persists it, and emits the gate-changed
+// event. Defensive when templateLoader / db / gateCache / kb19 are nil.
+func (h *PrioritySignalHandler) persistCKM4cCard(
+	patientID uuid.UUID,
+	fromStage string,
+	hfType string,
+	missingClasses []string,
+) error {
+	if h.templateLoader == nil || h.db == nil {
+		h.log.Warn("CKM 4c card persistence skipped: templateLoader or db not wired",
+			zap.Int("missing_class_count", len(missingClasses)))
+		return nil
+	}
+
+	tmpl, ok := h.templateLoader.Get(ckm4cMandatoryMedTemplateID)
+	if !ok {
+		return fmt.Errorf("template %s not loaded (check templates/ckm/*.yaml)", ckm4cMandatoryMedTemplateID)
+	}
+
+	clinicianSummary, patientSummaryEn, patientSummaryHi := renderCKM4cSummaries(tmpl, fromStage, hfType, missingClasses)
+	notes := clinicianSummary
+
+	card := &models.DecisionCard{
+		CardID:                   uuid.New(),
+		PatientID:                patientID,
+		TemplateID:               tmpl.TemplateID,
+		NodeID:                   tmpl.NodeID,
+		PrimaryDifferentialID:    "CKM_4C_MANDATORY_MEDICATION",
+		DiagnosticConfidenceTier: models.TierFirm,
+		MCUGate:                  models.GateModify,
+		MCUGateRationale:         clinicianSummary,
+		DoseAdjustmentNotes:      &notes,
+		ObservationReliability:   models.ReliabilityHigh,
+		SafetyTier:               models.SafetyUrgent,
+		CardSource:               models.SourceClinicalSignal,
+		Status:                   models.StatusActive,
+		ClinicianSummary:         clinicianSummary,
+		PatientSummaryEn:         patientSummaryEn,
+		PatientSummaryHi:         patientSummaryHi,
+		CreatedAt:                time.Now(),
+		UpdatedAt:                time.Now(),
+	}
+
+	if err := h.db.DB.Create(card).Error; err != nil {
+		return fmt.Errorf("save CKM 4c card: %w", err)
+	}
+
+	if h.gateCache != nil {
+		if err := h.gateCache.WriteGate(card); err != nil {
+			h.log.Error("gate cache write failed for CKM 4c card",
+				zap.String("card_id", card.CardID.String()),
+				zap.Error(err))
+		}
+	}
+	if h.kb19 != nil {
+		go h.kb19.PublishGateChanged(card)
+	}
+
+	return nil
+}
+
+// renderCKM4cSummaries picks the CLINICIAN and PATIENT fragments out of
+// the CKM 4c template and substitutes {{.FromStage}}, {{.HFType}}, and
+// {{.MissingClasses}} into them. Pure function — exported for unit
+// testing without a database or template loader.
+func renderCKM4cSummaries(tmpl *models.CardTemplate, fromStage, hfType string, missingClasses []string) (clinician, patientEn, patientHi string) {
+	data := struct {
+		FromStage      string
+		HFType         string
+		MissingClasses string
+	}{
+		FromStage:      fromStage,
+		HFType:         hfType,
+		MissingClasses: strings.Join(missingClasses, ", "),
+	}
+
+	for _, frag := range tmpl.Fragments {
+		switch frag.FragmentType {
+		case models.FragClinician:
+			clinician = executeRenalTemplate(frag.TextEn, data)
+		case models.FragPatient:
+			patientEn = executeRenalTemplate(frag.TextEn, data)
+			patientHi = executeRenalTemplate(frag.TextHi, data)
+		}
+	}
+
+	// Defensive fallback: synthesise a baseline clinician summary if
+	// the template is somehow missing a CLINICIAN fragment.
+	if clinician == "" {
+		clinician = fmt.Sprintf("CKM 4c transition (%s→4c, %s): missing GDMT classes: %s",
+			fromStage, hfType, strings.Join(missingClasses, ", "))
+	}
+	return clinician, patientEn, patientHi
 }
 
 

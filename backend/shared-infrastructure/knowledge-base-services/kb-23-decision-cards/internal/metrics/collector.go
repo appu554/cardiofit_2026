@@ -49,6 +49,15 @@ type Collector struct {
 	RenalContraindicationDetected *prometheus.CounterVec
 	RenalDoseReduceDetected       *prometheus.CounterVec
 	RenalReactiveLatency          prometheus.Histogram
+
+	// Phase 7 P7-B: CKM 4c transition + mandatory-med-check outcomes.
+	// CKMStageTransitions is labelled by from/to so dashboards can
+	// track both 4c entries (the case we act on) and every other
+	// transition observed on the priority topic for audit.
+	// CKM4cMandatoryMedAlerts is labelled by drug_class so dashboards
+	// can show which GDMT class gaps are most common on 4c transitions.
+	CKMStageTransitions      *prometheus.CounterVec
+	CKM4cMandatoryMedAlerts  *prometheus.CounterVec
 }
 
 func NewCollector() *Collector {
@@ -170,5 +179,15 @@ func NewCollector() *Collector {
 			Help:    "End-to-end latency from EGFR_LAB priority signal receipt to renal card persistence",
 			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5},
 		}),
+
+		CKMStageTransitions: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_ckm_stage_transitions_total",
+			Help: "CKM stage transition events observed on the priority topic, by from/to stage (Phase 7 P7-B)",
+		}, []string{"from", "to"}),
+
+		CKM4cMandatoryMedAlerts: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_ckm_4c_mandatory_med_alerts_total",
+			Help: "CKM 4c mandatory-medication gap alerts generated, by missing drug class (Phase 7 P7-B)",
+		}, []string{"drug_class"}),
 	}
 }

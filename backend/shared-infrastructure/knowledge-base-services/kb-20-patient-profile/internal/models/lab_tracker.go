@@ -47,7 +47,28 @@ const (
 	LabTypeHDL              = "HDL"  // HDL cholesterol
 	LabTypeSodium           = "SODIUM"
 	LabTypeACR              = "ACR" // albumin-to-creatinine ratio (mg/mmol)
+
+	// Phase 7 P7-B: CKM-relevant observation types. LVEF drives Stage 4c
+	// heart-failure classification, NT_PROBNP is a supporting marker for
+	// HFpEF detection, CAC_SCORE drives Stage 4a subclinical CVD. A new
+	// observation of any of these types triggers CKMRecomputationService.
+	LabTypeLVEF     = "LVEF"
+	LabTypeNTproBNP = "NT_PROBNP"
+	LabTypeCACScore = "CAC_SCORE"
 )
+
+// IsCKMStagingRelevant reports whether a lab type, when newly observed,
+// should trigger CKM stage recomputation. Used by the FHIR sync worker
+// to gate invocation of CKMRecomputationService.RecomputeAndPublish.
+// Phase 7 P7-B.
+func IsCKMStagingRelevant(labType string) bool {
+	switch labType {
+	case LabTypeLVEF, LabTypeNTproBNP, LabTypeCACScore:
+		return true
+	default:
+		return false
+	}
+}
 
 // Validation status constants
 const (
