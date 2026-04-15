@@ -109,6 +109,16 @@ func (s *Server) setupRoutes() {
 			// against real medication events rather than hardcoded nulls.
 			patient.GET("/:id/intervention-timeline", s.getInterventionTimeline)
 
+			// Phase 8 P8-1: CRITICAL PATH summary context endpoint.
+			// KB-23's KB20Client.FetchSummaryContext has been calling
+			// this URL since Phase 6 but no handler existed — every
+			// card-generation code path (P7-A renal reactive, P7-B
+			// CKM 4c, P7-D inertia weekly, P7-E CGM TIR override)
+			// silently 404'd and produced nothing for real patients.
+			// This route is what converts the entire Phase 7 stack
+			// from "shipped code" to "shipped clinical effect."
+			patient.GET("/:id/summary-context", s.getSummaryContext)
+
 			// Signals — patient-reported signal ingestion (S4, S15, S16, S18-S22)
 			signals := patient.Group("/:id/signals")
 			{

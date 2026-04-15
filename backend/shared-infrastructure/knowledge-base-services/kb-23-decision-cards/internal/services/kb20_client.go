@@ -102,11 +102,25 @@ func (c *KB20Client) FetchSummaryContext(ctx context.Context, patientID string) 
 		return nil, fmt.Errorf("KB-20 returned status %d", resp.StatusCode)
 	}
 
-	var result PatientContext
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	// Phase 8 P8-1: KB-20 wraps responses in the standard
+	// {"success": true, "data": ...} envelope, matching every other
+	// handler in the service (renal-status, intervention-timeline,
+	// modifier registry, etc.). The P7-era FetchSummaryContext client
+	// was decoding the raw body into PatientContext directly — a
+	// wire mismatch that would have produced an empty struct even
+	// if the KB-20 endpoint had existed. Both halves of the bug are
+	// now fixed: KB-20 has the handler, and KB-23 unwraps the
+	// envelope. The integration test in this package pins the
+	// contract so this mismatch cannot regress.
+	var envelope struct {
+		Success bool           `json:"success"`
+		Data    PatientContext `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("decode KB-20 response: %w", err)
 	}
 
+	result := envelope.Data
 	result.PatientID = patientID
 	return &result, nil
 }
