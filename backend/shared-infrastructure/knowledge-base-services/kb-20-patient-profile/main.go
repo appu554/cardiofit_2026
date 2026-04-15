@@ -122,8 +122,14 @@ func main() {
 	// The caller that populates TrajectoryInput uses this client to fetch MRI data
 	// (score and 14-day delta) for the MRI forcing rules (Spec §7).
 	// The TrajectoryEngine itself remains a pure computation engine.
+	//
+	// Phase 8 P8-3: the same KB-26 client also backs the CGM status
+	// fetch used by the summary-context handler. A small adapter
+	// translates the clients.CGMPeriodReportSnapshot return into
+	// the services.CGMStatusSnapshot the summary-context service
+	// consumes — keeps the services package free of clients imports
+	// and the clients package free of services imports.
 	kb26Client := clients.NewKB26Client(cfg.KB26.BaseURL, logger)
-	_ = kb26Client // available for injection into handlers/services that build TrajectoryInput
 
 	// Initialize HTTP server with all services
 	logger.Info("Initializing HTTP server...")
@@ -146,6 +152,15 @@ func main() {
 		eventBus,
 		logger,
 	)
+
+	// Phase 8 P8-3: wire the KB-26 CGM status fetcher into the
+	// summary-context handler. The adapter wraps the clients-layer
+	// KB26Client into the services-layer CGMStatusFetcher interface,
+	// keeping the two packages decoupled. Every call to
+	// GET /patient/:id/summary-context now produces real CGM fields
+	// when the patient has a recent cgm_period_reports row, or
+	// HasCGM=false + clean fallback when they don't.
+	httpServer.SetKB26CGMFetcher(newKB26CGMFetcherAdapter(kb26Client, logger))
 
 	// Start HTTP server
 	go func() {
@@ -309,4 +324,46 @@ func (a *kb21FestivalAdapter) GetFestivalStatus(region string) *services.Festiva
 		FastingType: fhir.MapFestivalToPerturbationFastingType(status.FastingType),
 		End:         status.End,
 	}
+}
+
+// kb26CGMFetcherAdapter adapts clients.KB26Client to the
+// services.CGMStatusFetcher interface, keeping the services package
+// free of imports from the clients package and vice versa. Phase 8 P8-3.
+//
+// The adapter performs two jobs:
+//   1. Translates the HTTP shape (clients.CGMPeriodReportSnapshot)
+//      into the service-layer DTO (services.CGMStatusSnapshot).
+//   2. Converts (nil, nil) from the client (patient has no CGM data,
+//      a 404 from KB-26) into a services-layer "no CGM status" return
+//      with HasCGM=false.
+type kb26CGMFetcherAdapter struct {
+	client *clients.KB26Client
+	logger *zap.Logger
+}
+
+// newKB26CGMFetcherAdapter constructs the adapter. Returning a pointer
+// via this helper matches the convention used by kb21FestivalAdapter.
+func newKB26CGMFetcherAdapter(client *clients.KB26Client, logger *zap.Logger) *kb26CGMFetcherAdapter {
+	return &kb26CGMFetcherAdapter{client: client, logger: logger}
+}
+
+// FetchLatestCGMStatus implements services.CGMStatusFetcher.
+func (a *kb26CGMFetcherAdapter) FetchLatestCGMStatus(ctx context.Context, patientID string) (*services.CGMStatusSnapshot, error) {
+	snap, err := a.client.GetLatestCGMStatus(ctx, patientID)
+	if err != nil {
+		return nil, err
+	}
+	// nil response from the client means 404 from KB-26 — the patient
+	// has no CGM data. Return a non-nil snapshot with HasCGM=false so
+	// the summary-context service populates the CGM fields cleanly
+	// rather than leaving them nil and tripping downstream nil checks.
+	if snap == nil {
+		return &services.CGMStatusSnapshot{HasCGM: false}, nil
+	}
+	return &services.CGMStatusSnapshot{
+		HasCGM:     true,
+		TIRPct:     snap.TIRPct,
+		GRIZone:    snap.GRIZone,
+		ReportedAt: snap.PeriodEnd,
+	}, nil
 }

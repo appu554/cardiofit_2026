@@ -26,15 +26,14 @@ import (
 func (s *Server) getSummaryContext(c *gin.Context) {
 	patientID := c.Param("id")
 
-	// Phase 8 P8-2: the CGM fetcher is wired optionally. When the
-	// server has no KB-26 client configured (local dev, tests, or
-	// a deployment where KB-26 is not yet reachable), the fetcher
-	// is nil and the SummaryContext response carries HasCGM=false.
-	// KB-23 consumers treat that as "no CGM data available" and
-	// fall back to the HbA1c-based glycaemic path. The nil-fetcher
-	// path is the default until a follow-up commit wires a real
-	// KB-26 HTTP client into the server constructor.
-	svc := services.NewSummaryContextService(s.db.DB, nil, s.logger)
+	// Phase 8 P8-3: the CGM fetcher is injected from main.go via
+	// SetKB26CGMFetcher after the KB-26 HTTP client is constructed.
+	// When nil (local dev without KB-26 reachable, or tests), the
+	// service degrades cleanly to HasCGM=false and downstream card
+	// generation falls back to the HbA1c glycaemic path. When
+	// populated, CGM status for the patient comes straight from
+	// KB-26's cgm_period_reports table via the cgm-latest endpoint.
+	svc := services.NewSummaryContextService(s.db.DB, s.kb26CGMFetcher, s.logger)
 	summary, err := svc.BuildContext(c.Request.Context(), patientID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

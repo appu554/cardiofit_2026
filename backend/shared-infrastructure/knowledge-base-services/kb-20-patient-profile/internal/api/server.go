@@ -37,7 +37,15 @@ type Server struct {
 	protocolRegistry  *services.ProtocolRegistry
 	eventBus          services.EventPublisher
 	bpReadingQuery    *services.BPReadingQuery
-	logger            *zap.Logger
+
+	// Phase 8 P8-3: optional CGM status fetcher backed by a KB-26
+	// HTTP client. When nil (local dev, tests, or deployments where
+	// KB-26 is not reachable), the summary-context handler populates
+	// HasCGM=false and downstream card generation falls back to the
+	// HbA1c glycaemic path. Set via SetKB26CGMFetcher from main.go.
+	kb26CGMFetcher services.CGMStatusFetcher
+
+	logger *zap.Logger
 }
 
 // NewServer constructs the HTTP server with all dependencies injected.
@@ -117,4 +125,12 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// SetKB26CGMFetcher injects the KB-26 CGM status fetcher after server
+// construction. Matches the existing pattern used for KB-25 client
+// injection on protocolService. Called from main.go once the
+// KB26Client is instantiated. Phase 8 P8-3.
+func (s *Server) SetKB26CGMFetcher(fetcher services.CGMStatusFetcher) {
+	s.kb26CGMFetcher = fetcher
 }

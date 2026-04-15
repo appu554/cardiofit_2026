@@ -64,6 +64,69 @@ func (c *KB26Client) GetCurrentMRI(ctx context.Context, patientID string) *MRISn
 	return &wrapper.Data
 }
 
+// CGMPeriodReportSnapshot mirrors the fields of KB-26's
+// models.CGMPeriodReport that the summary-context builder needs to
+// populate its CGM status fields. Only the fields downstream KB-23
+// card generation reads are carried — TIR, GRI zone, report date,
+// and a HasCGM derived flag. Phase 8 P8-3.
+type CGMPeriodReportSnapshot struct {
+	PatientID       string    `json:"patient_id"`
+	PeriodStart     time.Time `json:"period_start"`
+	PeriodEnd       time.Time `json:"period_end"`
+	TIRPct          float64   `json:"tir_pct"`
+	MeanGlucose     float64   `json:"mean_glucose"`
+	GRIZone         string    `json:"gri_zone"`
+	ConfidenceLevel string    `json:"confidence_level"`
+}
+
+// GetLatestCGMStatus fetches the most recent CGM period report for
+// a patient from KB-26's P7-E Milestone 2 cgm-latest endpoint.
+//
+// Returns (nil, nil) on 404 — a patient with no CGM data is not an
+// error condition, it's the normal case for patients who aren't on
+// a CGM device. The summary-context builder treats nil as "no CGM
+// status, HasCGM=false" and falls back to HbA1c-based glycaemic
+// evaluation.
+//
+// Returns (nil, err) on network failures, 5xx responses, and decode
+// errors so the caller can log them at debug level without aborting
+// the summary-context assembly. The pattern matches GetCurrentMRI's
+// best-effort behaviour. Phase 8 P8-3.
+func (c *KB26Client) GetLatestCGMStatus(ctx context.Context, patientID string) (*CGMPeriodReportSnapshot, error) {
+	url := fmt.Sprintf("%s/api/v1/kb26/cgm-latest/%s", c.baseURL, patientID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create KB-26 cgm-latest request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		c.logger.Debug("KB-26 cgm-latest fetch failed",
+			zap.String("patient_id", patientID),
+			zap.Error(err))
+		return nil, fmt.Errorf("KB-26 cgm-latest fetch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 404 is expected for patients with no CGM data — degrade cleanly.
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("KB-26 cgm-latest returned status %d", resp.StatusCode)
+	}
+
+	var wrapper struct {
+		Success bool                    `json:"success"`
+		Data    CGMPeriodReportSnapshot `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("decode KB-26 cgm-latest response: %w", err)
+	}
+	return &wrapper.Data, nil
+}
+
 // GetMRIHistory fetches the most recent `limit` MRI snapshots for the given patient
 // in reverse-chronological order. Returns nil if the call fails.
 func (c *KB26Client) GetMRIHistory(ctx context.Context, patientID string, limit int) []MRISnapshot {
