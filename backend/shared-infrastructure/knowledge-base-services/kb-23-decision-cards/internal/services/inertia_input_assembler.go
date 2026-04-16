@@ -108,6 +108,14 @@ func (a *ConcreteInertiaInputAssembler) AssembleInertiaInput(ctx context.Context
 		return input, fmt.Errorf("KB-20 summary context nil for %s", patientID)
 	}
 
+	// Phase 9 P9-A: thread engagement context into the detector input
+	// so the orchestrator can check adherence before running
+	// DetectInertia. Nil EngagementComposite is fine — the orchestrator
+	// treats it as "no engagement data available, assume engaged" which
+	// biases toward surfacing inertia cards rather than suppressing them.
+	input.EngagementStatus = summary.EngagementStatus
+	input.EngagementComposite = summary.EngagementComposite
+
 	// 2. KB-20 renal status — eGFR + slope for the renal domain. Non-fatal
 	// if missing; renal domain input simply stays nil.
 	var renalStatus *KB20RenalStatus

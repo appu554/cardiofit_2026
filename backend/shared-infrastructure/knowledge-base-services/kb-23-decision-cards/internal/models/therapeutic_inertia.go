@@ -31,6 +31,14 @@ const (
 	PatternPostEventInertia        InertiaPattern = "POST_EVENT_INERTIA"
 	PatternRenalProgressionInertia InertiaPattern = "RENAL_PROGRESSION_INERTIA"
 	PatternIntensificationCeiling  InertiaPattern = "INTENSIFICATION_CEILING"
+
+	// Phase 9 P9-A: generated when an inertia-eligible patient is
+	// disengaged / non-adherent. The detector suppresses the inertia
+	// verdict and produces an ADHERENCE_GAP verdict instead, so the
+	// clinician gets "investigate adherence" rather than "escalate
+	// therapy" — the correct clinical action when the target gap is
+	// driven by non-adherence, not by insufficient therapy.
+	PatternAdherenceGap InertiaPattern = "ADHERENCE_GAP"
 )
 
 // ---------------------------------------------------------------------------

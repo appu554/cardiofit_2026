@@ -145,6 +145,148 @@ func TestInertiaTemplates_LoadFromDisk(t *testing.T) {
 	}
 }
 
+// ─────────────── Phase 9 P9-A: Adherence-Exclusion Tests ───────────────
+
+// TestIsDisengaged_StatusDisengaged verifies the primary gate: a
+// patient with EngagementStatus="DISENGAGED" is flagged regardless
+// of the composite score.
+func TestIsDisengaged_StatusDisengaged(t *testing.T) {
+	input := InertiaDetectorInput{EngagementStatus: "DISENGAGED"}
+	if !isDisengaged(input) {
+		t.Error("expected isDisengaged=true for DISENGAGED status")
+	}
+}
+
+// TestIsDisengaged_LowComposite verifies the secondary gate: a
+// patient with a composite score below 0.4 is flagged even if
+// EngagementStatus is empty or a non-DISENGAGED value.
+func TestIsDisengaged_LowComposite(t *testing.T) {
+	composite := 0.25
+	input := InertiaDetectorInput{
+		EngagementStatus:    "PARTIALLY_ENGAGED",
+		EngagementComposite: &composite,
+	}
+	if !isDisengaged(input) {
+		t.Error("expected isDisengaged=true for composite 0.25 < 0.4")
+	}
+}
+
+// TestIsDisengaged_EngagedPatient verifies that an engaged patient
+// (status ENGAGED, composite 0.85) does NOT trigger the adherence
+// gate — they should still get inertia cards if their target is unmet.
+func TestIsDisengaged_EngagedPatient(t *testing.T) {
+	composite := 0.85
+	input := InertiaDetectorInput{
+		EngagementStatus:    "ENGAGED",
+		EngagementComposite: &composite,
+	}
+	if isDisengaged(input) {
+		t.Error("expected isDisengaged=false for engaged patient")
+	}
+}
+
+// TestIsDisengaged_NilComposite_DefaultsToEngaged verifies that a
+// patient with no engagement data (nil EngagementComposite, empty
+// EngagementStatus) is treated as engaged. Bias toward surfacing
+// inertia cards when engagement data is unavailable.
+func TestIsDisengaged_NilComposite_DefaultsToEngaged(t *testing.T) {
+	input := InertiaDetectorInput{} // all zero/nil
+	if isDisengaged(input) {
+		t.Error("expected isDisengaged=false when no engagement data available")
+	}
+}
+
+// TestInertiaOrchestrator_AdherenceGap_SuppressesInertia verifies
+// the full orchestrator path: a disengaged patient with an unmet
+// glycaemic target produces an ADHERENCE_GAP report, NOT an
+// INERTIA_DETECTED report. This is the Patient 17 fix from the
+// 20-patient thought experiment.
+func TestInertiaOrchestrator_AdherenceGap_SuppressesInertia(t *testing.T) {
+	orch := NewInertiaOrchestrator(nil, nil, nil, nil, nil, nil, zap.NewNop())
+	composite := 0.2
+	input := InertiaDetectorInput{
+		PatientID:           "p-non-adherent",
+		EngagementStatus:    "DISENGAGED",
+		EngagementComposite: &composite,
+		Glycaemic: &DomainInertiaInput{
+			AtTarget:         false,
+			CurrentValue:     8.5,
+			TargetValue:      7.0,
+			DaysUncontrolled: 120,
+			DataSource:       "HBA1C",
+		},
+	}
+	report := orch.Evaluate(context.Background(), input)
+
+	// Should have verdicts with ADHERENCE_GAP pattern
+	if len(report.Verdicts) == 0 {
+		t.Fatal("expected at least one verdict")
+	}
+	for _, v := range report.Verdicts {
+		if v.Pattern != models.PatternAdherenceGap {
+			t.Errorf("expected pattern ADHERENCE_GAP, got %q — inertia was not suppressed", v.Pattern)
+		}
+	}
+	// HasAnyInertia should be false — adherence gap is NOT inertia
+	if report.HasAnyInertia {
+		t.Error("HasAnyInertia should be false for adherence gap report")
+	}
+}
+
+// TestInertiaOrchestrator_EngagedPatient_StillGetsInertia is the
+// regression guard: an engaged patient with the same unmet target
+// should produce a normal INERTIA_DETECTED verdict, not an
+// ADHERENCE_GAP.
+func TestInertiaOrchestrator_EngagedPatient_StillGetsInertia(t *testing.T) {
+	orch := NewInertiaOrchestrator(nil, nil, nil, nil, nil, nil, zap.NewNop())
+	composite := 0.9
+	input := InertiaDetectorInput{
+		PatientID:           "p-engaged",
+		EngagementStatus:    "ENGAGED",
+		EngagementComposite: &composite,
+		Glycaemic: &DomainInertiaInput{
+			AtTarget:            false,
+			CurrentValue:        8.5,
+			TargetValue:         7.0,
+			DaysUncontrolled:    120,
+			ConsecutiveReadings: 2,
+			DataSource:          "HBA1C",
+		},
+	}
+	report := orch.Evaluate(context.Background(), input)
+
+	// Should have verdicts with a real inertia pattern, NOT ADHERENCE_GAP
+	foundInertia := false
+	for _, v := range report.Verdicts {
+		if v.Detected && v.Pattern != models.PatternAdherenceGap {
+			foundInertia = true
+		}
+	}
+	if !foundInertia {
+		t.Error("engaged patient should still get inertia detection, not adherence gap")
+	}
+}
+
+// TestInertiaOrchestrator_DisengagedButAtTarget_NoCard verifies
+// that a disengaged patient whose targets ARE all met produces no
+// adherence-gap card — there's nothing to surface.
+func TestInertiaOrchestrator_DisengagedButAtTarget_NoCard(t *testing.T) {
+	orch := NewInertiaOrchestrator(nil, nil, nil, nil, nil, nil, zap.NewNop())
+	input := InertiaDetectorInput{
+		PatientID:        "p-disengaged-ok",
+		EngagementStatus: "DISENGAGED",
+		Glycaemic: &DomainInertiaInput{
+			AtTarget:     true,
+			CurrentValue: 6.5,
+			TargetValue:  7.0,
+		},
+	}
+	report := orch.Evaluate(context.Background(), input)
+	if len(report.Verdicts) != 0 {
+		t.Errorf("expected 0 verdicts for disengaged-but-at-target patient, got %d", len(report.Verdicts))
+	}
+}
+
 // TestInertiaVerdictHistory_InMemoryUpsert verifies the in-memory
 // history store upserts by patient_id (each SaveVerdict overwrites
 // the previous entry).

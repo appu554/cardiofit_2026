@@ -67,6 +67,16 @@ type InertiaDetectorInput struct {
 
 	// Pattern 7: Intensification ceiling — at max dose, target unmet, no class add
 	Ceiling *CeilingInput
+
+	// Phase 9 P9-A: engagement context from KB-20's summary-context
+	// response. When the patient is disengaged (EngagementStatus ==
+	// "DISENGAGED" or EngagementComposite < 0.4), the orchestrator
+	// suppresses the inertia verdict and generates an ADHERENCE_GAP
+	// verdict instead. Nil EngagementComposite means "no engagement
+	// data available" → treat as engaged (bias toward surfacing
+	// inertia cards rather than suppressing them).
+	EngagementStatus    string
+	EngagementComposite *float64
 }
 
 // ---------------------------------------------------------------------------

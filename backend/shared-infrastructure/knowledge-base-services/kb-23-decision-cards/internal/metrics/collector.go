@@ -80,6 +80,15 @@ type Collector struct {
 	InertiaVerdictsDetected     *prometheus.CounterVec
 	DualDomainInertiaDetected   prometheus.Counter
 	InertiaWeeklyBatchDuration  prometheus.Histogram
+
+	// Phase 9 P9-A: adherence-exclusion branch outcomes.
+	// AdherenceGapDetected is labelled by domain so dashboards show
+	// which clinical domains are most affected by non-adherence.
+	// InertiaSuppressedByAdherence is the total count of inertia
+	// verdicts that were suppressed because the patient was
+	// disengaged — the "false positive prevention" counter.
+	AdherenceGapDetected           *prometheus.CounterVec
+	InertiaSuppressedByAdherence   prometheus.Counter
 }
 
 func NewCollector() *Collector {
@@ -242,6 +251,16 @@ func NewCollector() *Collector {
 			Name:    "kb23_inertia_weekly_batch_duration_seconds",
 			Help:    "End-to-end duration of the weekly inertia batch run",
 			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1200, 3600},
+		}),
+
+		AdherenceGapDetected: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_adherence_gap_detected_total",
+			Help: "Adherence gap cards generated (inertia suppressed due to disengagement), by domain (Phase 9 P9-A)",
+		}, []string{"domain"}),
+
+		InertiaSuppressedByAdherence: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb23_inertia_suppressed_by_adherence_total",
+			Help: "Inertia verdicts suppressed because patient was disengaged (Phase 9 P9-A false-positive prevention counter)",
 		}),
 	}
 }

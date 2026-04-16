@@ -14,10 +14,11 @@ import (
 	"kb-23-decision-cards/internal/models"
 )
 
-// Phase 7 P7-D: template IDs for the inertia cards.
+// Phase 7 P7-D + Phase 9 P9-A: template IDs for the inertia cards.
 const (
 	inertiaDetectedTemplateID           = "dc-inertia-detected-v1"
 	dualDomainInertiaDetectedTemplateID = "dc-dual-domain-inertia-detected-v1"
+	adherenceGapTemplateID              = "dc-adherence-gap-v1"
 )
 
 // InertiaOrchestrator is the coordination layer that wraps DetectInertia,
@@ -82,6 +83,20 @@ func NewInertiaOrchestrator(
 // evaluation — the verdict history write still happens so the next
 // week's dampening check sees the current verdict.
 func (o *InertiaOrchestrator) Evaluate(ctx context.Context, input InertiaDetectorInput) models.PatientInertiaReport {
+	// Phase 9 P9-A: adherence-exclusion gate. If the patient is
+	// disengaged, skip DetectInertia entirely and produce an
+	// ADHERENCE_GAP report instead. This prevents false-positive
+	// inertia cards when the target gap is driven by non-adherence
+	// (Patient 17 in the 20-patient thought experiment).
+	//
+	// Threshold: EngagementStatus == "DISENGAGED" OR
+	// EngagementComposite != nil && *EngagementComposite < 0.4.
+	// Nil EngagementComposite → no engagement data → assume
+	// engaged (bias toward surfacing inertia, not suppressing).
+	if isDisengaged(input) {
+		return o.handleAdherenceGap(ctx, input)
+	}
+
 	report := DetectInertia(input)
 
 	// Stability dampening: if the raw verdict differs from the previous
@@ -387,6 +402,144 @@ func renderDualDomainSummaries(tmpl *models.CardTemplate, detectedDomains []stri
 			strings.Join(detectedDomains, ", "))
 	}
 	return clinician, patientEn, patientHi
+}
+
+// isDisengaged returns true when the patient's engagement context
+// indicates non-adherence. Phase 9 P9-A.
+//
+// Threshold logic:
+//   - EngagementStatus == "DISENGAGED" → definitely disengaged
+//   - EngagementComposite != nil && *EngagementComposite < 0.4 → low
+//     composite score means <40% engagement across measurement domains
+//   - EngagementComposite == nil → no engagement data available →
+//     assume engaged (bias toward surfacing inertia cards)
+func isDisengaged(input InertiaDetectorInput) bool {
+	if input.EngagementStatus == "DISENGAGED" {
+		return true
+	}
+	if input.EngagementComposite != nil && *input.EngagementComposite < 0.4 {
+		return true
+	}
+	return false
+}
+
+// handleAdherenceGap produces an ADHERENCE_GAP report instead of an
+// inertia report. It identifies which domains are uncontrolled (from
+// the raw domain inputs) and generates one card per uncontrolled
+// domain with the adherence-gap template. Phase 9 P9-A.
+func (o *InertiaOrchestrator) handleAdherenceGap(ctx context.Context, input InertiaDetectorInput) models.PatientInertiaReport {
+	report := models.PatientInertiaReport{
+		PatientID:   input.PatientID,
+		EvaluatedAt: time.Now(),
+	}
+
+	// Identify uncontrolled domains for the adherence-gap verdicts.
+	// We DON'T run the full DetectInertia because we don't want to
+	// produce inertia verdicts — but we still need to know which
+	// domains are off-target so the adherence-gap card can say
+	// "glycaemic adherence gap" vs "hemodynamic adherence gap."
+	var uncontrolledDomains []models.InertiaDomain
+	if input.Glycaemic != nil && !input.Glycaemic.AtTarget {
+		uncontrolledDomains = append(uncontrolledDomains, models.DomainGlycaemic)
+	}
+	if input.Hemodynamic != nil && !input.Hemodynamic.AtTarget {
+		uncontrolledDomains = append(uncontrolledDomains, models.DomainHemodynamic)
+	}
+	if input.Renal != nil && !input.Renal.AtTarget {
+		uncontrolledDomains = append(uncontrolledDomains, models.DomainRenal)
+	}
+
+	if len(uncontrolledDomains) == 0 {
+		// Patient is disengaged but all domains are at target — no
+		// adherence gap to surface. This is a patient who is non-
+		// adherent but still controlled (possible if they're over-
+		// medicated or the non-adherence is to non-critical drugs).
+		o.log.Debug("inertia: disengaged patient but all domains at target",
+			zap.String("patient_id", input.PatientID))
+		return report
+	}
+
+	for _, domain := range uncontrolledDomains {
+		verdict := models.InertiaVerdict{
+			Domain:   domain,
+			Pattern:  models.PatternAdherenceGap,
+			Detected: true,
+			Severity: models.SeverityModerate,
+		}
+		report.Verdicts = append(report.Verdicts, verdict)
+
+		if err := o.persistAdherenceGapCard(input.PatientID, verdict); err != nil {
+			o.log.Error("inertia: failed to persist adherence gap card",
+				zap.String("patient_id", input.PatientID),
+				zap.String("domain", string(domain)),
+				zap.Error(err))
+		} else if o.metrics != nil {
+			o.metrics.AdherenceGapDetected.WithLabelValues(string(domain)).Inc()
+			o.metrics.InertiaSuppressedByAdherence.Inc()
+		}
+	}
+
+	report.HasAnyInertia = false // adherence gap is NOT inertia
+	report.OverallUrgency = "ROUTINE"
+
+	o.log.Info("inertia: adherence gap detected (inertia suppressed)",
+		zap.String("patient_id", input.PatientID),
+		zap.Int("uncontrolled_domains", len(uncontrolledDomains)),
+		zap.String("engagement_status", input.EngagementStatus))
+
+	return report
+}
+
+// persistAdherenceGapCard builds and persists a single ADHERENCE_GAP
+// card. Uses the same persistence pattern as persistInertiaCard but
+// with the adherence-gap template + SAFE gate (advisory only).
+func (o *InertiaOrchestrator) persistAdherenceGapCard(patientID string, verdict models.InertiaVerdict) error {
+	if o.templateLoader == nil || o.db == nil {
+		return nil
+	}
+	tmpl, ok := o.templateLoader.Get(adherenceGapTemplateID)
+	if !ok {
+		return fmt.Errorf("template %s not loaded", adherenceGapTemplateID)
+	}
+	pid, err := uuid.Parse(patientID)
+	if err != nil {
+		return fmt.Errorf("invalid patient_id: %w", err)
+	}
+
+	clinician, patientEn, patientHi := renderInertiaSummaries(tmpl, verdict)
+	notes := clinician
+
+	card := &models.DecisionCard{
+		CardID:                   uuid.New(),
+		PatientID:                pid,
+		TemplateID:               tmpl.TemplateID,
+		NodeID:                   tmpl.NodeID,
+		PrimaryDifferentialID:    "ADHERENCE_GAP_" + string(verdict.Domain),
+		DiagnosticConfidenceTier: models.TierProbable,
+		MCUGate:                  models.GateSafe, // advisory only — don't modify therapy
+		MCUGateRationale:         clinician,
+		DoseAdjustmentNotes:      &notes,
+		ObservationReliability:   models.ReliabilityModerate,
+		SafetyTier:               models.SafetyRoutine,
+		CardSource:               models.SourceClinicalSignal,
+		Status:                   models.StatusActive,
+		ClinicianSummary:         clinician,
+		PatientSummaryEn:         patientEn,
+		PatientSummaryHi:         patientHi,
+		CreatedAt:                time.Now(),
+		UpdatedAt:                time.Now(),
+	}
+
+	if err := o.db.DB.Create(card).Error; err != nil {
+		return fmt.Errorf("save adherence gap card: %w", err)
+	}
+	if o.gateCache != nil {
+		_ = o.gateCache.WriteGate(card)
+	}
+	if o.kb19 != nil {
+		go o.kb19.PublishGateChanged(card)
+	}
+	return nil
 }
 
 // severityToSafetyTier maps the inertia detector's severity bracket to
