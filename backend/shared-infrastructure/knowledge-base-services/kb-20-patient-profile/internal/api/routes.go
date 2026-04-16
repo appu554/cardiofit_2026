@@ -139,6 +139,12 @@ func (s *Server) setupRoutes() {
 		// monthly RenalAnticipatoryBatch to enumerate candidates.
 		v1.GET("/patients/renal-active", s.listRenalActivePatients)
 
+		// Phase 9 P9-B: list endpoint for patients who were actively
+		// monitoring home BP and stopped (>=7 readings in a 28-day
+		// window ending 14 days ago + 0 readings in the last 14 days).
+		// Consumed by KB-23's MonitoringEngagementBatch weekly.
+		v1.GET("/patients/monitoring-lapsed", s.listMonitoringLapsedPatients)
+
 		// Context modifier registry
 		modifiers := v1.Group("/modifiers")
 		{

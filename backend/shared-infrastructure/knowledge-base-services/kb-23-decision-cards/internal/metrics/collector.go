@@ -89,6 +89,10 @@ type Collector struct {
 	// disengaged — the "false positive prevention" counter.
 	AdherenceGapDetected           *prometheus.CounterVec
 	InertiaSuppressedByAdherence   prometheus.Counter
+
+	// Phase 9 P9-B: monitoring engagement batch outcomes.
+	MonitoringLapsedDetected      *prometheus.CounterVec
+	MonitoringLapsedBatchDuration prometheus.Histogram
 }
 
 func NewCollector() *Collector {
@@ -261,6 +265,17 @@ func NewCollector() *Collector {
 		InertiaSuppressedByAdherence: promauto.NewCounter(prometheus.CounterOpts{
 			Name: "kb23_inertia_suppressed_by_adherence_total",
 			Help: "Inertia verdicts suppressed because patient was disengaged (Phase 9 P9-A false-positive prevention counter)",
+		}),
+
+		MonitoringLapsedDetected: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_monitoring_lapsed_total",
+			Help: "Monitoring-lapsed cards generated, by monitor type (Phase 9 P9-B)",
+		}, []string{"monitor_type"}),
+
+		MonitoringLapsedBatchDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "kb23_monitoring_lapsed_batch_duration_seconds",
+			Help:    "End-to-end duration of the weekly monitoring engagement batch run",
+			Buckets: []float64{1, 5, 15, 30, 60, 120, 300},
 		}),
 	}
 }

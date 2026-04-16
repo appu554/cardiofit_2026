@@ -211,11 +211,27 @@ func main() {
 	)
 	batchScheduler.Register(inertiaWeeklyJob)
 
+	// Phase 9 P9-B: monitoring engagement weekly batch. Fires on
+	// Wednesdays at 04:00 UTC (offset from the Sunday 03:00 inertia
+	// batch to spread load). Calls KB-20's monitoring-lapsed
+	// endpoint and generates MONITORING_LAPSED cards for patients
+	// who stopped home BP monitoring.
+	monitoringBatch := services.NewMonitoringEngagementBatch(
+		cfg,
+		server.TemplateLoader(),
+		server.Database(),
+		server.MCUGateCache(),
+		server.KB19Publisher(),
+		server.MetricsCollector(),
+		logger,
+	)
+	batchScheduler.Register(monitoringBatch)
+
 	batchCtx, batchCancel := context.WithCancel(context.Background())
 	defer batchCancel()
 	go batchScheduler.StartLoop(batchCtx, 1*time.Hour)
 	logger.Info("KB-23 batch scheduler started",
-		zap.String("registered_jobs", "renal_anticipatory_monthly + inertia_weekly"))
+		zap.String("registered_jobs", "renal_anticipatory_monthly + inertia_weekly + monitoring_engagement_weekly"))
 
 	// 11. Log startup banner
 	fmt.Printf(`
