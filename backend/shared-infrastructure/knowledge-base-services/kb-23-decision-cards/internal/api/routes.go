@@ -41,5 +41,12 @@ func (s *Server) RegisterRoutes() {
 		// active cards (masked HTN, medication timing, selection bias,
 		// etc.) into a single CompositeCardSignal.
 		v1.POST("/composite-cards/synthesize/:patientId", s.handleCompositeSynthesize)
+
+		// Phase 10 Gap 10: explainability endpoint — returns the
+		// full evidence trail for a decision card. Clinicians can
+		// ask "why did the system recommend this?" and get a
+		// structured answer covering template selection, confidence
+		// tier, MCU gate rationale, safety checks, and patient state.
+		v1.GET("/cards/:id/explainability", s.handleGetExplainability)
 	}
 }
