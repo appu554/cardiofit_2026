@@ -84,6 +84,13 @@ func main() {
 	kb21AdherenceClient := clients.NewKB21Client(cfg.KB21, logger)
 	patientService.SetKB21Client(kb21AdherenceClient)
 	labService := services.NewLabService(db, cacheClient, logger, metricsCollector, eventBus)
+	// Phase 8 P8-6: wire the safety event recorder into the lab
+	// service so every safety alert publish path also persists the
+	// event to the safety_events audit table. The summary-context
+	// endpoint's ConfounderFlags query reads from this table to
+	// derive IsAcuteIll / HasRecentTransfusion / HasRecentHypoglycaemia.
+	labService.SetSafetyRecorder(services.NewSafetyEventRecorder(db.DB, logger))
+
 	medicationService := services.NewMedicationService(db, cacheClient, logger, eventBus)
 	adrService := services.NewADRService(db, logger)
 	pipelineService := services.NewPipelineService(db, logger, adrService)

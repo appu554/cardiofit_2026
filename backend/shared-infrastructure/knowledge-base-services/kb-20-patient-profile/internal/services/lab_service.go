@@ -19,13 +19,23 @@ import (
 // LabService handles lab value writes with plausibility validation (F-05),
 // auto-derives eGFR from creatinine, and detects medication threshold crossings (F-03).
 type LabService struct {
-	db        *database.Database
-	cache     *cache.Client
-	logger    *zap.Logger
-	metrics   *metrics.Collector
-	validator *LabValidator
-	egfr      *EGFREngine
-	eventBus  *EventBus
+	db              *database.Database
+	cache           *cache.Client
+	logger          *zap.Logger
+	metrics         *metrics.Collector
+	validator       *LabValidator
+	egfr            *EGFREngine
+	eventBus        *EventBus
+	safetyRecorder  *SafetyEventRecorder // Phase 8 P8-6
+}
+
+// SetSafetyRecorder injects the safety event recorder after lab
+// service construction. Phase 8 P8-6: call sites that already
+// publish safety events via the event bus will also persist them
+// to the safety_events audit table so the summary-context endpoint
+// can derive confounder flags for the MCU gate manager.
+func (s *LabService) SetSafetyRecorder(r *SafetyEventRecorder) {
+	s.safetyRecorder = r
 }
 
 // NewLabService creates a lab service with validation and eGFR engine.
@@ -144,6 +154,14 @@ func (s *LabService) AddLab(patientID string, req models.AddLabRequest) (*models
 				LabType:     models.LabTypePotassium,
 				NewValue:    fmt.Sprintf("%.1f", req.Value),
 			})
+			// Phase 8 P8-6: persist to safety_events audit trail so the
+			// summary-context confounder flags query can read it back.
+			if s.safetyRecorder != nil {
+				_ = s.safetyRecorder.RecordLabEvent(
+					patientID, models.SafetyEventPotassiumHigh, severity, desc,
+					models.LabTypePotassium, "", fmt.Sprintf("%.1f", req.Value),
+					time.Now().UTC())
+			}
 			s.logger.Warn("SAFETY_ALERT: critical potassium",
 				zap.String("patient_id", patientID),
 				zap.Float64("potassium", req.Value))
@@ -251,6 +269,14 @@ func (s *LabService) deriveEGFR(tx *gorm.DB, patientID string, creatinine float6
 			LabType:     models.LabTypeEGFR,
 			NewValue:    fmt.Sprintf("%.1f", egfr),
 		})
+		// Phase 8 P8-6: persist to safety_events audit trail.
+		if s.safetyRecorder != nil {
+			_ = s.safetyRecorder.RecordLabEvent(
+				patientID, models.SafetyEventEGFRCritical, "CRITICAL",
+				"eGFR < 15 — CKD Stage 5",
+				models.LabTypeEGFR, "", fmt.Sprintf("%.1f", egfr),
+				measuredAt)
+		}
 		s.logger.Warn("SAFETY_ALERT: critically low eGFR",
 			zap.String("patient_id", patientID),
 			zap.Float64("egfr", egfr))
@@ -884,6 +910,14 @@ func (s *LabService) PublishSafetyAlert(patientID string, severity string, alert
 		OldValue:    oldVal,
 		NewValue:    newVal,
 	})
+	// Phase 8 P8-6: persist to safety_events audit trail. The
+	// alertType is used as the eventType so downstream queries
+	// can match on the same string the existing consumers see.
+	if s.safetyRecorder != nil {
+		_ = s.safetyRecorder.RecordLabEvent(
+			patientID, alertType, severity, description,
+			labType, oldVal, newVal, time.Now().UTC())
+	}
 	s.logger.Warn("SAFETY_ALERT published",
 		zap.String("patient_id", patientID),
 		zap.String("severity", severity),
