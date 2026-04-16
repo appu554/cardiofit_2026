@@ -1,0 +1,144 @@
+# phenotype_stability.yaml
+# Governs temporal-stability processing for patient phenotype cluster assignments.
+# Read by KB-20 stability engine at startup (and on SIGHUP reload).
+
+# ---------------------------------------------------------------------------
+# Dwell gate — minimum time a raw assignment must persist before it is accepted
+# as a genuine cluster transition.
+# ---------------------------------------------------------------------------
+dwell:
+  min_dwell_weeks: 4              # Standard dwell gate for all clusters
+  extended_dwell_weeks: 8         # Extended gate for conservative cluster pairs (see conservatism_rank)
+  grace_period_after_override: 2  # Weeks before the dwell gate re-arms after an override event
+
+# ---------------------------------------------------------------------------
+# Flap detection — identify patients oscillating between two clusters without
+# a genuine directional trend.
+# ---------------------------------------------------------------------------
+flap_detection:
+  lookback_days: 90               # Window over which oscillations are counted
+  min_oscillations: 2             # Minimum A→B→A round-trips to declare flapping
+  dampening_strategy: "CONSERVATIVE"  # CONSERVATIVE | AGGRESSIVE | NONE
+  manual_review_threshold: 3      # Flap count at which a manual-review flag is raised
+
+# ---------------------------------------------------------------------------
+# Confidence thresholds derived from HDBSCAN membership probability and
+# geometry metrics.
+# ---------------------------------------------------------------------------
+confidence:
+  high_membership_prob: 0.7       # ≥ this → high confidence assignment
+  moderate_membership_prob: 0.4   # ≥ this and < high → moderate confidence
+  low_membership_prob: 0.4        # < this → low confidence (mirrors moderate lower bound)
+  separability_ratio_good: 2.0    # dist_nearest / dist_own ≥ this → well-separated cluster
+  noise_handling: "HOLD_PREVIOUS" # HOLD_PREVIOUS | ASSIGN_NOISE_CLUSTER | MANUAL_REVIEW
+
+# ---------------------------------------------------------------------------
+# Override events — clinical events that bypass the dwell gate and force
+# immediate re-evaluation of cluster assignment.
+# ---------------------------------------------------------------------------
+override_events:
+  - type: "MHRI_CATEGORY_CROSSING"
+    description: >
+      Patient crosses a Metabolic Health Risk Index category boundary
+      (e.g. Stage 2 → Stage 3), indicating a clinically significant
+      metabolic trajectory shift.
+
+  - type: "CKM_STAGE_TRANSITION"
+    description: >
+      Confirmed transition between CKM (Cardiovascular-Kidney-Metabolic)
+      disease stages per ACC/AHA 2023 framework; fundamentally changes
+      the patient's multi-organ risk profile.
+
+  - type: "MEDICATION_CLASS_ADD"
+    description: >
+      Addition of a new pharmacological class (e.g. first GLP-1 RA, first
+      SGLT-2i) that may materially shift glycaemic, weight, or
+      cardiorenal phenotype over subsequent weeks.
+
+  - type: "MEDICATION_CLASS_REMOVE"
+    description: >
+      Permanent discontinuation of a medication class (not temporary
+      hold), which may unmask or accelerate phenotype drift.
+
+  - type: "HOSPITALIZATION"
+    description: >
+      Acute hospitalisation (≥24 h) for a cardiometabolic indication
+      (ACS, HF decompensation, DKA, hyperglycaemic crisis, CKD
+      progression); resets phenotypic baseline assumptions.
+
+  - type: "CONCORDANT_DETERIORATION"
+    description: >
+      Simultaneous worsening across ≥2 independent biomarker domains
+      (e.g. HbA1c + eGFR + SBP) within a single assessment window,
+      suggesting genuine multi-domain phenotype change rather than noise.
+
+  - type: "CGM_INITIATION"
+    description: >
+      Patient starts continuous glucose monitoring; introduces a richer
+      glycaemic signal that changes feature space density and may shift
+      cluster geometry during the data-modality grace period.
+
+  - type: "CGM_CESSATION"
+    description: >
+      Patient stops continuous glucose monitoring; CGM-derived features
+      become unavailable, reducing feature dimensionality and requiring
+      a grace period before cluster assignments are considered stable.
+
+# ---------------------------------------------------------------------------
+# Transition classification rules — applied after the dwell gate to label
+# each accepted transition.
+# ---------------------------------------------------------------------------
+transition_classification:
+  genuine:
+    requires_clinical_event: true      # At least one override_event logged in window
+    min_confidence: 0.5                # Membership probability in new cluster
+    directional: true                  # Movement must not reverse within lookback_days
+
+  probable_flap:
+    same_pair_oscillation: true        # Same A↔B pair seen in prior lookback window
+    no_clinical_event: true            # No concurrent override_event logged
+    low_confidence: true               # Confidence below moderate_membership_prob threshold
+
+  uncertain:
+    description: >
+      Fallback classification when neither genuine nor probable_flap
+      criteria are met. Triggers soft alert for clinical review but does
+      not block the transition.
+
+# ---------------------------------------------------------------------------
+# Conservatism rank — lower number means the engine applies a MORE conservative
+# (extended) dwell gate before accepting a transition away from that cluster.
+# Intended to protect phenotypically stable patients from noise-driven changes.
+# ---------------------------------------------------------------------------
+conservatism_rank:
+  - cluster: "STABLE_CONTROLLED"
+    rank: 1
+    note: "Most conservative — well-controlled patients should not flip easily."
+
+  - cluster: "STABLE_MEDICATED"
+    rank: 2
+    note: "Stable on therapy; extended dwell before accepting regression."
+
+  - cluster: "PROGRESSIVE_GLYCAEMIC"
+    rank: 3
+    note: "Trajectory cluster; moderate conservatism to reduce noise flaps."
+
+  - cluster: "CARDIORENAL_COMPLEX"
+    rank: 4
+    note: "Multi-organ involvement; allow quicker recognition of deterioration."
+
+  - cluster: "HIGH_RISK_UNSTABLE"
+    rank: 5
+    note: "Fast-moving phenotype; minimal dwell extension."
+
+  - cluster: "NOISE"
+    rank: 6
+    note: "Least conservative — noise assignments are treated as provisional by default."
+
+# ---------------------------------------------------------------------------
+# Data modality grace periods — after a major sensor change the cluster geometry
+# shifts; assignments during the grace window are treated as provisional.
+# ---------------------------------------------------------------------------
+data_modality:
+  cgm_start_grace_weeks: 2   # Weeks after CGM initiation before cluster changes are accepted
+  cgm_stop_grace_weeks: 4    # Weeks after CGM cessation before cluster changes are accepted
