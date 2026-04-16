@@ -53,6 +53,13 @@ func main() {
 	if err := db.AutoMigrate(); err != nil {
 		logger.Fatal("Failed to run auto-migration", zap.Error(err))
 	}
+	// Phase 9 P9-C: persistent inertia verdict history table.
+	// AutoMigrate'd here rather than in database.AutoMigrate()
+	// because InertiaVerdictRow lives in the services package
+	// and importing services from database would create a cycle.
+	if err := db.DB.AutoMigrate(&services.InertiaVerdictRow{}); err != nil {
+		logger.Fatal("Failed to auto-migrate InertiaVerdictRow", zap.Error(err))
+	}
 	logger.Info("Database migration completed")
 
 	// 5. Initialize Redis cache
@@ -181,7 +188,10 @@ func main() {
 	// as P7-C: patients on at least one renal-sensitive medication
 	// are the initial inertia population. A broader
 	// "clinically-active" lister is a future refinement.
-	inertiaHistory := services.NewInMemoryInertiaHistory()
+	// Phase 9 P9-C: persistent Postgres store replaces the Phase 7
+	// in-memory store. Dampening now survives service restart — no
+	// more "first post-deployment run skips dampening" gap.
+	inertiaHistory := services.NewPostgresInertiaHistory(db.DB, logger)
 	kb26Client := services.NewKB26Client(cfg, server.MetricsCollector(), logger)
 	// Phase 7 P7-E Milestone 2: kb26Client now doubles as the
 	// InertiaCGMLatestFetcher — the assembler prefers CGM TIR over
