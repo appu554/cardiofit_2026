@@ -53,6 +53,10 @@ type Server struct {
 	// direction clinically (bias toward surfacing cards).
 	safetyRecorder *services.SafetyEventRecorder
 
+	// V4-7: phenotype stability engine evaluates raw cluster
+	// assignments before writing to PatientProfile.
+	stabilityEngine *services.StabilityEngine
+
 	logger *zap.Logger
 }
 
@@ -105,8 +109,9 @@ func NewServer(
 		// construction because it only needs the db + logger, both
 		// of which are already available. Used by getSummaryContext
 		// to populate the confounder flags.
-		safetyRecorder: services.NewSafetyEventRecorder(db.DB, logger),
-		logger:         logger,
+		safetyRecorder:  services.NewSafetyEventRecorder(db.DB, logger),
+		stabilityEngine: services.NewStabilityEngine(),
+		logger:          logger,
 	}
 
 	s.Router.Use(s.metricsMiddleware())

@@ -77,6 +77,9 @@ func autoMigrate(db *gorm.DB) error {
 		// Phase 8 P8-5: safety_events audit table feeds the
 		// summary-context confounder flags.
 		&models.SafetyEvent{},
+		// V4-7: phenotype stability history tables.
+		&models.ClusterAssignmentRecord{},
+		&models.ClusterTransitionRecord{},
 	)
 }
 

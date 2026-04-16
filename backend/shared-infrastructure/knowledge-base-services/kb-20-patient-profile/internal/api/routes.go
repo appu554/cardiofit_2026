@@ -67,6 +67,12 @@ func (s *Server) setupRoutes() {
 			patient.GET("/:id/profile", s.getProfile)
 			patient.PUT("/:id", s.updatePatient)
 
+			// V4-7: stability-aware phenotype cluster update.
+			// The Python clustering pipeline PATCHes the raw assignment;
+			// the handler routes it through StabilityEngine.Evaluate
+			// before writing the stable cluster to PatientProfile.
+			patient.PATCH("/:id/phenotype-cluster", s.patchPhenotypeCluster)
+
 			// Labs
 			patient.POST("/:id/labs", s.addLab)
 			patient.GET("/:id/labs", s.getLabs)
