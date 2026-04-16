@@ -77,6 +77,17 @@ type InertiaDetectorInput struct {
 	// inertia cards rather than suppressing them).
 	EngagementStatus    string
 	EngagementComposite *float64
+
+	// Phase 9 P9-F: frailty / deprescribing context. When the
+	// patient is elderly (Age >= 75) AND on polypharmacy
+	// (MedicationCount >= 5), the orchestrator annotates inertia
+	// cards with a deprescribing-review recommendation and
+	// generates an additional DEPRESCRIBING_REVIEW card. This does
+	// NOT suppress inertia detection — it adds context that helps
+	// the clinician decide whether escalation or deprescribing is
+	// the right action for this specific patient.
+	Age             int
+	MedicationCount int
 }
 
 // ---------------------------------------------------------------------------

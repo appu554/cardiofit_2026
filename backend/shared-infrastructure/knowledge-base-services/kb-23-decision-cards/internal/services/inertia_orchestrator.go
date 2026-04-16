@@ -14,12 +14,29 @@ import (
 	"kb-23-decision-cards/internal/models"
 )
 
-// Phase 7 P7-D + Phase 9 P9-A: template IDs for the inertia cards.
+// Phase 7 P7-D + Phase 9 P9-A + P9-F: template IDs for the inertia cards.
 const (
 	inertiaDetectedTemplateID           = "dc-inertia-detected-v1"
 	dualDomainInertiaDetectedTemplateID = "dc-dual-domain-inertia-detected-v1"
 	adherenceGapTemplateID              = "dc-adherence-gap-v1"
+	deprescribingReviewTemplateID       = "dc-deprescribing-review-v1"
 )
+
+// Polypharmacy-elderly thresholds (Beers Criteria screen).
+// A patient meeting BOTH criteria gets a DEPRESCRIBING_REVIEW card
+// when inertia is detected, advising the clinician to consider
+// reducing medication burden before adding another agent.
+const (
+	polypharmacyElderlyAgeThreshold = 75
+	polypharmacyElderlyMedThreshold = 5
+)
+
+// IsPolypharmacyElderly returns true when the patient meets the
+// conservative frailty proxy: age >= 75 AND >= 5 active medications.
+// Pure function — exported for unit testing. Phase 9 P9-F.
+func IsPolypharmacyElderly(age, medicationCount int) bool {
+	return age >= polypharmacyElderlyAgeThreshold && medicationCount >= polypharmacyElderlyMedThreshold
+}
 
 // InertiaOrchestrator is the coordination layer that wraps DetectInertia,
 // applies stability dampening against the previous week's verdict,
@@ -154,10 +171,30 @@ func (o *InertiaOrchestrator) Evaluate(ctx context.Context, input InertiaDetecto
 		}
 	}
 
+	// Phase 9 P9-F: polypharmacy-elderly deprescribing review. When
+	// the patient is >= 75 years old AND on >= 5 medications AND the
+	// detector just generated inertia verdicts, add a
+	// DEPRESCRIBING_REVIEW card that advises the clinician to
+	// consider reducing medication burden before adding another agent.
+	// This does NOT suppress the inertia verdicts — it adds a
+	// parallel card that provides frailty context so the clinician
+	// can make an informed decision between escalation and
+	// deprescribing.
+	if detectedCount > 0 && IsPolypharmacyElderly(input.Age, input.MedicationCount) {
+		if err := o.persistDeprescribingCard(input.PatientID, input.Age, input.MedicationCount); err != nil {
+			o.log.Error("inertia: failed to persist deprescribing card",
+				zap.String("patient_id", input.PatientID),
+				zap.Error(err))
+		} else if o.metrics != nil {
+			o.metrics.DeprescribingReviewGenerated.Inc()
+		}
+	}
+
 	o.log.Info("inertia: verdicts detected",
 		zap.String("patient_id", input.PatientID),
 		zap.Int("verdict_count", detectedCount),
 		zap.Bool("dual_domain", detectedCount >= 2),
+		zap.Bool("deprescribing_review", detectedCount > 0 && IsPolypharmacyElderly(input.Age, input.MedicationCount)),
 	)
 	return report
 }
@@ -532,6 +569,81 @@ func (o *InertiaOrchestrator) persistAdherenceGapCard(patientID string, verdict 
 
 	if err := o.db.DB.Create(card).Error; err != nil {
 		return fmt.Errorf("save adherence gap card: %w", err)
+	}
+	if o.gateCache != nil {
+		_ = o.gateCache.WriteGate(card)
+	}
+	if o.kb19 != nil {
+		go o.kb19.PublishGateChanged(card)
+	}
+	return nil
+}
+
+// persistDeprescribingCard builds and persists a DEPRESCRIBING_REVIEW
+// card for a polypharmacy-elderly patient. This card is generated in
+// addition to (not instead of) the inertia verdicts — it provides
+// frailty context so the clinician can decide between escalation and
+// deprescribing. Phase 9 P9-F.
+func (o *InertiaOrchestrator) persistDeprescribingCard(patientID string, age, medCount int) error {
+	if o.templateLoader == nil || o.db == nil {
+		return nil
+	}
+	tmpl, ok := o.templateLoader.Get(deprescribingReviewTemplateID)
+	if !ok {
+		return fmt.Errorf("template %s not loaded", deprescribingReviewTemplateID)
+	}
+	pid, err := uuid.Parse(patientID)
+	if err != nil {
+		return fmt.Errorf("invalid patient_id: %w", err)
+	}
+
+	data := struct {
+		Age      string
+		MedCount string
+	}{
+		Age:      fmt.Sprintf("%d", age),
+		MedCount: fmt.Sprintf("%d", medCount),
+	}
+
+	var clinician, patientEn, patientHi string
+	for _, frag := range tmpl.Fragments {
+		switch frag.FragmentType {
+		case models.FragClinician:
+			clinician = executeRenalTemplate(frag.TextEn, data)
+		case models.FragPatient:
+			patientEn = executeRenalTemplate(frag.TextEn, data)
+			patientHi = executeRenalTemplate(frag.TextHi, data)
+		}
+	}
+	if clinician == "" {
+		clinician = fmt.Sprintf("DEPRESCRIBING REVIEW: patient is %d years old on %d medications — consider reducing medication burden before adding another agent",
+			age, medCount)
+	}
+
+	notes := clinician
+	card := &models.DecisionCard{
+		CardID:                   uuid.New(),
+		PatientID:                pid,
+		TemplateID:               tmpl.TemplateID,
+		NodeID:                   tmpl.NodeID,
+		PrimaryDifferentialID:    "DEPRESCRIBING_REVIEW",
+		DiagnosticConfidenceTier: models.TierProbable,
+		MCUGate:                  models.GateSafe, // advisory
+		MCUGateRationale:         clinician,
+		DoseAdjustmentNotes:      &notes,
+		ObservationReliability:   models.ReliabilityModerate,
+		SafetyTier:               models.SafetyRoutine,
+		CardSource:               models.SourceClinicalSignal,
+		Status:                   models.StatusActive,
+		ClinicianSummary:         clinician,
+		PatientSummaryEn:         patientEn,
+		PatientSummaryHi:         patientHi,
+		CreatedAt:                time.Now(),
+		UpdatedAt:                time.Now(),
+	}
+
+	if err := o.db.DB.Create(card).Error; err != nil {
+		return fmt.Errorf("save deprescribing review card: %w", err)
 	}
 	if o.gateCache != nil {
 		_ = o.gateCache.WriteGate(card)

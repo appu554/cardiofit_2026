@@ -93,6 +93,11 @@ type Collector struct {
 	// Phase 9 P9-B: monitoring engagement batch outcomes.
 	MonitoringLapsedDetected      *prometheus.CounterVec
 	MonitoringLapsedBatchDuration prometheus.Histogram
+
+	// Phase 9 P9-F: deprescribing review cards for polypharmacy-
+	// elderly patients. Counter of cards generated — advisory cards
+	// that accompany inertia verdicts, not replacements for them.
+	DeprescribingReviewGenerated prometheus.Counter
 }
 
 func NewCollector() *Collector {
@@ -276,6 +281,11 @@ func NewCollector() *Collector {
 			Name:    "kb23_monitoring_lapsed_batch_duration_seconds",
 			Help:    "End-to-end duration of the weekly monitoring engagement batch run",
 			Buckets: []float64{1, 5, 15, 30, 60, 120, 300},
+		}),
+
+		DeprescribingReviewGenerated: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb23_deprescribing_review_generated_total",
+			Help: "Deprescribing review cards generated for polypharmacy-elderly patients alongside inertia detection (Phase 9 P9-F)",
 		}),
 	}
 }

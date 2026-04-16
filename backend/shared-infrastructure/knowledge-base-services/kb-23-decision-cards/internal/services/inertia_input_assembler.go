@@ -116,6 +116,12 @@ func (a *ConcreteInertiaInputAssembler) AssembleInertiaInput(ctx context.Context
 	input.EngagementStatus = summary.EngagementStatus
 	input.EngagementComposite = summary.EngagementComposite
 
+	// Phase 9 P9-F: thread demographic context for the frailty /
+	// deprescribing modifier. Age from the summary context +
+	// medication count from the active medication list.
+	input.Age = summary.Age
+	input.MedicationCount = len(summary.Medications)
+
 	// 2. KB-20 renal status — eGFR + slope for the renal domain. Non-fatal
 	// if missing; renal domain input simply stays nil.
 	var renalStatus *KB20RenalStatus

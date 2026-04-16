@@ -1,0 +1,106 @@
+# KB-23 Decision Card Template: Deprescribing Review
+# Triggered when: InertiaOrchestrator detects inertia verdicts AND the
+#   patient is polypharmacy-elderly (age >= 75, >= 5 active medications).
+#   Generated IN ADDITION TO the inertia verdicts, not instead of them.
+#   The clinician sees both "therapy target unmet" and "consider
+#   reducing medication burden" — the two signals together enable an
+#   informed decision between escalation and deprescribing.
+# Purpose: Fix the Patient 19 failure mode from the 20-patient thought
+#   experiment. A 78-year-old on 12 medications with eGFR 35 and
+#   HbA1c 7.5 should NOT get more cards recommending more drugs. The
+#   right clinical action is a comprehensive medication review that
+#   considers falls risk, cognitive load, pill burden, and the
+#   diminishing marginal benefit of tight glycaemic control in the
+#   frail elderly.
+# Version: 1.0.0
+# Phase: 9 P9-F — Frailty / Deprescribing Context Modifier
+
+template_id: "dc-deprescribing-review-v1"
+node_id: "CROSS_NODE"
+differential_id: "DEPRESCRIBING_REVIEW"
+version: "1.0.0"
+clinical_reviewer: "dr.geriatrics.lead"
+mcu_gate_default: "SAFE"
+
+card_source: "CLINICAL_SIGNAL"
+
+confidence_thresholds:
+  firm_posterior: 0.0
+  firm_medication_change: 0.0
+  probable_posterior: 0.0
+  possible_posterior: 0.0
+
+recommendations:
+  - rec_type: "MEDICATION_REVIEW"
+    urgency: "ROUTINE"
+    target: "clinician"
+    action_text_en: |
+      DEPRESCRIBING REVIEW RECOMMENDED: This patient is {{.Age}} years
+      old and on {{.MedCount}} active medications. Before adding
+      another agent to address the therapeutic target gap (see the
+      accompanying inertia card), consider:
+
+        1. Are all current medications still indicated? Review each
+           against the Beers Criteria / STOPP-START for age-related
+           inappropriateness.
+        2. Is tight glycaemic control (HbA1c < 7.0) appropriate for
+           this patient? ADA/EASD consensus allows HbA1c 7.5-8.0 for
+           frail elderly to reduce hypoglycaemia risk.
+        3. What is the patient's fall risk? Each additional
+           antihypertensive increases orthostatic hypotension risk.
+           Each additional hypoglycaemic agent increases nocturnal
+           hypo risk. Both directly increase fall risk.
+        4. What is the pill burden? Polypharmacy (>= 5 agents)
+           reduces adherence independently of the patient's
+           motivation — cognitive load matters.
+        5. Would stopping a low-value medication and starting a
+           high-value one produce a better outcome than simply adding
+           the high-value one? Net medication count neutral.
+
+      This card does NOT override the inertia detection. The target
+      gap is real. But the intervention should account for the
+      patient's frailty context.
+    action_text_hi: |
+      डिप्रिस्क्राइबिंग समीक्षा अनुशंसित: यह रोगी {{.Age}} वर्ष का है
+      और {{.MedCount}} सक्रिय दवाओं पर है। एक और दवा जोड़ने से पहले,
+      वर्तमान दवाओं की समीक्षा करें।
+    rationale_en: |
+      Polypharmacy in the elderly (>= 5 medications in a patient >= 75
+      years) is an independent risk factor for adverse drug events,
+      falls, hospitalisation, and mortality. The Beers Criteria (AGS
+      2023) and STOPP/START framework (O'Mahony 2023) provide evidence-
+      based deprescribing guidance. Tight glycaemic control (HbA1c < 7)
+      in frail elderly increases hypoglycaemia risk without meaningful
+      mortality benefit (ACCORD, ADVANCE, VADT trials). ADA SOC 2025
+      Section 13 recommends less-intensive glycaemic targets for older
+      adults with limited life expectancy, high comorbidity burden, or
+      functional impairment.
+    guideline_ref: "ADA SOC 2025 §13; AGS Beers Criteria 2023; STOPP/START v3 2023"
+    confidence_tier_required: "UNCERTAIN"
+    bypasses_confidence_gate: true
+    sort_order: 1
+
+fragments:
+  - fragment_type: "CLINICIAN"
+    text_en: |
+      DEPRESCRIBING REVIEW: Patient is {{.Age}} years old on
+      {{.MedCount}} medications. Polypharmacy-elderly flag triggered
+      alongside therapeutic inertia. Consider medication burden
+      reduction before escalation. Beers Criteria / STOPP-START
+      review recommended.
+    text_hi: |
+      डिप्रिस्क्राइबिंग समीक्षा: रोगी {{.Age}} वर्ष, {{.MedCount}}
+      दवाओं पर। दवा बोझ कम करने पर विचार करें।
+    version: "1.0.0"
+  - fragment_type: "PATIENT"
+    text_en: |
+      You are on several medications and your care team wants to make
+      sure each one is still needed and helping you. Before making
+      any changes to your treatment, they will review all your
+      medications together to find the best combination for your
+      health and quality of life.
+    text_hi: |
+      आप कई दवाओं पर हैं और आपकी देखभाल टीम यह सुनिश्चित करना चाहती
+      है कि प्रत्येक दवा अभी भी आवश्यक है। कोई भी बदलाव करने से
+      पहले, वे आपकी सभी दवाओं की एक साथ समीक्षा करेंगे।
+    version: "1.0.0"
