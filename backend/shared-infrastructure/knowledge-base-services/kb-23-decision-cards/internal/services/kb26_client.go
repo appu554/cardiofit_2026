@@ -37,6 +37,11 @@ func NewKB26Client(cfg *config.Config, m *metrics.Collector, log *zap.Logger) *K
 	cbCfg := resilience.DefaultConfig("kb26")
 	cbCfg.MaxRetries = 3
 	cbCfg.ResetTimeout = 30 * time.Second
+	if m != nil && m.CircuitBreakerTransitions != nil {
+		cbCfg.OnStateChange = func(name string, from, to resilience.State) {
+			m.CircuitBreakerTransitions.WithLabelValues(name, from.String(), to.String()).Inc()
+		}
+	}
 	return &KB26Client{
 		cfg:     cfg,
 		metrics: m,

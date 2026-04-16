@@ -1,5 +1,13 @@
 // Package resilience provides fault-tolerance primitives for
-// cross-service HTTP calls. Phase 10 P10-A.
+// cross-service HTTP calls. Phase 10 P10-A + P10-C.
+//
+// DUPLICATION NOTE (Decision 8): this package is copied verbatim
+// from kb-23-decision-cards/pkg/resilience (the canonical source).
+// KB-20 and KB-23 are separate Go modules and cannot cross-import.
+// When a third consumer appears, promote to
+// backend/shared-infrastructure/pkg/resilience and consume from
+// both sides. Until then, intentional duplication per the same
+// convention used for pkg/stability.
 //
 // The circuit breaker wraps http.Client.Do with a three-state model:
 //
@@ -214,7 +222,9 @@ func (cb *CircuitBreaker) Do(req *http.Request) (*http.Response, error) {
 }
 
 // SetOnStateChange sets or replaces the state-change callback.
-// Thread-safe. Phase 10 P10-D.
+// Thread-safe. Phase 10 P10-D: allows main.go to wire Prometheus
+// metrics into the breaker without the client package needing to
+// import the metrics package.
 func (cb *CircuitBreaker) SetOnStateChange(fn func(name string, from, to State)) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()

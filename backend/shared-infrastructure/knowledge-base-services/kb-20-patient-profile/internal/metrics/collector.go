@@ -25,6 +25,11 @@ type Collector struct {
 	// Kafka outbox relay metrics
 	OutboxRelayPublished *prometheus.CounterVec
 	OutboxRelayErrors     prometheus.Counter
+
+	// Phase 10 P10-D: circuit breaker state transitions for
+	// cross-service calls (KB-20 → KB-26). Labelled by service
+	// name and transition direction.
+	CircuitBreakerTransitions *prometheus.CounterVec
 }
 
 // NewCollector creates and registers all KB-20 Prometheus metrics.
@@ -101,6 +106,11 @@ func NewCollector() *Collector {
 			Name: "kb20_outbox_relay_errors_total",
 			Help: "Outbox relay publish failures",
 		}),
+
+		CircuitBreakerTransitions: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb20_circuit_breaker_transitions_total",
+			Help: "Circuit breaker state transitions by service and direction (Phase 10 P10-D)",
+		}, []string{"service", "from", "to"}),
 	}
 }
 

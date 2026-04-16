@@ -73,6 +73,15 @@ func NewKB20Client(cfg *config.Config, m *metrics.Collector, log *zap.Logger) *K
 	cbCfg := resilience.DefaultConfig("kb20")
 	cbCfg.MaxRetries = 2
 	cbCfg.ResetTimeout = 15 * time.Second
+	// Phase 10 P10-D: emit Prometheus counter on every state transition
+	// so Grafana can alert on open circuits. The callback fires
+	// asynchronously (the breaker calls it in a goroutine) so it
+	// cannot block the request path.
+	if m != nil && m.CircuitBreakerTransitions != nil {
+		cbCfg.OnStateChange = func(name string, from, to resilience.State) {
+			m.CircuitBreakerTransitions.WithLabelValues(name, from.String(), to.String()).Inc()
+		}
+	}
 	return &KB20Client{
 		cfg:     cfg,
 		metrics: m,

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"kb-patient-profile/pkg/resilience"
 )
 
 // KB26Client communicates with the KB-26 Metabolic Digital Twin service (port 8137).
@@ -17,15 +19,33 @@ import (
 type KB26Client struct {
 	baseURL    string
 	httpClient *http.Client
+	breaker    *resilience.CircuitBreaker // Phase 10 P10-C
 	logger     *zap.Logger
 }
 
 // NewKB26Client creates a client for the KB-26 Metabolic Digital Twin service.
+// Phase 10 P10-C: wraps the HTTP client with a circuit breaker so
+// MRI + CGM status calls to KB-26 have retry + fast-fail + recovery.
 func NewKB26Client(baseURL string, logger *zap.Logger) *KB26Client {
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	cbCfg := resilience.DefaultConfig("kb26-from-kb20")
+	cbCfg.MaxRetries = 2
+	cbCfg.ResetTimeout = 20 * time.Second
 	return &KB26Client{
 		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		httpClient: httpClient,
+		breaker:    resilience.NewCircuitBreaker(httpClient, cbCfg),
 		logger:     logger,
+	}
+}
+
+// SetOnStateChange sets the circuit breaker's state-change callback
+// after construction. Used by main.go to wire Prometheus metrics
+// into the breaker without the clients package needing to import
+// the metrics package. Phase 10 P10-D.
+func (c *KB26Client) SetOnStateChange(fn func(name string, from, to resilience.State)) {
+	if c.breaker != nil {
+		c.breaker.SetOnStateChange(fn)
 	}
 }
 
@@ -46,7 +66,7 @@ func (c *KB26Client) GetCurrentMRI(ctx context.Context, patientID string) *MRISn
 	if err != nil {
 		return nil
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.breaker.Do(req)
 	if err != nil {
 		c.logger.Warn("KB-26 MRI fetch failed", zap.String("patient_id", patientID), zap.Error(err))
 		return nil
@@ -100,7 +120,7 @@ func (c *KB26Client) GetLatestCGMStatus(ctx context.Context, patientID string) (
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.breaker.Do(req)
 	if err != nil {
 		c.logger.Debug("KB-26 cgm-latest fetch failed",
 			zap.String("patient_id", patientID),
@@ -135,7 +155,7 @@ func (c *KB26Client) GetMRIHistory(ctx context.Context, patientID string, limit 
 	if err != nil {
 		return nil
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.breaker.Do(req)
 	if err != nil {
 		c.logger.Warn("KB-26 MRI history fetch failed", zap.String("patient_id", patientID), zap.Error(err))
 		return nil

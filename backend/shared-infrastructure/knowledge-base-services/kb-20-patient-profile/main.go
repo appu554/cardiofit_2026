@@ -20,6 +20,7 @@ import (
 	"kb-patient-profile/internal/metrics"
 	"kb-patient-profile/internal/models"
 	"kb-patient-profile/internal/services"
+	"kb-patient-profile/pkg/resilience"
 )
 
 func main() {
@@ -137,6 +138,13 @@ func main() {
 	// consumes — keeps the services package free of clients imports
 	// and the clients package free of services imports.
 	kb26Client := clients.NewKB26Client(cfg.KB26.BaseURL, logger)
+	// Phase 10 P10-D: wire Prometheus metrics into KB-26 circuit
+	// breaker so state transitions are observable in Grafana.
+	if metricsCollector.CircuitBreakerTransitions != nil {
+		kb26Client.SetOnStateChange(func(name string, from, to resilience.State) {
+			metricsCollector.CircuitBreakerTransitions.WithLabelValues(name, from.String(), to.String()).Inc()
+		})
+	}
 
 	// Initialize HTTP server with all services
 	logger.Info("Initializing HTTP server...")

@@ -98,6 +98,11 @@ type Collector struct {
 	// elderly patients. Counter of cards generated — advisory cards
 	// that accompany inertia verdicts, not replacements for them.
 	DeprescribingReviewGenerated prometheus.Counter
+
+	// Phase 10 P10-D: circuit breaker observability. Labelled by
+	// service name (kb20, kb26) and state transition direction
+	// (from→to). Enables Grafana alerts on open circuits.
+	CircuitBreakerTransitions *prometheus.CounterVec
 }
 
 func NewCollector() *Collector {
@@ -287,5 +292,11 @@ func NewCollector() *Collector {
 			Name: "kb23_deprescribing_review_generated_total",
 			Help: "Deprescribing review cards generated for polypharmacy-elderly patients alongside inertia detection (Phase 9 P9-F)",
 		}),
+
+		CircuitBreakerTransitions: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "kb23_circuit_breaker_transitions_total",
+			Help: "Circuit breaker state transitions by service and direction (Phase 10 P10-D)",
+		}, []string{"service", "from", "to"}),
 	}
 }
+
