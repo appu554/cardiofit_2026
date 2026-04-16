@@ -6,9 +6,9 @@ import "time"
 // (typically 14 days per international consensus).
 type CGMPeriodReport struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
-	PatientID       string    `gorm:"index" json:"patient_id"`
+	PatientID       string    `gorm:"uniqueIndex:idx_cgm_patient_period_end" json:"patient_id"`
 	PeriodStart     time.Time `json:"period_start"`
-	PeriodEnd       time.Time `json:"period_end"`
+	PeriodEnd       time.Time `gorm:"uniqueIndex:idx_cgm_patient_period_end" json:"period_end"`
 	CoveragePct     float64   `json:"coverage_pct"`
 	SufficientData  bool      `json:"sufficient_data"`
 	ConfidenceLevel string    `json:"confidence_level"`

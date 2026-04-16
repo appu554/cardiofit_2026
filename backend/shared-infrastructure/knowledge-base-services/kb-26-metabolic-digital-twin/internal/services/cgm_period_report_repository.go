@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"kb-26-metabolic-digital-twin/internal/models"
 )
@@ -40,7 +41,18 @@ func (r *CGMPeriodReportRepository) SavePeriodReport(report *models.CGMPeriodRep
 	if report.CreatedAt.IsZero() {
 		report.CreatedAt = time.Now().UTC()
 	}
-	return r.db.Create(report).Error
+	// Phase 9 P9-D: upsert on (patient_id, period_end) to handle
+	// at-least-once Kafka delivery. A second delivery of the same
+	// CGM analytics event for the same patient + window-end updates
+	// ALL columns on the existing row rather than creating a
+	// duplicate. The UNIQUE(patient_id, period_end) index on
+	// CGMPeriodReport enforces this at the database level.
+	// UpdateAll=true avoids manually listing column names, which
+	// would diverge from GORM's CamelCase→snake_case derivation.
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "patient_id"}, {Name: "period_end"}},
+		UpdateAll: true,
+	}).Create(report).Error
 }
 
 // FetchLatestPeriodReport returns the most recent CGMPeriodReport for
