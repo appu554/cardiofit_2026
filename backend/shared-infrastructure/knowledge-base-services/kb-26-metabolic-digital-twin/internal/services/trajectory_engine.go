@@ -340,12 +340,200 @@ func (e *TrajectoryEngine) detectLeadingIndicators(points []models.DomainTraject
 		return nil
 	}
 
+	// Phase 10 V4-5 completion: estimate lead days from the temporal
+	// offset between behavioral decline onset and clinical decline onset.
+	leadDays := e.estimateLeadDays(points, models.DomainBehavioral, lagging)
+
+	// Build causal chain: order ALL declining domains by their decline
+	// onset time (earliest first). This implements V4-5 Scenario 4.
+	causalChain := e.buildCausalChain(points, slopes)
+
 	return []models.LeadingIndicator{{
 		LeadingDomain:  models.DomainBehavioral,
 		LaggingDomains: lagging,
+		LeadDays:       leadDays,
+		CausalChain:    causalChain,
 		Confidence:     models.ConfidenceModerate,
 		Interpretation: "Behavioral domain decline preceded clinical domain deterioration — engagement collapse may be driving worsening outcomes",
 	}}
+}
+
+// domainExtractorMap returns the extraction function for each domain.
+// Shared by estimateLeadDays and buildCausalChain.
+func domainExtractorMap() map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64 {
+	return map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64{
+		models.DomainGlucose:    func(p models.DomainTrajectoryPoint) float64 { return p.GlucoseScore },
+		models.DomainCardio:     func(p models.DomainTrajectoryPoint) float64 { return p.CardioScore },
+		models.DomainBodyComp:   func(p models.DomainTrajectoryPoint) float64 { return p.BodyCompScore },
+		models.DomainBehavioral: func(p models.DomainTrajectoryPoint) float64 { return p.BehavioralScore },
+	}
+}
+
+// estimateLeadDays computes the approximate number of days the leading
+// domain started declining before the earliest lagging domain.
+// Uses a 5% decline from start score as the onset marker.
+// Phase 10 V4-5 completion.
+func (e *TrajectoryEngine) estimateLeadDays(
+	points []models.DomainTrajectoryPoint,
+	leadingDomain models.MHRIDomain,
+	laggingDomains []models.MHRIDomain,
+) int {
+	if len(points) < 3 {
+		return 0
+	}
+	extractors := domainExtractorMap()
+
+	onset := func(domain models.MHRIDomain) int {
+		ext := extractors[domain]
+		if ext == nil {
+			return len(points) - 1
+		}
+		startScore := ext(points[0])
+		threshold := startScore * 0.95
+		for i, p := range points {
+			if ext(p) < threshold {
+				return i
+			}
+		}
+		return len(points) - 1
+	}
+
+	leadOnset := onset(leadingDomain)
+	earliestLag := len(points) - 1
+	for _, domain := range laggingDomains {
+		lagOnset := onset(domain)
+		if lagOnset < earliestLag {
+			earliestLag = lagOnset
+		}
+	}
+
+	leadDays := earliestLag - leadOnset
+	if leadDays < 0 {
+		leadDays = 0
+	}
+	return leadDays
+}
+
+// buildCausalChain orders all declining domains by their decline
+// onset time (earliest first). Implements V4-5 Scenario 4: "body
+// comp deteriorated first, then glucose, then cardio — pointing
+// to weight gain as the root cause." Phase 10 V4-5 completion.
+func (e *TrajectoryEngine) buildCausalChain(
+	points []models.DomainTrajectoryPoint,
+	slopes map[models.MHRIDomain]models.DomainSlope,
+) []models.MHRIDomain {
+	if len(points) < 3 {
+		return nil
+	}
+
+	type domainOnset struct {
+		domain models.MHRIDomain
+		onset  int
+	}
+
+	extractors := domainExtractorMap()
+	var declining []domainOnset
+
+	for _, domain := range models.AllMHRIDomains {
+		ds := slopes[domain]
+		if ds.SlopePerDay >= e.thresholds.Trend.Declining {
+			continue
+		}
+		ext := extractors[domain]
+		startScore := ext(points[0])
+		threshold := startScore * 0.95
+		onsetIdx := len(points) - 1
+		for i, p := range points {
+			if ext(p) < threshold {
+				onsetIdx = i
+				break
+			}
+		}
+		declining = append(declining, domainOnset{domain: domain, onset: onsetIdx})
+	}
+
+	if len(declining) < 2 {
+		return nil
+	}
+
+	// Sort by onset index (earliest first)
+	for i := 0; i < len(declining)-1; i++ {
+		for j := i + 1; j < len(declining); j++ {
+			if declining[j].onset < declining[i].onset {
+				declining[i], declining[j] = declining[j], declining[i]
+			}
+		}
+	}
+
+	chain := make([]models.MHRIDomain, len(declining))
+	for i, d := range declining {
+		chain[i] = d.domain
+	}
+	return chain
+}
+
+// CheckSeasonalSuppression checks whether any seasonal window from
+// the market config is currently active and whether the declining
+// domains match the window's affected domains. Returns a suppression
+// context for downstream card urgency downgrade.
+// Phase 10 V4-5 completion (India-specific consideration).
+func CheckSeasonalSuppression(
+	result *models.DecomposedTrajectory,
+	seasonalWindows []SeasonalWindow,
+	now time.Time,
+) *models.SeasonalSuppressionContext {
+	if result == nil || len(seasonalWindows) == 0 {
+		return nil
+	}
+	for _, w := range seasonalWindows {
+		if !w.IsActive(now) {
+			continue
+		}
+		for _, domain := range w.AffectedDomains {
+			ds, ok := result.DomainSlopes[domain]
+			if ok && ds.SlopePerDay < -0.3 {
+				return &models.SeasonalSuppressionContext{
+					WindowName:      w.Name,
+					AffectedDomains: w.AffectedDomains,
+					Mode:            w.Mode,
+					Rationale:       w.Rationale,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// SeasonalWindow represents one window from the market config's
+// seasonal_calendar.yaml. Phase 10 V4-5 completion.
+type SeasonalWindow struct {
+	Name            string              `yaml:"name"`
+	Start           string              `yaml:"start,omitempty"`
+	End             string              `yaml:"end,omitempty"`
+	StartDOY        int                 `yaml:"start_doy,omitempty"`
+	EndDOY          int                 `yaml:"end_doy,omitempty"`
+	AffectedDomains []models.MHRIDomain `yaml:"affected_domains"`
+	Mode            string              `yaml:"mode"`
+	Rationale       string              `yaml:"rationale"`
+}
+
+// IsActive returns true when now falls within the seasonal window.
+func (w SeasonalWindow) IsActive(now time.Time) bool {
+	if w.Start != "" && w.End != "" {
+		start, err1 := time.Parse("2006-01-02", w.Start)
+		end, err2 := time.Parse("2006-01-02", w.End)
+		if err1 == nil && err2 == nil {
+			return !now.Before(start) && !now.After(end)
+		}
+	}
+	if w.StartDOY > 0 && w.EndDOY > 0 {
+		doy := now.YearDay()
+		if w.StartDOY <= w.EndDOY {
+			return doy >= w.StartDOY && doy <= w.EndDOY
+		}
+		return doy >= w.StartDOY || doy <= w.EndDOY
+	}
+	return false
 }
 
 func extractScores(points []models.DomainTrajectoryPoint, extractor func(models.DomainTrajectoryPoint) float64) []float64 {

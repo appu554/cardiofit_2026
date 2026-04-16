@@ -75,10 +75,18 @@ type DivergencePattern struct {
 	PossibleMechanism string     `json:"possible_mechanism"`
 }
 
-// LeadingIndicator describes when behavioral domain decline precedes clinical domain decline.
+// LeadingIndicator describes when behavioral domain decline precedes
+// clinical domain decline.
+//
+// Phase 10 V4-5 completion: LeadDays and CausalChain fields added
+// to support temporal lead-lag analysis (Scenario 4 from the spec:
+// "body composition deteriorated first, then glucose, then cardio —
+// pointing to weight gain as the root cause").
 type LeadingIndicator struct {
 	LeadingDomain  MHRIDomain   `json:"leading_domain"`
 	LaggingDomains []MHRIDomain `json:"lagging_domains"`
+	LeadDays       int          `json:"lead_days"`        // estimated days the leading domain leads by
+	CausalChain    []MHRIDomain `json:"causal_chain,omitempty"` // ordered: first decliner → second → third
 	Confidence     string       `json:"confidence"`
 	Interpretation string       `json:"interpretation"`
 }
@@ -111,6 +119,22 @@ type DecomposedTrajectory struct {
 	HasDiscordantTrend      bool                       `json:"has_discordant_trend"`
 	ConcordantDeterioration bool                       `json:"concordant_deterioration"`
 	DomainsDeteriorating    int                        `json:"domains_deteriorating"`
+
+	// Phase 10 V4-5 completion: seasonal suppression (India-specific).
+	// When a seasonal window is active and the declining domain
+	// matches the window's affected_domains list, this field carries
+	// the seasonal context so downstream card generators can
+	// downgrade urgency rather than alerting on expected patterns.
+	SeasonalSuppression *SeasonalSuppressionContext `json:"seasonal_suppression,omitempty"`
+}
+
+// SeasonalSuppressionContext describes an active seasonal window
+// that may explain a domain decline. Phase 10 V4-5 completion.
+type SeasonalSuppressionContext struct {
+	WindowName      string       `json:"window_name"`       // e.g. "diwali", "ramadan", "summer_heat"
+	AffectedDomains []MHRIDomain `json:"affected_domains"`
+	Mode            string       `json:"mode"`              // DOWNGRADE_URGENCY | SUPPRESS
+	Rationale       string       `json:"rationale"`
 }
 
 // DomainTrajectoryHistory stores decomposed snapshots for trend-over-time analysis.
