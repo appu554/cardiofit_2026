@@ -89,6 +89,13 @@ func (c *FHIRClient) UpsertDetectedIssue(issue map[string]interface{}) error {
 	return c.upsertResource("DetectedIssue", issue)
 }
 
+// UpsertResource creates or updates a FHIR resource of any type.
+// Phase 10 Gap 9: generic method for CommunicationRequest and future
+// resource types that don't need their own typed wrapper.
+func (c *FHIRClient) UpsertResource(resourceType string, resource map[string]interface{}) error {
+	return c.upsertResource(resourceType, resource)
+}
+
 // SearchPatients queries FHIR Store for patients updated since the given time.
 func (c *FHIRClient) SearchPatients(since time.Time) ([]map[string]interface{}, error) {
 	return c.searchResourcesSince("Patient", since)
