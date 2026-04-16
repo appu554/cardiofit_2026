@@ -137,7 +137,7 @@ func (e *StabilityEngine) Evaluate(input StabilityInput) models.StabilityDecisio
 
 	// 6. Override check — bypass dwell.
 	if e.hasOverride(input) {
-		evt := input.OverrideEvents[0]
+		evt := e.mostRecentOverride(input.OverrideEvents)
 		return models.StabilityDecision{
 			PatientID:          input.PatientID,
 			RawClusterLabel:    input.RawClusterLabel,
@@ -217,6 +217,8 @@ func (e *StabilityEngine) hasOverride(input StabilityInput) bool {
 
 // moreConservativeCluster returns the cluster from the pair that has the
 // LOWER conservatism rank number (i.e., is more conservative).
+// Unknown clusters default to rank 99 (least conservative) so that a
+// known-safe cluster is always preferred over an unmapped one.
 func (e *StabilityEngine) moreConservativeCluster(pair []string, cfg StabilityConfig) string {
 	if len(pair) < 2 {
 		if len(pair) == 1 {
@@ -224,20 +226,40 @@ func (e *StabilityEngine) moreConservativeCluster(pair []string, cfg StabilityCo
 		}
 		return ""
 	}
-	rankA := cfg.ConservatismRank[pair[0]]
-	rankB := cfg.ConservatismRank[pair[1]]
+	rankA := e.clusterRank(pair[0], cfg)
+	rankB := e.clusterRank(pair[1], cfg)
 	if rankA <= rankB {
 		return pair[0]
 	}
 	return pair[1]
 }
 
+// clusterRank returns the conservatism rank for a cluster, defaulting to 99
+// (least conservative) if the label is not in the config map.
+func (e *StabilityEngine) clusterRank(label string, cfg StabilityConfig) int {
+	if rank, ok := cfg.ConservatismRank[label]; ok {
+		return rank
+	}
+	return 99
+}
+
+// mostRecentOverride returns the override event with the latest EventDate.
+func (e *StabilityEngine) mostRecentOverride(events []models.OverrideEvent) models.OverrideEvent {
+	best := events[0]
+	for _, evt := range events[1:] {
+		if evt.EventDate.After(best.EventDate) {
+			best = evt
+		}
+	}
+	return best
+}
+
 // requiredDwellDays returns the number of days a pending assignment must be
 // sustained before it is accepted. Conservative clusters (rank <= 2) use the
 // extended dwell window.
 func (e *StabilityEngine) requiredDwellDays(currentStable string, cfg StabilityConfig) int {
-	rank, ok := cfg.ConservatismRank[currentStable]
-	if ok && rank <= 2 {
+	rank := e.clusterRank(currentStable, cfg)
+	if rank <= 2 {
 		return cfg.DwellExtendedWeeks * 7
 	}
 	return cfg.DwellMinWeeks * 7
@@ -248,7 +270,11 @@ func (e *StabilityEngine) requiredDwellDays(currentStable string, cfg StabilityC
 // DwellDays (which represents time since last stable assignment).
 func (e *StabilityEngine) pendingDwellDays(input StabilityInput) int {
 	if input.CurrentState.PendingSince != nil {
-		return int(input.RunDate.Sub(*input.CurrentState.PendingSince).Hours() / 24)
+		days := int(input.RunDate.Sub(*input.CurrentState.PendingSince).Hours() / 24)
+		if days < 0 {
+			return 0 // guard against PendingSince in the future (data error)
+		}
+		return days
 	}
 	return input.CurrentState.DwellDays
 }
