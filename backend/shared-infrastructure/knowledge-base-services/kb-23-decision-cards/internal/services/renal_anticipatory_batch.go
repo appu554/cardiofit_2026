@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -130,70 +132,77 @@ func (j *RenalAnticipatoryBatch) Run(ctx context.Context) error {
 		return nil
 	}
 
+	// Phase 9 P9-E: bounded-concurrency fan-out. Same pattern as
+	// InertiaWeeklyBatch.Run — channel semaphore limits goroutine
+	// fan-out to DefaultBatchConcurrency (4). Per-patient errors
+	// are isolated; a goroutine failure does not abort siblings.
 	var (
-		approachingCardCount int
-		staleCardCount       int
-		evalErrCount         int
+		approachingCardCount int64
+		staleCardCount       int64
+		evalErrCount         int64
 	)
+	sem := make(chan struct{}, DefaultBatchConcurrency)
+	var wg sync.WaitGroup
 
 	for _, patientID := range ids {
 		if ctx.Err() != nil {
-			j.log.Warn("renal anticipatory batch cancelled mid-run",
-				zap.Int("processed", approachingCardCount+staleCardCount),
-				zap.Int("remaining", len(ids)-approachingCardCount-staleCardCount))
-			return ctx.Err()
+			break
 		}
+		sem <- struct{}{} // acquire semaphore slot
+		wg.Add(1)
+		go func(pid string) {
+			defer wg.Done()
+			defer func() { <-sem }() // release
 
-		result, err := j.orchestrator.EvaluatePatient(ctx, patientID)
-		if err != nil {
-			evalErrCount++
-			j.log.Warn("renal anticipatory orchestrator error for patient",
-				zap.String("patient_id", patientID),
-				zap.Error(err))
-			continue
-		}
-		if result == nil {
-			continue
-		}
-
-		// Per-alert card persistence. One card per approaching alert so
-		// a patient with contraindication + efficacy-cliff projections
-		// gets two distinct cards — avoids losing either signal in a
-		// combined summary.
-		for _, alert := range result.ApproachingAlerts {
-			if err := j.persistApproachingCard(patientID, result, alert); err != nil {
-				j.log.Error("failed to persist renal-approaching card",
-					zap.String("patient_id", patientID),
-					zap.String("drug_class", alert.DrugClass),
+			result, err := j.orchestrator.EvaluatePatient(ctx, pid)
+			if err != nil {
+				atomic.AddInt64(&evalErrCount, 1)
+				j.log.Warn("renal anticipatory orchestrator error for patient",
+					zap.String("patient_id", pid),
 					zap.Error(err))
-				continue
+				return
 			}
-			approachingCardCount++
-			if j.metrics != nil {
-				j.metrics.RenalAnticipatoryAlerts.
-					WithLabelValues(alert.DrugClass, alert.ThresholdType).Inc()
+			if result == nil {
+				return
 			}
-		}
 
-		if result.StaleEGFRTriggered {
-			if err := j.persistStaleEGFRCard(patientID, result); err != nil {
-				j.log.Error("failed to persist stale-eGFR card",
-					zap.String("patient_id", patientID),
-					zap.Error(err))
-				continue
+			for _, alert := range result.ApproachingAlerts {
+				if err := j.persistApproachingCard(pid, result, alert); err != nil {
+					j.log.Error("failed to persist renal-approaching card",
+						zap.String("patient_id", pid),
+						zap.String("drug_class", alert.DrugClass),
+						zap.Error(err))
+					continue
+				}
+				atomic.AddInt64(&approachingCardCount, 1)
+				if j.metrics != nil {
+					j.metrics.RenalAnticipatoryAlerts.
+						WithLabelValues(alert.DrugClass, alert.ThresholdType).Inc()
+				}
 			}
-			staleCardCount++
-			if j.metrics != nil {
-				j.metrics.StaleEGFRDetected.WithLabelValues(result.CKDStage).Inc()
+
+			if result.StaleEGFRTriggered {
+				if err := j.persistStaleEGFRCard(pid, result); err != nil {
+					j.log.Error("failed to persist stale-eGFR card",
+						zap.String("patient_id", pid),
+						zap.Error(err))
+					return
+				}
+				atomic.AddInt64(&staleCardCount, 1)
+				if j.metrics != nil {
+					j.metrics.StaleEGFRDetected.WithLabelValues(result.CKDStage).Inc()
+				}
 			}
-		}
+		}(patientID)
 	}
+	wg.Wait()
 
 	j.log.Info("renal anticipatory monthly batch completed",
 		zap.Int("patients_evaluated", len(ids)),
-		zap.Int("approaching_cards_persisted", approachingCardCount),
-		zap.Int("stale_cards_persisted", staleCardCount),
-		zap.Int("per_patient_errors", evalErrCount),
+		zap.Int64("approaching_cards_persisted", approachingCardCount),
+		zap.Int64("stale_cards_persisted", staleCardCount),
+		zap.Int64("per_patient_errors", evalErrCount),
+		zap.Int("concurrency", DefaultBatchConcurrency),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }

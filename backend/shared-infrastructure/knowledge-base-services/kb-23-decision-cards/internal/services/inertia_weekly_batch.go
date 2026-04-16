@@ -2,10 +2,18 @@ package services
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// DefaultBatchConcurrency is the number of patients evaluated in
+// parallel by the inertia weekly batch and renal anticipatory batch.
+// Phase 9 P9-E: channel-based semaphore limits goroutine fan-out
+// so batch HTTP calls don't overwhelm KB-20/KB-26 on large cohorts.
+const DefaultBatchConcurrency = 4
 
 // InertiaActivePatientLister is the narrow dependency the inertia weekly
 // batch needs to enumerate active patients for inertia evaluation.
@@ -123,25 +131,44 @@ func (j *InertiaWeeklyBatch) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// Full per-patient evaluation. Errors on individual patients are
-	// logged but do not abort the batch — each patient is isolated.
-	evaluated := 0
+	// Phase 9 P9-E: bounded-concurrency fan-out. A channel-based
+	// semaphore limits the number of concurrent per-patient
+	// evaluations to DefaultBatchConcurrency (4). Each patient
+	// evaluation makes HTTP calls to KB-20 + KB-26, so unbounded
+	// concurrency on a 10K-patient cohort would overwhelm the
+	// downstream services. Errors on individual patients are still
+	// isolated — a goroutine failure logs and does not abort sibling
+	// goroutines or the batch.
+	var evaluated int64
+	sem := make(chan struct{}, DefaultBatchConcurrency)
+	var wg sync.WaitGroup
+
 	for _, id := range ids {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			break
 		}
-		input, assembleErr := j.assembler.AssembleInertiaInput(ctx, id)
-		if assembleErr != nil {
-			j.log.Warn("inertia weekly batch: assembly failed",
-				zap.String("patient_id", id),
-				zap.Error(assembleErr))
-			continue
-		}
-		j.orchestrator.Evaluate(ctx, input)
-		evaluated++
+		sem <- struct{}{} // acquire semaphore slot
+		wg.Add(1)
+		go func(patientID string) {
+			defer wg.Done()
+			defer func() { <-sem }() // release semaphore slot
+
+			input, assembleErr := j.assembler.AssembleInertiaInput(ctx, patientID)
+			if assembleErr != nil {
+				j.log.Warn("inertia weekly batch: assembly failed",
+					zap.String("patient_id", patientID),
+					zap.Error(assembleErr))
+				return
+			}
+			j.orchestrator.Evaluate(ctx, input)
+			atomic.AddInt64(&evaluated, 1)
+		}(id)
 	}
+	wg.Wait()
+
 	j.log.Info("inertia weekly batch complete",
 		zap.Int("active_patient_count", len(ids)),
-		zap.Int("evaluated", evaluated))
+		zap.Int64("evaluated", evaluated),
+		zap.Int("concurrency", DefaultBatchConcurrency))
 	return nil
 }
