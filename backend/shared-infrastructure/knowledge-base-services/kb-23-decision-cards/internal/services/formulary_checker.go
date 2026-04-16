@@ -161,3 +161,37 @@ func (c *FormularyChecker) DrugCount() int {
 	}
 	return len(c.entries)
 }
+
+// AnnotateCardWithFormularyNotes checks each drug class in the
+// provided medications list and appends formulary accessibility
+// notes to the clinician summary for any drug that is RESTRICTED
+// or NOT_AVAILABLE in the current market. Called after card
+// assembly, before persistence. Modifies clinicianSummary in place.
+// Phase 10 Gap 13 follow-up.
+func (c *FormularyChecker) AnnotateCardWithFormularyNotes(
+	clinicianSummary *string,
+	medications []string,
+) {
+	if c == nil || clinicianSummary == nil {
+		return
+	}
+	var notes []string
+	seen := map[string]bool{}
+	for _, drugClass := range medications {
+		if seen[drugClass] {
+			continue
+		}
+		seen[drugClass] = true
+		note := c.FormatNote(drugClass)
+		if note != "" {
+			notes = append(notes, note)
+		}
+	}
+	if len(notes) > 0 {
+		annotation := "\n\n[Formulary Notes]\n"
+		for _, n := range notes {
+			annotation += "  " + n + "\n"
+		}
+		*clinicianSummary += annotation
+	}
+}

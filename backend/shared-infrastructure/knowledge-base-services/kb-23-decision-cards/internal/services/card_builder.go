@@ -33,10 +33,24 @@ type CardBuilder struct {
 	log               *zap.Logger
 
 	// Phase 3 enrichment dependencies
-	hysteresis    *HysteresisEngine
-	perturbations *PerturbationService
-	kb21Client    *KB21Client
-	gateCache     *MCUGateCache
+	hysteresis        *HysteresisEngine
+	perturbations     *PerturbationService
+	kb21Client        *KB21Client
+	gateCache         *MCUGateCache
+	formularyChecker  *FormularyChecker // Phase 10 Gap 13 follow-up
+	auditService      *AuditService     // Phase 10 Gap 11 follow-up
+}
+
+// SetFormularyChecker injects the formulary checker after card
+// builder construction. Phase 10 Gap 13 follow-up.
+func (b *CardBuilder) SetFormularyChecker(fc *FormularyChecker) {
+	b.formularyChecker = fc
+}
+
+// SetAuditService injects the audit service after card builder
+// construction. Phase 10 Gap 11 follow-up.
+func (b *CardBuilder) SetAuditService(as *AuditService) {
+	b.auditService = as
 }
 
 // NewCardBuilder creates a CardBuilder with all required service dependencies.
@@ -210,9 +224,36 @@ func (b *CardBuilder) Build(
 		card.ReasoningChain = models.JSONB(event.ReasoningChain)
 	}
 
+	// Phase 10 Gap 13 follow-up: annotate clinician summary with
+	// formulary accessibility notes before persisting. If any drug
+	// in the patient's medication list is restricted or unavailable
+	// in the configured market, the annotation surfaces the constraint
+	// + the recommended alternative.
+	if b.formularyChecker != nil && patientCtx != nil {
+		b.formularyChecker.AnnotateCardWithFormularyNotes(&card.ClinicianSummary, patientCtx.Medications)
+	}
+
 	// 7. Save card to database
 	if err := b.db.DB.WithContext(ctx).Create(card).Error; err != nil {
 		return nil, err
+	}
+
+	// Phase 10 Gap 11 follow-up: audit trail entry for every card.
+	if b.auditService != nil {
+		auditPayload := map[string]string{
+			"card_id":       card.CardID.String(),
+			"template_id":   card.TemplateID,
+			"mcu_gate":      string(card.MCUGate),
+			"safety_tier":   string(card.SafetyTier),
+			"confidence":    string(card.DiagnosticConfidenceTier),
+		}
+		_ = b.auditService.Append(
+			event.PatientID.String(),
+			"DECISION_CARD_GENERATED",
+			"kb23-card-builder",
+			auditPayload,
+			card.CreatedAt,
+		)
 	}
 
 	// 8. Save recommendations with card_id reference

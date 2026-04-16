@@ -60,6 +60,10 @@ func main() {
 	if err := db.DB.AutoMigrate(&services.InertiaVerdictRow{}); err != nil {
 		logger.Fatal("Failed to auto-migrate InertiaVerdictRow", zap.Error(err))
 	}
+	// Phase 10 Gap 11 follow-up: clinical audit log table.
+	if err := db.DB.AutoMigrate(&services.ClinicalAuditEntry{}); err != nil {
+		logger.Fatal("Failed to auto-migrate ClinicalAuditEntry", zap.Error(err))
+	}
 	logger.Info("Database migration completed")
 
 	// 5. Initialize Redis cache

@@ -21,6 +21,7 @@ const (
 	EventACRTargetMet               = "ACR_TARGET_MET"               // ACR category improved (e.g., A3 -> A2)
 	EventBPVariabilityAlert         = "BP_VARIABILITY_ALERT"         // Wave 3.1: BP variability transitioned to HIGH
 	EventCKMStageTransition         = "CKM_STAGE_TRANSITION"         // Phase 6 P6-6: CKM substage changed (e.g., 3b → 4c)
+	EventDecisionCardGenerated      = "DECISION_CARD_GENERATED"      // Phase 10 Gap 9: KB-23 card persisted → FHIR CommunicationRequest write-back
 
 	// HTN Proposal §3.3 — Core BP events
 	EventBPAlert           = "BP_ALERT"              // bp_status transitions to ABOVE_TARGET or DECLINING
