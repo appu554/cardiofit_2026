@@ -13,6 +13,7 @@ import (
 
 	"kb-23-decision-cards/internal/config"
 	"kb-23-decision-cards/internal/metrics"
+	"kb-23-decision-cards/pkg/resilience"
 )
 
 // KB26Client is a narrow HTTP client used by the Phase 7 P7-D inertia
@@ -24,15 +25,24 @@ type KB26Client struct {
 	metrics *metrics.Collector
 	log     *zap.Logger
 	client  *http.Client
+	breaker *resilience.CircuitBreaker // Phase 10 P10-B
 }
 
 // NewKB26Client constructs a KB26Client with the configured timeout.
+// Phase 10 P10-B: circuit breaker with MaxRetries=3 and
+// ResetTimeout=30s — KB-26 calls are less frequent and higher
+// tolerance than KB-20 calls.
 func NewKB26Client(cfg *config.Config, m *metrics.Collector, log *zap.Logger) *KB26Client {
+	httpClient := &http.Client{Timeout: cfg.KB26Timeout()}
+	cbCfg := resilience.DefaultConfig("kb26")
+	cbCfg.MaxRetries = 3
+	cbCfg.ResetTimeout = 30 * time.Second
 	return &KB26Client{
 		cfg:     cfg,
 		metrics: m,
 		log:     log,
-		client:  &http.Client{Timeout: cfg.KB26Timeout()},
+		client:  httpClient,
+		breaker: resilience.NewCircuitBreaker(httpClient, cbCfg),
 	}
 }
 
@@ -126,7 +136,7 @@ func (c *KB26Client) FetchLatestCGMReport(ctx context.Context, patientID string)
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.breaker.Do(req)
 	if c.metrics != nil {
 		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
 	}
@@ -172,7 +182,7 @@ func (c *KB26Client) FetchTargetStatus(ctx context.Context, patientID string, re
 	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(httpReq)
+	resp, err := c.breaker.Do(httpReq)
 	if c.metrics != nil {
 		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
 	}

@@ -12,6 +12,7 @@ import (
 
 	"kb-23-decision-cards/internal/config"
 	"kb-23-decision-cards/internal/metrics"
+	"kb-23-decision-cards/pkg/resilience"
 )
 
 // KB20RenalStatus mirrors the KB-20 GET /patient/:id/renal-status response
@@ -59,16 +60,25 @@ type KB20Client struct {
 	metrics *metrics.Collector
 	log     *zap.Logger
 	client  *http.Client
+	breaker *resilience.CircuitBreaker // Phase 10 P10-B
 }
 
 func NewKB20Client(cfg *config.Config, m *metrics.Collector, log *zap.Logger) *KB20Client {
+	httpClient := &http.Client{Timeout: cfg.KB20Timeout()}
+	// Phase 10 P10-B: circuit breaker wraps the HTTP client with
+	// three-state management + exponential backoff + retry. KB-20
+	// calls are frequent and latency-sensitive (summary-context,
+	// renal-status, intervention-timeline), so MaxRetries=2 and
+	// ResetTimeout=15s keep the recovery fast.
+	cbCfg := resilience.DefaultConfig("kb20")
+	cbCfg.MaxRetries = 2
+	cbCfg.ResetTimeout = 15 * time.Second
 	return &KB20Client{
 		cfg:     cfg,
 		metrics: m,
 		log:     log,
-		client: &http.Client{
-			Timeout: cfg.KB20Timeout(),
-		},
+		client:  httpClient,
+		breaker: resilience.NewCircuitBreaker(httpClient, cbCfg),
 	}
 }
 
@@ -89,7 +99,7 @@ func (c *KB20Client) FetchSummaryContext(ctx context.Context, patientID string) 
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.breaker.Do(req)
 	c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
 
 	if err != nil {
@@ -144,7 +154,7 @@ func (c *KB20Client) FetchRenalStatus(ctx context.Context, patientID string) (*K
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.breaker.Do(req)
 	if c.metrics != nil {
 		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
 	}
@@ -210,7 +220,7 @@ func (c *KB20Client) FetchInterventionTimeline(ctx context.Context, patientID st
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.breaker.Do(req)
 	if c.metrics != nil {
 		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
 	}
@@ -248,7 +258,7 @@ func (c *KB20Client) FetchRenalActivePatientIDs(ctx context.Context) ([]string, 
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.client.Do(req)
+	resp, err := c.breaker.Do(req)
 	if c.metrics != nil {
 		c.metrics.KB20FetchLatency.Observe(float64(time.Since(start).Milliseconds()))
 	}
