@@ -6,13 +6,37 @@ import (
 	"github.com/google/uuid"
 )
 
+// Stability decision outcomes.
+const (
+	DecisionAccept        = "ACCEPT"
+	DecisionHoldDwell     = "HOLD_DWELL"
+	DecisionHoldFlap      = "HOLD_FLAP"
+	DecisionOverrideEvent = "OVERRIDE_EVENT"
+)
+
+// Transition types recorded on ClusterTransitionRecord.
+const (
+	TransitionTypeGenuine  = "GENUINE"
+	TransitionTypeFlap     = "FLAP_DAMPENED"
+	TransitionTypeOverride = "OVERRIDE"
+	TransitionTypeInitial  = "INITIAL"
+)
+
+// Transition classifications from the classifier.
+const (
+	ClassificationGenuine   = "GENUINE_TRANSITION"
+	ClassificationFlap      = "PROBABLE_FLAP"
+	ClassificationUncertain = "UNCERTAIN"
+	ClassificationDwellHeld = "DWELL_HELD"
+)
+
 // ClusterAssignmentRecord captures the raw HDBSCAN output for one patient in one batch run,
 // plus the stability-processed assignment that was actually applied.
 type ClusterAssignmentRecord struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID string    `gorm:"size:100;index;not null"                        json:"patient_id"`
-	RunID     string    `gorm:"size:100;index;not null"                        json:"run_id"`
-	RunDate   time.Time `gorm:"not null"                                       json:"run_date"`
+	PatientID string    `gorm:"size:100;uniqueIndex:uq_car_patient_run,priority:1;index:idx_car_patient_date,priority:1;not null" json:"patient_id"`
+	RunID     string    `gorm:"size:100;uniqueIndex:uq_car_patient_run,priority:2;not null"                                    json:"run_id"`
+	RunDate   time.Time `gorm:"index:idx_car_patient_date,priority:2,sort:desc;not null"                                       json:"run_date"`
 
 	// Raw HDBSCAN output
 	RawClusterLabel   string  `gorm:"size:30;not null"         json:"raw_cluster_label"`
@@ -39,8 +63,8 @@ func (ClusterAssignmentRecord) TableName() string {
 // It captures both the mechanical transition type and the clinical classification.
 type ClusterTransitionRecord struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID      string    `gorm:"size:100;index;not null"                        json:"patient_id"`
-	TransitionDate time.Time `gorm:"not null"                                       json:"transition_date"`
+	PatientID      string    `gorm:"size:100;index:idx_ctr_patient_date,priority:1;not null" json:"patient_id"`
+	TransitionDate time.Time `gorm:"index:idx_ctr_patient_date,priority:2,sort:desc;not null" json:"transition_date"`
 
 	PreviousCluster string `gorm:"size:30;not null" json:"previous_cluster"`
 	NewCluster      string `gorm:"size:30;not null" json:"new_cluster"`
