@@ -121,11 +121,27 @@ type DecomposedTrajectory struct {
 	DomainsDeteriorating    int                        `json:"domains_deteriorating"`
 
 	// Phase 10 V4-5 completion: seasonal suppression (India-specific).
-	// When a seasonal window is active and the declining domain
-	// matches the window's affected_domains list, this field carries
-	// the seasonal context so downstream card generators can
-	// downgrade urgency rather than alerting on expected patterns.
 	SeasonalSuppression *SeasonalSuppressionContext `json:"seasonal_suppression,omitempty"`
+
+	// V4-5 Phase 3: second derivative — trajectory-of-the-trajectory.
+	// Answers "is the decline accelerating or decelerating?" by
+	// computing OLS slope over the per-domain slopes from the last
+	// N snapshots in domain_trajectory_history. A positive second
+	// derivative on a declining domain means the decline is
+	// decelerating (intervention may be working). A negative second
+	// derivative means the decline is accelerating (intervention
+	// is failing or absent).
+	SecondDerivatives map[MHRIDomain]SecondDerivativeResult `json:"second_derivatives,omitempty"`
+}
+
+// SecondDerivativeResult describes the rate of change of a domain's
+// slope over time. V4-5 Phase 3.
+type SecondDerivativeResult struct {
+	Domain            MHRIDomain `json:"domain"`
+	SlopeOfSlope      float64    `json:"slope_of_slope"`     // second derivative: score/day² (positive = decelerating decline)
+	Interpretation    string     `json:"interpretation"`      // ACCELERATING_DECLINE | DECELERATING_DECLINE | STABLE_DECLINE | ACCELERATING_IMPROVEMENT | STABLE
+	SnapshotsUsed     int        `json:"snapshots_used"`
+	Confidence        string     `json:"confidence"`          // HIGH (≥5 snapshots), MODERATE (3-4), LOW (<3)
 }
 
 // SeasonalSuppressionContext describes an active seasonal window

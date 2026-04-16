@@ -536,6 +536,130 @@ func (w SeasonalWindow) IsActive(now time.Time) bool {
 	return false
 }
 
+// ComputeSecondDerivatives computes the trajectory-of-the-trajectory:
+// the rate of change of each domain's slope over time. Accepts recent
+// snapshots from domain_trajectory_history (caller fetches from DB)
+// and computes OLS regression over each domain's slope values.
+//
+// V4-5 Phase 3: answers "is the decline accelerating or decelerating?"
+//
+// A positive slope_of_slope on a declining domain means the decline
+// is decelerating (the intervention may be working — the patient is
+// still getting worse but more slowly). A negative slope_of_slope
+// means the decline is accelerating (the intervention is failing).
+//
+// Pure function — no DB dependency. The caller provides the history
+// snapshots; the engine computes the second derivatives.
+//
+// Minimum 3 snapshots required for a meaningful second derivative.
+// Returns nil map when insufficient data.
+func (e *TrajectoryEngine) ComputeSecondDerivatives(
+	snapshots []models.DomainTrajectoryHistory,
+) map[models.MHRIDomain]models.SecondDerivativeResult {
+	if len(snapshots) < 3 {
+		return nil
+	}
+
+	// Sort snapshots by date ascending (oldest first).
+	sorted := make([]models.DomainTrajectoryHistory, len(snapshots))
+	copy(sorted, snapshots)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].SnapshotDate.Before(sorted[j].SnapshotDate)
+	})
+
+	results := make(map[models.MHRIDomain]models.SecondDerivativeResult)
+
+	type domainSlopeExtractor struct {
+		domain    models.MHRIDomain
+		extractor func(models.DomainTrajectoryHistory) float64
+	}
+
+	extractors := []domainSlopeExtractor{
+		{models.DomainGlucose, func(h models.DomainTrajectoryHistory) float64 { return h.GlucoseSlope }},
+		{models.DomainCardio, func(h models.DomainTrajectoryHistory) float64 { return h.CardioSlope }},
+		{models.DomainBodyComp, func(h models.DomainTrajectoryHistory) float64 { return h.BodyCompSlope }},
+		{models.DomainBehavioral, func(h models.DomainTrajectoryHistory) float64 { return h.BehavioralSlope }},
+	}
+
+	for _, ext := range extractors {
+		slopes := make([]float64, len(sorted))
+		for i, snap := range sorted {
+			slopes[i] = ext.extractor(snap)
+		}
+
+		// OLS regression: slope index (0, 1, 2, ...) vs slope value.
+		// The slope of this regression is the second derivative.
+		n := float64(len(slopes))
+		var sumX, sumY, sumXY, sumX2 float64
+		for i, y := range slopes {
+			x := float64(i)
+			sumX += x
+			sumY += y
+			sumXY += x * y
+			sumX2 += x * x
+		}
+		denom := n*sumX2 - sumX*sumX
+		if denom == 0 {
+			continue
+		}
+		slopeOfSlope := (n*sumXY - sumX*sumY) / denom
+
+		// Classify the second derivative.
+		interp := e.classifySecondDerivative(slopeOfSlope, slopes[len(slopes)-1])
+
+		// Confidence based on snapshot count.
+		confidence := models.ConfidenceLow
+		if len(sorted) >= 5 {
+			confidence = models.ConfidenceHigh
+		} else if len(sorted) >= 3 {
+			confidence = models.ConfidenceModerate
+		}
+
+		results[ext.domain] = models.SecondDerivativeResult{
+			Domain:         ext.domain,
+			SlopeOfSlope:   roundTo3(slopeOfSlope),
+			Interpretation: interp,
+			SnapshotsUsed:  len(sorted),
+			Confidence:     confidence,
+		}
+	}
+
+	return results
+}
+
+// classifySecondDerivative interprets the second derivative in
+// clinical context. The combination of the current slope (first
+// derivative) and the slope_of_slope (second derivative) determines
+// the interpretation.
+func (e *TrajectoryEngine) classifySecondDerivative(slopeOfSlope, currentSlope float64) string {
+	threshold := 0.05 // minimum meaningful second derivative
+
+	if math.Abs(slopeOfSlope) < threshold {
+		if currentSlope < e.thresholds.Trend.Declining {
+			return "STABLE_DECLINE"
+		}
+		return "STABLE"
+	}
+
+	if currentSlope < e.thresholds.Trend.Declining {
+		// Domain is currently declining
+		if slopeOfSlope > 0 {
+			return "DECELERATING_DECLINE" // decline is slowing — intervention may be working
+		}
+		return "ACCELERATING_DECLINE" // decline is speeding up — intervention failing
+	}
+
+	if currentSlope > e.thresholds.Trend.Improving {
+		// Domain is currently improving
+		if slopeOfSlope > 0 {
+			return "ACCELERATING_IMPROVEMENT" // improvement is speeding up
+		}
+		return "DECELERATING_IMPROVEMENT" // improvement is slowing
+	}
+
+	return "STABLE"
+}
+
 func extractScores(points []models.DomainTrajectoryPoint, extractor func(models.DomainTrajectoryPoint) float64) []float64 {
 	scores := make([]float64, len(points))
 	for i, p := range points {
