@@ -51,6 +51,15 @@ type PAIConfig struct {
 	ContextNYHAAmplifier       map[string]float64 // "IV"->1.5, "III"->1.3, "II"->1.1, "I"->1.0
 	ContextMaxScore            float64            // 100
 
+	// Attention dimension
+	AttentionCriticalDays    int     // 90
+	AttentionHighDays        int     // 60
+	AttentionModerateDays    int     // 30
+	AttentionAdequateDays    int     // 14
+	AttentionPerCard         float64 // 10
+	AttentionPerDayOldest    float64 // 3
+	AttentionCardCap         float64 // 50
+
 	// Tier thresholds
 	CriticalThreshold float64
 	HighThreshold     float64

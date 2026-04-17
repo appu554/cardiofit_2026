@@ -53,6 +53,14 @@ func testPAIConfig() *PAIConfig {
 			"I": 1.0, "II": 1.1, "III": 1.3, "IV": 1.5,
 		},
 		ContextMaxScore: 100,
+		// Attention
+		AttentionCriticalDays: 90,
+		AttentionHighDays:     60,
+		AttentionModerateDays: 30,
+		AttentionAdequateDays: 14,
+		AttentionPerCard:      10,
+		AttentionPerDayOldest: 3,
+		AttentionCardCap:      50,
 		// Tiers
 		CriticalThreshold: 80,
 		HighThreshold:     60,
