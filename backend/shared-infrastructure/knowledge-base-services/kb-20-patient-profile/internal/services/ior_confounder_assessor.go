@@ -58,12 +58,38 @@ func (a *IORConfounderAssessor) Assess(
 		clinicalFactors = a.eventDetector.DetectConfounders(events, windowStart, windowEnd)
 	}
 
-	// 3. Compute enhanced score
+	// 3. V4-7 connection: check if the patient's phenotype cluster
+	// transitioned during the outcome window. A cluster transition
+	// means the patient's metabolic profile shifted, making it harder
+	// to attribute the outcome to the intervention alone.
+	var lifestyleFactors []models.ConfounderFactor
+	if a.db != nil {
+		var transitionCount int64
+		a.db.Model(&models.ClusterTransitionRecord{}).
+			Where("patient_id = ? AND transition_date BETWEEN ? AND ?",
+				patientID, windowStart, windowEnd).
+			Count(&transitionCount)
+		if transitionCount > 0 {
+			lifestyleFactors = append(lifestyleFactors, models.ConfounderFactor{
+				Category:          models.ConfounderLifestyle,
+				Name:              "CLUSTER_TRANSITION",
+				Weight:            0.15,
+				AffectedOutcomes:  []string{"DELTA_HBA1C", "DELTA_SBP", "DELTA_EGFR", "DELTA_WEIGHT"},
+				ExpectedDirection: "VARIABLE",
+				ExpectedMagnitude: "Phenotype shift confounds outcome attribution",
+				Source:            "STABILITY_ENGINE",
+				Confidence:        "HIGH",
+			})
+		}
+	}
+
+	// 4. Compute enhanced score
 	return a.scorer.Compute(EnhancedConfounderInput{
 		ConcurrentMedCount:   concurrentMedCount,
 		AdherenceDrop:        adherenceDrop,
 		CalendarFactors:      calendarFactors,
 		ClinicalEventFactors: clinicalFactors,
+		LifestyleFactors:     lifestyleFactors,
 		OutcomeType:          outcomeType,
 		DeferOnRamadan:       true,
 		DeferOnSteroid:       true,

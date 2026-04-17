@@ -64,6 +64,14 @@ func NewClinicalEventDetector(w *ConfounderWeights) *ClinicalEventDetector {
 
 // DetectConfounders scans events and returns confounder factors that overlap
 // [windowStart, windowEnd].
+//
+// Overlapping washouts: If a steroid course (28d washout) and hospitalization
+// (42d washout) overlap in time, both factors are returned independently.
+// This is clinically correct — each event confounds outcomes through a
+// different mechanism (steroids: hyperglycaemia; hospitalization: stress
+// response + medication disruption). The EnhancedConfounderScorer's category
+// cap (0.45 for clinical events) prevents the composite score from being
+// inflated beyond what the overlapping evidence warrants.
 func (d *ClinicalEventDetector) DetectConfounders(
 	events []PatientClinicalEvent,
 	windowStart, windowEnd time.Time,
@@ -212,6 +220,12 @@ func (d *ClinicalEventDetector) detectInfection(
 		}
 		// Already matched as steroid? Skip (shouldn't happen but guard).
 		if matchesAny(e.DrugName, steroidPatterns) {
+			continue
+		}
+		// Duration >21 days suggests prophylactic or chronic use (e.g.,
+		// doxycycline for rosacea, azithromycin for gastroparesis) rather
+		// than acute infection treatment. Skip to reduce false positives.
+		if e.Duration > 21 {
 			continue
 		}
 
