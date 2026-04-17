@@ -65,10 +65,16 @@ type SummaryContext struct {
 	CGMReportAt      *time.Time `json:"cgm_report_at,omitempty"`
 
 	// ── V4-7 Phenotype stability ──
-	// PhenotypeCluster is the stable (not raw) cluster assignment
-	// from the stability engine. Used by KB-23's inertia orchestrator
-	// to suppress inertia cards when the patient is in STABLE_CONTROLLED.
 	PhenotypeCluster string `json:"phenotype_cluster,omitempty"`
+
+	// ── PAI attention dimension data sources ──
+	// LastClinicianContactAt is the most recent timestamp when a clinician
+	// interacted with this patient's record (protocol state update,
+	// medication change, or lab review). Used by PAI's attention
+	// dimension to compute DaysSinceLastClinician. Nil if no interaction
+	// found — PAI treats nil as "no data, don't penalize" rather than
+	// "never contacted, maximum urgency."
+	LastClinicianContactAt *time.Time `json:"last_clinician_contact_at,omitempty"`
 }
 
 // CKMSubstageWire is the wire shape for the CKM substage metadata
@@ -218,6 +224,20 @@ func (s *SummaryContextService) BuildContext(ctx context.Context, patientID stri
 	}
 	if profile.EGFR != nil {
 		result.EGFRValue = *profile.EGFR
+	}
+
+	// PAI: last clinician contact — most recent medication change or
+	// protocol state update as proxy for clinician interaction.
+	var lastContact time.Time
+	if err := s.db.Raw(`
+		SELECT COALESCE(MAX(t), '0001-01-01') FROM (
+			SELECT MAX(updated_at) AS t FROM medication_states WHERE patient_id = ?
+			UNION ALL
+			SELECT MAX(updated_at) AS t FROM protocol_states WHERE patient_id = ?
+		) sub`, patientID, patientID).Scan(&lastContact).Error; err == nil {
+		if !lastContact.IsZero() {
+			result.LastClinicianContactAt = &lastContact
+		}
 	}
 
 	// P8-2 CKM substage metadata: convert the Go-side JSONB struct

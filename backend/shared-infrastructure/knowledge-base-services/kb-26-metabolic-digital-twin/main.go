@@ -197,7 +197,7 @@ func main() {
 
 	// 7d. Initialize PAI services (Patient Acuity Index)
 	paiRepo := services.NewPAIRepository(db.DB)
-	paiTrigger := services.NewPAIEventTrigger(15, 10.0) // 15-min rate limit, delta 10 significance
+	paiTrigger := services.NewPAIEventTrigger(15, 10.0, paiRepo) // 15-min rate limit, delta 10, DB fallback
 
 	// Load PAI config from YAML — try deployment path, then relative dev path.
 	var paiCfg *services.PAIConfig

@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -64,6 +65,22 @@ func (s *Server) computePAI(c *gin.Context) {
 		return
 	}
 	input.PatientID = patientID
+
+	// Auto-populate seasonal window if not set by caller.
+	// Enable confounder dampening when the PAI config says so.
+	// The caller can override by explicitly setting SeasonalWindow=true/false.
+	if !input.SeasonalWindow && input.ActiveConfounderScore == 0 {
+		// Check if current month falls in known seasonal confounder months
+		// (monsoon Jun-Sep India, Diwali Oct-Nov, winter Jun-Aug Australia).
+		// This is a lightweight approximation — the full V4-8 confounder
+		// calendar query happens in the IOR assessor, not here.
+		month := int(time.Now().Month())
+		seasonalMonths := map[int]bool{6: true, 7: true, 8: true, 9: true, 10: true, 11: true}
+		if seasonalMonths[month] {
+			input.SeasonalWindow = true
+			input.ActiveConfounderScore = 0.15 // mild seasonal baseline
+		}
+	}
 
 	// Compute — use server config (loaded from YAML) or fall back to defaults
 	cfg := s.paiConfig

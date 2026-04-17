@@ -88,6 +88,9 @@ type PatientContext struct {
 	// orchestrator checks this field to suppress inertia verdicts
 	// for patients in STABLE_CONTROLLED phenotype.
 	PhenotypeCluster string `json:"phenotype_cluster,omitempty"`
+
+	// ── PAI attention dimension ──
+	LastClinicianContactAt *time.Time `json:"last_clinician_contact_at,omitempty"`
 }
 
 // CKMSubstageMeta mirrors kb-20-patient-profile/internal/models.SubstageMetadata

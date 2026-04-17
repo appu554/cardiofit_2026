@@ -15,6 +15,17 @@ import (
 // dimensions (velocity, proximity, behavioral, context, attention) using
 // weighted scoring, tier classification, dominant-dimension identification,
 // and actionability context generation.
+//
+// Sprint 1 known limitations:
+//   - Attention dimension operates at reduced capacity (~3-5% vs 10% weight)
+//     until the clinician worklist ships (Sprint 2). DaysSinceLastCardAck and
+//     UnacknowledgedCardCount have no data source until card acknowledgment
+//     exists. DaysSinceLastClinician is populated from medication/protocol
+//     timestamps as a proxy.
+//   - Action context strings (PrimaryReason, SuggestedAction, SuggestedTimeframe)
+//     are generic cardiometabolic language. Product-specific text (CHF-specific
+//     or aged-care-specific) should be injected by the worklist layer or
+//     overridden via market config in Sprint 2.
 func ComputePAI(input models.PAIDimensionInput, cfg *PAIConfig) models.PAIScore {
 	now := time.Now().UTC()
 
