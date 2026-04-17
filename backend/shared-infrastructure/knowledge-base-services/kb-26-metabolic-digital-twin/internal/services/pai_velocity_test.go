@@ -32,6 +32,11 @@ func testPAIConfig() *PAIConfig {
 		MaxVelocityDuringSeason:       60,
 		// Proximity
 		ProximityExponent: 2.0,
+		// Behavioral
+		BehavioralCessationDays:    5,
+		BehavioralReducedThreshold: 0.50,
+		BehavioralSlightlyReduced:  0.25,
+		BehavioralCompoundBoth:     95,
 		// Tiers
 		CriticalThreshold: 80,
 		HighThreshold:     60,

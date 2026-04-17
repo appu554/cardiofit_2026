@@ -33,6 +33,12 @@ type PAIConfig struct {
 	// Proximity
 	ProximityExponent float64
 
+	// Behavioral
+	BehavioralCessationDays    int
+	BehavioralReducedThreshold float64
+	BehavioralSlightlyReduced  float64
+	BehavioralCompoundBoth     float64
+
 	// Tier thresholds
 	CriticalThreshold float64
 	HighThreshold     float64
