@@ -122,6 +122,11 @@ func (a *ConcreteInertiaInputAssembler) AssembleInertiaInput(ctx context.Context
 	input.Age = summary.Age
 	input.MedicationCount = len(summary.Medications)
 
+	// V4-7: thread phenotype cluster for the stable-good suppression
+	// gate. When PhenotypeCluster == "STABLE_CONTROLLED", the
+	// orchestrator skips inertia detection entirely.
+	input.PhenotypeCluster = summary.PhenotypeCluster
+
 	// 2. KB-20 renal status — eGFR + slope for the renal domain. Non-fatal
 	// if missing; renal domain input simply stays nil.
 	var renalStatus *KB20RenalStatus

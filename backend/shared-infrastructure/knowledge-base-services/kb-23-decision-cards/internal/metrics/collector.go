@@ -90,6 +90,9 @@ type Collector struct {
 	AdherenceGapDetected           *prometheus.CounterVec
 	InertiaSuppressedByAdherence   prometheus.Counter
 
+	// V4-7: phenotype stability suppression counter.
+	InertiaSuppressedByPhenotype   prometheus.Counter
+
 	// Phase 9 P9-B: monitoring engagement batch outcomes.
 	MonitoringLapsedDetected      *prometheus.CounterVec
 	MonitoringLapsedBatchDuration prometheus.Histogram
@@ -275,6 +278,11 @@ func NewCollector() *Collector {
 		InertiaSuppressedByAdherence: promauto.NewCounter(prometheus.CounterOpts{
 			Name: "kb23_inertia_suppressed_by_adherence_total",
 			Help: "Inertia verdicts suppressed because patient was disengaged (Phase 9 P9-A false-positive prevention counter)",
+		}),
+
+		InertiaSuppressedByPhenotype: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "kb23_inertia_suppressed_by_phenotype_total",
+			Help: "Inertia verdicts suppressed because patient is in STABLE_CONTROLLED phenotype (V4-7 cross-domain signal)",
 		}),
 
 		MonitoringLapsedDetected: promauto.NewCounterVec(prometheus.CounterOpts{

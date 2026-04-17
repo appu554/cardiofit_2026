@@ -20,13 +20,14 @@ func defaultTestConfig() StabilityConfig {
 		HighMembershipProb:     0.7,
 		ModerateMembershipProb: 0.4,
 		CGMStartGraceWeeks:     2,
-		CGMStopGraceWeeks:      2,
+		CGMStopGraceWeeks:      4,
 		ConservatismRank: map[string]int{
-			"STABLE_CONTROLLED": 1,
-			"STABLE_MEDICATED":  2,
-			"IMPROVING":         3,
-			"WORSENING":         4,
-			"UNCONTROLLED":      5,
+			"STABLE_CONTROLLED":     1,
+			"STABLE_MEDICATED":      2,
+			"PROGRESSIVE_GLYCAEMIC": 3,
+			"WORSENING":             4,
+			"HIGH_RISK_UNSTABLE":    5,
+			"NOISE":                 6,
 		},
 	}
 }
@@ -55,12 +56,12 @@ func TestStability_SameCluster_NoChange(t *testing.T) {
 	now := time.Now()
 	input := StabilityInput{
 		PatientID:       "P002",
-		RawClusterLabel: "IMPROVING",
+		RawClusterLabel: "PROGRESSIVE_GLYCAEMIC",
 		MembershipProb:  0.9,
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P002",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, -2, 0),
 			DwellDays:            60,
 			Confidence:           0.9,
@@ -71,7 +72,7 @@ func TestStability_SameCluster_NoChange(t *testing.T) {
 	decision := engine.Evaluate(input)
 
 	assert.Equal(t, models.DecisionAccept, decision.Decision)
-	assert.Equal(t, "IMPROVING", decision.StableClusterLabel)
+	assert.Equal(t, "PROGRESSIVE_GLYCAEMIC", decision.StableClusterLabel)
 	assert.Empty(t, decision.TransitionType, "no transition when cluster unchanged")
 }
 
@@ -85,7 +86,7 @@ func TestStability_DifferentCluster_WithinDwell_Held(t *testing.T) {
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P003",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, 0, -14), // 2 weeks — within 4-week dwell
 			DwellDays:            14,
 			Confidence:           0.8,
@@ -96,7 +97,7 @@ func TestStability_DifferentCluster_WithinDwell_Held(t *testing.T) {
 	decision := engine.Evaluate(input)
 
 	assert.Equal(t, models.DecisionHoldDwell, decision.Decision)
-	assert.Equal(t, "IMPROVING", decision.StableClusterLabel, "stable cluster unchanged during dwell")
+	assert.Equal(t, "PROGRESSIVE_GLYCAEMIC", decision.StableClusterLabel, "stable cluster unchanged during dwell")
 }
 
 func TestStability_DifferentCluster_PastDwell_Accepted(t *testing.T) {
@@ -109,7 +110,7 @@ func TestStability_DifferentCluster_PastDwell_Accepted(t *testing.T) {
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P004",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, 0, -35), // 5 weeks — past 4-week dwell
 			DwellDays:            35,
 			Confidence:           0.8,
@@ -136,7 +137,7 @@ func TestStability_DifferentCluster_WithinDwell_OverrideEvent_Accepted(t *testin
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P005",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, 0, -7), // 1 week — within dwell
 			DwellDays:            7,
 			Confidence:           0.8,
@@ -158,7 +159,7 @@ func TestStability_CKMStageTransition_OverridesDwell(t *testing.T) {
 	now := time.Now()
 	input := StabilityInput{
 		PatientID:       "P006",
-		RawClusterLabel: "UNCONTROLLED",
+		RawClusterLabel: "HIGH_RISK_UNSTABLE",
 		MembershipProb:  0.75,
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
@@ -177,7 +178,7 @@ func TestStability_CKMStageTransition_OverridesDwell(t *testing.T) {
 	decision := engine.Evaluate(input)
 
 	require.Equal(t, models.DecisionAccept, decision.Decision)
-	assert.Equal(t, "UNCONTROLLED", decision.StableClusterLabel)
+	assert.Equal(t, "HIGH_RISK_UNSTABLE", decision.StableClusterLabel)
 	assert.Equal(t, models.TransitionTypeOverride, decision.TransitionType)
 	assert.Contains(t, decision.TriggerEvent, "CKM_STAGE_TRANSITION")
 }
@@ -192,13 +193,13 @@ func TestStability_FlapDetected_HeldAtConservative(t *testing.T) {
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P007",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, 0, -40),
 			DwellDays:            40,
 			Confidence:           0.7,
 			IsFlapping:           true,
 			FlapCount:            3,
-			FlapPair:             []string{"IMPROVING", "WORSENING"},
+			FlapPair:             []string{"PROGRESSIVE_GLYCAEMIC", "WORSENING"},
 		},
 		Config: defaultTestConfig(),
 	}
@@ -207,7 +208,7 @@ func TestStability_FlapDetected_HeldAtConservative(t *testing.T) {
 
 	assert.Equal(t, models.DecisionHoldFlap, decision.Decision)
 	// IMPROVING has rank 3, WORSENING has rank 4 → IMPROVING is more conservative
-	assert.Equal(t, "IMPROVING", decision.StableClusterLabel, "should hold at more conservative cluster")
+	assert.Equal(t, "PROGRESSIVE_GLYCAEMIC", decision.StableClusterLabel, "should hold at more conservative cluster")
 }
 
 func TestStability_FlapDetected_OverrideStillWorks(t *testing.T) {
@@ -220,13 +221,13 @@ func TestStability_FlapDetected_OverrideStillWorks(t *testing.T) {
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P008",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, 0, -40),
 			DwellDays:            40,
 			Confidence:           0.7,
 			IsFlapping:           true,
 			FlapCount:            3,
-			FlapPair:             []string{"IMPROVING", "WORSENING"},
+			FlapPair:             []string{"PROGRESSIVE_GLYCAEMIC", "WORSENING"},
 		},
 		OverrideEvents: []models.OverrideEvent{
 			{EventType: "CKM_STAGE_TRANSITION", EventDate: now.AddDate(0, 0, -1)},
@@ -296,7 +297,7 @@ func TestStability_CGMStarted_GracePeriod(t *testing.T) {
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P011",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, -3, 0),
 			DwellDays:            90,
 			Confidence:           0.8,
@@ -308,7 +309,7 @@ func TestStability_CGMStarted_GracePeriod(t *testing.T) {
 	decision := engine.Evaluate(input)
 
 	assert.Equal(t, models.DecisionHoldDwell, decision.Decision)
-	assert.Equal(t, "IMPROVING", decision.StableClusterLabel)
+	assert.Equal(t, "PROGRESSIVE_GLYCAEMIC", decision.StableClusterLabel)
 	assert.Contains(t, decision.Reason, "CGM data modality grace period")
 }
 
@@ -322,7 +323,7 @@ func TestStability_TransitionWithDomainDriver(t *testing.T) {
 		RunDate:         now,
 		CurrentState: &models.PatientClusterState{
 			PatientID:            "P012",
-			CurrentStableCluster: "IMPROVING",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
 			StableSince:          now.AddDate(0, 0, -35),
 			DwellDays:            35,
 			Confidence:           0.85,

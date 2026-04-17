@@ -82,6 +82,12 @@ type PatientContext struct {
 	LatestCGMTIR      *float64   `json:"latest_cgm_tir,omitempty"`
 	LatestCGMGRIZone  string     `json:"latest_cgm_gri_zone,omitempty"`
 	CGMReportAt       *time.Time `json:"cgm_report_at,omitempty"`
+
+	// ── V4-7: Phenotype stability ──
+	// Stable cluster from KB-20 stability engine. The inertia
+	// orchestrator checks this field to suppress inertia verdicts
+	// for patients in STABLE_CONTROLLED phenotype.
+	PhenotypeCluster string `json:"phenotype_cluster,omitempty"`
 }
 
 // CKMSubstageMeta mirrors kb-20-patient-profile/internal/models.SubstageMetadata

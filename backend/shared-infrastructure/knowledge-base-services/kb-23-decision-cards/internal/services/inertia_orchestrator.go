@@ -114,6 +114,27 @@ func (o *InertiaOrchestrator) Evaluate(ctx context.Context, input InertiaDetecto
 		return o.handleAdherenceGap(ctx, input)
 	}
 
+	// V4-7: phenotype stability gate. A patient stably classified as
+	// STABLE_CONTROLLED for 4+ weeks (enforced by the KB-20 stability
+	// engine's dwell gate) is in a well-managed cluster where "no
+	// medication change" is appropriate maintenance, not inertia.
+	// Suppressing inertia cards for these patients avoids false
+	// positives that would confuse clinicians with contradictory
+	// signals ("patient is well controlled" + "therapeutic inertia
+	// detected").
+	if isPhenotypeStableGood(input) {
+		o.log.Debug("inertia: suppressed by stable-good phenotype",
+			zap.String("patient_id", input.PatientID),
+			zap.String("phenotype_cluster", input.PhenotypeCluster))
+		if o.metrics != nil {
+			o.metrics.InertiaSuppressedByPhenotype.Inc()
+		}
+		return models.PatientInertiaReport{
+			PatientID:   input.PatientID,
+			EvaluatedAt: time.Now(),
+		}
+	}
+
 	report := DetectInertia(input)
 
 	// Stability dampening: if the raw verdict differs from the previous
@@ -450,6 +471,15 @@ func renderDualDomainSummaries(tmpl *models.CardTemplate, detectedDomains []stri
 //     composite score means <40% engagement across measurement domains
 //   - EngagementComposite == nil → no engagement data available →
 //     assume engaged (bias toward surfacing inertia cards)
+// isPhenotypeStableGood returns true when the patient's stable phenotype
+// cluster is STABLE_CONTROLLED — meaning the stability engine has confirmed
+// the patient has been in this well-managed cluster for at least 4 weeks
+// (or 8 weeks, since STABLE_CONTROLLED has rank 1 = extended dwell).
+// V4-7 cross-domain signal: suppresses inertia for these patients.
+func isPhenotypeStableGood(input InertiaDetectorInput) bool {
+	return input.PhenotypeCluster == "STABLE_CONTROLLED"
+}
+
 func isDisengaged(input InertiaDetectorInput) bool {
 	if input.EngagementStatus == "DISENGAGED" {
 		return true

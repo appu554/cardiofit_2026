@@ -88,6 +88,12 @@ type InertiaDetectorInput struct {
 	// the right action for this specific patient.
 	Age             int
 	MedicationCount int
+
+	// V4-7: stable phenotype cluster from KB-20 stability engine.
+	// When PhenotypeCluster == "STABLE_CONTROLLED", the orchestrator
+	// suppresses inertia detection — the patient is phenotypically
+	// stable-good and "no medication change" is appropriate maintenance.
+	PhenotypeCluster string
 }
 
 // ---------------------------------------------------------------------------

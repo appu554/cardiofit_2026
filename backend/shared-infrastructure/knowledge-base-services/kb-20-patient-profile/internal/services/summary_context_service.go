@@ -63,6 +63,12 @@ type SummaryContext struct {
 	LatestCGMTIR     *float64   `json:"latest_cgm_tir,omitempty"`
 	LatestCGMGRIZone string     `json:"latest_cgm_gri_zone,omitempty"`
 	CGMReportAt      *time.Time `json:"cgm_report_at,omitempty"`
+
+	// ── V4-7 Phenotype stability ──
+	// PhenotypeCluster is the stable (not raw) cluster assignment
+	// from the stability engine. Used by KB-23's inertia orchestrator
+	// to suppress inertia cards when the patient is in STABLE_CONTROLLED.
+	PhenotypeCluster string `json:"phenotype_cluster,omitempty"`
 }
 
 // CKMSubstageWire is the wire shape for the CKM substage metadata
@@ -206,6 +212,9 @@ func (s *SummaryContextService) BuildContext(ctx context.Context, patientID stri
 		// as pointers when present
 		EngagementComposite: profile.EngagementComposite,
 		EngagementStatus:    profile.EngagementStatus,
+
+		// V4-7: stable phenotype cluster from the stability engine
+		PhenotypeCluster: profile.PhenotypeCluster,
 	}
 	if profile.EGFR != nil {
 		result.EGFRValue = *profile.EGFR
