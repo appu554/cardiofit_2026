@@ -51,14 +51,15 @@ func IsPolypharmacyElderly(age, medicationCount int) bool {
 //   - MCUGateCache + KB19Publisher for downstream gate propagation
 //   - metrics.Collector for inertia counters
 type InertiaOrchestrator struct {
-	history        InertiaVerdictHistory
-	templateLoader *TemplateLoader
-	db             *database.Database
-	gateCache      *MCUGateCache
-	kb19           *KB19Publisher
-	fhirNotifier   FHIRCardNotifier
-	metrics        *metrics.Collector
-	log            *zap.Logger
+	history           InertiaVerdictHistory
+	templateLoader    *TemplateLoader
+	db                *database.Database
+	gateCache         *MCUGateCache
+	kb19              *KB19Publisher
+	fhirNotifier      FHIRCardNotifier
+	escalationManager *EscalationManager
+	metrics           *metrics.Collector
+	log               *zap.Logger
 }
 
 // FHIRCardNotifier is the interface for sending FHIR CommunicationRequest
@@ -118,6 +119,12 @@ func NewInertiaOrchestrator(
 // Called from main.go once the KB20Client is instantiated. Phase 10 Gap 9.
 func (o *InertiaOrchestrator) SetFHIRNotifier(n FHIRCardNotifier) {
 	o.fhirNotifier = n
+}
+
+// SetEscalationManager injects the escalation manager after construction.
+// Called from main.go once the EscalationManager is instantiated. Gap 15.
+func (o *InertiaOrchestrator) SetEscalationManager(em *EscalationManager) {
+	o.escalationManager = em
 }
 
 // Evaluate runs DetectInertia, applies stability dampening, persists
@@ -376,6 +383,9 @@ func (o *InertiaOrchestrator) persistInertiaCard(patientID string, verdict model
 		go o.kb19.PublishGateChanged(card)
 	}
 	notifyFHIR(o.fhirNotifier, card)
+	if o.escalationManager != nil {
+		go o.escalationManager.HandleCardCreated(card, "", 0)
+	}
 	return nil
 }
 

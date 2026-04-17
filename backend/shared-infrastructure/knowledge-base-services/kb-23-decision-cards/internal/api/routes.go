@@ -48,5 +48,16 @@ func (s *Server) RegisterRoutes() {
 		// structured answer covering template selection, confidence
 		// tier, MCU gate rationale, safety checks, and patient state.
 		v1.GET("/cards/:id/explainability", s.handleGetExplainability)
+
+		// Escalation Protocol Engine (Gap 15)
+		escalation := v1.Group("/escalation")
+		{
+			escalation.POST("/:id/acknowledge", s.acknowledgeEscalation)
+			escalation.POST("/:id/action", s.recordEscalationAction)
+			escalation.GET("/patient/:patientId", s.getPatientEscalations)
+			escalation.GET("/metrics", s.getEscalationMetrics)
+		}
+		// Clinician preferences
+		v1.POST("/clinician/:clinicianId/preferences", s.upsertClinicianPreferences)
 	}
 }

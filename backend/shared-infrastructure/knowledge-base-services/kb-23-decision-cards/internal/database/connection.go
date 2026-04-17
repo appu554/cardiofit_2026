@@ -52,7 +52,7 @@ func NewConnection(cfg *config.Config, log *zap.Logger) (*Database, error) {
 	return &Database{DB: db}, nil
 }
 
-// AutoMigrate runs GORM auto-migration for all 8 KB-23 tables.
+// AutoMigrate runs GORM auto-migration for all KB-23 tables.
 func (d *Database) AutoMigrate() error {
 	return d.DB.AutoMigrate(
 		&models.DecisionCard{},
@@ -63,6 +63,8 @@ func (d *Database) AutoMigrate() error {
 		&models.CompositeCardSignal{},
 		&models.HypoglycaemiaAlert{},
 		&models.TreatmentPerturbation{},
+		&models.EscalationEvent{},
+		&models.ClinicianPreferences{},
 	)
 }
 

@@ -45,6 +45,7 @@ type Server struct {
 	compositeService    *services.CompositeCardService
 	signalCardBuilder   *services.SignalCardBuilder
 	seasonalContext     *services.SeasonalContext
+	escalationManager   *services.EscalationManager
 }
 
 func NewServer(
@@ -156,6 +157,12 @@ func (s *Server) KB20Client() *services.KB20Client { return s.kb20Client }
 // wiring in main — Phase 7 P7-A reactive renal handler needs it to look up
 // renal_contraindication + renal_dose_reduce templates at card-build time).
 func (s *Server) TemplateLoader() *services.TemplateLoader { return s.templateLoader }
+
+// SetEscalationManager injects the escalation manager after construction.
+// Called from main.go once the EscalationManager is instantiated. Gap 15.
+func (s *Server) SetEscalationManager(em *services.EscalationManager) {
+	s.escalationManager = em
+}
 
 // requestLogger middleware logs each request.
 func requestLogger(log *zap.Logger) gin.HandlerFunc {
