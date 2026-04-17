@@ -75,6 +75,9 @@ func main() {
 		// PAI (Patient Acuity Index) persistence models
 		&models.PAIScore{},
 		&models.PAIHistory{},
+		// Acute-on-chronic detection (Gap 16)
+		&models.AcuteEvent{},
+		&models.PatientBaselineSnapshot{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -216,9 +219,14 @@ func main() {
 		paiCfg = services.DefaultPAIConfig()
 	}
 
+	// 7e. Initialize acute-on-chronic detection services (Gap 16)
+	acuteRepo := services.NewAcuteRepository(db.DB)
+	acuteHandler := services.NewAcuteEventHandler(nil, acuteRepo, logger) // nil config → defaults
+
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector, trajectoryPublisher)
 	server.SetPAIServices(paiRepo, paiTrigger, paiCfg)
+	server.SetAcuteServices(acuteRepo, acuteHandler)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{

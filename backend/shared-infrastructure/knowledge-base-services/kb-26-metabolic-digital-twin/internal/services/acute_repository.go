@@ -80,6 +80,19 @@ func (r *AcuteRepository) FetchRecentDeviations(patientID string, since time.Tim
 	return events, nil
 }
 
+// FetchAllBaselines returns all baseline snapshots for a patient.
+func (r *AcuteRepository) FetchAllBaselines(patientID string) ([]models.PatientBaselineSnapshot, error) {
+	var baselines []models.PatientBaselineSnapshot
+	err := r.db.
+		Where("patient_id = ?", patientID).
+		Order("vital_sign_type ASC").
+		Find(&baselines).Error
+	if err != nil {
+		return nil, err
+	}
+	return baselines, nil
+}
+
 // MarkResolved sets ResolvedAt and ResolutionType on an existing event.
 func (r *AcuteRepository) MarkResolved(eventID uuid.UUID, resolutionType string) error {
 	now := time.Now().UTC()

@@ -36,6 +36,10 @@ type Server struct {
 	paiRepo    *services.PAIRepository
 	paiTrigger *services.PAIEventTrigger
 	paiConfig  *services.PAIConfig
+
+	// Acute-on-chronic detection (Gap 16)
+	acuteRepo    *services.AcuteRepository
+	acuteHandler *services.AcuteEventHandler
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -122,6 +126,14 @@ func (s *Server) SetPAIServices(repo *services.PAIRepository, trigger *services.
 	s.paiRepo = repo
 	s.paiTrigger = trigger
 	s.paiConfig = cfg
+}
+
+// SetAcuteServices injects the acute repository and event handler into the
+// server after construction. Setter injection avoids further bloating
+// the NewServer constructor parameter list.
+func (s *Server) SetAcuteServices(repo *services.AcuteRepository, handler *services.AcuteEventHandler) {
+	s.acuteRepo = repo
+	s.acuteHandler = handler
 }
 
 // --- Infrastructure handlers ---

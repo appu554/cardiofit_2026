@@ -77,5 +77,13 @@ func (s *Server) setupRoutes() {
 			relapse.POST("/check", s.checkRelapse)
 			relapse.GET("/history", s.getRelapseHistory)
 		}
+
+		// Acute-on-chronic detection (Gap 16)
+		acute := v1.Group("/acute")
+		{
+			acute.GET("/:patientId", s.getAcuteEvents)
+			acute.GET("/:patientId/baselines", s.getPatientBaselines)
+			acute.POST("/:patientId/reading", s.processAcuteReading)
+		}
 	}
 }
