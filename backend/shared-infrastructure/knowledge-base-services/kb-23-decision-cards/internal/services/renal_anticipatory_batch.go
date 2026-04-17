@@ -44,15 +44,19 @@ const (
 // alert, and emits Prometheus counters by drug class, horizon, and
 // CKD stage.
 type RenalAnticipatoryBatch struct {
-	repo         RenalActivePatientLister
-	orchestrator *RenalAnticipatoryOrchestrator
+	repo           RenalActivePatientLister
+	orchestrator   *RenalAnticipatoryOrchestrator
 	templateLoader *TemplateLoader
-	db           *database.Database
-	gateCache    *MCUGateCache
-	kb19         *KB19Publisher
-	metrics      *metrics.Collector
-	log          *zap.Logger
+	db             *database.Database
+	gateCache      *MCUGateCache
+	kb19           *KB19Publisher
+	fhirNotifier   FHIRCardNotifier
+	metrics        *metrics.Collector
+	log            *zap.Logger
 }
+
+// SetFHIRNotifier injects the FHIR notification client. Phase 10 Gap 9.
+func (j *RenalAnticipatoryBatch) SetFHIRNotifier(n FHIRCardNotifier) { j.fhirNotifier = n }
 
 // NewRenalAnticipatoryBatch wires the dependencies.
 //
@@ -268,6 +272,7 @@ func (j *RenalAnticipatoryBatch) persistApproachingCard(
 	if j.kb19 != nil {
 		go j.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(j.fhirNotifier, card)
 	return nil
 }
 
@@ -328,6 +333,7 @@ func (j *RenalAnticipatoryBatch) persistStaleEGFRCard(
 	if j.kb19 != nil {
 		go j.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(j.fhirNotifier, card)
 	return nil
 }
 

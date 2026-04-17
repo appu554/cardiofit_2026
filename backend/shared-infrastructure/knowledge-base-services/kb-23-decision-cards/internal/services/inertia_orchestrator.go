@@ -56,8 +56,31 @@ type InertiaOrchestrator struct {
 	db             *database.Database
 	gateCache      *MCUGateCache
 	kb19           *KB19Publisher
+	fhirNotifier   FHIRCardNotifier
 	metrics        *metrics.Collector
 	log            *zap.Logger
+}
+
+// FHIRCardNotifier is the interface for sending FHIR CommunicationRequest
+// notifications when a decision card is persisted. Implemented by KB20Client.
+// Nil-safe: when unset, FHIR notification is skipped (local dev, tests).
+type FHIRCardNotifier interface {
+	NotifyCardGenerated(patientID, cardID, templateID, clinicianSummary, safetyTier, mcuGate string)
+}
+
+// notifyFHIR fires a FHIR webhook for a persisted card. Nil-safe, fire-and-forget.
+func notifyFHIR(notifier FHIRCardNotifier, card *models.DecisionCard) {
+	if notifier == nil || card == nil {
+		return
+	}
+	go notifier.NotifyCardGenerated(
+		card.PatientID.String(),
+		card.CardID.String(),
+		card.TemplateID,
+		card.ClinicianSummary,
+		string(card.SafetyTier),
+		string(card.MCUGate),
+	)
 }
 
 // NewInertiaOrchestrator constructs the orchestrator. All dependencies
@@ -89,6 +112,12 @@ func NewInertiaOrchestrator(
 		metrics:        m,
 		log:            log,
 	}
+}
+
+// SetFHIRNotifier injects the FHIR notification client after construction.
+// Called from main.go once the KB20Client is instantiated. Phase 10 Gap 9.
+func (o *InertiaOrchestrator) SetFHIRNotifier(n FHIRCardNotifier) {
+	o.fhirNotifier = n
 }
 
 // Evaluate runs DetectInertia, applies stability dampening, persists
@@ -346,6 +375,7 @@ func (o *InertiaOrchestrator) persistInertiaCard(patientID string, verdict model
 	if o.kb19 != nil {
 		go o.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(o.fhirNotifier, card)
 	return nil
 }
 
@@ -403,6 +433,7 @@ func (o *InertiaOrchestrator) persistDualDomainCard(patientID string, report mod
 	if o.kb19 != nil {
 		go o.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(o.fhirNotifier, card)
 	return nil
 }
 
@@ -606,6 +637,7 @@ func (o *InertiaOrchestrator) persistAdherenceGapCard(patientID string, verdict 
 	if o.kb19 != nil {
 		go o.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(o.fhirNotifier, card)
 	return nil
 }
 
@@ -681,6 +713,7 @@ func (o *InertiaOrchestrator) persistDeprescribingCard(patientID string, age, me
 	if o.kb19 != nil {
 		go o.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(o.fhirNotifier, card)
 	return nil
 }
 

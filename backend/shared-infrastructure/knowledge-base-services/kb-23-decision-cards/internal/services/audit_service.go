@@ -55,8 +55,11 @@ func NewAuditService(db *gorm.DB, logger *zap.Logger) *AuditService {
 }
 
 // Append writes a new audit entry with hash-chain linkage to the
-// previous entry for this patient. Thread-safe via the database's
-// serializable read of the previous hash.
+// previous entry for this patient. The read-compute-write is wrapped
+// in a SERIALIZABLE transaction to prevent concurrent Appends for the
+// same patient from reading the same prevHash (which would fork the
+// chain). Postgres SERIALIZABLE isolation guarantees that if two
+// transactions read the same row, one will be rolled back and retried.
 //
 // The hash chain is per-patient so chain verification is scoped to
 // individual patient audit trails rather than the entire table.
@@ -76,41 +79,45 @@ func (s *AuditService) Append(
 		return fmt.Errorf("marshal audit payload: %w", err)
 	}
 
-	// Fetch the previous entry's hash for this patient.
-	prevHash := "GENESIS"
-	var lastEntry ClinicalAuditEntry
-	if err := s.db.
-		Where("patient_id = ?", patientID).
-		Order("created_at DESC").
-		First(&lastEntry).Error; err == nil {
-		prevHash = lastEntry.Hash
-	}
+	// Wrap the read-compute-write in a SERIALIZABLE transaction to
+	// prevent concurrent appends from forking the hash chain.
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		// Fetch the previous entry's hash for this patient (within tx).
+		prevHash := "GENESIS"
+		var lastEntry ClinicalAuditEntry
+		if err := tx.
+			Where("patient_id = ?", patientID).
+			Order("created_at DESC").
+			First(&lastEntry).Error; err == nil {
+			prevHash = lastEntry.Hash
+		}
 
-	// Compute this entry's hash: SHA-256(previousHash + patientID + eventType + payload + occurredAt)
-	hashInput := fmt.Sprintf("%s|%s|%s|%s|%s",
-		prevHash, patientID, eventType, string(payloadJSON), occurredAt.Format(time.RFC3339Nano))
-	hash := sha256.Sum256([]byte(hashInput))
-	hashHex := hex.EncodeToString(hash[:])
+		// Compute this entry's hash: SHA-256(previousHash + patientID + eventType + payload + occurredAt)
+		hashInput := fmt.Sprintf("%s|%s|%s|%s|%s",
+			prevHash, patientID, eventType, string(payloadJSON), occurredAt.Format(time.RFC3339Nano))
+		hash := sha256.Sum256([]byte(hashInput))
+		hashHex := hex.EncodeToString(hash[:])
 
-	entry := ClinicalAuditEntry{
-		ID:            uuid.New(),
-		PatientID:     patientID,
-		EventType:     eventType,
-		ServiceSource: serviceSource,
-		Payload:       string(payloadJSON),
-		PreviousHash:  prevHash,
-		Hash:          hashHex,
-		OccurredAt:    occurredAt,
-	}
+		entry := ClinicalAuditEntry{
+			ID:            uuid.New(),
+			PatientID:     patientID,
+			EventType:     eventType,
+			ServiceSource: serviceSource,
+			Payload:       string(payloadJSON),
+			PreviousHash:  prevHash,
+			Hash:          hashHex,
+			OccurredAt:    occurredAt,
+		}
 
-	if err := s.db.Create(&entry).Error; err != nil {
-		s.logger.Error("audit append failed",
-			zap.String("patient_id", patientID),
-			zap.String("event_type", eventType),
-			zap.Error(err))
-		return err
-	}
-	return nil
+		if err := tx.Create(&entry).Error; err != nil {
+			s.logger.Error("audit append failed",
+				zap.String("patient_id", patientID),
+				zap.String("event_type", eventType),
+				zap.Error(err))
+			return err
+		}
+		return nil
+	})
 }
 
 // FetchPatientTrail returns the audit trail for a patient within

@@ -27,8 +27,14 @@ type PrioritySignalHandler struct {
 	kb20Client           *KB20Client          // Phase 6 P6-6 + P6-2
 	renalDoseGate        *RenalDoseGate       // Phase 6 P6-2
 	templateLoader       *TemplateLoader      // Phase 7 P7-A
+	fhirNotifier         FHIRCardNotifier     // Phase 10 Gap 9: FHIR outbound
 	metrics              *metrics.Collector
 	log                  *zap.Logger
+}
+
+// SetFHIRNotifier injects the FHIR notification client. Phase 10 Gap 9.
+func (h *PrioritySignalHandler) SetFHIRNotifier(n FHIRCardNotifier) {
+	h.fhirNotifier = n
 }
 
 // NewPrioritySignalHandler creates a new handler for priority signals.
@@ -321,6 +327,7 @@ func (h *PrioritySignalHandler) persistRenalCard(
 	if h.kb19 != nil {
 		go h.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(h.fhirNotifier, card)
 
 	return nil
 }
@@ -537,6 +544,7 @@ func (h *PrioritySignalHandler) persistCKM4cCard(
 	if h.kb19 != nil {
 		go h.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(h.fhirNotifier, card)
 
 	return nil
 }
@@ -674,6 +682,7 @@ func (h *PrioritySignalHandler) handleOrthostatic(ctx context.Context, env prior
 	}
 
 	go h.kb19.PublishGateChanged(card)
+	notifyFHIR(h.fhirNotifier, card)
 
 	h.log.Warn("priority orthostatic alert card generated",
 		zap.String("card_id", card.CardID.String()),
@@ -760,6 +769,7 @@ func (h *PrioritySignalHandler) handlePotassium(ctx context.Context, env priorit
 	}
 
 	go h.kb19.PublishGateChanged(card)
+	notifyFHIR(h.fhirNotifier, card)
 
 	h.log.Warn("priority high potassium card generated",
 		zap.String("card_id", card.CardID.String()),
@@ -850,6 +860,7 @@ func (h *PrioritySignalHandler) handleAdverseEvent(ctx context.Context, env prio
 	}
 
 	go h.kb19.PublishGateChanged(card)
+	notifyFHIR(h.fhirNotifier, card)
 
 	h.log.Warn("priority ADR review card generated",
 		zap.String("card_id", card.CardID.String()),
@@ -936,6 +947,7 @@ func (h *PrioritySignalHandler) handleHospitalisation(ctx context.Context, env p
 	}
 
 	go h.kb19.PublishGateChanged(card)
+	notifyFHIR(h.fhirNotifier, card)
 
 	h.log.Warn("priority hospitalisation card generated",
 		zap.String("card_id", card.CardID.String()),

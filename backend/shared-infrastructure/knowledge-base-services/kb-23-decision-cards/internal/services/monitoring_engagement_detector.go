@@ -61,9 +61,13 @@ type MonitoringEngagementBatch struct {
 	db             *database.Database
 	gateCache      *MCUGateCache
 	kb19           *KB19Publisher
+	fhirNotifier   FHIRCardNotifier
 	metrics        *metrics.Collector
 	log            *zap.Logger
 }
+
+// SetFHIRNotifier injects the FHIR notification client. Phase 10 Gap 9.
+func (j *MonitoringEngagementBatch) SetFHIRNotifier(n FHIRCardNotifier) { j.fhirNotifier = n }
 
 // NewMonitoringEngagementBatch wires the dependencies. All optional
 // for degraded / test modes (matching the convention from
@@ -256,5 +260,6 @@ func (j *MonitoringEngagementBatch) persistMonitoringLapsedCard(patient Monitori
 	if j.kb19 != nil {
 		go j.kb19.PublishGateChanged(card)
 	}
+	notifyFHIR(j.fhirNotifier, card)
 	return nil
 }
