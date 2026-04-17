@@ -218,7 +218,10 @@ func main() {
 				publisher := fhir.NewPublisher(fhirClient, db.DB, logger)
 				eventBus.Subscribe(models.EventMedicationThresholdCrossed, publisher.HandleThresholdCrossed)
 				eventBus.Subscribe(models.EventStratumChange, publisher.HandleStratumChange)
-				logger.Info("FHIR write-back publisher registered for MEDICATION_THRESHOLD_CROSSED and STRATUM_CHANGE events")
+				// Phase 10 Gap 9: KB-23 decision cards → FHIR CommunicationRequest
+				// write-back for MHR (Australia) and ABDM (India) compliance.
+				eventBus.Subscribe(models.EventDecisionCardGenerated, publisher.HandleDecisionCard)
+				logger.Info("FHIR write-back publisher registered for MEDICATION_THRESHOLD_CROSSED, STRATUM_CHANGE, and DECISION_CARD_GENERATED events")
 			}
 		}
 	} else {

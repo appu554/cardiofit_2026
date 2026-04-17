@@ -12,6 +12,36 @@ import (
 	"kb-patient-profile/internal/services"
 )
 
+// DecisionCardWebhookRequest is the minimal projection KB-23 sends after
+// persisting a decision card. Phase 10 Gap 9 FHIR write-back.
+type DecisionCardWebhookRequest struct {
+	PatientID        string `json:"patient_id" binding:"required"`
+	CardID           string `json:"card_id" binding:"required"`
+	TemplateID       string `json:"template_id"`
+	ClinicianSummary string `json:"clinician_summary"`
+	SafetyTier       string `json:"safety_tier"`
+	MCUGate          string `json:"mcu_gate"`
+}
+
+func (s *Server) handleDecisionCardWebhook(c *gin.Context) {
+	var req DecisionCardWebhookRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Republish on the internal event bus → FHIR publisher picks it up.
+	s.eventBus.Publish(models.EventDecisionCardGenerated, req.PatientID, map[string]interface{}{
+		"card_id":           req.CardID,
+		"template_id":      req.TemplateID,
+		"clinician_summary": req.ClinicianSummary,
+		"safety_tier":      req.SafetyTier,
+		"mcu_gate":         req.MCUGate,
+	})
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 // PhenotypeClusterRequest is the JSON body from the Python clustering pipeline.
 type PhenotypeClusterRequest struct {
 	RawClusterLabel   string  `json:"raw_cluster_label" binding:"required"`

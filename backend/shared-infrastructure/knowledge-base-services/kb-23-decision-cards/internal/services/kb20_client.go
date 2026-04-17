@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -295,4 +296,44 @@ func (c *KB20Client) FetchRenalActivePatientIDs(ctx context.Context) ([]string, 
 		}
 	}
 	return ids, nil
+}
+
+// NotifyCardGenerated sends a decision-card-generated webhook to KB-20 so the
+// FHIR publisher can write a CommunicationRequest to MHR/ABDM. Phase 10 Gap 9.
+// Fire-and-forget: errors are logged but do not fail card persistence.
+func (kc *KB20Client) NotifyCardGenerated(patientID, cardID, templateID, clinicianSummary, safetyTier, mcuGate string) {
+	url := fmt.Sprintf("%s/api/v1/webhooks/decision-card-generated", kc.cfg.KB20URL)
+	payload := map[string]string{
+		"patient_id":        patientID,
+		"card_id":           cardID,
+		"template_id":       templateID,
+		"clinician_summary": clinicianSummary,
+		"safety_tier":       safetyTier,
+		"mcu_gate":          mcuGate,
+	}
+	body, _ := json.Marshal(payload)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
+		bytes.NewReader(body))
+	if err != nil {
+		kc.log.Error("failed to build FHIR webhook request", zap.Error(err))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := kc.breaker.Do(req)
+	if err != nil {
+		kc.log.Warn("FHIR webhook to KB-20 failed (non-fatal)", zap.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		kc.log.Warn("FHIR webhook returned non-2xx",
+			zap.Int("status", resp.StatusCode),
+			zap.String("card_id", cardID))
+	}
 }

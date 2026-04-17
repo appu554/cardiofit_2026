@@ -176,6 +176,16 @@ func (s *Server) setupRoutes() {
 			loinc.GET("/registry", s.getLOINCRegistry)
 		}
 
+		// Phase 10 Gap 9: KB-23 → KB-20 webhook for FHIR write-back.
+		// When KB-23 persists a decision card, it POSTs a minimal
+		// projection here. KB-20 republishes on the internal event
+		// bus, which triggers the FHIR publisher to write a
+		// CommunicationRequest to MHR/ABDM.
+		webhooks := v1.Group("/webhooks")
+		{
+			webhooks.POST("/decision-card-generated", s.handleDecisionCardWebhook)
+		}
+
 		// Lab thresholds for Flink stream enrichment and V-MCU Channel B safety
 		thresholds := v1.Group("/thresholds")
 		{
