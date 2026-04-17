@@ -37,6 +37,22 @@ func testPAIConfig() *PAIConfig {
 		BehavioralReducedThreshold: 0.50,
 		BehavioralSlightlyReduced:  0.25,
 		BehavioralCompoundBoth:     95,
+		// Context
+		ContextCKMStageBase: map[string]float64{
+			"0": 0, "1": 5, "2": 10, "3": 20, "3a": 25, "3b": 35,
+			"4": 50, "4a": 55, "4b": 60, "4c": 65,
+		},
+		ContextPostDischarge30d:    25,
+		ContextAcuteIllness:        20,
+		ContextRecentHypo:          15,
+		ContextActiveSteroid:       10,
+		ContextPolypharmacyElderly: 15,
+		ContextPolypharmacyAge:     75,
+		ContextPolypharmacyMeds:    5,
+		ContextNYHAAmplifier: map[string]float64{
+			"I": 1.0, "II": 1.1, "III": 1.3, "IV": 1.5,
+		},
+		ContextMaxScore: 100,
 		// Tiers
 		CriticalThreshold: 80,
 		HighThreshold:     60,

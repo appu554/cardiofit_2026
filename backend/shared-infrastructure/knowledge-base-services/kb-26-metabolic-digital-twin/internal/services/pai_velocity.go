@@ -39,6 +39,18 @@ type PAIConfig struct {
 	BehavioralSlightlyReduced  float64
 	BehavioralCompoundBoth     float64
 
+	// Context dimension
+	ContextCKMStageBase        map[string]float64 // "0"->0, "1"->5, ..., "4c"->65
+	ContextPostDischarge30d    float64            // +25
+	ContextAcuteIllness        float64            // +20
+	ContextRecentHypo          float64            // +15
+	ContextActiveSteroid       float64            // +10
+	ContextPolypharmacyElderly float64            // +15
+	ContextPolypharmacyAge     int                // 75
+	ContextPolypharmacyMeds    int                // 5
+	ContextNYHAAmplifier       map[string]float64 // "IV"->1.5, "III"->1.3, "II"->1.1, "I"->1.0
+	ContextMaxScore            float64            // 100
+
 	// Tier thresholds
 	CriticalThreshold float64
 	HighThreshold     float64
