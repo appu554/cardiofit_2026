@@ -56,6 +56,7 @@ type Server struct {
 	// V4-7: phenotype stability engine evaluates raw cluster
 	// assignments before writing to PatientProfile.
 	stabilityEngine *services.StabilityEngine
+	stabilityConfig services.StabilityConfig
 
 	logger *zap.Logger
 }
@@ -111,6 +112,7 @@ func NewServer(
 		// to populate the confounder flags.
 		safetyRecorder:  services.NewSafetyEventRecorder(db.DB, logger),
 		stabilityEngine: services.NewStabilityEngine(),
+		stabilityConfig: loadStabilityConfigOrDefault(logger),
 		logger:          logger,
 	}
 
@@ -151,4 +153,24 @@ func (s *Server) corsMiddleware() gin.HandlerFunc {
 // KB26Client is instantiated. Phase 8 P8-3.
 func (s *Server) SetKB26CGMFetcher(fetcher services.CGMStatusFetcher) {
 	s.kb26CGMFetcher = fetcher
+}
+
+// loadStabilityConfigOrDefault attempts to load phenotype_stability.yaml
+// from the market-configs directory. Falls back to hardcoded defaults
+// if the file is not found (local dev, tests, or first deployment).
+func loadStabilityConfigOrDefault(logger *zap.Logger) services.StabilityConfig {
+	// Try standard deployment path first, then relative dev path.
+	paths := []string{
+		"/app/market-configs/shared/phenotype_stability.yaml",
+		"../../market-configs/shared/phenotype_stability.yaml",
+	}
+	for _, p := range paths {
+		cfg, err := services.LoadStabilityConfig(p)
+		if err == nil {
+			logger.Info("loaded phenotype stability config from YAML", zap.String("path", p))
+			return cfg
+		}
+	}
+	logger.Warn("phenotype_stability.yaml not found, using default config")
+	return services.DefaultStabilityConfig()
 }

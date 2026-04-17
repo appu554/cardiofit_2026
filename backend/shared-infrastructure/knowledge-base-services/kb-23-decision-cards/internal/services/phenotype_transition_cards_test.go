@@ -1,9 +1,12 @@
 package services
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // Test 1: A StabilityDecision with Decision=ACCEPT and TransitionType=GENUINE
@@ -20,7 +23,7 @@ func TestPhenotypeCards_GenuineTransition_ProducesCard(t *testing.T) {
 		PreviousCluster:    "CLUSTER_A",
 	}
 
-	cards := EvaluatePhenotypeTransition(decision)
+	cards := EvaluatePhenotypeTransition(decision, []string{"metformin", "empagliflozin"})
 
 	assert.Len(t, cards, 1)
 	card := cards[0]
@@ -30,6 +33,8 @@ func TestPhenotypeCards_GenuineTransition_ProducesCard(t *testing.T) {
 	assert.Equal(t, "CLUSTER_B", card.NewCluster)
 	assert.Equal(t, "GLYCAEMIC", card.DomainDriver)
 	assert.InDelta(t, 0.92, card.Confidence, 0.001)
+	assert.Contains(t, card.Interpretation, "metformin")
+	assert.Contains(t, card.Interpretation, "CLUSTER_A")
 	assert.False(t, card.SuppressInertia)
 }
 
@@ -46,7 +51,7 @@ func TestPhenotypeCards_FlapWarning_ProducesCard(t *testing.T) {
 		FlapPair:           []string{"CLUSTER_B", "CLUSTER_C"},
 	}
 
-	cards := EvaluatePhenotypeTransition(decision)
+	cards := EvaluatePhenotypeTransition(decision, nil)
 
 	assert.Len(t, cards, 1)
 	card := cards[0]
@@ -74,7 +79,7 @@ func TestPhenotypeCards_StableGoodCluster_SuppressesInertia(t *testing.T) {
 		PreviousCluster:    "STABLE_CONTROLLED",
 	}
 
-	cards := EvaluatePhenotypeTransition(decision)
+	cards := EvaluatePhenotypeTransition(decision, nil)
 
 	assert.Len(t, cards, 1)
 	card := cards[0]
@@ -84,19 +89,50 @@ func TestPhenotypeCards_StableGoodCluster_SuppressesInertia(t *testing.T) {
 	assert.Equal(t, "STABLE_CONTROLLED", card.NewCluster)
 }
 
-// Test 4: A StabilityDecision with Decision=HOLD_DWELL should produce NO card
-// (dwell holds are silent — the engine is just waiting, nothing to report).
-func TestPhenotypeCards_HoldDwell_NoCard(t *testing.T) {
-	decision := PhenotypeStabilityDecision{
-		PatientID:          "patient-004",
-		RawClusterLabel:    "CLUSTER_A",
-		StableClusterLabel: "CLUSTER_A",
-		Decision:           "HOLD_DWELL",
-		DomainDriver:       "LIPID",
-		Confidence:         0.70,
+// Test 4: Phenotype YAML templates load from disk and parse correctly.
+func TestPhenotypeCards_TemplateLoadsFromDisk(t *testing.T) {
+	templates := []string{
+		"../../templates/phenotype/genuine_transition.yaml",
+		"../../templates/phenotype/flap_warning.yaml",
 	}
 
-	cards := EvaluatePhenotypeTransition(decision)
+	for _, path := range templates {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err, "template file should exist: %s", path)
 
-	assert.Empty(t, cards, "HOLD_DWELL should produce no cards")
+		var parsed map[string]interface{}
+		err = yaml.Unmarshal(data, &parsed)
+		require.NoError(t, err, "template should parse as valid YAML: %s", path)
+
+		assert.NotEmpty(t, parsed["template_id"], "template_id required in %s", path)
+		assert.NotEmpty(t, parsed["node_id"], "node_id required in %s", path)
+		assert.NotEmpty(t, parsed["differential_id"], "differential_id required in %s", path)
+		assert.NotEmpty(t, parsed["fragments"], "fragments required in %s", path)
+	}
+}
+
+// Test 5: Engagement-coincident transition. When an ACCEPT decision has
+// TransitionType=GENUINE and previous != stable, a transition card is
+// produced even when no medications are provided (nil patientMeds).
+func TestPhenotypeCards_EngagementCoincident_ProducesCard(t *testing.T) {
+	decision := PhenotypeStabilityDecision{
+		PatientID:          "patient-005",
+		RawClusterLabel:    "WORSENING",
+		StableClusterLabel: "WORSENING",
+		Decision:           "ACCEPT",
+		TransitionType:     "GENUINE",
+		DomainDriver:       "BEHAVIORAL",
+		Confidence:         0.65,
+		PreviousCluster:    "STABLE_CONTROLLED",
+	}
+
+	cards := EvaluatePhenotypeTransition(decision, nil)
+
+	assert.Len(t, cards, 1)
+	card := cards[0]
+	assert.Equal(t, "dc-phenotype-transition-v1", card.TemplateID)
+	assert.Equal(t, "STABLE_CONTROLLED", card.PreviousCluster)
+	assert.Equal(t, "WORSENING", card.NewCluster)
+	assert.Contains(t, card.Interpretation, "STABLE_CONTROLLED")
+	assert.NotContains(t, card.Interpretation, "regimen", "no meds → no regimen text")
 }

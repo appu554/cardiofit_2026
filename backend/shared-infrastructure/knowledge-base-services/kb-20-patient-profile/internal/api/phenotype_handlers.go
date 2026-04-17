@@ -54,7 +54,7 @@ func (s *Server) patchPhenotypeCluster(c *gin.Context) {
 		}
 	}
 
-	// Build stability input with default config
+	// Build stability input with config loaded from phenotype_stability.yaml
 	input := services.StabilityInput{
 		PatientID:         patientID,
 		RawClusterLabel:   req.RawClusterLabel,
@@ -64,24 +64,7 @@ func (s *Server) patchPhenotypeCluster(c *gin.Context) {
 		RunDate:           now,
 		CurrentState:      currentState,
 		DomainDriver:      req.DomainDriver,
-		Config: services.StabilityConfig{
-			DwellMinWeeks:          4,
-			DwellExtendedWeeks:     8,
-			FlapLookbackDays:       90,
-			FlapMinOscillations:    2,
-			HighMembershipProb:     0.7,
-			ModerateMembershipProb: 0.4,
-			CGMStartGraceWeeks:     2,
-			CGMStopGraceWeeks:      4,
-			ConservatismRank: map[string]int{
-				"STABLE_CONTROLLED":     1,
-				"STABLE_MEDICATED":      2,
-				"PROGRESSIVE_GLYCAEMIC": 3,
-				"CARDIORENAL_COMPLEX":   4,
-				"HIGH_RISK_UNSTABLE":    5,
-				"NOISE":                 6,
-			},
-		},
+		Config:            s.stabilityConfig,
 	}
 
 	// Evaluate through stability engine
@@ -108,8 +91,9 @@ func (s *Server) patchPhenotypeCluster(c *gin.Context) {
 	// Update profile with the STABLE cluster (not the raw one)
 	confidence := decision.Confidence
 	updates := map[string]interface{}{
-		"phenotype_cluster":    decision.StableClusterLabel,
-		"phenotype_confidence": &confidence,
+		"phenotype_cluster":        decision.StableClusterLabel,
+		"phenotype_confidence":     &confidence,
+		"phenotype_cluster_origin": "STABILITY_ENGINE",
 	}
 	s.db.DB.Model(&models.PatientProfile{}).Where("patient_id = ?", patientID).Updates(updates)
 

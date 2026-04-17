@@ -2,7 +2,10 @@ package services
 
 import (
 	"fmt"
+	"os"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"kb-patient-profile/internal/models"
 )
@@ -18,6 +21,84 @@ type StabilityConfig struct {
 	CGMStartGraceWeeks     int
 	CGMStopGraceWeeks      int
 	ConservatismRank       map[string]int // cluster label -> rank (1 = most conservative)
+}
+
+// stabilityConfigYAML mirrors the YAML structure of phenotype_stability.yaml
+// so we can unmarshal it directly.
+type stabilityConfigYAML struct {
+	Dwell struct {
+		MinDwellWeeks int `yaml:"min_dwell_weeks"`
+		ExtendedWeeks int `yaml:"extended_dwell_weeks"`
+	} `yaml:"dwell"`
+	FlapDetection struct {
+		LookbackDays    int `yaml:"lookback_days"`
+		MinOscillations int `yaml:"min_oscillations"`
+	} `yaml:"flap_detection"`
+	Confidence struct {
+		HighMembershipProb     float64 `yaml:"high_membership_prob"`
+		ModerateMembershipProb float64 `yaml:"moderate_membership_prob"`
+	} `yaml:"confidence"`
+	ConservatismRank []struct {
+		Cluster string `yaml:"cluster"`
+		Rank    int    `yaml:"rank"`
+	} `yaml:"conservatism_rank"`
+	DataModality struct {
+		CGMStartGraceWeeks int `yaml:"cgm_start_grace_weeks"`
+		CGMStopGraceWeeks  int `yaml:"cgm_stop_grace_weeks"`
+	} `yaml:"data_modality"`
+}
+
+// LoadStabilityConfig reads phenotype_stability.yaml and returns a StabilityConfig.
+func LoadStabilityConfig(path string) (StabilityConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return StabilityConfig{}, fmt.Errorf("read stability config: %w", err)
+	}
+
+	var raw stabilityConfigYAML
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return StabilityConfig{}, fmt.Errorf("parse stability config: %w", err)
+	}
+
+	rankMap := make(map[string]int, len(raw.ConservatismRank))
+	for _, entry := range raw.ConservatismRank {
+		rankMap[entry.Cluster] = entry.Rank
+	}
+
+	return StabilityConfig{
+		DwellMinWeeks:          raw.Dwell.MinDwellWeeks,
+		DwellExtendedWeeks:     raw.Dwell.ExtendedWeeks,
+		FlapLookbackDays:       raw.FlapDetection.LookbackDays,
+		FlapMinOscillations:    raw.FlapDetection.MinOscillations,
+		HighMembershipProb:     raw.Confidence.HighMembershipProb,
+		ModerateMembershipProb: raw.Confidence.ModerateMembershipProb,
+		CGMStartGraceWeeks:     raw.DataModality.CGMStartGraceWeeks,
+		CGMStopGraceWeeks:      raw.DataModality.CGMStopGraceWeeks,
+		ConservatismRank:       rankMap,
+	}, nil
+}
+
+// DefaultStabilityConfig returns the hardcoded default config matching
+// phenotype_stability.yaml values. Used as fallback when YAML is unavailable.
+func DefaultStabilityConfig() StabilityConfig {
+	return StabilityConfig{
+		DwellMinWeeks:          4,
+		DwellExtendedWeeks:     8,
+		FlapLookbackDays:       90,
+		FlapMinOscillations:    2,
+		HighMembershipProb:     0.7,
+		ModerateMembershipProb: 0.4,
+		CGMStartGraceWeeks:     2,
+		CGMStopGraceWeeks:      4,
+		ConservatismRank: map[string]int{
+			"STABLE_CONTROLLED":     1,
+			"STABLE_MEDICATED":      2,
+			"PROGRESSIVE_GLYCAEMIC": 3,
+			"CARDIORENAL_COMPLEX":   4,
+			"HIGH_RISK_UNSTABLE":    5,
+			"NOISE":                 6,
+		},
+	}
 }
 
 // StabilityInput is everything the engine needs for one evaluation.

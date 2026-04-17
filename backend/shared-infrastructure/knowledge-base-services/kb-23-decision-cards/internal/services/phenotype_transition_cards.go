@@ -27,17 +27,19 @@ type PhenotypeTransitionCard struct {
 	NewCluster      string
 	DomainDriver    string
 	Confidence      float64
+	Interpretation  string // human-readable interpretation of the transition
 	FlapPair        string // formatted "A <-> B" for the flap warning
 	SuppressInertia bool   // true when patient is stable-good -> skip inertia detection
 }
 
 // EvaluatePhenotypeTransition generates card(s) based on a stability decision.
-// It uses the PhenotypeStabilityDecision from KB-20 (passed by the caller —
-// KB-23 does not call KB-20 directly for this).
-func EvaluatePhenotypeTransition(decision PhenotypeStabilityDecision) []PhenotypeTransitionCard {
+// patientMeds is the list of active medication class names — used to generate
+// the Interpretation string on transition cards (e.g. "therapy pathway may
+// need adjustment given current regimen: metformin, empagliflozin").
+func EvaluatePhenotypeTransition(decision PhenotypeStabilityDecision, patientMeds []string) []PhenotypeTransitionCard {
 	switch decision.Decision {
 	case "ACCEPT":
-		return evaluateAccept(decision)
+		return evaluateAccept(decision, patientMeds)
 	case "HOLD_FLAP":
 		return evaluateHoldFlap(decision)
 	case "HOLD_DWELL":
@@ -48,7 +50,7 @@ func EvaluatePhenotypeTransition(decision PhenotypeStabilityDecision) []Phenotyp
 	}
 }
 
-func evaluateAccept(d PhenotypeStabilityDecision) []PhenotypeTransitionCard {
+func evaluateAccept(d PhenotypeStabilityDecision, patientMeds []string) []PhenotypeTransitionCard {
 	// INITIAL assignment — first phenotype, nothing to compare against.
 	if d.TransitionType == "INITIAL" {
 		return nil
@@ -69,6 +71,7 @@ func evaluateAccept(d PhenotypeStabilityDecision) []PhenotypeTransitionCard {
 
 	// Genuine transition — previous cluster differs from the new stable cluster.
 	if d.PreviousCluster != d.StableClusterLabel {
+		interpretation := buildInterpretation(d.PreviousCluster, d.StableClusterLabel, patientMeds)
 		return []PhenotypeTransitionCard{{
 			TemplateID:      "dc-phenotype-transition-v1",
 			PatientID:       d.PatientID,
@@ -76,10 +79,21 @@ func evaluateAccept(d PhenotypeStabilityDecision) []PhenotypeTransitionCard {
 			NewCluster:      d.StableClusterLabel,
 			DomainDriver:    d.DomainDriver,
 			Confidence:      d.Confidence,
+			Interpretation:  interpretation,
 		}}
 	}
 
 	return nil
+}
+
+// buildInterpretation creates a human-readable description of the phenotype
+// transition including the patient's current medication context.
+func buildInterpretation(from, to string, meds []string) string {
+	base := fmt.Sprintf("phenotype shifted from %s to %s", from, to)
+	if len(meds) > 0 {
+		return fmt.Sprintf("%s; current regimen: %s", base, strings.Join(meds, ", "))
+	}
+	return base
 }
 
 func evaluateHoldFlap(d PhenotypeStabilityDecision) []PhenotypeTransitionCard {

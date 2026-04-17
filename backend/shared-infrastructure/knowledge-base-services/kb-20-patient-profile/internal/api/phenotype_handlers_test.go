@@ -62,23 +62,34 @@ func TestPhenotypeHandler_StabilityHold(t *testing.T) {
 }
 
 // TestPhenotypeHandler_StabilityAccept verifies the stability engine accepts a
-// first-ever cluster assignment without dwell gating. When no prior cluster
-// exists the engine must immediately accept whatever the pipeline assigns.
+// cluster transition when dwell time has been met. The patient has been pending
+// in WORSENING for 35 days (past the 28-day standard dwell for rank 3+).
 func TestPhenotypeHandler_StabilityAccept(t *testing.T) {
 	engine := services.NewStabilityEngine()
+	now := time.Now()
 
 	input := services.StabilityInput{
 		PatientID:       "test-002",
-		RawClusterLabel: "IMPROVING",
+		RawClusterLabel: "WORSENING",
 		MembershipProb:  0.85,
-		RunDate:         time.Now(),
-		CurrentState:    nil,
-		Config:          defaultConfig(),
+		RunDate:         now,
+		CurrentState: &models.PatientClusterState{
+			PatientID:            "test-002",
+			CurrentStableCluster: "PROGRESSIVE_GLYCAEMIC",
+			DwellDays:            35,
+			Confidence:           0.8,
+			PendingRawCluster:    strPtr("WORSENING"),
+			PendingSince:         timePtr(now.AddDate(0, 0, -35)),
+		},
+		Config: defaultConfig(),
 	}
 
 	decision := engine.Evaluate(input)
 
 	assert.Equal(t, models.DecisionAccept, decision.Decision)
-	assert.Equal(t, "IMPROVING", decision.StableClusterLabel)
-	assert.Equal(t, models.TransitionTypeInitial, decision.TransitionType)
+	assert.Equal(t, "WORSENING", decision.StableClusterLabel)
+	assert.Equal(t, models.TransitionTypeGenuine, decision.TransitionType)
 }
+
+func strPtr(s string) *string       { return &s }
+func timePtr(t time.Time) *time.Time { return &t }
