@@ -303,6 +303,68 @@ func countInputSources(input models.PAIDimensionInput) int {
 	return count
 }
 
+// DefaultPAIConfig returns a PAIConfig populated with standard clinical
+// thresholds matching the pai_dimensions specification. This is the
+// single source of truth for production defaults; tests may override
+// individual fields as needed.
+func DefaultPAIConfig() *PAIConfig {
+	return &PAIConfig{
+		VelocityWeight:   0.30,
+		ProximityWeight:  0.25,
+		BehavioralWeight: 0.20,
+		ContextWeight:    0.15,
+		AttentionWeight:  0.10,
+		// Velocity thresholds
+		SevereDeclineSlope:            -2.0,
+		ModerateDeclineSlope:          -1.0,
+		MildDeclineSlope:              -0.3,
+		StableSlope:                   0.3,
+		AcceleratingDeclineMultiplier: 1.5,
+		DeceleratingDeclineMultiplier: 0.7,
+		ConcordantBonus:               15,
+		PerAdditionalDomain:           5,
+		ConfounderDampeningEnabled:    false,
+		MaxVelocityDuringSeason:       60,
+		// Proximity
+		ProximityExponent: 2.0,
+		// Behavioral
+		BehavioralCessationDays:    5,
+		BehavioralReducedThreshold: 0.50,
+		BehavioralSlightlyReduced:  0.25,
+		BehavioralCompoundBoth:     95,
+		// Context
+		ContextCKMStageBase: map[string]float64{
+			"0": 0, "1": 5, "2": 10, "3": 20, "3a": 25, "3b": 35,
+			"4": 50, "4a": 55, "4b": 60, "4c": 65,
+		},
+		ContextPostDischarge30d:    25,
+		ContextAcuteIllness:        20,
+		ContextRecentHypo:          15,
+		ContextActiveSteroid:       10,
+		ContextPolypharmacyElderly: 15,
+		ContextPolypharmacyAge:     75,
+		ContextPolypharmacyMeds:    5,
+		ContextNYHAAmplifier: map[string]float64{
+			"I": 1.0, "II": 1.1, "III": 1.3, "IV": 1.5,
+		},
+		ContextMaxScore: 100,
+		// Attention
+		AttentionCriticalDays: 90,
+		AttentionHighDays:     60,
+		AttentionModerateDays: 30,
+		AttentionAdequateDays: 14,
+		AttentionPerCard:      10,
+		AttentionPerDayOldest: 3,
+		AttentionCardCap:      50,
+		// Tiers
+		CriticalThreshold: 80,
+		HighThreshold:     60,
+		ModerateThreshold: 40,
+		LowThreshold:      20,
+		SignificantDelta:   10,
+	}
+}
+
 // itoa is a minimal int-to-string helper to avoid importing strconv.
 func itoa(n int) string {
 	if n == 0 {

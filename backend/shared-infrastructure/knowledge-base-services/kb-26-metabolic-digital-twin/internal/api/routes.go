@@ -62,6 +62,14 @@ func (s *Server) setupRoutes() {
 		// PREVENT (10-year CVD risk)
 		v1.GET("/prevent/:patientId", s.getPREVENT)
 
+		// PAI (Patient Acuity Index)
+		pai := v1.Group("/pai")
+		{
+			pai.GET("/:patientId", s.getPAIScore)
+			pai.GET("/:patientId/history", s.getPAIHistory)
+			pai.POST("/:patientId/compute", s.computePAI)
+		}
+
 		// Relapse detection (Patient Engagement Loop)
 		relapse := v1.Group("/relapse/:patientId")
 		{

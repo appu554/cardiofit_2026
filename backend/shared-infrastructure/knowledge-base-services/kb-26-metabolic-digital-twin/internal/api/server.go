@@ -31,6 +31,10 @@ type Server struct {
 	preventScorer         *services.PREVENTScorer
 	relapseDetector       *services.RelapseDetector
 	trajectoryEngine      *services.TrajectoryEngine
+
+	// PAI (Patient Acuity Index)
+	paiRepo    *services.PAIRepository
+	paiTrigger *services.PAIEventTrigger
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -108,6 +112,14 @@ func (s *Server) setupMiddleware() {
 	s.Router.Use(s.requestLogger())
 	s.Router.Use(s.metricsMiddleware())
 	s.Router.Use(s.corsMiddleware())
+}
+
+// SetPAIServices injects the PAI repository and event trigger into the
+// server after construction. Setter injection avoids further bloating
+// the NewServer constructor parameter list.
+func (s *Server) SetPAIServices(repo *services.PAIRepository, trigger *services.PAIEventTrigger) {
+	s.paiRepo = repo
+	s.paiTrigger = trigger
 }
 
 // --- Infrastructure handlers ---

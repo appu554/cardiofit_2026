@@ -72,6 +72,9 @@ func main() {
 		// Phase 7 P7-E Milestone 2: persistence target for the
 		// CGM analytics consumer.
 		&models.CGMPeriodReport{},
+		// PAI (Patient Acuity Index) persistence models
+		&models.PAIScore{},
+		&models.PAIHistory{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -192,8 +195,13 @@ func main() {
 		logger.Info("KafkaTrajectoryPublisher wired", zap.String("topic", "kb26.domain_trajectory.v1"))
 	}
 
+	// 7d. Initialize PAI services (Patient Acuity Index)
+	paiRepo := services.NewPAIRepository(db.DB)
+	paiTrigger := services.NewPAIEventTrigger(15, 10.0) // 15-min rate limit, delta 10 significance
+
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector, trajectoryPublisher)
+	server.SetPAIServices(paiRepo, paiTrigger)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{
