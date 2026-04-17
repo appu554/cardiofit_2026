@@ -185,18 +185,29 @@ func TestPAI_SignificantChange_Detected(t *testing.T) {
 		UnacknowledgedCardCount: 2,
 	}
 
-	result := ComputePAI(input, cfg)
+	current := ComputePAI(input, cfg)
 
-	// Simulate previous score of 30 and recompute delta
-	prev := 30.0
-	result.PreviousScore = &prev
-	result.ScoreDelta = result.Score - prev
-	result.SignificantChange = result.ScoreDelta >= cfg.SignificantDelta
-
-	if result.ScoreDelta < 10 {
-		t.Errorf("expected ScoreDelta >= 10, got %.2f (score=%.2f, prev=%.2f)", result.ScoreDelta, result.Score, prev)
+	// Simulate a previous score of 30 (tier LOW) — use the actual
+	// PAIEventTrigger.ProcessResult path instead of manual wiring.
+	previous := models.PAIScore{
+		PatientID: "change-detect-001",
+		Score:     30.0,
+		Tier:      string(models.TierLow),
 	}
-	if !result.SignificantChange {
-		t.Error("expected SignificantChange to be true")
+
+	trigger := NewPAIEventTrigger(15, cfg.SignificantDelta)
+	event := trigger.ProcessResult(current, previous)
+
+	if event == nil {
+		t.Fatal("expected significant change event, got nil")
+	}
+	if event.NewScore != current.Score {
+		t.Errorf("expected NewScore %.2f, got %.2f", current.Score, event.NewScore)
+	}
+	if event.PreviousScore != 30.0 {
+		t.Errorf("expected PreviousScore 30.0, got %.2f", event.PreviousScore)
+	}
+	if current.Score-30.0 < 10 {
+		t.Errorf("expected score delta >= 10, got %.2f", current.Score-30.0)
 	}
 }

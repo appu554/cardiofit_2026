@@ -65,8 +65,11 @@ func (s *Server) computePAI(c *gin.Context) {
 	}
 	input.PatientID = patientID
 
-	// Compute
-	cfg := services.DefaultPAIConfig()
+	// Compute — use server config (loaded from YAML) or fall back to defaults
+	cfg := s.paiConfig
+	if cfg == nil {
+		cfg = services.DefaultPAIConfig()
+	}
 	result := services.ComputePAI(input, cfg)
 	result.TriggerEvent = "API_COMPUTE"
 

@@ -1,8 +1,12 @@
 package services
 
 import (
+	"fmt"
 	"math"
+	"os"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"kb-26-metabolic-digital-twin/internal/models"
 )
@@ -334,8 +338,8 @@ func DefaultPAIConfig() *PAIConfig {
 		BehavioralCompoundBoth:     95,
 		// Context
 		ContextCKMStageBase: map[string]float64{
-			"0": 0, "1": 5, "2": 10, "3": 20, "3a": 25, "3b": 35,
-			"4": 50, "4a": 55, "4b": 60, "4c": 65,
+			"0": 0, "1": 5, "2": 10, "3": 20,
+			"4a": 35, "4b": 50, "4c": 65,
 		},
 		ContextPostDischarge30d:    25,
 		ContextAcuteIllness:        20,
@@ -363,6 +367,150 @@ func DefaultPAIConfig() *PAIConfig {
 		LowThreshold:      20,
 		SignificantDelta:   10,
 	}
+}
+
+// ─── YAML config loader ─────────────────────────────────────────────────────
+
+// paiDimensionsYAML mirrors the YAML structure of pai_dimensions.yaml.
+type paiDimensionsYAML struct {
+	Weights struct {
+		Velocity   float64 `yaml:"velocity"`
+		Proximity  float64 `yaml:"proximity"`
+		Behavioral float64 `yaml:"behavioral"`
+		Context    float64 `yaml:"context"`
+		Attention  float64 `yaml:"attention"`
+	} `yaml:"weights"`
+	Velocity struct {
+		CompositeSlope struct {
+			SevereDecline  float64 `yaml:"severe_decline"`
+			ModerateDecline float64 `yaml:"moderate_decline"`
+			MildDecline    float64 `yaml:"mild_decline"`
+			Stable         float64 `yaml:"stable"`
+		} `yaml:"composite_slope"`
+		SecondDerivative struct {
+			AcceleratingDecline    float64 `yaml:"accelerating_decline"`
+			DeceleratingDecline    float64 `yaml:"decelerating_decline"`
+			AcceleratingImprovement float64 `yaml:"accelerating_improvement"`
+		} `yaml:"second_derivative"`
+		ConcordantBonus     float64 `yaml:"concordant_bonus"`
+		PerAdditionalDomain float64 `yaml:"per_additional_domain"`
+	} `yaml:"velocity"`
+	Proximity struct {
+		Exponent float64 `yaml:"exponent"`
+	} `yaml:"proximity"`
+	Behavioral struct {
+		MeasurementFrequency struct {
+			CessationDays    int     `yaml:"cessation_days"`
+			ReducedThreshold float64 `yaml:"reduced_threshold"`
+			SlightlyReduced  float64 `yaml:"slightly_reduced"`
+		} `yaml:"measurement_frequency"`
+		CompoundBoth float64 `yaml:"compound_both"`
+	} `yaml:"behavioral"`
+	Context struct {
+		CKMStageBase map[string]float64 `yaml:"ckm_stage_base"`
+		Modifiers    struct {
+			PostDischarge30d   float64 `yaml:"post_discharge_30d"`
+			AcuteIllness       float64 `yaml:"acute_illness"`
+			RecentHypo         float64 `yaml:"recent_hypo"`
+			ActiveSteroid      float64 `yaml:"active_steroid"`
+			PolypharmacyElderly float64 `yaml:"polypharmacy_elderly"`
+		} `yaml:"modifiers"`
+		NYHAAmplifier map[string]float64 `yaml:"nyha_amplifier"`
+		MaxScore      float64            `yaml:"max_score"`
+	} `yaml:"context"`
+	Attention struct {
+		DaysSinceClinician struct {
+			Critical int `yaml:"critical"`
+			High     int `yaml:"high"`
+			Moderate int `yaml:"moderate"`
+			Adequate int `yaml:"adequate"`
+		} `yaml:"days_since_clinician"`
+		UnacknowledgedCards struct {
+			PerCard      float64 `yaml:"per_card"`
+			PerDayOldest float64 `yaml:"per_day_oldest"`
+			Cap          float64 `yaml:"cap"`
+		} `yaml:"unacknowledged_cards"`
+	} `yaml:"attention"`
+	Tiers struct {
+		Critical float64 `yaml:"critical"`
+		High     float64 `yaml:"high"`
+		Moderate float64 `yaml:"moderate"`
+		Low      float64 `yaml:"low"`
+	} `yaml:"tiers"`
+	SignificantChange struct {
+		ScoreDelta float64 `yaml:"score_delta"`
+	} `yaml:"significant_change"`
+	RateLimit struct {
+		MinIntervalMinutes int `yaml:"min_interval_minutes"`
+	} `yaml:"rate_limit"`
+	ConfounderDampening struct {
+		Enabled              bool    `yaml:"enabled"`
+		MaxVelocityDuringSeason float64 `yaml:"max_velocity_during_season"`
+	} `yaml:"confounder_dampening"`
+}
+
+// LoadPAIConfig reads pai_dimensions.yaml and returns a PAIConfig.
+func LoadPAIConfig(path string) (*PAIConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read PAI config: %w", err)
+	}
+
+	var raw paiDimensionsYAML
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse PAI config: %w", err)
+	}
+
+	return &PAIConfig{
+		VelocityWeight:   raw.Weights.Velocity,
+		ProximityWeight:  raw.Weights.Proximity,
+		BehavioralWeight: raw.Weights.Behavioral,
+		ContextWeight:    raw.Weights.Context,
+		AttentionWeight:  raw.Weights.Attention,
+
+		SevereDeclineSlope:            raw.Velocity.CompositeSlope.SevereDecline,
+		ModerateDeclineSlope:          raw.Velocity.CompositeSlope.ModerateDecline,
+		MildDeclineSlope:              raw.Velocity.CompositeSlope.MildDecline,
+		StableSlope:                   raw.Velocity.CompositeSlope.Stable,
+		AcceleratingDeclineMultiplier: raw.Velocity.SecondDerivative.AcceleratingDecline,
+		DeceleratingDeclineMultiplier: raw.Velocity.SecondDerivative.DeceleratingDecline,
+		ConcordantBonus:               raw.Velocity.ConcordantBonus,
+		PerAdditionalDomain:           raw.Velocity.PerAdditionalDomain,
+		ConfounderDampeningEnabled:    raw.ConfounderDampening.Enabled,
+		MaxVelocityDuringSeason:       raw.ConfounderDampening.MaxVelocityDuringSeason,
+
+		ProximityExponent: raw.Proximity.Exponent,
+
+		BehavioralCessationDays:    raw.Behavioral.MeasurementFrequency.CessationDays,
+		BehavioralReducedThreshold: raw.Behavioral.MeasurementFrequency.ReducedThreshold,
+		BehavioralSlightlyReduced:  raw.Behavioral.MeasurementFrequency.SlightlyReduced,
+		BehavioralCompoundBoth:     raw.Behavioral.CompoundBoth,
+
+		ContextCKMStageBase:        raw.Context.CKMStageBase,
+		ContextPostDischarge30d:    raw.Context.Modifiers.PostDischarge30d,
+		ContextAcuteIllness:        raw.Context.Modifiers.AcuteIllness,
+		ContextRecentHypo:          raw.Context.Modifiers.RecentHypo,
+		ContextActiveSteroid:       raw.Context.Modifiers.ActiveSteroid,
+		ContextPolypharmacyElderly: raw.Context.Modifiers.PolypharmacyElderly,
+		ContextPolypharmacyAge:     75,
+		ContextPolypharmacyMeds:    5,
+		ContextNYHAAmplifier:       raw.Context.NYHAAmplifier,
+		ContextMaxScore:            raw.Context.MaxScore,
+
+		AttentionCriticalDays: raw.Attention.DaysSinceClinician.Critical,
+		AttentionHighDays:     raw.Attention.DaysSinceClinician.High,
+		AttentionModerateDays: raw.Attention.DaysSinceClinician.Moderate,
+		AttentionAdequateDays: raw.Attention.DaysSinceClinician.Adequate,
+		AttentionPerCard:      raw.Attention.UnacknowledgedCards.PerCard,
+		AttentionPerDayOldest: raw.Attention.UnacknowledgedCards.PerDayOldest,
+		AttentionCardCap:      raw.Attention.UnacknowledgedCards.Cap,
+
+		CriticalThreshold: raw.Tiers.Critical,
+		HighThreshold:     raw.Tiers.High,
+		ModerateThreshold: raw.Tiers.Moderate,
+		LowThreshold:      raw.Tiers.Low,
+		SignificantDelta:   raw.SignificantChange.ScoreDelta,
+	}, nil
 }
 
 // itoa is a minimal int-to-string helper to avoid importing strconv.

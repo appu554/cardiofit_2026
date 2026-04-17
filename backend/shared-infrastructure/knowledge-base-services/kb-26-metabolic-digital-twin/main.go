@@ -199,9 +199,26 @@ func main() {
 	paiRepo := services.NewPAIRepository(db.DB)
 	paiTrigger := services.NewPAIEventTrigger(15, 10.0) // 15-min rate limit, delta 10 significance
 
+	// Load PAI config from YAML — try deployment path, then relative dev path.
+	var paiCfg *services.PAIConfig
+	for _, p := range []string{
+		"/app/market-configs/shared/pai_dimensions.yaml",
+		"../../market-configs/shared/pai_dimensions.yaml",
+	} {
+		if loaded, err := services.LoadPAIConfig(p); err == nil {
+			paiCfg = loaded
+			logger.Info("loaded PAI config from YAML", zap.String("path", p))
+			break
+		}
+	}
+	if paiCfg == nil {
+		logger.Warn("pai_dimensions.yaml not found, using default PAI config")
+		paiCfg = services.DefaultPAIConfig()
+	}
+
 	// 8. Create HTTP server
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector, trajectoryPublisher)
-	server.SetPAIServices(paiRepo, paiTrigger)
+	server.SetPAIServices(paiRepo, paiTrigger, paiCfg)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{

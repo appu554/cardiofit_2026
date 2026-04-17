@@ -7,9 +7,11 @@ import (
 )
 
 // PAIConfig holds all tunable parameters for the Patient Acuity Index
-// computation. Defined here (velocity dimension) and reused by all
-// other PAI dimension engines (proximity, behavioral, context, attention,
-// composite — Tasks 3-7).
+// computation. Defined in this file because the velocity dimension was
+// the first to be implemented, but logically it belongs with the
+// composite engine (pai_engine.go) which provides LoadPAIConfig() and
+// DefaultPAIConfig(). All 5 dimension engines and the composite engine
+// reference this single struct.
 type PAIConfig struct {
 	// Dimension weights (must sum to 1.0)
 	VelocityWeight   float64

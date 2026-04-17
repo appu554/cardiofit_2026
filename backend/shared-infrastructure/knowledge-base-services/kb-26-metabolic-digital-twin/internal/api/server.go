@@ -35,6 +35,7 @@ type Server struct {
 	// PAI (Patient Acuity Index)
 	paiRepo    *services.PAIRepository
 	paiTrigger *services.PAIEventTrigger
+	paiConfig  *services.PAIConfig
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -117,9 +118,10 @@ func (s *Server) setupMiddleware() {
 // SetPAIServices injects the PAI repository and event trigger into the
 // server after construction. Setter injection avoids further bloating
 // the NewServer constructor parameter list.
-func (s *Server) SetPAIServices(repo *services.PAIRepository, trigger *services.PAIEventTrigger) {
+func (s *Server) SetPAIServices(repo *services.PAIRepository, trigger *services.PAIEventTrigger, cfg *services.PAIConfig) {
 	s.paiRepo = repo
 	s.paiTrigger = trigger
+	s.paiConfig = cfg
 }
 
 // --- Infrastructure handlers ---
