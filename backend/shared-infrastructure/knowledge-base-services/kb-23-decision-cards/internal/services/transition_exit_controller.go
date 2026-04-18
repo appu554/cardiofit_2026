@@ -91,3 +91,29 @@ func paiMaxAboveCritical(history []float64) bool {
 	}
 	return false
 }
+
+// TransitionExitActions describes the side effects that must be performed
+// when a transition exits. The caller (API handler or batch processor)
+// is responsible for executing these actions against the respective services.
+type TransitionExitActions struct {
+	ResetBaselineToSteadyState    bool   // KB-26: set baseline stage → STEADY_STATE
+	DeactivateHeightenedSurveillance bool // KB-26: remove threshold tightening + PAI boost
+	ResetPAIContextBoost          bool   // KB-26: remove +15 post-discharge boost
+	RestoreEngagementGapThreshold bool   // restore 7d from 72h
+	RestoreEscalationTiers        bool   // remove ROUTINE→URGENT amplification
+	PatientID                     string
+}
+
+// ComputeExitActions returns the set of side effects that must be performed
+// when the transition exits, regardless of outcome category. Every transition
+// exit requires resetting the heightened surveillance state.
+func ComputeExitActions(patientID string) TransitionExitActions {
+	return TransitionExitActions{
+		ResetBaselineToSteadyState:       true,
+		DeactivateHeightenedSurveillance: true,
+		ResetPAIContextBoost:             true,
+		RestoreEngagementGapThreshold:    true,
+		RestoreEscalationTiers:           true,
+		PatientID:                        patientID,
+	}
+}

@@ -216,7 +216,8 @@ func determineOutcome(r models.MedicationReconciliationReport) string {
 	if r.HighRiskChanges > 0 {
 		return "DISCREPANCIES_CLINICIAN_REVIEW"
 	}
-	return "CLEAN"
+	// Discrepancies exist but none are CRITICAL/HIGH — still needs review
+	return "DISCREPANCIES_CLINICIAN_REVIEW"
 }
 
 // hasCriticalRisk checks if any drug across all lists has CRITICAL risk.
