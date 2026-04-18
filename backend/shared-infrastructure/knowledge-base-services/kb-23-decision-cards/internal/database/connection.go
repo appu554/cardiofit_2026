@@ -65,6 +65,7 @@ func (d *Database) AutoMigrate() error {
 		&models.TreatmentPerturbation{},
 		&models.EscalationEvent{},
 		&models.ClinicianPreferences{},
+		&models.DetectionLifecycle{},
 	)
 }
 

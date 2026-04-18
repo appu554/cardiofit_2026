@@ -25,6 +25,9 @@ type EscalationManager struct {
 
 	// Tier timeout config (tier -> minutes). Zero means no timeout.
 	tierTimeouts map[string]int
+
+	// Gap 19: lifecycle tracker for T0→T4 detection lifecycle.
+	lifecycleTracker *LifecycleTracker
 }
 
 // NewEscalationManager constructs the manager with all dependencies injected.
@@ -53,6 +56,11 @@ func NewEscalationManager(
 			"ROUTINE":   0,
 		},
 	}
+}
+
+// SetLifecycleTracker injects the lifecycle tracker for Gap 19 T0→T4 tracking.
+func (m *EscalationManager) SetLifecycleTracker(t *LifecycleTracker) {
+	m.lifecycleTracker = t
 }
 
 // HandleCardCreated is the primary entry point: given a newly generated
@@ -108,6 +116,20 @@ func (m *EscalationManager) HandleCardCreated(
 		event.TimeoutAt = &timeout
 	}
 
+	// Gap 19 T0 — record detection into lifecycle tracker.
+	var lifecycle *models.DetectionLifecycle
+	if m.lifecycleTracker != nil {
+		lifecycle = m.lifecycleTracker.RecordT0(
+			card.PrimaryDifferentialID,
+			string(card.MCUGate),
+			card.PatientID.String(),
+			string(result.Tier),
+			"KB-23",
+			&card.CardID,
+			&event.ID,
+		)
+	}
+
 	// Step 4 — select channels.
 	sel := SelectChannels(result.Tier, nil, now)
 
@@ -129,6 +151,11 @@ func (m *EscalationManager) HandleCardCreated(
 			// Other tiers: dispatch sequentially.
 			m.dispatchSequential(event, sel.PrimaryChannels, notification)
 		}
+	}
+
+	// Gap 19 T1 — record delivery into lifecycle tracker.
+	if m.lifecycleTracker != nil && lifecycle != nil {
+		m.lifecycleTracker.RecordT1(lifecycle, time.Now())
 	}
 
 	// Step 6 — persist if DB available.

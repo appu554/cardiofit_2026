@@ -145,6 +145,13 @@ func (s *Server) handleWorklistAction(c *gin.Context) {
 			s.log.Info("worklist→escalation loop closed: acknowledged",
 				zap.String("patient_id", req.PatientID),
 				zap.String("escalation_id", pendingEsc.ID.String()))
+
+			// Gap 19 T2 — record acknowledgment in lifecycle tracker.
+			if s.lifecycleTracker != nil {
+				if lc, err := s.lifecycleTracker.FindByEscalation(pendingEsc.ID); err == nil && lc != nil {
+					s.lifecycleTracker.RecordT2(lc, req.ClinicianID, now)
+				}
+			}
 		}
 	}
 	if result.UpdatedItem.ResolutionState == models.ResolutionInProgress {
@@ -162,6 +169,13 @@ func (s *Server) handleWorklistAction(c *gin.Context) {
 			s.log.Info("worklist→escalation loop closed: action recorded",
 				zap.String("patient_id", req.PatientID),
 				zap.String("action", req.ActionCode))
+
+			// Gap 19 T3 — record action in lifecycle tracker.
+			if s.lifecycleTracker != nil {
+				if lc, err := s.lifecycleTracker.FindByEscalation(actedEsc.ID); err == nil && lc != nil {
+					s.lifecycleTracker.RecordT3(lc, req.ActionCode, req.Notes, now)
+				}
+			}
 		}
 	}
 

@@ -46,6 +46,7 @@ type Server struct {
 	signalCardBuilder   *services.SignalCardBuilder
 	seasonalContext     *services.SeasonalContext
 	escalationManager   *services.EscalationManager
+	lifecycleTracker    *services.LifecycleTracker
 }
 
 func NewServer(
@@ -162,6 +163,12 @@ func (s *Server) TemplateLoader() *services.TemplateLoader { return s.templateLo
 // Called from main.go once the EscalationManager is instantiated. Gap 15.
 func (s *Server) SetEscalationManager(em *services.EscalationManager) {
 	s.escalationManager = em
+}
+
+// SetLifecycleTracker injects the lifecycle tracker after construction.
+// Called from main.go once the LifecycleTracker is instantiated. Gap 19.
+func (s *Server) SetLifecycleTracker(t *services.LifecycleTracker) {
+	s.lifecycleTracker = t
 }
 
 // requestLogger middleware logs each request.
