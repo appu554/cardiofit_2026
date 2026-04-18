@@ -41,6 +41,11 @@ func ComputeContextScore(input models.PAIDimensionInput, cfg *PAIConfig) float64
 		score *= amp
 	}
 
-	// 4. Cap at max
+	// 4. V5 Gap 17: Post-discharge context boost (heightened surveillance)
+	if input.IsPostDischarge30d {
+		score += 15.0 // configurable via HeightenedSurveillanceMode
+	}
+
+	// 5. Cap at max
 	return math.Min(score, cfg.ContextMaxScore)
 }
