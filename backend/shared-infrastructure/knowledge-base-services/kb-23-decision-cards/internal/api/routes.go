@@ -67,5 +67,18 @@ func (s *Server) RegisterRoutes() {
 			worklist.POST("/action", s.handleWorklistAction)
 			worklist.POST("/feedback", s.recordWorklistFeedback)
 		}
+
+		// Gap 19: Time-to-Response Tracking
+		tracking := v1.Group("/tracking")
+		{
+			tracking.GET("/detection/:id", s.getDetectionLifecycle)
+			tracking.GET("/patient/:patientId", s.getPatientLifecycles)
+		}
+		responseMetrics := v1.Group("/metrics")
+		{
+			responseMetrics.GET("/clinician/:clinicianId", s.getClinicianMetrics)
+			responseMetrics.GET("/system", s.getSystemMetrics)
+			responseMetrics.GET("/pilot", s.getPilotMetrics)
+		}
 	}
 }
