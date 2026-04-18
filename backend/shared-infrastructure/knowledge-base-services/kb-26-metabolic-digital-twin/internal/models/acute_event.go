@@ -78,6 +78,7 @@ type PatientBaselineSnapshot struct {
 	Confidence     string    `gorm:"size:10" json:"confidence"`
 	LookbackDays   int       `json:"lookback_days"`
 	UsualMeasurementHour int       `json:"usual_measurement_hour"`
+	BaselineStage        string    `gorm:"size:30" json:"baseline_stage,omitempty"`
 	ComputedAt           time.Time `gorm:"not null" json:"computed_at"`
 	UpdatedAt            time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
@@ -95,6 +96,15 @@ const (
 	ValidationNotApplicable          ValidationState = "NOT_APPLICABLE"
 	ValidationRefuted                ValidationState = "REFUTED"
 	ValidationExpired                ValidationState = "EXPIRED_UNCONFIRMED"
+)
+
+// BaselineStage constants define the 4-state post-discharge baseline machine.
+const (
+	BaselineStageHospitalInfluenced    = "HOSPITAL_INFLUENCED"
+	BaselineStageBuildingNew           = "BUILDING_NEW_BASELINE"
+	BaselineStagePostDischargeEvolving = "POST_DISCHARGE_EVOLVING"
+	BaselineStageSteadyState           = "STEADY_STATE"
+	BaselineStagePreAdmissionFallback  = "PRE_ADMISSION_FALLBACK"
 )
 
 // PendingValidation tracks a weight reading awaiting confirmation.
