@@ -79,17 +79,13 @@ func (s *Server) getWorklist(c *gin.Context) {
 		}
 	}
 
+	// Select persona config based on clinician role.
+	persona := personaConfigForRole(role)
+
 	// Sort and tier
-	maxItems := 20 // default; persona-specific in production
-	view := services.SortAndTierWorklist(allItems, maxItems)
+	view := services.SortAndTierWorklist(allItems, persona.MaxItems)
 
 	// Apply persona filter
-	persona := services.PersonaConfig{
-		MaxItems:      maxItems,
-		Scope:         "ASSIGNED_PANEL",
-		Actions:       []string{"ACKNOWLEDGE", "CALL_PATIENT", "DEFER", "DISMISS"},
-		PrimaryAction: "CALL_PATIENT",
-	}
 	view.Items = services.ApplyPersonaFilter(view.Items, assignedPatientIDs, persona)
 	view.ClinicianID = clinicianID
 	view.PersonaType = role
@@ -146,4 +142,55 @@ func (s *Server) recordWorklistFeedback(c *gin.Context) {
 		zap.String("type", feedback.FeedbackType))
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// personaConfigForRole returns the persona configuration matching the
+// clinician's role. Values match persona_definitions.yaml. In Sprint 2,
+// this will load from YAML at startup; for Sprint 1, hardcoded to ensure
+// persona differentiation works through the API.
+func personaConfigForRole(role string) services.PersonaConfig {
+	switch role {
+	case "HCF_CARE_MANAGER":
+		return services.PersonaConfig{
+			MaxItems:      15,
+			Scope:         "ASSIGNED_PANEL",
+			Actions:       []string{"CALL_PATIENT", "SCHEDULE_CLINIC", "ESCALATE_TO_GP", "DEFER", "ACKNOWLEDGE"},
+			PrimaryAction: "CALL_PATIENT",
+		}
+	case "AGED_CARE_NURSE":
+		return services.PersonaConfig{
+			MaxItems:      20,
+			Scope:         "FACILITY",
+			Actions:       []string{"RECHECK_VITALS", "CALL_GP", "MEDICATION_HOLD", "ACKNOWLEDGE", "HANDOVER_NOTE"},
+			PrimaryAction: "RECHECK_VITALS",
+		}
+	case "AUSTRALIA_GP":
+		return services.PersonaConfig{
+			MaxItems:      25,
+			Scope:         "ASSIGNED_PANEL",
+			Actions:       []string{"MEDICATION_REVIEW", "SCHEDULE_APPOINTMENT", "TELEHEALTH", "REFERRAL", "ACKNOWLEDGE"},
+			PrimaryAction: "MEDICATION_REVIEW",
+		}
+	case "INDIA_GP":
+		return services.PersonaConfig{
+			MaxItems:      15,
+			Scope:         "ASSIGNED_PANEL",
+			Actions:       []string{"CALL_PATIENT", "TELECONSULT", "ASHA_OUTREACH", "PRESCRIPTION_REVIEW", "DEFER"},
+			PrimaryAction: "CALL_PATIENT",
+		}
+	case "ASHA_WORKER":
+		return services.PersonaConfig{
+			MaxItems:      10,
+			Scope:         "VILLAGE",
+			Actions:       []string{"VISIT_TODAY", "VISIT_TOMORROW", "CALL_ANM", "RECORD_VITALS"},
+			PrimaryAction: "VISIT_TODAY",
+		}
+	default:
+		return services.PersonaConfig{
+			MaxItems:      20,
+			Scope:         "ASSIGNED_PANEL",
+			Actions:       []string{"ACKNOWLEDGE", "CALL_PATIENT", "DEFER", "DISMISS"},
+			PrimaryAction: "CALL_PATIENT",
+		}
+	}
 }

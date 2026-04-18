@@ -94,10 +94,12 @@ func SortAndTierWorklist(items []models.WorklistItem, maxItems int) models.Workl
 		return scored_items[i].score > scored_items[j].score
 	})
 
-	// Assign urgency tiers from score.
-	for i := range scored_items {
-		scored_items[i].item.UrgencyTier = urgencyTierFromScore(scored_items[i].score)
-	}
+	// Preserve aggregator's urgency tier — do NOT re-derive from score.
+	// The aggregator assigned tiers based on clinical cascade logic
+	// (SAFETY escalation → CRITICAL, PAI CRITICAL → CRITICAL, etc.).
+	// The score is used only for ordering within tiers, not for
+	// tier reassignment. Re-deriving would downgrade PAI-CRITICAL
+	// patients (no escalation, low score) from CRITICAL to LOW.
 
 	// Truncate to maxItems, never removing CRITICAL items.
 	var result []models.WorklistItem

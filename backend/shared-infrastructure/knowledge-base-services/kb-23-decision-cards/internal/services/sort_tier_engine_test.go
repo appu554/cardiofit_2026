@@ -65,30 +65,33 @@ func TestSort_TransitionBoost(t *testing.T) {
 func TestSort_TierCounts(t *testing.T) {
 	var items []models.WorklistItem
 
-	// 2 CRITICAL (score ≥ 4000): use IMMEDIATE escalation tier (weight 4000).
+	// 2 CRITICAL: aggregator sets UrgencyTier=CRITICAL for IMMEDIATE escalations.
 	for i := 0; i < 2; i++ {
 		items = append(items, models.WorklistItem{
 			PatientID:      "crit",
 			PAIScore:       80,
 			EscalationTier: "IMMEDIATE",
+			UrgencyTier:    models.WorklistTierCritical,
 			PAITrend:       "STABLE",
 		})
 	}
-	// 3 HIGH (score ≥ 3000): use URGENT escalation tier (weight 3000).
+	// 3 HIGH: aggregator sets UrgencyTier=HIGH for URGENT escalations.
 	for i := 0; i < 3; i++ {
 		items = append(items, models.WorklistItem{
 			PatientID:      "high",
 			PAIScore:       60,
 			EscalationTier: "URGENT",
+			UrgencyTier:    models.WorklistTierHigh,
 			PAITrend:       "STABLE",
 		})
 	}
-	// 5 MODERATE (score ≥ 1000): use ROUTINE escalation tier (weight 1000).
+	// 5 MODERATE: aggregator sets UrgencyTier=MODERATE for ROUTINE.
 	for i := 0; i < 5; i++ {
 		items = append(items, models.WorklistItem{
 			PatientID:      "mod",
 			PAIScore:       40,
 			EscalationTier: "ROUTINE",
+			UrgencyTier:    models.WorklistTierModerate,
 			PAITrend:       "STABLE",
 		})
 	}
