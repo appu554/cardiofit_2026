@@ -115,8 +115,42 @@ func (s *Server) handleWorklistAction(c *gin.Context) {
 		return
 	}
 
-	// If feedback was generated (DISMISS), persist it
-	// (in Sprint 2, this would write to a feedback table)
+	// Gap 15 loop closure: when a worklist action resolves or acknowledges
+	// an item, update the underlying escalation state so the 30-minute
+	// timeout cancels and T2/T3 timestamps are recorded.
+	if req.ActionCode == "ACKNOWLEDGE" || result.UpdatedItem.ResolutionState == models.ResolutionResolved {
+		// Find and update pending escalation for this patient
+		var pendingEsc models.EscalationEvent
+		if err := s.db.DB.Where("patient_id = ? AND current_state IN (?, ?)",
+			req.PatientID, string(models.StatePending), string(models.StateDelivered)).
+			Order("created_at DESC").First(&pendingEsc).Error; err == nil {
+			now := time.Now()
+			pendingEsc.AcknowledgedAt = &now
+			pendingEsc.AcknowledgedBy = req.ClinicianID
+			pendingEsc.CurrentState = string(models.StateAcknowledged)
+			s.db.DB.Save(&pendingEsc)
+			s.log.Info("worklist→escalation loop closed: acknowledged",
+				zap.String("patient_id", req.PatientID),
+				zap.String("escalation_id", pendingEsc.ID.String()))
+		}
+	}
+	if result.UpdatedItem.ResolutionState == models.ResolutionInProgress {
+		// Record T3 (action taken) on the underlying escalation
+		var actedEsc models.EscalationEvent
+		if err := s.db.DB.Where("patient_id = ? AND current_state = ?",
+			req.PatientID, string(models.StateAcknowledged)).
+			Order("created_at DESC").First(&actedEsc).Error; err == nil {
+			now := time.Now()
+			actedEsc.ActedAt = &now
+			actedEsc.ActionType = req.ActionCode
+			actedEsc.ActionDetail = req.Notes
+			actedEsc.CurrentState = string(models.StateActed)
+			s.db.DB.Save(&actedEsc)
+			s.log.Info("worklist→escalation loop closed: action recorded",
+				zap.String("patient_id", req.PatientID),
+				zap.String("action", req.ActionCode))
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":    true,
