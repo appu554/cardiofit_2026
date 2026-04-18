@@ -12,6 +12,19 @@ import (
 	"kb-23-decision-cards/internal/services"
 )
 
+// Gap 18 Clinician Worklist — Sprint 1 Core Engine.
+//
+// Sprint 2 deferrals (documented per review):
+//   - Redis cache + 5-min TTL (currently inline fetch — acceptable for 500-patient pilot)
+//   - WebSocket push for SAFETY events (Gap 15 notification covers this for now)
+//   - WhatsApp summary generator for India GP + ASHA
+//   - Shift handover generator for aged care nurses (ISBAR format)
+//   - PMS integration for Australian GPs (Best Practice / Medical Director)
+//   - Facility aggregation service for aged care managers
+//   - Kafka event consumer for cache invalidation
+//   - Offline capability for ASHA workers
+//   - Full YAML config loading (persona configs hardcoded matching YAML values)
+
 // GET /api/v1/worklist?clinician_id=X&role=HCF_CARE_MANAGER&patient_ids=P1,P2,P3
 // Returns the PAI-sorted, persona-filtered worklist.
 func (s *Server) getWorklist(c *gin.Context) {
@@ -218,6 +231,7 @@ func personaConfigForRole(role string) services.PersonaConfig {
 			Scope:         "VILLAGE",
 			Actions:       []string{"VISIT_TODAY", "VISIT_TOMORROW", "CALL_ANM", "RECORD_VITALS"},
 			PrimaryAction: "VISIT_TODAY",
+			Language:       "hi-IN",
 		}
 	default:
 		return services.PersonaConfig{

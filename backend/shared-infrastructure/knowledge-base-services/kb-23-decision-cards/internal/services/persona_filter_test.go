@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"testing"
 
 	"kb-23-decision-cards/internal/models"
@@ -127,5 +128,46 @@ func TestPersona_ASHAWorker_PrimaryAction(t *testing.T) {
 		if !foundVisit {
 			t.Error("VISIT_TODAY button not found")
 		}
+	}
+}
+
+func TestPersona_ASHAWorker_SimplifiedLanguage(t *testing.T) {
+	items := []models.WorklistItem{
+		{
+			PatientID:     "p1",
+			PrimaryReason: "Fluid overload detected — weight gain 2.5kg",
+			SuggestedAction: "Call patient to assess dyspnea and peripheral edema",
+		},
+		{
+			PatientID:     "p2",
+			PrimaryReason: "Cardiorenal syndrome suspected based on eGFR decline",
+			SuggestedAction: "Urgent nephrology referral recommended",
+		},
+	}
+
+	persona := PersonaConfig{
+		MaxItems:      10,
+		Scope:         "VILLAGE",
+		Actions:       []string{"VISIT_TODAY"},
+		PrimaryAction: "VISIT_TODAY",
+		Language:      "hi-IN",
+	}
+
+	result := ApplyPersonaFilter(items, nil, persona)
+
+	// Fluid overload should be translated to layperson language
+	if result[0].PrimaryReason == "Fluid overload detected — weight gain 2.5kg" {
+		t.Error("ASHA filter should have simplified 'Fluid overload' to layperson terms")
+	}
+	if !strings.Contains(result[0].PrimaryReason, "water") || !strings.Contains(result[0].PrimaryReason, "legs") {
+		t.Errorf("Expected layperson fluid overload text, got: %s", result[0].PrimaryReason)
+	}
+
+	// Cardiorenal should be translated
+	if result[1].PrimaryReason == "Cardiorenal syndrome suspected based on eGFR decline" {
+		t.Error("ASHA filter should have simplified 'cardiorenal' to layperson terms")
+	}
+	if !strings.Contains(result[1].PrimaryReason, "heart") || !strings.Contains(result[1].PrimaryReason, "kidney") {
+		t.Errorf("Expected layperson cardiorenal text, got: %s", result[1].PrimaryReason)
 	}
 }
