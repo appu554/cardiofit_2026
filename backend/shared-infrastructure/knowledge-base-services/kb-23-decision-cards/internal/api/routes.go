@@ -59,5 +59,13 @@ func (s *Server) RegisterRoutes() {
 		}
 		// Clinician preferences
 		v1.POST("/clinician/:clinicianId/preferences", s.upsertClinicianPreferences)
+
+		// Gap 18: Clinician Worklist
+		worklist := v1.Group("/worklist")
+		{
+			worklist.GET("", s.getWorklist)
+			worklist.POST("/action", s.handleWorklistAction)
+			worklist.POST("/feedback", s.recordWorklistFeedback)
+		}
 	}
 }
