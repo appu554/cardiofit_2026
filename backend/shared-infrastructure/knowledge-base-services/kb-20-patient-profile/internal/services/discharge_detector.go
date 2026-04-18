@@ -21,16 +21,24 @@ type DischargeInput struct {
 }
 
 // DischargeDetector validates discharge inputs and produces CareTransition records.
-type DischargeDetector struct{}
-
-// NewDischargeDetector creates a new DischargeDetector.
-func NewDischargeDetector() *DischargeDetector {
-	return &DischargeDetector{}
+// MaxAgeDays is configurable per market — India allows 21 days for ASHA-reported
+// discharges that arrive late; Australia uses 14 days (FHIR catches most within hours).
+type DischargeDetector struct {
+	MaxAgeDays int // default 14, India override 21
 }
 
-// maxDischargeAgeDays is the cutoff beyond which a discharge is too old
-// for meaningful transition support.
-const maxDischargeAgeDays = 14
+// NewDischargeDetector creates a detector with the default 14-day rejection window.
+func NewDischargeDetector() *DischargeDetector {
+	return &DischargeDetector{MaxAgeDays: 14}
+}
+
+// NewDischargeDetectorWithConfig creates a detector with a custom age limit.
+func NewDischargeDetectorWithConfig(maxAgeDays int) *DischargeDetector {
+	if maxAgeDays <= 0 {
+		maxAgeDays = 14
+	}
+	return &DischargeDetector{MaxAgeDays: maxAgeDays}
+}
 
 // DetectDischarge validates the input and creates a CareTransition.
 func (d *DischargeDetector) DetectDischarge(input DischargeInput) (*models.CareTransition, error) {
@@ -44,8 +52,8 @@ func (d *DischargeDetector) DetectDischarge(input DischargeInput) (*models.CareT
 
 	// 2. Reject if discharge is too old
 	daysSinceDischarge := time.Since(input.DischargeDate).Hours() / 24
-	if daysSinceDischarge > float64(maxDischargeAgeDays) {
-		return nil, fmt.Errorf("discharge too old: %.0f days ago exceeds %d-day limit", math.Floor(daysSinceDischarge), maxDischargeAgeDays)
+	if daysSinceDischarge > float64(d.MaxAgeDays) {
+		return nil, fmt.Errorf("discharge too old: %.0f days ago exceeds %d-day limit", math.Floor(daysSinceDischarge), d.MaxAgeDays)
 	}
 
 	// 3. Determine source confidence

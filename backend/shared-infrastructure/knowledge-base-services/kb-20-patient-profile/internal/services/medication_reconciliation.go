@@ -39,6 +39,51 @@ var unclearDrugTerms = []string{
 	"current medications",
 }
 
+// clinicallySignificantDDIs defines the top drug-drug interactions to check.
+// Each entry: [drugClassA, drugClassB, riskDescription].
+var clinicallySignificantDDIs = []struct {
+	ClassA, ClassB, Risk string
+}{
+	{"ACEi", "MRA", "Hyperkalemia risk — potassium accumulation (Antoniou 2015)"},
+	{"ARB", "MRA", "Hyperkalemia risk — potassium accumulation"},
+	{"ACEi", "POTASSIUM_SUPPLEMENT", "Hyperkalemia risk"},
+	{"ARB", "POTASSIUM_SUPPLEMENT", "Hyperkalemia risk"},
+	{"ANTICOAGULANT", "ANTIPLATELET", "Bleeding risk — dual antithrombotic without clear indication"},
+	{"ANTICOAGULANT", "NSAID", "Bleeding risk — GI hemorrhage"},
+	{"ACEi", "NSAID", "Renal risk — nephrotoxic combination"},
+	{"ARB", "NSAID", "Renal risk — nephrotoxic combination"},
+	{"SGLT2I", "LOOP_DIURETIC", "Volume depletion risk — excessive diuresis"},
+	{"SULFONYLUREA", "INSULIN", "Hypoglycemia risk — dual insulin secretagogue/supply"},
+	{"BETA_BLOCKER", "VERAPAMIL", "Bradycardia risk — AV nodal blockade"},
+	{"DIGOXIN", "AMIODARONE", "Digoxin toxicity risk — amiodarone raises digoxin levels"},
+}
+
+// CheckDDIs checks new medications against continuing medications for significant interactions.
+func CheckDDIs(newMeds, continuingMeds []MedicationEntry) []string {
+	var interactions []string
+	for _, ddi := range clinicallySignificantDDIs {
+		// Check if new drug in classA and continuing in classB, or vice versa
+		newHasA := hasClass(newMeds, ddi.ClassA)
+		newHasB := hasClass(newMeds, ddi.ClassB)
+		contHasA := hasClass(continuingMeds, ddi.ClassA)
+		contHasB := hasClass(continuingMeds, ddi.ClassB)
+
+		if (newHasA && contHasB) || (newHasB && contHasA) {
+			interactions = append(interactions, ddi.Risk)
+		}
+	}
+	return interactions
+}
+
+func hasClass(meds []MedicationEntry, class string) bool {
+	for _, m := range meds {
+		if strings.EqualFold(m.DrugClass, class) {
+			return true
+		}
+	}
+	return false
+}
+
 // ReconcileRegimens compares pre-admission vs discharge medication lists.
 // patientEGFR: current eGFR for renal appropriateness checks (nil if unavailable).
 // diagnosis: primary admission diagnosis for context-aware risk assessment.
