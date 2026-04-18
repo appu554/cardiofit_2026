@@ -80,6 +80,11 @@ func autoMigrate(db *gorm.DB) error {
 		// V4-7: phenotype stability history tables.
 		&models.ClusterAssignmentRecord{},
 		&models.ClusterTransitionRecord{},
+		// Gap 17: Care Transition Bridge tables.
+		&models.CareTransition{},
+		&models.DischargeMedication{},
+		&models.TransitionMilestone{},
+		&models.TransitionOutcome{},
 	)
 }
 

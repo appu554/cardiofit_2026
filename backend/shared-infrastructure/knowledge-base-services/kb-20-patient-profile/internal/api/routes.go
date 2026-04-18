@@ -125,6 +125,11 @@ func (s *Server) setupRoutes() {
 			// from "shipped code" to "shipped clinical effect."
 			patient.GET("/:id/summary-context", s.getSummaryContext)
 
+			// Gap 17: Care Transition Bridge
+			patient.POST("/:id/discharge", s.registerDischarge)
+			patient.GET("/:id/transition", s.getActiveTransition)
+			patient.GET("/:id/transition/milestones", s.getTransitionMilestones)
+
 			// Signals — patient-reported signal ingestion (S4, S15, S16, S18-S22)
 			signals := patient.Group("/:id/signals")
 			{
