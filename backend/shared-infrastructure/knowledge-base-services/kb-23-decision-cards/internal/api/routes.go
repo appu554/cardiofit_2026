@@ -64,6 +64,7 @@ func (s *Server) RegisterRoutes() {
 		worklist := v1.Group("/worklist")
 		{
 			worklist.GET("", s.getWorklist)
+			worklist.GET("/proactive", s.getProactiveWorklist)
 			worklist.POST("/action", s.handleWorklistAction)
 			worklist.POST("/feedback", s.recordWorklistFeedback)
 		}

@@ -205,6 +205,56 @@ func (s *Server) recordWorklistFeedback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
+// GET /api/v1/worklist/proactive?clinician_id=X&patient_ids=P1,P2,...
+// Returns proactive outreach candidates for patients with elevated predicted risk
+// but stable current PAI (not in the urgent worklist).
+func (s *Server) getProactiveWorklist(c *gin.Context) {
+	clinicianID := c.Query("clinician_id")
+	patientIDsRaw := c.Query("patient_ids")
+
+	if clinicianID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "clinician_id required"})
+		return
+	}
+
+	var patientIDs []string
+	if patientIDsRaw != "" {
+		patientIDs = strings.Split(patientIDsRaw, ",")
+	}
+
+	// Build mock predictions for Sprint 1 (in production, query KB-26 risk API).
+	// For now, create minimal risk summaries from available data.
+	var predictions []services.PredictedRiskSummary
+	for _, pid := range patientIDs {
+		predictions = append(predictions, services.PredictedRiskSummary{
+			PatientID:         pid,
+			RiskScore:         30, // default moderate — real values from KB-26 in Sprint 2
+			RiskTier:          "MODERATE",
+			RiskSummary:       "Moderate predicted risk based on clinical trajectory",
+			RecommendedAction: "Schedule proactive outreach call",
+		})
+	}
+
+	// Empty maps for Sprint 1 (PAI tiers and contact days populated in Sprint 2).
+	paiTiers := make(map[string]string)
+	contactDays := make(map[string]int)
+
+	items := services.SelectProactiveOutreach(
+		predictions, paiTiers, contactDays,
+		8,                             // max items per day
+		25,                            // min risk score
+		[]string{"CRITICAL", "HIGH"},  // exclude urgent PAI
+		14,                            // cooldown days
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":      true,
+		"clinician_id": clinicianID,
+		"items":        items,
+		"total":        len(items),
+	})
+}
+
 // personaConfigForRole returns the persona configuration matching the
 // clinician's role. Values match persona_definitions.yaml. In Sprint 2,
 // this will load from YAML at startup; for Sprint 1, hardcoded to ensure
