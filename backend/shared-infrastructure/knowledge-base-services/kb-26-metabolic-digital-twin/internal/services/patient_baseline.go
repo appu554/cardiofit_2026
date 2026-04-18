@@ -17,9 +17,11 @@ func ComputeBaseline(readings []float64, timestamps []time.Time, lookbackDays in
 
 	// Filter readings within the lookback window.
 	var filtered []float64
+	var filteredTimestamps []time.Time
 	for i, ts := range timestamps {
 		if !ts.Before(cutoff) {
 			filtered = append(filtered, readings[i])
+			filteredTimestamps = append(filteredTimestamps, ts)
 		}
 	}
 
@@ -32,13 +34,25 @@ func ComputeBaseline(readings []float64, timestamps []time.Time, lookbackDays in
 	mad := MAD(sorted, median)
 	confidence := BaselineConfidence(len(sorted))
 
+	// Compute usual measurement hour from median of timestamp hours.
+	usualHour := 0
+	if len(filteredTimestamps) > 0 {
+		hours := make([]float64, len(filteredTimestamps))
+		for i, ts := range filteredTimestamps {
+			hours[i] = float64(ts.Hour())
+		}
+		sort.Float64s(hours)
+		usualHour = int(Median(hours))
+	}
+
 	return models.PatientBaselineSnapshot{
-		BaselineMedian: median,
-		BaselineMAD:    mad,
-		ReadingCount:   len(sorted),
-		Confidence:     confidence,
-		LookbackDays:   lookbackDays,
-		ComputedAt:     now,
+		BaselineMedian:       median,
+		BaselineMAD:          mad,
+		ReadingCount:         len(sorted),
+		Confidence:           confidence,
+		LookbackDays:         lookbackDays,
+		UsualMeasurementHour: usualHour,
+		ComputedAt:           now,
 	}
 }
 

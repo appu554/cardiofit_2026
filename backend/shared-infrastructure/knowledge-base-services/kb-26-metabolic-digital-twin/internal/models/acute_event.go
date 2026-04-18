@@ -67,11 +67,42 @@ type PatientBaselineSnapshot struct {
 	ReadingCount   int       `json:"reading_count"`
 	Confidence     string    `gorm:"size:10" json:"confidence"`
 	LookbackDays   int       `json:"lookback_days"`
-	ComputedAt     time.Time `gorm:"not null" json:"computed_at"`
-	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+	UsualMeasurementHour int       `json:"usual_measurement_hour"`
+	ComputedAt           time.Time `gorm:"not null" json:"computed_at"`
+	UpdatedAt            time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
 func (PatientBaselineSnapshot) TableName() string { return "patient_baselines" }
+
+// ValidationState classifies the validation status of a deviation reading.
+type ValidationState string
+
+const (
+	ValidationConfirmed              ValidationState = "CONFIRMED"
+	ValidationUnconfirmed            ValidationState = "UNCONFIRMED"
+	ValidationAwaitingConfirmation   ValidationState = "AWAITING_CONFIRMATION"
+	ValidationUnconfirmedCritical    ValidationState = "UNCONFIRMED_CRITICAL"
+	ValidationNotApplicable          ValidationState = "NOT_APPLICABLE"
+	ValidationRefuted                ValidationState = "REFUTED"
+	ValidationExpired                ValidationState = "EXPIRED_UNCONFIRMED"
+)
+
+// PendingValidation tracks a weight reading awaiting confirmation.
+type PendingValidation struct {
+	ID                  string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	PatientID           string    `gorm:"size:100;index;not null" json:"patient_id"`
+	VitalSignType       string    `gorm:"size:20;not null" json:"vital_sign_type"`
+	OriginalValue       float64   `json:"original_value"`
+	OriginalDeviation   float64   `json:"original_deviation"`
+	OriginalReadingTime time.Time `json:"original_reading_time"`
+	ExpiresAt           time.Time `gorm:"index;not null" json:"expires_at"`
+	ConfirmationValue   *float64  `json:"confirmation_value,omitempty"`
+	ValidationOutcome   string    `gorm:"size:30" json:"validation_outcome,omitempty"`
+	CreatedAt           time.Time `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt           time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+func (PendingValidation) TableName() string { return "pending_validations" }
 
 // DeviationResult is the output of a single vital sign deviation check.
 type DeviationResult struct {
@@ -85,6 +116,8 @@ type DeviationResult struct {
 	ClinicalSignificance string  `json:"clinical_significance"`
 	GapAmplified         bool    `json:"gap_amplified"`
 	ConfounderDampened   bool    `json:"confounder_dampened"`
+	ValidationState      string  `json:"validation_state,omitempty"`
+	ValidationReason     string  `json:"validation_reason,omitempty"`
 }
 
 // CompoundPatternMatch describes a multi-vital-sign syndrome detection.
