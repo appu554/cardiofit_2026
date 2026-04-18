@@ -10,13 +10,26 @@ import (
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
+// PAIUpdater is the interface for feeding acute deviations into the PAI engine.
+// Implemented by a wrapper around ComputePAI in the server layer.
+// Nil-safe: when unset, acute events don't update PAI (tests, standalone mode).
+type PAIUpdater interface {
+	UpdateFromAcuteEvent(patientID string, deviationPercent float64, severity string, vitalType string)
+}
+
 // AcuteEventHandler orchestrates the full acute-on-chronic detection pipeline:
 // baseline computation → deviation scoring → compound pattern detection →
-// event creation → resolution tracking.
+// event creation → resolution tracking → PAI velocity/proximity update.
 type AcuteEventHandler struct {
-	config *AcuteDetectionConfig
-	repo   *AcuteRepository // nil-safe for tests
-	log    *zap.Logger
+	config     *AcuteDetectionConfig
+	repo       *AcuteRepository // nil-safe for tests
+	paiUpdater PAIUpdater       // nil-safe: when unset, PAI is not updated
+	log        *zap.Logger
+}
+
+// SetPAIUpdater injects the PAI integration callback. Called from server wiring.
+func (h *AcuteEventHandler) SetPAIUpdater(u PAIUpdater) {
+	h.paiUpdater = u
 }
 
 // NewAcuteEventHandler constructs a handler. repo may be nil for unit tests.
@@ -98,6 +111,18 @@ func (h *AcuteEventHandler) HandleNewReading(
 		if err := h.repo.SaveEvent(event); err != nil {
 			h.log.Error("failed to save acute event", zap.Error(err))
 		}
+	}
+
+	// Update PAI velocity + proximity with acute deviation data.
+	// This feeds the acute event into the PAI's real-time urgency
+	// computation so the escalation engine sees the updated PAI tier.
+	if h.paiUpdater != nil {
+		h.paiUpdater.UpdateFromAcuteEvent(
+			patientID,
+			deviation.DeviationPercent,
+			event.Severity,
+			vitalType,
+		)
 	}
 
 	return event, resolvedIDs

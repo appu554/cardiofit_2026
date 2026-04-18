@@ -33,8 +33,8 @@ const (
 // AcuteEvent is persisted for every detected acute-on-chronic deterioration.
 type AcuteEvent struct {
 	ID                 uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID          string     `gorm:"size:100;index:idx_acute_patient;not null" json:"patient_id"`
-	DetectedAt         time.Time  `gorm:"not null" json:"detected_at"`
+	PatientID          string     `gorm:"size:100;index:idx_acute_patient,priority:1;not null" json:"patient_id"`
+	DetectedAt         time.Time  `gorm:"index:idx_acute_patient,priority:2,sort:desc;not null" json:"detected_at"`
 	EventType          string     `gorm:"size:40;not null" json:"event_type"`
 	Severity           string     `gorm:"size:10;not null" json:"severity"`
 	VitalSignType      string     `gorm:"size:20" json:"vital_sign_type"`
