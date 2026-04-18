@@ -87,4 +87,5 @@ const (
 	ResolutionInProgress = "IN_PROGRESS"
 	ResolutionResolved   = "RESOLVED"
 	ResolutionDeferred   = "DEFERRED"
+	ResolutionEscalated  = "ESCALATED"
 )

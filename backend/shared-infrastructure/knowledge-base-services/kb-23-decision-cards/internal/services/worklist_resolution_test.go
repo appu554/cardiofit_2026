@@ -103,6 +103,24 @@ func TestResolution_CallPatient_InProgress(t *testing.T) {
 	}
 }
 
+func TestResolution_EscalateToGP_Escalated(t *testing.T) {
+	item := newTestItem()
+	req := models.WorklistActionRequest{
+		PatientID:   "patient-1",
+		ClinicianID: "nurse-1",
+		ActionCode:  "ESCALATE_TO_GP",
+	}
+
+	result := HandleWorklistAction(item, req)
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+	if result.UpdatedItem.ResolutionState != models.ResolutionEscalated {
+		t.Errorf("expected ESCALATED, got %s", result.UpdatedItem.ResolutionState)
+	}
+}
+
 func TestResolution_UnknownAction_Error(t *testing.T) {
 	item := newTestItem()
 	req := models.WorklistActionRequest{

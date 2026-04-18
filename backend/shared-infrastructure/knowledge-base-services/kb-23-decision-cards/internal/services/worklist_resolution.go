@@ -42,8 +42,8 @@ func HandleWorklistAction(item *models.WorklistItem, req models.WorklistActionRe
 		}
 		return ResolutionResult{UpdatedItem: item, Feedback: feedback}
 
-	case "ESCALATE_TO_GP", "REFERRAL":
-		item.ResolutionState = models.ResolutionResolved
+	case "ESCALATE_TO_GP", "REFERRAL", "CALL_ANM":
+		item.ResolutionState = models.ResolutionEscalated
 		return ResolutionResult{UpdatedItem: item}
 
 	default:
