@@ -7,6 +7,15 @@ import (
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
+// compoundLabels maps each compound pattern to clinician- and patient-friendly labels.
+var compoundLabels = map[string]struct{ Clinician, Patient string }{
+	"CARDIORENAL_SYNDROME":        {"Heart-Kidney Strain", "Change detected in heart and kidney measurements"},
+	"INFECTION_CASCADE":            {"Possible Infection with Multi-System Impact", "Your care team noticed changes that may indicate an infection"},
+	"MEDICATION_CRISIS":            {"Possible Medication Reaction", "A recent medication change may need adjustment"},
+	"FLUID_OVERLOAD_TRIAD":         {"Fluid Overload", "Your weight and blood pressure changes need attention"},
+	"POST_DISCHARGE_DETERIORATION": {"Post-Hospital Deterioration", "Changes detected since your hospital discharge"},
+}
+
 // CompoundContext carries patient-level context for compound pattern detection.
 type CompoundContext struct {
 	CKMStage            string
@@ -80,6 +89,8 @@ func detectCardiorenalSyndrome(deviations []models.DeviationResult) (models.Comp
 		ClinicalSyndrome:    "Cardiorenal syndrome — simultaneous renal and haemodynamic deterioration",
 		RecommendedResponse: "Urgent nephrology/cardiology review. Assess volume status and cardiac output.",
 		CompoundSeverity:    escalateSeverity(highest, 1),
+		ClinicianLabel:      compoundLabels["CARDIORENAL_SYNDROME"].Clinician,
+		PatientLabel:        compoundLabels["CARDIORENAL_SYNDROME"].Patient,
 	}, true
 }
 
@@ -115,6 +126,8 @@ func detectInfectionCascade(deviations []models.DeviationResult, ctx CompoundCon
 		ClinicalSyndrome:    "Possible infection cascade — hyperglycaemia with haemodynamic compromise",
 		RecommendedResponse: "Screen for infection source. Consider blood cultures and empiric therapy.",
 		CompoundSeverity:    escalateSeverity(highest, 1),
+		ClinicianLabel:      compoundLabels["INFECTION_CASCADE"].Clinician,
+		PatientLabel:        compoundLabels["INFECTION_CASCADE"].Patient,
 	}, true
 }
 
@@ -160,6 +173,8 @@ func detectMedicationCrisis(deviations []models.DeviationResult, ctx CompoundCon
 		ClinicalSyndrome:    fmt.Sprintf("Medication-induced crisis — new medications (%s) temporally correlated with deterioration", medList),
 		RecommendedResponse: response,
 		CompoundSeverity:    escalateSeverity(highest, 1),
+		ClinicianLabel:      compoundLabels["MEDICATION_CRISIS"].Clinician,
+		PatientLabel:        compoundLabels["MEDICATION_CRISIS"].Patient,
 	}, true
 }
 
@@ -194,6 +209,8 @@ func detectFluidOverloadTriad(deviations []models.DeviationResult, ctx CompoundC
 		ClinicalSyndrome:    "Fluid overload triad — weight gain with hypertension in advanced CKM",
 		RecommendedResponse: "Assess fluid balance. Consider diuretic adjustment and sodium restriction.",
 		CompoundSeverity:    escalateSeverity(highest, 1),
+		ClinicianLabel:      compoundLabels["FLUID_OVERLOAD_TRIAD"].Clinician,
+		PatientLabel:        compoundLabels["FLUID_OVERLOAD_TRIAD"].Patient,
 	}, true
 }
 
@@ -228,6 +245,8 @@ func detectPostDischargeDeterior(deviations []models.DeviationResult, ctx Compou
 		ClinicalSyndrome:    fmt.Sprintf("Post-discharge deterioration — %d days since discharge with significant deviation", *ctx.DaysSinceDischarge),
 		RecommendedResponse: "Urgent post-discharge review. Reassess medication reconciliation and volume status.",
 		CompoundSeverity:    escalateSeverity(highest, 1),
+		ClinicianLabel:      compoundLabels["POST_DISCHARGE_DETERIORATION"].Clinician,
+		PatientLabel:        compoundLabels["POST_DISCHARGE_DETERIORATION"].Patient,
 	}, true
 }
 

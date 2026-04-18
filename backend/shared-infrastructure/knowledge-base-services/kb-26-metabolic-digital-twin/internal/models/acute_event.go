@@ -128,4 +128,6 @@ type CompoundPatternMatch struct {
 	ClinicalSyndrome    string            `json:"clinical_syndrome"`
 	RecommendedResponse string            `json:"recommended_response"`
 	CompoundSeverity    string            `json:"compound_severity"`
+	ClinicianLabel      string            `json:"clinician_label"`
+	PatientLabel        string            `json:"patient_label"`
 }
