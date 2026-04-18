@@ -6,6 +6,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// TemporalClassification describes the temporal pattern of a deviation.
+type TemporalClassification string
+
+const (
+	TemporalSpike       TemporalClassification = "SPIKE"       // single reading, needs confirmation
+	TemporalTrend       TemporalClassification = "TREND"        // 3+ readings same direction
+	TemporalPersistence TemporalClassification = "PERSISTENCE"  // sustained >24h or 5+ readings
+)
+
 // AcuteEventType classifies the type of acute deterioration.
 type AcuteEventType string
 
@@ -47,8 +56,9 @@ type AcuteEvent struct {
 	MedicationContext  string     `gorm:"type:text" json:"medication_context,omitempty"`
 	ConfounderContext  string     `gorm:"size:100" json:"confounder_context,omitempty"`
 	GapAmplified       bool       `gorm:"default:false" json:"gap_amplified"`
-	ConfounderDampened bool       `gorm:"default:false" json:"confounder_dampened"`
-	EscalationTier     string     `gorm:"size:20" json:"escalation_tier"`
+	ConfounderDampened     bool       `gorm:"default:false" json:"confounder_dampened"`
+	TemporalClassification string    `gorm:"size:15" json:"temporal_classification,omitempty"`
+	EscalationTier         string    `gorm:"size:20" json:"escalation_tier"`
 	SuggestedAction    string     `gorm:"type:text" json:"suggested_action"`
 	ResolvedAt         *time.Time `json:"resolved_at,omitempty"`
 	ResolutionType     string     `gorm:"size:20" json:"resolution_type,omitempty"`
@@ -115,8 +125,11 @@ type DeviationResult struct {
 	Direction            string  `json:"direction"`
 	ClinicalSignificance string  `json:"clinical_significance"`
 	GapAmplified         bool    `json:"gap_amplified"`
-	ConfounderDampened   bool    `json:"confounder_dampened"`
-	ValidationState      string  `json:"validation_state,omitempty"`
+	ConfounderDampened     bool    `json:"confounder_dampened"`
+	RawSeverity            string  `json:"raw_severity,omitempty"`
+	EffectiveSeverity      string  `json:"effective_severity,omitempty"`
+	TemporalClassification string  `json:"temporal_classification,omitempty"`
+	ValidationState        string  `json:"validation_state,omitempty"`
 	ValidationReason     string  `json:"validation_reason,omitempty"`
 }
 
