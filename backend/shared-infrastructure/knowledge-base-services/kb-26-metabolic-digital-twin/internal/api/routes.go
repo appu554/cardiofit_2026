@@ -85,5 +85,12 @@ func (s *Server) setupRoutes() {
 			acute.GET("/:patientId/baselines", s.getPatientBaselines)
 			acute.POST("/:patientId/reading", s.processAcuteReading)
 		}
+
+		// Predicted risk (Gap 20 — Predictive Risk Layer)
+		risk := v1.Group("/risk")
+		{
+			risk.GET("/:patientId", s.getPredictedRisk)
+			risk.POST("/batch", s.batchPredictRisk)
+		}
 	}
 }

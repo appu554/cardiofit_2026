@@ -78,6 +78,8 @@ func main() {
 		// Acute-on-chronic detection (Gap 16)
 		&models.AcuteEvent{},
 		&models.PatientBaselineSnapshot{},
+		// Predictive risk layer (Gap 20)
+		&models.PredictedRisk{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
