@@ -32,10 +32,10 @@ const (
 // a single authoritative record by OutcomeIngestionService.
 type OutcomeRecord struct {
 	ID             uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	PatientID      string    `gorm:"size:100;index;not null" json:"patient_id"`
-	LifecycleID    *uuid.UUID `gorm:"type:uuid;index" json:"lifecycle_id,omitempty"` // links to DetectionLifecycle
+	PatientID      string    `gorm:"size:100;index;index:idx_or_patient_type,priority:1;not null" json:"patient_id"`
+	LifecycleID    *uuid.UUID `gorm:"type:uuid;index" json:"lifecycle_id,omitempty"` // nil if no alert was generated before the outcome arrived (e.g., registry sweep predating any lifecycle)
 	CohortID       string    `gorm:"size:60;index" json:"cohort_id,omitempty"`
-	OutcomeType    string    `gorm:"size:60;index;not null" json:"outcome_type"` // READMISSION_30D, ADMISSION_90D, MORTALITY_30D, etc.
+	OutcomeType    string    `gorm:"size:60;index;index:idx_or_patient_type,priority:2;not null" json:"outcome_type"` // READMISSION_30D, ADMISSION_90D, MORTALITY_30D, etc.
 	OutcomeOccurred bool     `gorm:"not null" json:"outcome_occurred"`
 	OccurredAt     *time.Time `json:"occurred_at,omitempty"`
 	Source         string    `gorm:"size:40;index;not null" json:"source"`
