@@ -59,6 +59,15 @@ func (s *Server) runAttribution(c *gin.Context) {
 	verdict := services.ComputeAttributionWithConfig(in, cfg)
 
 	payload, _ := json.Marshal(verdict)
+	// Sprint 4 debt: AppendEntry mutates the in-memory ledger BEFORE the DB
+	// transaction below. If the txn rolls back (unique constraint, disk error,
+	// context deadline), the in-memory chain contains a phantom entry with no
+	// corresponding DB row, and subsequent AppendEntry calls chain off it —
+	// VerifyChain reports "valid" even though the chain diverges from persisted
+	// state. Bounded by Sprint 1's in-memory design (process restart resets
+	// the ledger) but must be closed in Sprint 4's durable ledger: either
+	// append inside the same DB transaction, or implement rollback-on-txn-fail
+	// on the in-memory ledger. See append_only_ledger.go SeedSequence comment.
 	entry, err := s.ledger.AppendEntry("ATTRIBUTION_RUN", verdict.ID.String(), string(payload))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
