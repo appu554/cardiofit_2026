@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // TreatmentStrategy is the TTE-protocol treatment label inferred from the clinician response.
@@ -57,3 +58,13 @@ type ConsolidatedAlertRecord struct {
 }
 
 func (ConsolidatedAlertRecord) TableName() string { return "consolidated_alert_records" }
+
+// BeforeCreate generates a UUID primary key if not already set.
+// Mirrors the pattern used by DecisionCard, MCUGateHistory, etc., and ensures
+// SQLite-backed test fixtures work without gen_random_uuid() support.
+func (c *ConsolidatedAlertRecord) BeforeCreate(tx *gorm.DB) error {
+	if c.ID == uuid.Nil {
+		c.ID = uuid.New()
+	}
+	return nil
+}

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // OutcomeSource identifies where an outcome record came from.
@@ -40,6 +41,12 @@ type OutcomeRecord struct {
 	OccurredAt     *time.Time `json:"occurred_at,omitempty"`
 	Source         string    `gorm:"size:40;index;not null" json:"source"`
 	SourceRecordID string    `gorm:"size:200" json:"source_record_id,omitempty"`
+	// Feed-supplied idempotency key. When set, POST /outcomes/ingest with a
+	// duplicate key returns the existing record instead of creating a new one.
+	// Required for at-least-once claims/discharge feeds to avoid duplicate
+	// reconciliation passes. uniqueIndex allows multiple NULL values (standard
+	// SQL), so legacy records without a key are unaffected.
+	IdempotencyKey  string     `gorm:"size:128;uniqueIndex:idx_or_idem_key" json:"idempotency_key,omitempty"`
 	Reconciliation string    `gorm:"size:20;index;not null;default:'PENDING'" json:"reconciliation"`
 	ReconciledID   *uuid.UUID `gorm:"type:uuid" json:"reconciled_id,omitempty"` // points to authoritative record after reconciliation
 	IngestedAt     time.Time `gorm:"autoCreateTime" json:"ingested_at"`
@@ -47,3 +54,13 @@ type OutcomeRecord struct {
 }
 
 func (OutcomeRecord) TableName() string { return "outcome_records" }
+
+// BeforeCreate generates a UUID primary key if not already set.
+// Mirrors the pattern used by DecisionCard, MCUGateHistory, etc., and ensures
+// SQLite-backed test fixtures work without gen_random_uuid() support.
+func (o *OutcomeRecord) BeforeCreate(tx *gorm.DB) error {
+	if o.ID == uuid.Nil {
+		o.ID = uuid.New()
+	}
+	return nil
+}
