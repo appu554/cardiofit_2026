@@ -1,0 +1,45 @@
+# Gap 22 Sprint 1 CATE engine parameters. Spec §6.1, §7.1.
+version: "1.0.0"
+
+# Overlap-positivity band. Patients with propensity outside the band for a given
+# intervention get OVERLAP_BELOW_FLOOR or OVERLAP_ABOVE_CEILING and no point estimate.
+# Market override: per-cohort blocks below. Spec §6.1: (0.05, 0.95) default.
+overlap_band:
+  default:
+    floor: 0.05
+    ceiling: 0.95
+  per_cohort:
+    hcf_catalyst_chf:
+      floor: 0.05
+      ceiling: 0.95
+    aged_care_au:
+      floor: 0.10
+      ceiling: 0.90  # slightly tighter — smaller cohort, more conservative
+
+# Bootstrap parameters for Sprint 1 baseline learner CI construction.
+bootstrap:
+  n_resamples: 500
+  ci_level: 0.90  # 5th/95th percentile of bootstrap distribution
+
+# Minimum training set size (combined treated + control) below which the baseline
+# learner returns OVERLAP_INSUFFICIENT_DATA regardless of individual propensity.
+min_training_n: 40
+
+# Calibration monitor: miscalibration alarm fires when rolling 90-day mean of
+# |attributed_effect − predicted_CATE| exceeds threshold for a given cohort × intervention.
+calibration:
+  alarm_threshold_abs_diff: 0.05     # spec §14 HCF CHF target
+  rolling_window_days: 90
+  min_matched_pairs: 20              # below this, summary returns INSUFFICIENT_SIGNAL
+
+# Per-cohort primary learner. Sprint 1: BASELINE_DIFF_MEANS everywhere.
+# Sprint 2: selection pipeline populates this via Qini benchmark (spec §6.1).
+primary_learner:
+  hcf_catalyst_chf:
+    default:
+      learner: "BASELINE_DIFF_MEANS"
+      horizon_days: 30
+  aged_care_au:
+    default:
+      learner: "BASELINE_DIFF_MEANS"
+      horizon_days: 90
