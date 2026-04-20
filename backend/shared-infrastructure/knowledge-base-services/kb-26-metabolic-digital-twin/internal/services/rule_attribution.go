@@ -103,6 +103,16 @@ func ComputeAttribution(in AttributionInput) models.AttributionVerdict {
 			"Alert overridden/unresponded at non-high risk tier (%.0f/100); rule-based attribution cannot establish signal.",
 			in.PreAlertRiskScore)
 
+	// NO_RESPONSE / OVERRIDE + outcome occurred: clinically the worst scenario
+	// (alert ignored, patient decompensated) but attribution is inconclusive
+	// without propensity adjustment. Sprint 2 IPW/DR will distinguish "alert
+	// ignored because it was noise" from "alert ignored because clinician missed
+	// it" — both look the same from observational data alone.
+	case (ts == "NO_RESPONSE" || ts == "OVERRIDE_WITH_REASON") && occurred:
+		verdict.ClinicianLabel = string(models.LabelInconclusive)
+		verdict.TechnicalLabel = "rule_ignored_alert_outcome_occurred"
+		verdict.Rationale = "Alert was not responded to and outcome occurred; rule-based attribution cannot establish whether response would have changed the outcome."
+
 	default:
 		verdict.ClinicianLabel = string(models.LabelInconclusive)
 		verdict.TechnicalLabel = "rule_no_matching_case"

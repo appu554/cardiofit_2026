@@ -73,3 +73,13 @@ func TestAttribution_NilOutcome_Inconclusive(t *testing.T) {
 		t.Fatalf("expected non-zero verdict ID; got zero UUID")
 	}
 }
+
+func TestAttribution_NoResponseOutcomeOccurred_InconclusiveIgnoredAlert(t *testing.T) {
+	v := ComputeAttribution(attrInput("NO_RESPONSE", true, "HIGH"))
+	if v.ClinicianLabel != string(models.LabelInconclusive) {
+		t.Fatalf("expected inconclusive, got %s", v.ClinicianLabel)
+	}
+	if v.TechnicalLabel != "rule_ignored_alert_outcome_occurred" {
+		t.Fatalf("expected rule_ignored_alert_outcome_occurred, got %s", v.TechnicalLabel)
+	}
+}

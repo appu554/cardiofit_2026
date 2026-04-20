@@ -16,9 +16,11 @@ import (
 // hash is HMAC(key, prior_hash || entry_type || subject_id || payload_json || sequence || timestamp).
 // Sprint 2 replaces storage with PostgreSQL persistence and adds Ed25519 per-entry signatures.
 type InMemoryLedger struct {
-	mu      sync.Mutex
-	key     []byte
-	entries []models.LedgerEntry
+	mu            sync.Mutex
+	key           []byte
+	entries       []models.LedgerEntry
+	seededLastSeq int64
+	seeded        bool
 }
 
 const genesisHash = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -28,6 +30,21 @@ func NewInMemoryLedger(hmacKey []byte) *InMemoryLedger {
 		hmacKey = []byte("sprint1-default-do-not-use-in-prod")
 	}
 	return &InMemoryLedger{key: hmacKey}
+}
+
+// SeedSequence primes the in-memory counter so the next AppendEntry produces
+// sequence = startSeq. Call once at startup after restoring from a persistent
+// store (DB) to avoid collisions with already-persisted LedgerEntry rows.
+// No-op if startSeq <= current last sequence (already seeded or has entries).
+func (l *InMemoryLedger) SeedSequence(startSeq int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.entries) > 0 {
+		return
+	}
+	// Store the seed as the "virtual last sequence" so AppendEntry continues from startSeq.
+	l.seededLastSeq = startSeq - 1
+	l.seeded = true
 }
 
 // AppendEntry appends a new entry and returns it with EntryHash and Sequence set.
@@ -40,6 +57,8 @@ func (l *InMemoryLedger) AppendEntry(entryType, subjectID, payloadJSON string) (
 	if n := len(l.entries); n > 0 {
 		prior = l.entries[n-1].EntryHash
 		seq = l.entries[n-1].Sequence + 1
+	} else if l.seeded {
+		seq = l.seededLastSeq + 1
 	}
 	now := time.Now().UTC()
 	hash := l.computeEntryHash(prior, entryType, subjectID, payloadJSON, seq, now)

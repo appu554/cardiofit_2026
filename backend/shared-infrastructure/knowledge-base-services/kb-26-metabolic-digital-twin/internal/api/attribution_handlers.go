@@ -39,10 +39,17 @@ func (s *Server) runAttribution(c *gin.Context) {
 				zap.Error(err),
 				zap.String("verdict_id", verdict.ID.String()))
 		}
+		// Ledger entry persist MUST succeed — the chain is the audit trail.
+		// Returning 500 here prevents a verdict from being created without a
+		// durable ledger anchor (e.g., after a restart where the Sequence
+		// uniqueIndex would otherwise silently reject the duplicate).
 		if err := s.db.DB.Create(&entry).Error; err != nil {
-			s.logger.Warn("failed to persist ledger entry",
+			s.logger.Error("failed to persist ledger entry; failing attribution request",
 				zap.Error(err),
-				zap.Int64("seq", entry.Sequence))
+				zap.Int64("seq", entry.Sequence),
+				zap.String("verdict_id", verdict.ID.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist governance ledger entry"})
+			return
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"verdict": verdict, "ledger_entry": entry})

@@ -240,6 +240,22 @@ func main() {
 		logger.Warn("GAP21_LEDGER_HMAC_KEY is not set — ledger will use an insecure default key (not suitable for production)")
 	}
 	gap21Ledger := services.NewInMemoryLedger([]byte(hmacKey))
+
+	// Seed the in-memory sequence counter from the DB so restarts don't
+	// collide with the Sequence uniqueIndex. If the governance_ledger_entries
+	// table is empty or unreachable, default to 0.
+	var maxLedgerSeq int64 = -1
+	if db != nil && db.DB != nil {
+		row := db.DB.Table("governance_ledger_entries").Select("COALESCE(MAX(sequence), -1)").Row()
+		if err := row.Scan(&maxLedgerSeq); err != nil {
+			logger.Warn("failed to seed ledger sequence from DB; starting fresh at 0", zap.Error(err))
+			maxLedgerSeq = -1
+		}
+	}
+	if maxLedgerSeq >= 0 {
+		gap21Ledger.SeedSequence(maxLedgerSeq + 1)
+		logger.Info("governance ledger sequence seeded from DB", zap.Int64("next_sequence", maxLedgerSeq+1))
+	}
 	server.SetGap21Services(gap21Ledger)
 
 	// 9. Start HTTP server
