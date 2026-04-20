@@ -26,7 +26,7 @@ func TestConsolidate_InterventionTaken_ActionTypePresent(t *testing.T) {
 		Reconciliation: string(models.ReconciliationResolved),
 	}
 	riskScore := 62.0
-	record, err := BuildConsolidatedRecord(lc, &outcome, riskScore, "HIGH", "gap20-heuristic-v1")
+	record, err := BuildConsolidatedRecord(lc, &outcome, riskScore, "HIGH", "gap20-heuristic-v1", 30)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,6 +39,9 @@ func TestConsolidate_InterventionTaken_ActionTypePresent(t *testing.T) {
 	if record.TimeZero != lc.DetectedAt {
 		t.Fatalf("expected time_zero = T0 (DetectedAt)")
 	}
+	if record.HorizonDays != 30 {
+		t.Fatalf("expected horizon_days=30, got %d", record.HorizonDays)
+	}
 }
 
 func TestConsolidate_Override_OverrideReasonPreserved(t *testing.T) {
@@ -48,7 +51,7 @@ func TestConsolidate_Override_OverrideReasonPreserved(t *testing.T) {
 		ActionType: "OVERRIDE",
 		ActionDetail: "reason=already_addressed",
 	}
-	record, err := BuildConsolidatedRecord(lc, nil, 55.0, "HIGH", "gap20-heuristic-v1")
+	record, err := BuildConsolidatedRecord(lc, nil, 55.0, "HIGH", "gap20-heuristic-v1", 30)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +69,7 @@ func TestConsolidate_NoResponse_HorizonClosure(t *testing.T) {
 		DetectedAt: time.Now().Add(-45 * 24 * time.Hour),
 		// no DeliveredAt / AcknowledgedAt / ActionedAt
 	}
-	record, err := BuildConsolidatedRecord(lc, nil, 48.0, "MODERATE", "gap20-heuristic-v1")
+	record, err := BuildConsolidatedRecord(lc, nil, 48.0, "MODERATE", "gap20-heuristic-v1", 30)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

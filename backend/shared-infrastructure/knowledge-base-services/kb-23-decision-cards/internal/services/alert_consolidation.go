@@ -20,6 +20,7 @@ func BuildConsolidatedRecord(
 	preAlertRiskScore float64,
 	preAlertRiskTier string,
 	predictionModelID string,
+	horizonDays int,
 ) (models.ConsolidatedAlertRecord, error) {
 	strategy := classifyTreatmentStrategy(lc)
 	overrideReason := ""
@@ -46,6 +47,7 @@ func BuildConsolidatedRecord(
 		TreatmentStrategy: string(strategy),
 		ActionType:        lc.ActionType,
 		OverrideReason:    overrideReason,
+		HorizonDays:       horizonDays,
 	}
 
 	if outcome != nil {

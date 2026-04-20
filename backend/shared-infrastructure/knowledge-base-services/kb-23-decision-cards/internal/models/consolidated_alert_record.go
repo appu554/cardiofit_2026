@@ -27,7 +27,7 @@ type ConsolidatedAlertRecord struct {
 	ID                uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	LifecycleID       uuid.UUID  `gorm:"type:uuid;index;not null" json:"lifecycle_id"`
 	PatientID         string     `gorm:"size:100;index;not null" json:"patient_id"`
-	CohortID          string     `gorm:"size:60;index" json:"cohort_id,omitempty"`
+	CohortID          string     `gorm:"size:60;index;index:idx_car_cohort_type,priority:1" json:"cohort_id,omitempty"`
 
 	// Pre-alert snapshot
 	PreAlertRiskScore float64    `json:"pre_alert_risk_score"`
@@ -50,7 +50,7 @@ type ConsolidatedAlertRecord struct {
 	// Outcome
 	OutcomeRecordID   *uuid.UUID `gorm:"type:uuid;index" json:"outcome_record_id,omitempty"`
 	OutcomeOccurred   *bool      `json:"outcome_occurred,omitempty"`
-	OutcomeType       string     `gorm:"size:60" json:"outcome_type,omitempty"`
+	OutcomeType       string     `gorm:"size:60;index:idx_car_cohort_type,priority:2" json:"outcome_type,omitempty"`
 	HorizonDays       int        `json:"horizon_days"`
 
 	BuiltAt           time.Time  `gorm:"autoCreateTime" json:"built_at"`
