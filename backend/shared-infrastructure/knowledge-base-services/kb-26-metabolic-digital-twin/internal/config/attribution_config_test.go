@@ -41,3 +41,50 @@ func TestLoadAttributionConfig_MissingFile_ReturnsDefault(t *testing.T) {
 		t.Fatalf("expected default version=sprint1-v1, got %q", cfg.MethodVersion)
 	}
 }
+
+func TestLoadAttributionConfig_MalformedYAML_ReturnsDefaultWithError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "attribution_parameters.yaml")
+	// Syntactically valid YAML that doesn't match yamlShape — method is a list, not a map.
+	content := `method:
+  - name: RULE_BASED
+  - version: sprint1-v1
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	cfg, err := LoadAttributionConfig(path)
+	if err == nil {
+		t.Fatalf("expected parse error for malformed YAML, got nil")
+	}
+	if cfg.Method != DefaultAttributionConfig.Method {
+		t.Fatalf("expected default method on parse error, got %q", cfg.Method)
+	}
+	if cfg.MethodVersion != DefaultAttributionConfig.MethodVersion {
+		t.Fatalf("expected default version on parse error, got %q", cfg.MethodVersion)
+	}
+}
+
+func TestLoadAttributionConfig_PartialYAML_FillsWithDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "attribution_parameters.yaml")
+	// Only method.name populated; version missing.
+	content := `method:
+  name: CUSTOM_METHOD
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	cfg, err := LoadAttributionConfig(path)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if cfg.Method != "CUSTOM_METHOD" {
+		t.Fatalf("expected method=CUSTOM_METHOD from YAML, got %q", cfg.Method)
+	}
+	if cfg.MethodVersion != DefaultAttributionConfig.MethodVersion {
+		t.Fatalf("expected version fallback to default, got %q", cfg.MethodVersion)
+	}
+}

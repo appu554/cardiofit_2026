@@ -8,6 +8,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"kb-26-metabolic-digital-twin/internal/config"
+	"kb-26-metabolic-digital-twin/internal/models"
+	"kb-26-metabolic-digital-twin/internal/services"
 )
 
 func newTestEngine() *gin.Engine {
@@ -124,5 +128,53 @@ func TestRunAttribution_ContextTimeout_Honoured(t *testing.T) {
 	// the timeout env var was read without error.
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 from nil-ledger guard (pre-timeout-logic), got %d", w.Code)
+	}
+}
+
+func TestRunAttribution_EndToEnd_PersistsVerdictAndLedger(t *testing.T) {
+	db := newTestDB(t)
+	ledger := services.NewInMemoryLedger([]byte("test-key"))
+	r := newTestEngine()
+	srv := &Server{db: db, ledger: ledger}
+	srv.attributionConfig = config.DefaultAttributionConfig
+	r.POST("/attribution/run", srv.runAttribution)
+	r.GET("/attribution/:patientId", srv.getAttributionByPatient)
+
+	body := map[string]interface{}{
+		"PatientID":         "P-e2e-001",
+		"TreatmentStrategy": "INTERVENTION_TAKEN",
+		"PreAlertRiskTier":  "HIGH",
+		"PreAlertRiskScore": 75.0,
+		"OutcomeOccurred":   false,
+		"HorizonDays":       30,
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/attribution/run", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// GET should return the persisted verdict.
+	getReq := httptest.NewRequest(http.MethodGet, "/attribution/P-e2e-001", nil)
+	getW := httptest.NewRecorder()
+	r.ServeHTTP(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("GET: expected 200, got %d: %s", getW.Code, getW.Body.String())
+	}
+	var resp map[string]interface{}
+	_ = json.Unmarshal(getW.Body.Bytes(), &resp)
+	verdicts, _ := resp["verdicts"].([]interface{})
+	if len(verdicts) != 1 {
+		t.Fatalf("expected 1 verdict for P-e2e-001, got %d", len(verdicts))
+	}
+
+	// Ledger should have exactly one entry for this attribution.
+	var ledgerCount int64
+	db.DB.Model(&models.LedgerEntry{}).Where("entry_type = ?", "ATTRIBUTION_RUN").Count(&ledgerCount)
+	if ledgerCount != 1 {
+		t.Fatalf("expected 1 ledger entry, got %d", ledgerCount)
 	}
 }
