@@ -61,7 +61,7 @@ type CATEEstimate struct {
 	PatientID            string    `gorm:"size:100;index;not null" json:"patient_id"`
 	CohortID             string    `gorm:"size:60;index;not null" json:"cohort_id"`
 	InterventionID       string    `gorm:"size:80;index;not null" json:"intervention_id"`
-	LearnerType          string    `gorm:"size:30;not null" json:"learner_type"`
+	LearnerType          LearnerType `gorm:"size:30;not null" json:"learner_type"`
 
 	PointEstimate float64 `json:"point_estimate"`
 	CILower       float64 `json:"ci_lower"`
@@ -69,8 +69,8 @@ type CATEEstimate struct {
 	HorizonDays   int     `json:"horizon_days"`
 
 	// Propensity and overlap
-	Propensity    float64 `json:"propensity"`
-	OverlapStatus string  `gorm:"size:40;index;not null" json:"overlap_status"`
+	Propensity    float64       `json:"propensity"`
+	OverlapStatus OverlapStatus `gorm:"size:40;index;not null" json:"overlap_status"`
 
 	// Cohort context (shown in explanation layer Sprint 3)
 	TrainingN      int `json:"training_n"`
@@ -92,14 +92,14 @@ func (CATEEstimate) TableName() string { return "cate_estimates" }
 // IsActionable is the single short-circuit used by the recommender (Sprint 3).
 // Spec §6.1: CATE estimates without overlap pass are never shown, regardless of point value.
 func (e CATEEstimate) IsActionable() bool {
-	return OverlapStatus(e.OverlapStatus) == OverlapPass
+	return e.OverlapStatus == OverlapPass
 }
 
 // ConfidenceLabel derives the 3-tier label from CI width + overlap status. Spec §6.1.
 // Width thresholds are deliberately not per-cohort in Sprint 1; Sprint 3 explanation
 // layer will YAML-configure per market.
 func (e CATEEstimate) ConfidenceLabel() CATEConfidenceLabel {
-	if OverlapStatus(e.OverlapStatus) != OverlapPass {
+	if e.OverlapStatus != OverlapPass {
 		return CATEConfidenceLow
 	}
 	width := e.CIUpper - e.CILower
@@ -119,12 +119,12 @@ func (e CATEEstimate) ConfidenceLabel() CATEConfidenceLabel {
 // as CATE_LEARNER_ASSIGNMENT.
 type CATEPrimaryLearnerAssignment struct {
 	ID             uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	CohortID       string     `gorm:"size:60;uniqueIndex:idx_cohort_intv_horizon,priority:1;not null" json:"cohort_id"`
-	InterventionID string     `gorm:"size:80;uniqueIndex:idx_cohort_intv_horizon,priority:2;not null" json:"intervention_id"`
-	HorizonDays    int        `gorm:"uniqueIndex:idx_cohort_intv_horizon,priority:3;not null" json:"horizon_days"`
-	LearnerType    string     `gorm:"size:30;not null" json:"learner_type"`
-	AssignedAt     time.Time  `gorm:"autoCreateTime" json:"assigned_at"`
-	LedgerEntryID  *uuid.UUID `gorm:"type:uuid" json:"ledger_entry_id,omitempty"`
+	CohortID       string      `gorm:"size:60;uniqueIndex:idx_cohort_intv_horizon,priority:1;not null" json:"cohort_id"`
+	InterventionID string      `gorm:"size:80;uniqueIndex:idx_cohort_intv_horizon,priority:2;not null" json:"intervention_id"`
+	HorizonDays    int         `gorm:"uniqueIndex:idx_cohort_intv_horizon,priority:3;not null" json:"horizon_days"`
+	LearnerType    LearnerType `gorm:"size:30;not null" json:"learner_type"`
+	AssignedAt     time.Time   `gorm:"autoCreateTime" json:"assigned_at"`
+	LedgerEntryID  *uuid.UUID  `gorm:"type:uuid" json:"ledger_entry_id,omitempty"`
 }
 
 func (CATEPrimaryLearnerAssignment) TableName() string { return "cate_primary_learner_assignments" }
