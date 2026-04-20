@@ -322,3 +322,159 @@ func TestIngestOutcome_ScopeGlobalSweep_NilLifecycle_Returns200(t *testing.T) {
 		t.Fatalf("expected lifecycle_id=nil in DB")
 	}
 }
+
+func TestIngestOutcome_MissingOutcomeType_Returns400(t *testing.T) {
+	r := newTestGinEngine()
+	srv := &Server{}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	lifecycleID := uuid.New()
+	body := models.OutcomeRecord{
+		PatientID:   "P-missing-ot",
+		LifecycleID: &lifecycleID,
+		// OutcomeType intentionally empty
+		Source: string(models.OutcomeSourceHospitalDischarge),
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing outcome_type, got %d", w.Code)
+	}
+}
+
+func TestIngestOutcome_MissingSource_Returns400(t *testing.T) {
+	r := newTestGinEngine()
+	srv := &Server{}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	lifecycleID := uuid.New()
+	body := models.OutcomeRecord{
+		PatientID:       "P-missing-src",
+		LifecycleID:     &lifecycleID,
+		OutcomeType:     "READMISSION_30D",
+		OutcomeOccurred: true,
+		// Source intentionally empty
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing source, got %d", w.Code)
+	}
+}
+
+func TestIngestOutcome_MultiSourceAgree_ResolvesViaHandler(t *testing.T) {
+	db := newTestDB(t)
+	r := newTestGinEngine()
+	srv := &Server{db: db}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	lifecycleID := uuid.New()
+	occurredAt := time.Now().Add(-10 * 24 * time.Hour)
+	first := models.OutcomeRecord{
+		PatientID: "P-multi-001", LifecycleID: &lifecycleID, OutcomeType: "READMISSION_30D",
+		OutcomeOccurred: true, OccurredAt: &occurredAt,
+		Source: string(models.OutcomeSourceHospitalDischarge),
+	}
+	second := models.OutcomeRecord{
+		PatientID: "P-multi-001", LifecycleID: &lifecycleID, OutcomeType: "READMISSION_30D",
+		OutcomeOccurred: true, OccurredAt: &occurredAt,
+		Source: string(models.OutcomeSourceClaimsFeed),
+	}
+	for _, body := range []models.OutcomeRecord{first, second} {
+		bodyJSON, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+	// Both rows should end up RESOLVED — the second POST's transaction
+	// promotes the first PENDING row to RESOLVED with ReconciledID set.
+	var rows []models.OutcomeRecord
+	db.DB.Where("patient_id = ?", "P-multi-001").Find(&rows)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if r.Reconciliation != string(models.ReconciliationResolved) {
+			t.Fatalf("expected all rows RESOLVED, got %s for source=%s", r.Reconciliation, r.Source)
+		}
+	}
+}
+
+// TestIngestOutcome_SequentialDisagreeSources_BothPersistAsResolved captures
+// the CURRENT handler behavior for disagreeing sequential POSTs: with
+// minSources=1, the first POST immediately resolves RESOLVED, so the
+// second POST's PENDING-only prior-rows query finds nothing and the
+// second record also resolves RESOLVED independently. Two rows with
+// opposite OutcomeOccurred values both end up RESOLVED — no CONFLICTED
+// detection across POSTs.
+//
+// The reducer CAN detect CONFLICTED when both records are passed at once
+// (see TestOutcomeIngest_MultipleSourcesDisagree_Conflicts in the services
+// package). The handler's per-POST minSources=1 + PENDING-only prior query
+// structurally prevents cross-POST disagreement detection.
+//
+// Sprint 4 task: change minSources to 2 (or make it source-configurable)
+// so the first record stays PENDING until corroborated, enabling the
+// handler to pass both records to the reducer and detect disagreement.
+// That is a semantic change to the ingest contract — out of Sprint 3 scope.
+func TestIngestOutcome_SequentialDisagreeSources_BothPersistAsResolved(t *testing.T) {
+	db := newTestDB(t)
+	r := newTestGinEngine()
+	srv := &Server{db: db}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	lifecycleID := uuid.New()
+	firstBody := models.OutcomeRecord{
+		PatientID: "P-conflict-001", LifecycleID: &lifecycleID, OutcomeType: "READMISSION_30D",
+		OutcomeOccurred: true,
+		Source:          string(models.OutcomeSourceHospitalDischarge),
+	}
+	secondBody := models.OutcomeRecord{
+		PatientID: "P-conflict-001", LifecycleID: &lifecycleID, OutcomeType: "READMISSION_30D",
+		OutcomeOccurred: false, // disagree
+		Source:          string(models.OutcomeSourceClaimsFeed),
+	}
+	for _, body := range []models.OutcomeRecord{firstBody, secondBody} {
+		bodyJSON, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+	// Sprint 3 behavior: 2 rows, both RESOLVED, opposite OutcomeOccurred values.
+	// This is the GAP — Sprint 4 should fix this so disagreement surfaces as
+	// CONFLICTED and the adjudication queue picks it up.
+	var rows []models.OutcomeRecord
+	db.DB.Where("patient_id = ?", "P-conflict-001").Find(&rows)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	var trueCount, falseCount int
+	for _, r := range rows {
+		if r.Reconciliation != string(models.ReconciliationResolved) {
+			t.Fatalf("Sprint 3 current behavior: expected both rows RESOLVED (cross-POST disagreement NOT detected), got %s",
+				r.Reconciliation)
+		}
+		if r.OutcomeOccurred {
+			trueCount++
+		} else {
+			falseCount++
+		}
+	}
+	if trueCount != 1 || falseCount != 1 {
+		t.Fatalf("expected one true and one false OutcomeOccurred, got true=%d false=%d", trueCount, falseCount)
+	}
+}

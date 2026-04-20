@@ -104,6 +104,16 @@ func (s *Server) ingestOutcome(c *gin.Context) {
 		// CONFLICTED from earlier ingest calls must not be pulled back into
 		// a second reconciliation pass, otherwise the authoritative verdict
 		// can be silently re-derived on every new source arrival.
+		// Sprint 4 debt: the PENDING-only filter combined with minSources=1
+		// (48h tolerance, 1 source to resolve) means the first POST for a
+		// (patient, outcome_type) immediately resolves RESOLVED — so a second
+		// disagreeing POST's prior-rows query finds nothing and the second
+		// record also resolves RESOLVED independently. Cross-POST CONFLICTED
+		// detection is structurally impossible in the current design.
+		// See TestIngestOutcome_SequentialDisagreeSources_BothPersistAsResolved.
+		// Sprint 4 fix: change minSources to 2 OR make it source-configurable
+		// OR query across RESOLVED + PENDING when source_type indicates an
+		// authoritative second opinion (e.g., CLINICIAN_CONFIRMATION vs claims feed).
 		q := s.db.DB.
 			Where("patient_id = ? AND outcome_type = ?", incoming.PatientID, incoming.OutcomeType).
 			Where("reconciliation = ?", string(models.ReconciliationPending))
