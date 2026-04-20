@@ -72,15 +72,6 @@ func TestGetAttributionByPatient_LimitQueryParam_IsHonoured(t *testing.T) {
 	}
 }
 
-// TestRunAttribution_TxnWrap_HandlerHasNoOrphanPaths is a structural-contract
-// test — it exists so any future refactor that splits the verdict+ledger
-// Create calls back into separate non-transactional statements will surface
-// as a grep-time reminder. Full end-to-end DB-failure rollback verification
-// is Sprint 3 hardening (requires a test DB fixture).
-func TestRunAttribution_TxnWrap_HandlerHasNoOrphanPaths(t *testing.T) {
-	t.Log("transactional persist is a structural contract — verified by code review, not runtime simulation")
-}
-
 func TestRunAttribution_NilLedger_Returns503(t *testing.T) {
 	r := newTestEngine()
 	srv := &Server{} // ledger deliberately nil

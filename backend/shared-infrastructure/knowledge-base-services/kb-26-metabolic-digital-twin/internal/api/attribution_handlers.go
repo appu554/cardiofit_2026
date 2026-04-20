@@ -43,7 +43,7 @@ func (s *Server) runAttribution(c *gin.Context) {
 		// If either Create fails, both roll back.
 		txErr := s.db.DB.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&verdict).Error; err != nil {
-				s.logger.Warn("failed to persist attribution verdict (txn will roll back)",
+				s.logger.Error("failed to persist attribution verdict (txn will roll back)",
 					zap.Error(err),
 					zap.String("verdict_id", verdict.ID.String()))
 				return err
