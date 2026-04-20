@@ -1,7 +1,7 @@
 package services
 
 import (
-	"strings"
+	"regexp"
 
 	"kb-23-decision-cards/internal/models"
 )
@@ -99,34 +99,74 @@ func actionLabel(code string) string {
 	return code
 }
 
-// clinicalToLayperson maps clinical terms to layperson Hindi-friendly
-// equivalents for ASHA workers. The ASHA worker sees actionable
-// instructions, not diagnostic labels.
-var clinicalToLayperson = map[string]string{
-	"cardiorenal":              "heart and kidney problem",
-	"heart-kidney strain":      "heart and kidney problem — check for swollen legs",
-	"fluid overload":           "body holding too much water — check for swollen legs and breathing difficulty",
-	"hypertensive emergency":   "very high blood pressure — needs immediate doctor attention",
-	"acute kidney injury":      "kidney problem — patient may need more water or medicine change",
-	"severe hypoglycaemia":     "very low sugar — give sweet drink or food immediately",
-	"medication reaction":      "new medicine may be causing problems",
-	"post-hospital":            "recently came home from hospital — needs extra attention",
-	"therapeutic inertia":      "medicine may need to be changed — discuss with doctor",
-	"concordant deterioration": "multiple health signs getting worse together",
-	"phenotype transition":     "health pattern has changed — discuss with doctor",
-	"engagement":               "patient stopped measuring — visit to check on them",
-	"measurement gap":          "no readings received — visit to check on them",
-	"deterioration":            "health getting worse — visit today",
-	"declining":                "health getting worse — visit soon",
+// ashaReplacement pairs a compiled case-insensitive pattern for a clinical
+// term with the layperson phrase that should substitute for it.
+type ashaReplacement struct {
+	pattern   *regexp.Regexp
+	layperson string
 }
 
-// simplifyForASHA replaces clinical terms in text with layperson equivalents.
-func simplifyForASHA(text string) string {
-	lower := strings.ToLower(text)
-	for clinical, simple := range clinicalToLayperson {
-		if strings.Contains(lower, clinical) {
-			return simple
+// ashaSimplifications maps clinical terminology to layperson equivalents for
+// ASHA worker consumption. Ordering matters: compound / longer-phrase entries
+// come before their substrings so the compound phrase wins (e.g. "concordant
+// deterioration" is translated as a single unit before the bare word
+// "deterioration" gets its own substitution). This is a stable, deterministic
+// ordering — do NOT convert to a map.
+//
+// The replacement uses regexp.ReplaceAllString rather than returning the
+// layperson text directly, so surrounding context (numeric values like eGFR,
+// weight deltas, dates, patient names) is preserved verbatim.
+var ashaSimplifications = buildAshaSimplifications([]struct{ clinical, layperson string }{
+	// Compound / multi-word phrases first (longest-match wins).
+	{"concordant deterioration", "multiple health signs getting worse together"},
+	{"severe hypoglycaemia", "very low sugar — give sweet drink or food immediately"},
+	{"lower extremity edema", "swollen legs"},
+	{"hypertensive emergency", "very high blood pressure — needs immediate doctor attention"},
+	{"acute kidney injury", "kidney problem — patient may need more water or medicine change"},
+	{"therapeutic inertia", "medicine may need to be changed — discuss with doctor"},
+	{"phenotype transition", "health pattern has changed — discuss with doctor"},
+	{"cardiorenal syndrome", "heart and kidney problem"},
+	{"heart-kidney strain", "heart and kidney problem — check for swollen legs"},
+	{"medication reaction", "new medicine may be causing problems"},
+	{"peripheral edema", "swollen legs"},
+	{"measurement gap", "no readings received — visit to check on them"},
+	{"fluid overload", "body holding too much water — check for swollen legs and breathing difficulty"},
+	{"post-hospital", "recently came home from hospital — needs extra attention"},
+	// Shorter / single-word terms last.
+	{"deterioration", "health getting worse — visit today"},
+	{"cardiorenal", "heart and kidney problem"},
+	{"engagement", "patient stopped measuring — visit to check on them"},
+	{"declining", "health getting worse — visit soon"},
+	{"dyspnea", "breathing problem"},
+})
+
+// buildAshaSimplifications precompiles each clinical term into a case-insensitive
+// regex pattern. regexp.QuoteMeta escapes regex metacharacters so entries like
+// "heart-kidney strain" match literally.
+func buildAshaSimplifications(pairs []struct{ clinical, layperson string }) []ashaReplacement {
+	out := make([]ashaReplacement, len(pairs))
+	for i, p := range pairs {
+		out[i] = ashaReplacement{
+			pattern:   regexp.MustCompile("(?i)" + regexp.QuoteMeta(p.clinical)),
+			layperson: p.layperson,
 		}
+	}
+	return out
+}
+
+// simplifyForASHA rewrites clinical terminology in text with ASHA-friendly
+// phrasing, preserving all surrounding context (numbers, patient identifiers,
+// units). Substitutions are applied in the deterministic order defined by
+// ashaSimplifications; compound phrases are handled before their substrings.
+//
+// Known limitation: the output is English ASHA-friendly vocabulary, not Hindi
+// Devanagari. Full multi-language rendering is deferred — PersonaConfig's
+// Language field ("hi-IN") currently labels intent; a follow-up should either
+// emit Devanagari replacements or the label should be narrowed to reflect
+// what's actually produced.
+func simplifyForASHA(text string) string {
+	for _, r := range ashaSimplifications {
+		text = r.pattern.ReplaceAllString(text, r.layperson)
 	}
 	return text
 }

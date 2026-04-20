@@ -9,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"kb-23-decision-cards/internal/models"
 	"kb-23-decision-cards/internal/services"
@@ -297,66 +296,23 @@ func personaConfigForRole(role string) services.PersonaConfig {
 	}
 }
 
-// acknowledgeEscalationViaTracker locates the most recent pending/delivered
-// escalation for the patient, routes the T2 update through
-// AcknowledgmentTracker.RecordAcknowledgment (single source of truth), and
-// persists inside a transaction with SELECT … FOR UPDATE. The state predicate
-// in the WHERE clause makes double-ACK a no-op: the second caller sees
-// ErrRecordNotFound and returns cleanly.
-//
-// Returns the updated event on success, or nil with gorm.ErrRecordNotFound
-// when no eligible escalation exists (already acknowledged, or never created).
+// acknowledgeEscalationViaTracker forwards to the services-layer
+// AcknowledgePendingEscalation helper. Kept as a thin method on Server so the
+// handler code reads naturally; the idempotent transactional logic itself
+// lives in services/escalation_idempotency.go where it can be unit-tested
+// with an in-memory DB.
 func (s *Server) acknowledgeEscalationViaTracker(patientID, clinicianID string) (*models.EscalationEvent, error) {
 	if s.escalationManager == nil || s.db == nil || s.db.DB == nil {
 		return nil, nil
 	}
-	tracker := s.escalationManager.Tracker()
-	if tracker == nil {
-		return nil, nil
-	}
-	var event models.EscalationEvent
-	err := s.db.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("patient_id = ? AND current_state IN (?, ?)",
-				patientID, string(models.StatePending), string(models.StateDelivered)).
-			Order("created_at DESC").First(&event).Error; err != nil {
-			return err
-		}
-		tracker.RecordAcknowledgment(&event, clinicianID)
-		return tx.Save(&event).Error
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &event, nil
+	return services.AcknowledgePendingEscalation(s.db.DB, s.escalationManager.Tracker(), patientID, clinicianID)
 }
 
-// recordActionViaTracker locates the acknowledged escalation for the patient,
-// routes the T3 update through AcknowledgmentTracker.RecordAction, and saves
-// inside a transaction. T3 semantics: the timestamp captured here is "action
-// initiated" (button click in worklist) — not "action completed". See
-// LifecycleTracker.RecordT3 for the full semantic contract.
+// recordActionViaTracker forwards to services.RecordActionOnAcknowledgedEscalation.
+// See that function for the idempotency / T3 semantic contract.
 func (s *Server) recordActionViaTracker(patientID, actionCode, notes string) (*models.EscalationEvent, error) {
 	if s.escalationManager == nil || s.db == nil || s.db.DB == nil {
 		return nil, nil
 	}
-	tracker := s.escalationManager.Tracker()
-	if tracker == nil {
-		return nil, nil
-	}
-	var event models.EscalationEvent
-	err := s.db.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("patient_id = ? AND current_state = ?",
-				patientID, string(models.StateAcknowledged)).
-			Order("created_at DESC").First(&event).Error; err != nil {
-			return err
-		}
-		tracker.RecordAction(&event, actionCode, notes)
-		return tx.Save(&event).Error
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &event, nil
+	return services.RecordActionOnAcknowledgedEscalation(s.db.DB, s.escalationManager.Tracker(), patientID, actionCode, notes)
 }

@@ -171,3 +171,106 @@ func TestPersona_ASHAWorker_SimplifiedLanguage(t *testing.T) {
 		t.Errorf("Expected layperson cardiorenal text, got: %s", result[1].PrimaryReason)
 	}
 }
+
+// TestASHA_PreservesContext is a regression guard against the old
+// simplifyForASHA which returned the replacement phrase entirely, discarding
+// surrounding clinical context like eGFR values, weight deltas, and dates.
+// An ASHA worker must still see the numeric detail after translation.
+func TestASHA_PreservesContext(t *testing.T) {
+	cases := []struct {
+		name             string
+		input            string
+		mustContain      []string // substrings that must appear in the output
+		mustNotBeEqualTo string   // guard against original untransformed text
+	}{
+		{
+			name:  "cardiorenal keeps eGFR numbers",
+			input: "Cardiorenal syndrome suspected based on eGFR decline 45 to 32",
+			mustContain: []string{
+				"heart and kidney problem", // clinical term translated
+				"eGFR",                     // context preserved
+				"45",
+				"32",
+			},
+			mustNotBeEqualTo: "Cardiorenal syndrome suspected based on eGFR decline 45 to 32",
+		},
+		{
+			name:  "fluid overload keeps weight delta",
+			input: "Fluid overload detected — weight gain 2.5kg in 3 days",
+			mustContain: []string{
+				"body holding too much water", // translated
+				"2.5kg",                       // numeric context preserved
+				"3 days",                      // temporal context preserved
+			},
+		},
+		{
+			name:  "therapeutic inertia keeps drug name",
+			input: "Therapeutic inertia on metformin 500mg BD for 6 months",
+			mustContain: []string{
+				"medicine may need to be changed",
+				"metformin",
+				"500mg",
+				"6 months",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := simplifyForASHA(tc.input)
+			for _, s := range tc.mustContain {
+				if !strings.Contains(got, s) {
+					t.Errorf("output missing %q (context destroyed): got %q", s, got)
+				}
+			}
+			if tc.mustNotBeEqualTo != "" && got == tc.mustNotBeEqualTo {
+				t.Errorf("clinical term was not translated at all: %q", got)
+			}
+		})
+	}
+}
+
+// TestASHA_Deterministic is a regression guard against the old map-iteration
+// implementation, which produced different outputs for the same input across
+// different requests (Go map iteration is randomized per-process). Every call
+// with identical input must produce identical output.
+func TestASHA_Deterministic(t *testing.T) {
+	input := "Fluid overload with deterioration; patient in therapeutic inertia and dyspnea"
+	first := simplifyForASHA(input)
+	for i := 0; i < 50; i++ {
+		got := simplifyForASHA(input)
+		if got != first {
+			t.Fatalf("non-deterministic output on iteration %d:\n  first: %q\n  got:   %q", i, first, got)
+		}
+	}
+}
+
+// TestASHA_CompoundBeforeBase verifies that compound phrases like "concordant
+// deterioration" are translated as a unit, not as the substring "deterioration"
+// preceded by an orphan "concordant". The ordered-slice design enforces this.
+func TestASHA_CompoundBeforeBase(t *testing.T) {
+	input := "Concordant deterioration across cardiac and renal axes"
+	got := simplifyForASHA(input)
+	if !strings.Contains(got, "multiple health signs getting worse together") {
+		t.Errorf("compound phrase not translated: %q", got)
+	}
+	// The compound must have consumed its substring — there should be no bare
+	// "deterioration" left over, nor a stranded "concordant".
+	lower := strings.ToLower(got)
+	if strings.Contains(lower, "concordant deterioration") {
+		t.Errorf("compound phrase left untouched: %q", got)
+	}
+	if strings.Contains(lower, "concordant ") {
+		t.Errorf("stranded 'concordant' prefix — base term matched instead of compound: %q", got)
+	}
+}
+
+// TestASHA_UnmatchedInputPassesThrough ensures inputs with no clinical terms
+// are returned verbatim (not swallowed / emptied / mangled).
+func TestASHA_UnmatchedInputPassesThrough(t *testing.T) {
+	input := "Patient stable, no intervention needed today."
+	got := simplifyForASHA(input)
+	if got != input {
+		t.Errorf("unmatched input should pass through unchanged: got %q, want %q", got, input)
+	}
+}
