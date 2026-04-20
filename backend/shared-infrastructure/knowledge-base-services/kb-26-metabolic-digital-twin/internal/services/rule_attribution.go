@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
@@ -23,28 +24,20 @@ type AttributionInput struct {
 	PreAlertRiskTier     string
 }
 
-// AttributionConfig is the local mirror of config.AttributionConfig used to
-// avoid a circular import between services and config. Handlers populate it
-// from the loaded config at startup and pass it here.
-type AttributionConfig struct {
-	Method        string
-	MethodVersion string
-}
-
 // ComputeAttribution is the Sprint 1 backward-compatible entry point. It uses
 // the default rule-based config. Existing tests and callers can continue using
 // this signature. New handler paths should use ComputeAttributionWithConfig
 // with a loaded AttributionConfig so Sprint 2b's ML method swap is a config
 // change rather than a code change.
 func ComputeAttribution(in AttributionInput) models.AttributionVerdict {
-	return ComputeAttributionWithConfig(in, AttributionConfig{Method: "RULE_BASED", MethodVersion: "sprint1-v1"})
+	return ComputeAttributionWithConfig(in, config.DefaultAttributionConfig)
 }
 
 // ComputeAttributionWithConfig produces a rule-based AttributionVerdict and
 // stamps AttributionMethod/MethodVersion from the supplied config. Sprint 2b
 // replaces the function body with an ML client call while preserving the
 // exact signature — callers stay identical.
-func ComputeAttributionWithConfig(in AttributionInput, cfg AttributionConfig) models.AttributionVerdict {
+func ComputeAttributionWithConfig(in AttributionInput, cfg config.AttributionConfig) models.AttributionVerdict {
 	verdict := models.AttributionVerdict{
 		ID:                   uuid.New(),
 		ConsolidatedRecordID: in.ConsolidatedRecordID,

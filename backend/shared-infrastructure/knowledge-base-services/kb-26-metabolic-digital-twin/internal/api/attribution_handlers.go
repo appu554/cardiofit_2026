@@ -1,15 +1,19 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"kb-26-metabolic-digital-twin/internal/config"
 	"kb-26-metabolic-digital-twin/internal/models"
 	"kb-26-metabolic-digital-twin/internal/services"
 )
@@ -22,6 +26,20 @@ func (s *Server) runAttribution(c *gin.Context) {
 		return
 	}
 
+	// Sprint 3 Task 4: per-request deadline. Without this, ComputeAttribution
+	// (Sprint 1/2a rule-based) completes in microseconds, but Sprint 2b's
+	// ONNX inference call could block indefinitely. The 10s default matches
+	// typical ML inference budgets; override via GAP21_ATTRIBUTION_TIMEOUT_MS.
+	timeoutMs := 10000
+	if raw := os.Getenv("GAP21_ATTRIBUTION_TIMEOUT_MS"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			timeoutMs = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
+
 	var in services.AttributionInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -29,10 +47,10 @@ func (s *Server) runAttribution(c *gin.Context) {
 	}
 	cfg := s.attributionConfig
 	if cfg.Method == "" || cfg.MethodVersion == "" {
-		// If SetAttributionConfig was never called OR was called with a partial
-		// config (e.g., tests, or a misconfigured YAML that set one field but
-		// not the other), fall back to rule-based defaults.
-		cfg = services.AttributionConfig{Method: "RULE_BASED", MethodVersion: "sprint1-v1"}
+		// Fallback when SetAttributionConfig was never called (tests) or was
+		// called with a partial config. The config package's default ensures
+		// consistent values across all fallback paths.
+		cfg = config.DefaultAttributionConfig
 	}
 	verdict := services.ComputeAttributionWithConfig(in, cfg)
 
@@ -48,7 +66,7 @@ func (s *Server) runAttribution(c *gin.Context) {
 		// Sprint 2a Task 3: single transaction so a verdict cannot persist
 		// with a LedgerEntryID pointing at a ledger row that was rolled back.
 		// If either Create fails, both roll back.
-		txErr := s.db.DB.Transaction(func(tx *gorm.DB) error {
+		txErr := s.db.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&verdict).Error; err != nil {
 				s.logger.Error("failed to persist attribution verdict (txn will roll back)",
 					zap.Error(err),

@@ -299,10 +299,7 @@ func main() {
 			zap.String("method", attrCfg.Method),
 			zap.String("version", attrCfg.MethodVersion))
 	}
-	server.SetAttributionConfig(services.AttributionConfig{
-		Method:        attrCfg.Method,
-		MethodVersion: attrCfg.MethodVersion,
-	})
+	server.SetAttributionConfig(attrCfg)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{

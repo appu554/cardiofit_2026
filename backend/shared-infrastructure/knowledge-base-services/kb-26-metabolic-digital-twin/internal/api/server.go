@@ -47,7 +47,7 @@ type Server struct {
 	// Attribution config (Gap 21 Sprint 2a Task 5): loaded from
 	// market-configs/shared/attribution_parameters.yaml at startup.
 	// Used by runAttribution to stamp AttributionMethod/MethodVersion.
-	attributionConfig services.AttributionConfig
+	attributionConfig config.AttributionConfig
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -153,7 +153,7 @@ func (s *Server) SetGap21Services(ledger *services.InMemoryLedger) {
 // SetAttributionConfig injects the attribution config loaded from YAML at
 // startup. Setter injection matches the existing pattern for PAI, Acute,
 // and Gap 21 ledger.
-func (s *Server) SetAttributionConfig(cfg services.AttributionConfig) {
+func (s *Server) SetAttributionConfig(cfg config.AttributionConfig) {
 	s.attributionConfig = cfg
 }
 

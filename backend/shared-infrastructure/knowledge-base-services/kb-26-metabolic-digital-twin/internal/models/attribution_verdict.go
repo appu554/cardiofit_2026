@@ -26,7 +26,7 @@ const (
 type AttributionVerdict struct {
 	ID                 uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	ConsolidatedRecordID uuid.UUID `gorm:"type:uuid;index;not null" json:"consolidated_record_id"`
-	PatientID          string    `gorm:"size:100;index;index:idx_av_patient_computed,priority:1;not null" json:"patient_id"`
+	PatientID          string    `gorm:"size:100;index:idx_av_patient_computed,priority:1;not null" json:"patient_id"`
 	CohortID           string    `gorm:"size:60;index;index:idx_av_cohort_label,priority:1" json:"cohort_id,omitempty"`
 
 	// Attribution outputs
