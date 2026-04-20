@@ -1,0 +1,52 @@
+# Rule-based attribution thresholds — Sprint 1.
+# These thresholds convert a patient's own pre-alert risk vs observed outcome into
+# one of the five ClinicianLabel values. Sprint 2 replaces this with propensity-weighted
+# and doubly-robust estimators; the ClinicianLabel vocabulary stays identical.
+
+method:
+  name: RULE_BASED
+  version: sprint1-v1
+
+# Per-patient-baseline rules — no cohort mean, no propensity model.
+# The "counterfactual" is the patient's own pre-alert risk score (from Gap 20).
+# If the outcome does NOT occur and baseline risk was HIGH, we attribute prevention.
+# If the outcome DOES occur and baseline risk was HIGH, we attribute "outcome despite".
+# If baseline risk was LOW, we return "no_effect_detected" — rule-based attribution
+# cannot distinguish a genuine effect from chance on low-risk cases.
+
+labels:
+  prevented:
+    conditions:
+      treatment_strategy_in: [INTERVENTION_TAKEN]
+      outcome_occurred: false
+      pre_alert_risk_tier_in: [HIGH]
+    rationale_template: "High pre-alert risk ({risk_score:.0f}/100); intervention taken; outcome did not occur within {horizon_days}-day window."
+
+  outcome_despite_intervention:
+    conditions:
+      treatment_strategy_in: [INTERVENTION_TAKEN, ALREADY_ADDRESSED]
+      outcome_occurred: true
+    rationale_template: "Intervention taken but outcome occurred within {horizon_days}-day window."
+
+  no_effect_detected:
+    conditions:
+      treatment_strategy_in: [INTERVENTION_TAKEN]
+      outcome_occurred: false
+      pre_alert_risk_tier_in: [MODERATE, LOW]
+    rationale_template: "Pre-alert risk not high enough ({risk_score:.0f}/100) to credibly attribute non-occurrence to intervention."
+
+  fragile_estimate:
+    conditions:
+      treatment_strategy_in: [OVERRIDE_WITH_REASON, NO_RESPONSE]
+      outcome_occurred: false
+      pre_alert_risk_tier_in: [HIGH]
+    rationale_template: "High-risk alert overridden/unresponded; outcome did not occur but attribution is fragile without propensity adjustment."
+
+  inconclusive:
+    rationale_template: "Insufficient data for rule-based attribution (outcome status or risk tier missing)."
+
+# Aggregate attribution guardrails — portfolio-level reports must not claim
+# more effect than per-patient evidence supports.
+portfolio:
+  min_records_for_aggregate: 30
+  fragile_estimate_max_share: 0.40
