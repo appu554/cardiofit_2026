@@ -80,7 +80,7 @@ func (s *Server) getAttributionByPatient(c *gin.Context) {
 		}
 	}
 
-	var verdicts []models.AttributionVerdict
+	verdicts := []models.AttributionVerdict{}
 	if s.db != nil && s.db.DB != nil {
 		if err := s.db.DB.
 			Where("patient_id = ?", patientID).
