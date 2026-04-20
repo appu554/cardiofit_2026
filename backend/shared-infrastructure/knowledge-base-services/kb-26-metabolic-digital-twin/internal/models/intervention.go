@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // InterventionCategory is the coarse taxonomy bucket an intervention falls into.
@@ -60,7 +61,7 @@ type InterventionDefinition struct {
 	ClinicianLanguage     string        `gorm:"size:300" json:"clinician_language"`
 	CoolDownHours         int           `json:"cool_down_hours"`
 	ResourceCost          float64       `json:"resource_cost"`
-	FeatureSignature      []string      `gorm:"serializer:json" json:"feature_signature"`
+	FeatureSignature      pq.StringArray `gorm:"type:text[]" json:"feature_signature"`
 	EligibilityJSON       string        `gorm:"type:text" json:"-"`
 	ContraindicationsJSON string        `gorm:"type:text" json:"-"`
 	Version               string        `gorm:"size:20;not null;default:'1.0.0'" json:"version"`
