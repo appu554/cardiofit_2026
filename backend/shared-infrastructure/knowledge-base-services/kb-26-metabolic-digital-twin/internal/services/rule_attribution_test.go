@@ -83,3 +83,13 @@ func TestAttribution_NoResponseOutcomeOccurred_InconclusiveIgnoredAlert(t *testi
 		t.Fatalf("expected rule_ignored_alert_outcome_occurred, got %s", v.TechnicalLabel)
 	}
 }
+
+func TestAttribution_OverrideOutcomeOccurred_InconclusiveIgnoredAlert(t *testing.T) {
+	v := ComputeAttribution(attrInput("OVERRIDE_WITH_REASON", true, "HIGH"))
+	if v.ClinicianLabel != string(models.LabelInconclusive) {
+		t.Fatalf("expected inconclusive, got %s", v.ClinicianLabel)
+	}
+	if v.TechnicalLabel != "rule_ignored_alert_outcome_occurred" {
+		t.Fatalf("expected rule_ignored_alert_outcome_occurred, got %s", v.TechnicalLabel)
+	}
+}

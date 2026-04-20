@@ -97,6 +97,7 @@ func (s *Server) setupRoutes() {
 		attribution := v1.Group("/attribution")
 		{
 			attribution.POST("/run", s.runAttribution)
+			attribution.GET("/:patientId", s.getAttributionByPatient)
 		}
 
 		// Governance ledger (Gap 21)
