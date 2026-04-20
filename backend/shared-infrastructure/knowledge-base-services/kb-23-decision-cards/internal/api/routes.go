@@ -74,6 +74,9 @@ func (s *Server) RegisterRoutes() {
 		{
 			tracking.GET("/detection/:id", s.getDetectionLifecycle)
 			tracking.GET("/patient/:patientId", s.getPatientLifecycles)
+			// T4 bridge: called by KB-26 acute_event_handler when an event
+			// resolves back to baseline, closing the outcome lifecycle.
+			tracking.POST("/resolve", s.handleResolveLifecycle)
 		}
 		responseMetrics := v1.Group("/metrics")
 		{

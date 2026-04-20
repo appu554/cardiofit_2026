@@ -36,7 +36,7 @@ func TestMetrics_ClinicianMedians(t *testing.T) {
 		lifecycles = append(lifecycles, lc)
 	}
 
-	result := svc.ComputeClinicianMetrics(lifecycles, "doc-1", 30)
+	result := svc.ComputeClinicianMetrics(lifecycles, "doc-1", "", 30)
 
 	if result.TotalDetections != 10 {
 		t.Fatalf("expected 10 detections, got %d", result.TotalDetections)
@@ -63,7 +63,7 @@ func TestMetrics_ActionCompletionRate(t *testing.T) {
 		lifecycles = append(lifecycles, lc)
 	}
 
-	result := svc.ComputeClinicianMetrics(lifecycles, "doc-2", 30)
+	result := svc.ComputeClinicianMetrics(lifecycles, "doc-2", "", 30)
 
 	if result.ActionCompletionRate != 0.8 {
 		t.Fatalf("expected action completion rate 0.80, got %.4f", result.ActionCompletionRate)
@@ -87,7 +87,7 @@ func TestMetrics_OutcomeRate(t *testing.T) {
 		lifecycles = append(lifecycles, lc)
 	}
 
-	result := svc.ComputeClinicianMetrics(lifecycles, "doc-3", 30)
+	result := svc.ComputeClinicianMetrics(lifecycles, "doc-3", "", 30)
 
 	if result.OutcomeRate != 0.625 {
 		t.Fatalf("expected outcome rate 0.625, got %.4f", result.OutcomeRate)
@@ -109,7 +109,7 @@ func TestMetrics_SystemLevel(t *testing.T) {
 		lifecycles = append(lifecycles, lc)
 	}
 
-	result := svc.ComputeSystemMetrics(lifecycles, 30)
+	result := svc.ComputeSystemMetrics(lifecycles, "", 30)
 
 	if result.TotalDetections != 30 {
 		t.Fatalf("expected 30 detections, got %d", result.TotalDetections)
@@ -146,7 +146,7 @@ func TestMetrics_AckInTime_UsesTierThreshold(t *testing.T) {
 		mk("URGENT", 90*60*1000),
 	}
 
-	result := svc.ComputePilotMetrics(lifecycles)
+	result := svc.ComputePilotMetrics(lifecycles, "", 90)
 
 	if result.DetectionsAcknowledgedInTime != 1 {
 		t.Fatalf("expected exactly 1 in-time (URGENT only), got %d — SAFETY threshold leaking", result.DetectionsAcknowledgedInTime)
@@ -179,7 +179,7 @@ func TestMetrics_PilotKPIs(t *testing.T) {
 		lifecycles = append(lifecycles, lc)
 	}
 
-	result := svc.ComputePilotMetrics(lifecycles)
+	result := svc.ComputePilotMetrics(lifecycles, "", 90)
 
 	if result.TotalDetections != 20 {
 		t.Fatalf("expected 20 total detections, got %d", result.TotalDetections)
@@ -192,5 +192,21 @@ func TestMetrics_PilotKPIs(t *testing.T) {
 	}
 	if result.AppointmentsScheduled != 3 {
 		t.Fatalf("expected 3 appointments scheduled, got %d", result.AppointmentsScheduled)
+	}
+}
+
+// TestMetrics_PilotMetrics_EchoesCohortAndWindow — the pilot endpoint must
+// return which cohort + window the numbers were computed over, so HCF's
+// contract-renewal analysts can see the denominator scope in the response
+// payload rather than having to trust query-param round-trip.
+func TestMetrics_PilotMetrics_EchoesCohortAndWindow(t *testing.T) {
+	svc := NewResponseMetricsService(nil)
+	lifecycles := []models.DetectionLifecycle{makeLifecycle("d", "p")}
+	result := svc.ComputePilotMetrics(lifecycles, "hcf_catalyst_chf", 90)
+	if result.CohortID != "hcf_catalyst_chf" {
+		t.Fatalf("expected cohort_id echoed, got %q", result.CohortID)
+	}
+	if result.WindowDays != 90 {
+		t.Fatalf("expected window_days echoed, got %d", result.WindowDays)
 	}
 }

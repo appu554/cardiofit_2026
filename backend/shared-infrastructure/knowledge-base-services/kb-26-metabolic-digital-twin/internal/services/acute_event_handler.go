@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"math"
 	"time"
 
@@ -17,19 +18,33 @@ type PAIUpdater interface {
 	UpdateFromAcuteEvent(patientID string, deviationPercent float64, severity string, vitalType string)
 }
 
+// LifecycleResolver bridges Gap 19 T4: when an acute event resolves, KB-26
+// reports the outcome to KB-23 so the DetectionLifecycle can be closed.
+// Implemented by clients.KB23Client.ResolveLifecycle. Nil-safe: when unset
+// resolution is purely local (tests, standalone mode).
+type LifecycleResolver interface {
+	ResolveLifecycle(ctx context.Context, patientID, detectionType, outcomeDescription string, resolvedAt time.Time) error
+}
+
 // AcuteEventHandler orchestrates the full acute-on-chronic detection pipeline:
 // baseline computation → deviation scoring → compound pattern detection →
 // event creation → resolution tracking → PAI velocity/proximity update.
 type AcuteEventHandler struct {
-	config     *AcuteDetectionConfig
-	repo       *AcuteRepository // nil-safe for tests
-	paiUpdater PAIUpdater       // nil-safe: when unset, PAI is not updated
-	log        *zap.Logger
+	config            *AcuteDetectionConfig
+	repo              *AcuteRepository  // nil-safe for tests
+	paiUpdater        PAIUpdater        // nil-safe: when unset, PAI is not updated
+	lifecycleResolver LifecycleResolver // nil-safe: when unset, T4 is not reported
+	log               *zap.Logger
 }
 
 // SetPAIUpdater injects the PAI integration callback. Called from server wiring.
 func (h *AcuteEventHandler) SetPAIUpdater(u PAIUpdater) {
 	h.paiUpdater = u
+}
+
+// SetLifecycleResolver injects the KB-23 T4 bridge. Called from server wiring.
+func (h *AcuteEventHandler) SetLifecycleResolver(r LifecycleResolver) {
+	h.lifecycleResolver = r
 }
 
 // NewAcuteEventHandler constructs a handler. repo may be nil for unit tests.
@@ -150,6 +165,7 @@ func (h *AcuteEventHandler) checkResolution(
 	}
 
 	// Reading is within 10% of baseline — resolve matching active events.
+	now := time.Now().UTC()
 	for _, ev := range activeEvents {
 		if ev.VitalSignType == vitalType && ev.ResolvedAt == nil {
 			resolvedIDs = append(resolvedIDs, ev.ID.String())
@@ -160,6 +176,28 @@ func (h *AcuteEventHandler) checkResolution(
 						zap.String("event_id", ev.ID.String()),
 						zap.Error(err))
 				}
+			}
+
+			// Gap 19 T4 bridge — inform KB-23 so it can close the outcome
+			// lifecycle. Best-effort: a failure here must not block resolution
+			// of the acute event, so we fire-and-forget in a goroutine with
+			// a bounded timeout.
+			if h.lifecycleResolver != nil {
+				patientID := ev.PatientID
+				vital := vitalType
+				detectionType := "ACUTE_EVENT_" + vital
+				outcome := "reading returned to within 10% of baseline"
+				resolver := h.lifecycleResolver
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					if err := resolver.ResolveLifecycle(ctx, patientID, detectionType, outcome, now); err != nil {
+						h.log.Warn("KB-23 T4 bridge failed",
+							zap.String("patient_id", patientID),
+							zap.String("vital", vital),
+							zap.Error(err))
+					}
+				}()
 			}
 		}
 	}

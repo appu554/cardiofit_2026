@@ -70,6 +70,7 @@ type Config struct {
 
 	// Response tracking (Gap 19)
 	ResponseTrackingConfigPath string // path to response_tracking_parameters.yaml; empty = built-in defaults
+	DefaultCohort              string // e.g. "hcf_catalyst_chf" — stamped on new lifecycle records
 }
 
 func Load() *Config {
@@ -122,6 +123,7 @@ func Load() *Config {
 		SeasonalCalendarPath: envOrDefault("SEASONAL_CALENDAR_PATH", ""),
 
 		ResponseTrackingConfigPath: envOrDefault("RESPONSE_TRACKING_CONFIG_PATH", ""),
+		DefaultCohort:              envOrDefault("DEFAULT_COHORT", ""),
 	}
 }
 

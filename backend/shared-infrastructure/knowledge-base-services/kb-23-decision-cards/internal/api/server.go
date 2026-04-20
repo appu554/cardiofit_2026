@@ -178,8 +178,13 @@ func (s *Server) SetEscalationManager(em *services.EscalationManager) {
 
 // SetLifecycleTracker injects the lifecycle tracker after construction.
 // Called from main.go once the LifecycleTracker is instantiated. Gap 19.
+// The configured DefaultCohort is stamped onto the tracker so every new
+// lifecycle is tagged with the deployment's pilot cohort automatically.
 func (s *Server) SetLifecycleTracker(t *services.LifecycleTracker) {
 	s.lifecycleTracker = t
+	if t != nil && s.cfg != nil && s.cfg.DefaultCohort != "" {
+		t.SetDefaultCohort(s.cfg.DefaultCohort)
+	}
 }
 
 // requestLogger middleware logs each request.

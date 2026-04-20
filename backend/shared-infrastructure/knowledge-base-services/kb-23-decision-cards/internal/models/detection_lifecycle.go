@@ -28,6 +28,11 @@ type DetectionLifecycle struct {
 	AssignedClinicianID     string     `gorm:"size:100;index" json:"assigned_clinician_id,omitempty"`
 	CurrentState            string     `gorm:"size:30;not null;default:'PENDING_NOTIFICATION'" json:"current_state"`
 	TierAtDetection         string     `gorm:"size:20" json:"tier_at_detection"`
+	// CohortID scopes the lifecycle to a pilot / program / product line
+	// (e.g. "hcf_catalyst_chf", "aged_care_au"). The pilot metrics endpoint
+	// filters on this so HCF sees HCF data, not platform-wide aggregates.
+	// Empty string means "unassigned / platform-default".
+	CohortID                string     `gorm:"size:60;index" json:"cohort_id,omitempty"`
 	DetectedAt              time.Time  `gorm:"not null" json:"detected_at"`
 	DeliveredAt             *time.Time `json:"delivered_at,omitempty"`
 	AcknowledgedAt          *time.Time `json:"acknowledged_at,omitempty"`
@@ -54,6 +59,7 @@ func (DetectionLifecycle) TableName() string { return "detection_lifecycles" }
 // ClinicianResponseMetrics holds computed metrics for one clinician.
 type ClinicianResponseMetrics struct {
 	ClinicianID            string `json:"clinician_id"`
+	CohortID               string `json:"cohort_id,omitempty"`
 	WindowDays             int    `json:"window_days"`
 	TotalDetections        int    `json:"total_detections"`
 	MedianDeliveryMs       *int64 `json:"median_delivery_ms,omitempty"`
@@ -66,6 +72,7 @@ type ClinicianResponseMetrics struct {
 
 // SystemResponseMetrics holds aggregate metrics.
 type SystemResponseMetrics struct {
+	CohortID             string                 `json:"cohort_id,omitempty"`
 	WindowDays           int                    `json:"window_days"`
 	TotalDetections      int                    `json:"total_detections"`
 	MedianT0toT2Ms       *int64                 `json:"median_t0_to_t2_ms,omitempty"`
@@ -86,6 +93,8 @@ type TierMetrics struct {
 
 // PilotMetrics holds HCF CHF pilot-specific KPIs.
 type PilotMetrics struct {
+	CohortID                    string  `json:"cohort_id,omitempty"`
+	WindowDays                  int     `json:"window_days"`
 	TotalDetections             int     `json:"total_detections"`
 	DetectionsAcknowledgedInTime int    `json:"detections_acknowledged_in_time"`
 	DetectionsWithAction        int     `json:"detections_with_action"`

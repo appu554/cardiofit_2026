@@ -63,6 +63,13 @@ func (m *EscalationManager) SetLifecycleTracker(t *LifecycleTracker) {
 	m.lifecycleTracker = t
 }
 
+// Tracker returns the acknowledgment tracker so other subsystems (e.g. the
+// worklist resolution handler) can route T2/T3 transitions through the single
+// source of truth instead of mutating EscalationEvent fields directly.
+func (m *EscalationManager) Tracker() *AcknowledgmentTracker {
+	return m.tracker
+}
+
 // HandleCardCreated is the primary entry point: given a newly generated
 // decision card, it routes, selects channels, dispatches, persists, and
 // returns the EscalationEvent (or nil if the card was suppressed / informational).
@@ -117,6 +124,9 @@ func (m *EscalationManager) HandleCardCreated(
 	}
 
 	// Gap 19 T0 — record detection into lifecycle tracker.
+	// Cohort is left empty here so the tracker stamps its deployment default
+	// (e.g. "hcf_catalyst_chf"); a per-patient lookup will replace this once
+	// KB-20 exposes cohort membership.
 	var lifecycle *models.DetectionLifecycle
 	if m.lifecycleTracker != nil {
 		lifecycle = m.lifecycleTracker.RecordT0(
@@ -125,6 +135,7 @@ func (m *EscalationManager) HandleCardCreated(
 			card.PatientID.String(),
 			string(result.Tier),
 			"KB-23",
+			"", // cohort: use tracker default
 			&card.CardID,
 			&event.ID,
 		)

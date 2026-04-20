@@ -10,6 +10,20 @@ import (
 // ResponseTrackingConfig holds threshold values loaded from
 // market-configs/shared/response_tracking_parameters.yaml, driving the
 // per-tier "acknowledged in time" and "timely action" KPI computations.
+//
+// Semantic contract for the T-stages this config thresholds against:
+//   T0 — detection (card/escalation created)
+//   T1 — delivery (notification hit clinician's channel)
+//   T2 — acknowledgment (clinician clicked ACK in worklist or replied to WA)
+//   T3 — action INITIATED (clinician clicked an action button, e.g.
+//        CALL_PATIENT). NOT action completed — the actual call may occur
+//        minutes to hours later. ActionThresholdsMs therefore measures
+//        intent-to-act latency, not intervention-completed latency.
+//   T4 — resolution / outcome (if tracked; currently optional)
+//
+// See LifecycleTracker.RecordT3 for the full semantic note. If pilot metrics
+// require a distinct action-completed signal, add a new T-stage — do NOT
+// redefine T3, which already has downstream dependents.
 type ResponseTrackingConfig struct {
 	AckThresholdsMs    map[string]int64
 	ActionThresholdsMs map[string]int64

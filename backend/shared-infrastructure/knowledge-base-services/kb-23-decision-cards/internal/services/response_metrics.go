@@ -27,7 +27,7 @@ func NewResponseMetricsService(cfg *ResponseTrackingConfig) *ResponseMetricsServ
 // by date window is the caller's responsibility.
 func (s *ResponseMetricsService) ComputeClinicianMetrics(
 	lifecycles []models.DetectionLifecycle,
-	clinicianID string,
+	clinicianID, cohort string,
 	windowDays int,
 ) models.ClinicianResponseMetrics {
 	// Filter to this clinician
@@ -41,6 +41,7 @@ func (s *ResponseMetricsService) ComputeClinicianMetrics(
 	total := len(filtered)
 	result := models.ClinicianResponseMetrics{
 		ClinicianID:     clinicianID,
+		CohortID:        cohort,
 		WindowDays:      windowDays,
 		TotalDetections: total,
 	}
@@ -82,13 +83,15 @@ func (s *ResponseMetricsService) ComputeClinicianMetrics(
 }
 
 // ComputeSystemMetrics computes system-level aggregate metrics across all
-// lifecycles in the provided slice.
+// lifecycles in the provided slice. cohort is echoed into the result.
 func (s *ResponseMetricsService) ComputeSystemMetrics(
 	lifecycles []models.DetectionLifecycle,
+	cohort string,
 	windowDays int,
 ) models.SystemResponseMetrics {
 	total := len(lifecycles)
 	result := models.SystemResponseMetrics{
+		CohortID:        cohort,
 		WindowDays:      windowDays,
 		TotalDetections: total,
 		ByTier:          make(map[string]models.TierMetrics),
@@ -180,10 +183,16 @@ func (s *ResponseMetricsService) ComputeSystemMetrics(
 // injected ResponseTrackingConfig loaded from response_tracking_parameters.yaml.)
 
 // ComputePilotMetrics computes HCF CHF pilot-specific KPIs.
+// cohort and windowDays are echoed into the result so API consumers know
+// exactly what denominator the numbers are drawn from.
 func (s *ResponseMetricsService) ComputePilotMetrics(
 	lifecycles []models.DetectionLifecycle,
+	cohort string,
+	windowDays int,
 ) models.PilotMetrics {
 	result := models.PilotMetrics{
+		CohortID:        cohort,
+		WindowDays:      windowDays,
 		TotalDetections: len(lifecycles),
 	}
 	if len(lifecycles) == 0 {

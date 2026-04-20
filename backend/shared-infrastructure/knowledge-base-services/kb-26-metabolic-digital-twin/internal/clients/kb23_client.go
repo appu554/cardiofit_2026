@@ -1,7 +1,9 @@
 package clients
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +61,64 @@ func (c *KB23Client) TriggerCompositeSynthesize(ctx context.Context, patientID s
 
 	c.log.Debug("KB-23 composite synthesise triggered",
 		zap.String("patient_id", patientID),
+		zap.Int("status", resp.StatusCode))
+	return nil
+}
+
+// ResolveLifecycle tells KB-23 that an outcome signal has been observed for
+// a patient (Gap 19 T4). KB-23 attributes the outcome to the most-recent
+// actioned-but-unresolved DetectionLifecycle and closes it.
+//
+// Best-effort: a 404 from KB-23 means "nothing to resolve" and is not an
+// error from KB-26's perspective; a transport error is logged and returned
+// so the caller can decide whether to continue or retry.
+func (c *KB23Client) ResolveLifecycle(
+	ctx context.Context,
+	patientID, detectionType, outcomeDescription string,
+	resolvedAt time.Time,
+) error {
+	if patientID == "" {
+		return fmt.Errorf("patient_id required")
+	}
+
+	body := map[string]interface{}{
+		"patient_id":          patientID,
+		"resolved_at":         resolvedAt.UTC().Format(time.RFC3339Nano),
+		"outcome_description": outcomeDescription,
+	}
+	if detectionType != "" {
+		body["detection_type"] = detectionType
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal resolve body: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v1/tracking/resolve", c.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
+	if err != nil {
+		return fmt.Errorf("build KB-23 resolve request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		c.log.Warn("KB-23 resolve-lifecycle failed", zap.String("url", url), zap.Error(err))
+		return fmt.Errorf("KB-23 POST: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil // no matching lifecycle — not an error
+	}
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("KB-23 resolve returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	c.log.Debug("KB-23 lifecycle resolved",
+		zap.String("patient_id", patientID),
+		zap.String("detection_type", detectionType),
 		zap.Int("status", resp.StatusCode))
 	return nil
 }

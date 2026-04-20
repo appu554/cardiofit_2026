@@ -16,7 +16,7 @@ func newLifecycleTracker() *LifecycleTracker {
 func TestTracker_RecordT0_CreatesLifecycle(t *testing.T) {
 	tracker := newLifecycleTracker()
 
-	lc := tracker.RecordT0("WEIGHT_GAIN", "RAPID", "patient-001", "URGENT", "kb-26", nil, nil)
+	lc := tracker.RecordT0("WEIGHT_GAIN", "RAPID", "patient-001", "URGENT", "kb-26", "", nil, nil)
 
 	require.NotNil(t, lc)
 	assert.Equal(t, string(models.LifecyclePendingNotification), lc.CurrentState)

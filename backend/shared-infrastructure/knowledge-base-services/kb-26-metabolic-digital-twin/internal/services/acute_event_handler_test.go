@@ -1,6 +1,8 @@
 package services
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -8,6 +10,33 @@ import (
 
 	"kb-26-metabolic-digital-twin/internal/models"
 )
+
+// fakeLifecycleResolver captures calls for assertions in tests.
+type fakeLifecycleResolver struct {
+	mu    sync.Mutex
+	calls []struct {
+		PatientID     string
+		DetectionType string
+		Outcome       string
+	}
+}
+
+func (f *fakeLifecycleResolver) ResolveLifecycle(_ context.Context, patientID, detectionType, outcome string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, struct {
+		PatientID     string
+		DetectionType string
+		Outcome       string
+	}{patientID, detectionType, outcome})
+	return nil
+}
+
+func (f *fakeLifecycleResolver) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
 
 // makeTimestamps generates n timestamps within the last lookbackDays, spaced evenly.
 func makeTimestamps(n int, lookbackDays int) []time.Time {
@@ -199,6 +228,56 @@ func TestHandler_Resolution_MarksResolved(t *testing.T) {
 	}
 	if resolvedIDs[0] != activeEventID.String() {
 		t.Errorf("expected resolved ID %q, got %q", activeEventID.String(), resolvedIDs[0])
+	}
+}
+
+// TestHandler_Resolution_BridgesT4ToKB23 — when an acute event resolves,
+// the handler must call LifecycleResolver.ResolveLifecycle so KB-23 can
+// close the Gap 19 T4 outcome lifecycle. Without this bridge the pilot
+// metrics report "actions taken" but never "outcomes observed."
+func TestHandler_Resolution_BridgesT4ToKB23(t *testing.T) {
+	handler := NewAcuteEventHandler(DefaultAcuteDetectionConfig(), nil, nil)
+	fake := &fakeLifecycleResolver{}
+	handler.SetLifecycleResolver(fake)
+
+	readings := []float64{42, 40, 43, 41, 38, 42, 40}
+	timestamps := makeTimestamps(len(readings), 7)
+	now := time.Now().UTC()
+	activeEvents := []models.AcuteEvent{
+		{
+			ID:            uuid.New(),
+			PatientID:     "patient-t4",
+			EventType:     string(models.AcuteKidneyInjury),
+			VitalSignType: "EGFR",
+			Severity:      "HIGH",
+			ResolvedAt:    nil,
+		},
+	}
+
+	_, resolvedIDs := handler.HandleNewReading(
+		"patient-t4", "EGFR", 40.0, now,
+		readings, timestamps,
+		DeviationContext{},
+		nil, CompoundContext{}, activeEvents,
+	)
+	if len(resolvedIDs) != 1 {
+		t.Fatalf("expected 1 resolved event, got %d", len(resolvedIDs))
+	}
+
+	// Bridge fires on a goroutine — give it a moment to run.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) && fake.callCount() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fake.callCount() != 1 {
+		t.Fatalf("expected 1 ResolveLifecycle call, got %d", fake.callCount())
+	}
+	call := fake.calls[0]
+	if call.PatientID != "patient-t4" {
+		t.Errorf("wrong patient_id: %q", call.PatientID)
+	}
+	if call.DetectionType != "ACUTE_EVENT_EGFR" {
+		t.Errorf("wrong detection_type: %q", call.DetectionType)
 	}
 }
 
