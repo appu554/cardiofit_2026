@@ -41,3 +41,16 @@ func TestInterventionDefinition_Validate_AcceptsWellFormed(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
+
+func TestInterventionDefinition_Validate_RejectsNegativeCoolDown(t *testing.T) {
+	def := InterventionDefinition{
+		ID:       "x",
+		CohortID: "hcf_catalyst_chf",
+		Category: string(CategoryFollowUp),
+		Name:     "x",
+		CoolDownHours: -1,
+	}
+	if err := def.Validate(); err == nil {
+		t.Fatal("expected validation error for negative cool down")
+	}
+}

@@ -55,12 +55,12 @@ type Contraindication struct {
 // can score. Persisted to DB on service start from market-config YAML.
 type InterventionDefinition struct {
 	ID                    string        `gorm:"primaryKey;size:80" json:"id"`
-	CohortID              string        `gorm:"size:60;index;not null" json:"cohort_id"`
+	CohortID              string        `gorm:"primaryKey;size:60" json:"cohort_id"`
 	Category              string        `gorm:"size:40;not null" json:"category"`
 	Name                  string        `gorm:"size:200;not null" json:"name"`
 	ClinicianLanguage     string        `gorm:"size:300" json:"clinician_language"`
-	CoolDownHours         int           `json:"cool_down_hours"`
-	ResourceCost          float64       `json:"resource_cost"`
+	CoolDownHours         int           `gorm:"not null;default:0" json:"cool_down_hours"`
+	ResourceCost          float64       `gorm:"not null;default:0" json:"resource_cost"`
 	FeatureSignature      pq.StringArray `gorm:"type:text[]" json:"feature_signature"`
 	EligibilityJSON       string        `gorm:"type:text" json:"-"`
 	ContraindicationsJSON string        `gorm:"type:text" json:"-"`
@@ -86,6 +86,9 @@ func (d InterventionDefinition) Validate() error {
 	}
 	if d.Name == "" {
 		return errors.New("intervention name required")
+	}
+	if d.CoolDownHours < 0 {
+		return errors.New("cool down hours must be non-negative")
 	}
 	return nil
 }
