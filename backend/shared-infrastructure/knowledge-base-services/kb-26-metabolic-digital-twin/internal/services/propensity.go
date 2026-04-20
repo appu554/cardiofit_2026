@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"math"
 )
 
@@ -17,13 +18,19 @@ type PropensityModel struct {
 }
 
 const (
-	propensityEpochs    = 800
-	propensityLearnRate = 0.05
-	propensityClipAbs   = 30.0 // clip logits to avoid sigmoid overflow
+	propensityEpochs    = 800   // enough to converge on cohorts up to ~10K samples; Sprint 2 GBM replaces this
+	propensityLearnRate = 0.05  // normalised by n in FitPropensity; equivalent to learning on mean log-loss
+	propensityClipAbs   = 30.0  // sigmoid(30) ≈ 1-9.4e-14; beyond this, exp() is at double-precision floor
 )
 
 // FitPropensity fits a logistic regression on features X (n×d) with binary labels y.
 // featureKeys[i] names column i — Predict expects the same ordering in its input map.
+//
+// Note: FitPropensity does not detect degenerate label distributions (all-true
+// or all-false). A degenerate distribution will converge to a near-constant
+// output (~1.0 or ~0.0), causing all patients to fail the overlap ceiling or
+// floor check. Callers should validate that both treated and control arms are
+// present before fitting.
 func FitPropensity(X [][]float64, y []bool, featureKeys []string) (*PropensityModel, error) {
 	n := len(X)
 	if n == 0 || len(y) != n {
@@ -32,6 +39,9 @@ func FitPropensity(X [][]float64, y []bool, featureKeys []string) (*PropensityMo
 	d := len(featureKeys)
 	if d == 0 {
 		return nil, errors.New("no features")
+	}
+	if len(X[0]) != d {
+		return nil, fmt.Errorf("feature key count (%d) does not match column count (%d)", d, len(X[0]))
 	}
 	w := make([]float64, d)
 	var b float64

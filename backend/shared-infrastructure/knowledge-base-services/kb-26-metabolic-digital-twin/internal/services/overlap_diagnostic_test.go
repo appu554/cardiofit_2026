@@ -26,3 +26,17 @@ func TestEvaluateOverlap_AboveCeiling(t *testing.T) {
 		t.Fatalf("want ABOVE_CEILING, got %s", got)
 	}
 }
+
+func TestEvaluateOverlap_ExactlyAtFloorPasses(t *testing.T) {
+	got := EvaluateOverlap(0.05, models.OverlapBand{Floor: 0.05, Ceiling: 0.95})
+	if got != models.OverlapPass {
+		t.Fatalf("want PASS at exact floor, got %s (strict < boundary was changed to <=?)", got)
+	}
+}
+
+func TestEvaluateOverlap_ExactlyAtCeilingPasses(t *testing.T) {
+	got := EvaluateOverlap(0.95, models.OverlapBand{Floor: 0.05, Ceiling: 0.95})
+	if got != models.OverlapPass {
+		t.Fatalf("want PASS at exact ceiling, got %s (strict > boundary was changed to >=?)", got)
+	}
+}
