@@ -40,6 +40,9 @@ type Server struct {
 	// Acute-on-chronic detection (Gap 16)
 	acuteRepo    *services.AcuteRepository
 	acuteHandler *services.AcuteEventHandler
+
+	// Attribution + governance ledger (Gap 21)
+	ledger *services.InMemoryLedger
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -134,6 +137,12 @@ func (s *Server) SetPAIServices(repo *services.PAIRepository, trigger *services.
 func (s *Server) SetAcuteServices(repo *services.AcuteRepository, handler *services.AcuteEventHandler) {
 	s.acuteRepo = repo
 	s.acuteHandler = handler
+}
+
+// SetGap21Services injects the governance ledger used by attribution + governance
+// handlers. Setter injection matches the existing pattern for PAI and Acute.
+func (s *Server) SetGap21Services(ledger *services.InMemoryLedger) {
+	s.ledger = ledger
 }
 
 // --- Infrastructure handlers ---

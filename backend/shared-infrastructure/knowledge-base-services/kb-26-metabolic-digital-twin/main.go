@@ -80,6 +80,9 @@ func main() {
 		&models.PatientBaselineSnapshot{},
 		// Predictive risk layer (Gap 20)
 		&models.PredictedRisk{},
+		// Attribution + governance ledger (Gap 21)
+		&models.AttributionVerdict{},
+		&models.LedgerEntry{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -229,6 +232,11 @@ func main() {
 	server := api.NewServer(cfg, db, cacheClient, metricsCollector, logger, bpContextOrch, twinUpdater, calibrator, eventProcessor, mriScorer, preventScorer, relapseDetector, trajectoryPublisher)
 	server.SetPAIServices(paiRepo, paiTrigger, paiCfg)
 	server.SetAcuteServices(acuteRepo, acuteHandler)
+
+	// Gap 21: governance ledger for attribution runs + model promotions.
+	// HMAC key from env for Sprint 1; Sprint 2 adds Ed25519 per-entry signatures.
+	gap21Ledger := services.NewInMemoryLedger([]byte(os.Getenv("GAP21_LEDGER_HMAC_KEY")))
+	server.SetGap21Services(gap21Ledger)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{

@@ -92,5 +92,17 @@ func (s *Server) setupRoutes() {
 			risk.GET("/:patientId", s.getPredictedRisk)
 			risk.POST("/batch", s.batchPredictRisk)
 		}
+
+		// Attribution (Gap 21 — Closed-Loop Outcome Learning)
+		attribution := v1.Group("/attribution")
+		{
+			attribution.POST("/run", s.runAttribution)
+		}
+
+		// Governance ledger (Gap 21)
+		governance := v1.Group("/governance")
+		{
+			governance.GET("/ledger", s.getLedger)
+		}
 	}
 }

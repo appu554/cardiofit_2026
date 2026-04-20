@@ -17,6 +17,7 @@ import (
 	"kb-23-decision-cards/internal/config"
 	"kb-23-decision-cards/internal/database"
 	"kb-23-decision-cards/internal/metrics"
+	"kb-23-decision-cards/internal/models"
 	"kb-23-decision-cards/internal/services"
 )
 
@@ -63,6 +64,10 @@ func main() {
 	// Phase 10 Gap 11 follow-up: clinical audit log table.
 	if err := db.DB.AutoMigrate(&services.ClinicalAuditEntry{}); err != nil {
 		logger.Fatal("Failed to auto-migrate ClinicalAuditEntry", zap.Error(err))
+	}
+	// Gap 21: outcome ingestion + consolidated alert record.
+	if err := db.DB.AutoMigrate(&models.OutcomeRecord{}, &models.ConsolidatedAlertRecord{}); err != nil {
+		logger.Fatal("Failed to auto-migrate Gap 21 models", zap.Error(err))
 	}
 	logger.Info("Database migration completed")
 
