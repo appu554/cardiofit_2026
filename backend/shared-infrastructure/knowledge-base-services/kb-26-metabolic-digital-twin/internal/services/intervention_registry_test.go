@@ -64,6 +64,15 @@ func TestInterventionRegistry_LoadFromYAML_PersistsDefinitions(t *testing.T) {
 	if count != 6 {
 		t.Fatalf("want 6 HCF CHF interventions, got %d", count)
 	}
+
+	// Load a second time — LoadFromYAML must be idempotent.
+	if err := reg.LoadFromYAML("../../../../market-configs/shared/intervention_taxonomy_hcf_chf.yaml"); err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	db.Model(&models.InterventionDefinition{}).Where("cohort_id = ?", "hcf_catalyst_chf").Count(&count)
+	if count != 6 {
+		t.Fatalf("after second load want 6 (upsert working), got %d", count)
+	}
 }
 
 func TestInterventionRegistry_ListEligible_FiltersByCohort(t *testing.T) {

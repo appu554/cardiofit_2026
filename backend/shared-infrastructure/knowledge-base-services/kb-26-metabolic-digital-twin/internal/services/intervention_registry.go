@@ -1,12 +1,12 @@
 package services
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"kb-26-metabolic-digital-twin/internal/models"
 )
@@ -14,6 +14,8 @@ import (
 // eligibilityCriterionYAML mirrors models.EligibilityCriterion with yaml tags so
 // gopkg.in/yaml.v3 maps snake_case YAML keys correctly (the model struct only has
 // json tags, which yaml.v3 does not fall back to).
+// KEEP IN SYNC: if you add/rename fields on models.EligibilityCriterion, update
+// this struct and the conversion in LoadFromYAML.
 type eligibilityCriterionYAML struct {
 	FeatureKey string   `yaml:"feature_key"`
 	Operator   string   `yaml:"operator"`
@@ -22,6 +24,7 @@ type eligibilityCriterionYAML struct {
 }
 
 // contraindicationYAML is the YAML-parse-time twin of models.Contraindication.
+// KEEP IN SYNC with models.Contraindication.
 type contraindicationYAML struct {
 	FeatureKey string   `yaml:"feature_key"`
 	Operator   string   `yaml:"operator"`
@@ -93,32 +96,28 @@ func (r *InterventionRegistry) LoadFromYAML(path string) error {
 				Reason:     c.Reason,
 			}
 		}
-		eligJSON, err := json.Marshal(eligibility)
-		if err != nil {
+		def := models.InterventionDefinition{
+			ID:                iv.ID,
+			CohortID:          cfg.CohortID,
+			Category:          iv.Category,
+			Name:              iv.Name,
+			ClinicianLanguage: iv.ClinicianLanguage,
+			CoolDownHours:     iv.CoolDownHours,
+			ResourceCost:      iv.ResourceCost,
+			FeatureSignature:  iv.FeatureSignature,
+			Version:           cfg.Version,
+			SourceYAMLPath:    path,
+		}
+		if err := def.MarshalEligibility(eligibility); err != nil {
 			return fmt.Errorf("marshal eligibility for %s: %w", iv.ID, err)
 		}
-		contraJSON, err := json.Marshal(contraindications)
-		if err != nil {
+		if err := def.MarshalContraindications(contraindications); err != nil {
 			return fmt.Errorf("marshal contraindications for %s: %w", iv.ID, err)
-		}
-		def := models.InterventionDefinition{
-			ID:                    iv.ID,
-			CohortID:              cfg.CohortID,
-			Category:              iv.Category,
-			Name:                  iv.Name,
-			ClinicianLanguage:     iv.ClinicianLanguage,
-			CoolDownHours:         iv.CoolDownHours,
-			ResourceCost:          iv.ResourceCost,
-			FeatureSignature:      iv.FeatureSignature,
-			EligibilityJSON:       string(eligJSON),
-			ContraindicationsJSON: string(contraJSON),
-			Version:               cfg.Version,
-			SourceYAMLPath:        path,
 		}
 		if err := def.Validate(); err != nil {
 			return fmt.Errorf("validate %s: %w", iv.ID, err)
 		}
-		if err := r.db.Save(&def).Error; err != nil {
+		if err := r.db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&def).Error; err != nil {
 			return fmt.Errorf("persist %s: %w", iv.ID, err)
 		}
 	}
@@ -132,20 +131,20 @@ func (r *InterventionRegistry) LoadFromYAML(path string) error {
 func (r *InterventionRegistry) ListEligible(cohortID string, features map[string]float64) ([]models.InterventionDefinition, error) {
 	var all []models.InterventionDefinition
 	if err := r.db.Where("cohort_id = ?", cohortID).Find(&all).Error; err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetch interventions for cohort %s: %w", cohortID, err)
 	}
 	out := make([]models.InterventionDefinition, 0, len(all))
 	for _, d := range all {
-		var contra []models.Contraindication
-		if d.ContraindicationsJSON != "" {
-			_ = json.Unmarshal([]byte(d.ContraindicationsJSON), &contra)
+		contra, err := d.UnmarshalContraindications()
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal contraindications for %s: %w", d.ID, err)
 		}
 		if anyContraindicationMatches(contra, features) {
 			continue
 		}
-		var elig []models.EligibilityCriterion
-		if d.EligibilityJSON != "" {
-			_ = json.Unmarshal([]byte(d.EligibilityJSON), &elig)
+		elig, err := d.UnmarshalEligibility()
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal eligibility for %s: %w", d.ID, err)
 		}
 		if !allEligibilityMatches(elig, features) {
 			continue
@@ -173,9 +172,17 @@ func allEligibilityMatches(elig []models.EligibilityCriterion, f map[string]floa
 	return true
 }
 
-// predicateHolds evaluates one criterion against a feature value. Missing features
-// default to 0 (the zero value of float64), which means an eligibility predicate like
-// "gte 5" correctly fails for a patient without that feature recorded.
+// predicateHolds evaluates one criterion against a feature value.
+//
+// Supported operators: "gte", "lte", "eq". The "in" operator declared in
+// EligibilityCriterion.Set is not yet implemented — Sprint 1 YAML taxonomies
+// do not use it. An unknown operator (including a YAML author writing
+// operator: in) returns false, which safely excludes the intervention rather
+// than silently passing it. Add the "in" case here when Sprint 2 YAMLs need it.
+//
+// Missing features default to 0.0 (the zero value of float64), which means an
+// eligibility predicate like gte:5 correctly fails for a patient without
+// that feature recorded.
 func predicateHolds(op string, value, threshold float64) bool {
 	switch op {
 	case "gte":
