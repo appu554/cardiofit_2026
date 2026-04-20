@@ -55,12 +55,14 @@ func newTestDB(t *testing.T) *database.Database {
 			ingested_at DATETIME,
 			notes TEXT
 		)`,
-		// Partial unique index: only enforce uniqueness when idempotency_key is non-empty.
-		// Postgres uniqueIndex implicitly allows multiple NULLs; SQLite treats "" as a
-		// concrete value so we scope to non-empty only.
+		// Partial unique index: only enforce uniqueness when idempotency_key is
+		// supplied. Matches Postgres semantics: a standard unique index allows
+		// multiple NULL values (nil *string pointers on the Go side serialize
+		// to SQL NULL), so legacy/keyless rows never collide. Only non-null
+		// keys must be unique.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_or_idem_key
 		 ON outcome_records(idempotency_key)
-		 WHERE idempotency_key != ''`,
+		 WHERE idempotency_key IS NOT NULL`,
 		`CREATE TABLE IF NOT EXISTS consolidated_alert_records (
 			id TEXT PRIMARY KEY,
 			lifecycle_id TEXT NOT NULL,
