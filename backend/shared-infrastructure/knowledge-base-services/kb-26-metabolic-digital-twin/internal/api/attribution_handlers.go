@@ -30,9 +30,13 @@ func (s *Server) runAttribution(c *gin.Context) {
 	// (Sprint 1/2a rule-based) completes in microseconds, but Sprint 2b's
 	// ONNX inference call could block indefinitely. The 10s default matches
 	// typical ML inference budgets; override via GAP21_ATTRIBUTION_TIMEOUT_MS.
+	// Upper bound of 300_000ms (5 min) prevents int64 overflow on
+	// time.Duration multiplication — a misconfigured huge value would
+	// otherwise silently produce a negative duration → immediately-cancelled
+	// context → every request fails with deadline exceeded.
 	timeoutMs := 10000
 	if raw := os.Getenv("GAP21_ATTRIBUTION_TIMEOUT_MS"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 300_000 {
 			timeoutMs = n
 		}
 	}
