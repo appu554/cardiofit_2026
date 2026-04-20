@@ -45,6 +45,27 @@ func (s *Server) ingestOutcome(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "source is required"})
 		return
 	}
+	// Scope validation. Empty scope defaults to PATIENT_ALERT for backward
+	// compatibility with Sprint 2a records. Explicit values must match
+	// LifecycleID presence.
+	if incoming.Scope == "" {
+		incoming.Scope = string(models.ScopePatientAlert)
+	}
+	switch incoming.Scope {
+	case string(models.ScopePatientAlert):
+		if incoming.LifecycleID == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scope=PATIENT_ALERT requires lifecycle_id"})
+			return
+		}
+	case string(models.ScopeGlobalSweep):
+		if incoming.LifecycleID != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scope=GLOBAL_SWEEP must not set lifecycle_id"})
+			return
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be PATIENT_ALERT or GLOBAL_SWEEP"})
+		return
+	}
 	if incoming.IngestedAt.IsZero() {
 		incoming.IngestedAt = time.Now().UTC()
 	}

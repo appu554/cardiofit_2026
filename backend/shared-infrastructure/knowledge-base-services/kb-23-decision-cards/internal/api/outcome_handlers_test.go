@@ -238,3 +238,52 @@ func TestIngestOutcome_WithoutIdempotencyKey_StillWorks(t *testing.T) {
 		t.Fatalf("expected 2 rows (no dedup without idempotency key), got %d", count)
 	}
 }
+
+func TestIngestOutcome_ScopeGlobalSweepWithLifecycleID_Returns400(t *testing.T) {
+	db := newTestDB(t)
+	r := newTestGinEngine()
+	srv := &Server{db: db}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	lifecycleID := uuid.New()
+	body := models.OutcomeRecord{
+		PatientID:       "P-scope-001",
+		LifecycleID:     &lifecycleID, // present
+		Scope:           string(models.ScopeGlobalSweep), // inconsistent
+		OutcomeType:     "READMISSION_30D",
+		OutcomeOccurred: true,
+		Source:          string(models.OutcomeSourceMortalityRegistry),
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for scope=GLOBAL_SWEEP with lifecycle_id set, got %d", w.Code)
+	}
+}
+
+func TestIngestOutcome_ScopePatientAlertWithoutLifecycleID_Returns400(t *testing.T) {
+	db := newTestDB(t)
+	r := newTestGinEngine()
+	srv := &Server{db: db}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	body := models.OutcomeRecord{
+		PatientID:       "P-scope-002",
+		LifecycleID:     nil, // missing
+		Scope:           string(models.ScopePatientAlert), // requires lifecycle
+		OutcomeType:     "READMISSION_30D",
+		OutcomeOccurred: true,
+		Source:          string(models.OutcomeSourceHospitalDischarge),
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for scope=PATIENT_ALERT without lifecycle_id, got %d", w.Code)
+	}
+}

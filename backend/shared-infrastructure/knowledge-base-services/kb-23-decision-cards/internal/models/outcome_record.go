@@ -28,6 +28,22 @@ const (
 	ReconciliationHorizonExp ReconciliationStatus = "HORIZON_EXPIRED"
 )
 
+// OutcomeScope disambiguates nil-LifecycleID semantics: is the outcome
+// tied to a specific alert lifecycle, or is it a global sweep (e.g.,
+// mortality registry pull that doesn't know about CardioFit alerts)?
+type OutcomeScope string
+
+const (
+	// ScopePatientAlert: outcome is tied to a specific DetectionLifecycle.
+	// LifecycleID MUST be set.
+	ScopePatientAlert OutcomeScope = "PATIENT_ALERT"
+	// ScopeGlobalSweep: outcome arrived from a source with no lifecycle
+	// awareness (registry, bulk claims feed without patient-alert linkage).
+	// LifecycleID MUST be nil. Query semantics at ingest time span all
+	// lifecycles for the (patient, outcome_type) tuple.
+	ScopeGlobalSweep OutcomeScope = "GLOBAL_SWEEP"
+)
+
 // OutcomeRecord is a single outcome observation for one patient from one source.
 // Multiple OutcomeRecords for the same (patient, outcome_type) are reconciled into
 // a single authoritative record by OutcomeIngestionService.
@@ -36,6 +52,11 @@ type OutcomeRecord struct {
 	PatientID      string    `gorm:"size:100;index;index:idx_or_patient_type,priority:1;not null" json:"patient_id"`
 	LifecycleID    *uuid.UUID `gorm:"type:uuid;index" json:"lifecycle_id,omitempty"` // nil if no alert was generated before the outcome arrived (e.g., registry sweep predating any lifecycle)
 	CohortID       string    `gorm:"size:60;index" json:"cohort_id,omitempty"`
+	// Scope makes the LifecycleID presence/absence semantically explicit.
+	// PATIENT_ALERT requires LifecycleID; GLOBAL_SWEEP requires LifecycleID nil.
+	// Empty string treated as PATIENT_ALERT for backward compatibility with
+	// Sprint 2a records that predate this field.
+	Scope           string     `gorm:"size:20;index;default:'PATIENT_ALERT'" json:"scope,omitempty"`
 	OutcomeType    string    `gorm:"size:60;index;index:idx_or_patient_type,priority:2;not null" json:"outcome_type"` // READMISSION_30D, ADMISSION_90D, MORTALITY_30D, etc.
 	OutcomeOccurred bool     `gorm:"not null" json:"outcome_occurred"`
 	OccurredAt     *time.Time `json:"occurred_at,omitempty"`

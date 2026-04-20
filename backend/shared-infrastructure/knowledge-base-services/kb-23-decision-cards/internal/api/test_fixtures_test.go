@@ -44,6 +44,7 @@ func newTestDB(t *testing.T) *database.Database {
 			patient_id TEXT NOT NULL,
 			lifecycle_id TEXT,
 			cohort_id TEXT,
+			scope TEXT DEFAULT 'PATIENT_ALERT',
 			outcome_type TEXT NOT NULL,
 			outcome_occurred INTEGER NOT NULL DEFAULT 0,
 			occurred_at DATETIME,
