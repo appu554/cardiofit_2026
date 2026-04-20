@@ -29,6 +29,7 @@ type AttributionInput struct {
 // estimators in KB-28; the returned struct stays identical.
 func ComputeAttribution(in AttributionInput) models.AttributionVerdict {
 	verdict := models.AttributionVerdict{
+		ID:                   uuid.New(),
 		ConsolidatedRecordID: in.ConsolidatedRecordID,
 		PatientID:            in.PatientID,
 		CohortID:             in.CohortID,

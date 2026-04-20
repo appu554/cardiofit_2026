@@ -25,7 +25,7 @@ func (s *Server) runAttribution(c *gin.Context) {
 	verdict := services.ComputeAttribution(in)
 
 	payload, _ := json.Marshal(verdict)
-	entry, err := s.ledger.AppendEntry("ATTRIBUTION_RUN", verdict.PatientID, string(payload))
+	entry, err := s.ledger.AppendEntry("ATTRIBUTION_RUN", verdict.ID.String(), string(payload))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

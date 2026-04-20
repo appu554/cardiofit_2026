@@ -69,4 +69,7 @@ func TestAttribution_NilOutcome_Inconclusive(t *testing.T) {
 	if v.TechnicalLabel != "outcome_missing" {
 		t.Fatalf("expected technical_label=outcome_missing, got %s", v.TechnicalLabel)
 	}
+	if v.ID.String() == "00000000-0000-0000-0000-000000000000" {
+		t.Fatalf("expected non-zero verdict ID; got zero UUID")
+	}
 }
