@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"kb-26-metabolic-digital-twin/internal/models"
 	"kb-26-metabolic-digital-twin/internal/services"
@@ -37,21 +38,27 @@ func (s *Server) runAttribution(c *gin.Context) {
 	verdict.LedgerEntryID = &entry.ID
 
 	if s.db != nil && s.db.DB != nil {
-		if err := s.db.DB.Create(&verdict).Error; err != nil {
-			s.logger.Warn("failed to persist attribution verdict",
-				zap.Error(err),
-				zap.String("verdict_id", verdict.ID.String()))
-		}
-		// Ledger entry persist MUST succeed — the chain is the audit trail.
-		// Returning 500 here prevents a verdict from being created without a
-		// durable ledger anchor (e.g., after a restart where the Sequence
-		// uniqueIndex would otherwise silently reject the duplicate).
-		if err := s.db.DB.Create(&entry).Error; err != nil {
-			s.logger.Error("failed to persist ledger entry; failing attribution request",
-				zap.Error(err),
-				zap.Int64("seq", entry.Sequence),
-				zap.String("verdict_id", verdict.ID.String()))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist governance ledger entry"})
+		// Sprint 2a Task 3: single transaction so a verdict cannot persist
+		// with a LedgerEntryID pointing at a ledger row that was rolled back.
+		// If either Create fails, both roll back.
+		txErr := s.db.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&verdict).Error; err != nil {
+				s.logger.Warn("failed to persist attribution verdict (txn will roll back)",
+					zap.Error(err),
+					zap.String("verdict_id", verdict.ID.String()))
+				return err
+			}
+			if err := tx.Create(&entry).Error; err != nil {
+				s.logger.Error("failed to persist ledger entry (txn will roll back)",
+					zap.Error(err),
+					zap.Int64("seq", entry.Sequence),
+					zap.String("verdict_id", verdict.ID.String()))
+				return err
+			}
+			return nil
+		})
+		if txErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist attribution (transaction rolled back): " + txErr.Error()})
 			return
 		}
 	}
