@@ -84,5 +84,11 @@ func (s *Server) RegisterRoutes() {
 			responseMetrics.GET("/system", s.getSystemMetrics)
 			responseMetrics.GET("/pilot", s.getPilotMetrics)
 		}
+
+		// Outcome ingestion (Gap 21 Sprint 2a — Task 1)
+		outcomes := v1.Group("/outcomes")
+		{
+			outcomes.POST("/ingest", s.ingestOutcome)
+		}
 	}
 }
