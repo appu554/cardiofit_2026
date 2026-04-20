@@ -103,7 +103,7 @@ func TestResolution_CallPatient_InProgress(t *testing.T) {
 	}
 }
 
-func TestResolution_EscalateToGP_Escalated(t *testing.T) {
+func TestResolution_EscalateToGP_HandedOff(t *testing.T) {
 	item := newTestItem()
 	req := models.WorklistActionRequest{
 		PatientID:   "patient-1",
@@ -116,8 +116,13 @@ func TestResolution_EscalateToGP_Escalated(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("unexpected error: %v", result.Error)
 	}
-	if result.UpdatedItem.ResolutionState != models.ResolutionEscalated {
-		t.Errorf("expected ESCALATED, got %s", result.UpdatedItem.ResolutionState)
+	if result.UpdatedItem.ResolutionState != models.ResolutionHandedOff {
+		t.Errorf("expected HANDED_OFF, got %s", result.UpdatedItem.ResolutionState)
+	}
+	// Regression guard: the resolution string must not collide with the
+	// Gap 15 escalation-event state "ESCALATED".
+	if result.UpdatedItem.ResolutionState == string(models.StateEscalated) {
+		t.Error("resolution state must not equal StateEscalated (string collision regression)")
 	}
 }
 

@@ -130,11 +130,13 @@ func SortAndTierWorklist(items []models.WorklistItem, maxItems int) models.Workl
 		}
 	}
 
-	// Compute tier counts.
+	// Compute tier counts. TotalEligibleCount captures the full pre-truncation
+	// pool so the API caller can detect when items were hidden by MaxItems.
 	view := models.WorklistView{
-		Items:         result,
-		TotalCount:    len(result),
-		LastRefreshed: time.Now(),
+		Items:              result,
+		TotalCount:         len(result),
+		TotalEligibleCount: len(items),
+		LastRefreshed:      time.Now(),
 	}
 	for _, it := range result {
 		switch it.UrgencyTier {

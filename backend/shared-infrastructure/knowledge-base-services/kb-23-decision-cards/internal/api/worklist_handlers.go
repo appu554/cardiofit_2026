@@ -1,12 +1,15 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"kb-23-decision-cards/internal/models"
 	"kb-23-decision-cards/internal/services"
@@ -130,52 +133,39 @@ func (s *Server) handleWorklistAction(c *gin.Context) {
 
 	// Gap 15 loop closure: when a worklist action resolves or acknowledges
 	// an item, update the underlying escalation state so the 30-minute
-	// timeout cancels and T2/T3 timestamps are recorded.
+	// timeout cancels and T2/T3 timestamps are recorded. Goes through the
+	// AcknowledgmentTracker (single source of truth for T2/T3 semantics)
+	// inside a row-locking transaction (SELECT … FOR UPDATE with a state
+	// predicate) so concurrent worklist + WhatsApp acknowledgments are
+	// idempotent rather than last-writer-wins.
 	if req.ActionCode == "ACKNOWLEDGE" || result.UpdatedItem.ResolutionState == models.ResolutionResolved {
-		// Find and update pending escalation for this patient
-		var pendingEsc models.EscalationEvent
-		if err := s.db.DB.Where("patient_id = ? AND current_state IN (?, ?)",
-			req.PatientID, string(models.StatePending), string(models.StateDelivered)).
-			Order("created_at DESC").First(&pendingEsc).Error; err == nil {
-			now := time.Now()
-			pendingEsc.AcknowledgedAt = &now
-			pendingEsc.AcknowledgedBy = req.ClinicianID
-			pendingEsc.CurrentState = string(models.StateAcknowledged)
-			s.db.DB.Save(&pendingEsc)
+		if ackEvent, ackErr := s.acknowledgeEscalationViaTracker(req.PatientID, req.ClinicianID); ackErr == nil && ackEvent != nil {
 			s.log.Info("worklist→escalation loop closed: acknowledged",
 				zap.String("patient_id", req.PatientID),
-				zap.String("escalation_id", pendingEsc.ID.String()))
-
-			// Gap 19 T2 — record acknowledgment in lifecycle tracker.
-			if s.lifecycleTracker != nil {
-				if lc, err := s.lifecycleTracker.FindByEscalation(pendingEsc.ID); err == nil && lc != nil {
-					s.lifecycleTracker.RecordT2(lc, req.ClinicianID, now)
+				zap.String("escalation_id", ackEvent.ID.String()))
+			if s.lifecycleTracker != nil && ackEvent.AcknowledgedAt != nil {
+				if lc, err := s.lifecycleTracker.FindByEscalation(ackEvent.ID); err == nil && lc != nil {
+					s.lifecycleTracker.RecordT2(lc, req.ClinicianID, *ackEvent.AcknowledgedAt)
 				}
 			}
+		} else if ackErr != nil && !errors.Is(ackErr, gorm.ErrRecordNotFound) {
+			s.log.Warn("escalation acknowledge transaction failed",
+				zap.String("patient_id", req.PatientID), zap.Error(ackErr))
 		}
 	}
 	if result.UpdatedItem.ResolutionState == models.ResolutionInProgress {
-		// Record T3 (action taken) on the underlying escalation
-		var actedEsc models.EscalationEvent
-		if err := s.db.DB.Where("patient_id = ? AND current_state = ?",
-			req.PatientID, string(models.StateAcknowledged)).
-			Order("created_at DESC").First(&actedEsc).Error; err == nil {
-			now := time.Now()
-			actedEsc.ActedAt = &now
-			actedEsc.ActionType = req.ActionCode
-			actedEsc.ActionDetail = req.Notes
-			actedEsc.CurrentState = string(models.StateActed)
-			s.db.DB.Save(&actedEsc)
+		if actedEvent, actErr := s.recordActionViaTracker(req.PatientID, req.ActionCode, req.Notes); actErr == nil && actedEvent != nil {
 			s.log.Info("worklist→escalation loop closed: action recorded",
 				zap.String("patient_id", req.PatientID),
 				zap.String("action", req.ActionCode))
-
-			// Gap 19 T3 — record action in lifecycle tracker.
-			if s.lifecycleTracker != nil {
-				if lc, err := s.lifecycleTracker.FindByEscalation(actedEsc.ID); err == nil && lc != nil {
-					s.lifecycleTracker.RecordT3(lc, req.ActionCode, req.Notes, now)
+			if s.lifecycleTracker != nil && actedEvent.ActedAt != nil {
+				if lc, err := s.lifecycleTracker.FindByEscalation(actedEvent.ID); err == nil && lc != nil {
+					s.lifecycleTracker.RecordT3(lc, req.ActionCode, req.Notes, *actedEvent.ActedAt)
 				}
 			}
+		} else if actErr != nil && !errors.Is(actErr, gorm.ErrRecordNotFound) {
+			s.log.Warn("escalation action transaction failed",
+				zap.String("patient_id", req.PatientID), zap.Error(actErr))
 		}
 	}
 
@@ -295,7 +285,7 @@ func personaConfigForRole(role string) services.PersonaConfig {
 			Scope:         "VILLAGE",
 			Actions:       []string{"VISIT_TODAY", "VISIT_TOMORROW", "CALL_ANM", "RECORD_VITALS"},
 			PrimaryAction: "VISIT_TODAY",
-			Language:       "hi-IN",
+			Language:      "hi-IN",
 		}
 	default:
 		return services.PersonaConfig{
@@ -305,4 +295,68 @@ func personaConfigForRole(role string) services.PersonaConfig {
 			PrimaryAction: "CALL_PATIENT",
 		}
 	}
+}
+
+// acknowledgeEscalationViaTracker locates the most recent pending/delivered
+// escalation for the patient, routes the T2 update through
+// AcknowledgmentTracker.RecordAcknowledgment (single source of truth), and
+// persists inside a transaction with SELECT … FOR UPDATE. The state predicate
+// in the WHERE clause makes double-ACK a no-op: the second caller sees
+// ErrRecordNotFound and returns cleanly.
+//
+// Returns the updated event on success, or nil with gorm.ErrRecordNotFound
+// when no eligible escalation exists (already acknowledged, or never created).
+func (s *Server) acknowledgeEscalationViaTracker(patientID, clinicianID string) (*models.EscalationEvent, error) {
+	if s.escalationManager == nil || s.db == nil || s.db.DB == nil {
+		return nil, nil
+	}
+	tracker := s.escalationManager.Tracker()
+	if tracker == nil {
+		return nil, nil
+	}
+	var event models.EscalationEvent
+	err := s.db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("patient_id = ? AND current_state IN (?, ?)",
+				patientID, string(models.StatePending), string(models.StateDelivered)).
+			Order("created_at DESC").First(&event).Error; err != nil {
+			return err
+		}
+		tracker.RecordAcknowledgment(&event, clinicianID)
+		return tx.Save(&event).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
+// recordActionViaTracker locates the acknowledged escalation for the patient,
+// routes the T3 update through AcknowledgmentTracker.RecordAction, and saves
+// inside a transaction. T3 semantics: the timestamp captured here is "action
+// initiated" (button click in worklist) — not "action completed". See
+// LifecycleTracker.RecordT3 for the full semantic contract.
+func (s *Server) recordActionViaTracker(patientID, actionCode, notes string) (*models.EscalationEvent, error) {
+	if s.escalationManager == nil || s.db == nil || s.db.DB == nil {
+		return nil, nil
+	}
+	tracker := s.escalationManager.Tracker()
+	if tracker == nil {
+		return nil, nil
+	}
+	var event models.EscalationEvent
+	err := s.db.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("patient_id = ? AND current_state = ?",
+				patientID, string(models.StateAcknowledged)).
+			Order("created_at DESC").First(&event).Error; err != nil {
+			return err
+		}
+		tracker.RecordAction(&event, actionCode, notes)
+		return tx.Save(&event).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
 }

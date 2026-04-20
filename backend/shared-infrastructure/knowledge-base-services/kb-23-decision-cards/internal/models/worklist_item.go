@@ -33,16 +33,22 @@ type ActionButton struct {
 }
 
 // WorklistView is a complete worklist for one clinician.
+// TotalCount is the number of items actually displayed (after truncation and
+// persona filter). TotalEligibleCount is the number of patients with a
+// triggering condition before the MaxItems cap was applied — surfacing the
+// difference lets clinicians know when items were hidden so they can request
+// an expanded view rather than silently miss patients.
 type WorklistView struct {
-	ClinicianID   string         `json:"clinician_id"`
-	PersonaType   string         `json:"persona_type"`
-	Items         []WorklistItem `json:"items"`
-	TotalCount    int            `json:"total_count"`
-	CriticalCount int            `json:"critical_count"`
-	HighCount     int            `json:"high_count"`
-	ModerateCount int            `json:"moderate_count"`
-	LowCount      int            `json:"low_count"`
-	LastRefreshed time.Time      `json:"last_refreshed"`
+	ClinicianID        string         `json:"clinician_id"`
+	PersonaType        string         `json:"persona_type"`
+	Items              []WorklistItem `json:"items"`
+	TotalCount         int            `json:"total_count"`
+	TotalEligibleCount int            `json:"total_eligible_count"`
+	CriticalCount      int            `json:"critical_count"`
+	HighCount          int            `json:"high_count"`
+	ModerateCount      int            `json:"moderate_count"`
+	LowCount           int            `json:"low_count"`
+	LastRefreshed      time.Time      `json:"last_refreshed"`
 }
 
 // WorklistActionRequest is a clinician action on a worklist item.
@@ -82,10 +88,19 @@ const (
 )
 
 // Resolution state constants.
+//
+// ResolutionHandedOff (string value "HANDED_OFF") is distinct from the
+// EscalationEvent state "ESCALATED" (see models.StateEscalated in
+// escalation_event.go). They describe different things: an escalation-event
+// state is the Gap 15 notification-lifecycle position, while a worklist
+// resolution state is the clinician's outcome for a triage item. Sharing the
+// string "ESCALATED" across both caused analytics / log-query ambiguity, so
+// the worklist domain uses "HANDED_OFF" to denote "clinician routed this to
+// the next tier of care (GP, ANM, specialist)".
 const (
 	ResolutionPending    = "PENDING"
 	ResolutionInProgress = "IN_PROGRESS"
 	ResolutionResolved   = "RESOLVED"
 	ResolutionDeferred   = "DEFERRED"
-	ResolutionEscalated  = "ESCALATED"
+	ResolutionHandedOff  = "HANDED_OFF"
 )
