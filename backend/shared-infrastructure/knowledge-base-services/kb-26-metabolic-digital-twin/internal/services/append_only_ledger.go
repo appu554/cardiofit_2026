@@ -12,9 +12,13 @@ import (
 	"kb-26-metabolic-digital-twin/internal/models"
 )
 
-// InMemoryLedger is the Sprint 1 governance ledger. HMAC-SHA256 chain; each entry's
-// hash is HMAC(key, prior_hash || entry_type || subject_id || payload_json || sequence || timestamp).
-// Sprint 2 replaces storage with PostgreSQL persistence and adds Ed25519 per-entry signatures.
+// InMemoryLedger is the Sprint 1 governance ledger. HMAC-SHA256 chain over
+// length-prefixed fields: each entry's hash covers prior_hash, entry_type,
+// subject_id, payload_json (all length-prefixed via computeEntryHash), plus
+// the unprefixed sequence and RFC3339Nano timestamp. See computeEntryHash
+// for the exact encoding.
+// Sprint 2b replaces storage with PostgreSQL persistence and adds Ed25519
+// per-entry signatures on top of the HMAC chain.
 type InMemoryLedger struct {
 	mu            sync.Mutex
 	key           []byte

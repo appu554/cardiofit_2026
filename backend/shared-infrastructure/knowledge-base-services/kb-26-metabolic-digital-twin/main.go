@@ -261,9 +261,29 @@ func main() {
 	// Gap 21 Sprint 2a Task 5: load attribution config from YAML. Degrades to
 	// rule-based defaults if file is missing; logs error if file exists
 	// but parses invalidly.
+	//
+	// Path resolution matches the PAI pattern: env override first, then
+	// Docker mount (/app/market-configs/), then repo-relative path from
+	// the service directory. Without this fallback chain the YAML never
+	// resolves in Docker (market-configs/ is not a child of /app/).
 	attributionCfgPath := os.Getenv("GAP21_ATTRIBUTION_CONFIG_PATH")
 	if attributionCfgPath == "" {
-		attributionCfgPath = "market-configs/shared/attribution_parameters.yaml"
+		for _, p := range []string{
+			"/app/market-configs/shared/attribution_parameters.yaml",
+			"../../market-configs/shared/attribution_parameters.yaml",
+			"market-configs/shared/attribution_parameters.yaml",
+		} {
+			if _, statErr := os.Stat(p); statErr == nil {
+				attributionCfgPath = p
+				break
+			}
+		}
+		if attributionCfgPath == "" {
+			// No file found on any candidate path — pass the Docker path
+			// so LoadAttributionConfig's missing-file fallback produces
+			// defaults and the error log names the expected location.
+			attributionCfgPath = "/app/market-configs/shared/attribution_parameters.yaml"
+		}
 	}
 	attrCfg, attrCfgErr := config.LoadAttributionConfig(attributionCfgPath)
 	if attrCfgErr != nil {
