@@ -2,6 +2,7 @@ package services
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLedger_AppendAndVerifyChain(t *testing.T) {
@@ -75,28 +76,26 @@ func TestLedger_TamperedEntry_VerifyFails(t *testing.T) {
 }
 
 func TestLedger_LengthPrefixPreventsFieldCollision(t *testing.T) {
-	// Two ledger entries with different field splits that, under the old
-	// "|"-separator scheme, could produce identical hash inputs. With
-	// length-prefixing, they must produce different hashes.
+	// Two field-split combinations that under the old "|"-separator scheme
+	// would produce identical hash inputs:
+	//   split A: entryType="A", subjectID="B|C", payload="D"
+	//   split B: entryType="A|B", subjectID="C", payload="D"
+	// The pre-fix `|`-joined string is identical: "A|B|C|D".
+	// With length-prefixing each field's byte count differs, so the hashes
+	// must diverge.
+	//
+	// This test calls the unexported computeEntryHash directly with fixed
+	// inputs (same key, same prior, same seq, same timestamp) because
+	// AppendEntry stamps a fresh time.Now() per call and would otherwise
+	// mask the collision behind timestamp differences.
 	ledger := NewInMemoryLedger([]byte("test-key"))
+	fixedTS := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
 
-	// Entry A: entryType="A", subjectID="B|C", payload="D"
-	e1, err := ledger.AppendEntry("A", "B|C", "D")
-	if err != nil {
-		t.Fatalf("append A failed: %v", err)
-	}
+	hashA := ledger.computeEntryHash(genesisHash, "A", "B|C", "D", 0, fixedTS)
+	hashB := ledger.computeEntryHash(genesisHash, "A|B", "C", "D", 0, fixedTS)
 
-	// Entry B (on a fresh ledger so prior_hash is the same genesis):
-	ledger2 := NewInMemoryLedger([]byte("test-key"))
-	// entryType="A|B", subjectID="C", payload="D" — same "|"-joined string
-	// would collide.
-	e2, err := ledger2.AppendEntry("A|B", "C", "D")
-	if err != nil {
-		t.Fatalf("append B failed: %v", err)
-	}
-
-	if e1.EntryHash == e2.EntryHash {
-		t.Fatalf("hash collision between different field splits — length-prefixing not applied")
+	if hashA == hashB {
+		t.Fatalf("hash collision between different field splits under length-prefix scheme: got identical hash %s", hashA)
 	}
 }
 
