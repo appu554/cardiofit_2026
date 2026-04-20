@@ -32,8 +32,22 @@ func newTestDB(t *testing.T) *database.Database {
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
 	}
+	// Close the connection pool when the test ends. sqlite in-memory DBs
+	// auto-dispose when the last connection closes, but GORM holds the pool
+	// open until the process exits or it's explicitly closed.
+	t.Cleanup(func() {
+		if sqlDB, derr := gdb.DB(); derr == nil {
+			_ = sqlDB.Close()
+		}
+	})
 
 	ddl := []string{
+		// attribution_verdicts: computed_at must be NOT NULL to match
+		// GORM's autoCreateTime semantic (the model field has that tag,
+		// and the column is a sort key in idx_av_patient_computed — a
+		// NULL value would silently break ordering).
+		// ledger_entry_id is intentionally nullable: the handler sets it
+		// to &entry.ID only after the ledger append succeeds.
 		`CREATE TABLE IF NOT EXISTS attribution_verdicts (
 			id TEXT PRIMARY KEY,
 			consolidated_record_id TEXT NOT NULL,
@@ -50,11 +64,14 @@ func newTestDB(t *testing.T) *database.Database {
 			method_version TEXT,
 			rationale TEXT,
 			ledger_entry_id TEXT,
-			computed_at DATETIME
+			computed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_av_consolidated_record ON attribution_verdicts(consolidated_record_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_av_patient_computed ON attribution_verdicts(patient_id, computed_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_av_cohort_label ON attribution_verdicts(cohort_id, clinician_label)`,
+		// governance_ledger_entries: created_at must be NOT NULL to match
+		// GORM's autoCreateTime tag. The column is indexed and used for
+		// ordering in the Snapshot/VerifyChain path.
 		`CREATE TABLE IF NOT EXISTS governance_ledger_entries (
 			id TEXT PRIMARY KEY,
 			sequence INTEGER UNIQUE NOT NULL,
@@ -63,10 +80,12 @@ func newTestDB(t *testing.T) *database.Database {
 			payload_json TEXT NOT NULL,
 			prior_hash TEXT NOT NULL,
 			entry_hash TEXT NOT NULL,
-			created_at DATETIME
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_ledger_subject ON governance_ledger_entries(subject_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ledger_created ON governance_ledger_entries(created_at)`,
+		// Append additional CREATE TABLE statements here as new attribution
+		// or governance tables are added in future sprints.
 	}
 	for _, stmt := range ddl {
 		if err := gdb.Exec(stmt).Error; err != nil {

@@ -177,4 +177,24 @@ func TestRunAttribution_EndToEnd_PersistsVerdictAndLedger(t *testing.T) {
 	if ledgerCount != 1 {
 		t.Fatalf("expected 1 ledger entry, got %d", ledgerCount)
 	}
+
+	// Verify the LedgerEntryID linkage: the verdict row must point at the
+	// ledger entry row. Without this assertion, a regression that drops
+	// `verdict.LedgerEntryID = &entry.ID` in the handler would leave both
+	// rows present and the above assertions would still pass — but the
+	// navigation from verdict → ledger entry would silently break.
+	var persistedVerdict models.AttributionVerdict
+	if err := db.DB.Where("patient_id = ?", "P-e2e-001").First(&persistedVerdict).Error; err != nil {
+		t.Fatalf("load persisted verdict: %v", err)
+	}
+	if persistedVerdict.LedgerEntryID == nil {
+		t.Fatalf("expected verdict.ledger_entry_id to be set (linkage to ledger entry), got nil")
+	}
+	var linkedEntry models.LedgerEntry
+	if err := db.DB.Where("id = ?", persistedVerdict.LedgerEntryID).First(&linkedEntry).Error; err != nil {
+		t.Fatalf("verdict's ledger_entry_id does not resolve to any ledger entry row: %v", err)
+	}
+	if linkedEntry.EntryType != "ATTRIBUTION_RUN" {
+		t.Fatalf("linked ledger entry has wrong type: got %q, want ATTRIBUTION_RUN", linkedEntry.EntryType)
+	}
 }
