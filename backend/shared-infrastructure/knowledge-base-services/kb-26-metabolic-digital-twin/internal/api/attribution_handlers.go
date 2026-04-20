@@ -28,8 +28,10 @@ func (s *Server) runAttribution(c *gin.Context) {
 		return
 	}
 	cfg := s.attributionConfig
-	if cfg.Method == "" {
-		// If SetAttributionConfig was never called (e.g., tests), fall back to rule-based defaults.
+	if cfg.Method == "" || cfg.MethodVersion == "" {
+		// If SetAttributionConfig was never called OR was called with a partial
+		// config (e.g., tests, or a misconfigured YAML that set one field but
+		// not the other), fall back to rule-based defaults.
 		cfg = services.AttributionConfig{Method: "RULE_BASED", MethodVersion: "sprint1-v1"}
 	}
 	verdict := services.ComputeAttributionWithConfig(in, cfg)

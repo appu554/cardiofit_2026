@@ -267,11 +267,18 @@ func main() {
 	}
 	attrCfg, attrCfgErr := config.LoadAttributionConfig(attributionCfgPath)
 	if attrCfgErr != nil {
-		logger.Error("failed to load attribution config; using defaults", zap.Error(attrCfgErr), zap.String("path", attributionCfgPath))
+		logger.Error("failed to load attribution config; using defaults",
+			zap.Error(attrCfgErr),
+			zap.String("path", attributionCfgPath))
+		logger.Info("attribution config effective (fallback default after load error)",
+			zap.String("method", attrCfg.Method),
+			zap.String("version", attrCfg.MethodVersion))
+	} else {
+		logger.Info("attribution config loaded from YAML",
+			zap.String("path", attributionCfgPath),
+			zap.String("method", attrCfg.Method),
+			zap.String("version", attrCfg.MethodVersion))
 	}
-	logger.Info("attribution config loaded",
-		zap.String("method", attrCfg.Method),
-		zap.String("version", attrCfg.MethodVersion))
 	server.SetAttributionConfig(services.AttributionConfig{
 		Method:        attrCfg.Method,
 		MethodVersion: attrCfg.MethodVersion,

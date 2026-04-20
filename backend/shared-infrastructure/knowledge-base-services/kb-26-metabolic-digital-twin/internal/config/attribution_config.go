@@ -11,6 +11,14 @@ import (
 // loaded from market-configs/shared/attribution_parameters.yaml. Sprint 1
 // hardcoded these values; Sprint 2a loads them so Sprint 2b's ML attribution
 // can swap Method/MethodVersion via config rather than code change.
+//
+// The yaml:"-" tags are intentional: this struct is the PUBLIC flat shape
+// returned to consumers. The on-disk YAML uses a nested {method: {name, version}}
+// structure (see yamlShape below), so parsing happens through yamlShape and
+// the fields are then copied into this flat struct. yaml:"-" ensures that if
+// anyone accidentally tries to Unmarshal directly into AttributionConfig (or
+// Marshal one back out), the fields are skipped rather than silently reading
+// or writing wrong-shaped YAML.
 type AttributionConfig struct {
 	Method        string `yaml:"-"`
 	MethodVersion string `yaml:"-"`
