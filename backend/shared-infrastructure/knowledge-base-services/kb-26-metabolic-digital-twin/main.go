@@ -258,6 +258,25 @@ func main() {
 	}
 	server.SetGap21Services(gap21Ledger)
 
+	// Gap 21 Sprint 2a Task 5: load attribution config from YAML. Degrades to
+	// rule-based defaults if file is missing; logs error if file exists
+	// but parses invalidly.
+	attributionCfgPath := os.Getenv("GAP21_ATTRIBUTION_CONFIG_PATH")
+	if attributionCfgPath == "" {
+		attributionCfgPath = "market-configs/shared/attribution_parameters.yaml"
+	}
+	attrCfg, attrCfgErr := config.LoadAttributionConfig(attributionCfgPath)
+	if attrCfgErr != nil {
+		logger.Error("failed to load attribution config; using defaults", zap.Error(attrCfgErr), zap.String("path", attributionCfgPath))
+	}
+	logger.Info("attribution config loaded",
+		zap.String("method", attrCfg.Method),
+		zap.String("version", attrCfg.MethodVersion))
+	server.SetAttributionConfig(services.AttributionConfig{
+		Method:        attrCfg.Method,
+		MethodVersion: attrCfg.MethodVersion,
+	})
+
 	// 9. Start HTTP server
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Server.Port,

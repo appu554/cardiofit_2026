@@ -27,7 +27,12 @@ func (s *Server) runAttribution(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	verdict := services.ComputeAttribution(in)
+	cfg := s.attributionConfig
+	if cfg.Method == "" {
+		// If SetAttributionConfig was never called (e.g., tests), fall back to rule-based defaults.
+		cfg = services.AttributionConfig{Method: "RULE_BASED", MethodVersion: "sprint1-v1"}
+	}
+	verdict := services.ComputeAttributionWithConfig(in, cfg)
 
 	payload, _ := json.Marshal(verdict)
 	entry, err := s.ledger.AppendEntry("ATTRIBUTION_RUN", verdict.ID.String(), string(payload))
