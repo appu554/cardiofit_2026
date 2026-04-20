@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"kb-26-metabolic-digital-twin/internal/services"
 )
@@ -33,8 +34,16 @@ func (s *Server) runAttribution(c *gin.Context) {
 	verdict.LedgerEntryID = &entry.ID
 
 	if s.db != nil && s.db.DB != nil {
-		_ = s.db.DB.Create(&verdict).Error
-		_ = s.db.DB.Create(&entry).Error
+		if err := s.db.DB.Create(&verdict).Error; err != nil {
+			s.logger.Warn("failed to persist attribution verdict",
+				zap.Error(err),
+				zap.String("verdict_id", verdict.ID.String()))
+		}
+		if err := s.db.DB.Create(&entry).Error; err != nil {
+			s.logger.Warn("failed to persist ledger entry",
+				zap.Error(err),
+				zap.Int64("seq", entry.Sequence))
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"verdict": verdict, "ledger_entry": entry})
 }
@@ -46,8 +55,7 @@ func (s *Server) getLedger(c *gin.Context) {
 		return
 	}
 
-	entries := s.ledger.Entries()
-	ok, brokenIdx, _ := s.ledger.VerifyChain()
+	entries, ok, brokenIdx := s.ledger.Snapshot()
 	c.JSON(http.StatusOK, gin.H{
 		"entries":          entries,
 		"chain_valid":      ok,

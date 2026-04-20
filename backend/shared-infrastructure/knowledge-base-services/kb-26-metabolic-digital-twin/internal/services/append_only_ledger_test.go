@@ -28,6 +28,31 @@ func TestLedger_AppendAndVerifyChain(t *testing.T) {
 	}
 }
 
+func TestLedger_EmptyChain_IsValid(t *testing.T) {
+	ledger := NewInMemoryLedger([]byte("sprint1-test-hmac-key"))
+	ok, idx, err := ledger.VerifyChain()
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected empty chain to verify as valid, got first-broken-index=%d", idx)
+	}
+	if idx != -1 {
+		t.Fatalf("expected broken index -1 for empty chain, got %d", idx)
+	}
+
+	entries, snapValid, snapIdx := ledger.Snapshot()
+	if len(entries) != 0 {
+		t.Fatalf("expected 0 entries from snapshot, got %d", len(entries))
+	}
+	if !snapValid {
+		t.Fatalf("expected snapshot of empty chain to be valid")
+	}
+	if snapIdx != -1 {
+		t.Fatalf("expected snapshot broken index -1, got %d", snapIdx)
+	}
+}
+
 func TestLedger_TamperedEntry_VerifyFails(t *testing.T) {
 	ledger := NewInMemoryLedger([]byte("sprint1-test-hmac-key"))
 	_, _ = ledger.AppendEntry("ATTRIBUTION_RUN", "s1", `{"a":1}`)
@@ -35,7 +60,7 @@ func TestLedger_TamperedEntry_VerifyFails(t *testing.T) {
 	_, _ = ledger.AppendEntry("ATTRIBUTION_RUN", "s3", `{"a":3}`)
 
 	// Tamper with entry 1's payload in place (simulates post-hoc edit).
-	ledger.TamperForTest(1, `{"a":2,"tampered":true}`)
+	ledger.tamperForTest(1, `{"a":2,"tampered":true}`)
 
 	ok, idx, err := ledger.VerifyChain()
 	if err != nil {

@@ -235,7 +235,11 @@ func main() {
 
 	// Gap 21: governance ledger for attribution runs + model promotions.
 	// HMAC key from env for Sprint 1; Sprint 2 adds Ed25519 per-entry signatures.
-	gap21Ledger := services.NewInMemoryLedger([]byte(os.Getenv("GAP21_LEDGER_HMAC_KEY")))
+	hmacKey := os.Getenv("GAP21_LEDGER_HMAC_KEY")
+	if hmacKey == "" {
+		logger.Warn("GAP21_LEDGER_HMAC_KEY is not set — ledger will use an insecure default key (not suitable for production)")
+	}
+	gap21Ledger := services.NewInMemoryLedger([]byte(hmacKey))
 	server.SetGap21Services(gap21Ledger)
 
 	// 9. Start HTTP server
