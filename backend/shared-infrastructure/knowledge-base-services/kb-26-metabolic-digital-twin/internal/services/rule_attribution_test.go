@@ -52,3 +52,21 @@ func TestAttribution_HighRiskOverrideNoOutcome_Fragile(t *testing.T) {
 		t.Fatalf("expected fragile_estimate, got %s", v.ClinicianLabel)
 	}
 }
+
+func TestAttribution_NilOutcome_Inconclusive(t *testing.T) {
+	in := AttributionInput{
+		ConsolidatedRecordID: uuid.New(),
+		PatientID:            "P-test",
+		TreatmentStrategy:    "INTERVENTION_TAKEN",
+		OutcomeOccurred:      nil,
+		PreAlertRiskScore:    62.0,
+		PreAlertRiskTier:     "HIGH",
+	}
+	v := ComputeAttribution(in)
+	if v.ClinicianLabel != string(models.LabelInconclusive) {
+		t.Fatalf("expected inconclusive for nil outcome, got %s", v.ClinicianLabel)
+	}
+	if v.TechnicalLabel != "outcome_missing" {
+		t.Fatalf("expected technical_label=outcome_missing, got %s", v.TechnicalLabel)
+	}
+}
