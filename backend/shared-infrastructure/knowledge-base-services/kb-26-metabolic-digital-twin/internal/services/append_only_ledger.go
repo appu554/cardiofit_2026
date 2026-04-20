@@ -142,8 +142,10 @@ func (l *InMemoryLedger) verifyChainLocked() (bool, int) {
 }
 
 // computeEntryHash produces an HMAC-SHA256 over length-prefixed fields.
-// Each variable-length field is written as "<length>:<bytes>|" so no
-// payload value can collide with a neighbouring field's contents.
+// Each variable-length field is written as "<byte_length>:<bytes>|" so no
+// payload value can collide with a neighbouring field's contents. The length
+// prefix is Go's len(s) — UTF-8 byte count, NOT rune count. Cross-language
+// verifiers (Sprint 2b+) must use byte length, not character count.
 // Fixed-width fields (seq, timestamp) are written without length prefix
 // because their structure is already unambiguous.
 func (l *InMemoryLedger) computeEntryHash(prior, entryType, subjectID, payloadJSON string, seq int64, ts time.Time) string {
