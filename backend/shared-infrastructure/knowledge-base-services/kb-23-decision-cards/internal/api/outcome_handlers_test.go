@@ -287,3 +287,38 @@ func TestIngestOutcome_ScopePatientAlertWithoutLifecycleID_Returns400(t *testing
 		t.Fatalf("expected 400 for scope=PATIENT_ALERT without lifecycle_id, got %d", w.Code)
 	}
 }
+
+func TestIngestOutcome_ScopeGlobalSweep_NilLifecycle_Returns200(t *testing.T) {
+	db := newTestDB(t)
+	r := newTestGinEngine()
+	srv := &Server{db: db}
+	r.POST("/outcomes/ingest", srv.ingestOutcome)
+
+	body := models.OutcomeRecord{
+		PatientID:       "P-scope-003",
+		LifecycleID:     nil,
+		Scope:           string(models.ScopeGlobalSweep),
+		OutcomeType:     "MORTALITY_30D",
+		OutcomeOccurred: true,
+		Source:          string(models.OutcomeSourceMortalityRegistry),
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/outcomes/ingest", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for GLOBAL_SWEEP + nil lifecycle, got %d: %s", w.Code, w.Body.String())
+	}
+	// Verify the scope was persisted.
+	var saved models.OutcomeRecord
+	if err := db.DB.Where("patient_id = ?", "P-scope-003").First(&saved).Error; err != nil {
+		t.Fatalf("load persisted row: %v", err)
+	}
+	if saved.Scope != string(models.ScopeGlobalSweep) {
+		t.Fatalf("expected scope=GLOBAL_SWEEP in DB, got %q", saved.Scope)
+	}
+	if saved.LifecycleID != nil {
+		t.Fatalf("expected lifecycle_id=nil in DB")
+	}
+}

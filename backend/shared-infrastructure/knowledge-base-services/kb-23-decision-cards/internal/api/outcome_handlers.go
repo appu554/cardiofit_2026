@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -63,7 +64,7 @@ func (s *Server) ingestOutcome(c *gin.Context) {
 			return
 		}
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be PATIENT_ALERT or GLOBAL_SWEEP"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown scope %q; must be PATIENT_ALERT or GLOBAL_SWEEP", incoming.Scope)})
 		return
 	}
 	if incoming.IngestedAt.IsZero() {
