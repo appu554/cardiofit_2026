@@ -47,6 +47,9 @@ type Server struct {
 	seasonalContext     *services.SeasonalContext
 	escalationManager   *services.EscalationManager
 	lifecycleTracker    *services.LifecycleTracker
+
+	// Gap 19: response metrics service (loads thresholds from YAML at startup).
+	responseMetricsService *services.ResponseMetricsService
 }
 
 func NewServer(
@@ -131,6 +134,14 @@ func (s *Server) InitServices() {
 		seasonalCtx, _ = services.NewSeasonalContext(s.cfg.Market, "")
 	}
 	s.seasonalContext = seasonalCtx
+
+	// Gap 19: load response tracking thresholds (falls back to defaults if absent).
+	rtc, err := services.LoadResponseTrackingConfig(s.cfg.ResponseTrackingConfigPath)
+	if err != nil {
+		s.log.Warn("failed to load response tracking config, using defaults", zap.Error(err))
+		rtc = services.DefaultResponseTrackingConfig()
+	}
+	s.responseMetricsService = services.NewResponseMetricsService(rtc)
 
 	s.log.Info("all services initialized")
 }

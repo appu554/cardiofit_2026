@@ -65,11 +65,16 @@ func (t *LifecycleTracker) RecordT1(lc *models.DetectionLifecycle, deliveredAt t
 }
 
 // RecordT2 marks the detection as acknowledged by a clinician.
+// First-write-wins: when the same detection is delivered via multiple channels
+// (Push + SMS + WhatsApp), the earliest acknowledgment is the canonical T2.
+// Subsequent calls are no-ops so the latency isn't inflated by duplicate taps.
 func (t *LifecycleTracker) RecordT2(lc *models.DetectionLifecycle, clinicianID string, acknowledgedAt time.Time) {
+	if lc.AcknowledgedAt != nil {
+		return
+	}
 	lc.AcknowledgedAt = &acknowledgedAt
 	lc.AssignedClinicianID = clinicianID
 	lc.CurrentState = string(models.LifecycleAcknowledged)
-	// Only compute latency if T1 is known
 	if lc.DeliveredAt != nil {
 		latency := acknowledgedAt.Sub(*lc.DeliveredAt).Milliseconds()
 		lc.AcknowledgmentLatencyMs = &latency

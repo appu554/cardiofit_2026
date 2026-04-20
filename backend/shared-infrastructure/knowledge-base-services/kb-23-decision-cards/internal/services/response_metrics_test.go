@@ -26,7 +26,7 @@ func makeLifecycle(clinicianID, patientID string) models.DetectionLifecycle {
 // TestMetrics_ClinicianMedians — 10 lifecycles with AcknowledgmentLatencyMs
 // [100000..1000000]. Median of 10 even values = avg(5th, 6th) = (500000+600000)/2 = 550000.
 func TestMetrics_ClinicianMedians(t *testing.T) {
-	svc := NewResponseMetricsService()
+	svc := NewResponseMetricsService(nil)
 
 	var lifecycles []models.DetectionLifecycle
 	for i := 1; i <= 10; i++ {
@@ -51,7 +51,7 @@ func TestMetrics_ClinicianMedians(t *testing.T) {
 
 // TestMetrics_ActionCompletionRate — 10 lifecycles, 8 have ActionedAt → rate 0.80
 func TestMetrics_ActionCompletionRate(t *testing.T) {
-	svc := NewResponseMetricsService()
+	svc := NewResponseMetricsService(nil)
 
 	var lifecycles []models.DetectionLifecycle
 	now := time.Now()
@@ -72,7 +72,7 @@ func TestMetrics_ActionCompletionRate(t *testing.T) {
 
 // TestMetrics_OutcomeRate — 8 actioned, 5 have ResolvedAt → rate 5/8 = 0.625
 func TestMetrics_OutcomeRate(t *testing.T) {
-	svc := NewResponseMetricsService()
+	svc := NewResponseMetricsService(nil)
 
 	var lifecycles []models.DetectionLifecycle
 	now := time.Now()
@@ -96,7 +96,7 @@ func TestMetrics_OutcomeRate(t *testing.T) {
 
 // TestMetrics_SystemLevel — 30 lifecycles across 3 clinicians, 5 timed out → TimeoutRate 5/30
 func TestMetrics_SystemLevel(t *testing.T) {
-	svc := NewResponseMetricsService()
+	svc := NewResponseMetricsService(nil)
 
 	clinicians := []string{"doc-a", "doc-b", "doc-c"}
 	var lifecycles []models.DetectionLifecycle
@@ -121,9 +121,41 @@ func TestMetrics_SystemLevel(t *testing.T) {
 	}
 }
 
+// TestMetrics_AckInTime_UsesTierThreshold — regression for a prior bug where
+// timelyThresholdMs switched on CRITICAL/URGENT/STANDARD while the live system
+// uses SAFETY/IMMEDIATE/URGENT/ROUTINE. Under the old code a SAFETY ack taken
+// 90 minutes after delivery silently counted as "in time" (fell through to the
+// 24-hour default). The fix pulls the 30-minute SAFETY threshold from YAML.
+func TestMetrics_AckInTime_UsesTierThreshold(t *testing.T) {
+	svc := NewResponseMetricsService(nil) // defaults match YAML
+
+	now := time.Now()
+	mk := func(tier string, ackLatencyMs int64) models.DetectionLifecycle {
+		lc := makeLifecycle("doc-tier", "patient-tier")
+		lc.TierAtDetection = tier
+		lc.ActionedAt = ptrTime(now)
+		lc.ActionLatencyMs = ptr64(ackLatencyMs) // reuse as the at-detection-to-ack value
+		lc.AcknowledgmentLatencyMs = ptr64(ackLatencyMs)
+		return lc
+	}
+
+	// SAFETY threshold is 30 min = 1_800_000 ms. 90 min = 5_400_000 ms → LATE.
+	// URGENT threshold is 1440 min = 86_400_000 ms. 90 min → IN TIME.
+	lifecycles := []models.DetectionLifecycle{
+		mk("SAFETY", 90*60*1000),
+		mk("URGENT", 90*60*1000),
+	}
+
+	result := svc.ComputePilotMetrics(lifecycles)
+
+	if result.DetectionsAcknowledgedInTime != 1 {
+		t.Fatalf("expected exactly 1 in-time (URGENT only), got %d — SAFETY threshold leaking", result.DetectionsAcknowledgedInTime)
+	}
+}
+
 // TestMetrics_PilotKPIs — 20 lifecycles with various action types
 func TestMetrics_PilotKPIs(t *testing.T) {
-	svc := NewResponseMetricsService()
+	svc := NewResponseMetricsService(nil)
 
 	actionTypes := []string{
 		// 8 CALL_PATIENT → OutreachCalls

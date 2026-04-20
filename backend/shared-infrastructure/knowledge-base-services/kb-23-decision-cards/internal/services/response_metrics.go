@@ -8,12 +8,18 @@ import (
 )
 
 // ResponseMetricsService computes aggregate response metrics from lifecycle data.
-// It is stateless — all methods are pure functions operating on slices.
-type ResponseMetricsService struct{}
+// Methods are pure functions operating on slices plus the injected config.
+type ResponseMetricsService struct {
+	cfg *ResponseTrackingConfig
+}
 
-// NewResponseMetricsService creates a new ResponseMetricsService.
-func NewResponseMetricsService() *ResponseMetricsService {
-	return &ResponseMetricsService{}
+// NewResponseMetricsService creates a new ResponseMetricsService. Passing nil
+// uses DefaultResponseTrackingConfig (matches the shipped YAML).
+func NewResponseMetricsService(cfg *ResponseTrackingConfig) *ResponseMetricsService {
+	if cfg == nil {
+		cfg = DefaultResponseTrackingConfig()
+	}
+	return &ResponseMetricsService{cfg: cfg}
 }
 
 // ComputeClinicianMetrics computes rolling-window metrics from lifecycle data
@@ -168,19 +174,10 @@ func (s *ResponseMetricsService) ComputeSystemMetrics(
 	return result
 }
 
-// timelyThresholdMs returns the "timely" acknowledgment threshold per tier.
-func timelyThresholdMs(tier string) int64 {
-	switch tier {
-	case "CRITICAL":
-		return 15 * 60 * 1000 // 15 min
-	case "URGENT":
-		return 60 * 60 * 1000 // 1 hour
-	case "STANDARD":
-		return 4 * 60 * 60 * 1000 // 4 hours
-	default:
-		return 24 * 60 * 60 * 1000 // 24 hours
-	}
-}
+// (Removed: former timelyThresholdMs switched on CRITICAL/URGENT/STANDARD
+// which never matched the live tier vocabulary of SAFETY/IMMEDIATE/URGENT/
+// ROUTINE used by the escalation manager. Thresholds now come from the
+// injected ResponseTrackingConfig loaded from response_tracking_parameters.yaml.)
 
 // ComputePilotMetrics computes HCF CHF pilot-specific KPIs.
 func (s *ResponseMetricsService) ComputePilotMetrics(
@@ -198,10 +195,9 @@ func (s *ResponseMetricsService) ComputePilotMetrics(
 	untimelyPatients := make(map[string]bool)
 
 	for _, lc := range lifecycles {
-		// Acknowledged in time?
+		// Acknowledged in time? (Per-tier threshold from YAML.)
 		if lc.AcknowledgmentLatencyMs != nil {
-			threshold := timelyThresholdMs(lc.TierAtDetection)
-			if *lc.AcknowledgmentLatencyMs <= threshold {
+			if *lc.AcknowledgmentLatencyMs <= s.cfg.AckThreshold(lc.TierAtDetection) {
 				result.DetectionsAcknowledgedInTime++
 			}
 		}
@@ -211,7 +207,7 @@ func (s *ResponseMetricsService) ComputePilotMetrics(
 			result.DetectionsWithAction++
 		}
 
-		// Action type counting
+		// Action type counting.
 		switch lc.ActionType {
 		case "CALL_PATIENT", "TELECONSULT":
 			result.OutreachCalls++
@@ -221,15 +217,15 @@ func (s *ResponseMetricsService) ComputePilotMetrics(
 			result.AppointmentsScheduled++
 		}
 
-		// Collect action latencies for median
+		// Collect action latencies for median.
 		if lc.ActionLatencyMs != nil {
 			actionLatencies = append(actionLatencies, *lc.ActionLatencyMs)
 		}
 
-		// Timely action tracking per patient
+		// Timely-action tracking per patient using timely_action_definition
+		// from YAML (not a derived multiple of the ack threshold).
 		if lc.ActionedAt != nil && lc.ActionLatencyMs != nil {
-			threshold := timelyThresholdMs(lc.TierAtDetection)
-			if *lc.ActionLatencyMs <= threshold*2 { // action within 2x ack threshold
+			if *lc.ActionLatencyMs <= s.cfg.ActionThreshold(lc.TierAtDetection) {
 				timelyPatients[lc.PatientID] = true
 			} else {
 				if !timelyPatients[lc.PatientID] {

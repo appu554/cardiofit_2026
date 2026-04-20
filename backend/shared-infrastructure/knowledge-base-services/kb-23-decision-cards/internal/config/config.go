@@ -67,6 +67,9 @@ type Config struct {
 	// Seasonal calendar
 	Market               string // e.g. "india", "australia"
 	SeasonalCalendarPath string // path to seasonal_calendar.yaml; empty = no suppression
+
+	// Response tracking (Gap 19)
+	ResponseTrackingConfigPath string // path to response_tracking_parameters.yaml; empty = built-in defaults
 }
 
 func Load() *Config {
@@ -117,6 +120,8 @@ func Load() *Config {
 
 		Market:               envOrDefault("MARKET", "india"),
 		SeasonalCalendarPath: envOrDefault("SEASONAL_CALENDAR_PATH", ""),
+
+		ResponseTrackingConfigPath: envOrDefault("RESPONSE_TRACKING_CONFIG_PATH", ""),
 	}
 }
 

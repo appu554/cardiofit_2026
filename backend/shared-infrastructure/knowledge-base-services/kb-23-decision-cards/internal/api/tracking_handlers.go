@@ -49,7 +49,10 @@ func (s *Server) getClinicianMetrics(c *gin.Context) {
 	s.db.DB.Where("assigned_clinician_id = ? AND detected_at > ?", clinicianID, since).
 		Find(&lifecycles)
 
-	svc := services.NewResponseMetricsService()
+	svc := s.responseMetricsService
+	if svc == nil {
+		svc = services.NewResponseMetricsService(nil)
+	}
 	metrics := svc.ComputeClinicianMetrics(lifecycles, clinicianID, window)
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": metrics})
 }
@@ -68,7 +71,10 @@ func (s *Server) getSystemMetrics(c *gin.Context) {
 	since := time.Now().AddDate(0, 0, -window)
 	s.db.DB.Where("detected_at > ?", since).Find(&lifecycles)
 
-	svc := services.NewResponseMetricsService()
+	svc := s.responseMetricsService
+	if svc == nil {
+		svc = services.NewResponseMetricsService(nil)
+	}
 	metrics := svc.ComputeSystemMetrics(lifecycles, window)
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": metrics})
 }
@@ -87,7 +93,10 @@ func (s *Server) getPilotMetrics(c *gin.Context) {
 	since := time.Now().AddDate(0, 0, -window)
 	s.db.DB.Where("detected_at > ?", since).Find(&lifecycles)
 
-	svc := services.NewResponseMetricsService()
+	svc := s.responseMetricsService
+	if svc == nil {
+		svc = services.NewResponseMetricsService(nil)
+	}
 	metrics := svc.ComputePilotMetrics(lifecycles)
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": metrics})
 }

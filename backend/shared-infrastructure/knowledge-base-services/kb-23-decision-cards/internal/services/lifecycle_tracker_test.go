@@ -203,3 +203,32 @@ func TestTracker_OutOfOrder_T2BeforeT1(t *testing.T) {
 	require.NotNil(t, lc.AcknowledgmentLatencyMs)
 	assert.Equal(t, int64(1500000), *lc.AcknowledgmentLatencyMs)
 }
+
+// TestTracker_RecordT2_FirstWriteWins — when the same detection is delivered
+// through multiple channels (Push + SMS + WhatsApp) the clinician may tap each
+// one; canonical T2 should be the earliest. Duplicate RecordT2 calls must be
+// no-ops so later taps don't inflate AcknowledgmentLatencyMs.
+func TestTracker_RecordT2_FirstWriteWins(t *testing.T) {
+	tracker := newLifecycleTracker()
+
+	t0 := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(2 * time.Minute)
+	t2First := t0.Add(10 * time.Minute)
+	t2Second := t0.Add(25 * time.Minute)
+
+	lc := &models.DetectionLifecycle{
+		DetectedAt:   t0,
+		CurrentState: string(models.LifecyclePendingNotification),
+	}
+
+	tracker.RecordT1(lc, t1)
+	tracker.RecordT2(lc, "dr-a", t2First)
+	tracker.RecordT2(lc, "dr-b", t2Second) // duplicate — must NOT overwrite
+
+	require.NotNil(t, lc.AcknowledgedAt)
+	assert.Equal(t, t2First, *lc.AcknowledgedAt, "canonical T2 must be the earliest acknowledgment")
+	assert.Equal(t, "dr-a", lc.AssignedClinicianID, "duplicate RecordT2 must not reassign clinician")
+	// Ack latency = T2First - T1 = 8 min = 480_000 ms
+	require.NotNil(t, lc.AcknowledgmentLatencyMs)
+	assert.Equal(t, int64(480000), *lc.AcknowledgmentLatencyMs)
+}
