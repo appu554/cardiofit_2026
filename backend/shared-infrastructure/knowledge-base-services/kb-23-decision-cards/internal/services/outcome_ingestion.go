@@ -11,6 +11,9 @@ import (
 // and returns a single authoritative record with Reconciliation set to RESOLVED,
 // CONFLICTED, or PENDING. Source agreement on OutcomeOccurred resolves; disagreement
 // conflicts; insufficient sources remain pending.
+//
+// Intentionally stateless — reconciliation has no dependency on ambient state and
+// needs to be deterministically testable without a receiver.
 func ReconcileOutcomes(records []models.OutcomeRecord, tolerance time.Duration, minSources int) (models.OutcomeRecord, error) {
 	if len(records) == 0 {
 		return models.OutcomeRecord{}, fmt.Errorf("no records to reconcile")
@@ -38,14 +41,28 @@ func ReconcileOutcomes(records []models.OutcomeRecord, tolerance time.Duration, 
 	}
 
 	// All agree on occurrence — check timestamp agreement within tolerance.
+	// If records[0] has no OccurredAt but a later source does, promote the first
+	// non-nil timestamp so attribution downstream gets a usable value. Skipping
+	// this step silently drops valid data when sources have mixed nil/non-nil timestamps.
 	if firstOccurred && len(records) > 1 {
-		for _, r := range records[1:] {
-			if r.OccurredAt != nil && result.OccurredAt != nil {
-				diff := r.OccurredAt.Sub(*result.OccurredAt)
-				if diff < -tolerance || diff > tolerance {
-					result.Reconciliation = string(models.ReconciliationConflicted)
-					result.Notes = fmt.Sprintf("timestamp disagreement beyond %s", tolerance)
-					return result, nil
+		if result.OccurredAt == nil {
+			for _, r := range records[1:] {
+				if r.OccurredAt != nil {
+					ts := *r.OccurredAt
+					result.OccurredAt = &ts
+					break
+				}
+			}
+		}
+		if result.OccurredAt != nil {
+			for _, r := range records[1:] {
+				if r.OccurredAt != nil {
+					diff := r.OccurredAt.Sub(*result.OccurredAt)
+					if diff < -tolerance || diff > tolerance {
+						result.Reconciliation = string(models.ReconciliationConflicted)
+						result.Notes = fmt.Sprintf("timestamp disagreement beyond %s", tolerance)
+						return result, nil
+					}
 				}
 			}
 		}

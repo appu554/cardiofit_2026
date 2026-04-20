@@ -79,3 +79,33 @@ func TestOutcomeIngest_MultipleSourcesDisagree_Conflicts(t *testing.T) {
 		t.Fatalf("expected CONFLICTED, got %s", result.Reconciliation)
 	}
 }
+
+func TestOutcomeIngest_MixedNilTimestamp_PromotesFirstNonNil(t *testing.T) {
+	lifecycleID := uuid.New()
+	occurredAt := time.Now().Add(-10 * 24 * time.Hour)
+	records := []models.OutcomeRecord{
+		{
+			PatientID: "P004", LifecycleID: &lifecycleID, OutcomeType: "READMISSION_30D",
+			OutcomeOccurred: true, // OccurredAt intentionally nil
+			Source: string(models.OutcomeSourceHospitalDischarge),
+		},
+		{
+			PatientID: "P004", LifecycleID: &lifecycleID, OutcomeType: "READMISSION_30D",
+			OutcomeOccurred: true, OccurredAt: &occurredAt,
+			Source: string(models.OutcomeSourceClaimsFeed),
+		},
+	}
+	result, err := ReconcileOutcomes(records, 48*time.Hour, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reconciliation != string(models.ReconciliationResolved) {
+		t.Fatalf("expected RESOLVED, got %s", result.Reconciliation)
+	}
+	if result.OccurredAt == nil {
+		t.Fatalf("expected non-nil OccurredAt promoted from second source; got nil")
+	}
+	if !result.OccurredAt.Equal(occurredAt) {
+		t.Fatalf("expected OccurredAt=%v, got %v", occurredAt, *result.OccurredAt)
+	}
+}
