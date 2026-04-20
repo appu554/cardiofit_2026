@@ -73,3 +73,44 @@ func TestLedger_TamperedEntry_VerifyFails(t *testing.T) {
 		t.Fatalf("expected break at or after index 1, got %d", idx)
 	}
 }
+
+func TestLedger_LengthPrefixPreventsFieldCollision(t *testing.T) {
+	// Two ledger entries with different field splits that, under the old
+	// "|"-separator scheme, could produce identical hash inputs. With
+	// length-prefixing, they must produce different hashes.
+	ledger := NewInMemoryLedger([]byte("test-key"))
+
+	// Entry A: entryType="A", subjectID="B|C", payload="D"
+	e1, err := ledger.AppendEntry("A", "B|C", "D")
+	if err != nil {
+		t.Fatalf("append A failed: %v", err)
+	}
+
+	// Entry B (on a fresh ledger so prior_hash is the same genesis):
+	ledger2 := NewInMemoryLedger([]byte("test-key"))
+	// entryType="A|B", subjectID="C", payload="D" — same "|"-joined string
+	// would collide.
+	e2, err := ledger2.AppendEntry("A|B", "C", "D")
+	if err != nil {
+		t.Fatalf("append B failed: %v", err)
+	}
+
+	if e1.EntryHash == e2.EntryHash {
+		t.Fatalf("hash collision between different field splits — length-prefixing not applied")
+	}
+}
+
+func TestLedger_SeedSequence_Idempotent(t *testing.T) {
+	ledger := NewInMemoryLedger([]byte("test-key"))
+	ledger.SeedSequence(100)
+	// Second seed with a DIFFERENT starting sequence must be a no-op.
+	ledger.SeedSequence(500)
+
+	e, err := ledger.AppendEntry("T", "S", "P")
+	if err != nil {
+		t.Fatalf("append failed: %v", err)
+	}
+	if e.Sequence != 100 {
+		t.Fatalf("expected sequence=100 (first seed preserved), got %d", e.Sequence)
+	}
+}

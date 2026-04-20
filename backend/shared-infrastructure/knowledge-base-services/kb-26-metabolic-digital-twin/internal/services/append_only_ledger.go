@@ -35,14 +35,22 @@ func NewInMemoryLedger(hmacKey []byte) *InMemoryLedger {
 // SeedSequence primes the in-memory counter so the next AppendEntry produces
 // sequence = startSeq. Call once at startup after restoring from a persistent
 // store (DB) to avoid collisions with already-persisted LedgerEntry rows.
-// No-op if startSeq <= current last sequence (already seeded or has entries).
+//
+// Idempotent: if already seeded, or if live entries exist, this is a no-op.
+// This prevents a second call (e.g., during a test helper or a botched
+// restart sequence) from silently overwriting the first seed.
+//
+// Note: this method seeds only the sequence counter. The first entry's
+// PriorHash will be the genesis hash regardless, which means each process
+// lifetime starts a new HMAC chain segment. Sprint 2b's durable ledger
+// will add a companion SeedPriorHash method for full cross-process chain
+// continuity.
 func (l *InMemoryLedger) SeedSequence(startSeq int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.entries) > 0 {
+	if l.seeded || len(l.entries) > 0 {
 		return
 	}
-	// Store the seed as the "virtual last sequence" so AppendEntry continues from startSeq.
 	l.seededLastSeq = startSeq - 1
 	l.seeded = true
 }
@@ -133,8 +141,20 @@ func (l *InMemoryLedger) verifyChainLocked() (bool, int) {
 	return true, -1
 }
 
+// computeEntryHash produces an HMAC-SHA256 over length-prefixed fields.
+// Each variable-length field is written as "<length>:<bytes>|" so no
+// payload value can collide with a neighbouring field's contents.
+// Fixed-width fields (seq, timestamp) are written without length prefix
+// because their structure is already unambiguous.
 func (l *InMemoryLedger) computeEntryHash(prior, entryType, subjectID, payloadJSON string, seq int64, ts time.Time) string {
 	m := hmac.New(sha256.New, l.key)
-	fmt.Fprintf(m, "%s|%s|%s|%s|%d|%s", prior, entryType, subjectID, payloadJSON, seq, ts.Format(time.RFC3339Nano))
+	writeLP := func(s string) {
+		fmt.Fprintf(m, "%d:%s|", len(s), s)
+	}
+	writeLP(prior)
+	writeLP(entryType)
+	writeLP(subjectID)
+	writeLP(payloadJSON)
+	fmt.Fprintf(m, "%d|%s", seq, ts.Format(time.RFC3339Nano))
 	return hex.EncodeToString(m.Sum(nil))
 }
