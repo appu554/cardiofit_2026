@@ -23,10 +23,11 @@ var dbCounter int64
 // which SQLite rejects at DDL parse time. The BeforeCreate hooks on the
 // models handle UUID generation at insert time so the missing DEFAULT is safe.
 //
-// The idempotency_key uniqueness is enforced via a partial index
-// (WHERE idempotency_key != '') so that multiple rows with no key (empty string)
-// are still allowed — matching Postgres uniqueIndex semantics which allows
-// multiple NULLs/empty values in a partial unique index.
+// Partial unique index matches Postgres semantics: NULL values (nil pointers
+// on the Go side, representing "no key supplied") are allowed to repeat.
+// Non-null idempotency keys must be unique. The production Postgres schema
+// relies on *string nil = SQL NULL and the standard uniqueIndex allowing
+// multiple NULLs.
 func newTestDB(t *testing.T) *database.Database {
 	t.Helper()
 	// Each test gets a unique named in-memory DB to avoid cross-test pollution.

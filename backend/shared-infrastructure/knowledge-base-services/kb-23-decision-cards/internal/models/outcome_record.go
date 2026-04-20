@@ -44,9 +44,13 @@ type OutcomeRecord struct {
 	// Feed-supplied idempotency key. When set, POST /outcomes/ingest with a
 	// duplicate key returns the existing record instead of creating a new one.
 	// Required for at-least-once claims/discharge feeds to avoid duplicate
-	// reconciliation passes. uniqueIndex allows multiple NULL values (standard
-	// SQL), so legacy records without a key are unaffected.
-	IdempotencyKey  string     `gorm:"size:128;uniqueIndex:idx_or_idem_key" json:"idempotency_key,omitempty"`
+	// reconciliation passes.
+	//
+	// Pointer type is load-bearing: Postgres's standard unique index allows
+	// multiple NULL values but rejects duplicate empty strings. *string with
+	// nil = "no key supplied" maps to SQL NULL, so legacy records and
+	// keyless feed sources don't collide on the unique index.
+	IdempotencyKey  *string    `gorm:"size:128;uniqueIndex:idx_or_idem_key" json:"idempotency_key,omitempty"`
 	Reconciliation string    `gorm:"size:20;index;not null;default:'PENDING'" json:"reconciliation"`
 	ReconciledID   *uuid.UUID `gorm:"type:uuid" json:"reconciled_id,omitempty"` // points to authoritative record after reconciliation
 	IngestedAt     time.Time `gorm:"autoCreateTime" json:"ingested_at"`

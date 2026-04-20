@@ -52,9 +52,10 @@ func (s *Server) ingestOutcome(c *gin.Context) {
 	// Idempotency check — if an earlier ingest with the same key already
 	// produced an authoritative row, return that row unchanged. Short-circuits
 	// reconciliation + persist and makes at-least-once feed delivery safe.
-	if incoming.IdempotencyKey != "" && s.db != nil && s.db.DB != nil {
+	// Nil pointer or empty-string-after-deref means "no key supplied" — skip the check.
+	if incoming.IdempotencyKey != nil && *incoming.IdempotencyKey != "" && s.db != nil && s.db.DB != nil {
 		var existing models.OutcomeRecord
-		err := s.db.DB.Where("idempotency_key = ?", incoming.IdempotencyKey).First(&existing).Error
+		err := s.db.DB.Where("idempotency_key = ?", *incoming.IdempotencyKey).First(&existing).Error
 		if err == nil {
 			c.JSON(http.StatusOK, gin.H{"record": existing, "idempotent": true})
 			return
@@ -63,7 +64,7 @@ func (s *Server) ingestOutcome(c *gin.Context) {
 			if s.log != nil {
 				s.log.Error("idempotency key lookup failed",
 					zap.Error(err),
-					zap.String("idempotency_key", incoming.IdempotencyKey))
+					zap.Stringp("idempotency_key", incoming.IdempotencyKey))
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "idempotency lookup failed: " + err.Error()})
 			return

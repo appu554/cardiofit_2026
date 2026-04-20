@@ -97,13 +97,14 @@ func TestIngestOutcome_IdempotencyKey_DeduplicatesDuplicate(t *testing.T) {
 	r.POST("/outcomes/ingest", srv.ingestOutcome)
 
 	lifecycleID := uuid.New()
+	idemKey := "feed-msg-abc-123"
 	body := models.OutcomeRecord{
 		PatientID:       "P-idem-001",
 		LifecycleID:     &lifecycleID,
 		OutcomeType:     "READMISSION_30D",
 		OutcomeOccurred: true,
 		Source:          string(models.OutcomeSourceHospitalDischarge),
-		IdempotencyKey:  "feed-msg-abc-123",
+		IdempotencyKey:  &idemKey,
 	}
 	post := func() int {
 		bodyJSON, _ := json.Marshal(body)
@@ -168,18 +169,34 @@ func TestIngestOutcome_Transactional_PriorRowsMarkedResolved(t *testing.T) {
 	}
 
 	var all []models.OutcomeRecord
-	if err := db.DB.Where("patient_id = ?", "P-txn-001").Order("ingested_at").Find(&all).Error; err != nil {
+	if err := db.DB.Where("patient_id = ?", "P-txn-001").Find(&all).Error; err != nil {
 		t.Fatalf("load all: %v", err)
 	}
 	if len(all) != 2 {
 		t.Fatalf("expected 2 rows (authoritative + prior), got %d", len(all))
 	}
-	priorLoaded := all[0]
-	authoritative := all[1]
+	// Locate rows by ReconciledID presence — deterministic regardless of insertion order
+	// or which source ReconcileOutcomes chose as the base for the authoritative record.
+	// The prior row is updated in-place with a non-nil ReconciledID pointing at the
+	// new authoritative row; the authoritative row has ReconciledID == nil.
+	var priorLoaded, authoritative models.OutcomeRecord
+	for _, r := range all {
+		if r.ReconciledID != nil {
+			priorLoaded = r
+		} else {
+			authoritative = r
+		}
+	}
+	if priorLoaded.ID == uuid.Nil {
+		t.Fatalf("prior row (ReconciledID != nil) not found in result set")
+	}
+	if authoritative.ID == uuid.Nil {
+		t.Fatalf("authoritative row (ReconciledID == nil) not found in result set")
+	}
 	if priorLoaded.Reconciliation != string(models.ReconciliationResolved) {
 		t.Fatalf("prior row should be RESOLVED, got %s", priorLoaded.Reconciliation)
 	}
-	if priorLoaded.ReconciledID == nil || *priorLoaded.ReconciledID != authoritative.ID {
+	if *priorLoaded.ReconciledID != authoritative.ID {
 		t.Fatalf("prior ReconciledID should point at authoritative; got %v", priorLoaded.ReconciledID)
 	}
 }
@@ -212,5 +229,12 @@ func TestIngestOutcome_WithoutIdempotencyKey_StillWorks(t *testing.T) {
 	r.ServeHTTP(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("second POST: expected 200, got %d", w2.Code)
+	}
+
+	// Verify: without an idempotency key, the two keyless POSTs created 2 distinct rows.
+	var count int64
+	db.DB.Model(&models.OutcomeRecord{}).Where("patient_id = ?", "P-noidem-001").Count(&count)
+	if count != 2 {
+		t.Fatalf("expected 2 rows (no dedup without idempotency key), got %d", count)
 	}
 }
