@@ -77,8 +77,9 @@ func (m *CATECalibrationMonitor) ComputeCalibrationSummary(cohortID, interventio
 		INNER JOIN attribution_verdicts a ON c.consolidated_record_id = a.consolidated_record_id
 		WHERE c.cohort_id = ? AND c.intervention_id = ? AND c.horizon_days = ?
 		  AND c.overlap_status = ?
+		  AND c.computed_at BETWEEN ? AND ?
 		  AND a.computed_at BETWEEN ? AND ?
-	`, cohortID, interventionID, horizonDays, string(models.OverlapPass), windowStart, windowEnd).Scan(&rows).Error
+	`, cohortID, interventionID, horizonDays, string(models.OverlapPass), windowStart, windowEnd, windowStart, windowEnd).Scan(&rows).Error
 	if err != nil {
 		return CalibrationSummary{}, fmt.Errorf("join cate_estimates and attribution_verdicts for cohort %s intervention %s: %w", cohortID, interventionID, err)
 	}
@@ -124,8 +125,9 @@ func (m *CATECalibrationMonitor) EvaluateAndAlarm(cohortID string, ledger *InMem
 	}
 	var triples []triple
 	if err := m.db.Raw(`
-		SELECT DISTINCT intervention_id, horizon_days FROM cate_estimates WHERE cohort_id = ?
-	`, cohortID).Scan(&triples).Error; err != nil {
+		SELECT DISTINCT intervention_id, horizon_days FROM cate_estimates
+		WHERE cohort_id = ? AND overlap_status = ?
+	`, cohortID, string(models.OverlapPass)).Scan(&triples).Error; err != nil {
 		return fmt.Errorf("enumerate (intervention, horizon) triples for cohort %s: %w", cohortID, err)
 	}
 	for _, t := range triples {
@@ -140,6 +142,10 @@ func (m *CATECalibrationMonitor) EvaluateAndAlarm(cohortID string, ledger *InMem
 		if marshalErr != nil {
 			return fmt.Errorf("marshal calibration summary: %w", marshalErr)
 		}
+		// subject encodes (cohortID, interventionID) as "cohortID:interventionID"
+		// — safe because cohort and intervention IDs are snake_case by convention
+		// and cannot contain colons. If that convention changes, switch to a
+		// delimited or length-prefixed encoding.
 		subject := cohortID + ":" + t.InterventionID
 		if _, err := ledger.AppendEntry("CATE_MISCALIBRATION", subject, string(payload)); err != nil {
 			return fmt.Errorf("append CATE_MISCALIBRATION ledger entry: %w", err)
