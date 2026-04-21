@@ -105,5 +105,13 @@ func (s *Server) setupRoutes() {
 		{
 			governance.GET("/ledger", s.getLedger)
 		}
+
+		// CATE — Conditional Average Treatment Effect (Gap 22 Sprint 1)
+		cate := v1.Group("/cate")
+		{
+			cate.POST("/estimate", s.postCATEEstimate)
+			cate.GET("/:id", s.getCATEEstimate)
+			cate.GET("/calibration/summary/:cohortId", s.getCalibrationSummary)
+		}
 	}
 }

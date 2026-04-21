@@ -83,6 +83,10 @@ func main() {
 		// Attribution + governance ledger (Gap 21)
 		&models.AttributionVerdict{},
 		&models.LedgerEntry{},
+		// Gap 22 Sprint 1 CATE foundation
+		&models.InterventionDefinition{},
+		&models.CATEEstimate{},
+		&models.CATEPrimaryLearnerAssignment{},
 	); err != nil {
 		logger.Fatal("Failed to auto-migrate models", zap.Error(err))
 	}
@@ -300,6 +304,64 @@ func main() {
 			zap.String("version", attrCfg.MethodVersion))
 	}
 	server.SetAttributionConfig(attrCfg)
+
+	// Gap 22 Sprint 1: load intervention taxonomies + CATE parameters,
+	// construct the registry and calibration monitor, attach to the server.
+	// Pattern matches PAI/attribution loaders above.
+	interventionRegistry := services.NewInterventionRegistry(db.DB)
+	for _, name := range []string{"intervention_taxonomy_hcf_chf.yaml", "intervention_taxonomy_aged_care_au.yaml"} {
+		loaded := false
+		for _, prefix := range []string{
+			"/app/market-configs/shared/",
+			"../../market-configs/shared/",
+			"market-configs/shared/",
+		} {
+			p := prefix + name
+			if _, err := os.Stat(p); err != nil {
+				continue
+			}
+			if err := interventionRegistry.LoadFromYAML(p); err != nil {
+				logger.Error("failed to load intervention taxonomy",
+					zap.String("path", p), zap.Error(err))
+				continue
+			}
+			logger.Info("loaded intervention taxonomy", zap.String("path", p))
+			loaded = true
+			break
+		}
+		if !loaded {
+			logger.Warn("intervention taxonomy not found; CATE recommendations for this cohort will be empty",
+				zap.String("taxonomy", name))
+		}
+	}
+
+	var cateParams *services.CATEParameters
+	for _, p := range []string{
+		"/app/market-configs/shared/cate_parameters.yaml",
+		"../../market-configs/shared/cate_parameters.yaml",
+		"market-configs/shared/cate_parameters.yaml",
+	} {
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		loaded, err := services.LoadCATEParameters(p)
+		if err != nil {
+			logger.Error("failed to load cate parameters; using defaults",
+				zap.String("path", p), zap.Error(err))
+			cateParams = loaded
+		} else {
+			cateParams = loaded
+			logger.Info("loaded cate parameters", zap.String("path", p))
+		}
+		break
+	}
+	if cateParams == nil {
+		logger.Warn("cate_parameters.yaml not found; using Sprint 1 defaults")
+		cateParams = services.DefaultCATEParameters()
+	}
+
+	cateMonitor := services.NewCATECalibrationMonitor(db.DB, cateParams.CalibrationConfigFromYAML())
+	server.SetGap22CATEServices(interventionRegistry, cateMonitor, cateParams)
 
 	// 9. Start HTTP server
 	httpServer := &http.Server{

@@ -48,6 +48,11 @@ type Server struct {
 	// market-configs/shared/attribution_parameters.yaml at startup.
 	// Used by runAttribution to stamp AttributionMethod/MethodVersion.
 	attributionConfig config.AttributionConfig
+
+	// Gap 22 Sprint 1 CATE services
+	interventionRegistry *services.InterventionRegistry
+	cateMonitor          *services.CATECalibrationMonitor
+	cateParameters       *services.CATEParameters
 }
 
 // NewServer creates and configures the HTTP server with all dependencies.
@@ -155,6 +160,17 @@ func (s *Server) SetGap21Services(ledger *services.InMemoryLedger) {
 // and Gap 21 ledger.
 func (s *Server) SetAttributionConfig(cfg config.AttributionConfig) {
 	s.attributionConfig = cfg
+}
+
+// SetGap22CATEServices attaches the Gap 22 Sprint 1 CATE registry + monitor.
+// Called from main.go after the intervention taxonomies and cate_parameters.yaml
+// are loaded. Handler endpoints under /cate/* require both services and the
+// parameters block to be set; handlers guard with s.cateMonitor == nil and
+// return 503 Service Unavailable if Task 7 wiring was skipped.
+func (s *Server) SetGap22CATEServices(reg *services.InterventionRegistry, mon *services.CATECalibrationMonitor, params *services.CATEParameters) {
+	s.interventionRegistry = reg
+	s.cateMonitor = mon
+	s.cateParameters = params
 }
 
 // --- Infrastructure handlers ---
