@@ -110,6 +110,9 @@ func (s *Server) setupRoutes() {
 		cate := v1.Group("/cate")
 		{
 			cate.POST("/estimate", s.postCATEEstimate)
+			// Gin's httprouter gives static path segments priority over wildcards,
+			// so /calibration/summary/* always wins over /:id regardless of the
+			// registration order below. No routing conflict.
 			cate.GET("/:id", s.getCATEEstimate)
 			cate.GET("/calibration/summary/:cohortId", s.getCalibrationSummary)
 		}

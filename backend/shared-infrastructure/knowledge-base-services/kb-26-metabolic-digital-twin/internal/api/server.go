@@ -167,6 +167,12 @@ func (s *Server) SetAttributionConfig(cfg config.AttributionConfig) {
 // are loaded. Handler endpoints under /cate/* require both services and the
 // parameters block to be set; handlers guard with s.cateMonitor == nil and
 // return 503 Service Unavailable if Task 7 wiring was skipped.
+//
+// Sprint 1 only reads s.cateMonitor (from getCalibrationSummary). The
+// s.interventionRegistry field is consumed by Sprint 3's recommender endpoint;
+// s.cateParameters feeds Sprint 2's real POST /cate/estimate implementation
+// (currently a 501 stub). Both are populated at Sprint 1 startup so Sprint 2
+// and Sprint 3 only need to add handlers, not re-wire the server.
 func (s *Server) SetGap22CATEServices(reg *services.InterventionRegistry, mon *services.CATECalibrationMonitor, params *services.CATEParameters) {
 	s.interventionRegistry = reg
 	s.cateMonitor = mon

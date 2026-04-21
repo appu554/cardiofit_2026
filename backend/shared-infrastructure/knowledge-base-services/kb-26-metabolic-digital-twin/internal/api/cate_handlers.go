@@ -55,9 +55,12 @@ func (s *Server) getCalibrationSummary(c *gin.Context) {
 	}
 	horizon := 30
 	if raw := c.Query("horizon"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 3650 {
-			horizon = n
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > 3650 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "horizon must be a positive integer ≤ 3650"})
+			return
 		}
+		horizon = n
 	}
 	if s.cateMonitor == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Gap 22 CATE services not wired (monitor nil)"})

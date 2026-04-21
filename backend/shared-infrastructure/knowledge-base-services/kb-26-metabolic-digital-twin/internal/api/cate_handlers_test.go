@@ -17,9 +17,12 @@ import (
 	"kb-26-metabolic-digital-twin/internal/services"
 )
 
-// newCATETestDB builds a sqlite in-memory DB with cate_estimates, attribution_verdicts,
-// and intervention_definitions tables. Mirrors the newTestDB helper but scoped to the
-// Gap 22 Sprint 1 handler tests.
+// newCATETestDB builds a sqlite in-memory DB with cate_estimates and
+// attribution_verdicts tables — the two tables the CATE handler tests need.
+// Intervention definitions are not created here because no Sprint 1 handler
+// test queries them; extend with CREATE TABLE intervention_definitions when
+// Sprint 3's recommender endpoint tests land. Mirrors the newTestDB helper
+// pattern but scoped to Gap 22 handler tests.
 func newCATETestDB(t *testing.T) *database.Database {
 	t.Helper()
 	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -195,6 +198,37 @@ func TestGetCalibrationSummary_InsufficientSignalReturnsOK(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["status"] != "INSUFFICIENT_SIGNAL" {
 		t.Fatalf("want INSUFFICIENT_SIGNAL, got %v", body["status"])
+	}
+}
+
+func TestGetCalibrationSummary_MalformedHorizonReturns400(t *testing.T) {
+	r := newTestEngine()
+	db := newCATETestDB(t)
+	srv := &Server{db: db, cateMonitor: services.NewCATECalibrationMonitor(db.DB, services.CalibrationConfig{AbsDiffAlarm: 0.05, RollingWindowDays: 90, MinMatchedPairs: 20})}
+	r.GET("/cate/calibration/summary/:cohortId", srv.getCalibrationSummary)
+
+	// Malformed horizon value → should reject with 400, not silently default.
+	req := httptest.NewRequest(http.MethodGet, "/cate/calibration/summary/hcf_catalyst_chf?intervention=nurse_phone_48h&horizon=abc", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed horizon, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetCalibrationSummary_NegativeHorizonReturns400(t *testing.T) {
+	r := newTestEngine()
+	db := newCATETestDB(t)
+	srv := &Server{db: db, cateMonitor: services.NewCATECalibrationMonitor(db.DB, services.CalibrationConfig{AbsDiffAlarm: 0.05, RollingWindowDays: 90, MinMatchedPairs: 20})}
+	r.GET("/cate/calibration/summary/:cohortId", srv.getCalibrationSummary)
+
+	req := httptest.NewRequest(http.MethodGet, "/cate/calibration/summary/hcf_catalyst_chf?intervention=nurse_phone_48h&horizon=-5", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for negative horizon, got %d", w.Code)
 	}
 }
 
