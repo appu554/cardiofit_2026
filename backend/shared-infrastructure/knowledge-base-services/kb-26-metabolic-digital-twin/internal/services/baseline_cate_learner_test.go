@@ -3,6 +3,7 @@ package services
 import (
 	"math"
 	"math/rand"
+	"strconv"
 	"testing"
 
 	"kb-26-metabolic-digital-twin/internal/models"
@@ -101,5 +102,32 @@ func TestBaselineCATELearner_CohortCountsPopulated(t *testing.T) {
 	}
 	if est.TrainingN != 200 {
 		t.Fatalf("want TrainingN=200, got %d", est.TrainingN)
+	}
+}
+
+func TestBaselineCATELearner_OverlapFailReturnsStatus(t *testing.T) {
+	// Cohort with 100% treated → propensity for any patient ~ 1.0 → OverlapAboveCeiling.
+	// This exercises the spec §6.1 hard-guard path end-to-end through EstimateFromCohort.
+	rows := make([]TrainingRow, 60)
+	for i := range rows {
+		rows[i] = TrainingRow{
+			PatientID:       "T" + strconv.Itoa(i),
+			Features:        map[string]float64{"age": 70 + float64(i%5)},
+			Treated:         true, // all treated
+			OutcomeOccurred: i%3 == 0,
+		}
+	}
+	est, err := EstimateFromCohort(rows, "P_test", map[string]float64{"age": 72}, models.OverlapBand{Floor: 0.05, Ceiling: 0.95})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if est.OverlapStatus == models.OverlapPass {
+		t.Fatalf("expected non-pass overlap status for all-treated cohort, got %s", est.OverlapStatus)
+	}
+	if est.PointEstimate != 0 {
+		t.Fatalf("expected point=0 when overlap fails, got %.4f", est.PointEstimate)
+	}
+	if est.LearnerType != models.LearnerBaselineDiffMeans {
+		t.Fatalf("LearnerType must be set even on overlap-fail, got %q", est.LearnerType)
 	}
 }

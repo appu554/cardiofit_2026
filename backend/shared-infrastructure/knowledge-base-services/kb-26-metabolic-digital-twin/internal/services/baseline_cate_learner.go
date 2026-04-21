@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -51,8 +52,19 @@ type TrainingRow struct {
 // (e.g. raw age in [60,85]) from driving the gradient descent to degenerate weights
 // that push sigmoid to 0 or 1. Patient features are normalized with the same
 // cohort statistics so the propensity prediction is consistent.
+//
+// Missing-feature handling: if patientFeatures omits a key present in the
+// training rows, it defaults to 0.0, which after cohort-z-score normalization
+// equals the cohort mean for that feature — the patient is treated as "average
+// on this axis" rather than as an error. Extra keys in patientFeatures not
+// present in training rows are silently ignored. The Task 7 HTTP handler is
+// responsible for logging when the feature vector it passes is incomplete
+// relative to the intervention's feature_signature.
 func EstimateFromCohort(rows []TrainingRow, patientID string, patientFeatures map[string]float64, band models.OverlapBand) (models.CATEEstimate, error) {
-	est := models.CATEEstimate{PatientID: patientID}
+	est := models.CATEEstimate{
+		PatientID:   patientID,
+		LearnerType: models.LearnerBaselineDiffMeans,
+	}
 
 	// Insufficient-data short-circuit.
 	if len(rows) < minTrainingN {
@@ -70,7 +82,7 @@ func EstimateFromCohort(rows []TrainingRow, patientID string, patientFeatures ma
 	X, y := buildNormalizedPropensityMatrix(rows, featureKeys, means, stds)
 	prop, err := FitPropensity(X, y, featureKeys)
 	if err != nil {
-		return est, err
+		return est, fmt.Errorf("baseline CATE propensity fit (patientID=%s): %w", patientID, err)
 	}
 	normalizedPatient := normalizeFeatures(patientFeatures, featureKeys, means, stds)
 	p := prop.Predict(normalizedPatient)
@@ -103,6 +115,11 @@ func EstimateFromCohort(rows []TrainingRow, patientID string, patientFeatures ma
 	est.CohortTreatedN = len(treatedOut)
 	est.CohortControlN = len(controlOut)
 
+	// Arm-imbalance guard: even if the patient passed the propensity overlap
+	// check, the nearest-neighbour bucket may be skewed (e.g., the patient's
+	// feature neighbourhood happens to be mostly treated or mostly control).
+	// Returning OverlapInsufficientData here is safer than a point estimate
+	// backed by 1-2 observations in the minority arm.
 	if len(treatedOut) < minBucketArmN || len(controlOut) < minBucketArmN {
 		est.OverlapStatus = models.OverlapInsufficientData
 		return est, nil
@@ -143,6 +160,11 @@ func bootstrapDiffCI(treated, control []int, B int, lowerPct, upperPct float64, 
 		samples[b] = meanInt(c) - meanInt(t)
 	}
 	sort.Float64s(samples)
+	// Uses "exclusive-lower" percentile convention: for B=500 and lowerPct=5.0,
+	// lower = samples[25] (the 26th sorted value). This differs by one index from
+	// numpy default but keeps the interval width identical. Sprint 3 explanation
+	// layer should prefer `samples[int(lowerPct/100 * (B-1))]` if interval endpoints
+	// are compared against probability thresholds.
 	lower := samples[int(math.Floor(lowerPct/100*float64(B)))]
 	upper := samples[int(math.Floor(upperPct/100*float64(B)))]
 	return lower, upper
@@ -286,6 +308,7 @@ func computeFeatureContributions(all, bucket []TrainingRow, patient map[string]f
 			CohortMean:   deltas[i].cm,
 		}
 	}
+	// FeatureContribution fields are all string/float64; json.Marshal cannot fail.
 	payload, _ := json.Marshal(contribs)
 	return keysOut, string(payload)
 }
