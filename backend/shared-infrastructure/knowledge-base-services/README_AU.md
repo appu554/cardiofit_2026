@@ -31,8 +31,11 @@
 | **KB-16** lab interp | KDIGO L3 staging | 63 | KDIGO 2022 L3 | ✅ live |
 | **KB-20** patient profile | KDIGO L3 typed ADR profiles (`adverse_reaction_profiles`) | 112 | KDIGO 2022 L3 | ✅ live |
 | **KB-20** patient profile | KDIGO L3 staging | 63 | KDIGO 2022 L3 | ✅ live |
+| **KB-4** patient safety | STOPP v3 (drugs-to-stop, 10 sections) | 80 | O'Mahony 2023, Age and Ageing | ✅ live |
+| **KB-4** patient safety | START v3 (drugs-to-start / PPO, 9 sections) | 40 | O'Mahony 2023 | ✅ live |
+| **KB-4** patient safety | AGS Beers 2023 (US PIM, RxCUI + ATC + ACB scores) | 57 | AGS 2023 | ✅ live |
 
-**Totals:** 9.4M SNOMED-AU rows + 6.9k PBS items + 11.9k pipeline spans + 416 typed clinical facts = approx. **9.43M rows** across 5 separate KB DBs, all loaded fresh 28-29 April 2026.
+**Totals:** 9.4M SNOMED-AU rows + 6.9k PBS items + 11.9k pipeline spans + 416 typed clinical facts + 177 explicit-criteria rules = approx. **9.43M rows** across 5 separate KB DBs, all loaded fresh 28-29 April 2026.
 
 ---
 
@@ -46,7 +49,7 @@ Every KB service has its own Postgres DB on its own container. The table below i
 | KB-6 formulary | `kb6-postgres` | **5447** | `kb_formulary` | `kb6_admin` | `kb6_secure_password` | `kb6_pbs_items`, `kb6_pbs_authorities`, `kb6_pbs_indications`, `kb6_pbs_section_100`, `kb6_pbs_restrictions`, `kb6_pbs_prescriber_types`, `kb6_pbs_load_log` |
 | KB-3 guidelines | `kb3-postgres` | **5435** | `kb3_guidelines` | `postgres` | `password` | `kb3_pipeline2_*` (jobs, raw_spans, merged_spans, sections, tree, rxnorm_corrections, validation_reports) |
 | KB-1 drug-rules | `kb1-postgres` | **5481** | `kb1_drug_rules` | `kb1_user` | `kb1_password` | `kb_l3_staging`, `drug_rules` (filter `source_set_id LIKE 'L3:%'`) |
-| KB-4 patient-safety | `kb4-patient-safety-postgres` | **5440** | `kb4_patient_safety` | `kb4_safety_user` | `kb4_safety_password` | `kb_l3_staging`, `kb4_l3_safety_facts` |
+| KB-4 patient-safety | `kb4-patient-safety-postgres` | **5440** | `kb4_patient_safety` | `kb4_safety_user` | `kb4_safety_password` | `kb_l3_staging`, `kb4_l3_safety_facts`, `kb4_explicit_criteria` (STOPP/START/Beers) |
 | KB-16 lab-interpretation | `kb16-postgres` | **5446** | `kb_lab_interpretation` | `kb16_user` | `kb_password` | `kb_l3_staging`, `kb16_l3_lab_requirements` |
 | KB-20 patient-profile | `kb20-postgres` | **5436** | `kb_service_20` | `kb20_user` | `kb20_password` | `kb_l3_staging`, `adverse_reaction_profiles` (filter `source = 'L3_KDIGO'`) |
 
@@ -143,6 +146,21 @@ python3 scripts/extract_l3_to_typed.py
 python3 scripts/load_pipeline2_layers.py
 ```
 
+### KB-4 — Explicit criteria (Wave 3): STOPP v3 + START v3 + Beers 2023
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-4-patient-safety
+
+# Source YAMLs already in repo (no download needed)
+python3 scripts/load_explicit_criteria.py
+
+# Per-set load
+python3 scripts/load_explicit_criteria.py --set STOPP_V3
+python3 scripts/load_explicit_criteria.py --set START_V3
+python3 scripts/load_explicit_criteria.py --set BEERS_2023
+```
+Result: 177 rules in `kb4_explicit_criteria` (80 STOPP + 40 START + 57 Beers).
+
 ### Cross-KB validator (Wave 1 exit check)
 
 ```bash
@@ -198,6 +216,34 @@ curl "http://localhost:8094/v1/au/amt/search?q=metformin&level=mp&limit=5"
 curl "http://localhost:8094/v1/au/concepts/search?q=aboriginal&module=au&limit=5"
 ```
 
+### KB-4 explicit criteria (Wave 3)
+
+```bash
+# Counts per criterion set
+PGPASSWORD=kb4_safety_password docker exec -it kb4-patient-safety-postgres \
+  psql -U kb4_safety_user -d kb4_patient_safety -c "
+SELECT criterion_set, count(*) FROM kb4_explicit_criteria GROUP BY 1
+"
+# => STOPP_V3 80, START_V3 40, BEERS_2023 57
+
+# All Beers AVOID drugs with high anticholinergic burden (ACB >= 3)
+PGPASSWORD=kb4_safety_password docker exec -it kb4-patient-safety-postgres \
+  psql -U kb4_safety_user -d kb4_patient_safety -c "
+SELECT drug_name, recommendation, acb_score
+FROM kb4_explicit_criteria
+WHERE criterion_set='BEERS_2023' AND recommendation='AVOID' AND acb_score >= 3
+ORDER BY drug_name LIMIT 10
+"
+
+# START criteria for atrial fibrillation (ICD-10 I48)
+PGPASSWORD=kb4_safety_password docker exec -it kb4-patient-safety-postgres \
+  psql -U kb4_safety_user -d kb4_patient_safety -c "
+SELECT criterion_id, condition_text, recommended_drugs
+FROM kb4_explicit_criteria
+WHERE criterion_set='START_V3' AND 'I48' = ANY(condition_icd10)
+"
+```
+
 ---
 
 ## Backups
@@ -232,9 +278,9 @@ docker exec -i kb7-postgres pg_restore -U postgres -d kb_terminology --no-owner 
 |---|---|---|---|
 | Wave 1 | ICD-10-AM / ACHI codes | ⚠️ infra ready | IHACPA commercial license |
 | Wave 2 | PBS amt-items, criteria, indications, atc-codes (other CSVs in the bundle) | ⚠️ infra ready | Just need additional load runs |
-| Wave 3 | STOPP/START v3 (190 criteria) | ❌ not started | Pipeline 2 re-run on source |
-| Wave 3 | Australian PIMs 2024 | ❌ not started | Pipeline 2 re-run |
-| Wave 3 | AGS Beers 2023 | ❌ not started | OHDSI verification + enrichment |
+| Wave 3 | STOPP v3 + START v3 (120 entries) | ✅ **loaded** (commit 5c0eda39) | — |
+| Wave 3 | Australian PIMs 2024 (Wang IMJ) | ❌ not started | Source YAML not yet in repo |
+| Wave 3 | AGS Beers 2023 | ✅ **loaded** (commit 5c0eda39, 57 entries) | — |
 | Wave 4 | Drug Burden Index (DBI) weights | ❌ not started | Monash CSV load |
 | Wave 4 | Anticholinergic Cognitive Burden (ACB) scores | ❌ not started | CSV load |
 | Wave 5 | AMH Aged Care Companion | ❌ blocked | Commercial license |
