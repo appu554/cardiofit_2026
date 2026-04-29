@@ -48,9 +48,14 @@ DSN = dict(
 )
 
 SOURCES = {
-    "STOPP_V3":   ("knowledge/global/stopp_start/stopp_v3.yaml",  "stopp_entries"),
-    "START_V3":   ("knowledge/global/stopp_start/start_v3.yaml",  "start_entries"),
-    "BEERS_2023": ("knowledge/beers/beers_criteria_2023.yaml",    "beers_entries"),
+    "STOPP_V3":      ("knowledge/global/stopp_start/stopp_v3.yaml",     "stopp_entries"),
+    "START_V3":      ("knowledge/global/stopp_start/start_v3.yaml",     "start_entries"),
+    "BEERS_2023":    ("knowledge/beers/beers_criteria_2023.yaml",       "beers_entries"),
+    # Wave 3 follow-up + Wave 4 partial — additional AU / global safety lists
+    "AU_APINCHS":    ("knowledge/au/high-alert/apinchs.yaml",           "entries"),
+    "TGA_BLACKBOX":  ("knowledge/au/blackbox/tga_blackbox.yaml",        "entries"),
+    "TGA_PREGNANCY": ("knowledge/au/pregnancy/tga_pregnancy.yaml",      "entries"),
+    "ACB_SCALE":     ("knowledge/global/anticholinergic/acb_scale.yaml", "entries"),
 }
 
 
@@ -71,17 +76,55 @@ def _sha256(obj) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _build_criteria_text(criterion_set: str, entry: dict) -> str:
+    """Construct criteria_text for sources that don't expose it directly.
+
+    Different YAMLs use different field names for the rule sentence; this
+    function maps each criterion_set to its natural canonical phrasing.
+    """
+    explicit = entry.get("criteria") or entry.get("criteriaText")
+    if explicit:
+        return explicit
+
+    drug = entry.get("drugName") or "Drug"
+
+    if criterion_set == "AU_APINCHS":
+        cat = entry.get("categoryName") or entry.get("category") or "high-alert"
+        risk = entry.get("riskLevel") or "high"
+        factors = entry.get("riskFactors") or []
+        risk_summary = factors[0] if factors else "specific safety requirements apply"
+        return (
+            f"{drug} is a high-alert medication ({cat}, risk: {risk}). "
+            f"Key risk: {risk_summary}."
+        )
+    if criterion_set == "TGA_BLACKBOX":
+        title = entry.get("warningTitle") or "Boxed warning"
+        text = entry.get("warningText") or ""
+        return f"TGA black-box warning ({title}) for {drug}. {text}".strip()
+    if criterion_set == "TGA_PREGNANCY":
+        cat = entry.get("category") or "?"
+        desc = entry.get("categoryDescription") or ""
+        return f"TGA pregnancy category {cat} for {drug}. {desc}".strip()
+    if criterion_set == "ACB_SCALE":
+        score = entry.get("acbScore")
+        risk = entry.get("riskLevel") or ""
+        cog = entry.get("cognitiveRisk") or ""
+        return f"{drug} carries ACB score {score} ({risk} anticholinergic burden). {cog}".strip()
+    return f"{drug}: {criterion_set} entry"
+
+
 def _normalize_entry(criterion_set: str, entry: dict) -> dict:
     """Map a YAML entry to kb4_explicit_criteria row fields."""
     g = entry.get("governance") or {}
 
-    # criterion_id: STOPP/START use 'id'; Beers uses rxnorm or constructs from drug name
+    # criterion_id: STOPP/START use 'id'; Beers/APINCHs/TGA/ACB use rxnorm
     crit_id = entry.get("id")
-    if not crit_id and criterion_set == "BEERS_2023":
+    if not crit_id:
         crit_id = entry.get("rxnorm") or f"{entry.get('drugName', 'unk')}-{_sha256(entry)[:8]}"
 
-    # rxnorm handling — Beers single, STOPP/START array
-    if criterion_set == "BEERS_2023":
+    # rxnorm handling — sources with single rxnorm use rxnorm_code_primary
+    if criterion_set in ("BEERS_2023", "AU_APINCHS", "TGA_BLACKBOX",
+                         "TGA_PREGNANCY", "ACB_SCALE"):
         rxnorm_primary = entry.get("rxnorm")
         rxnorm_codes = None
     else:
@@ -94,7 +137,6 @@ def _normalize_entry(criterion_set: str, entry: dict) -> dict:
         condition_icd10 = entry.get("conditionICD10") or []
     elif criterion_set == "BEERS_2023":
         cta = entry.get("conditionsToAvoid") or []
-        # Render as text for free-text searchability; keep structured in conditions_to_avoid JSONB
         if isinstance(cta, list) and cta:
             condition_text = "; ".join(
                 (c.get("display") or c.get("code") or "") if isinstance(c, dict) else str(c)
@@ -102,6 +144,9 @@ def _normalize_entry(criterion_set: str, entry: dict) -> dict:
             )
         else:
             condition_text = None
+        condition_icd10 = []
+    elif criterion_set == "TGA_PREGNANCY":
+        condition_text = "Pregnancy (any trimester)"
         condition_icd10 = []
     else:
         condition_text = None
@@ -122,12 +167,17 @@ def _normalize_entry(criterion_set: str, entry: dict) -> dict:
         conditions_to_avoid        = entry.get("conditionsToAvoid"),
         recommended_drugs          = entry.get("recommendedDrugs"),
         recommendation             = entry.get("recommendation"),
-        criteria_text              = entry.get("criteria") or entry.get("criteriaText") or "",
-        rationale                  = entry.get("rationale"),
+        criteria_text              = _build_criteria_text(criterion_set, entry),
+        rationale                  = (entry.get("rationale")
+                                      or entry.get("clinicalGuidance")  # TGA pregnancy
+                                      or entry.get("warningText")        # TGA blackbox
+                                      or entry.get("dementiaRisk")       # ACB
+                                      or entry.get("geriatricRisk")),    # ACB
         exceptions                 = entry.get("exceptions"),
         evidence_level             = entry.get("evidenceLevel") or g.get("evidenceLevel"),
         quality_of_evidence        = entry.get("qualityOfEvidence"),
-        strength_of_recommendation = entry.get("strengthOfRecommendation"),
+        strength_of_recommendation = entry.get("strengthOfRecommendation")
+                                      or entry.get("severity"),          # TGA blackbox
         acb_score                  = entry.get("acbScore"),
         alternatives               = entry.get("alternatives"),
         source_authority           = g.get("sourceAuthority"),
