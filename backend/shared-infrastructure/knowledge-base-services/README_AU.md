@@ -22,6 +22,18 @@
 | **KB-7** terminology | AMT packs | 54,303 | NCTS AMT TSV 30 Apr 2026 | ✅ live |
 | **KB-7** terminology | ICD-10-AM codes | 0 | IHACPA (commercial) | ⚠️ schema ready, license blocked |
 | **KB-6** formulary | PBS items | 6,935 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS ATC codes (`kb6_pbs_rel_atc_codes`) | 7,891 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS item↔ATC linkages (`kb6_pbs_rel_item_atc`) | 6,803 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS prescribers (`kb6_pbs_rel_prescribers`) | 10,324 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS restrictions full text (`kb6_pbs_rel_restrictions`) | 3,553 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS item↔restriction linkages (`kb6_pbs_rel_item_restrictions`) | 23,073 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS prescribing texts (`kb6_pbs_rel_prescribing_texts`) | 9,007 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS item↔prescribing-text linkages (`kb6_pbs_rel_item_prescribing_texts`) | 12,915 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS criteria (`kb6_pbs_rel_criteria`) | 2,820 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS parameters (`kb6_pbs_rel_parameters`) | 3,501 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS criteria↔parameter linkages (`kb6_pbs_rel_criteria_parameters`) | 3,885 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS indications (`kb6_pbs_rel_indications`) | 646 | PBS API CSV 1 Apr 2026 | ✅ live |
+| **KB-6** formulary | PBS programs (`kb6_pbs_rel_programs`) | 17 | PBS API CSV 1 Apr 2026 | ✅ live |
 | **KB-3** guidelines | Pipeline 2 layered spans / sections / tree / corrections | 11,873 | KDIGO 2022 Pipeline 2 | ✅ live |
 | **KB-1** drug rules | KDIGO L3 dosing facts (typed `drug_rules`) | 37 | KDIGO 2022 L3 | ✅ live |
 | **KB-1** drug rules | KDIGO L3 staging | 64 | KDIGO 2022 L3 | ✅ live |
@@ -41,7 +53,7 @@
 | **KB-4** patient safety | Australian PIMs 2024 (Wang IMJ) | 19 | Wiley DOI 10.1111/imj.16322 | ✅ live (criterion_set=AU_PIMS_2024, Delphi-curated, re-phrased) |
 | **KB-4** patient safety | Drug Burden Index weights (DBI) | 0 | Hilmer 2007 + Monash CMUS | 🚫 **deferred — procurement blocked** (no JAMA supp / Monash CSV / Kouladjian 2014 obtained; will NOT synthesize weights — clinical safety risk) |
 
-**Totals:** 9.4M SNOMED-AU rows + 6.9k PBS items + 11.9k pipeline spans + 416 typed clinical facts + 392 explicit-criteria rules = approx. **9.43M rows** across 5 separate KB DBs, all loaded fresh 28-29 April 2026.
+**Totals:** 9.4M SNOMED-AU rows + 6.9k PBS items + **84.4k PBS relational rows** + 11.9k pipeline spans + 416 typed clinical facts + 392 explicit-criteria rules = approx. **9.51M rows** across 5 separate KB DBs, all loaded fresh 28-29 April 2026.
 
 ---
 
@@ -131,8 +143,23 @@ unzip -q -o data/pbs/2026-04-01-PBS-API-CSV-files.zip -d data/pbs/extracted/
 python3 scripts/load_pbs.py \
   --csv data/pbs/extracted/tables_as_csv/items.csv \
   --schedule-date 2026-04-01
+
+# Then load the FULL relational graph (12 CSVs, ~84k rows): authorities,
+# restrictions text, indications, ATC codes, prescribers, criteria,
+# parameters, programs. TRUNCATE+COPY semantics, idempotent monthly.
+python3 scripts/load_pbs_relational.py --apply-migrations
 ```
 Details: [kb-6-formulary/scripts/README_PBS.md](kb-6-formulary/scripts/README_PBS.md)
+
+After both loaders run, KB-6 supports decision-support joins like:
+```sql
+-- "What authority text applies to PBS code X?"
+SELECT i.drug_name, ir.benefit_type_code, r.li_html_text
+FROM kb6_pbs_items i
+JOIN kb6_pbs_rel_item_restrictions ir ON ir.pbs_code = i.pbs_code
+JOIN kb6_pbs_rel_restrictions r ON r.res_code = ir.res_code
+WHERE i.pbs_code = '10001J';
+```
 
 ### KB-1/4/16/20 — KDIGO L3 fact pipeline (4-stage)
 
@@ -291,7 +318,7 @@ docker exec -i kb7-postgres pg_restore -U postgres -d kb_terminology --no-owner 
 | Wave | Scope | Status | Blocker |
 |---|---|---|---|
 | Wave 1 | ICD-10-AM / ACHI codes | ⚠️ infra ready | IHACPA commercial license |
-| Wave 2 | PBS amt-items, criteria, indications, atc-codes (other CSVs in the bundle) | ⚠️ infra ready | Just need additional load runs |
+| Wave 2 | PBS authorities, restrictions, indications, ATC codes, prescriber types, criteria, parameters, programs (12 relational CSVs, 84,435 rows) | ✅ **loaded** (commit `<this commit>`) | — |
 | Wave 3 | STOPP v3 + START v3 (120 entries) | ✅ **loaded** (commit 5c0eda39) | — |
 | Wave 3 | AU APINCHs (high-alert) + TGA blackbox + TGA pregnancy (140 entries) | ✅ **loaded** | — |
 | Wave 3 | Australian PIMs 2024 (Wang IMJ) | ✅ **loaded** (19 entries, manually curated from PDF, criteria re-phrased) | — |
