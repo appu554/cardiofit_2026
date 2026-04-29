@@ -31,8 +31,16 @@ import logging
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import psycopg2
+
+# RxNav-in-a-Box base URL — used by --rxnav to classify unresolved RxCUIs
+# as Active / NotCurrent (retired) / Obsolete (remapped) / TruePhantom.
+# The container ships a complete NLM RxNorm release with full history, so
+# it's the authoritative oracle for "is this RxCUI legitimate?"
+RXNAV_BASE = "http://localhost:4000"
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -44,6 +52,10 @@ KB7_DSN = dict(
 KB1_DSN = dict(
     host="localhost", port=5457, user="kb1_user",
     password="kb1_password", dbname="kb1_drug_rules",
+)
+KB4_DSN = dict(
+    host="localhost", port=5440, user="kb4_safety_user",
+    password="kb4_safety_password", dbname="kb4_patient_safety",
 )
 
 # Reference tables in kb_terminology — where codes SHOULD resolve to.
@@ -65,6 +77,7 @@ class ConsumerCheck:
     column: str
     target_system: str        # human label
     reference_query: str      # SELECT producing one TEXT column of valid codes
+    is_array: bool = False    # True when column is a TEXT[] / VARCHAR[] needing UNNEST
 
 
 @dataclass
@@ -80,6 +93,94 @@ class CheckResult:
     resolution_pct: float
     sample_unresolved: list[str] = field(default_factory=list)
     status: str = "PASS"          # PASS | WARN | FAIL
+    # Optional RxNav classification (only populated for RxNorm checks when
+    # --rxnav is passed). Counts how unresolved codes break down per status.
+    rxnav_classification: dict = field(default_factory=dict)
+    rxnav_remap_samples: list[dict] = field(default_factory=list)
+
+
+def _rxnav_status(rxcui: str, timeout: float = 2.0) -> dict:
+    """Query RxNav-in-a-Box historystatus for one RxCUI.
+
+    Returns a dict with keys:
+        status: 'Active' | 'NotCurrent' | 'Obsolete' | 'Remapped'
+                | 'Quantified' | 'Alien' | 'TruePhantom' | 'RxNavError'
+        name:   current/historical name if known
+        tty:    term type if known
+        remap_target: list of remap target RxCUI strings (for Obsolete/Remapped)
+
+    A status of 'TruePhantom' means RxNav also doesn't recognize the code —
+    it's neither current nor historical, suggesting a typo or invented code
+    in the source YAML.
+    """
+    try:
+        with urlopen(
+            f"{RXNAV_BASE}/REST/rxcui/{rxcui}/historystatus.json",
+            timeout=timeout,
+        ) as resp:
+            payload = json.load(resp)
+    except (URLError, json.JSONDecodeError, OSError):
+        return {"status": "RxNavError", "name": "", "tty": "",
+                "remap_target": []}
+
+    history = payload.get("rxcuiStatusHistory") or {}
+    meta = history.get("metaData") or {}
+    attrs = history.get("attributes") or {}
+    status = meta.get("status") or "TruePhantom"
+
+    # Find any remap targets (RxNav lists these under derivedConcepts /
+    # remappedConcept depending on transition type).
+    remap_target: list[str] = []
+    derived = history.get("derivedConcepts") or {}
+    for bucket in ("remappedConcept", "quantifiedConcept"):
+        for entry in derived.get(bucket, []) or []:
+            target = entry.get("remappedRxCui") or entry.get("quantifiedRxCui")
+            if target:
+                remap_target.append(str(target))
+
+    return {
+        "status": status,
+        "name": attrs.get("name", ""),
+        "tty": attrs.get("tty", ""),
+        "remap_target": remap_target,
+    }
+
+
+def _classify_unresolved_rxcuis(
+    unresolved: set[str],
+    sample_n: int,
+    log_progress: bool = False,
+) -> tuple[dict, list[dict]]:
+    """For a set of unresolved RxCUIs, classify each via RxNav and return:
+        - status_counts: {Active: N, NotCurrent: N, Obsolete: N, ...}
+        - sample_remaps: up to sample_n {rxcui, status, name, remap_target}
+          biased toward Obsolete/Remapped (the actionable cases)
+    """
+    counts: dict[str, int] = {}
+    actionable: list[dict] = []
+    other: list[dict] = []
+
+    for i, rxcui in enumerate(sorted(unresolved)):
+        info = _rxnav_status(rxcui)
+        s = info["status"]
+        counts[s] = counts.get(s, 0) + 1
+
+        record = {"rxcui": rxcui, **info}
+        # Bias the sample toward fixable cases (have a remap target or are
+        # marked NotCurrent — both repairable by RxNav lookup).
+        if info["remap_target"] or s in ("NotCurrent", "Obsolete", "Remapped"):
+            if len(actionable) < sample_n:
+                actionable.append(record)
+        else:
+            if len(other) < sample_n:
+                other.append(record)
+
+        if log_progress and (i + 1) % 25 == 0:
+            log.info("    RxNav classified %d/%d unresolved codes",
+                     i + 1, len(unresolved))
+
+    samples = actionable + other[: max(0, sample_n - len(actionable))]
+    return counts, samples[:sample_n]
 
 
 def _resolution_status(pct: float) -> str:
@@ -104,7 +205,8 @@ def reference_summary() -> list[dict]:
     return rows
 
 
-def validate_consumer(check: ConsumerCheck, sample_n: int) -> CheckResult:
+def validate_consumer(check: ConsumerCheck, sample_n: int,
+                      rxnav: bool = False) -> CheckResult:
     """Run one validation check.
 
     Strategy:
@@ -113,19 +215,38 @@ def validate_consumer(check: ConsumerCheck, sample_n: int) -> CheckResult:
       3. Compute set difference (consumer - reference).
     """
     # 1. Pull consumer codes
-    consumer_dsn = KB1_DSN if check.consumer_kb == "kb1_drug_rules" else KB7_DSN
-    with psycopg2.connect(**consumer_dsn) as cc, cc.cursor() as cur:
-        cur.execute(
-            f"SELECT count(*) FROM {check.table} "
-            f"WHERE {check.column} IS NOT NULL AND {check.column} <> ''"
-        )
-        total_rows = cur.fetchone()[0]
+    consumer_dsn = {
+        "kb1_drug_rules":     KB1_DSN,
+        "kb4_patient_safety": KB4_DSN,
+    }.get(check.consumer_kb, KB7_DSN)
 
-        cur.execute(
-            f"SELECT DISTINCT {check.column} FROM {check.table} "
-            f"WHERE {check.column} IS NOT NULL AND {check.column} <> ''"
-        )
-        consumer_codes = {r[0] for r in cur.fetchall()}
+    with psycopg2.connect(**consumer_dsn) as cc, cc.cursor() as cur:
+        if check.is_array:
+            # Array column — count rows-with-any-non-empty-array, then unnest distinct
+            cur.execute(
+                f"SELECT count(*) FROM {check.table} "
+                f"WHERE {check.column} IS NOT NULL "
+                f"AND array_length({check.column}, 1) > 0"
+            )
+            total_rows = cur.fetchone()[0]
+            cur.execute(
+                f"SELECT DISTINCT unnest({check.column})::text "
+                f"FROM {check.table} "
+                f"WHERE {check.column} IS NOT NULL "
+                f"AND array_length({check.column}, 1) > 0"
+            )
+            consumer_codes = {r[0] for r in cur.fetchall() if r[0]}
+        else:
+            cur.execute(
+                f"SELECT count(*) FROM {check.table} "
+                f"WHERE {check.column} IS NOT NULL AND {check.column} <> ''"
+            )
+            total_rows = cur.fetchone()[0]
+            cur.execute(
+                f"SELECT DISTINCT {check.column} FROM {check.table} "
+                f"WHERE {check.column} IS NOT NULL AND {check.column} <> ''"
+            )
+            consumer_codes = {r[0] for r in cur.fetchall()}
 
     distinct = len(consumer_codes)
     if distinct == 0:
@@ -154,6 +275,17 @@ def validate_consumer(check: ConsumerCheck, sample_n: int) -> CheckResult:
     unresolved = len(unresolved_set)
     pct = (resolved / distinct * 100.0) if distinct else 100.0
 
+    # 4. Optional: classify unresolved RxCUIs via RxNav-in-a-Box.
+    # Only meaningful for RxNorm checks; skip for SNOMED/ICD-10/etc.
+    rxnav_counts: dict = {}
+    rxnav_samples: list[dict] = []
+    if rxnav and unresolved_set and "RxNorm" in check.target_system:
+        log.info("    [%s] classifying %d unresolved RxCUIs via RxNav...",
+                 check.column, len(unresolved_set))
+        rxnav_counts, rxnav_samples = _classify_unresolved_rxcuis(
+            unresolved_set, sample_n=sample_n, log_progress=True,
+        )
+
     return CheckResult(
         consumer_kb=check.consumer_kb,
         table=check.table,
@@ -166,6 +298,8 @@ def validate_consumer(check: ConsumerCheck, sample_n: int) -> CheckResult:
         resolution_pct=pct,
         sample_unresolved=sorted(unresolved_set)[:sample_n],
         status=_resolution_status(pct),
+        rxnav_classification=rxnav_counts,
+        rxnav_remap_samples=rxnav_samples,
     )
 
 
@@ -202,6 +336,31 @@ def build_checks() -> list[ConsumerCheck]:
             column="rxnorm_code",
             target_system="RxNorm",
             reference_query="SELECT code FROM concepts_rxnorm",
+        ),
+        # KB-4 patient-safety — explicit-criteria (STOPP/START/Beers/APINCHs/
+        # TGA blackbox/TGA pregnancy/ACB/Wang 2024 = 392 rules as of 2026-04-29)
+        ConsumerCheck(
+            consumer_kb="kb4_patient_safety",
+            table="kb4_explicit_criteria",
+            column="rxnorm_code_primary",
+            target_system="RxNorm (single-drug rules — Beers/APINCHs/TGA/ACB)",
+            reference_query="SELECT code FROM concepts_rxnorm",
+        ),
+        ConsumerCheck(
+            consumer_kb="kb4_patient_safety",
+            table="kb4_explicit_criteria",
+            column="rxnorm_codes",
+            target_system="RxNorm (multi-drug rules — STOPP/START/Wang)",
+            reference_query="SELECT code FROM concepts_rxnorm",
+            is_array=True,
+        ),
+        ConsumerCheck(
+            consumer_kb="kb4_patient_safety",
+            table="kb4_explicit_criteria",
+            column="condition_icd10",
+            target_system="ICD-10 (START condition codes)",
+            reference_query="SELECT code FROM concepts_icd10",
+            is_array=True,
         ),
     ]
 
@@ -244,6 +403,37 @@ def render_text(refs: list[dict], results: list[CheckResult]) -> str:
                        f"({r.unresolved} unresolved):")
             for s in r.sample_unresolved:
                 out.append(f"    {s}")
+
+    rxnav_issues = [r for r in results if r.rxnav_classification]
+    if rxnav_issues:
+        out.append("")
+        out.append("RXNAV CLASSIFICATION (unresolved RxCUIs)")
+        out.append("-" * 78)
+        for r in rxnav_issues:
+            out.append(f"  {r.consumer_kb}.{r.table}.{r.column}")
+            total = sum(r.rxnav_classification.values())
+            for status, count in sorted(r.rxnav_classification.items(),
+                                        key=lambda x: -x[1]):
+                pct = (count / total * 100.0) if total else 0.0
+                hint = {
+                    "Active":      "→ stale KB-7; reload RxNorm",
+                    "NotCurrent":  "→ retired in current RxNorm; remap or remove",
+                    "Obsolete":    "→ replaced by newer RxCUI; remap via RxNav",
+                    "Remapped":    "→ already remapped; use new RxCUI",
+                    "Quantified":  "→ dose-quantified concept; check parent",
+                    "Alien":       "→ from another vocabulary; map to RxNorm",
+                    "UNKNOWN":     "→ RxNav has metadata but cannot classify; investigate YAML",
+                    "TruePhantom": "→ NOT in RxNav either; YAML typo",
+                    "RxNavError":  "→ RxNav unreachable",
+                }.get(status, "")
+                out.append(f"    {status:<12} {count:>4} ({pct:>5.1f}%)  {hint}")
+
+            if r.rxnav_remap_samples:
+                out.append("    Sample remap targets:")
+                for s in r.rxnav_remap_samples[:5]:
+                    target = ",".join(s.get("remap_target") or []) or "—"
+                    out.append(f"      {s['rxcui']:<10} {s['status']:<12} "
+                               f"→ {target:<10}  {s.get('name', '')[:40]}")
     out.append("")
     out.append("=" * 78)
     out.append(f"Total checks: {len(results)}  "
@@ -261,6 +451,10 @@ def main() -> int:
                    help="Emit JSON instead of human-readable report")
     p.add_argument("--sample", type=int, default=10,
                    help="Sample size of unresolved codes per failing check (default 10)")
+    p.add_argument("--rxnav", action="store_true",
+                   help=("For RxNorm checks, classify unresolved codes against "
+                         "RxNav-in-a-Box (localhost:4000) to distinguish "
+                         "Active/NotCurrent/Obsolete/TruePhantom"))
     args = p.parse_args()
 
     refs = reference_summary()
@@ -268,7 +462,7 @@ def main() -> int:
     results = []
     for check in build_checks():
         try:
-            res = validate_consumer(check, args.sample)
+            res = validate_consumer(check, args.sample, rxnav=args.rxnav)
         except psycopg2.Error as e:
             res = CheckResult(
                 consumer_kb=check.consumer_kb, table=check.table,

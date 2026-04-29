@@ -169,10 +169,18 @@ Result: 177 rules in `kb4_explicit_criteria` (80 STOPP + 40 START + 57 Beers).
 
 ### Cross-KB validator (Wave 1 exit check)
 
+Validates that every code-bearing column across consumer KBs (KB-1, KB-4) resolves in KB-7's authoritative reference tables. Optional `--rxnav` flag cross-classifies unresolved RxCUIs against RxNav-in-a-Box (localhost:4000) to distinguish retired/obsolete/remapped codes (fixable) from true phantoms (YAML typos).
+
 ```bash
-python3 scripts/validate_kb_codes.py
-python3 scripts/validate_kb_codes.py --json   # CI-friendly
+cd kb-7-terminology
+python3 scripts/validate_kb_codes.py                    # text report
+python3 scripts/validate_kb_codes.py --json             # CI-friendly
+python3 scripts/validate_kb_codes.py --rxnav --sample 25 # full classification
 ```
+
+Exit codes: `0` if all PASS/WARN, `2` if any FAIL.
+
+**Latest run (2026-04-29):** 3 FAILs — KB-4 RxNorm 78–82% resolution (mostly retired RxCUIs, remappable via RxNav), KB-4 ICD-10 only 2.3% (format mismatch: KB-7 holds ICD-10-CM, START_V3 uses WHO ICD-10). Gap report + remediation paths in [claudedocs/audits/2026-04-29_kb_cross_reference_gap_report.md](../../claudedocs/audits/2026-04-29_kb_cross_reference_gap_report.md).
 
 ---
 
