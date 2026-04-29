@@ -56,6 +56,7 @@ SOURCES = {
     "TGA_BLACKBOX":  ("knowledge/au/blackbox/tga_blackbox.yaml",        "entries"),
     "TGA_PREGNANCY": ("knowledge/au/pregnancy/tga_pregnancy.yaml",      "entries"),
     "ACB_SCALE":     ("knowledge/global/anticholinergic/acb_scale.yaml", "entries"),
+    "AU_PIMS_2024":  ("knowledge/au/pims_wang_2024/wang_2024_pims.yaml", "entries"),
 }
 
 
@@ -179,7 +180,8 @@ def _normalize_entry(criterion_set: str, entry: dict) -> dict:
         strength_of_recommendation = entry.get("strengthOfRecommendation")
                                       or entry.get("severity"),          # TGA blackbox
         acb_score                  = entry.get("acbScore"),
-        alternatives               = entry.get("alternatives"),
+        alternatives               = entry.get("alternatives")
+                                      or entry.get("saferAlternatives"),  # Wang 2024
         source_authority           = g.get("sourceAuthority"),
         source_document            = g.get("sourceDocument"),
         source_url                 = g.get("sourceUrl"),
