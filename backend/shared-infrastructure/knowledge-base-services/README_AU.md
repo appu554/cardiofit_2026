@@ -328,7 +328,10 @@ docker exec -i kb7-postgres pg_restore -U postgres -d kb_terminology --no-owner 
 | Wave 4 | Anticholinergic Cognitive Burden (ACB) scores | ❌ not started | CSV load |
 | Wave 5 | AMH Aged Care Companion | ❌ blocked | Commercial license |
 | Wave 5 | eTG Geriatric | ❌ blocked | Commercial license |
-| Wave 6 | Heart Foundation, ADS-ADEA, KHA-CARI, RANZCP, ACSQHC AMS | ❌ not started | Pipeline 2 extraction |
+| Wave 6 | Heart Foundation (11 PDFs), ADS-ADEA T2D algorithm 2025 (2 PDFs), KHA-CARI KDIGO commentaries (5 PDFs) | ⏳ **PDFs downloaded — Pipeline 2 extraction next** | 18 PDFs / ~16 MB landed at [kb-3-guidelines/knowledge/au/wave6/](kb-3-guidelines/knowledge/au/wave6/MANIFEST.md), gitignored |
+| Wave 6 | RANZCP CPGs (BPSD, schizophrenia, mood disorders) | ⏳ manual procurement needed | RANZCP library is policy-submission-heavy; CPGs gated behind ANZJP/SAGE journal — see MANIFEST |
+| Wave 6 | ACSQHC Clinical Care Standards (Antimicrobial Stewardship, Delirium, Hip Fracture, Cognitive Impairment) | ⏳ manual procurement needed | ACSQHC site unreachable from dev env (TLS/CDN); browse manually — see MANIFEST |
+| Wave 6 | NPS MedicineWise deprescribing algorithms | ⏳ legacy procurement needed | Site retired Q4 2023, content moved to ACSQHC — try web.archive.org per MANIFEST |
 | Wave 6 | Standard 5 + QI Program + Royal Commission | ⚠️ partial | Manual ingestion |
 
 ---
