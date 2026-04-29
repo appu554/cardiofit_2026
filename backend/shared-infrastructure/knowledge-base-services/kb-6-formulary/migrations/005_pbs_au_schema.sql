@@ -25,9 +25,9 @@
 CREATE TABLE IF NOT EXISTS kb6_pbs_items (
     pbs_code               VARCHAR(10)  PRIMARY KEY,
     drug_name              VARCHAR(500) NOT NULL,
-    drug_class             VARCHAR(200),
-    form                   VARCHAR(200),
-    strength               VARCHAR(200),
+    drug_class             TEXT,            -- some PBS combination products have very long class descriptors
+    form                   TEXT,            -- e.g., "Tablet containing 12.5 mg X with 850 mg Y"
+    strength               TEXT,
     manner_of_administration VARCHAR(100),
     max_quantity           INTEGER,
     max_repeats            INTEGER,

@@ -256,6 +256,43 @@ def parse_xml(path: Path) -> list[ParsedItem]:
 
 # ---------- CSV parsing ----------
 
+def _classify_csv_row(row: dict) -> tuple[str, dict]:
+    """Map official PBS API CSV columns to schedule classification.
+
+    Uses benefit_type_code (A/S/R/U), section100_only_indicator (Y/N),
+    and program_code. Falls back to text-based classification of any
+    schedule_section column for non-PBS-API CSV formats.
+    """
+    btc = (row.get("benefit_type_code") or "").strip().upper()
+    sec100 = (row.get("section100_only_indicator") or "").strip().upper() == "Y"
+    program = (row.get("program_code") or "").strip().upper()
+
+    if not btc:
+        # Fallback to legacy text-based classification
+        sched_text = (row.get("schedule_section") or row.get("ScheduleSection")
+                      or row.get("li_schedule_section") or "")
+        return _classify_schedule(sched_text)
+
+    flags = {
+        "is_authority_required": btc == "A",
+        "is_streamlined":        btc == "S",
+        "is_restricted":         btc == "R",
+        "is_section_100":        sec100,
+        "is_palliative_care":    program in ("PL", "EP"),
+        "is_chemotherapy":       program in ("CT", "MF"),
+    }
+    if sec100:
+        if program == "HS":   section = "S100_HSD"
+        else:                 section = "S100_HSD"
+    elif btc == "A": section = "AUTHORITY"
+    elif btc == "S": section = "STREAMLINED"
+    elif btc == "R": section = "RESTRICTED"
+    elif program in ("PL", "EP"): section = "PALLIATIVE"
+    elif program in ("CT", "MF"): section = "CHEMO"
+    else: section = "GENERAL"
+    return section, flags
+
+
 def parse_csv(path: Path) -> list[ParsedItem]:
     log.info("Parsing PBS CSV: %s (%.1f MB)", path, path.stat().st_size / (1024 * 1024))
     items: list[ParsedItem] = []
@@ -267,20 +304,25 @@ def parse_csv(path: Path) -> list[ParsedItem]:
             drug = (row.get("drug_name") or row.get("DrugName") or row.get("li_drug_name") or "").strip()
             if not code or not drug:
                 continue
-
-            sched_text = (row.get("schedule_section") or row.get("ScheduleSection")
-                          or row.get("li_schedule_section") or "")
-            section, flags = _classify_schedule(sched_text)
+            section, flags = _classify_csv_row(row)
             item = ParsedItem(
                 pbs_code=code, drug_name=drug,
                 drug_class=row.get("drug_class") or row.get("DrugClass"),
-                form=row.get("form") or row.get("li_form"),
+                form=row.get("form") or row.get("li_form") or row.get("schedule_form"),
                 strength=row.get("strength") or row.get("li_strength"),
-                manner_of_administration=row.get("manner_of_administration") or row.get("Route"),
-                max_quantity=_to_int(row.get("max_quantity") or row.get("li_max_qty")),
-                max_repeats=_to_int(row.get("max_repeats") or row.get("li_max_repeats")),
+                manner_of_administration=(row.get("manner_of_administration")
+                                          or row.get("moa_preferred_term")
+                                          or row.get("Route")),
+                max_quantity=_to_int(row.get("max_quantity")
+                                     or row.get("maximum_quantity_units")
+                                     or row.get("li_max_qty")),
+                max_repeats=_to_int(row.get("max_repeats")
+                                    or row.get("number_of_repeats")
+                                    or row.get("li_max_repeats")),
                 pack_size=_to_int(row.get("pack_size") or row.get("li_pack_size")),
-                pack_quantity=_to_int(row.get("pack_quantity") or row.get("li_pack_qty")),
+                pack_quantity=_to_int(row.get("pack_quantity")
+                                      or row.get("pricing_quantity")
+                                      or row.get("li_pack_qty")),
                 schedule_section=section,
                 is_authority_required=flags.get("is_authority_required", False),
                 is_streamlined=flags.get("is_streamlined", False),
@@ -290,7 +332,10 @@ def parse_csv(path: Path) -> list[ParsedItem]:
                 is_chemotherapy=flags.get("is_chemotherapy", False),
                 amt_mpuu_sctid=_to_int(row.get("amt_mpuu_sctid") or row.get("MPUU_SCTID")),
                 amt_ctpp_sctid=_to_int(row.get("amt_ctpp_sctid") or row.get("CTPP_SCTID")),
-                effective_date=_to_date(row.get("effective_date") or row.get("EffectiveDate")),
+                effective_date=_to_date(row.get("effective_date")
+                                        or row.get("first_listed_date")
+                                        or row.get("EffectiveDate")),
+                end_date=_to_date(row.get("end_date") or row.get("non_effective_date")),
                 raw=dict(row),
             )
             items.append(item)

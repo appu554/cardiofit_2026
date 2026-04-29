@@ -26,26 +26,45 @@ have on disk. Wave 2 of the AU Aged Care Layer 1 plan.
 
 ## Where to obtain real PBS data
 
-The PBS Schedule is published monthly. Check these in order — the
-URLs **do change** between releases:
+The PBS Schedule is published monthly. **Public, no auth required**
+for the file downloads (the new PBS Data API itself does require a
+key, but the CSV bundle is freely available).
 
-### 1. PBS Schedule downloads page
-- https://www.pbs.gov.au/info/browse/downloads
-- Look for "PBS Schedule XML extract" or "PBS Extracts ZIP"
-- Typical filename: `pbs-extracts-YYYY-MM.zip`
+### **Recommended: PBS API CSV bundle** ✅
 
-### 2. data.gov.au PBS catalogue
-- https://data.gov.au/data/dataset?q=pbs+schedule
-- Reports include Item Report, Patient Category Report, ATC Report
-- Note: data.gov.au tends to host historical aggregates, not live monthly schedule
+```
+https://www.pbs.gov.au/downloads/<YYYY>/<MM>/<YYYY-MM-01>-PBS-API-CSV-files.zip
+```
 
-### 3. Services Australia PBS
-- https://www.servicesaustralia.gov.au/pbs
-- Bulk extracts via PBS Online portal (registration may be required)
+Example (April 2026):
+```
+https://www.pbs.gov.au/downloads/2026/04/2026-04-01-PBS-API-CSV-files.zip
+```
 
-### 4. Department of Health open data API
-- https://data-api.health.gov.au/api/pbs/v3/schedules
-- REST API (auth requirements vary; check current status)
+This is a **4-5 MB ZIP** containing 22 normalized CSV tables:
+`items.csv` (the primary table), `amt-items.csv` (AMT cross-reference),
+`atc-codes.csv`, `criteria.csv`, `indications.csv`, `item-restriction-relationships.csv`,
+plus several smaller relationship/lookup tables. **All free, no auth.**
+
+### Other formats (XML deprecated 1 May 2026)
+
+```
+https://www.pbs.gov.au/downloads/<YYYY>/<MM>/<DATE>-XML-V3.zip            (deprecated)
+https://www.pbs.gov.au/downloads/<YYYY>/<MM>/<DATE>-V2-down-converted.zip (legacy)
+```
+
+### PBS API (REST, requires key)
+
+```
+https://api.pbs.gov.au/api/v3/...
+```
+Returns 401 without an API key. Email HPP Support to register.
+
+### Discovery / search routes
+
+- https://www.pbs.gov.au/info/browse/download — official download page
+- https://data.gov.au/data/dataset?q=pbs+schedule — open data CKAN
+  (note: tends to host historical aggregates, not the current monthly schedule)
 
 ## Run
 
