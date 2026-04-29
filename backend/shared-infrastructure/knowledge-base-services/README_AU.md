@@ -39,7 +39,7 @@
 | **KB-4** patient safety | TGA pregnancy categories | 55 | TGA | ✅ live |
 | **KB-4** patient safety | ACB anticholinergic burden scale | 56 | Boustani 2008 + extensions | ✅ live (Wave 4 partial) |
 | **KB-4** patient safety | Australian PIMs 2024 (Wang IMJ) | 19 | Wiley DOI 10.1111/imj.16322 | ✅ live (criterion_set=AU_PIMS_2024, Delphi-curated, re-phrased) |
-| **KB-4** patient safety | Drug Burden Index weights (DBI) | 0 | Hilmer 2007 + Monash CMUS | ⚠️ procurement runbook ready |
+| **KB-4** patient safety | Drug Burden Index weights (DBI) | 0 | Hilmer 2007 + Monash CMUS | 🚫 **deferred — procurement blocked** (no JAMA supp / Monash CSV / Kouladjian 2014 obtained; will NOT synthesize weights — clinical safety risk) |
 
 **Totals:** 9.4M SNOMED-AU rows + 6.9k PBS items + 11.9k pipeline spans + 416 typed clinical facts + 392 explicit-criteria rules = approx. **9.43M rows** across 5 separate KB DBs, all loaded fresh 28-29 April 2026.
 
@@ -289,8 +289,7 @@ docker exec -i kb7-postgres pg_restore -U postgres -d kb_terminology --no-owner 
 | Wave 3 | Australian PIMs 2024 (Wang IMJ) | ✅ **loaded** (19 entries, manually curated from PDF, criteria re-phrased) | — |
 | Wave 3 | AGS Beers 2023 | ✅ **loaded** (57 entries) | — |
 | Wave 4 | ACB Scale (Boustani-derived, 56 entries) | ✅ **loaded** | — |
-| Wave 4 | Drug Burden Index (DBI) weights | ⚠️ procurement runbook ready | Monash CMUS — see [README_AU_PIMS_DBI_PROCUREMENT.md](kb-4-patient-safety/scripts/README_AU_PIMS_DBI_PROCUREMENT.md) |
-| Wave 4 | Drug Burden Index (DBI) weights | ❌ not started | Monash CSV load |
+| Wave 4 | Drug Burden Index (DBI) weights | 🚫 **deferred** — procurement blocked, NO synthetic weights | Need ONE of: Hilmer 2007 JAMA supp / Monash CMUS CSV / Kouladjian 2014 (DOI 10.2147/CIA.S66660 — open access). When obtained, schema scaffold per [runbook](kb-4-patient-safety/scripts/README_AU_PIMS_DBI_PROCUREMENT.md) §"Source 2". |
 | Wave 4 | Anticholinergic Cognitive Burden (ACB) scores | ❌ not started | CSV load |
 | Wave 5 | AMH Aged Care Companion | ❌ blocked | Commercial license |
 | Wave 5 | eTG Geriatric | ❌ blocked | Commercial license |
