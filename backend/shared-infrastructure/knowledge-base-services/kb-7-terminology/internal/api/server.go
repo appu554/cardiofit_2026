@@ -30,6 +30,7 @@ type Server struct {
 	cdssHandlers        *CDSSHandlers               // CDSS handlers for patient evaluation
 	refsetHandlers      *RefsetHandlers             // Refset handlers for NCTS reference sets
 	fhirHandlers        *FHIRHandlers               // FHIR handlers for CQL integration (pure DB read)
+	auAgedCareHandlers  *AUAgedCareHandlers         // AU aged care handlers — querying kb7_snomed_* + kb7_amt_pack
 	logger              *logrus.Logger
 	metrics             *metrics.Collector
 }
@@ -75,6 +76,13 @@ func (s *Server) SetRefsetHandlers(handlers *RefsetHandlers) {
 // CRITICAL: FHIR handlers use ONLY precomputed PostgreSQL expansions - NO Neo4j at runtime
 func (s *Server) SetFHIRHandlers(handlers *FHIRHandlers) {
 	s.fhirHandlers = handlers
+}
+
+// SetAUAgedCareHandlers sets the AU aged care terminology handlers,
+// which query the kb7_snomed_* and kb7_amt_pack tables loaded from
+// the NCTS RF2/AMT distributions. Read-only, Postgres-only.
+func (s *Server) SetAUAgedCareHandlers(handlers *AUAgedCareHandlers) {
+	s.auAgedCareHandlers = handlers
 }
 
 func (s *Server) SetupRoutes() *gin.Engine {
@@ -178,6 +186,15 @@ func (s *Server) SetupRoutes() *gin.Engine {
 			// NEW: Classify endpoint - find ALL value sets for a code (reverse lookup)
 			// This is the missing "FindValueSetsForCode" feature from specs
 			rules.POST("/classify", s.classifyCode)
+		}
+
+		// AU Aged Care endpoints — backed by kb7_snomed_* and kb7_amt_pack
+		// loaded from NCTS RF2 + AMT TSV distributions.
+		// Read-only, Postgres-only, no Neo4j dependency.
+		if s.auAgedCareHandlers != nil {
+			auGroup := v1.Group("/au")
+			s.auAgedCareHandlers.RegisterRoutes(auGroup)
+			s.logger.Info("AU aged care endpoints registered at /v1/au/*")
 		}
 
 		// CDSS (Clinical Decision Support System) endpoints

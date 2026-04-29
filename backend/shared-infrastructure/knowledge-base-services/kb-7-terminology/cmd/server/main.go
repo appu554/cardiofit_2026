@@ -366,6 +366,12 @@ func main() {
 	apiServer.SetFHIRHandlers(fhirHandlers)
 	logger.Info("FHIR R4 handlers initialized for CQL integration (pure PostgreSQL read, no runtime Neo4j)")
 
+	// Initialize AU aged care handlers — query kb7_snomed_* and kb7_amt_pack
+	// loaded from NCTS RF2 + AMT TSV distributions. Read-only, Postgres-only.
+	auAgedCareHandlers := api.NewAUAgedCareHandlers(db, logger)
+	apiServer.SetAUAgedCareHandlers(auAgedCareHandlers)
+	logger.Info("AU aged care handlers initialized (kb7_snomed_* + kb7_amt_pack)")
+
 	// Setup routes
 	router := apiServer.SetupRoutes()
 
