@@ -52,8 +52,11 @@ DB_CONFIG = dict(
     connect_timeout=10,
 )
 
-# Tier string → smallint (matches export_gcp_to_merged_spans.py reverse map)
-TIER_REVERSE = {"NOISE": 0, "TIER_1": 1, "TIER_2": 2, None: None}
+# Tier string → smallint. The DB constraint l2_merged_spans_tier_check allows
+# only tier IN (NULL, 1, 2, 3). Matches the dashboard's convention:
+#   TIER_1 → 1, TIER_2 → 2, NOISE → 3 (not 0; export script's 0 mapping is
+#   stale dead code that never matched real DB rows).
+TIER_REVERSE = {"TIER_1": 1, "TIER_2": 2, "NOISE": 3, None: None}
 
 # Default guideline_tier (smallint) when not set in metadata. AU sources
 # default to 1 (Tier 1 = primary peak-body guideline) until reviewers
