@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+# Add shared extraction module to path (mirrors tests/v4/conftest.py pattern).
+SHARED_DIR = Path(__file__).resolve().parents[4]  # -> shared/
+sys.path.insert(0, str(SHARED_DIR))
 
 ATOMISER_DIR = Path(__file__).resolve().parents[2]
 SMOKE_PDFS = [
