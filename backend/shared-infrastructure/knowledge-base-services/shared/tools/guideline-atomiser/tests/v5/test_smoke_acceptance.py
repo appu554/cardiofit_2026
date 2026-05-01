@@ -1,7 +1,7 @@
 """V5 Bbox Provenance — smoke acceptance gate.
 
 Single-test suite that asserts the V5 metric pipeline produces
->=99% bbox_coverage_pct on a realistic synthetic span set.
+>=99.5% bbox_coverage_pct on a realistic synthetic span set.
 
 No GPU, no RunPod, no GCP, no real PDF — pure in-memory test on raw
 dicts shaped like serialise_provenance_list() output.
@@ -16,6 +16,11 @@ DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 sys.path.insert(0, str(DATA_DIR))
 
 from v5_metrics import compute_v5_bbox_metrics  # noqa: E402
+
+_TOTAL_SPANS = 200
+_V5_SPANS = 199   # one V4 fallthrough simulates text-only footnote
+_SPANS_PER_PAGE = 20
+_COLS = 5
 
 
 def _make_v5_span(channel_id: str, page: int, x0: float, span_idx: int) -> dict:
@@ -44,22 +49,23 @@ def _make_v4_span(span_idx: int) -> dict:
 
 
 def test_smoke_bbox_coverage_gte_99_pct():
-    """Acceptance gate: 199/200 V5 spans -> >=99% bbox coverage."""
+    """Acceptance gate: 199/200 V5 spans -> >=99.5% bbox coverage."""
     channels = ["A", "B", "C", "D"]
     spans: list[dict] = []
-    for i in range(199):
+    for i in range(_V5_SPANS):
         ch = channels[i % len(channels)]
-        page = (i // 20) + 1
-        x0 = 50.0 + (i % 5) * 220.0
+        page = (i // _SPANS_PER_PAGE) + 1
+        x0 = 50.0 + (i % _COLS) * 220.0
         spans.append(_make_v5_span(ch, page, x0, i))
     # One V4-style span with no provenance — simulates a text-only
     # footnote that fell through without bbox.
-    spans.append(_make_v4_span(199))
+    spans.append(_make_v4_span(_V5_SPANS))
 
     metrics = compute_v5_bbox_metrics(spans)
     bbox = metrics["v5_bbox_provenance"]
 
-    assert bbox["total_spans"] == 200
-    assert bbox["spans_with_provenance"] == 199
-    assert bbox["bbox_coverage_pct"] >= 99.0
-    assert "A" in bbox["channels_seen"]
+    assert bbox["total_spans"] == _TOTAL_SPANS, f"expected {_TOTAL_SPANS} spans, got {bbox['total_spans']}"
+    assert bbox["spans_with_provenance"] == _V5_SPANS, f"expected {_V5_SPANS} with provenance, got {bbox['spans_with_provenance']}"
+    # 99.5% = 199/200: one intentional V4 fallthrough (text-only footnote without bbox)
+    assert bbox["bbox_coverage_pct"] >= 99.5, f"bbox_coverage_pct {bbox['bbox_coverage_pct']:.2f}% < 99.5% threshold"
+    assert "A" in bbox["channels_seen"], f"channel A missing from channels_seen: {bbox['channels_seen']}"
