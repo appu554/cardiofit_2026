@@ -49,11 +49,14 @@ Output written to `data/output/v4/job_monkeyocr_<timestamp>/`.
 
 ```bash
 python3 data/v5_metrics.py data/output/v4/job_monkeyocr_*/
-# Expected output: bbox_coverage_pct >= 99.0%
+# Reads merged_spans.json from each job dir; prints bbox_coverage_pct per job
+# Expected output: bbox_coverage_pct=99.50% (or higher)
+# Note: requires <job_dir>/merged_spans.json to exist (produced by run_pipeline_targeted.py)
 ```
 
 If coverage is below 99% the run is a regression — do not push to KB-0. Open
-an issue with the output of `v5_metrics.py --verbose`.
+an issue with the output of `v5_metrics.py` and the contents of
+`<job_dir>/metrics.json`.
 
 ## Step 5: Apply migration and push to KB-0
 
@@ -85,7 +88,7 @@ python -m pytest tests/v5/ -q
 
 ## Success Criteria
 
-- [ ] bbox_coverage_pct >= 99.0% on acs-hcp-summary
+- [ ] bbox_coverage_pct >= 99.0% (printed by v5_metrics.py or check data/output/v4/job_*/metrics.json) on acs-hcp-summary
 - [ ] provenance_v5 IS NOT NULL for > 0 rows in KB-0
 - [ ] All 89 V5 unit tests pass on pod
 - [ ] No errors in `push_to_kb0_gcp.py` output

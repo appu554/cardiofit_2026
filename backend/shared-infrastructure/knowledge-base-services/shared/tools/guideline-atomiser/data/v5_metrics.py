@@ -9,7 +9,7 @@ Usage:
         from v5_metrics import compute_v5_bbox_metrics, write_v5_metrics
 
     Script:
-        python3 v5_metrics.py <job_dir>
+        python3 v5_metrics.py <job_dir> [<job_dir> ...]
 """
 from __future__ import annotations
 
@@ -86,27 +86,37 @@ def write_v5_metrics(job_dir: Path, metrics: dict[str, Any]) -> None:
     tmp_path.replace(out_path)
 
 
-def _main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: python3 v5_metrics.py <job_dir>", file=sys.stderr)
-        return 2
-    job_dir = Path(argv[1])
-    spans_path = job_dir / "merged_spans.json"
-    if not spans_path.exists():
-        print(f"error: {spans_path} not found", file=sys.stderr)
-        return 1
-    spans = json.loads(spans_path.read_text())
-    metrics = compute_v5_bbox_metrics(spans)
-    write_v5_metrics(job_dir, metrics)
-    bp = metrics["v5_bbox_provenance"]
-    print(
-        f"v5_bbox_provenance: total={bp['total_spans']} "
-        f"with_prov={bp['spans_with_provenance']} "
-        f"coverage={bp['bbox_coverage_pct']:.2f}% "
-        f"channels={bp['channels_seen']} "
-        f"multi={bp['spans_multi_channel']}"
+def _main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Compute V5 bbox provenance metrics for one or more job dirs."
     )
-    return 0
+    parser.add_argument(
+        "job_dirs",
+        nargs="+",
+        metavar="job_dir",
+        help="Pipeline 1 output directory (one or more)",
+    )
+    args = parser.parse_args(argv if argv is None else argv[1:])
+
+    rc = 0
+    for job_dir_str in args.job_dirs:
+        job_dir = Path(job_dir_str)
+        spans_path = job_dir / "merged_spans.json"
+        if not spans_path.exists():
+            print(f"[v5_metrics] ERROR: {spans_path} not found", file=sys.stderr)
+            rc = 1
+            continue
+        spans = json.loads(spans_path.read_text(encoding="utf-8"))
+        metrics = compute_v5_bbox_metrics(spans)
+        write_v5_metrics(job_dir, metrics)
+        bp = metrics["v5_bbox_provenance"]
+        print(
+            f"{job_dir.name}: bbox_coverage_pct={bp['bbox_coverage_pct']:.2f}% "
+            f"({bp['total_spans']} spans)"
+        )
+    return rc
 
 
 if __name__ == "__main__":

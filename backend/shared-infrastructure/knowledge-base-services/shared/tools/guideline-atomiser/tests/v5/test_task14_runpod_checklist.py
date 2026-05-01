@@ -35,3 +35,6 @@ def test_runpod_smoke_checklist_has_success_criteria():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     assert "Success Criteria" in text, "Checklist missing 'Success Criteria' section"
     assert "bbox_coverage_pct" in text, "Checklist missing 'bbox_coverage_pct' metric"
+    assert "provenance_v5" in text, (
+        "Checklist missing 'provenance_v5' reference (guards against column rename)"
+    )
