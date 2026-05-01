@@ -20,6 +20,50 @@ import time
 from typing import Optional
 
 from .models import ChannelOutput, GuidelineTree, RawSpan
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
+
+
+def _channel_e_model_version() -> str:
+    """Channel E model version, pinned to GLiNER model name when discoverable."""
+    try:
+        from ..gliner.extractor import GLINER_MODEL_NAME  # type: ignore
+        return f"gliner@{GLINER_MODEL_NAME}"
+    except Exception:
+        return "gliner@medium-v2.1"
+
+
+def _channel_e_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel E (GLiNER residual NER).
+
+    Returns None when V5_BBOX_PROVENANCE is off or bbox is missing. Confidence
+    is the GLiNER per-entity score from the model output; bbox comes from the
+    parent chunk passed into the residual run.
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="E",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_e_model_version(),
+        notes=notes,
+    )
 
 
 class ChannelEGLiNERResidual:

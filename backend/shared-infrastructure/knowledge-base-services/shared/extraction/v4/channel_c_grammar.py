@@ -21,6 +21,48 @@ from typing import Optional
 
 from .models import ChannelOutput, GuidelineTree, RawSpan
 from .postprocessors import extend_parenthetical
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
+
+
+def _channel_c_model_version() -> str:
+    """Channel C model version, pinned to ChannelCGrammar.VERSION if present."""
+    try:
+        return f"regex@{ChannelCGrammar.VERSION}"
+    except Exception:
+        return "regex@v1.0"
+
+
+def _channel_c_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel C (grammar/regex patterns).
+
+    Returns None when V5_BBOX_PROVENANCE is off or bbox is missing. Confidence
+    typically comes from the per-pattern weight in the profile's extra_patterns.
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="C",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_c_model_version(),
+        notes=notes,
+    )
 
 
 class ChannelCGrammar:

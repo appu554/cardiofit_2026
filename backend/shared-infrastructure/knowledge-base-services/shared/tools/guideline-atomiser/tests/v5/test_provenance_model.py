@@ -329,3 +329,86 @@ def test_normalise_confidence_clamps() -> None:
     assert _normalise_confidence(1.5) == 1.0
     assert _normalise_confidence(None) == 0.0
     assert _normalise_confidence("not a number") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Sibling-channel helpers: _channel_{0,B,C,D,E,F,G,H}_provenance (Task 7)
+# ---------------------------------------------------------------------------
+
+
+_SIBLING_HELPERS = [
+    ("0", "extraction.v4.channel_0_normalizer", "_channel_0_provenance"),
+    ("B", "extraction.v4.channel_b_drug_dict", "_channel_b_provenance"),
+    ("C", "extraction.v4.channel_c_grammar", "_channel_c_provenance"),
+    ("D", "extraction.v4.channel_d_table", "_channel_d_provenance"),
+    ("E", "extraction.v4.channel_e_gliner", "_channel_e_provenance"),
+    ("F", "extraction.v4.channel_f_nuextract", "_channel_f_provenance"),
+    ("G", "extraction.v4.channel_g_sentence", "_channel_g_provenance"),
+    ("H", "extraction.v4.channel_h_recovery", "_channel_h_provenance"),
+]
+
+
+@pytest.mark.parametrize("channel_letter,helper_module,helper_name", _SIBLING_HELPERS)
+def test_channel_provenance_helper_off_by_default(
+    channel_letter: str, helper_module: str, helper_name: str, monkeypatch
+) -> None:
+    """Each channel's helper returns None when V5_BBOX_PROVENANCE is off (default)."""
+    import importlib
+
+    monkeypatch.delenv("V5_BBOX_PROVENANCE", raising=False)
+    mod = importlib.import_module(helper_module)
+    helper = getattr(mod, helper_name)
+    profile = _make_profile_obj()  # default off
+    assert helper(
+        bbox=(0, 0, 100, 50),
+        page_number=1,
+        confidence=0.9,
+        profile=profile,
+    ) is None
+
+
+@pytest.mark.parametrize("channel_letter,helper_module,helper_name", _SIBLING_HELPERS)
+def test_channel_provenance_helper_on_with_flag(
+    channel_letter: str, helper_module: str, helper_name: str, monkeypatch
+) -> None:
+    """Each helper returns a populated ChannelProvenance with right channel_id when flag on."""
+    import importlib
+
+    monkeypatch.setenv("V5_BBOX_PROVENANCE", "1")
+    mod = importlib.import_module(helper_module)
+    helper = getattr(mod, helper_name)
+    profile = _make_profile_obj()
+    p = helper(
+        bbox=(10, 20, 100, 50),
+        page_number=2,
+        confidence=0.85,
+        profile=profile,
+    )
+    assert p is not None, f"channel {channel_letter} returned None despite flag on"
+    assert p.channel_id == channel_letter
+    assert p.page_number == 2
+    assert p.bbox.x0 == 10
+    assert p.bbox.y0 == 20
+    assert p.bbox.x1 == 100
+    assert p.bbox.y1 == 50
+    assert p.confidence == 0.85
+    assert len(p.model_version) >= 1
+
+
+@pytest.mark.parametrize("channel_letter,helper_module,helper_name", _SIBLING_HELPERS)
+def test_channel_provenance_helper_skip_when_bbox_none(
+    channel_letter: str, helper_module: str, helper_name: str, monkeypatch
+) -> None:
+    """If bbox is None, helper returns None even with flag on."""
+    import importlib
+
+    monkeypatch.setenv("V5_BBOX_PROVENANCE", "1")
+    mod = importlib.import_module(helper_module)
+    helper = getattr(mod, helper_name)
+    profile = _make_profile_obj()
+    assert helper(
+        bbox=None,
+        page_number=1,
+        confidence=0.9,
+        profile=profile,
+    ) is None

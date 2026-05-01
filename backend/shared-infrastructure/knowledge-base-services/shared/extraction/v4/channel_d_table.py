@@ -26,6 +26,55 @@ import time
 from typing import Optional
 
 from .models import ChannelOutput, GuidelineTree, RawSpan, TableBoundary
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
+
+
+def _channel_d_model_version(table_source: Optional[str] = None) -> str:
+    """Channel D model version. Differentiates docling-OTSL vs marker-pipe paths.
+
+    Mirrors Channel A's both-saw vs marker-only branching: tables sourced from
+    Granite-Docling OTSL get one tag; Marker-only pipe tables get another.
+    """
+    if table_source == "marker_pipe":
+        return "pipe-table@v1.0"
+    if table_source == "granite_otsl":
+        return "docling-otsl@v1.0"
+    return "table@v1.0"
+
+
+def _channel_d_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+    table_source: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel D (table decomposer).
+
+    Returns None when V5_BBOX_PROVENANCE is off or bbox is missing. The
+    ``table_source`` argument selects between docling-OTSL and marker-pipe
+    model_version tags.
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="D",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_d_model_version(table_source),
+        notes=notes,
+    )
 
 
 class ChannelDTableDecomposer:
