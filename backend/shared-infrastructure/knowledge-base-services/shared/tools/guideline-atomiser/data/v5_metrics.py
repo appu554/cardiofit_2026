@@ -75,11 +75,15 @@ def write_v5_metrics(job_dir: Path, metrics: dict[str, Any]) -> None:
             if not isinstance(existing, dict):
                 existing = {}
         except (json.JSONDecodeError, OSError):
+            print(f"[v5_metrics] Warning: could not read existing {out_path}, starting fresh", file=sys.stderr)
             existing = {}
     else:
         existing = {}
     existing.update(metrics)
-    out_path.write_text(json.dumps(existing, indent=2, sort_keys=True))
+    merged = existing
+    tmp_path = out_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    tmp_path.replace(out_path)
 
 
 def _main(argv: list[str]) -> int:
