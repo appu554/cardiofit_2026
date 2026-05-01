@@ -7,8 +7,7 @@ from typing import Any
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ATOMISER_DIR = REPO_ROOT / "shared/tools/guideline-atomiser"
+ATOMISER_DIR = Path(__file__).resolve().parents[2]
 SMOKE_PDFS = [
     "AU-HF-ACS-HCP-Summary-2025.pdf",
     "AU-HF-Cholesterol-Action-Plan-2026.pdf",
@@ -37,5 +36,12 @@ def v4_baseline_jobs(atomiser_dir: Path) -> dict[str, Path]:
 
 
 def load_merged_spans(job_dir: Path) -> list[dict[str, Any]]:
-    """Load merged_spans.json as list of dicts."""
-    return json.loads((job_dir / "merged_spans.json").read_text())
+    """Load merged_spans.json as list of dicts.
+
+    Raises:
+        FileNotFoundError: if merged_spans.json is missing in job_dir.
+    """
+    path = job_dir / "merged_spans.json"
+    if not path.exists():
+        raise FileNotFoundError(f"merged_spans.json not found in {job_dir}")
+    return json.loads(path.read_text())
