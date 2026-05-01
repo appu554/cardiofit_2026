@@ -146,6 +146,24 @@ if not args.pdf_path and args.source not in PDF_PATHS:
     )
 
 
+def _merge_with_v5_flag(merger, *args_, profile, **kwargs):
+    """Resolve V5_BBOX_PROVENANCE from the loaded profile and call merger.merge.
+
+    Threads the V5 feature flag (resolved via extraction.v4.v5_flags) and the
+    profile object into ``signal_merger.merge`` so ChannelProvenance entries
+    can be built when the flag is on. V4 callers are unaffected because the
+    merge() defaults are ``v5_bbox_provenance=False, profile=None``.
+    """
+    from extraction.v4.v5_flags import is_v5_enabled
+    v5_bbox = is_v5_enabled("bbox_provenance", profile)
+    return merger.merge(
+        *args_,
+        v5_bbox_provenance=v5_bbox,
+        profile=profile,
+        **kwargs,
+    )
+
+
 def normalize_drug_name(name: str) -> str:
     """Normalize drug name for comparison — lowercase and strip dose forms.
 
@@ -612,7 +630,10 @@ def pipeline_1():
         print(f"   Classifier: RULE_BASED")
 
     merger = SignalMerger()
-    merged_spans = merger.merge(job_id, channel_outputs, tree, classifier=tiering_classifier)
+    merged_spans = _merge_with_v5_flag(
+        merger, job_id, channel_outputs, tree,
+        classifier=tiering_classifier, profile=profile,
+    )
 
     # Assign prediction tracking metadata for ML feedback loop
     import uuid as _uuid_mod
@@ -648,7 +669,10 @@ def pipeline_1():
         if h_output.spans:
             # Feed recovery spans back through merger as additional input
             recovery_co = [h_output]
-            h_merged = merger.merge(job_id, recovery_co, tree, classifier=tiering_classifier)
+            h_merged = _merge_with_v5_flag(
+                merger, job_id, recovery_co, tree,
+                classifier=tiering_classifier, profile=profile,
+            )
             # Assign prediction tracking to recovery spans
             for span in h_merged:
                 span.prediction_id = str(_uuid_mod.uuid4())
@@ -1811,9 +1835,14 @@ def pipeline_legacy():
 # MAIN DISPATCH
 # ═══════════════════════════════════════════════════════════════════════════
 
-if args.pipeline == "1":
-    pipeline_1()
-elif args.pipeline == "2":
-    pipeline_2()
-else:
-    pipeline_legacy()
+def _main():
+    if args.pipeline == "1":
+        pipeline_1()
+    elif args.pipeline == "2":
+        pipeline_2()
+    else:
+        pipeline_legacy()
+
+
+if __name__ == "__main__":
+    _main()
