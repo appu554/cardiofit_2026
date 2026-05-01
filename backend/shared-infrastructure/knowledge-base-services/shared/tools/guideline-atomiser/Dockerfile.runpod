@@ -1,0 +1,73 @@
+# Pipeline 1 V4 — RunPod-ready container.
+#
+# Designed to run on RunPod GPU pods (or any CUDA host). Bakes the repo,
+# Python venv, Ollama, and entry point. Models (MonkeyOCR ~3GB, NuExtract
+# ~2GB, GLiNER ~1GB) are NOT baked — they're pulled on first run and
+# cached on the persistent volume to keep image size sane.
+#
+# Build (locally or in CI):
+#   docker build -f Dockerfile.runpod \
+#     --build-arg REPO_BRANCH=feature/v4-clinical-gaps \
+#     -t ghcr.io/appu554/cardiofit-pipeline1:runpod-latest .
+#
+# Push to GHCR:
+#   echo $GHCR_PAT | docker login ghcr.io -u appu554 --password-stdin
+#   docker push ghcr.io/appu554/cardiofit-pipeline1:runpod-latest
+#
+# Then on RunPod console: Deploy → Pods → Custom → image=
+#   ghcr.io/appu554/cardiofit-pipeline1:runpod-latest
+# Mount /workspace as a persistent volume (≥100 GB).
+
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    OLLAMA_URL=http://localhost:11434 \
+    NUEXTRACT_MODEL=nuextract \
+    MONKEYOCR_DEVICE=cuda \
+    HF_HOME=/workspace/hf_cache \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+# System deps for PDF / image / Docling
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential \
+        libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+        ffmpeg poppler-utils \
+        wget unzip jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ollama (Channel F dependency)
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+WORKDIR /workspace
+
+# Clone the repo at build time so first-pod-boot is fast.
+ARG REPO_BRANCH=feature/v4-clinical-gaps
+ARG REPO_URL=https://github.com/appu554/cardiofit_2026.git
+RUN git clone --depth 1 --branch "${REPO_BRANCH}" "${REPO_URL}" cardiofit_2026
+
+WORKDIR /workspace/cardiofit_2026/backend/shared-infrastructure/knowledge-base-services/shared/tools/guideline-atomiser
+
+# Python venv with all extraction deps
+RUN python3 -m venv /workspace/venv \
+    && /workspace/venv/bin/pip install --no-cache-dir --upgrade pip wheel \
+    && /workspace/venv/bin/pip install --no-cache-dir \
+        -r requirements.txt \
+    && /workspace/venv/bin/pip install --no-cache-dir \
+        pypdf docling hf_transfer
+
+# Stage entrypoint
+COPY runpod-startup.sh /workspace/runpod-startup.sh
+RUN chmod +x /workspace/runpod-startup.sh
+
+# Ports: SSH (22), Ollama (11434), Jupyter (8888)
+EXPOSE 22 11434 8888
+
+# Default ENTRYPOINT brings up Ollama + warms cache then drops into bash.
+# Override CMD for batch jobs:
+#   CMD ["smoke"]                          # smoke test
+#   CMD ["flagship"]                       # 2 flagship HF PDFs
+#   CMD ["queue", "<source1>", "<source2>"] # arbitrary sources
+#   CMD ["bash"]                           # interactive
+ENTRYPOINT ["/workspace/runpod-startup.sh"]
+CMD ["bash"]
