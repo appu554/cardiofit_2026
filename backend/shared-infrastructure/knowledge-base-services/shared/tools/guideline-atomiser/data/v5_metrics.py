@@ -19,11 +19,20 @@ from pathlib import Path
 from typing import Any
 
 
+_BBOX_COVERAGE_THRESHOLD = 99.0
+
+
 def compute_v5_bbox_metrics(merged_spans: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute V5 bbox provenance metrics from a list of MergedSpan dicts.
 
     Pure function. No I/O. Treats missing or empty `channel_provenance`
     identically (both count as "no provenance").
+
+    Returns a dict with three top-level keys matching the spec §7 sidecar
+    metrics.json shape:
+      - ``v5_bbox_provenance``: raw counts and coverage
+      - ``primary``: per-metric status dicts with threshold and verdict
+      - ``verdict``: "PASS" or "FAIL" aggregate
     """
     total_spans = len(merged_spans)
     spans_with_provenance = 0
@@ -45,9 +54,11 @@ def compute_v5_bbox_metrics(merged_spans: list[dict[str, Any]]) -> dict[str, Any
             spans_multi_channel += 1
 
     if total_spans > 0:
-        coverage_pct = (spans_with_provenance / total_spans) * 100.0
+        coverage_pct = round((spans_with_provenance / total_spans) * 100.0, 2)
     else:
         coverage_pct = 0.0
+
+    primary_status = "PASS" if coverage_pct >= _BBOX_COVERAGE_THRESHOLD else "FAIL"
 
     return {
         "v5_bbox_provenance": {
@@ -56,7 +67,15 @@ def compute_v5_bbox_metrics(merged_spans: list[dict[str, Any]]) -> dict[str, Any
             "bbox_coverage_pct": coverage_pct,
             "channels_seen": sorted(channels),
             "spans_multi_channel": spans_multi_channel,
-        }
+        },
+        "primary": {
+            "bbox_coverage_pct": {
+                "v5": coverage_pct,
+                "threshold": _BBOX_COVERAGE_THRESHOLD,
+                "status": primary_status,
+            },
+        },
+        "verdict": primary_status,
     }
 
 

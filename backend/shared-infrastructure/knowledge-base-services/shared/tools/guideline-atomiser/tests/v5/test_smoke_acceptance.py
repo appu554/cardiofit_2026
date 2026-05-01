@@ -1,15 +1,19 @@
 """V5 Bbox Provenance — smoke acceptance gate.
 
-Single-test suite that asserts the V5 metric pipeline produces
->=99.5% bbox_coverage_pct on a realistic synthetic span set.
-
-No GPU, no RunPod, no GCP, no real PDF — pure in-memory test on raw
-dicts shaped like serialise_provenance_list() output.
+Two test scenarios:
+1. Synthetic: asserts the V5 metric pipeline produces >=99.5% bbox_coverage_pct
+   on a realistic in-memory span set (no GPU, no RunPod, no GCP).
+2. V4 baseline: asserts that existing V4 job dirs (flag off) produce 0% bbox
+   coverage — confirms the feature flag default-off contract. Skips when no
+   smoke-set V4 job dirs are present locally.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 # Add data/ dir to path so we can import v5_metrics standalone.
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -69,3 +73,28 @@ def test_smoke_bbox_coverage_gte_99_pct():
     # 99.5% = 199/200: one intentional V4 fallthrough (text-only footnote without bbox)
     assert bbox["bbox_coverage_pct"] >= 99.5, f"bbox_coverage_pct {bbox['bbox_coverage_pct']:.2f}% < 99.5% threshold"
     assert "A" in bbox["channels_seen"], f"channel A missing from channels_seen: {bbox['channels_seen']}"
+    # Spec §7 shape: primary and verdict keys must be present
+    assert metrics["verdict"] == "PASS", f"expected PASS verdict, got {metrics['verdict']}"
+    assert metrics["primary"]["bbox_coverage_pct"]["status"] == "PASS"
+
+
+def test_v4_baseline_has_zero_bbox_coverage(v4_baseline_jobs: dict) -> None:
+    """V4 jobs (flag off) must report 0% bbox coverage — verifies default-off contract.
+
+    Self-skips when no smoke-set V4 job dirs exist locally (CI without job
+    output, or fresh checkout). Full smoke is documented in RUNPOD_SMOKE_V5.md.
+    """
+    if not v4_baseline_jobs:
+        pytest.skip("No V4 smoke-set job dirs found in data/output/v4/ — skipping baseline check")
+    for src_pdf, job_dir in v4_baseline_jobs.items():
+        spans_path = Path(job_dir) / "merged_spans.json"
+        spans = json.loads(spans_path.read_text(encoding="utf-8"))
+        metrics = compute_v5_bbox_metrics(spans)
+        bp = metrics["v5_bbox_provenance"]
+        assert bp["bbox_coverage_pct"] == 0.0, (
+            f"{src_pdf}: V4 baseline expected 0.0% bbox coverage "
+            f"(flag was off), got {bp['bbox_coverage_pct']:.2f}%"
+        )
+        assert metrics["verdict"] == "FAIL", (
+            f"{src_pdf}: expected FAIL verdict for 0% V4 baseline, got {metrics['verdict']}"
+        )

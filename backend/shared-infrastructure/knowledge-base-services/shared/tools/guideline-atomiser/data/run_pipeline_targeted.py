@@ -809,6 +809,10 @@ def pipeline_1():
         source_hash = hashlib.sha256(f.read()).hexdigest()[:16]
 
     # Job metadata (includes targeted extraction params + oracle results)
+    from extraction.v4.v5_flags import is_v5_enabled as _is_v5_enabled
+    _V5_KNOWN_FEATURES = ["bbox_provenance"]
+    _v5_features_enabled = [f for f in _V5_KNOWN_FEATURES if _is_v5_enabled(f, profile)]
+
     job_meta = {
         "job_id": str(job_id),
         "source_pdf": os.path.basename(pdf_path),
@@ -825,6 +829,7 @@ def pipeline_1():
         "disagreements": disagreements,
         "created_at": datetime.utcnow().isoformat(),
         "pipeline_version": "4.2.2",
+        "v5_features_enabled": _v5_features_enabled,
         "l1_backend": l1_tag,
         "structural_source": tree.structural_source,
         "alignment_confidence": tree.alignment_confidence,
