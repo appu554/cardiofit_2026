@@ -129,6 +129,53 @@ def serialise_provenance_list(
     return [item.model_dump() for item in items]
 
 
+def get_channel_provenance_builder(channel_id: str):
+    """Return the per-channel provenance builder for a given channel_id.
+
+    Returns None if no builder is registered for that channel (e.g., REVIEWER
+    spans, which signal_merger handles differently — there is no extraction
+    model attached to a human-edited span).
+
+    Lazy imports inside the function avoid the circular-import problem: each
+    channel module imports ChannelProvenance from this module, so a top-level
+    import here would cycle.
+    """
+    if channel_id == "0":
+        from .channel_0_normalizer import _channel_0_provenance
+        return _channel_0_provenance
+    if channel_id == "A":
+        from .channel_a_docling import _channel_a_provenance
+        return _channel_a_provenance
+    if channel_id == "B":
+        from .channel_b_drug_dict import _channel_b_provenance
+        return _channel_b_provenance
+    if channel_id == "C":
+        from .channel_c_grammar import _channel_c_provenance
+        return _channel_c_provenance
+    if channel_id == "D":
+        from .channel_d_table import _channel_d_provenance
+        return _channel_d_provenance
+    if channel_id == "E":
+        from .channel_e_gliner import _channel_e_provenance
+        return _channel_e_provenance
+    if channel_id == "F":
+        from .channel_f_nuextract import _channel_f_provenance
+        return _channel_f_provenance
+    if channel_id == "G":
+        from .channel_g_sentence import _channel_g_provenance
+        return _channel_g_provenance
+    if channel_id == "H":
+        from .channel_h_recovery import _channel_h_provenance
+        return _channel_h_provenance
+    if channel_id == "L1_RECOVERY":
+        # L1_RECOVERY uses Channel H semantics (recovery-grade extraction).
+        from .channel_h_recovery import _channel_h_provenance
+        return _channel_h_provenance
+    # REVIEWER, "" and arbitrary unknowns: no builder. signal_merger handles
+    # human-edited spans separately when KB-0 review edits land.
+    return None
+
+
 def _normalise_bbox(
     bbox: tuple[float, float, float, float] | list[float] | None,
 ) -> "BoundingBox | None":
