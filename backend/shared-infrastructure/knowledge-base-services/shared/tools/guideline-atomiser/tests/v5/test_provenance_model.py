@@ -206,3 +206,72 @@ def test_merged_span_defaults_empty_provenance_when_omitted() -> None:
     }
     span = MergedSpan(**span_kwargs)
     assert span.channel_provenance == []
+
+
+# ---------------------------------------------------------------------------
+# Channel A helper: _channel_a_provenance (Pipeline 1 V5 #2 Task 6)
+# ---------------------------------------------------------------------------
+
+
+def _make_profile_obj():
+    """Minimal profile-like object with v5_features dict (matches v5_flags contract)."""
+    from dataclasses import dataclass, field as dc_field
+
+    @dataclass
+    class _Profile:
+        v5_features: dict = dc_field(default_factory=dict)
+
+    return _Profile()
+
+
+def test_channel_a_provenance_helper_off_when_flag_disabled(monkeypatch) -> None:
+    """_channel_a_provenance returns None when V5_BBOX_PROVENANCE is off."""
+    from extraction.v4.channel_a_docling import _channel_a_provenance
+
+    monkeypatch.delenv("V5_BBOX_PROVENANCE", raising=False)
+    profile = _make_profile_obj()  # default off
+    assert _channel_a_provenance(
+        bbox=(0, 0, 100, 50),
+        page_number=1,
+        confidence=0.9,
+        profile=profile,
+    ) is None
+
+
+def test_channel_a_provenance_helper_on_with_flag(monkeypatch) -> None:
+    """_channel_a_provenance returns a populated ChannelProvenance when flag on."""
+    from extraction.v4.channel_a_docling import _channel_a_provenance
+
+    monkeypatch.setenv("V5_BBOX_PROVENANCE", "1")
+    profile = _make_profile_obj()
+    p = _channel_a_provenance(
+        bbox=(10, 20, 100, 50),
+        page_number=2,
+        confidence=0.85,
+        profile=profile,
+        notes="test",
+    )
+    assert p is not None
+    assert p.channel_id == "A"
+    assert p.page_number == 2
+    assert p.confidence == 0.85
+    assert p.bbox.x0 == 10
+    assert p.bbox.y0 == 20
+    assert p.bbox.x1 == 100
+    assert p.bbox.y1 == 50
+    assert p.notes == "test"
+    assert p.model_version.startswith("granite-docling@")
+
+
+def test_channel_a_provenance_helper_skip_when_bbox_none(monkeypatch) -> None:
+    """If bbox is None, helper returns None even with flag on (no fake bboxes)."""
+    from extraction.v4.channel_a_docling import _channel_a_provenance
+
+    monkeypatch.setenv("V5_BBOX_PROVENANCE", "1")
+    profile = _make_profile_obj()
+    assert _channel_a_provenance(
+        bbox=None,
+        page_number=1,
+        confidence=0.9,
+        profile=profile,
+    ) is None

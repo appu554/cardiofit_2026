@@ -375,6 +375,7 @@ def pipeline_1():
     channel_a = ChannelA(
         subordinate_headings=profile.subordinate_headings or None,
         chapter_reset_headings=profile.chapter_reset_headings or None,
+        profile=profile,  # V5: enables ChannelProvenance emission when flag on
     )
     tree = channel_a.parse(normalized_text, pdf_path=pdf_path)
     source_tag = tree.structural_source
