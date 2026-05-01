@@ -275,3 +275,57 @@ def test_channel_a_provenance_helper_skip_when_bbox_none(monkeypatch) -> None:
         confidence=0.9,
         profile=profile,
     ) is None
+
+
+def test_normalise_bbox_returns_none_on_none() -> None:
+    from extraction.v4.provenance import _normalise_bbox
+    assert _normalise_bbox(None) is None
+
+
+def test_normalise_bbox_returns_none_on_wrong_length() -> None:
+    from extraction.v4.provenance import _normalise_bbox
+    assert _normalise_bbox((0, 0, 100)) is None  # only 3 values
+    assert _normalise_bbox([]) is None
+
+
+def test_normalise_bbox_clamps_negatives_and_orders() -> None:
+    from extraction.v4.provenance import _normalise_bbox
+    b = _normalise_bbox((-5, -10, 100, 50))
+    assert b is not None
+    assert b.x0 == 0.0
+    assert b.y0 == 0.0
+    assert b.x1 == 100.0
+    assert b.y1 == 50.0
+
+
+def test_normalise_bbox_enforces_ordering() -> None:
+    """If x1<x0 even after coercing negatives, helper bumps x1 to x0."""
+    from extraction.v4.provenance import _normalise_bbox
+    b = _normalise_bbox((50, 0, 30, 100))  # x1=30 < x0=50
+    assert b is not None
+    assert b.x1 == 50.0  # bumped to x0
+
+
+def test_normalise_bbox_lets_garbage_above_ceiling_raise() -> None:
+    """Coordinates above the sanity ceiling raise ValidationError (loud failure)."""
+    from extraction.v4.provenance import _normalise_bbox
+    with pytest.raises(ValidationError):
+        _normalise_bbox((0, 0, 1e9, 50))
+
+
+def test_normalise_page_number_clamps_to_one() -> None:
+    from extraction.v4.provenance import _normalise_page_number
+    assert _normalise_page_number(0) == 1
+    assert _normalise_page_number(-3) == 1
+    assert _normalise_page_number(None) == 1
+    assert _normalise_page_number(5) == 5
+    assert _normalise_page_number(2.7) == 2  # truncates float to int
+
+
+def test_normalise_confidence_clamps() -> None:
+    from extraction.v4.provenance import _normalise_confidence
+    assert _normalise_confidence(0.5) == 0.5
+    assert _normalise_confidence(-0.1) == 0.0
+    assert _normalise_confidence(1.5) == 1.0
+    assert _normalise_confidence(None) == 0.0
+    assert _normalise_confidence("not a number") == 0.0

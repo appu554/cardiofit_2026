@@ -35,7 +35,12 @@ import unicodedata
 from typing import Optional
 
 from .models import GuidelineSection, GuidelineTree, TableBoundary
-from .provenance import BoundingBox, ChannelProvenance
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
 from .v5_flags import is_v5_enabled
 
 logger = logging.getLogger(__name__)
@@ -75,23 +80,14 @@ def _channel_a_provenance(
     """
     if not is_v5_enabled("bbox_provenance", profile):
         return None
-    if bbox is None:
+    bb = _normalise_bbox(bbox)
+    if bb is None:
         return None
-    try:
-        if len(bbox) != 4:
-            return None
-    except TypeError:
-        return None
-    x0, y0, x1, y1 = bbox
-    x0 = max(0.0, float(x0))
-    y0 = max(0.0, float(y0))
-    x1 = max(x0, float(x1))
-    y1 = max(y0, float(y1))
     return ChannelProvenance(
         channel_id="A",
-        bbox=BoundingBox(x0=x0, y0=y0, x1=x1, y1=y1),
-        page_number=max(1, int(page_number)),
-        confidence=max(0.0, min(1.0, float(confidence))),
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
         model_version=_channel_a_model_version(),
         notes=notes,
     )

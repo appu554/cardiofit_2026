@@ -127,3 +127,51 @@ def serialise_provenance_list(
 ) -> list[dict[str, object]]:
     """Render a list to JSON-compatible dicts for jsonb storage."""
     return [item.model_dump() for item in items]
+
+
+def _normalise_bbox(
+    bbox: tuple[float, float, float, float] | list[float] | None,
+) -> "BoundingBox | None":
+    """Build a BoundingBox from raw upstream coords, with defensive clamping.
+
+    Returns None when bbox is missing or malformed (so callers can skip without
+    a behaviour change). When bbox is a 4-tuple/list, clamps negatives to 0 and
+    enforces x1>=x0, y1>=y0. Coordinates above the BoundingBox sanity ceiling
+    (100_000 pt) cause Pydantic validation to raise; this is intentional —
+    garbage upstream should fail loudly, not be silently truncated.
+    """
+    if bbox is None:
+        return None
+    if len(bbox) != 4:
+        return None
+    x0, y0, x1, y1 = bbox
+    x0 = max(0.0, float(x0))
+    y0 = max(0.0, float(y0))
+    x1 = max(x0, float(x1))
+    y1 = max(y0, float(y1))
+    return BoundingBox(x0=x0, y0=y0, x1=x1, y1=y1)
+
+
+def _normalise_page_number(page_number: int | float | None) -> int:
+    """Clamp page_number to ≥1. Defaults to 1 if None or non-numeric.
+
+    Page-number is intentionally lenient (clamp-not-reject) because upstream
+    parsers occasionally emit page=0 for "document header" / non-page content;
+    the audit trail needs a valid integer regardless.
+    """
+    if page_number is None:
+        return 1
+    try:
+        return max(1, int(page_number))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _normalise_confidence(confidence: float | None) -> float:
+    """Clamp confidence to [0.0, 1.0]. Defaults to 0.0 if None or non-numeric."""
+    if confidence is None:
+        return 0.0
+    try:
+        return max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        return 0.0
