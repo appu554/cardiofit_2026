@@ -15,12 +15,13 @@ wave6/
 ├── nps_medicinewise/    # NPS MedicineWise (legacy — content moved to ACSQHC)
 ├── kha_cari_renal/      # KHA-CARI / Kidney Health Australia
 ├── ranzcp_psych/        # Royal AU/NZ College of Psychiatrists
-└── acsqhc_ams/          # ACSQHC (Antimicrobial Stewardship + post-NPS content)
+├── acsqhc_ams/          # ACSQHC (Antimicrobial Stewardship + post-NPS content)
+└── adg_2025_uwa/        # Australian Deprescribing Guideline 2025 (UWA — v2-introduced)
 ```
 
 ---
 
-## ✅ Downloaded (18 PDFs, ~16.4 MB)
+## ✅ Downloaded (23 documents, ~32.4 MB total)
 
 ### Heart Foundation Australia (11 PDFs, ~13.5 MB)
 
@@ -64,34 +65,53 @@ Source: `https://www.cariguidelines.org/`
 
 Source: `https://www.diabetessociety.com.au/guidelines/`
 
+### Australian Deprescribing Guideline 2025 (UWA, 5 documents, ~16 MB) — NEW v2-introduced
+
+**Status: DRAFTS in active public consultation phase (2025).** v2 Revision Mapping document framed this as "freely available, RACGP+ANZSGM endorsed" — that describes the *expected post-consultation* state. Currently downloadable from the project's consultation site.
+
+- `ADG-2025-DRAFT-deprescribing-guidelines.pdf` (6.3 MB) — **the actual guideline (185 recommendations target)**
+- `ADG-2025-DRAFT-technical-report.pdf` (4.2 MB) — evidence base + GRADE assessments
+- `ADG-2025-DRAFT-administrative-report.pdf` (1.1 MB) — process/administrative
+- `ADG-2025-DRAFT-dissemination-plan.pdf` (1.1 MB) — implementation/dissemination plan
+- `ADG-2025-Guideline-draft-v4.1.docx` (3.3 MB) — DOCX version of guideline (preferred for parsing — preserves table structure better than PDF)
+
+Source pages:
+- `https://deprescribing.com/` — project homepage (UWA-led, consultation form at `https://uwa.qualtrics.com/jfe/form/SV_3l3eObHpqhna8lM`)
+- `https://deprescribing.com/about/documents-for-public-consultation.html` — full document set
+
+PDFs hosted on Dropbox public-share URLs (CDN-stable while consultation runs).
+
+Why it matters per v2 Revision Mapping: ADG 2025 replaces what Wave-5 AMH Aged Care Companion was meant to provide for the deprescribing layer. Same legal posture as Wang 2024 — facts uncopyrightable, prose re-phrased before loading.
+
+**Caveats for curation:**
+- These are DRAFTS — final version may differ. Plan a re-fetch when consultation closes.
+- 185 recommendations is the *target*; actual count in current draft to be verified after extraction.
+- Endorsement status from RACGP/ANZSGM is *anticipated*, not confirmed in the draft documents.
+
 ---
 
 ## ⏳ Still needed — manual download required
 
-### NPS MedicineWise → ACSQHC (post-2023 redirect)
+### ACSQHC Clinical Care Standards (9 PDFs, ~27.4 MB) ✅ landed via Playwright (2026-04-30 evening)
 
-NPS MedicineWise was wound down in late 2023; their content transferred to
-the Australian Commission on Safety and Quality in Health Care (ACSQHC).
-The www.nps.org.au domain now 301-redirects to safetyandquality.gov.au.
+The Australian Commission on Safety and Quality in Health Care (ACSQHC) publishes Clinical Care Standards (CCS) — concise definitions of the care a person should receive for a specific condition. Direct curl/wget returned 000 from this dev env (TLS/CDN block) but Playwright's Chromium TLS handshake completed successfully.
 
-**Status:** ACSQHC's site (`www.safetyandquality.gov.au`) returns HTTP 000
-(connection failure) from this development environment — likely a TLS/CDN
-or firewall issue. Site is reachable from a normal browser.
+Clinical Care Standards (6 aged-care priority):
+- `ccs/AMS-Clinical-Care-Standard-2020.pdf` (2.87 MB) — Antimicrobial Stewardship
+- `ccs/Delirium-Clinical-Care-Standard-2021.pdf` (1.42 MB) — delirium screening/management
+- `ccs/Hip-Fracture-Clinical-Care-Standard-2023.pdf` (3.07 MB) — fall outcome management
+- `ccs/Opioid-Analgesic-Stewardship-in-Acute-Pain-CCS.pdf` (1.20 MB) — opioid stewardship
+- `ccs/Psychotropic-Medicines-in-Cognitive-Disability-Impairment-CCS.pdf` (2.35 MB) — **directly maps to KB-13 AU-QI-06 antipsychotic indicator**
+- `ccs/VTE-Prevention-Clinical-Care-Standard-2020.pdf` (7.11 MB)
 
-**To procure manually:**
+Stewardship framework (the v2-introduced piece):
+- `framework/Medication-Management-Transitions-Care-Stewardship-Framework-2024.pdf` (5.81 MB) ⭐
 
-1. Browse to: `https://www.safetyandquality.gov.au/standards/clinical-care-standards`
-2. Download the following Clinical Care Standards (most aged-care relevant):
-   - **Antimicrobial Stewardship Clinical Care Standard** — antibiotics in aged care
-   - **Delirium Clinical Care Standard** — delirium screening/management
-   - **Hip Fracture Care Clinical Care Standard** — relevant given fall risk
-   - **Cognitive Impairment in Hospital Care** — dementia/cognition
-   - **Heavy Menstrual Bleeding** — N/A for aged care, skip
-3. Save to: `acsqhc_ams/`
+Supporting documents:
+- `supporting/Cognitive-Impairment-User-Guide-2019.pdf` (2.94 MB)
+- `supporting/National-Medication-Management-Plan-User-Guide-2021.pdf` (1.85 MB) — bonus structured medication-management template
 
-4. Also browse to: `https://www.safetyandquality.gov.au/our-work/medication-safety`
-5. Download the **Medication Safety Standard** + any aged-care addenda.
-6. Save to: `acsqhc_ams/`
+Procurement recipe documented at `acsqhc_ams/PROCUREMENT.md` (Playwright fetch + base64 + Python decode pattern; reusable for any AU regulator site that's reachable in browser but blocked by curl from this dev env).
 
 For NPS MedicineWise legacy deprescribing algorithms (the highest-value
 content given Wave 5 is commercial-blocked):
@@ -104,7 +124,29 @@ content given Wave 5 is commercial-blocked):
    - Statin deprescribing in advanced age algorithm
 2. Save to: `nps_medicinewise/`
 
-### RANZCP — Royal AU/NZ College of Psychiatrists
+### RANZCP Clinical Practice Guidelines (9 PDFs, ~30 MB) ✅ landed via Playwright (2026-04-30 evening)
+
+Identical procurement pattern to ACSQHC: curl blocked, Playwright works. Detailed runbook at [ranzcp_psych/PROCUREMENT.md](ranzcp_psych/PROCUREMENT.md).
+
+Highest-priority for aged care:
+- `RANZCP-BPSD-Assessment-Management-NSWHealth-2022.pdf` (1.4 MB) — **antipsychotic-for-BPSD assessment + management**, RANZCP-endorsed NSW Health handbook
+- `RANZCP-Mood-Disorders-CPG.pdf` (4.0 MB) — joint depression + bipolar CPG
+- `RANZCP-Pain-Mgmt-Acute-ANZCA-APMSE5-2020.pdf` (22.9 MB) — Acute Pain Management Scientific Evidence 5th ed
+- `RANZCP-Prescription-Opioids-RACP-Policy.pdf` (1.9 MB)
+- `RANZCP-Physical-Health.pdf` (619 KB)
+- `RANZCP-Valproate-Healthcare-BAP-PS04-2018.pdf` (270 KB)
+- `RANZCP-ECT-Professional-Practice.pdf` (197 KB)
+- `RANZCP-Off-Label-Prescribing-Psych.pdf` (185 KB) — PPG-4
+- `RANZCP-Benzodiazepines-Psychiatric-Practice.pdf` (140 KB) — PPG-5
+
+Not downloaded (rescinded or JS-rendered without static PDF link):
+- Antipsychotics and dementia (PPG-10 — **rescinded pending review**)
+- Older people psychiatric service delivery
+- Deprescribing cholinesterase inhibitors + memantine
+- Dementia (endorsed external — U Sydney CDPC HTML portal, not a single PDF)
+- Care of sedated ABD patients · PTSD · Pharmacogenetics
+
+### RANZCP — Royal AU/NZ College of Psychiatrists (legacy section)
 
 **Status:** RANZCP's clinical-guidelines library page is dominated by
 policy submissions (carers strategy, crimes bills, pre-budget submissions)

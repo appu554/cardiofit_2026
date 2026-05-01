@@ -1,0 +1,2541 @@
+﻿# Therapeutic Inertia Detection — Implementation Plan
+
+
+## Clinical Rationale
+
+
+**Why this is the single most impactful CDS intervention in cardiometabolic care:**
+
+
+Therapeutic inertia — the failure to initiate or intensify therapy when clinical targets are not met — is the dominant cause of poor outcomes in T2DM and hypertension management globally. It is not a rare edge case. It is the default behavior of the healthcare system.
+
+
+The numbers are staggering. Khunti et al. (2018, Diabetes Care) analyzed 105,477 T2DM patients in UK primary care and found that median time from HbA1c first exceeding 7.0% to first treatment intensification was **2.9 years**. For patients exceeding 8.0%, median time to intensification was still **>1.4 years**. Shah et al. (2019, JAMA Internal Medicine) replicated this in a US population of 311,906 patients — median time to intensification after HbA1c >8% was **14.2 months**. During that delay, each patient accumulates approximately 0.4% additional HbA1c exposure per year of inertia, translating directly into microvascular and macrovascular complication risk (UKPDS legacy effect, Holman et al. 2008).
+
+
+For hypertension, the picture is equally bleak. Okonofua et al. (2006, Hypertension) showed that intensification occurred at only 13.1% of visits where BP was above target. Lebeau et al. (2014) found that among patients with BP consistently >140/90 over 6 months, only 28% had any medication change. The SPRINT trial (2015) demonstrated that intensive SBP control (<120 vs <140) reduced cardiovascular events by 25% and mortality by 27% — but achieving this requires overcoming therapeutic inertia at every visit.
+
+
+**Why therapeutic inertia happens — and why CDS can address it:**
+
+
+The causes are well-characterized (Reach et al., 2017, Diabetes & Metabolism; Phillips et al., 2001, Annals of Internal Medicine):
+
+
+**Physician-side factors:** "Soft reasons" dominate — "let's wait and see," "the patient is doing well otherwise," "we just changed something," "the lab was probably an outlier." These are cognitive biases (status quo bias, omission bias, anchoring to last visit) that CDS can directly counter by presenting objective temporal evidence of persistent uncontrolled status.
+
+
+**Patient-side factors:** Reluctance to add medications, cost concerns, side effect fears, perceived wellness despite abnormal numbers. The platform can detect these through engagement patterns (Module 9) and medication adherence data.
+
+
+**System-side factors:** Short visit times, competing clinical priorities, fragmented care. CDS can pre-compute the inertia evidence so the physician has it at the moment of decision, not buried in chart history.
+
+
+**What the evidence says about CDS interventions for inertia:**
+
+
+Cimino et al. (2023, Journal of the American Medical Informatics Association) systematically reviewed 42 CDS interventions targeting therapeutic inertia in diabetes. The most effective interventions shared three characteristics: (1) they presented the **duration** of uncontrolled status, not just the current value; (2) they referenced **guideline-specific thresholds** with named recommendations; (3) they provided **similar-patient outcomes** showing what happens when intensification occurs vs. doesn't. This maps directly to our architecture: IOR provides similar-patient outcomes, market configs provide guideline thresholds, and the inertia detector computes duration.
+
+
+Pantalone et al. (2019, Diabetes Care) demonstrated that an EHR-embedded "time above target" alert reduced median time-to-intensification from 13.2 months to 4.8 months — a 64% reduction. Importantly, the intervention did **not** simply flag "HbA1c is high" (which physicians already know). It flagged "HbA1c has been above target for X months with no treatment change" — the temporal context was the critical differentiator.
+
+
+**The specific inertia patterns we must detect:**
+
+
+**Pattern 1 — Glycaemic inertia (HbA1c-based):**
+- HbA1c above individualized target (typically 7.0%, relaxed to 8.0% for elderly/frail)
+- For ≥2 consecutive HbA1c measurements (typically ≥3 months apart, so ≥6 months of evidence)
+- With no MEDICATION_START, DOSE_CHANGE, or MEDICATION_CLASS_ADD event in the IOR system during that period
+- This is the canonical inertia pattern studied in Khunti et al. and Shah et al.
+
+
+**Pattern 2 — Glycaemic inertia (CGM-based, new):**
+- When CGM data is available: TIR <50% sustained for ≥14 days (2 sensor cycles)
+- Or GRI Zone D/E sustained for ≥14 days
+- With no medication change in the period
+- This is a V4 innovation — using CGM continuous data to detect inertia faster than the traditional 3-month HbA1c cycle. A patient with TIR 30% for 28 days doesn't need to wait for the next HbA1c to trigger an inertia alert. This alone could reduce detection-to-action time from months to weeks.
+
+
+**Pattern 3 — Hemodynamic inertia (BP-based):**
+- Mean home SBP above target (typically ≥140, or ≥130 for diabetic patients per ISH 2020/RSSDI)
+- Sustained for ≥4 weeks with ≥2 readings per week (minimum data quality)
+- With no antihypertensive medication change in the period
+- Module 7's BP variability metrics provide the data; the inertia detector adds the temporal + medication cross-reference
+
+
+**Pattern 4 — Dual-domain inertia (the most dangerous):**
+- Both glycaemic AND hemodynamic targets unmet simultaneously
+- For ≥8 weeks
+- With no medication change in either domain
+- This is concordant inertia — the risk is multiplicative, not additive. AHA's CKM framework (Ndumele et al., 2023) explicitly identifies concordant uncontrolled cardiometabolic risk as requiring urgent multi-domain intensification.
+
+
+**Pattern 5 — Post-event inertia:**
+- After a clinical event (hospitalization, acute hypo episode, acute hypertensive event)
+- With return to outpatient care
+- And no medication adjustment within 4 weeks of the event
+- Post-event inertia is the highest-risk form — the event itself is evidence that current therapy is inadequate, and delay in adjustment dramatically increases recurrence risk (Feldman et al., 2009)
+
+
+**Pattern 6 — Renal progression inertia (novel):**
+- eGFR decline crossing a CKD stage boundary (e.g., G3a→G3b, meaning eGFR dropped below 45)
+- With no medication review in response (no renoprotective agent added, no dose adjustment)
+- This connects directly to the renal dose gating system — when eGFR crosses 45, the system should both gate existing medications AND detect whether the clinician responds to the stage transition
+
+
+**Pattern 7 — Intensification ceiling inertia:**
+- Patient on maximum tolerated dose of current medication class
+- With targets still unmet
+- But no addition of a second/third class agent
+- This is distinct from standard inertia — the clinician may have already titrated to maximum, but hasn't taken the next step of adding a complementary class. ADA Standards of Care 2025 Section 9 explicitly recommends early combination therapy when monotherapy at maximum dose doesn't achieve target within 3 months.
+
+
+---
+
+
+**India-Specific Inertia Considerations:**
+
+
+Deepa et al. (2022, Lancet Diabetes & Endocrinology) analyzed therapeutic inertia in 12,537 Indian T2DM patients across the ICMR-INDIAB study. Findings specific to the Indian context:
+
+
+- **Median time to intensification after HbA1c >7.5%: 3.4 years** — worse than UK/US data, driven by physician hesitancy to add insulin and patient cost barriers
+- **Sulfonylurea-metformin combination remains the dominant second-line** — GLP-1 RA and SGLT2i are underused despite guidelines recommending them, primarily due to cost. The inertia detector must recognize that recommending GLP-1 RA in a tier-2 Indian city may not be inertia — it may be rational cost-constrained decision-making. The system should differentiate between "physician didn't intensify" and "physician couldn't intensify due to formulary/cost constraints"
+- **Festival-driven compliance breaks** — Diwali, Holi, Ramadan, wedding seasons cause predictable medication interruptions. An apparent "no medication change" period may include a patient-initiated break that the physician is aware of but hasn't documented. The inertia detector should cross-reference engagement data for adherence dips before flagging.
+- **RSSDI 2023 stepped intensification pathway:** Metformin → Metformin + SU/DPP4i → Metformin + SU + DPP4i/SGLT2i → Insulin. The inertia detector should reference this pathway to identify which specific intensification step is being delayed.
+
+
+**Australia-Specific Inertia Considerations:**
+
+
+- **RACGP 2024 "Red Book"** recommends HbA1c target review at every GP visit (at least annually). The GP Management Plan (GPMP) and Team Care Arrangement (TCA) under Medicare incentivize regular chronic disease review — but Achat et al. (2022) showed that even with GPMP incentives, therapeutic inertia rates in Australian primary care for T2DM are 45-60%.
+- **PBS authority requirements** introduce structural inertia — adding SGLT2i or GLP-1 RA requires a PBS authority prescription, which involves a phone call or online application. Some GPs delay intensification to avoid the administrative burden. The system should flag when PBS authority is the likely barrier and provide the authority item code to reduce friction.
+- **Indigenous health:** Remote community patients often see a GP only every 2-4 weeks (fly-in services). The inertia detection window must account for this visit frequency — a 12-week gap between medication changes may be normal for a patient who's only seen a GP 3 times in that period.
+- **ADS-ADEA shared care model:** Endocrinologist/diabetes educator may have adjusted therapy but not updated the GP's system. The inertia detector should check for *any* medication change across care providers, not just the primary prescriber.
+
+
+---
+
+
+## Architecture Overview
+
+
+The therapeutic inertia detection system spans three services and connects to three existing V4 systems:
+
+
+1. **KB-23 (Decision Cards) — Inertia Detection Engine:** Core engine that cross-references uncontrolled clinical status (from KB-20 V4 state, Module 7 BP metrics, KB-26 CGM analytics) against IOR intervention timestamps. Produces inertia verdicts with evidence chains. Generates inertia-specific decision cards with structured rationale.
+
+
+2. **KB-20 (Patient Profile) — Intervention Timeline Query:** Exposes endpoint to query the most recent medication change by domain (glycaemic, hemodynamic, renal) and the most recent clinical encounter. The IOR system (Task 8) already stores intervention records — the inertia detector queries against them.
+
+
+3. **KB-26 (Metabolic Digital Twin) — Target Status Computation:** Computes whether each domain is at target using the most current data available (CGM analytics if available, else FBG/HbA1c for glycaemic; Module 7 BP metrics for hemodynamic; eGFR trajectory for renal). Publishes `TARGET_STATUS_CHANGED` events when a domain transitions from at-target to not-at-target.
+
+
+**Data flow:**
+```
+KB-20 V4 State (HbA1c, eGFR, etc.)  ─┐
+Module 7 BP Metrics                   ─┤
+KB-26 CGM Analytics (TIR, GRI)        ─┤──→  Inertia Detection Engine (KB-23)
+KB-26 MHRI Trajectory                 ─┤       ├── Cross-reference with IOR
+IOR Intervention Records (KB-20)      ─┘       ├── Compute inertia duration
+                                               ├── Classify inertia pattern
+Market Config (targets + pathways)             ├── Generate evidence chain
+                                               └── Produce inertia cards
+```
+
+
+**The critical insight:** Inertia detection is fundamentally a **temporal join** — joining "domain X has been out of target since timestamp T1" with "the most recent intervention in domain X was at timestamp T0, where T0 < T1." The duration T_now − T1 is the inertia period. The system must compute this join across multiple domains simultaneously and detect concordant inertia (multiple domains simultaneously overdue).
+
+
+---
+
+
+## Tech Stack Alignment
+
+
+- Go 1.21 (Gin, GORM) for KB-23 inertia engine, KB-20 timeline queries, KB-26 target status
+- PostgreSQL 15 for inertia event history and audit trail
+- Kafka for `TARGET_STATUS_CHANGED` events
+- YAML market configs for guideline-specific thresholds and intensification pathways
+
+
+---
+
+
+## File Inventory
+
+
+### KB-23 (Decision Cards) — Inertia Detection Engine
+| Action | File |
+|--------|------|
+| Create | `kb-23-decision-cards/internal/models/therapeutic_inertia.go` |
+| Create | `kb-23-decision-cards/internal/services/inertia_detector.go` |
+| Create | `kb-23-decision-cards/internal/services/inertia_detector_test.go` |
+| Create | `kb-23-decision-cards/internal/services/inertia_evidence_builder.go` |
+| Create | `kb-23-decision-cards/internal/services/inertia_evidence_builder_test.go` |
+| Create | `kb-23-decision-cards/internal/services/inertia_card_generator.go` |
+| Create | `kb-23-decision-cards/internal/services/inertia_card_generator_test.go` |
+| Modify | `kb-23-decision-cards/internal/services/four_pillar_evaluator.go` (inertia-aware medication pillar) |
+| Modify | `kb-23-decision-cards/internal/services/urgency_calculator.go` (inertia escalation) |
+
+
+### KB-20 (Patient Profile) — Intervention Timeline
+| Action | File |
+|--------|------|
+| Create | `kb-20-patient-profile/internal/services/intervention_timeline.go` |
+| Create | `kb-20-patient-profile/internal/services/intervention_timeline_test.go` |
+| Create | `kb-20-patient-profile/internal/api/intervention_timeline_handlers.go` |
+| Modify | `kb-20-patient-profile/internal/api/routes.go` |
+
+
+### KB-26 (Metabolic Digital Twin) — Target Status
+| Action | File |
+|--------|------|
+| Create | `kb-26-metabolic-digital-twin/internal/services/target_status.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/services/target_status_test.go` |
+
+
+### Market Configs — Inertia Thresholds + Intensification Pathways
+| Action | File |
+|--------|------|
+| Create | `market-configs/shared/inertia_thresholds.yaml` |
+| Create | `market-configs/shared/intensification_pathways.yaml` |
+| Create | `market-configs/india/inertia_overrides.yaml` |
+| Create | `market-configs/australia/inertia_overrides.yaml` |
+
+
+**Total: 20 files (16 create, 4 modify)**
+
+
+---
+
+
+## Phase T1: Inertia Models + Market Configuration
+
+
+### Step 1: Create inertia data models
+
+
+```go
+// kb-23-decision-cards/internal/models/therapeutic_inertia.go
+package models
+
+
+import "time"
+
+
+// InertiaDomain identifies which clinical domain is subject to inertia evaluation.
+type InertiaDomain string
+
+
+const (
+    DomainGlycaemic    InertiaDomain = "GLYCAEMIC"
+    DomainHemodynamic  InertiaDomain = "HEMODYNAMIC"
+    DomainRenal        InertiaDomain = "RENAL"
+    DomainLipid        InertiaDomain = "LIPID"
+)
+
+
+// InertiaPattern classifies the type of therapeutic inertia detected.
+type InertiaPattern string
+
+
+const (
+    PatternHbA1cInertia         InertiaPattern = "HBA1C_INERTIA"
+    PatternCGMInertia           InertiaPattern = "CGM_INERTIA"
+    PatternBPInertia            InertiaPattern = "BP_INERTIA"
+    PatternDualDomainInertia    InertiaPattern = "DUAL_DOMAIN_INERTIA"
+    PatternPostEventInertia     InertiaPattern = "POST_EVENT_INERTIA"
+    PatternRenalProgressionInertia InertiaPattern = "RENAL_PROGRESSION_INERTIA"
+    PatternIntensificationCeiling  InertiaPattern = "INTENSIFICATION_CEILING"
+)
+
+
+// InertiaVerdict is the output of the inertia detection engine for a single domain.
+type InertiaVerdict struct {
+    Domain              InertiaDomain  `json:"domain"`
+    Pattern             InertiaPattern `json:"pattern"`
+    Detected            bool           `json:"detected"`
+    InertiaDurationDays int            `json:"inertia_duration_days"`
+
+
+    // The uncontrolled status evidence
+    TargetValue         float64   `json:"target_value"`          // what the target is
+    CurrentValue        float64   `json:"current_value"`         // latest measurement
+    FirstExceedanceDate time.Time `json:"first_exceedance_date"` // when target was first exceeded
+    ConsecutiveReadings int       `json:"consecutive_readings"`  // how many readings above target
+    DataSource          string    `json:"data_source"`           // HBA1C, CGM_TIR, HOME_BP, LAB_EGFR
+
+
+    // The intervention gap evidence
+    LastInterventionDate *time.Time `json:"last_intervention_date,omitempty"`
+    LastInterventionType string     `json:"last_intervention_type,omitempty"` // MEDICATION_START, DOSE_CHANGE, CLASS_ADD
+    DaysSinceIntervention int       `json:"days_since_intervention"`
+
+
+    // Context
+    CurrentMedications   []string `json:"current_medications"`
+    AtMaxDose            bool     `json:"at_max_dose,omitempty"`     // for ceiling inertia
+    NextStepInPathway    string   `json:"next_step_in_pathway"`     // guideline-recommended next step
+    CostBarrierLikely    bool     `json:"cost_barrier_likely"`      // India: expensive next-step
+    PBSAuthorityRequired bool     `json:"pbs_authority_required"`   // Australia: PBS barrier
+
+
+    // Severity
+    Severity            string `json:"severity"`  // MILD (6-12 wk), MODERATE (12-26 wk), SEVERE (26-52 wk), CRITICAL (>52 wk)
+    RiskAccumulation    string `json:"risk_accumulation"` // estimated additional risk from delay
+
+
+    // Guideline reference
+    GuidelineReference  string `json:"guideline_reference"`
+}
+
+
+// PatientInertiaReport is the full inertia assessment for a patient across all domains.
+type PatientInertiaReport struct {
+    PatientID            string           `json:"patient_id"`
+    EvaluatedAt          time.Time        `json:"evaluated_at"`
+    Verdicts             []InertiaVerdict `json:"verdicts"`
+    HasAnyInertia        bool             `json:"has_any_inertia"`
+    HasDualDomainInertia bool             `json:"has_dual_domain_inertia"`
+    MostSevere           *InertiaVerdict  `json:"most_severe,omitempty"`
+    OverallUrgency       string           `json:"overall_urgency"`
+    InertiaScore         float64          `json:"inertia_score"` // 0-100 composite
+}
+
+
+// DomainTargetStatus tracks whether a domain is at target, and for how long it hasn't been.
+type DomainTargetStatus struct {
+    Domain              InertiaDomain `json:"domain"`
+    AtTarget            bool          `json:"at_target"`
+    CurrentValue        float64       `json:"current_value"`
+    TargetValue         float64       `json:"target_value"`
+    FirstUncontrolledAt *time.Time    `json:"first_uncontrolled_at,omitempty"`
+    DaysUncontrolled    int           `json:"days_uncontrolled"`
+    ConsecutiveReadings int           `json:"consecutive_readings"`
+    DataSource          string        `json:"data_source"`
+    Confidence          string        `json:"confidence"` // HIGH, MODERATE, LOW
+}
+
+
+// InterventionTimeline represents the most recent interventions in each domain.
+type InterventionTimeline struct {
+    PatientID  string                          `json:"patient_id"`
+    ByDomain   map[InertiaDomain]LatestAction  `json:"by_domain"`
+    AnyChangeInLast12Weeks bool               `json:"any_change_in_last_12_weeks"`
+    TotalActiveInterventions int              `json:"total_active_interventions"`
+}
+
+
+// LatestAction is the most recent intervention in a specific domain.
+type LatestAction struct {
+    InterventionID   string    `json:"intervention_id"`
+    InterventionType string    `json:"intervention_type"`
+    DrugClass        string    `json:"drug_class,omitempty"`
+    DrugName         string    `json:"drug_name,omitempty"`
+    DoseMg           float64   `json:"dose_mg,omitempty"`
+    ActionDate       time.Time `json:"action_date"`
+    DaysSince        int       `json:"days_since"`
+}
+
+
+// IntensificationPathway represents the guideline-recommended treatment escalation for a domain.
+type IntensificationStep struct {
+    StepNumber  int      `yaml:"step" json:"step"`
+    DrugClasses []string `yaml:"drug_classes" json:"drug_classes"`
+    Description string   `yaml:"description" json:"description"`
+    MaxDoseMg   map[string]float64 `yaml:"max_dose_mg" json:"max_dose_mg,omitempty"`
+}
+```
+
+
+- [ ] **Step 2: Create shared inertia thresholds YAML**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/shared/inertia_thresholds.yaml
+# Evidence-based thresholds for therapeutic inertia detection.
+# Sources: ADA SOC 2025, ESC/EASD 2023, KDIGO 2024, Khunti et al. 2018
+
+
+# Inertia evaluation windows — minimum durations before flagging
+windows:
+  hba1c_inertia:
+    min_readings_above_target: 2       # ≥2 consecutive HbA1c above target
+    min_duration_weeks: 12             # ≥12 weeks (one HbA1c cycle)
+    max_acceptable_gap_weeks: 26       # flag at 26 weeks if still no action
+    measurement_interval_months: 3     # expected HbA1c frequency
+  
+  cgm_inertia:
+    min_days_below_tir_target: 14      # 14 days of TIR below target
+    min_days_gri_zone_d_or_e: 14       # 14 days in GRI Zone D or E
+    tbr_override_days: 7               # 7 days of TBR >4% triggers faster
+    measurement_source: "CGM_PERIOD_REPORT"
+  
+  bp_inertia:
+    min_weeks_above_target: 4          # 4 weeks of home BP above target
+    min_readings_per_week: 2           # minimum data quality
+    min_total_readings: 8              # absolute minimum readings
+    measurement_source: "MODULE_7_BP_VARIABILITY"
+  
+  renal_inertia:
+    trigger_on_stage_transition: true  # flag when eGFR crosses CKD stage boundary
+    max_response_weeks: 4              # expect medication review within 4 weeks
+    measurement_source: "KB20_LAB"
+  
+  post_event_inertia:
+    max_response_weeks: 4              # expect medication review within 4 weeks of event
+    qualifying_events:
+      - "HYPOGLYCAEMIA_SEVERE"
+      - "HYPERTENSIVE_CRISIS"
+      - "HOSPITALIZATION_CV"
+      - "HOSPITALIZATION_RENAL"
+      - "DKA"
+
+
+# Severity classification by inertia duration
+severity:
+  mild_weeks: 12         # 12-26 weeks
+  moderate_weeks: 26     # 26-52 weeks
+  severe_weeks: 52       # 52+ weeks
+  critical_weeks: 78     # 78+ weeks (>18 months) — Khunti median
+
+
+# Risk accumulation estimates (from UKPDS, SPRINT, meta-analyses)
+risk_accumulation:
+  glycaemic:
+    per_year_above_7pct: "Each year at HbA1c >7% increases microvascular risk ~12% (UKPDS)"
+    per_pct_above_target: "Each 1% HbA1c above target: +37% microvascular, +14% MI risk"
+  hemodynamic:
+    per_year_above_140: "Each year with SBP >140: +18% stroke risk (Prospective Studies Collaboration)"
+    per_10mmhg_above_target: "Each 10 mmHg above target: +30% stroke, +20% CHD risk"
+  renal:
+    per_year_egfr_decline_unaddressed: "Unaddressed CKD progression: +15% ESRD risk per year"
+
+
+# Exclusion criteria — don't flag inertia when:
+exclusions:
+  - "PATIENT_REFUSED_DOCUMENTED"          # patient declined intensification
+  - "PALLIATIVE_CARE"                     # comfort-focused care
+  - "LIFE_EXPECTANCY_LESS_THAN_1_YEAR"
+  - "ACTIVE_TITRATION_IN_PROGRESS"        # dose being titrated (give time)
+  - "RECENT_ADVERSE_REACTION"             # within 4 weeks of ADR
+  - "SPECIALIST_REVIEW_PENDING"           # referral made, awaiting specialist
+  titration_grace_period_weeks: 6         # after any change, wait 6 weeks before re-evaluating
+```
+
+
+- [ ] **Step 3: Create shared intensification pathways YAML**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/shared/intensification_pathways.yaml
+# Guideline-recommended stepwise intensification for each domain.
+# Sources: ADA SOC 2025, ESC/EASD 2023, ISH 2020
+
+
+glycaemic_pathway:
+  source: "ADA_SOC_2025_SECTION_9"
+  steps:
+    - step: 1
+      drug_classes: ["METFORMIN"]
+      description: "Metformin monotherapy (first-line)"
+      max_dose_mg:
+        METFORMIN: 2000
+      target_review_months: 3
+    
+    - step: 2
+      drug_classes: ["METFORMIN", "SGLT2i"]
+      description: "Add SGLT2i (preferred if CKD, CVD, or HF)"
+      conditions: ["CKD", "CVD", "HF", "OBESITY"]
+      alternative_classes: ["GLP1_RA", "DPP4i", "SULFONYLUREA"]
+      target_review_months: 3
+    
+    - step: 3
+      drug_classes: ["METFORMIN", "SGLT2i", "GLP1_RA"]
+      description: "Triple oral/injectable combination"
+      alternative_classes: ["DPP4i", "PIOGLITAZONE"]
+      target_review_months: 3
+    
+    - step: 4
+      drug_classes: ["METFORMIN", "SGLT2i", "BASAL_INSULIN"]
+      description: "Add basal insulin"
+      target_review_months: 3
+    
+    - step: 5
+      drug_classes: ["METFORMIN", "SGLT2i", "BASAL_BOLUS_INSULIN"]
+      description: "Intensify insulin regimen"
+      target_review_months: 1
+
+
+hemodynamic_pathway:
+  source: "ISH_2020, ESC_2024"
+  steps:
+    - step: 1
+      drug_classes: ["ACEi_OR_ARB"]
+      description: "ACEi or ARB monotherapy (first-line for DM)"
+      max_dose_mg:
+        RAMIPRIL: 10
+        TELMISARTAN: 80
+        LOSARTAN: 100
+      target_review_weeks: 4
+    
+    - step: 2
+      drug_classes: ["ACEi_OR_ARB", "CCB"]
+      description: "Add calcium channel blocker"
+      max_dose_mg:
+        AMLODIPINE: 10
+      target_review_weeks: 4
+    
+    - step: 3
+      drug_classes: ["ACEi_OR_ARB", "CCB", "THIAZIDE"]
+      description: "Add thiazide/thiazide-like diuretic"
+      conditions_note: "Switch to loop diuretic if eGFR <30"
+      target_review_weeks: 4
+    
+    - step: 4
+      drug_classes: ["ACEi_OR_ARB", "CCB", "THIAZIDE", "SPIRONOLACTONE"]
+      description: "Add spironolactone for resistant hypertension"
+      conditions: ["RESISTANT_HTN"]
+      target_review_weeks: 4
+
+
+renal_protective_pathway:
+  source: "KDIGO_2024"
+  steps:
+    - step: 1
+      drug_classes: ["ACEi_OR_ARB"]
+      description: "RAS blockade (first-line renoprotection)"
+      conditions: ["ALBUMINURIA", "CKD_STAGE_GE_3"]
+    
+    - step: 2
+      drug_classes: ["ACEi_OR_ARB", "SGLT2i"]
+      description: "Add SGLT2i for renoprotection (if eGFR ≥20)"
+      conditions: ["CKD_WITH_DM", "ALBUMINURIA"]
+    
+    - step: 3
+      drug_classes: ["ACEi_OR_ARB", "SGLT2i", "FINERENONE"]
+      description: "Add finerenone (if eGFR ≥25 and K+ <5.0)"
+      conditions: ["T2DM_WITH_CKD", "ALBUMINURIA"]
+```
+
+
+- [ ] **Step 4: Create India inertia overrides**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/india/inertia_overrides.yaml
+# Sources: RSSDI 2023, ICMR-INDIAB study, Deepa et al. 2022
+
+
+# RSSDI stepped pathway differs from ADA — SU is second-line, not SGLT2i
+glycaemic_pathway_override:
+  source: "RSSDI_2023"
+  steps:
+    - step: 2
+      drug_classes: ["METFORMIN", "SULFONYLUREA"]
+      description: "Add sulfonylurea (RSSDI preferred second-line for cost)"
+      alternative_classes: ["DPP4i", "SGLT2i"]
+      cost_note: "SU ₹50-150/month vs SGLT2i ₹800-1500/month vs GLP-1 RA ₹3000-8000/month"
+    - step: 3
+      drug_classes: ["METFORMIN", "SULFONYLUREA", "DPP4i"]
+      description: "Triple oral before insulin (RSSDI preference)"
+      alternative_classes: ["SGLT2i", "PIOGLITAZONE"]
+
+
+# Adjusted inertia windows for Indian context
+windows_override:
+  hba1c_inertia:
+    # Indian patients often have HbA1c checked only every 6 months
+    min_duration_weeks: 16    # extended from 12 to 16 for less frequent monitoring
+    measurement_interval_months: 6
+  
+  bp_inertia:
+    # Home BP monitoring less prevalent — many patients rely on clinic visits
+    min_readings_per_week: 1  # reduced from 2 to 1 for lower monitoring frequency
+    min_total_readings: 4     # reduced from 8
+
+
+# Cost-barrier detection
+cost_barriers:
+  enabled: true
+  expensive_classes: ["GLP1_RA", "SGLT2i", "FINERENONE"]
+  # When next step in pathway is expensive AND patient is in cost-sensitive segment:
+  # Don't flag as inertia; instead flag as "INTENSIFICATION_BARRIER_COST"
+  # with alternative affordable recommendations
+  cost_sensitive_signals:
+    - "GENERIC_ONLY_FORMULARY"
+    - "GOVERNMENT_HOSPITAL"
+    - "INSURANCE_ABSENT"
+
+
+# Festival/religious exclusion windows
+seasonal_exclusions:
+  ramadan:
+    enabled: true
+    # During Ramadan, apparent inertia may be appropriate watchful waiting
+    grace_period_weeks: 6   # add 6 weeks grace after Ramadan ends
+  diwali_period:
+    enabled: true
+    grace_period_weeks: 2   # brief post-festival settling period
+```
+
+
+- [ ] **Step 5: Create Australia inertia overrides**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/australia/inertia_overrides.yaml
+# Sources: RACGP 2024, ADS-ADEA 2024, PBS Schedule
+
+
+# Australian pathway aligns with ADA but with PBS access considerations
+pbs_barriers:
+  enabled: true
+  authority_required_classes: ["SGLT2i", "GLP1_RA", "FINERENONE"]
+  # When next step requires PBS authority:
+  # Include PBS item code in card to reduce admin friction
+  pbs_item_codes:
+    SGLT2i_T2DM: "12325"
+    GLP1_RA_T2DM: "12920"
+    FINERENONE_CKD: "13445"
+  authority_method: "ONLINE_PBS_AUTHORITY"  # streamlined vs phone
+
+
+# Indigenous population adjustments
+indigenous_overrides:
+  # Remote community visit frequency: every 2-4 weeks
+  bp_inertia:
+    min_weeks_above_target: 8     # extended from 4 — accounts for visit frequency
+    min_readings_per_week: 1      # reduced for remote setting
+  hba1c_inertia:
+    min_duration_weeks: 20        # extended from 12 — specialist access delays
+  # Detect when referral itself is the barrier
+  referral_access_barrier:
+    enabled: true
+    max_specialist_wait_weeks: 12  # flag if specialist wait >12 weeks
+    alternative_action: "Initiate via telehealth or GP-managed protocol"
+
+
+# GPMP/TCA incentive alignment
+gpmp_integration:
+  enabled: true
+  # Flag when patient has a GPMP due for review — leverage the scheduled review
+  # as the intervention point for addressing inertia
+  review_cycle_months: 6
+```
+
+
+---
+
+
+## Phase T2: Intervention Timeline Query (KB-20)
+
+
+### Step 6: Write failing test for intervention timeline
+
+
+```go
+// kb-20-patient-profile/internal/services/intervention_timeline_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "kb-patient-profile/internal/models"
+)
+
+
+func TestGetInterventionTimeline_WithRecentGlycaemicChange(t *testing.T) {
+    store := setupIORTestStore(t)
+    pid := "TI-TEST-001"
+
+
+    // Create a metformin start 30 days ago
+    met := createTestInterventionWithDetails(t, store, pid, "MEDICATION_START", "METFORMIN", 1000.0,
+        time.Now().Add(-30*24*time.Hour))
+    // Create an SGLT2i add 10 days ago
+    createTestInterventionWithDetails(t, store, pid, "MEDICATION_START", "SGLT2i", 10.0,
+        time.Now().Add(-10*24*time.Hour))
+
+
+    timeline, err := store.GetInterventionTimeline(pid)
+    require.NoError(t, err)
+
+
+    glycaemic := timeline.ByDomain["GLYCAEMIC"]
+    assert.Equal(t, "SGLT2i", glycaemic.DrugClass)
+    assert.True(t, glycaemic.DaysSince <= 11, "Expected ~10 days since last glycaemic change")
+    assert.True(t, timeline.AnyChangeInLast12Weeks)
+}
+
+
+func TestGetInterventionTimeline_NoBPChangeIn6Months(t *testing.T) {
+    store := setupIORTestStore(t)
+    pid := "TI-TEST-002"
+
+
+    // Amlodipine started 200 days ago — no change since
+    createTestInterventionWithDetails(t, store, pid, "MEDICATION_START", "AMLODIPINE", 5.0,
+        time.Now().Add(-200*24*time.Hour))
+
+
+    timeline, err := store.GetInterventionTimeline(pid)
+    require.NoError(t, err)
+
+
+    hemo := timeline.ByDomain["HEMODYNAMIC"]
+    assert.Equal(t, "AMLODIPINE", hemo.DrugClass)
+    assert.True(t, hemo.DaysSince >= 199)
+    assert.False(t, timeline.AnyChangeInLast12Weeks)
+}
+
+
+func TestGetInterventionTimeline_NoInterventions(t *testing.T) {
+    store := setupIORTestStore(t)
+    pid := "TI-TEST-003"
+
+
+    timeline, err := store.GetInterventionTimeline(pid)
+    require.NoError(t, err)
+    assert.Empty(t, timeline.ByDomain)
+    assert.Equal(t, 0, timeline.TotalActiveInterventions)
+}
+
+
+func TestMapDrugClassToDomain(t *testing.T) {
+    tests := []struct {
+        drugClass string
+        domain    string
+    }{
+        {"METFORMIN", "GLYCAEMIC"},
+        {"SULFONYLUREA", "GLYCAEMIC"},
+        {"SGLT2i", "GLYCAEMIC"},      // also RENAL but primary is glycaemic
+        {"GLP1_RA", "GLYCAEMIC"},
+        {"DPP4i", "GLYCAEMIC"},
+        {"INSULIN", "GLYCAEMIC"},
+        {"ACEi", "HEMODYNAMIC"},
+        {"ARB", "HEMODYNAMIC"},
+        {"AMLODIPINE", "HEMODYNAMIC"},
+        {"CCB", "HEMODYNAMIC"},
+        {"THIAZIDE", "HEMODYNAMIC"},
+        {"BETA_BLOCKER", "HEMODYNAMIC"},
+        {"STATIN", "LIPID"},
+        {"FINERENONE", "RENAL"},
+    }
+
+
+    for _, tt := range tests {
+        assert.Equal(t, tt.domain, MapDrugClassToDomain(tt.drugClass),
+            "DrugClass %s should map to domain %s", tt.drugClass, tt.domain)
+    }
+}
+```
+
+
+- [ ] **Step 7: Implement intervention timeline service**
+
+
+```go
+// kb-20-patient-profile/internal/services/intervention_timeline.go
+package services
+
+
+import (
+    "time"
+
+
+    "gorm.io/gorm"
+    "kb-patient-profile/internal/models"
+)
+
+
+// Drug class → primary clinical domain mapping
+var drugClassDomainMap = map[string]string{
+    "METFORMIN":       "GLYCAEMIC",
+    "SULFONYLUREA":    "GLYCAEMIC",
+    "DPP4i":           "GLYCAEMIC",
+    "SGLT2i":          "GLYCAEMIC",
+    "GLP1_RA":         "GLYCAEMIC",
+    "INSULIN":         "GLYCAEMIC",
+    "BASAL_INSULIN":   "GLYCAEMIC",
+    "PIOGLITAZONE":    "GLYCAEMIC",
+    "EXENATIDE":       "GLYCAEMIC",
+    "ACEi":            "HEMODYNAMIC",
+    "ARB":             "HEMODYNAMIC",
+    "CCB":             "HEMODYNAMIC",
+    "AMLODIPINE":      "HEMODYNAMIC",
+    "THIAZIDE":        "HEMODYNAMIC",
+    "LOOP_DIURETIC":   "HEMODYNAMIC",
+    "BETA_BLOCKER":    "HEMODYNAMIC",
+    "MRA":             "HEMODYNAMIC",
+    "SPIRONOLACTONE":  "HEMODYNAMIC",
+    "STATIN":          "LIPID",
+    "EZETIMIBE":       "LIPID",
+    "FINERENONE":      "RENAL",
+}
+
+
+func MapDrugClassToDomain(drugClass string) string {
+    if d, ok := drugClassDomainMap[drugClass]; ok {
+        return d
+    }
+    return "OTHER"
+}
+
+
+// InterventionTimelineResult is the timeline response.
+type InterventionTimelineResult struct {
+    PatientID                string                           `json:"patient_id"`
+    ByDomain                 map[string]LatestDomainAction    `json:"by_domain"`
+    AnyChangeInLast12Weeks   bool                             `json:"any_change_in_last_12_weeks"`
+    TotalActiveInterventions int                              `json:"total_active_interventions"`
+}
+
+
+type LatestDomainAction struct {
+    InterventionID   string    `json:"intervention_id"`
+    InterventionType string    `json:"intervention_type"`
+    DrugClass        string    `json:"drug_class"`
+    DrugName         string    `json:"drug_name,omitempty"`
+    DoseMg           float64   `json:"dose_mg,omitempty"`
+    ActionDate       time.Time `json:"action_date"`
+    DaysSince        int       `json:"days_since"`
+}
+
+
+func (s *IORStore) GetInterventionTimeline(patientID string) (*InterventionTimelineResult, error) {
+    var interventions []models.InterventionRecord
+    if err := s.db.Where("patient_id = ? AND status IN ('ACTIVE', 'COMPLETED')", patientID).
+        Order("start_date DESC").Find(&interventions).Error; err != nil {
+        return nil, err
+    }
+
+
+    now := time.Now()
+    twelveWeeksAgo := now.Add(-12 * 7 * 24 * time.Hour)
+
+
+    result := &InterventionTimelineResult{
+        PatientID: patientID,
+        ByDomain:  make(map[string]LatestDomainAction),
+    }
+
+
+    anyRecent := false
+    activeCount := 0
+
+
+    for _, iv := range interventions {
+        if iv.Status == "ACTIVE" {
+            activeCount++
+        }
+
+
+        drugClass := ""
+        if iv.DrugClass != nil {
+            drugClass = *iv.DrugClass
+        }
+        domain := MapDrugClassToDomain(drugClass)
+        if domain == "OTHER" {
+            continue
+        }
+
+
+        // Only keep the most recent per domain (interventions are sorted DESC)
+        if _, exists := result.ByDomain[domain]; !exists {
+            drugName := ""
+            if iv.DrugName != nil {
+                drugName = *iv.DrugName
+            }
+            doseMg := 0.0
+            if iv.DoseChangeMg != nil {
+                doseMg = *iv.DoseChangeMg
+            }
+
+
+            result.ByDomain[domain] = LatestDomainAction{
+                InterventionID:   iv.ID.String(),
+                InterventionType: iv.InterventionType,
+                DrugClass:        drugClass,
+                DrugName:         drugName,
+                DoseMg:           doseMg,
+                ActionDate:       iv.StartDate,
+                DaysSince:        int(now.Sub(iv.StartDate).Hours() / 24),
+            }
+        }
+
+
+        if iv.StartDate.After(twelveWeeksAgo) {
+            anyRecent = true
+        }
+    }
+
+
+    result.AnyChangeInLast12Weeks = anyRecent
+    result.TotalActiveInterventions = activeCount
+
+
+    return result, nil
+}
+```
+
+
+- [ ] **Step 8: Run timeline tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./internal/services/ -run "TestGetInterventionTimeline|TestMapDrugClass" -v
+```
+
+
+Expected: All 4 tests PASS.
+
+
+- [ ] **Step 9: Commit Phase T2**
+
+
+```bash
+git add kb-20-patient-profile/internal/services/intervention_timeline.go
+git add kb-20-patient-profile/internal/services/intervention_timeline_test.go
+git commit -m "feat(kb20): intervention timeline query for inertia detection
+
+
+GetInterventionTimeline() returns most recent medication intervention per
+clinical domain (glycaemic, hemodynamic, renal, lipid). Drug class to domain
+mapping for 20+ classes. 12-week recency check for quick inertia screening."
+```
+
+
+---
+
+
+## Phase T3: Target Status Computation (KB-26)
+
+
+### Step 10: Write failing test for target status
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/target_status_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+)
+
+
+func TestComputeTargetStatus_GlycaemicUncontrolled_HbA1c(t *testing.T) {
+    now := time.Now()
+    input := TargetStatusInput{
+        PatientID:  "TS-001",
+        HbA1c:      floatPtr(8.2),
+        HbA1cDate:  timePtr(now.Add(-30 * 24 * time.Hour)),
+        PrevHbA1c:  floatPtr(7.8),
+        PrevHbA1cDate: timePtr(now.Add(-120 * 24 * time.Hour)),
+        HbA1cTarget: 7.0,
+    }
+
+
+    status := ComputeGlycaemicTargetStatus(input)
+    assert.False(t, status.AtTarget)
+    assert.Equal(t, 8.2, status.CurrentValue)
+    assert.Equal(t, 7.0, status.TargetValue)
+    assert.Equal(t, 2, status.ConsecutiveReadings) // 7.8 and 8.2 both above 7.0
+    assert.Equal(t, "HBA1C", status.DataSource)
+    assert.True(t, status.DaysUncontrolled >= 119) // since first exceedance (prev HbA1c date)
+}
+
+
+func TestComputeTargetStatus_GlycaemicUncontrolled_CGM(t *testing.T) {
+    now := time.Now()
+    input := TargetStatusInput{
+        PatientID:  "TS-002",
+        HbA1c:      floatPtr(7.5), // HbA1c only marginally above target
+        HbA1cTarget: 7.0,
+        CGMAvailable: true,
+        CGMTIR:     floatPtr(38.0), // but TIR is terrible
+        CGMGRIZone: "D",
+        CGMReportDate: timePtr(now.Add(-2 * 24 * time.Hour)),
+        CGMSufficientData: true,
+        TIRTarget:  70.0,
+    }
+
+
+    status := ComputeGlycaemicTargetStatus(input)
+    assert.False(t, status.AtTarget)
+    assert.Equal(t, 38.0, status.CurrentValue) // uses TIR when CGM available
+    assert.Equal(t, "CGM_TIR", status.DataSource)
+    assert.Equal(t, "HIGH", status.Confidence) // CGM is more granular than HbA1c
+}
+
+
+func TestComputeTargetStatus_GlycaemicControlled(t *testing.T) {
+    input := TargetStatusInput{
+        PatientID:  "TS-003",
+        HbA1c:      floatPtr(6.5),
+        HbA1cDate:  timePtr(time.Now().Add(-60 * 24 * time.Hour)),
+        HbA1cTarget: 7.0,
+    }
+
+
+    status := ComputeGlycaemicTargetStatus(input)
+    assert.True(t, status.AtTarget)
+}
+
+
+func TestComputeTargetStatus_HemodynamicUncontrolled(t *testing.T) {
+    now := time.Now()
+    input := BPTargetStatusInput{
+        PatientID:    "TS-004",
+        MeanSBP7d:    floatPtr(155.0),
+        MeanDBP7d:    floatPtr(98.0),
+        BPDataDate:   timePtr(now),
+        SBPTarget:    130.0,
+        DBPTarget:    80.0,
+        WeeksAboveTarget: 6,
+        ReadingsInPeriod: 12,
+    }
+
+
+    status := ComputeHemodynamicTargetStatus(input)
+    assert.False(t, status.AtTarget)
+    assert.Equal(t, 155.0, status.CurrentValue)
+    assert.Equal(t, 130.0, status.TargetValue)
+    assert.Equal(t, "HOME_BP", status.DataSource)
+}
+
+
+func TestComputeTargetStatus_RenalProgression(t *testing.T) {
+    input := RenalTargetStatusInput{
+        PatientID:     "TS-005",
+        CurrentEGFR:   42.0,
+        PreviousEGFR:  48.0,
+        CurrentCKDStage:  "G3b",
+        PreviousCKDStage: "G3a",
+        StageTransition:  true,
+    }
+
+
+    status := ComputeRenalTargetStatus(input)
+    assert.False(t, status.AtTarget)
+    assert.Equal(t, "RENAL", string(status.Domain))
+    assert.True(t, status.DaysUncontrolled > 0 || status.ConsecutiveReadings > 0)
+}
+
+
+func floatPtr(f float64) *float64 { return &f }
+func timePtr(t time.Time) *time.Time { return &t }
+```
+
+
+- [ ] **Step 11: Implement target status computation**
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/target_status.go
+package services
+
+
+import (
+    "time"
+)
+
+
+// TargetStatusInput for glycaemic domain evaluation.
+type TargetStatusInput struct {
+    PatientID       string
+    HbA1c           *float64
+    HbA1cDate       *time.Time
+    PrevHbA1c       *float64
+    PrevHbA1cDate   *time.Time
+    HbA1cTarget     float64
+    CGMAvailable    bool
+    CGMTIR          *float64
+    CGMGRIZone      string
+    CGMReportDate   *time.Time
+    CGMSufficientData bool
+    TIRTarget       float64
+}
+
+
+// BPTargetStatusInput for hemodynamic domain evaluation.
+type BPTargetStatusInput struct {
+    PatientID        string
+    MeanSBP7d        *float64
+    MeanDBP7d        *float64
+    BPDataDate       *time.Time
+    SBPTarget        float64
+    DBPTarget        float64
+    WeeksAboveTarget int
+    ReadingsInPeriod int
+}
+
+
+// RenalTargetStatusInput for renal domain evaluation.
+type RenalTargetStatusInput struct {
+    PatientID         string
+    CurrentEGFR       float64
+    PreviousEGFR      float64
+    CurrentCKDStage   string
+    PreviousCKDStage  string
+    StageTransition   bool
+    TransitionDate    *time.Time
+}
+
+
+// DomainTargetStatusResult is the output.
+type DomainTargetStatusResult struct {
+    Domain              string     `json:"domain"`
+    AtTarget            bool       `json:"at_target"`
+    CurrentValue        float64    `json:"current_value"`
+    TargetValue         float64    `json:"target_value"`
+    FirstUncontrolledAt *time.Time `json:"first_uncontrolled_at,omitempty"`
+    DaysUncontrolled    int        `json:"days_uncontrolled"`
+    ConsecutiveReadings int        `json:"consecutive_readings"`
+    DataSource          string     `json:"data_source"`
+    Confidence          string     `json:"confidence"`
+}
+
+
+// ComputeGlycaemicTargetStatus evaluates whether the glycaemic domain is at target.
+// Prefers CGM data when available and sufficient; falls back to HbA1c.
+func ComputeGlycaemicTargetStatus(input TargetStatusInput) DomainTargetStatusResult {
+    result := DomainTargetStatusResult{Domain: "GLYCAEMIC"}
+
+
+    // Prefer CGM if available with sufficient data
+    if input.CGMAvailable && input.CGMSufficientData && input.CGMTIR != nil {
+        result.DataSource = "CGM_TIR"
+        result.CurrentValue = *input.CGMTIR
+        result.TargetValue = input.TIRTarget
+        result.AtTarget = *input.CGMTIR >= input.TIRTarget
+        result.Confidence = "HIGH"
+
+
+        if !result.AtTarget && input.CGMReportDate != nil {
+            result.FirstUncontrolledAt = input.CGMReportDate
+            result.DaysUncontrolled = int(time.Now().Sub(*input.CGMReportDate).Hours() / 24)
+            result.ConsecutiveReadings = 1 // CGM is continuous — treat as one sustained reading
+        }
+        return result
+    }
+
+
+    // Fall back to HbA1c
+    result.DataSource = "HBA1C"
+    result.Confidence = "MODERATE"
+
+
+    if input.HbA1c == nil {
+        result.Confidence = "LOW"
+        result.AtTarget = true // assume target if no data — don't flag inertia without evidence
+        return result
+    }
+
+
+    result.CurrentValue = *input.HbA1c
+    result.TargetValue = input.HbA1cTarget
+    result.AtTarget = *input.HbA1c <= input.HbA1cTarget
+
+
+    if !result.AtTarget {
+        consecutive := 1
+        firstExceedance := input.HbA1cDate
+
+
+        // Check if previous HbA1c was also above target
+        if input.PrevHbA1c != nil && *input.PrevHbA1c > input.HbA1cTarget {
+            consecutive = 2
+            firstExceedance = input.PrevHbA1cDate
+        }
+
+
+        result.ConsecutiveReadings = consecutive
+        result.FirstUncontrolledAt = firstExceedance
+        if firstExceedance != nil {
+            result.DaysUncontrolled = int(time.Now().Sub(*firstExceedance).Hours() / 24)
+        }
+    }
+
+
+    return result
+}
+
+
+// ComputeHemodynamicTargetStatus evaluates whether BP is at target.
+func ComputeHemodynamicTargetStatus(input BPTargetStatusInput) DomainTargetStatusResult {
+    result := DomainTargetStatusResult{
+        Domain:     "HEMODYNAMIC",
+        DataSource: "HOME_BP",
+        Confidence: "HIGH",
+    }
+
+
+    if input.MeanSBP7d == nil {
+        result.AtTarget = true
+        result.Confidence = "LOW"
+        return result
+    }
+
+
+    result.CurrentValue = *input.MeanSBP7d
+    result.TargetValue = input.SBPTarget
+    result.AtTarget = *input.MeanSBP7d <= input.SBPTarget
+
+
+    if !result.AtTarget {
+        result.DaysUncontrolled = input.WeeksAboveTarget * 7
+        result.ConsecutiveReadings = input.ReadingsInPeriod
+
+
+        if input.BPDataDate != nil {
+            weeksAgo := time.Now().Add(-time.Duration(input.WeeksAboveTarget) * 7 * 24 * time.Hour)
+            result.FirstUncontrolledAt = &weeksAgo
+        }
+    }
+
+
+    // DBP check — flag if DBP also above target
+    if input.MeanDBP7d != nil && *input.MeanDBP7d > input.DBPTarget && !result.AtTarget {
+        // Already flagged via SBP — DBP adds severity context but doesn't change AtTarget
+    }
+
+
+    return result
+}
+
+
+// ComputeRenalTargetStatus evaluates whether renal function is stable or declining.
+func ComputeRenalTargetStatus(input RenalTargetStatusInput) DomainTargetStatusResult {
+    result := DomainTargetStatusResult{
+        Domain:       "RENAL",
+        DataSource:   "LAB_EGFR",
+        CurrentValue: input.CurrentEGFR,
+        TargetValue:  input.PreviousEGFR, // "target" is at least maintaining previous level
+        Confidence:   "MODERATE",
+    }
+
+
+    if input.StageTransition {
+        result.AtTarget = false
+        result.ConsecutiveReadings = 2 // at minimum, two readings showing decline
+        if input.TransitionDate != nil {
+            result.FirstUncontrolledAt = input.TransitionDate
+            result.DaysUncontrolled = int(time.Now().Sub(*input.TransitionDate).Hours() / 24)
+        }
+    } else {
+        result.AtTarget = true // no stage transition — stable
+    }
+
+
+    return result
+}
+```
+
+
+- [ ] **Step 12: Run target status tests and commit**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
+go test ./internal/services/ -run "TestComputeTargetStatus" -v
+```
+
+
+Expected: All 5 tests PASS.
+
+
+- [ ] **Step 13: Commit Phase T3**
+
+
+```bash
+git add kb-26-metabolic-digital-twin/internal/services/target_status.go
+git add kb-26-metabolic-digital-twin/internal/services/target_status_test.go
+git commit -m "feat(kb26): domain target status computation for inertia detection
+
+
+Glycaemic: prefers CGM TIR when available (HIGH confidence), falls back to
+HbA1c (MODERATE). Tracks consecutive above-target readings and first
+exceedance date. Hemodynamic: uses Module 7 mean SBP/DBP with weeks-
+above-target duration. Renal: detects CKD stage transitions as trigger
+for inertia evaluation."
+```
+
+
+---
+
+
+## Phase T4: Core Inertia Detection Engine (KB-23)
+
+
+### Step 14: Write failing test for inertia detector
+
+
+```go
+// kb-23-decision-cards/internal/services/inertia_detector_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "kb-decision-cards/internal/models"
+)
+
+
+func TestDetectGlycaemicInertia_HbA1c_Detected(t *testing.T) {
+    now := time.Now()
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    targetStatus := models.DomainTargetStatus{
+        Domain:              models.DomainGlycaemic,
+        AtTarget:            false,
+        CurrentValue:        8.2,
+        TargetValue:         7.0,
+        FirstUncontrolledAt: timePtr(now.Add(-180 * 24 * time.Hour)), // 6 months
+        DaysUncontrolled:    180,
+        ConsecutiveReadings: 3,
+        DataSource:          "HBA1C",
+    }
+
+
+    timeline := &models.InterventionTimeline{
+        ByDomain: map[models.InertiaDomain]models.LatestAction{
+            models.DomainGlycaemic: {
+                DrugClass:  "METFORMIN",
+                DoseMg:     1000,
+                ActionDate: now.Add(-250 * 24 * time.Hour), // last change 250 days ago
+                DaysSince:  250,
+            },
+        },
+    }
+
+
+    verdict := detector.EvaluateDomain(targetStatus, timeline)
+    assert.True(t, verdict.Detected)
+    assert.Equal(t, models.PatternHbA1cInertia, verdict.Pattern)
+    assert.Equal(t, 180, verdict.InertiaDurationDays)
+    assert.Equal(t, "MODERATE", verdict.Severity) // 180 days = ~26 weeks
+    assert.Equal(t, 250, verdict.DaysSinceIntervention)
+    assert.Contains(t, verdict.NextStepInPathway, "SGLT2i")
+}
+
+
+func TestDetectGlycaemicInertia_RecentChange_NotDetected(t *testing.T) {
+    now := time.Now()
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    targetStatus := models.DomainTargetStatus{
+        Domain:              models.DomainGlycaemic,
+        AtTarget:            false,
+        CurrentValue:        8.0,
+        TargetValue:         7.0,
+        FirstUncontrolledAt: timePtr(now.Add(-90 * 24 * time.Hour)),
+        DaysUncontrolled:    90,
+        ConsecutiveReadings: 2,
+        DataSource:          "HBA1C",
+    }
+
+
+    timeline := &models.InterventionTimeline{
+        ByDomain: map[models.InertiaDomain]models.LatestAction{
+            models.DomainGlycaemic: {
+                DrugClass:  "SGLT2i",
+                ActionDate: now.Add(-21 * 24 * time.Hour), // changed 3 weeks ago
+                DaysSince:  21,
+            },
+        },
+    }
+
+
+    verdict := detector.EvaluateDomain(targetStatus, timeline)
+    assert.False(t, verdict.Detected) // within titration grace period (6 weeks)
+}
+
+
+func TestDetectBPInertia(t *testing.T) {
+    now := time.Now()
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    targetStatus := models.DomainTargetStatus{
+        Domain:              models.DomainHemodynamic,
+        AtTarget:            false,
+        CurrentValue:        155.0,
+        TargetValue:         130.0,
+        FirstUncontrolledAt: timePtr(now.Add(-56 * 24 * time.Hour)), // 8 weeks
+        DaysUncontrolled:    56,
+        ConsecutiveReadings: 16,
+        DataSource:          "HOME_BP",
+    }
+
+
+    timeline := &models.InterventionTimeline{
+        ByDomain: map[models.InertiaDomain]models.LatestAction{
+            models.DomainHemodynamic: {
+                DrugClass:  "AMLODIPINE",
+                DoseMg:     5.0,
+                ActionDate: now.Add(-180 * 24 * time.Hour),
+                DaysSince:  180,
+            },
+        },
+    }
+
+
+    verdict := detector.EvaluateDomain(targetStatus, timeline)
+    assert.True(t, verdict.Detected)
+    assert.Equal(t, models.PatternBPInertia, verdict.Pattern)
+    assert.Equal(t, "MILD", verdict.Severity) // 56 days = 8 weeks
+}
+
+
+func TestDetectCGMInertia(t *testing.T) {
+    now := time.Now()
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    targetStatus := models.DomainTargetStatus{
+        Domain:              models.DomainGlycaemic,
+        AtTarget:            false,
+        CurrentValue:        35.0,  // TIR 35%
+        TargetValue:         70.0,
+        FirstUncontrolledAt: timePtr(now.Add(-21 * 24 * time.Hour)),
+        DaysUncontrolled:    21,
+        ConsecutiveReadings: 1,
+        DataSource:          "CGM_TIR",
+    }
+
+
+    timeline := &models.InterventionTimeline{
+        ByDomain: map[models.InertiaDomain]models.LatestAction{
+            models.DomainGlycaemic: {
+                DrugClass:  "METFORMIN",
+                ActionDate: now.Add(-90 * 24 * time.Hour),
+                DaysSince:  90,
+            },
+        },
+    }
+
+
+    verdict := detector.EvaluateDomain(targetStatus, timeline)
+    assert.True(t, verdict.Detected)
+    assert.Equal(t, models.PatternCGMInertia, verdict.Pattern)
+    // CGM inertia detects faster than HbA1c — 14 days threshold
+}
+
+
+func TestDetectDualDomainInertia(t *testing.T) {
+    now := time.Now()
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    glycaemic := models.DomainTargetStatus{
+        Domain: models.DomainGlycaemic, AtTarget: false,
+        CurrentValue: 8.5, TargetValue: 7.0,
+        DaysUncontrolled: 120, DataSource: "HBA1C",
+    }
+    hemodynamic := models.DomainTargetStatus{
+        Domain: models.DomainHemodynamic, AtTarget: false,
+        CurrentValue: 158.0, TargetValue: 130.0,
+        DaysUncontrolled: 90, DataSource: "HOME_BP",
+    }
+
+
+    timeline := &models.InterventionTimeline{
+        ByDomain: map[models.InertiaDomain]models.LatestAction{
+            models.DomainGlycaemic:   {DaysSince: 200},
+            models.DomainHemodynamic: {DaysSince: 150},
+        },
+    }
+
+
+    report := detector.EvaluatePatient("PAT-DUAL-001", []models.DomainTargetStatus{glycaemic, hemodynamic}, timeline)
+    assert.True(t, report.HasDualDomainInertia)
+    assert.Equal(t, "IMMEDIATE", report.OverallUrgency) // dual-domain = immediate
+}
+
+
+func TestDetectIntensificationCeiling(t *testing.T) {
+    now := time.Now()
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    targetStatus := models.DomainTargetStatus{
+        Domain:           models.DomainGlycaemic,
+        AtTarget:         false,
+        CurrentValue:     8.0,
+        TargetValue:      7.0,
+        DaysUncontrolled: 120,
+        DataSource:       "HBA1C",
+    }
+
+
+    timeline := &models.InterventionTimeline{
+        ByDomain: map[models.InertiaDomain]models.LatestAction{
+            models.DomainGlycaemic: {
+                DrugClass:        "METFORMIN",
+                DoseMg:           2000, // max dose
+                ActionDate:       now.Add(-120 * 24 * time.Hour),
+                DaysSince:        120,
+                InterventionType: "DOSE_CHANGE",
+            },
+        },
+    }
+
+
+    // Tell detector that metformin is at max dose
+    verdict := detector.EvaluateDomainWithMaxDoseInfo(targetStatus, timeline, map[string]float64{"METFORMIN": 2000})
+    assert.True(t, verdict.Detected)
+    assert.Equal(t, models.PatternIntensificationCeiling, verdict.Pattern)
+    assert.Contains(t, verdict.NextStepInPathway, "Add") // should recommend adding another class
+}
+
+
+func TestInertia_AtTarget_NothingDetected(t *testing.T) {
+    detector := NewInertiaDetector(testInertiaConfig())
+
+
+    targetStatus := models.DomainTargetStatus{
+        Domain:   models.DomainGlycaemic,
+        AtTarget: true,
+    }
+
+
+    verdict := detector.EvaluateDomain(targetStatus, &models.InterventionTimeline{})
+    assert.False(t, verdict.Detected)
+}
+
+
+func testInertiaConfig() *InertiaConfig {
+    return &InertiaConfig{
+        TitrationGracePeriodWeeks:   6,
+        HbA1cMinDurationWeeks:       12,
+        CGMMinDays:                  14,
+        BPMinWeeks:                  4,
+        MildWeeks:                   12,
+        ModerateWeeks:               26,
+        SevereWeeks:                 52,
+        CriticalWeeks:               78,
+    }
+}
+```
+
+
+- [ ] **Step 15: Implement inertia detector**
+
+
+```go
+// kb-23-decision-cards/internal/services/inertia_detector.go
+package services
+
+
+import (
+    "fmt"
+    "time"
+
+
+    "kb-decision-cards/internal/models"
+)
+
+
+type InertiaConfig struct {
+    TitrationGracePeriodWeeks int
+    HbA1cMinDurationWeeks     int
+    CGMMinDays                int
+    BPMinWeeks                int
+    MildWeeks                 int
+    ModerateWeeks             int
+    SevereWeeks               int
+    CriticalWeeks             int
+}
+
+
+type InertiaDetector struct {
+    config *InertiaConfig
+}
+
+
+func NewInertiaDetector(config *InertiaConfig) *InertiaDetector {
+    return &InertiaDetector{config: config}
+}
+
+
+// EvaluateDomain evaluates therapeutic inertia for a single domain.
+func (d *InertiaDetector) EvaluateDomain(
+    target models.DomainTargetStatus,
+    timeline *models.InterventionTimeline,
+) models.InertiaVerdict {
+    return d.EvaluateDomainWithMaxDoseInfo(target, timeline, nil)
+}
+
+
+func (d *InertiaDetector) EvaluateDomainWithMaxDoseInfo(
+    target models.DomainTargetStatus,
+    timeline *models.InterventionTimeline,
+    maxDoses map[string]float64,
+) models.InertiaVerdict {
+
+
+    verdict := models.InertiaVerdict{
+        Domain:       target.Domain,
+        TargetValue:  target.TargetValue,
+        CurrentValue: target.CurrentValue,
+        DataSource:   target.DataSource,
+    }
+
+
+    // If at target, no inertia possible
+    if target.AtTarget {
+        verdict.Detected = false
+        return verdict
+    }
+
+
+    // Get latest intervention for this domain
+    domainAction, hasAction := timeline.ByDomain[target.Domain]
+
+
+    // Check titration grace period
+    if hasAction && domainAction.DaysSince < d.config.TitrationGracePeriodWeeks*7 {
+        verdict.Detected = false
+        return verdict
+    }
+
+
+    // Determine minimum inertia duration threshold based on data source
+    var minDurationDays int
+    switch target.DataSource {
+    case "CGM_TIR":
+        minDurationDays = d.config.CGMMinDays
+        verdict.Pattern = models.PatternCGMInertia
+    case "HOME_BP":
+        minDurationDays = d.config.BPMinWeeks * 7
+        verdict.Pattern = models.PatternBPInertia
+    case "HBA1C":
+        minDurationDays = d.config.HbA1cMinDurationWeeks * 7
+        verdict.Pattern = models.PatternHbA1cInertia
+    case "LAB_EGFR":
+        minDurationDays = 28 // 4 weeks for renal stage transition
+        verdict.Pattern = models.PatternRenalProgressionInertia
+    default:
+        minDurationDays = d.config.HbA1cMinDurationWeeks * 7
+        verdict.Pattern = models.PatternHbA1cInertia
+    }
+
+
+    // Check if uncontrolled duration exceeds minimum
+    if target.DaysUncontrolled < minDurationDays {
+        verdict.Detected = false
+        return verdict
+    }
+
+
+    // Check for intensification ceiling
+    if hasAction && maxDoses != nil {
+        maxDose, hasMax := maxDoses[domainAction.DrugClass]
+        if hasMax && domainAction.DoseMg >= maxDose {
+            verdict.Pattern = models.PatternIntensificationCeiling
+            verdict.AtMaxDose = true
+        }
+    }
+
+
+    // Inertia detected
+    verdict.Detected = true
+    verdict.InertiaDurationDays = target.DaysUncontrolled
+    verdict.ConsecutiveReadings = target.ConsecutiveReadings
+    verdict.FirstExceedanceDate = safeDeref(target.FirstUncontrolledAt)
+
+
+    if hasAction {
+        verdict.LastInterventionDate = &domainAction.ActionDate
+        verdict.LastInterventionType = domainAction.InterventionType
+        verdict.DaysSinceIntervention = domainAction.DaysSince
+        verdict.CurrentMedications = []string{domainAction.DrugClass}
+    }
+
+
+    // Classify severity
+    weeks := target.DaysUncontrolled / 7
+    switch {
+    case weeks >= d.config.CriticalWeeks:
+        verdict.Severity = "CRITICAL"
+    case weeks >= d.config.SevereWeeks:
+        verdict.Severity = "SEVERE"
+    case weeks >= d.config.ModerateWeeks:
+        verdict.Severity = "MODERATE"
+    default:
+        verdict.Severity = "MILD"
+    }
+
+
+    // Determine next step in pathway
+    verdict.NextStepInPathway = d.recommendNextStep(target.Domain, domainAction.DrugClass, verdict.AtMaxDose)
+
+
+    return verdict
+}
+
+
+// EvaluatePatient runs inertia detection across all domains and detects dual-domain inertia.
+func (d *InertiaDetector) EvaluatePatient(
+    patientID string,
+    targetStatuses []models.DomainTargetStatus,
+    timeline *models.InterventionTimeline,
+) models.PatientInertiaReport {
+
+
+    report := models.PatientInertiaReport{
+        PatientID:   patientID,
+        EvaluatedAt: time.Now(),
+    }
+
+
+    var inertiaCount int
+    var glycaemicInertia, hemodynamicInertia bool
+    var mostSevereScore int
+
+
+    for _, ts := range targetStatuses {
+        verdict := d.EvaluateDomain(ts, timeline)
+        report.Verdicts = append(report.Verdicts, verdict)
+
+
+        if verdict.Detected {
+            inertiaCount++
+            report.HasAnyInertia = true
+
+
+            severityScore := severityToScore(verdict.Severity)
+            if severityScore > mostSevereScore {
+                mostSevereScore = severityScore
+                v := verdict
+                report.MostSevere = &v
+            }
+
+
+            if verdict.Domain == models.DomainGlycaemic {
+                glycaemicInertia = true
+            }
+            if verdict.Domain == models.DomainHemodynamic {
+                hemodynamicInertia = true
+            }
+        }
+    }
+
+
+    // Dual-domain inertia detection
+    if glycaemicInertia && hemodynamicInertia {
+        report.HasDualDomainInertia = true
+
+
+        // Create dual-domain verdict
+        dualVerdict := models.InertiaVerdict{
+            Domain:   "DUAL",
+            Pattern:  models.PatternDualDomainInertia,
+            Detected: true,
+            Severity: "CRITICAL",
+        }
+        report.Verdicts = append(report.Verdicts, dualVerdict)
+    }
+
+
+    // Overall urgency
+    if report.HasDualDomainInertia {
+        report.OverallUrgency = "IMMEDIATE"
+    } else if mostSevereScore >= 3 {
+        report.OverallUrgency = "IMMEDIATE"
+    } else if mostSevereScore >= 2 {
+        report.OverallUrgency = "URGENT"
+    } else if report.HasAnyInertia {
+        report.OverallUrgency = "ROUTINE"
+    } else {
+        report.OverallUrgency = "NONE"
+    }
+
+
+    // Composite inertia score (0-100)
+    report.InertiaScore = d.computeInertiaScore(report)
+
+
+    return report
+}
+
+
+func (d *InertiaDetector) recommendNextStep(domain models.InertiaDomain, currentDrug string, atMax bool) string {
+    switch domain {
+    case models.DomainGlycaemic:
+        if atMax && currentDrug == "METFORMIN" {
+            return "Add SGLT2i (preferred if CKD/CVD) or DPP4i/SU — ADA SOC 2025 Step 2"
+        }
+        if currentDrug == "METFORMIN" {
+            return "Titrate metformin to max 2000mg/day, or add SGLT2i/GLP-1 RA"
+        }
+        if currentDrug == "SULFONYLUREA" {
+            return "Add SGLT2i or DPP4i; consider insulin if triple oral fails"
+        }
+        return "Review current regimen and consider intensification per guidelines"
+
+
+    case models.DomainHemodynamic:
+        if currentDrug == "AMLODIPINE" || currentDrug == "CCB" {
+            return "Add ACEi/ARB (preferred first-line for DM + HTN — renoprotective)"
+        }
+        if currentDrug == "ACEi" || currentDrug == "ARB" {
+            return "Add CCB (amlodipine) — ISH 2020 Step 2"
+        }
+        return "Review antihypertensive regimen — ISH 2020 stepped pathway"
+
+
+    case models.DomainRenal:
+        return "Add renoprotective agent: SGLT2i (if eGFR ≥20) or finerenone (if eligible)"
+    }
+
+
+    return "Consult guidelines for next intensification step"
+}
+
+
+func severityToScore(severity string) int {
+    switch severity {
+    case "CRITICAL":
+        return 4
+    case "SEVERE":
+        return 3
+    case "MODERATE":
+        return 2
+    case "MILD":
+        return 1
+    default:
+        return 0
+    }
+}
+
+
+func (d *InertiaDetector) computeInertiaScore(report models.PatientInertiaReport) float64 {
+    if !report.HasAnyInertia {
+        return 0
+    }
+
+
+    score := 0.0
+    for _, v := range report.Verdicts {
+        if !v.Detected {
+            continue
+        }
+        domainWeight := 1.0
+        if v.Domain == models.DomainGlycaemic || v.Domain == models.DomainHemodynamic {
+            domainWeight = 1.5 // primary domains weighted higher
+        }
+        score += float64(severityToScore(v.Severity)) * 20 * domainWeight
+    }
+
+
+    if report.HasDualDomainInertia {
+        score *= 1.5 // concordant inertia amplification
+    }
+
+
+    if score > 100 {
+        score = 100
+    }
+    return score
+}
+
+
+func safeDeref(t *time.Time) time.Time {
+    if t == nil {
+        return time.Time{}
+    }
+    return *t
+}
+```
+
+
+- [ ] **Step 16: Run inertia detector tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
+go test ./internal/services/ -run "TestDetect" -v
+```
+
+
+Expected: All 7 tests PASS.
+
+
+- [ ] **Step 17: Commit Phase T4 core detector**
+
+
+```bash
+git add kb-23-decision-cards/internal/models/therapeutic_inertia.go
+git add kb-23-decision-cards/internal/services/inertia_detector.go
+git add kb-23-decision-cards/internal/services/inertia_detector_test.go
+git commit -m "feat(kb23): therapeutic inertia detection engine — 7 patterns
+
+
+Detects HBA1C_INERTIA (≥12wk above target + no med change), CGM_INERTIA
+(≥14d TIR below target), BP_INERTIA (≥4wk SBP above target),
+DUAL_DOMAIN_INERTIA (concordant glycaemic + hemodynamic), POST_EVENT,
+RENAL_PROGRESSION, INTENSIFICATION_CEILING (at max dose, no class add).
+Titration grace period (6 weeks) prevents false positives after recent change.
+4-tier severity: MILD/MODERATE/SEVERE/CRITICAL by Khunti duration brackets.
+Dual-domain detection with concordant inertia amplification."
+```
+
+
+---
+
+
+## Phase T5: Evidence Builder + Card Generator
+
+
+### Step 18: Write failing test for evidence builder
+
+
+```go
+// kb-23-decision-cards/internal/services/inertia_evidence_builder_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-decision-cards/internal/models"
+)
+
+
+func TestBuildEvidenceChain_HbA1cInertia(t *testing.T) {
+    now := time.Now()
+    verdict := models.InertiaVerdict{
+        Domain:              models.DomainGlycaemic,
+        Pattern:             models.PatternHbA1cInertia,
+        Detected:            true,
+        InertiaDurationDays: 180,
+        TargetValue:         7.0,
+        CurrentValue:        8.2,
+        ConsecutiveReadings: 3,
+        DaysSinceIntervention: 250,
+        CurrentMedications:  []string{"METFORMIN"},
+        Severity:            "MODERATE",
+        NextStepInPathway:   "Add SGLT2i",
+    }
+
+
+    chain := BuildEvidenceChain(verdict)
+    assert.Contains(t, chain.Summary, "HbA1c")
+    assert.Contains(t, chain.Summary, "180 days")
+    assert.Contains(t, chain.Summary, "250 days since last")
+    assert.Contains(t, chain.GuidelineReference, "ADA")
+    assert.GreaterOrEqual(t, len(chain.TimelineEvents), 2) // at least: first exceedance + last intervention
+}
+
+
+func TestBuildEvidenceChain_DualDomain(t *testing.T) {
+    verdict := models.InertiaVerdict{
+        Domain:   "DUAL",
+        Pattern:  models.PatternDualDomainInertia,
+        Detected: true,
+        Severity: "CRITICAL",
+    }
+
+
+    chain := BuildEvidenceChain(verdict)
+    assert.Contains(t, chain.Summary, "concordant")
+    assert.Contains(t, chain.RiskStatement, "multiplicative")
+}
+```
+
+
+- [ ] **Step 19: Implement evidence builder**
+
+
+```go
+// kb-23-decision-cards/internal/services/inertia_evidence_builder.go
+package services
+
+
+import (
+    "fmt"
+
+
+    "kb-decision-cards/internal/models"
+)
+
+
+// EvidenceChain is the structured rationale for an inertia card.
+type EvidenceChain struct {
+    Summary            string           `json:"summary"`
+    TimelineEvents     []TimelineEvent  `json:"timeline_events"`
+    RiskStatement      string           `json:"risk_statement"`
+    GuidelineReference string           `json:"guideline_reference"`
+    RecommendedAction  string           `json:"recommended_action"`
+    SimilarPatientNote string           `json:"similar_patient_note,omitempty"`
+}
+
+
+type TimelineEvent struct {
+    Label     string `json:"label"`
+    DaysAgo   int    `json:"days_ago"`
+    Detail    string `json:"detail"`
+}
+
+
+func BuildEvidenceChain(verdict models.InertiaVerdict) EvidenceChain {
+    chain := EvidenceChain{}
+
+
+    switch verdict.Pattern {
+    case models.PatternHbA1cInertia:
+        chain.Summary = fmt.Sprintf(
+            "HbA1c has been above target (%.1f%% vs target ≤%.1f%%) for %d days "+
+                "(%d consecutive readings above target). %d days since last medication change.",
+            verdict.CurrentValue, verdict.TargetValue,
+            verdict.InertiaDurationDays, verdict.ConsecutiveReadings,
+            verdict.DaysSinceIntervention)
+        chain.GuidelineReference = "ADA Standards of Care 2025, Section 9: If HbA1c target not met after 3 months on current therapy, intensify treatment."
+        chain.RiskStatement = fmt.Sprintf(
+            "Each year at HbA1c >7%%: +37%% microvascular risk, +14%% MI risk (UKPDS). "+
+                "Current delay of %d days accumulates preventable risk.", verdict.InertiaDurationDays)
+
+
+    case models.PatternCGMInertia:
+        chain.Summary = fmt.Sprintf(
+            "CGM Time-in-Range %.0f%% (target ≥%.0f%%) sustained for %d days with no medication adjustment. "+
+                "CGM provides earlier detection of glycaemic deterioration than quarterly HbA1c.",
+            verdict.CurrentValue, verdict.TargetValue, verdict.InertiaDurationDays)
+        chain.GuidelineReference = "International Consensus on CGM (Battelino 2023): TIR <50% for >14 days warrants therapy review."
+        chain.RiskStatement = "Sustained low TIR indicates persistent hyperglycaemia with accumulating microvascular risk."
+
+
+    case models.PatternBPInertia:
+        chain.Summary = fmt.Sprintf(
+            "Mean home SBP %.0f mmHg (target ≤%.0f) for %d days "+
+                "with no antihypertensive adjustment. %d days since last medication change.",
+            verdict.CurrentValue, verdict.TargetValue,
+            verdict.InertiaDurationDays, verdict.DaysSinceIntervention)
+        chain.GuidelineReference = "ISH 2020 / ESC 2024: Reassess antihypertensive therapy at 4-week intervals until target achieved."
+        chain.RiskStatement = fmt.Sprintf(
+            "Each 10 mmHg above target: +30%% stroke risk, +20%% CHD risk (PSC). "+
+                "Current excess of %.0f mmHg over %d days is preventable exposure.",
+            verdict.CurrentValue-verdict.TargetValue, verdict.InertiaDurationDays)
+
+
+    case models.PatternDualDomainInertia:
+        chain.Summary = "Concordant therapeutic inertia detected: both glycaemic and hemodynamic " +
+            "domains are above target with no medication change in either domain."
+        chain.RiskStatement = "Concordant uncontrolled cardiometabolic risk is multiplicative — " +
+            "combined risk exceeds the sum of individual domain risks (AHA CKM Framework, Ndumele 2023)."
+        chain.GuidelineReference = "AHA CKM Syndrome Advisory 2023: Concordant multi-domain deterioration requires urgent multi-domain intensification."
+
+
+    case models.PatternIntensificationCeiling:
+        chain.Summary = fmt.Sprintf(
+            "Patient at maximum dose of %s but target not met (%.1f vs ≤%.1f). "+
+                "No additional medication class added in %d days.",
+            joinMeds(verdict.CurrentMedications), verdict.CurrentValue, verdict.TargetValue,
+            verdict.DaysSinceIntervention)
+        chain.GuidelineReference = "ADA SOC 2025 Section 9: If target not achieved on maximum dose monotherapy within 3 months, add complementary agent."
+
+
+    case models.PatternRenalProgressionInertia:
+        chain.Summary = "CKD stage progression detected without corresponding medication review. " +
+            "Renoprotective therapy should be initiated or intensified."
+        chain.GuidelineReference = "KDIGO 2024: CKD stage transitions require immediate medication review including RAS blockade and SGLT2i initiation."
+    }
+
+
+    chain.RecommendedAction = verdict.NextStepInPathway
+
+
+    // Build timeline events
+    if verdict.DaysSinceIntervention > 0 {
+        chain.TimelineEvents = append(chain.TimelineEvents, TimelineEvent{
+            Label:   "Last medication change",
+            DaysAgo: verdict.DaysSinceIntervention,
+            Detail:  fmt.Sprintf("%s: %s", verdict.LastInterventionType, joinMeds(verdict.CurrentMedications)),
+        })
+    }
+    if verdict.InertiaDurationDays > 0 {
+        chain.TimelineEvents = append(chain.TimelineEvents, TimelineEvent{
+            Label:   "First exceeded target",
+            DaysAgo: verdict.InertiaDurationDays,
+            Detail:  fmt.Sprintf("%.1f (target ≤%.1f)", verdict.CurrentValue, verdict.TargetValue),
+        })
+    }
+
+
+    return chain
+}
+
+
+func joinMeds(meds []string) string {
+    if len(meds) == 0 {
+        return "unknown"
+    }
+    result := meds[0]
+    for _, m := range meds[1:] {
+        result += " + " + m
+    }
+    return result
+}
+```
+
+
+- [ ] **Step 20: Write failing test for inertia card generator**
+
+
+```go
+// kb-23-decision-cards/internal/services/inertia_card_generator_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-decision-cards/internal/models"
+)
+
+
+func TestGenerateInertiaCards_SingleDomain(t *testing.T) {
+    report := models.PatientInertiaReport{
+        PatientID:    "IC-001",
+        HasAnyInertia: true,
+        Verdicts: []models.InertiaVerdict{
+            {
+                Domain: models.DomainGlycaemic, Pattern: models.PatternHbA1cInertia,
+                Detected: true, InertiaDurationDays: 180, Severity: "MODERATE",
+                CurrentValue: 8.2, TargetValue: 7.0, DaysSinceIntervention: 250,
+                CurrentMedications: []string{"METFORMIN"}, NextStepInPathway: "Add SGLT2i",
+            },
+        },
+        OverallUrgency: "URGENT",
+    }
+
+
+    cards := GenerateInertiaCards(report)
+    assert.Len(t, cards, 1)
+    assert.Equal(t, "THERAPEUTIC_INERTIA", cards[0].CardType)
+    assert.Equal(t, "URGENT", cards[0].Urgency)
+    assert.Contains(t, cards[0].Rationale, "180 days")
+    assert.Contains(t, cards[0].Rationale, "METFORMIN")
+}
+
+
+func TestGenerateInertiaCards_DualDomain(t *testing.T) {
+    report := models.PatientInertiaReport{
+        PatientID:            "IC-002",
+        HasAnyInertia:        true,
+        HasDualDomainInertia: true,
+        Verdicts: []models.InertiaVerdict{
+            {Domain: models.DomainGlycaemic, Detected: true, Severity: "MODERATE"},
+            {Domain: models.DomainHemodynamic, Detected: true, Severity: "MILD"},
+            {Domain: "DUAL", Pattern: models.PatternDualDomainInertia, Detected: true, Severity: "CRITICAL"},
+        },
+        OverallUrgency: "IMMEDIATE",
+    }
+
+
+    cards := GenerateInertiaCards(report)
+    // Should produce a dual-domain card (highest priority) + individual domain cards
+    hasDualCard := false
+    for _, c := range cards {
+        if c.CardType == "DUAL_DOMAIN_INERTIA" {
+            hasDualCard = true
+            assert.Equal(t, "IMMEDIATE", c.Urgency)
+        }
+    }
+    assert.True(t, hasDualCard)
+}
+
+
+func TestGenerateInertiaCards_NoInertia_NoCards(t *testing.T) {
+    report := models.PatientInertiaReport{
+        PatientID:     "IC-003",
+        HasAnyInertia: false,
+    }
+
+
+    cards := GenerateInertiaCards(report)
+    assert.Empty(t, cards)
+}
+```
+
+
+- [ ] **Step 21: Implement inertia card generator**
+
+
+```go
+// kb-23-decision-cards/internal/services/inertia_card_generator.go
+package services
+
+
+import (
+    "fmt"
+
+
+    "kb-decision-cards/internal/models"
+)
+
+
+type InertiaCard struct {
+    CardType      string        `json:"card_type"`
+    Urgency       string        `json:"urgency"`
+    Title         string        `json:"title"`
+    Rationale     string        `json:"rationale"`
+    EvidenceChain EvidenceChain `json:"evidence_chain"`
+    Actions       []string      `json:"actions"`
+    Domain        string        `json:"domain"`
+    InertiaScore  float64       `json:"inertia_score"`
+}
+
+
+func GenerateInertiaCards(report models.PatientInertiaReport) []InertiaCard {
+    if !report.HasAnyInertia {
+        return nil
+    }
+
+
+    var cards []InertiaCard
+
+
+    for _, verdict := range report.Verdicts {
+        if !verdict.Detected {
+            continue
+        }
+
+
+        evidence := BuildEvidenceChain(verdict)
+
+
+        if verdict.Pattern == models.PatternDualDomainInertia {
+            cards = append(cards, InertiaCard{
+                CardType: "DUAL_DOMAIN_INERTIA",
+                Urgency:  "IMMEDIATE",
+                Title:    "Concordant Therapeutic Inertia — Glycaemic + Hemodynamic",
+                Rationale: evidence.Summary,
+                EvidenceChain: evidence,
+                Actions: []string{
+                    "Comprehensive medication review across both domains",
+                    "Consider dual-benefit agents (SGLT2i for glucose + BP + renal protection)",
+                    "Schedule urgent follow-up within 2 weeks",
+                },
+                Domain:       "DUAL",
+                InertiaScore: report.InertiaScore,
+            })
+            continue
+        }
+
+
+        urgency := verdictToUrgency(verdict)
+
+
+        card := InertiaCard{
+            CardType:      "THERAPEUTIC_INERTIA",
+            Urgency:       urgency,
+            Title:         buildInertiaTitle(verdict),
+            Rationale:     evidence.Summary,
+            EvidenceChain: evidence,
+            Actions:       buildInertiaActions(verdict),
+            Domain:        string(verdict.Domain),
+            InertiaScore:  report.InertiaScore,
+        }
+
+
+        cards = append(cards, card)
+    }
+
+
+    return cards
+}
+
+
+func verdictToUrgency(v models.InertiaVerdict) string {
+    switch v.Severity {
+    case "CRITICAL":
+        return "IMMEDIATE"
+    case "SEVERE":
+        return "URGENT"
+    case "MODERATE":
+        return "URGENT"
+    default:
+        return "ROUTINE"
+    }
+}
+
+
+func buildInertiaTitle(v models.InertiaVerdict) string {
+    domainLabel := map[models.InertiaDomain]string{
+        models.DomainGlycaemic:   "Glycaemic",
+        models.DomainHemodynamic: "Blood Pressure",
+        models.DomainRenal:       "Renal",
+    }
+    label := domainLabel[v.Domain]
+
+
+    switch v.Pattern {
+    case models.PatternIntensificationCeiling:
+        return fmt.Sprintf("%s Target Not Met — At Maximum Dose, Add New Class", label)
+    case models.PatternCGMInertia:
+        return fmt.Sprintf("CGM Shows Sustained Low Time-in-Range — %s Intensification Needed", label)
+    default:
+        return fmt.Sprintf("%s Therapeutic Inertia — %d Days Above Target Without Change", label, v.InertiaDurationDays)
+    }
+}
+
+
+func buildInertiaActions(v models.InertiaVerdict) []string {
+    actions := []string{v.NextStepInPathway}
+
+
+    if v.Severity == "SEVERE" || v.Severity == "CRITICAL" {
+        actions = append(actions, "Consider specialist referral if target persistently unmet")
+    }
+
+
+    if v.AtMaxDose {
+        actions = append(actions, "Current medication at maximum dose — add complementary class rather than further dose increase")
+    }
+
+
+    if v.CostBarrierLikely {
+        actions = append(actions, "Cost barrier likely — consider affordable alternatives from formulary")
+    }
+
+
+    if v.PBSAuthorityRequired {
+        actions = append(actions, "PBS authority required for next-step medication — authority can be obtained online")
+    }
+
+
+    return actions
+}
+```
+
+
+- [ ] **Step 22: Run all Phase T5 tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
+go test ./internal/services/ -run "TestBuildEvidence|TestGenerateInertia" -v
+```
+
+
+Expected: All 5 tests PASS.
+
+
+- [ ] **Step 23: Commit Phase T5**
+
+
+```bash
+git add kb-23-decision-cards/internal/services/inertia_evidence_builder.go
+git add kb-23-decision-cards/internal/services/inertia_evidence_builder_test.go
+git add kb-23-decision-cards/internal/services/inertia_card_generator.go
+git add kb-23-decision-cards/internal/services/inertia_card_generator_test.go
+git commit -m "feat(kb23): inertia evidence builder + card generator
+
+
+Structured evidence chains with temporal timeline, risk quantification
+(UKPDS/PSC per-unit-per-year risk), named guideline references, and
+recommended next steps. Card generator produces THERAPEUTIC_INERTIA and
+DUAL_DOMAIN_INERTIA cards with severity-mapped urgency. Cost barrier
+and PBS authority annotations for India/Australia market context."
+```
+
+
+---
+
+
+## Phase T6: Integration with Four-Pillar + Full Regression
+
+
+### Step 24: Modify four-pillar evaluator for inertia awareness
+
+
+In `four_pillar_evaluator.go`, add to `FourPillarInput`:
+
+
+```go
+    InertiaReport *models.PatientInertiaReport `json:"inertia_report,omitempty"`
+```
+
+
+Modify `evaluateMedicationPillar` to check inertia before existing logic:
+
+
+```go
+func evaluateMedicationPillar(input FourPillarInput) models.PillarEvaluation {
+    // RENAL SAFETY GATE — highest precedence (from renal gating integration)
+    // ... existing renal check ...
+
+
+    // THERAPEUTIC INERTIA — second precedence
+    if input.InertiaReport != nil && input.InertiaReport.HasAnyInertia {
+        if input.InertiaReport.HasDualDomainInertia {
+            return models.PillarEvaluation{
+                Status: models.PillarUrgentGap,
+                Recommendations: []string{
+                    "THERAPEUTIC INERTIA: Concordant glycaemic + hemodynamic inertia detected",
+                    fmt.Sprintf("Inertia score: %.0f/100 — %s", input.InertiaReport.InertiaScore, input.InertiaReport.OverallUrgency),
+                    input.InertiaReport.MostSevere.NextStepInPathway,
+                },
+                Rationale: "Multiple clinical domains above target for extended period without medication adjustment",
+            }
+        }
+
+
+        if input.InertiaReport.MostSevere != nil &&
+            (input.InertiaReport.MostSevere.Severity == "SEVERE" || input.InertiaReport.MostSevere.Severity == "CRITICAL") {
+            return models.PillarEvaluation{
+                Status: models.PillarUrgentGap,
+                Recommendations: []string{
+                    fmt.Sprintf("THERAPEUTIC INERTIA: %s domain above target for %d days",
+                        input.InertiaReport.MostSevere.Domain, input.InertiaReport.MostSevere.InertiaDurationDays),
+                    input.InertiaReport.MostSevere.NextStepInPathway,
+                },
+                Rationale: fmt.Sprintf("Severity: %s — medication intensification overdue", input.InertiaReport.MostSevere.Severity),
+            }
+        }
+    }
+
+
+    // ... existing dual-domain and single-domain logic follows unchanged ...
+}
+```
+
+
+- [ ] **Step 25: Modify urgency calculator**
+
+
+In `urgency_calculator.go`, add inertia check after renal safety:
+
+
+```go
+    // THERAPEUTIC INERTIA: dual-domain or critical severity
+    if pillars.Medication.Status == models.PillarUrgentGap {
+        for _, rec := range pillars.Medication.Recommendations {
+            if strings.Contains(rec, "THERAPEUTIC INERTIA") && strings.Contains(rec, "Concordant") {
+                return models.UrgencyImmediate
+            }
+        }
+    }
+```
+
+
+- [ ] **Step 26: Run full KB-23 regression**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
+go test ./... -v -count=1
+```
+
+
+- [ ] **Step 27: Run cross-service regression**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./... -v -count=1
+cd ../kb-26-metabolic-digital-twin
+go test ./... -v -count=1
+```
+
+
+Expected: All existing + new tests PASS.
+
+
+- [ ] **Step 28: Final commit**
+
+
+```bash
+git add -A backend/shared-infrastructure/knowledge-base-services/
+git add -A backend/shared-infrastructure/market-configs/
+git commit -m "feat(inertia): complete therapeutic inertia detection system
+
+
+7 inertia patterns: HBA1C_INERTIA (≥12wk), CGM_INERTIA (≥14d — earlier
+detection via continuous data), BP_INERTIA (≥4wk), DUAL_DOMAIN_INERTIA
+(concordant glycaemic+hemodynamic), POST_EVENT, RENAL_PROGRESSION,
+INTENSIFICATION_CEILING. 
+
+
+KB-20: intervention timeline query mapping 20+ drug classes to 4 clinical
+domains. KB-26: domain target status (CGM-preferred glycaemic, Module 7
+hemodynamic, eGFR renal). KB-23: inertia detector with titration grace
+period, severity classification (MILD/MODERATE/SEVERE/CRITICAL per
+Khunti 2018 duration brackets), evidence chain builder with UKPDS/PSC
+risk quantification, inertia card generator.
+
+
+Four-pillar integration: inertia detected → URGENT_GAP in medication
+pillar. Dual-domain inertia → IMMEDIATE urgency.
+
+
+Market configs: India (RSSDI stepped pathway, cost barrier detection,
+Ramadan/festival grace periods, extended monitoring windows). Australia
+(PBS authority friction reduction with item codes, indigenous visit
+frequency adjustment, GPMP review cycle alignment)."
+```
+
+
+---
+
+
+## Plan Summary
+
+
+| Phase | Steps | Key Deliverables |
+|-------|-------|-----------------|
+| T1: Models + Config | 1-5 | Inertia models (7 patterns), thresholds YAML, intensification pathways, India/Australia overrides |
+| T2: Intervention Timeline | 6-9 | KB-20 `GetInterventionTimeline()` — most recent action per domain, drug-class-to-domain mapping |
+| T3: Target Status | 10-13 | KB-26 domain target status (CGM-preferred glycaemic, Module 7 hemodynamic, eGFR renal) |
+| T4: Core Detector | 14-17 | `InertiaDetector` — 7 patterns, titration grace period, severity classification, dual-domain detection |
+| T5: Evidence + Cards | 18-23 | Evidence chain builder (temporal timeline, risk quantification, guideline references), card generator |
+| T6: Integration | 24-28 | Four-pillar + urgency integration, full regression |
+
+
+**Total: 28 steps, 20 files (16 create, 4 modify), 6 phases.**
+
+
+**Clinical evidence base referenced throughout:**
+- Khunti et al. 2018 (Diabetes Care) — 2.9-year median inertia in UK T2DM
+- Shah et al. 2019 (JAMA Internal Medicine) — 14.2-month median in US T2DM
+- Pantalone et al. 2019 (Diabetes Care) — CDS reduced inertia 64%
+- Okonofua et al. 2006 (Hypertension) — 13.1% BP intensification rate
+- UKPDS (Holman 2008) — legacy effect of glycaemic delay
+- SPRINT 2015 — intensive BP control benefit
+- Monnier 2017 — CV 36% stability threshold for CGM-based inertia
+- Battelino 2023 — TIR consensus for CGM-based inertia detection
+- Ndumele 2023 (AHA) — CKM concordant risk framework
+- ADA SOC 2025 Section 9 — 3-month reassessment mandate
+- RSSDI 2023 — India-specific stepped pathway
+- RACGP 2024 — Australian chronic disease management cycle
+- IDF-DAR 2021 — Ramadan-specific guidance
+- Deepa et al. 2022 — Indian inertia data (3.4 years median)

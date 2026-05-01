@@ -40,6 +40,7 @@ from extraction.schemas.kb1_dosing import KB1ExtractionResult
 from extraction.schemas.kb4_safety import KB4ExtractionResult
 from extraction.schemas.kb16_labs import KB16ExtractionResult
 from extraction.schemas.kb20_contextual import KB20ExtractionResult
+from extraction.schemas.kb5_interactions import KB5ExtractionResult
 
 # V4 multi-channel models (for dossier-based extraction)
 try:
@@ -66,6 +67,7 @@ class KBFactExtractor:
         "safety": KB4ExtractionResult,
         "monitoring": KB16ExtractionResult,
         "contextual": KB20ExtractionResult,
+        "interactions": KB5ExtractionResult,
     }
 
     def __init__(
@@ -87,9 +89,9 @@ class KBFactExtractor:
         self,
         markdown_text: str,
         gliner_entities: list[dict],
-        target_kb: Literal["dosing", "safety", "monitoring", "contextual"],
+        target_kb: Literal["dosing", "safety", "monitoring", "contextual", "interactions"],
         guideline_context: dict,
-    ) -> Union[KB1ExtractionResult, KB4ExtractionResult, KB16ExtractionResult, KB20ExtractionResult]:
+    ) -> Union[KB1ExtractionResult, KB4ExtractionResult, KB16ExtractionResult, KB20ExtractionResult, KB5ExtractionResult]:
         """
         Extract facts for a specific KB from guideline text.
 
@@ -158,9 +160,9 @@ class KBFactExtractor:
     def extract_facts_from_dossier(
         self,
         dossier: "DrugDossier",
-        target_kb: Literal["dosing", "safety", "monitoring", "contextual"],
+        target_kb: Literal["dosing", "safety", "monitoring", "contextual", "interactions"],
         guideline_context: dict,
-    ) -> Union[KB1ExtractionResult, KB4ExtractionResult, KB16ExtractionResult, KB20ExtractionResult]:
+    ) -> Union[KB1ExtractionResult, KB4ExtractionResult, KB16ExtractionResult, KB20ExtractionResult, KB5ExtractionResult]:
         """Extract facts for a specific KB from a reviewer-verified drug dossier.
 
         V4 Pipeline 2 entry point. Replaces extract_facts() for dossier-based
@@ -302,6 +304,44 @@ Extract LAB MONITORING FACTS for this drug.
 - Monitoring frequency
 - Critical value thresholds
 - Actions when critical values reached"""
+        elif target_kb == "interactions":
+            kb_instructions = """## Target: KB-5 Drug-Drug Interaction Facts
+
+Extract DRUG-DRUG INTERACTION (DDI) facts where this dossier's drug is one
+side of the pair and the guideline mentions a specific other drug or class.
+
+For each interaction:
+- target_drug: this dossier's drug (left side of the pair)
+- partner: the other drug or class (with rxnorm_code if a specific drug,
+           or drug_class if a class — e.g., "ACE inhibitor", "MRA", "diuretic")
+- severity: CRITICAL (contraindicated combo) / HIGH (avoid; close monitoring) /
+            MODERATE (caution; monitor) / LOW (informational)
+- clinical_effect: what happens when the two are combined (e.g., "increased
+                   risk of hyperkalemia", "doubled risk of AKI",
+                   "reduced glycemic effectiveness")
+- mechanism: pharmacological mechanism IF the guideline specifies one
+             (e.g., "additive K+ retention", "CYP3A4 inhibition")
+- management: what to do — "avoid combination", "reduce dose by 50%",
+              "monitor K+ at 7 days", "switch to alternative class X"
+- is_bidirectional: true if both drugs affect each other; false if one
+                    is the precipitant and the other is the object
+- evidence_level: A/B/C/E (ADA grade) if specified
+
+Only extract DDIs that are EXPLICITLY mentioned in the guideline text. Do NOT
+invent interactions from general pharmacology knowledge. The dossier's source
+spans are the authoritative evidence; if a partner drug isn't named in those
+spans, do not include the interaction.
+
+Examples of valid extractions from ADA-2026:
+- "Adding an MRA to ACE inhibitor or ARB increases risk of hyperkalemia" →
+  target=spironolactone, partner=ACE inhibitor (class), severity=HIGH,
+  clinical_effect=hyperkalemia, management=monitor K+ + creatinine
+- "Combination of ACE inhibitor and ARB is contraindicated due to increased
+  adverse events" → target=perindopril, partner=losartan, severity=CRITICAL,
+  is_bidirectional=true, management=avoid combination
+- "DPP-4 inhibitors are not recommended for use with GLP-1 RAs" →
+  target=sitagliptin, partner=GLP-1 receptor agonist (class),
+  severity=MODERATE, management=switch one therapy"""
         else:  # contextual
             kb_instructions = """## Target: KB-20 Contextual Modifiers & ADR Profiles
 
@@ -681,7 +721,7 @@ Extract structured FACTS matching the KB20ExtractionResult schema."""
 
     def validate_extraction(
         self,
-        result: Union[KB1ExtractionResult, KB4ExtractionResult, KB16ExtractionResult, KB20ExtractionResult],
+        result: Union[KB1ExtractionResult, KB4ExtractionResult, KB16ExtractionResult, KB20ExtractionResult, KB5ExtractionResult],
     ) -> dict:
         """
         Validate extraction result for completeness and consistency.

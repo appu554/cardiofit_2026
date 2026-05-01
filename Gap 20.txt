@@ -1,0 +1,511 @@
+﻿Gap 20: Predictive Risk Layer — Implementation Plan
+Clinical Rationale
+Why reactive detection alone is clinically insufficient:
+The platform has built sophisticated reactive detection. Gap 16 detects acute-on-chronic deterioration when it happens. Gap 14 PAI scores urgency based on current state. Gap 15 escalates detected events. Gap 17 adds heightened surveillance during the post-discharge window. These systems answer the question: "is this patient deteriorating right now?" They cannot answer the question: "which patients are likely to deteriorate in the next 30 days even though their current state looks stable?"
+That second question is where the clinical leverage lives.
+A care manager reviewing their panel of 50 CHF patients sees the worklist showing 12 patients with active deterioration signals. They work through those 12 over the morning. At 11 AM, they're done with their urgent work. They have 2 hours before their afternoon calls. What do they do? Without predictive risk, they have no principled way to decide which of the remaining 38 stable-looking patients deserves proactive outreach. They might call whoever they spoke to most recently (recency bias), or whoever they haven't spoken to in the longest time (availability bias), or the patients they personally like (connection bias). None of these approaches correlate with clinical risk.
+With predictive risk, the care manager can see: "Of your 38 stable-looking patients, these 6 have a >25% probability of deterioration event in the next 14 days based on patterns in their data." The 6 patients become the afternoon's proactive work. The care manager's 2 hours produce 6 preventive interventions rather than 6 random calls. Over a 12-month pilot, this redirection of proactive capacity is the mechanism that achieves the 15% readmission reduction the HCF Catalyst program targets.
+The clinical evidence for predictive risk in chronic disease populations:
+Rajkomar et al. (2018, Nature Medicine) demonstrated that deep learning models trained on EHR time-series data predicted inpatient deterioration (ICU transfer, unexpected mortality) with AUC 0.85-0.93 across multiple conditions. The predictions used the same data that humans have access to but organized through temporal patterns that humans miss. The clinically actionable finding: model predictions made 24-48 hours before clinical deterioration enabled intervention that reduced unexpected mortality by 11% and ICU transfers by 15%. The predictive window must be long enough to intervene but short enough to be specific.
+Desai et al. (2020, JAMA Network Open) studied 30-day readmission prediction in heart failure using 6 months of pre-admission data. A gradient-boosted model using vital sign trajectories, medication adherence patterns, engagement metrics, and laboratory trends achieved AUC 0.78 — substantially better than the standard LACE index (AUC 0.63) and comparable to physician intuition (AUC 0.80 in the same cohort). The clinically actionable finding: high-risk patients identified by the model (top decile of predicted risk) had 35% 30-day readmission rate vs 8% for the bottom decile. A care management intervention targeted at the top decile delivered a relative risk reduction of 23% in the intervention arm vs standard care, with absolute reduction from 35% to 27%.
+Kansagara et al. (2011, JAMA) systematically reviewed 26 readmission risk models and identified the feature families that drive predictive performance: trajectory features (rate of change in clinical values over weeks-to-months), medication features (adherence patterns, polypharmacy complexity, recent changes), healthcare utilization features (prior admissions, ED visits, primary care contact frequency), social determinants (housing stability, caregiver availability, transportation access), and engagement features (appointment attendance, monitoring adherence). Models using all five families substantially outperformed models using any subset.
+Ghassemi et al. (2018, Nature Machine Intelligence) established the principle of "actionable prediction" — that predictive models in healthcare deliver value only when the prediction is specific enough to suggest an intervention. A model that says "this patient has 40% 30-day readmission risk" without decomposing the risk into driving factors produces anxiety but not action. A model that says "this patient has 40% 30-day readmission risk, primarily driven by declining medication adherence (35% probability contribution) and worsening engagement pattern (30% contribution)" suggests specific interventions (medication adherence call, engagement re-establishment outreach) and enables measurable follow-up. The implementation of predictive risk must include decomposition into modifiable factors, not just a risk score.
+Cruz et al. (2023, Journal of Diabetes Investigation) studied Type 2 diabetes complication prediction using the same feature families applied to 4-year outcomes. The model predicted major cardiovascular events, chronic kidney disease progression, and diabetic retinopathy with AUC 0.74-0.81. Critical finding for platform applicability: the model's performance was comparable across Indian and Australian cohorts when trained with cohort-specific data, but performance dropped substantially (AUC 0.60-0.65) when models trained on Australian data were applied to Indian patients without retraining. The principle: predictive models must be market-specific, not globally deployed with single parameters.
+Why the platform is uniquely positioned to build predictive risk:
+The platform has already built the hardest components of predictive risk without calling them "predictive":
+Multi-domain time-series data is already ingested. CGM data arrives every 5-15 minutes. BP readings arrive daily to weekly. eGFR arrives monthly to quarterly. Weight arrives daily for CHF patients. These time-series form the trajectory features that drive readmission prediction models. No new data ingestion is required — the platform already has the feature inputs.
+Per-patient baselines are already computed. Gap 16 builds 7-day rolling median baselines with MAD for every vital sign per patient. These baselines are exactly the "deviation from individual norm" features that outperform population-threshold models. The baseline infrastructure is a feature engineering layer that predictive models would otherwise need to build.
+Engagement and behavioral features are already tracked. PAI's behavioral dimension (Gap 14) measures engagement composite and measurement frequency. These are the behavioral features in the Kansagara feature family taxonomy. Already measured, already weighted.
+Confounder context is already captured. The V4-8 confounder scorer tracks seasonal, behavioral, and clinical confounders. These are the context features that distinguish "this reading deviates because it's Diwali" from "this reading deviates because the patient is deteriorating." Predictive models that include confounder context outperform models that don't.
+Care transition context is already tracked. Gap 17 maintains active transition status, medication reconciliation state, and milestone compliance. Post-discharge patients are a known high-risk subpopulation — having their transition state as a feature input dramatically improves prediction.
+What's missing is the synthesis: a service that combines these inputs into probabilistic forecasts of clinical events over defined prediction windows. The data plumbing exists. The feature engineering exists. The clinical decomposition infrastructure exists. Gap 20 is the composition layer that converts these inputs into actionable predictions.
+The distinction between predictive risk and existing PAI:
+This distinction is essential because teams often confuse the two. PAI (Gap 14) is a velocity-weighted current-urgency score that answers "who needs attention right now based on signals we've already observed?" Predictive risk (Gap 20) is a probabilistic forecast that answers "who is likely to develop deterioration in the next N days based on patterns that haven't yet triggered acute detection?"
+A patient with PAI CRITICAL has already deteriorated — the worklist should surface them today. A patient with predictive risk HIGH may be entirely stable today but has patterns that historically precede deterioration. They don't need worklist urgent attention — they need proactive outreach before the deterioration manifests.
+Architecturally, PAI uses five specific dimensions (velocity, proximity, behavioral, context, attention) computed from current-state data. Predictive risk uses a broader feature set including trajectory patterns, historical deterioration episodes, and population-level patterns learned from training data. PAI produces a single urgency tier. Predictive risk produces a probability with decomposition into contributing factors.
+For worklist integration, PAI drives the "urgent now" surface. Predictive risk drives a "proactive today" surface — a separate worklist view for outreach-eligible patients when the care manager has capacity beyond urgent work.
+________________
+
+
+India-Specific Predictive Risk Considerations:
+Social determinants are more variable and more impactful in Indian populations than in Australian. Housing stability, monsoon-related infrastructure disruption, festival-period dietary changes, caregiver dynamics in joint families, seasonal migration for agricultural work — these factors substantially affect clinical trajectory but are inconsistently captured. The predictive model for Indian deployment should include proxy variables for these factors: residence type (urban/peri-urban/rural), household income bracket, primary caregiver presence, agricultural employment flag, festival calendar overlap. These proxies don't perfectly capture social determinants but improve prediction over models that ignore them entirely.
+Medication adherence patterns differ. In Australia, PBS subsidization makes adherence primarily a behavioral question. In India, adherence is often affected by intermittent medication supply (pharmacy stock-outs, affordability gaps, rural distribution delays). The adherence feature should distinguish "didn't take medication due to personal choice" (behavioral) from "didn't take medication due to supply gap" (structural). The formulary module (Gap 13) already tracks drug availability — predictive models can use this as a feature.
+Healthcare utilization data is sparser. Many Indian patients have fragmented care — they see different GPs at different visits, use multiple pharmacies, receive care from private and government facilities in different episodes. The utilization features that drive Australian readmission models (clear longitudinal GP panels, consolidated ED history) are often unavailable for Indian patients. Models must handle this sparsity without assuming complete utilization capture. Prediction confidence should be adjusted based on data completeness — a patient with 2 years of comprehensive data has higher-confidence predictions than one with 6 months of fragmented data.
+ASHA worker context adds signal. In rural deployments, ASHA workers make direct home observations that aren't captured in clinical data streams. An ASHA worker reporting "the patient's house doesn't look as clean as usual" or "the daughter-in-law seems stressed" provides early behavioral signal that often precedes clinical deterioration by weeks. Structured ASHA reporting fields (captured in the ASHA worker mobile app) should flow as features into the predictive model.
+Australia-Specific Predictive Risk Considerations:
+Chronic disease cohorts have higher-quality longitudinal data. MBS claims data provides comprehensive primary care utilization history. PBS dispensing data provides medication fill patterns. MHR provides cross-provider care coordination context. These data streams enable richer feature engineering than typical Indian deployments can achieve. Models deployed in Australia can use more sophisticated utilization features.
+HCF Catalyst enrollment itself is a feature. Patients enrolled in Catalyst receive active care management intervention — this is an intervention variable that affects outcomes. Predictive models should include Catalyst enrollment status and intervention intensity as features. Models should also produce counterfactual predictions: "this patient's 30-day readmission probability is 28% with current Catalyst engagement vs projected 42% without engagement" — enabling demonstration of the intervention's effect size.
+Aboriginal and Torres Strait Islander health outcomes differ substantially from non-Indigenous Australian outcomes across most chronic conditions. The base rates of adverse events, the trajectory patterns, and the intervention effect sizes all vary. Models must account for Indigenous status as a feature (not a variable to ignore) — ignoring it produces models that systematically underperform for Indigenous patients. The Gap 14 PAI market config already has Indigenous-specific parameters; the predictive model must inherit this stratification.
+Aged care populations are predictively distinct. Frailty, polypharmacy, cognitive decline, and fall risk interact in ways that don't apply to community-dwelling adults. A predictive model trained on general CHF populations will systematically underpredict risk in aged care residents. The Aged Care pilot requires a dedicated aged care model variant with facility-appropriate features (falls history, cognitive assessment, polypharmacy complexity, aged care functional assessment scores).
+________________
+
+
+Architecture Overview
+The Predictive Risk Layer is a new module within the platform that consumes existing multi-domain data to produce forward-looking risk predictions. It sits alongside PAI (Gap 14) rather than replacing it, surfacing a different perspective on the same patient population.
+┌─ Input Data Sources (all existing) ─────────────────────┐
+│                                                          │
+│  KB-20 Patient Profile                                  │
+│    Demographics, comorbidities, care team, MBS codes    │
+│                                                          │
+│  KB-20 IOR Timeline                                     │
+│    Interventions, outcomes, confounders                 │
+│                                                          │
+│  KB-26 Per-Patient Baselines (Gap 16)                   │
+│    Rolling medians + MAD per vital sign                 │
+│                                                          │
+│  KB-26 PAI History                                      │
+│    PAI scores over time, tier transitions               │
+│                                                          │
+│  KB-23 Care Transitions (Gap 17)                        │
+│    Active transitions, milestone compliance, outcomes   │
+│                                                          │
+│  KB-27 Time-to-Response (Gap 19)                        │
+│    T0-T4 lifecycle events, response patterns            │
+│                                                          │
+│  V4-1 Metabolic Digital Twin (MHRI, domains)            │
+│  V4-5 MHRI Domain Decomposition                         │
+│  V4-7 Phenotype Stability                               │
+│  V4-8 Confounder Scoring                                │
+│                                                          │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌─ Feature Engineering Pipeline ──────────────────────────┐
+│                                                          │
+│  Per-patient feature vector construction:                │
+│                                                          │
+│  Trajectory features (30)                                │
+│    7d/30d/90d slopes per domain                         │
+│    Second derivatives (acceleration)                    │
+│    Volatility (variance of rolling windows)             │
+│    Deviation from individual baseline                   │
+│                                                          │
+│  Medication features (12)                                │
+│    Adherence score (pharmacy fills vs expected)         │
+│    Polypharmacy complexity                              │
+│    Recent changes (last 30d, last 90d)                  │
+│    High-risk drug flags                                 │
+│                                                          │
+│  Utilization features (10)                               │
+│    Prior admissions (6m, 12m)                           │
+│    ED visits                                             │
+│    Primary care contact frequency                       │
+│    Specialist visit frequency                            │
+│                                                          │
+│  Engagement features (8)                                 │
+│    Measurement frequency                                 │
+│    Appointment attendance rate                          │
+│    Response to care team contacts                       │
+│    Data freshness                                        │
+│                                                          │
+│  Context features (15)                                   │
+│    Demographic, comorbidity burden, care setting         │
+│    Active confounders                                    │
+│    Active transitions                                    │
+│    Social determinant proxies                           │
+│                                                          │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌─ Prediction Engine ─────────────────────────────────────┐
+│                                                          │
+│  Multiple prediction targets, each with own model:       │
+│                                                          │
+│  30-day deterioration (PAI CRITICAL in next 30 days)    │
+│  30-day readmission (hospital admission in next 30 days)│
+│  90-day disease progression (CKM stage advance)         │
+│  180-day cardiovascular event                            │
+│  365-day all-cause mortality                             │
+│                                                          │
+│  Each model produces:                                    │
+│    Probability (calibrated 0-1)                         │
+│    Confidence interval (bootstrap or quantile)          │
+│    Risk tier (HIGH/MODERATE/LOW relative to cohort)     │
+│    Feature contribution (SHAP-style decomposition)      │
+│    Modifiable factors flagged separately                │
+│                                                          │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌─ Clinical Interpretation Layer ─────────────────────────┐
+│                                                          │
+│  Converts technical predictions to clinical language:    │
+│                                                          │
+│  Risk summary statement                                  │
+│    "Moderate risk (22%) of fluid overload in 30 days"   │
+│                                                          │
+│  Contributing factor narrative                           │
+│    "Primarily driven by: declining weight monitoring    │
+│     adherence (last 7d), upward trend in home BP,       │
+│     recent medication change 5 days ago"                │
+│                                                          │
+│  Recommended action                                      │
+│    "Schedule proactive outreach call within 7 days to   │
+│     assess adherence and review medication response"    │
+│                                                          │
+│  Counterfactual intervention estimate                    │
+│    "Estimated risk reduction with early intervention:   │
+│     22% → 14% (8 percentage point absolute)"            │
+│                                                          │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌─ Integration with Existing Surfaces ────────────────────┐
+│                                                          │
+│  Worklist (Gap 18)                                      │
+│    New "Proactive Outreach" view for HIGH-risk stable   │
+│    patients beyond urgent cascade                       │
+│                                                          │
+│  PAI (Gap 14)                                           │
+│    Predictive risk contributes to velocity dimension    │
+│    as forward-looking signal                            │
+│                                                          │
+│  Escalation (Gap 15)                                    │
+│    Does NOT drive escalation directly — predictions    │
+│    are outreach triggers, not alert triggers            │
+│                                                          │
+│  Time-to-Response (Gap 19)                              │
+│    Tracks intervention effectiveness for predictive    │
+│    outreach (T3→T4 on predicted-risk interventions)    │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+
+
+Core design principles:
+Principle 1 — Predictions are outreach triggers, not alerts. The most important design decision. Predictive risk does not drive SAFETY or IMMEDIATE escalations. A predictive model saying "45% probability of deterioration in 30 days" is not clinically equivalent to a detection saying "actual deterioration happening now." The former is statistical; the latter is observed. Conflating them destroys trust in the alert system. Predictions surface through a separate "proactive outreach" channel and never through the escalation engine.
+Principle 2 — Interpretability over maximum accuracy. The platform could deploy a black-box deep learning model with AUC 0.85 and it would be useless. Clinicians cannot act on "the model thinks this patient is high risk" without knowing why. The interpretable decomposition into contributing factors is more important than pushing AUC from 0.78 to 0.85 with inscrutable methods. Start with gradient-boosted trees (XGBoost, LightGBM) which provide SHAP-style feature contributions. Consider neural methods only after interpretable methods have proven insufficient.
+Principle 3 — Modifiable factors are surfaced distinctly. Risk factors fall into two categories: immutable (age, sex, prior MI history) and modifiable (medication adherence, engagement level, current medication regimen). Immutable factors matter for risk stratification but don't suggest intervention. Modifiable factors are the levers care teams can pull. The clinical interpretation layer surfaces modifiable factors prominently because those are what change outcomes.
+Principle 4 — Calibrated probabilities, not relative scores. Many clinical prediction systems output relative risk scores (percentile rank within population). These are misleading because they don't answer "what's the probability this patient deteriorates?" Deploying a Platt-calibrated or isotonic-calibrated probability output ensures that "22% predicted probability" means approximately 22% of patients with that score actually deteriorate. This calibration is essential for risk communication and intervention thresholding.
+Principle 5 — Market-specific models, shared infrastructure. Cruz et al. 2023 demonstrated that models trained on one market underperform on another. The platform must train and deploy market-specific models (one for Australian HCF CHF cohort, one for Indian deployments, potentially separate models for aged care). The feature engineering pipeline, prediction infrastructure, and interpretation layer are shared — only the model weights differ by market.
+Principle 6 — Continuous retraining, not static deployment. Models deployed once and left alone degrade as clinical practice changes, patient populations shift, and seasonal patterns evolve. The architecture must support periodic retraining (quarterly initially, potentially monthly for mature deployments) with A/B testing before replacing production models. Gap 21 closed-loop learning feeds this retraining cycle.
+Principle 7 — Prediction intervals, not point estimates. "This patient has 23% probability of readmission" is misleading if it's presented as a precise number. The true 95% confidence interval might be 15-34%. Displaying point estimates as "HIGH risk (predicted probability 23%, 95% CI 15-34%)" communicates uncertainty honestly. This prevents both false confidence in predictions and false dismissal of moderate-uncertainty predictions.
+________________
+
+
+Tech Stack Alignment
+* Python 3.11 for the KB-28 predictive risk service (new service — Python is the appropriate language for ML infrastructure)
+* FastAPI for REST API
+* PostgreSQL 15 for prediction storage and model metadata
+* Kafka for consuming input data updates and publishing prediction events
+* Redis for prediction cache (predictions computed once per patient per day, cached for 24 hours)
+* XGBoost and LightGBM for gradient-boosted models
+* scikit-learn for preprocessing, calibration, evaluation
+* SHAP for feature contribution computation
+* MLflow for model registry, versioning, and experiment tracking
+* AWS SageMaker or equivalent for training infrastructure (preferred), or on-premises GPU servers
+* Prometheus for operational metrics
+* Grafana for model performance dashboards
+________________
+
+
+File Inventory
+KB-28 — Predictive Risk Service (New Service, Python)
+Action
+	File
+	Create
+	kb-28-predictive-risk/app/main.py
+	Create
+	kb-28-predictive-risk/app/models/prediction.py
+	Create
+	kb-28-predictive-risk/app/models/feature_vector.py
+	Create
+	kb-28-predictive-risk/app/models/model_metadata.py
+	Create
+	kb-28-predictive-risk/app/services/feature_engineering.py
+	Create
+	kb-28-predictive-risk/app/services/feature_engineering_test.py
+	Create
+	kb-28-predictive-risk/app/services/feature_trajectory_builder.py
+	Create
+	kb-28-predictive-risk/app/services/feature_medication_builder.py
+	Create
+	kb-28-predictive-risk/app/services/feature_utilization_builder.py
+	Create
+	kb-28-predictive-risk/app/services/feature_engagement_builder.py
+	Create
+	kb-28-predictive-risk/app/services/feature_context_builder.py
+	Create
+	kb-28-predictive-risk/app/services/prediction_engine.py
+	Create
+	kb-28-predictive-risk/app/services/prediction_engine_test.py
+	Create
+	kb-28-predictive-risk/app/services/interpretation_layer.py
+	Create
+	kb-28-predictive-risk/app/services/interpretation_layer_test.py
+	Create
+	kb-28-predictive-risk/app/services/model_registry.py
+	Create
+	kb-28-predictive-risk/app/services/prediction_cache.py
+	Create
+	kb-28-predictive-risk/app/services/prediction_event_consumer.py
+	Create
+	kb-28-predictive-risk/app/clients/kb20_client.py
+	Create
+	kb-28-predictive-risk/app/clients/kb23_client.py
+	Create
+	kb-28-predictive-risk/app/clients/kb26_client.py
+	Create
+	kb-28-predictive-risk/app/clients/kb27_client.py
+	Create
+	kb-28-predictive-risk/app/api/prediction_handlers.py
+	Create
+	kb-28-predictive-risk/app/api/proactive_outreach_handlers.py
+	Create
+	kb-28-predictive-risk/app/api/model_metadata_handlers.py
+	Create
+	kb-28-predictive-risk/app/api/routes.py
+	Create
+	kb-28-predictive-risk/migrations/001_predictions.sql
+	Create
+	kb-28-predictive-risk/migrations/002_feature_vectors.sql
+	Create
+	kb-28-predictive-risk/migrations/003_model_registry.sql
+	Training Pipeline (Separate from Production Service)
+Action
+	File
+	Create
+	ml-training/pipelines/deterioration_30d_training.py
+	Create
+	ml-training/pipelines/readmission_30d_training.py
+	Create
+	ml-training/pipelines/disease_progression_training.py
+	Create
+	ml-training/pipelines/training_dataset_builder.py
+	Create
+	ml-training/pipelines/feature_extraction_historical.py
+	Create
+	ml-training/pipelines/label_generation.py
+	Create
+	ml-training/pipelines/model_evaluation.py
+	Create
+	ml-training/pipelines/model_calibration.py
+	Create
+	ml-training/pipelines/fairness_audit.py
+	Create
+	ml-training/config/training_parameters.yaml
+	Create
+	ml-training/notebooks/model_development.ipynb
+	Create
+	ml-training/README.md
+	Worklist Integration (Gap 18 Modifications)
+Action
+	File
+	Modify
+	kb-23/internal/services/worklist_aggregator.go — add proactive outreach view
+	Create
+	kb-23/internal/services/proactive_outreach_selector.go
+	Create
+	kb-23/internal/services/proactive_outreach_selector_test.go
+	Modify
+	kb-23/internal/services/worklist_handlers.go — new endpoint
+	PAI Integration (Gap 14 Modification)
+Action
+	File
+	Modify
+	kb-26/internal/services/pai_velocity.go — incorporate forward-looking signal
+	Market Configs
+Action
+	File
+	Create
+	market-configs/shared/predictive_risk_parameters.yaml
+	Create
+	market-configs/shared/feature_engineering_rules.yaml
+	Create
+	market-configs/india/predictive_risk_overrides.yaml
+	Create
+	market-configs/australia/predictive_risk_overrides.yaml
+	Total: ~50 files (45 create, 5 modify)
+________________
+
+
+Phase PR1: Feature Engineering Pipeline
+Step 1: Create prediction data models
+Create kb-28/app/models/prediction.py containing:
+Prediction — the core entity representing a single prediction for a single patient at a single point in time. Fields: id (uuid), patient_id, prediction_type (DETERIORATION_30D, READMISSION_30D, DISEASE_PROGRESSION_90D, CV_EVENT_180D, MORTALITY_365D), predicted_probability (0.0-1.0, calibrated), confidence_interval_low (0.0-1.0), confidence_interval_high (0.0-1.0), risk_tier (HIGH, MODERATE, LOW), cohort_percentile (0-100, position within cohort distribution), primary_drivers (array of FeatureContribution — top 5 contributing features), modifiable_drivers (subset of primary_drivers flagged as modifiable), model_version (references ModelMetadata), feature_vector_id (references the FeatureVector used), counterfactual_reduction (estimated probability reduction with intervention, 0.0-1.0), prediction_window_end (end date of the prediction window), computed_at, expires_at (24 hours from computed_at), clinical_interpretation (structured fields — summary, narrative, action), produced_outreach_item (boolean, whether this prediction generated a proactive outreach worklist item).
+FeatureContribution — a single feature's contribution to a prediction. Fields: feature_name, feature_value (the raw value for this patient), contribution (SHAP value indicating how much this feature moved the prediction), direction (POSITIVE, NEGATIVE), clinical_interpretation (human-readable description), modifiable (boolean).
+FeatureVector — the full input vector used for a prediction. Fields: id (uuid), patient_id, computed_at, features (JSON with all feature values organized by family — trajectory, medication, utilization, engagement, context), data_completeness (0.0-1.0, fraction of expected features populated), data_freshness_days (max days since most recent contributing data point), market (AUSTRALIA, INDIA), cohort_tags (array of cohort identifiers — HCF_CATALYST_CHF, AGED_CARE, etc).
+ModelMetadata — versioning and audit trail for deployed models. Fields: id (uuid), model_name (descriptive name), prediction_type, model_version (semver format), training_dataset_id, training_completed_at, deployed_at, deprecated_at (nullable), performance_metrics (structured — AUC, sensitivity at 10% FPR, calibration metrics, fairness metrics across cohorts), feature_schema_version, market_scope (array of markets this model is deployed for), training_code_git_hash, training_data_range_start, training_data_range_end, model_artifact_location (S3 or equivalent URI).
+Step 2: Build the trajectory feature extractor
+Create kb-28/app/services/feature_trajectory_builder.py containing:
+BuildTrajectoryFeatures function. Takes a patient_id and a prediction_date and returns a dictionary of trajectory features computed from time-series data available before the prediction_date.
+Per-domain slope features. For each clinical domain (glycaemic, renal, cardiovascular, metabolic, weight), compute the ordinary least squares slope of the domain score over three lookback windows: 7 days, 30 days, 90 days. Use MHRI domain scores from V4-5 decomposition. The 7-day slope captures acute changes, the 30-day slope captures sub-acute trends, the 90-day slope captures chronic trajectory. Five domains × three windows = 15 slope features.
+Per-domain volatility features. For each domain, compute the standard deviation of the domain score over the same three windows. High volatility in a domain indicates instability — independent of whether the trajectory is up or down. Five domains × three windows = 15 volatility features.
+Per-vital-sign baseline deviation features. For each key vital sign (SBP, DBP, weight, glucose, eGFR, potassium, heart rate), compute the current value's deviation from the patient's 7-day baseline (from Gap 16 per-patient baselines). Use the MAD-normalized deviation (how many MADs from baseline). Seven vitals = 7 deviation features.
+Trajectory acceleration features. For domains with at least 90 days of data, compute the second derivative (rate of change in the slope). A rising slope that's accelerating (positive second derivative while first derivative is also positive) indicates worsening deterioration. Five acceleration features.
+PAI trajectory features. From PAI history (Gap 14), compute: current PAI, 7-day average PAI, 30-day average PAI, maximum PAI in last 30 days, count of CRITICAL transitions in last 90 days, count of HIGH transitions in last 90 days. Six PAI features.
+Data sparsity handling. When a patient has insufficient data for a slope computation (fewer than 3 data points in the window), record the feature as null and add a data_completeness penalty. Don't impute missing values — imputation introduces systematic bias. The downstream model handles nulls explicitly.
+Total trajectory features: approximately 48. Returns dictionary keyed by feature name with values as floats or nulls.
+Tests: patient with steady glycaemic trajectory has near-zero 30-day slope; patient with accelerating renal decline has negative 30-day slope AND negative second derivative; sparse data patient has null slopes with completeness penalty; baseline deviation correctly computed against Gap 16 baseline.
+Step 3: Build the medication feature extractor
+Create kb-28/app/services/feature_medication_builder.py containing:
+BuildMedicationFeatures function. Takes a patient_id and prediction_date and returns medication-related features.
+Adherence score. For each medication in the patient's current regimen, compute the adherence proportion over the last 90 days. Primary data source: pharmacy fill data from FHIR MedicationDispense resources (Australia) or pharmacy claims (India, when available). Compute: (actual fills × days_supply) / (expected fills × days_supply). Ranges: 0 (no fills) to 1.0+ (overfills possible). Aggregate across medications into a weighted adherence score (weighting by medication clinical importance — anti-arrhythmics and anticoagulants weighted higher than statins).
+Polypharmacy complexity score. Count of active medications, count of distinct dosing frequencies (OD, BD, TID, QID), count of medications requiring food/timing considerations, count of high-interaction-potential medications. Composite score reflecting the administrative complexity the patient faces.
+Recent medication changes. Count of new medications started in last 30 days, count of medications stopped in last 30 days, count of dose changes in last 30 days. Source: IOR intervention timeline. Medication changes within 30 days are a strong predictor of both short-term improvement (if appropriate change) and short-term deterioration (if change causes adverse effect). The direction isn't predictable from the count alone — the model learns the pattern from training data.
+High-risk medication flags. Binary flags for: on_anticoagulant, on_insulin, on_digoxin, on_amiodarone, on_opioid, on_NSAID, on_nephrotoxic_combination, on_hypoglycemic_combination, on_potassium_elevating_combination. Each flag corresponds to a known risk pattern.
+Supply gap risk. For each medication, query the Gap 13 formulary module for current availability and estimated cost. Compute a supply gap score (0-1) indicating probability of access failure. Aggregate across medications.
+Total medication features: approximately 12. Returns dictionary.
+Tests: patient with 80% pharmacy fills has adherence score 0.80; patient with 15 active medications has high polypharmacy score; patient on warfarin has on_anticoagulant=1; patient with recent hospitalization has recent_changes>5; patient in tier-2 India city with expensive medication has elevated supply_gap_risk.
+Step 4: Build utilization, engagement, and context feature extractors
+Create parallel extractors for the remaining feature families:
+feature_utilization_builder.py. Features: admissions_6m, admissions_12m, ED_visits_6m, ED_visits_12m, primary_care_contacts_3m, specialist_contacts_6m, teleconsults_3m, days_since_last_primary_care, days_since_last_admission, admissions_for_same_condition_12m. Source: FHIR Encounter resources + KB-27 acknowledgment tracking + PMS integration data. Approximately 10 features.
+feature_engagement_builder.py. Features: measurement_frequency_ratio (current vs patient's historical baseline), appointment_attendance_rate (attended / scheduled, last 12 months), care_team_contact_response_rate (responses / attempts, last 6 months), data_freshness_days (most recent data point age), worklist_acknowledgment_latency (median T1→T2 from Gap 19, when this patient's items appear in clinician worklists), engagement_trend (derivative of engagement scores over 30 days), disengagement_episodes_6m (count of periods with ≥7 days no data), predicted_engagement_cliff_risk (based on engagement trend direction and magnitude). Approximately 8 features.
+feature_context_builder.py. Features: age, sex, ckm_stage (categorical), primary_phenotype_cluster (from V4-7), comorbidity_count, charlson_comorbidity_index, care_setting (categorical: HOME, AGED_CARE, HITH), active_care_transition (boolean), days_since_last_discharge, active_confounder_count (from V4-8), has_indigenous_flag, has_rural_connectivity_flag, primary_language, preferred_channel, household_size_proxy (Indian deployments). Approximately 15 features.
+Total features across all families: approximately 93. This is within the typical range for gradient-boosted clinical prediction models (50-200 features).
+________________
+
+
+Step 5: Build the feature engineering orchestrator
+Create kb-28/app/services/feature_engineering.py containing:
+BuildFeatureVector function. Takes a patient_id and prediction_date, orchestrates all feature extractors, and returns a complete FeatureVector.
+Parallel extraction. All five feature extractors run in parallel using async/await (Python asyncio). Each extractor queries its required upstream services independently. Parallel execution completes in approximately 2-4 seconds per patient (dominated by upstream service latency).
+Data completeness computation. After all extractors return, compute: completeness = (non-null features) / (total expected features). Completeness affects prediction confidence — patients with <70% completeness have reduced confidence intervals.
+Data freshness computation. max(days_since_most_recent_data_point across all features). Freshness >14 days substantially reduces prediction confidence.
+Market and cohort tagging. Based on patient profile, tag the feature vector with market (AUSTRALIA or INDIA) and cohort tags (HCF_CATALYST_CHF, AGED_CARE_FACILITY, etc). These tags route the prediction to the appropriate model.
+Feature vector persistence. Store the computed FeatureVector in feature_vectors table with the prediction that uses it. This enables retrospective analysis — when a prediction turns out to be wrong, the feature vector shows why the model made that prediction.
+Caching. Feature vectors are cached for 4 hours (shorter than prediction cache because features update as new data arrives).
+Tests: full feature vector for test patient completes within 5 seconds; missing upstream service degrades gracefully (feature vector still returned with reduced completeness); completeness correctly computed; market tagging respects patient profile.
+________________
+
+
+Phase PR2: Prediction Engine + Model Registry
+Step 6: Build the prediction engine
+Create kb-28/app/services/prediction_engine.py containing:
+Predict function. Takes a FeatureVector and a prediction_type, returns a Prediction.
+Model selection. Query the ModelRegistry for the current production model matching (prediction_type, market, cohort). If no model matches exactly, use the most specific available (patient in HCF_CATALYST_CHF cohort gets the HCF-specific model; patient in general cardiometabolic gets the general Australia model; etc).
+Feature preprocessing. Apply the preprocessing pipeline saved with the model — typically: standardization of numeric features, one-hot encoding of categorical features, handling of null values (XGBoost handles nulls natively; LightGBM similar). The preprocessing pipeline is saved alongside the model and applied consistently.
+Probability prediction. Call model.predict_proba() to get raw model output. For XGBoost/LightGBM models, this produces a probability in [0, 1].
+Calibration. Apply the calibration layer saved with the model. Use isotonic regression for calibration (preferred over Platt scaling for non-parametric calibration). The calibrated probability is the reported predicted_probability.
+Confidence interval computation. Use bootstrap sampling on the training data's prediction distribution for similar feature vectors. Approximately 100 bootstrap samples produce 95% confidence intervals. For production inference, use precomputed lookup tables indexed by feature vector distance to training examples — this makes confidence interval computation fast (<100ms) rather than requiring 100 bootstrap iterations per prediction.
+SHAP feature contribution. Compute SHAP values using the model's TreeExplainer (for tree-based models). Returns contribution of each feature to this specific prediction. Sum of SHAP values + base rate = predicted probability (validation check). Top 5 features by absolute contribution become the primary_drivers.
+Modifiable factor flagging. From the primary_drivers, filter to those with modifiable=True (from the feature metadata). If >3 modifiable drivers, take top 3. These become modifiable_drivers.
+Risk tiering. Based on calibrated probability and cohort position: HIGH if probability >= 0.30 AND cohort_percentile >= 80. MODERATE if probability >= 0.15 AND cohort_percentile >= 60. LOW otherwise. The thresholds are model-specific and configured per market.
+Counterfactual estimation. If counterfactual analysis is enabled, estimate the probability reduction from intervention. For each modifiable driver, query the model's partial dependence plot to estimate "if this feature were at its population median, what would the prediction be?" Sum the estimated reductions across modifiable drivers. This produces the counterfactual_reduction field.
+Tests: predict on known feature vector produces expected probability within tolerance; calibration applied correctly; SHAP values sum correctly; modifiable drivers filtered correctly; tiering applied per configured thresholds; counterfactual reduction non-negative.
+Step 7: Build the clinical interpretation layer
+Create kb-28/app/services/interpretation_layer.py containing:
+InterpretPrediction function. Takes a Prediction and produces clinical_interpretation structured fields.
+Risk summary statement generation. Template-based generation from prediction_type, probability, and window. "Moderate risk ({probability}%) of {event_description} in {window}." For prediction_type=DETERIORATION_30D, event_description="clinical deterioration requiring intervention." For prediction_type=READMISSION_30D, event_description="hospital admission." Round probability to nearest 5 for readability (22% → 20%, 47% → 45%).
+Contributing factor narrative generation. Iterate through modifiable_drivers and primary_drivers, producing human-readable descriptions for each. Each feature has a clinical_interpretation template — for example, trajectory_glycaemic_slope_30d has template "glycaemic trajectory has been {direction} over last 30 days ({magnitude} score change)." Apply template with feature's current value and direction to produce the narrative.
+Concatenate narratives with natural language connectors: "Primarily driven by: {first factor}. Additional contributing factors include: {second factor}, {third factor}. Modifiable factors where intervention could reduce risk: {modifiable factors listed}."
+Recommended action generation. Based on the top modifiable driver, generate a specific action recommendation. Medication adherence driver → "Schedule medication adherence review call within 7 days. Verify pharmacy access and reconcile current regimen." Engagement cliff driver → "Initiate re-engagement outreach. Attempt 3 contacts across 7 days using primary and secondary channels." Trajectory driver → "Schedule proactive clinical review within {timeframe} days to assess {specific domain} concerns before acute deterioration."
+Counterfactual statement generation. If counterfactual_reduction > 0.03 (3 percentage points), include statement: "Estimated risk reduction with early intervention: {probability}% → {probability - reduction}% (about {reduction} percentage points)." This makes the intervention value explicit.
+Market-specific localization. Translate the interpretation into the clinician's preferred language for Indian deployments. Apply clinical vocabulary for GP audiences, layperson vocabulary for ASHA worker audiences.
+Tests: interpretation for HIGH risk deterioration produces sensible narrative; interpretation with no modifiable drivers doesn't include intervention statement; counterfactual appears only when reduction is meaningful; Hindi translation preserves clinical accuracy.
+Step 8: Build the model registry and lifecycle management
+Create kb-28/app/services/model_registry.py containing:
+Model lifecycle states. STAGING (trained but not production), PRODUCTION (currently serving predictions), DEPRECATED (replaced by newer model, kept for audit). Models transition through states via explicit promotion actions.
+RegisterModel function. When a new model is trained, register it in the model registry with full metadata: training dataset reference, training code git hash, feature schema version, performance metrics (AUC, calibration slope/intercept, sensitivity/specificity at operating points, fairness metrics across cohorts), model artifact location (S3 URI pointing to serialized model file).
+DeployModel function. Promote a STAGING model to PRODUCTION. Requires explicit approval signal (for pilot deployments, manual approval; for production scale, automated canary testing). Before deployment: (1) verify model metadata is complete, (2) verify model artifact is accessible, (3) verify feature schema matches current feature engineering pipeline, (4) run regression test suite against holdout validation data, (5) run fairness audit across protected cohorts.
+ABTestModel function. Deploy a new model alongside an existing production model for A/B comparison. Route a configurable percentage (default 10%) of predictions through the new model, log predictions from both models, compare performance metrics over a rolling window (default 30 days), automatically promote new model if it demonstrates significant improvement, automatically rollback if it demonstrates significant regression.
+DeprecateModel function. When a newer model replaces the current production model, deprecate the old model. Deprecated models are no longer used for inference but are retained for audit (predictions from deprecated models are still explainable when reviewed historically).
+Performance monitoring. Continuously compare production model predictions against actual outcomes (via Gap 27 outcome tracking). Compute rolling AUC, calibration drift, fairness metrics. Alert if performance degrades below predefined thresholds (AUC drop >0.05, calibration drift >10%).
+Tests: model registration captures full metadata; deployment blocks on missing validation data; A/B testing splits traffic correctly; deprecation preserves audit trail.
+________________
+
+
+Phase PR3: Model Training Pipeline
+Step 9: Build the training dataset builder
+Create ml-training/pipelines/training_dataset_builder.py containing:
+BuildTrainingDataset function. Constructs the historical training dataset from the platform's accumulated data.
+Cohort definition. Define the training cohort precisely: patients with at least 12 months of platform history, with data completeness above 70%, excluding patients whose data shows evidence of ingestion errors or synthetic data. Document the cohort size and demographics explicitly for reporting.
+Temporal split strategy. Use temporal splitting, not random splitting. Train on data from 18-6 months ago. Validate on data from 6-3 months ago. Test on data from 3-0 months ago. This prevents temporal leakage where models learn from future information. Document the exact date ranges.
+Feature extraction at historical points. For each patient in the cohort, select multiple "prediction dates" spanning the training period. At each prediction date, extract the feature vector using only data available before that date (critical — no future information leakage). This produces multiple feature vector observations per patient.
+Label generation. For each feature vector, determine the actual outcome during the prediction window following the feature vector date. For 30-day deterioration: did the patient have a PAI CRITICAL episode in the 30 days following? For 30-day readmission: was the patient hospitalized in the 30 days following? Labels are binary (0 or 1). Source: retrospective data query against Gap 19 outcome tracking + FHIR Encounter history + PAI history.
+Class balancing consideration. Clinical outcomes are typically imbalanced — maybe 5-15% of feature vectors have positive labels. Training models on imbalanced data requires careful handling: use class weighting in model training (preferred) or oversample minority class (less preferred due to potential overfitting). Document the class balance and the chosen handling strategy.
+Data leakage audit. For every feature in the training dataset, verify that the feature value is computable from data that existed before the prediction date. Common leakage sources: using outcomes-derived features (like "this patient was readmitted") as inputs, using features computed from data after the prediction date, using aggregated statistics that include future data. Run explicit audit checks.
+Tests: training dataset has expected size; temporal split has no overlap; labels correctly identify outcome events; data leakage audit passes; class balance computed correctly.
+Step 10: Build the model training pipeline
+Create ml-training/pipelines/deterioration_30d_training.py containing:
+Train function. The full training pipeline for the 30-day deterioration prediction model.
+Model selection and hyperparameter tuning. Start with LightGBM (comparable AUC to XGBoost with faster training and inference). Hyperparameter tuning via Optuna or similar: num_leaves, max_depth, learning_rate, min_child_samples, subsample, colsample_bytree, class_weight. Search 100-500 trials using cross-validation on training data.
+Cross-validation strategy. 5-fold stratified cross-validation within the training set. Stratification preserves class balance across folds. Report mean and standard deviation of performance across folds.
+Model evaluation metrics. Primary: AUC-ROC. Secondary: AUC-PR (more informative for imbalanced data), sensitivity at 10% FPR, specificity at 20% FNR, calibration (Brier score, calibration slope and intercept from calibration plot), sensitivity/specificity across decile ranks.
+Fairness audit across cohorts. Compute all metrics separately for: age bands, sex, Indigenous vs non-Indigenous (Australia), rural vs urban (India), primary language subgroups. Report performance gaps across groups. Flag if AUC differs by >0.05 across any protected group — this indicates biased model that needs intervention.
+Calibration layer training. After the base model is trained, fit an isotonic regression calibration layer using holdout validation data. This ensures that probabilities are calibrated — when the model says "20% probability," approximately 20% of those predictions actually occur.
+SHAP explanation pre-computation. Compute SHAP interaction values on a representative sample of training data. This accelerates production inference SHAP computation.
+Model artifact packaging. Save the trained model, preprocessing pipeline, calibration layer, feature schema, performance metadata, SHAP precomputations as a single artifact bundle. Upload to S3 with versioned naming.
+Model registry submission. Submit the model artifact to the model registry for staging. Include full metadata for auditability.
+Create parallel training pipelines for each prediction target: readmission_30d_training.py, disease_progression_training.py. Each follows the same structure with target-specific labels and appropriate evaluation metrics.
+Tests: training pipeline completes on synthetic test dataset; evaluation metrics computed correctly; fairness audit detects synthetic bias; calibration layer improves Brier score; model artifact bundle is reproducible (same inputs produce same model).
+Step 11: Build the label generation and evaluation infrastructure
+Create ml-training/pipelines/label_generation.py containing:
+GenerateLabels function. For each prediction_type and feature_vector_date, determine the binary outcome label.
+DETERIORATION_30D: Label = 1 if patient had any PAI CRITICAL transition in the 30 days after feature_vector_date. Source: PAI history.
+READMISSION_30D: Label = 1 if patient had an inpatient hospital admission in the 30 days after feature_vector_date. Source: FHIR Encounter resources with class=inpatient and status=finished within the window.
+DISEASE_PROGRESSION_90D: Label = 1 if patient's CKM stage advanced in the 90 days after feature_vector_date. Source: CKM stage history from KB-20.
+CV_EVENT_180D: Label = 1 if patient had a documented cardiovascular event (MI, stroke, hospitalization for HF, revascularization procedure) in the 180 days after feature_vector_date. Source: FHIR Condition and Procedure resources.
+MORTALITY_365D: Label = 1 if patient's patient profile was marked deceased within 365 days. Source: KB-20 patient profile status transitions.
+Each label generation function must handle edge cases: patients who were lost to follow-up during the window (excluded from training as label is unknown), patients who died during the window for a different cause (still count as "deceased" for mortality, but noted for analysis), patients who transferred to different health systems (excluded as outcome unknowable).
+Censoring handling. For patients whose follow-up ends before the window closes (moved away, dropped from program), label is censored and the example is excluded from training. Document the exclusion rate.
+Tests: label generation correctly identifies positive cases from historical data; edge cases handled appropriately; censoring removes incomplete follow-up.
+________________
+
+
+Phase PR4: Worklist Integration + Proactive Outreach
+Step 12: Build the proactive outreach selector
+Create kb-23/internal/services/proactive_outreach_selector.go containing:
+SelectProactiveOutreachCandidates function. Takes a clinician context (care manager panel of patients) and returns a ranked list of patients eligible for proactive outreach based on predictive risk.
+Eligibility criteria. A patient is proactive outreach eligible if:
+1. They have current PAI tier of LOW or MINIMAL (not in urgent work — already handled by priority cascade)
+2. They have an active predictive risk prediction with tier HIGH or MODERATE
+3. They have at least one modifiable driver in the prediction
+4. They haven't been proactively contacted in the last 14 days for the same driver
+5. Their care team has capacity for proactive outreach (configured per program)
+Ranking. Rank eligible patients by: predicted_probability (descending), counterfactual_reduction (descending — larger reductions prioritized), days_since_last_contact (descending — patients longer without contact prioritized), cohort_percentile (descending).
+Output integration. Return worklist items with trigger_type=PROACTIVE_OUTREACH, urgency_tier=PROACTIVE (new tier below LOW), primary_reason from the prediction's risk_summary_statement, suggested_action from the prediction's recommended_action, action_buttons including SCHEDULE_PROACTIVE_CALL, DOCUMENT_OUTREACH_OUTCOME, DEFER_7D, MARK_NOT_CURRENTLY_ACTIONABLE.
+Daily cap per clinician. Each clinician has a configured maximum proactive outreach items per day (typical: 6-8). This prevents proactive outreach from overwhelming the urgent work cascade. If eligible patients exceed the cap, surface the top N by ranking; remaining patients carry over to the next day.
+Integration with existing worklist. The proactive outreach list is a separate view within the worklist, not mixed with urgent priorities. Care manager opens worklist, sees "Urgent (3 CRITICAL, 5 HIGH, 8 MODERATE)" and separately "Proactive Outreach Today (7 patients)." They work urgent first, then proactive if time permits.
+Tests: patient with PAI CRITICAL is excluded (already urgent); patient with HIGH predictive risk and modifiable driver appears; patient contacted 5 days ago for same driver is excluded; daily cap enforced; ranking prioritizes higher counterfactual reduction.
+Step 13: Integrate predictive risk signal into PAI velocity
+Modify kb-26/internal/services/pai_velocity.go containing:
+Add forward-looking signal to velocity dimension. Currently, PAI velocity uses MHRI slopes + second derivative + concordant deterioration. Add: if the patient has an active predictive risk prediction with tier HIGH, add a small velocity boost (5-10 points). This reflects that the predictive model is detecting patterns that haven't yet manifested as acute deterioration but are statistically predictive.
+Rationale. This creates a subtle lift in the PAI for patients predicted to deteriorate — they don't jump to CRITICAL (predictions aren't detections), but they rise in the worklist ordering compared to stable-looking patients without elevated risk. This helps care teams naturally allocate attention toward predicted-risk patients within their urgent work cadence.
+Calibration. The boost is modest — 5-10 PAI points (not 20+). Predictions inform but don't dominate the current-state urgency calculation. Tune the exact magnitude based on pilot data showing how often predicted-risk patients convert to detected-deterioration.
+Audit tracking. When a PAI score includes a predictive risk boost, record this in the PAI history. This enables retrospective analysis: did predictive risk boosts correlate with actual deterioration? This is input for Gap 21 closed-loop learning.
+Tests: PAI for low-PAI patient with HIGH predictive risk increases by 5-10 points; PAI for low-PAI patient without prediction unchanged; boost is audited in history.
+Step 14: Build API handlers and integration tests
+Create prediction API handlers:
+POST /api/v1/predictions/batch — batch prediction endpoint. Takes a list of patient_ids and prediction_types, runs feature engineering and prediction for each, returns predictions. Used by scheduled batch jobs to refresh predictions daily.
+GET /api/v1/predictions/:patient_id — retrieves current predictions for a patient across all prediction types.
+GET /api/v1/predictions/:patient_id/:prediction_type — retrieves a specific prediction with full feature contributions and interpretation.
+GET /api/v1/proactive-outreach/:clinician_id — returns proactive outreach list for the clinician based on their panel's predictions.
+POST /api/v1/proactive-outreach/:prediction_id/outreach-completed — records outcome of proactive outreach (contacted/not_reached/declined_engagement/identified_concern/addressed_concern). This feeds Gap 19 time-to-response tracking and Gap 21 closed-loop learning.
+Integration test scenarios:
+Scenario 1 — HCF CHF daily prediction cycle. Synthesize 50 CHF patients with varied trajectories. Run daily batch prediction. Verify: all 50 patients get predictions, HIGH-risk patients identified correctly, modifiable drivers surface in interpretations, proactive outreach list includes top-ranked non-urgent patients.
+Scenario 2 — Predictive-to-urgent conversion. Track a patient predicted HIGH for deterioration. Over simulated time, inject deteriorating trajectory. Verify: predictive risk rises over days, eventually PAI detects actual deterioration and patient moves to CRITICAL urgent work. Verify the prediction history shows the early warning.
+Scenario 3 — Proactive outreach effectiveness tracking. Complete proactive outreach on a HIGH-risk patient. Record intervention (medication adherence discussion). Over subsequent 30 days, verify: patient's predictive risk decreases, no PAI CRITICAL transition occurs, attribution engine (Gap 19) correctly links intervention to improved trajectory.
+Scenario 4 — Market-specific prediction. Run predictions for patients in Australian HCF cohort and Indian rural cohort. Verify: each uses appropriate market-specific model, features are market-adjusted, interpretations are localized, protected-cohort fairness maintained.
+Scenario 5 — Prediction degradation detection. Simulate gradual performance degradation of production model. Verify: monitoring detects AUC drop, alert is raised, automatic A/B test with candidate model initiates, if candidate demonstrates recovery, rollout proceeds.
+________________
+
+
+Plan Summary
+Phase
+	Steps
+	Key Deliverables
+	PR1: Feature Engineering
+	1-5
+	Prediction/FeatureVector/ModelMetadata models, 5 feature extractor services (trajectory, medication, utilization, engagement, context), feature orchestrator producing ~93 features with completeness tracking, market-specific tagging
+	PR2: Prediction Engine + Registry
+	6-8
+	XGBoost/LightGBM prediction engine with SHAP explanations, isotonic calibration, confidence intervals, modifiable driver identification, counterfactual estimation, clinical interpretation layer with multi-language support, model registry with STAGING/PRODUCTION/DEPRECATED lifecycle and A/B testing
+	PR3: Training Pipeline
+	9-11
+	Training dataset builder with temporal splitting and data leakage audit, model training pipeline with hyperparameter tuning, cross-validation, fairness audit across cohorts, calibration, label generation for 5 prediction types
+	PR4: Worklist Integration + Outreach
+	12-14
+	Proactive outreach selector with eligibility criteria and daily caps, PAI velocity integration with forward-looking signal, 5 API endpoints, 5 integration test scenarios covering daily cycle, conversion, effectiveness, market specificity, degradation detection
+	Total: 14 steps, ~50 files, 4 phases.
+Clinical evidence base:
+* Rajkomar et al. 2018 (Nature Medicine) — deep learning on EHR time-series, AUC 0.85-0.93, 11% mortality reduction
+* Desai et al. 2020 (JAMA Network Open) — HF 30-day readmission prediction, AUC 0.78, 23% relative risk reduction with targeted intervention
+* Kansagara et al. 2011 (JAMA) — systematic review of 26 readmission models, feature family taxonomy
+* Ghassemi et al. 2018 (Nature Machine Intelligence) — actionable prediction principle, interpretability requirement
+* Cruz et al. 2023 (Journal of Diabetes Investigation) — cross-market model transferability, AUC 0.74-0.81, market-specific training requirement
+* Platt 1999 (Advances in Large Margin Classifiers) — calibration methodology
+* Lundberg & Lee 2017 (NeurIPS) — SHAP framework for feature contribution
+* Friedman 2001 (Annals of Statistics) — gradient boosting methodology
+The strategic position: The Predictive Risk Layer transforms the platform from reactive detection to proactive intervention. The HCF Catalyst care managers' 2 hours of afternoon capacity become 6 prevention calls rather than 6 random outreach attempts. The Aged Care facility nurses' rounds prioritize 3 residents likely to deteriorate in the coming week. The Indian GP's daily WhatsApp summary includes not just today's urgent cases but tomorrow's likely deteriorations. This proactive capability is the mechanism that converts pilot readmission-reduction claims into measurable clinical outcomes. For the HCF contract renewal at month 11, the evidence chain includes not just "we detected X deteriorations in time" but also "we prevented Y hospitalizations through proactive intervention on predicted-risk patients." The predictive layer is how the platform demonstrates preventive value, not just responsive value.
+The measurable outcome target: After 6 months of pilot operation, the platform should demonstrate that proactive outreach to HIGH-predicted-risk patients reduces subsequent 30-day deterioration events by 15-25% compared to similar-risk patients who didn't receive outreach (natural experiment via capacity constraints on proactive outreach daily caps). This effect size is consistent with the Desai 2020 intervention cohort findings and provides the empirical basis for demonstrating predictive risk's clinical value to purchasers.
+Ready for Gap 21 (Closed-Loop Outcome Learning) implementation guidelines when you're ready to proceed. Gap 20 and Gap 21 form a natural pair — Gap 20 produces predictions, Gap 21 learns from whether those predictions were right and uses that learning to improve the models and the overall clinical decision logic.

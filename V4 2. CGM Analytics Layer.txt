@@ -1,0 +1,2494 @@
+﻿# CGM Analytics Layer — Implementation Plan
+
+
+## Clinical Rationale
+
+
+**Why this is critical gap #1 for clinical value:**
+
+
+The platform currently captures CGM readings as point-in-time glucose values (`DEVICE_READING` with `readingType: "GLUCOSE"`) and routes them through Module 1b into the canonical pipeline. But a single CGM reading of 198 mg/dL is clinically meaningless without temporal context. Was this a transient post-meal spike that returned to 120 within 90 minutes (benign, normal physiology) or part of a sustained 6-hour plateau above 180 (pathological, indicating insulin resistance or medication failure)? The answer determines whether the clinician acts or waits. Without CGM analytics, the platform treats continuous glucose data the same way it treats a single fingerstick — discarding 95% of the clinical signal.
+
+
+**The International Consensus on CGM Metrics (Battelino et al. 2023, updated from 2019)** established 14 standardized metrics that every CGM analytics system must compute. These aren't optional academic exercises — RSSDI 2023, ADS-ADEA 2024, ADA Standards of Care 2025, and NICE NG28 (2024 update) all reference these metrics as primary glycaemic management endpoints alongside HbA1c. The consensus explicitly states that TIR (Time in Range) should be a primary clinical target, with >70% time in 70-180 mg/dL for most adults with T2DM.
+
+
+**The specific metrics and their clinical significance:**
+
+
+**Time in Range (TIR, 70-180 mg/dL):** The single most important CGM metric. Each 5% increase in TIR corresponds to approximately 0.5% decrease in HbA1c (Beck et al., 2019). Target: >70% for most T2DM adults, >50% for frail/elderly (relaxed per RSSDI 2023 and RACGP 2024). A 1% increase in TIR is associated with 5% reduction in retinopathy progression risk (DCCT reanalysis, Lu et al. 2021). This is the metric that replaces HbA1c as the primary glycaemic target for CGM-wearing patients.
+
+
+**Time Below Range (TBR):** Level 1 hypoglycaemia (<70 mg/dL) — target <4% of time. Level 2 severe hypoglycaemia (<54 mg/dL) — target <1%. In diabetic patients on metformin + sulfonylurea (common Indian regimen), TBR is the safety signal that triggers medication adjustment before a severe hypoglycaemic event occurs. For patients on insulin, TBR <54 directly correlates with severe hypoglycaemia event risk (Heinemann et al., 2023).
+
+
+**Time Above Range (TAR):** Level 1 hyperglycaemia (>180 mg/dL) — target <25%. Level 2 severe hyperglycaemia (>250 mg/dL) — target <5%. In Rajesh Kumar's scenario (HbA1c 8.2, CGM reading 198), sustained TAR >250 would indicate need for therapy intensification even if HbA1c hasn't been rechecked. TAR >250 for >2 hours correlates with increased oxidative stress and endothelial dysfunction (Ceriello et al., 2020).
+
+
+**Glucose Management Indicator (GMI):** Estimated HbA1c from CGM data. GMI = 3.31 + (0.02392 × mean glucose in mg/dL). Clinically useful because it updates every 14 days from CGM data rather than waiting 3 months for lab HbA1c. When GMI and lab HbA1c diverge by >0.5%, it indicates either hemoglobin variant, anemia, or lab assay interference — a diagnostic finding in itself (Bergenstal et al., 2018).
+
+
+**Coefficient of Variation (CV):** SD/mean × 100. CV ≤36% indicates stable glucose; CV >36% indicates unstable/labile diabetes. This threshold was validated by Monnier et al. (2017) and adopted by the International Consensus. CV >36% is an independent predictor of hypoglycaemia risk regardless of mean glucose. For patients with high CV, the therapeutic priority shifts from lowering mean glucose to reducing variability — a fundamentally different strategy (typically adding or adjusting basal insulin rather than intensifying bolus/prandial therapy).
+
+
+**Mean Glucose and Standard Deviation:** Foundation metrics. Mean glucose maps to GMI. SD captures absolute variability. Together they form the glycaemic "fingerprint."
+
+
+**Ambulatory Glucose Profile (AGP):** Visual representation showing median, IQR, and 10th/90th percentiles across a 24-hour period, aggregated over 14 days. The AGP reveals temporal patterns invisible in summary statistics: dawn phenomenon (pre-breakfast spike due to hepatic glucose output), post-prandial peak timing, nocturnal hypoglycaemia, and medication-effect timing. Computing AGP percentiles at 15-minute or 30-minute resolution across 24 hours requires bucketing readings by time-of-day.
+
+
+**Glycaemic Risk Index (GRI):** Introduced by Klonoff et al. (2023), adopted in ADA 2025. A single composite metric that integrates hypoglycaemia risk and hyperglycaemia risk into a 0-100 scale. GRI = (3.0 × VLow) + (2.4 × Low) + (1.6 × VHigh) + (0.8 × High), where VLow = % time <54, Low = % time 54-70, VHigh = % time >250, High = % time 180-250. GRI zones: A (best, GRI ≤20), B (GRI 21-40), C (GRI 41-60), D (GRI 61-80), E (worst, GRI >80). This is the metric that most directly maps to clinical action urgency.
+
+
+---
+
+
+**India-Specific CGM Considerations:**
+
+
+CGM adoption in India is accelerating but unevenly distributed. The Abbott FreeStyle Libre is the dominant device (~85% market share), with the Libre 2 providing 14-day sensor life and 1-minute glucose readings (but the reader/app captures at 15-minute intervals for most users). Dexcom G7 has entered the Indian market but at significantly higher cost. Key India-specific factors:
+
+
+- **Intermittent scanning vs. real-time:** Most Indian Libre users do intermittent scanning (isCGM), not real-time CGM (rtCGM). This means data gaps when the patient doesn't scan for >8 hours (the sensor stores 8 hours of data; older data is lost). The analytics engine must handle data gaps gracefully and compute metrics only when sufficient data exists (≥70% of readings present in a 24-hour period per International Consensus).
+- **14-day sensor cycles:** Indian CGM data arrives in 14-day bursts aligned with sensor life. The analytics engine should compute standard 14-day AGP reports at sensor change, not arbitrary rolling windows.
+- **Ramadan fasting:** During Ramadan, Muslim diabetic patients (15% of India market) fast from dawn to sunset. CGM data during Ramadan shows dramatically altered patterns — extended fasting euglycaemia/hypoglycaemia followed by post-Iftar hyperglycaemia spikes. The analytics engine must detect Ramadan-period data and adjust TIR interpretations (IDF-DAR 2021 practical guidelines recommend relaxed TBR targets and modified meal-glucose pairing during Ramadan).
+- **Cost-driven intermittent use:** Many Indian patients use CGM for 2-4 weeks, then revert to SMBG for cost reasons. The platform must handle intermittent CGM data alongside SMBG data, using CGM analytics when available and gracefully falling back to SMBG-based scoring.
+
+
+**Australia-Specific CGM Considerations:**
+
+
+- **NDSS subsidy:** The National Diabetes Services Scheme subsidizes CGM for T1DM and some T2DM patients on insulin. CGM data from subsidized devices often flows through the My Health Record system — the FHIR outbound gap (#9) becomes directly relevant here.
+- **Indigenous populations:** Aboriginal and Torres Strait Islander communities in remote areas increasingly use CGM through NACCHO-managed health services. Data connectivity is intermittent. The analytics engine must compute metrics from locally stored data that syncs when connectivity is available — potentially receiving 14 days of data in a single burst after an offline period.
+- **ADS-ADEA position statement 2024:** Explicitly recommends TIR as co-primary endpoint with HbA1c for all CGM-wearing patients. RACGP 2024 guidelines endorse the same position.
+
+
+---
+
+
+## Architecture Overview
+
+
+The CGM analytics system spans four components:
+
+
+1. **Module 3 (Flink — Comprehensive CDS):** Extended with a CGM analytics operator that computes streaming TIR/TBR/TAR/CV/mean/SD from the CGM reading stream. Emits `flink.cgm-analytics` events at configurable intervals (every reading + daily summary + 14-day report). This is where real-time alerting happens (nocturnal hypoglycaemia detection, sustained hyperglycaemia).
+
+
+2. **KB-26 (Metabolic Digital Twin):** Receives CGM analytics summaries and integrates them into the MHRI glucose domain scoring. When CGM data is available, MHRI glucose domain switches from FBG/PPBG snapshot scoring to CGM-derived TIR/CV/GMI scoring — fundamentally more accurate. Computes AGP percentile profiles for 14-day reports. Stores CGM metric history for trajectory analysis.
+
+
+3. **KB-20 (Patient Profile):** Stores patient's CGM device type, sensor status, data availability windows. Exposes CGM status endpoint for card generation context (does this patient have CGM data? how recent? how complete?).
+
+
+4. **KB-23 (Decision Cards):** Consumes CGM analytics to generate CGM-specific decision cards. TBR >4% triggers hypoglycaemia risk card. TAR >250 sustained >2 hours triggers hyperglycaemia urgency card. CV >36% triggers variability-focused therapy review card. GMI-HbA1c discrepancy >0.5% triggers investigation card.
+
+
+**Data flow:**
+```
+CGM Device → Patient App → Ingestion Service → Module 1b (canonical)
+                                                      ↓
+                                              Module 3 CGM Operator
+                                              (streaming TIR/TBR/TAR/CV)
+                                                      ↓
+                                              flink.cgm-analytics topic
+                                                ↓              ↓
+                                            KB-26            KB-23
+                                    (MHRI glucose domain)  (CGM cards)
+                                              ↓
+                                    KB-20 (v4-state PATCH)
+```
+
+
+**Critical design decisions:**
+
+
+1. **Minimum data requirement:** Per International Consensus, CGM metrics are only valid when ≥70% of readings are present over the computation period. For a 14-day period with readings every 15 minutes (96/day × 14 = 1,344 expected), minimum is 941 readings. The system must track data sufficiency and flag metrics as `LOW_CONFIDENCE` when below 70%.
+
+
+2. **Sensor warm-up exclusion:** First 60 minutes after sensor insertion produce unreliable readings. The system must detect sensor-start events and exclude warm-up readings from analytics.
+
+
+3. **Calibration detection:** Some CGM systems require fingerstick calibrations. Calibration readings should be flagged and excluded from CGM analytics (they're SMBG values, not interstitial glucose).
+
+
+4. **Compression artifact handling:** CGM sensors have accuracy limitations at extremes (typically ±15 mg/dL accuracy in 70-180 range, wider at extremes). The system should not over-interpret readings near range boundaries. A reading of 68 mg/dL might or might not be true hypoglycaemia. This is handled by the International Consensus recommendation to use sustained below-range (≥15 consecutive minutes) rather than single-reading thresholds.
+
+
+---
+
+
+## Tech Stack Alignment
+
+
+- Java 17 (Flink 1.18) for Module 3 CGM operator — streaming computation
+- Go 1.21 (Gin, GORM) for KB-26 CGM analytics storage and MHRI integration
+- Go 1.21 for KB-23 CGM-specific card generation rules
+- PostgreSQL 15 for CGM metric history
+- Kafka for `flink.cgm-analytics` topic
+- YAML market configs for population-specific TIR targets
+
+
+---
+
+
+## File Inventory
+
+
+### Module 3 (Flink) — Streaming CGM Analytics
+| Action | File |
+|--------|------|
+| Create | `flink-processing/.../operators/Module3_CGMAnalytics.java` |
+| Create | `flink-processing/.../operators/Module3_CGMAnalyticsTest.java` |
+| Create | `flink-processing/.../models/CGMAnalyticsEvent.java` |
+| Create | `flink-processing/.../models/CGMReadingBuffer.java` |
+| Create | `flink-processing/.../models/AGPProfile.java` |
+| Modify | `flink-processing/.../operators/Module3_ComprehensiveCDS.java` (integrate CGM analytics) |
+
+
+### KB-26 (Metabolic Digital Twin) — MHRI Integration
+| Action | File |
+|--------|------|
+| Create | `kb-26-metabolic-digital-twin/internal/services/cgm_analytics.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/services/cgm_analytics_test.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/models/cgm_metrics.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/api/cgm_handlers.go` |
+| Create | `kb-26-metabolic-digital-twin/migrations/004_cgm_tables.sql` |
+| Modify | `kb-26-metabolic-digital-twin/internal/services/mri_scorer.go` (CGM-aware glucose domain) |
+| Modify | `kb-26-metabolic-digital-twin/internal/api/routes.go` |
+
+
+### KB-23 (Decision Cards) — CGM-Specific Cards
+| Action | File |
+|--------|------|
+| Create | `kb-23-decision-cards/internal/services/cgm_card_rules.go` |
+| Create | `kb-23-decision-cards/internal/services/cgm_card_rules_test.go` |
+
+
+### Market Configs — CGM Targets
+| Action | File |
+|--------|------|
+| Create | `market-configs/shared/cgm_targets.yaml` |
+| Create | `market-configs/india/cgm_overrides.yaml` |
+| Create | `market-configs/australia/cgm_overrides.yaml` |
+
+
+### KB-20 (Patient Profile) — CGM Status
+| Action | File |
+|--------|------|
+| Create | `kb-20-patient-profile/internal/api/cgm_status_handlers.go` |
+| Create | `kb-20-patient-profile/internal/api/cgm_status_handlers_test.go` |
+| Modify | `kb-20-patient-profile/internal/api/routes.go` |
+
+
+**Total: 21 files (16 create, 5 modify)**
+
+
+---
+
+
+## Phase G1: CGM Data Models + Market Configuration
+
+
+### Step 1: Create CGM targets YAML
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/shared/cgm_targets.yaml
+# International Consensus on CGM Metrics (Battelino et al. 2023)
+# ADA Standards of Care 2025, Section 7
+# All targets apply to T1DM and T2DM unless population-specific override.
+
+
+data_sufficiency:
+  min_coverage_pct: 70        # % of expected readings required for valid metrics
+  min_days_for_report: 14     # standard AGP reporting period
+  min_days_for_tir: 3         # minimum days for preliminary TIR (flagged LOW_CONFIDENCE)
+  readings_per_day_expected: 96  # 1 reading per 15 minutes
+  sensor_warmup_minutes: 60   # exclude first 60 min after sensor start
+  max_gap_minutes: 60         # interpolate gaps < 60 min; flag gaps >= 60 min
+
+
+# Range thresholds (mg/dL) — International Consensus 2023
+ranges:
+  very_low: 54          # Level 2 hypoglycaemia
+  low: 70               # Level 1 hypoglycaemia
+  target_low: 70        # TIR lower bound
+  target_high: 180      # TIR upper bound
+  high: 180             # Level 1 hyperglycaemia
+  very_high: 250        # Level 2 hyperglycaemia
+
+
+# Targets — General adult T2DM
+targets:
+  general_adult:
+    tir_pct: 70           # >70% in 70-180
+    tbr_l1_pct: 4         # <4% in 54-70
+    tbr_l2_pct: 1         # <1% below 54
+    tar_l1_pct: 25        # <25% in 180-250
+    tar_l2_pct: 5         # <5% above 250
+    cv_pct: 36            # ≤36% = stable
+    gmi_target: 7.0       # GMI < 7.0% = well-managed
+
+
+  # Relaxed targets — Elderly/frail (age ≥75 or frailty score high)
+  elderly_frail:
+    tir_pct: 50           # >50% in 70-180
+    tbr_l1_pct: 1         # <1% — priority is avoiding hypos
+    tbr_l2_pct: 0         # zero tolerance for severe hypos
+    tar_l1_pct: 50        # relaxed — accept higher glucose
+    tar_l2_pct: 10        # relaxed
+    cv_pct: 36
+    gmi_target: 8.0
+
+
+  # Pregnancy (gestational or pre-existing) — tighter
+  pregnancy:
+    tir_pct: 70           # in 63-140 range (different range!)
+    tbr_l1_pct: 4
+    tbr_l2_pct: 1
+    tar_l1_pct: 25
+    tar_l2_pct: 5
+    target_low: 63        # pregnancy-specific range
+    target_high: 140      # pregnancy-specific range
+
+
+# Glycaemic Risk Index (GRI) — Klonoff et al. 2023
+gri:
+  weights:
+    very_low: 3.0    # % time <54
+    low: 2.4         # % time 54-70
+    very_high: 1.6   # % time >250
+    high: 0.8        # % time 180-250
+  zones:
+    A: 20            # GRI ≤ 20 (best)
+    B: 40            # GRI 21-40
+    C: 60            # GRI 41-60
+    D: 80            # GRI 61-80
+                     # GRI > 80 = Zone E (worst)
+
+
+# GMI formula: GMI(%) = 3.31 + (0.02392 × mean_glucose_mg_dl)
+gmi:
+  intercept: 3.31
+  slope: 0.02392
+  discrepancy_threshold: 0.5  # flag when |GMI - lab_HbA1c| > 0.5%
+
+
+# AGP computation
+agp:
+  bucket_minutes: 30          # 48 buckets per 24 hours
+  percentiles: [10, 25, 50, 75, 90]
+  min_days_per_bucket: 5      # need ≥5 days contributing to each bucket
+
+
+# Alert thresholds — real-time from Flink
+alerts:
+  sustained_hypo_minutes: 15           # alert if <70 for ≥15 consecutive min
+  sustained_severe_hypo_minutes: 15    # alert if <54 for ≥15 consecutive min
+  sustained_hyper_minutes: 120         # alert if >250 for ≥120 consecutive min
+  rapid_rise_mg_dl_per_min: 3.0        # alert if glucose rising >3 mg/dL/min
+  rapid_fall_mg_dl_per_min: 3.0        # alert if glucose falling >3 mg/dL/min
+  nocturnal_hypo_window: "00:00-06:00" # nocturnal window for hypo detection
+```
+
+
+- [ ] **Step 2: Create India CGM overrides**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/india/cgm_overrides.yaml
+# Sources: RSSDI 2023 CGM Position Statement, IDF-DAR 2021
+# India-specific CGM considerations.
+
+
+device_landscape:
+  primary_device: "FREESTYLE_LIBRE_2"     # ~85% market share India
+  data_format: "ISCGM_SCAN"              # intermittent scanning, not real-time
+  typical_scans_per_day: 4                # most Indian patients scan 4-8x/day
+  max_data_gap_hours: 8                   # Libre stores 8 hours; older data lost
+
+
+# RSSDI 2023 endorses International Consensus targets without modification
+# but adds emphasis on TBR for patients on SU + insulin combinations
+targets_override:
+  sulfonylurea_insulin_combination:
+    tbr_l1_pct: 2          # stricter TBR when on hypo-prone regimen
+    tbr_l2_pct: 0          # zero tolerance
+    rationale: "RSSDI_2023_CGM_POSITION: SU+insulin combination hypo risk"
+
+
+# Ramadan CGM guidance — IDF-DAR 2021
+ramadan:
+  enabled: true
+  # During Ramadan, the daily glucose pattern shifts dramatically:
+  # - Extended fasting (dawn to sunset): risk of hypoglycaemia
+  # - Post-Iftar meal: severe hyperglycaemia spike
+  # - Suhoor (pre-dawn meal): moderate rise then prolonged fast
+  pre_ramadan_cgm_recommended: true        # recommend CGM wear starting 2 weeks before
+  fasting_window_start: "SUNRISE"          # varies by date/location
+  fasting_window_end: "SUNSET"
+  adjusted_targets:
+    tir_pct: 60             # relaxed during Ramadan — altered eating pattern
+    tbr_l1_pct: 2           # tighter — fasting hypo is dangerous
+    tbr_l2_pct: 0           # zero tolerance during fasting
+    tar_l2_pct: 10          # relaxed — post-Iftar spikes expected
+  alert_adjustments:
+    # During fasting hours: lower hypo alert threshold (alert at <80 instead of 70)
+    fasting_hypo_alert_mg_dl: 80
+    # Post-Iftar window (2 hours after sunset): suppress single-spike hyper alerts
+    post_iftar_hyper_suppress_minutes: 120
+
+
+# Cost-driven intermittent CGM use
+intermittent_use:
+  enabled: true
+  typical_pattern: "2_WEEKS_ON_12_WEEKS_OFF"
+  # When CGM data is available, use it for MHRI. When not, fall back to SMBG/FBG.
+  fallback_to_smbg: true
+  min_cgm_days_for_mhri_switch: 7       # need at least 7 days CGM for MHRI glucose switch
+```
+
+
+- [ ] **Step 3: Create Australia CGM overrides**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/australia/cgm_overrides.yaml
+# Sources: ADS-ADEA Position Statement 2024, RACGP 2024
+
+
+device_landscape:
+  primary_devices:
+    - "FREESTYLE_LIBRE_2"
+    - "DEXCOM_G7"
+  data_format: "MIXED"                  # both isCGM and rtCGM
+  ndss_subsidized: true                 # NDSS subsidizes for eligible patients
+
+
+# ADS-ADEA 2024: TIR as co-primary endpoint with HbA1c
+# No target overrides — Australian guidelines adopt International Consensus directly
+
+
+# Indigenous population CGM considerations
+indigenous_overrides:
+  # Remote community connectivity: CGM data may arrive in bursts after offline periods
+  offline_sync_max_days: 14              # accept up to 14 days of batched data
+  # Relaxed targets per NACCHO guidance — prioritize TBR safety
+  targets:
+    tir_pct: 50                          # relaxed
+    tbr_l1_pct: 2                        # strict — hypo in remote community is dangerous
+    tbr_l2_pct: 0                        # zero tolerance
+  # Language support for CGM reports
+  report_languages: ["en", "kriol"]
+
+
+# My Health Record integration
+mhr_integration:
+  emit_cgm_summary: true                 # 14-day CGM summary to MHR
+  fhir_document_type: "CGM_SUMMARY_REPORT"
+  fhir_profile: "http://hl7.org.au/fhir/StructureDefinition/au-diagnosticreport"
+```
+
+
+---
+
+
+## Phase G2: Flink CGM Analytics Operator
+
+
+### Step 4: Create CGM data models for Flink
+
+
+```java
+// flink-processing/.../models/CGMReadingBuffer.java
+package com.cardiofit.flink.models;
+
+
+import java.io.Serializable;
+import java.util.*;
+
+
+/**
+ * Ring buffer for CGM readings in Flink keyed state.
+ * Stores up to 14 days of readings (96/day × 14 = 1,344 max).
+ * Uses HashMap instead of EnumMap to avoid Kryo serialization issues.
+ */
+public class CGMReadingBuffer implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private static final int MAX_READINGS = 1_500; // slightly above 14-day capacity
+
+
+    private final List<Long> timestamps;     // epoch millis
+    private final List<Double> glucoseValues; // mg/dL
+    private Long sensorStartTime;            // null if unknown
+    private int totalReadingsReceived;
+    private int readingsExcluded;            // warm-up, calibration, etc.
+
+
+    public CGMReadingBuffer() {
+        this.timestamps = new ArrayList<>(MAX_READINGS);
+        this.glucoseValues = new ArrayList<>(MAX_READINGS);
+        this.totalReadingsReceived = 0;
+        this.readingsExcluded = 0;
+    }
+
+
+    /**
+     * Add a CGM reading. Returns false if excluded (warm-up, duplicate, etc.)
+     */
+    public boolean addReading(long timestampMs, double glucoseMgDl) {
+        totalReadingsReceived++;
+
+
+        // Exclude sensor warm-up (first 60 minutes)
+        if (sensorStartTime != null && timestampMs - sensorStartTime < 60 * 60 * 1000L) {
+            readingsExcluded++;
+            return false;
+        }
+
+
+        // Exclude physiologically impossible values
+        if (glucoseMgDl < 20.0 || glucoseMgDl > 500.0) {
+            readingsExcluded++;
+            return false;
+        }
+
+
+        // Maintain sorted order by timestamp
+        int insertIdx = Collections.binarySearch(timestamps, timestampMs);
+        if (insertIdx >= 0) {
+            // Duplicate timestamp — skip
+            readingsExcluded++;
+            return false;
+        }
+        insertIdx = -(insertIdx + 1);
+        timestamps.add(insertIdx, timestampMs);
+        glucoseValues.add(insertIdx, glucoseMgDl);
+
+
+        // Evict oldest if over capacity
+        while (timestamps.size() > MAX_READINGS) {
+            timestamps.remove(0);
+            glucoseValues.remove(0);
+        }
+
+
+        return true;
+    }
+
+
+    public void setSensorStartTime(long sensorStartMs) {
+        this.sensorStartTime = sensorStartMs;
+    }
+
+
+    /**
+     * Returns readings within the specified window.
+     * @param windowStartMs inclusive start
+     * @param windowEndMs inclusive end
+     */
+    public List<Double> getReadingsInWindow(long windowStartMs, long windowEndMs) {
+        List<Double> result = new ArrayList<>();
+        for (int i = 0; i < timestamps.size(); i++) {
+            long ts = timestamps.get(i);
+            if (ts >= windowStartMs && ts <= windowEndMs) {
+                result.add(glucoseValues.get(i));
+            }
+        }
+        return result;
+    }
+
+
+    /**
+     * Returns timestamped readings in window for AGP bucketing.
+     */
+    public List<long[]> getTimestampedReadingsInWindow(long windowStartMs, long windowEndMs) {
+        List<long[]> result = new ArrayList<>();
+        for (int i = 0; i < timestamps.size(); i++) {
+            long ts = timestamps.get(i);
+            if (ts >= windowStartMs && ts <= windowEndMs) {
+                result.add(new long[]{ts, Double.doubleToLongBits(glucoseValues.get(i))});
+            }
+        }
+        return result;
+    }
+
+
+    /**
+     * Computes data sufficiency as percentage of expected readings present.
+     * @param windowDays number of days in window
+     * @param expectedPerDay expected readings per day (default 96 for 15-min intervals)
+     */
+    public double computeCoverage(long windowStartMs, long windowEndMs, int expectedPerDay) {
+        int expected = (int) ((windowEndMs - windowStartMs) / (86400_000L)) * expectedPerDay;
+        if (expected <= 0) return 0.0;
+        int actual = 0;
+        for (long ts : timestamps) {
+            if (ts >= windowStartMs && ts <= windowEndMs) actual++;
+        }
+        return (double) actual / expected;
+    }
+
+
+    public int size() { return timestamps.size(); }
+    public int getTotalReadingsReceived() { return totalReadingsReceived; }
+    public int getReadingsExcluded() { return readingsExcluded; }
+
+
+    /**
+     * Returns consecutive readings below threshold, with timestamps.
+     * Used for sustained hypo/hyper detection.
+     */
+    public List<ConsecutiveRun> findConsecutiveRunsBelowThreshold(double threshold, long windowStartMs, long windowEndMs) {
+        List<ConsecutiveRun> runs = new ArrayList<>();
+        Long runStart = null;
+        int runCount = 0;
+
+
+        for (int i = 0; i < timestamps.size(); i++) {
+            long ts = timestamps.get(i);
+            if (ts < windowStartMs || ts > windowEndMs) continue;
+
+
+            if (glucoseValues.get(i) < threshold) {
+                if (runStart == null) {
+                    runStart = ts;
+                    runCount = 1;
+                } else {
+                    runCount++;
+                }
+            } else {
+                if (runStart != null) {
+                    runs.add(new ConsecutiveRun(runStart, ts, runCount));
+                    runStart = null;
+                    runCount = 0;
+                }
+            }
+        }
+        // Close final run if still open
+        if (runStart != null && !timestamps.isEmpty()) {
+            runs.add(new ConsecutiveRun(runStart, timestamps.get(timestamps.size() - 1), runCount));
+        }
+        return runs;
+    }
+
+
+    public List<ConsecutiveRun> findConsecutiveRunsAboveThreshold(double threshold, long windowStartMs, long windowEndMs) {
+        List<ConsecutiveRun> runs = new ArrayList<>();
+        Long runStart = null;
+        int runCount = 0;
+
+
+        for (int i = 0; i < timestamps.size(); i++) {
+            long ts = timestamps.get(i);
+            if (ts < windowStartMs || ts > windowEndMs) continue;
+
+
+            if (glucoseValues.get(i) > threshold) {
+                if (runStart == null) {
+                    runStart = ts;
+                    runCount = 1;
+                } else {
+                    runCount++;
+                }
+            } else {
+                if (runStart != null) {
+                    runs.add(new ConsecutiveRun(runStart, ts, runCount));
+                    runStart = null;
+                    runCount = 0;
+                }
+            }
+        }
+        if (runStart != null && !timestamps.isEmpty()) {
+            runs.add(new ConsecutiveRun(runStart, timestamps.get(timestamps.size() - 1), runCount));
+        }
+        return runs;
+    }
+
+
+    public static class ConsecutiveRun implements Serializable {
+        public final long startMs;
+        public final long endMs;
+        public final int readingCount;
+
+
+        public ConsecutiveRun(long startMs, long endMs, int readingCount) {
+            this.startMs = startMs;
+            this.endMs = endMs;
+            this.readingCount = readingCount;
+        }
+
+
+        public long durationMinutes() {
+            return (endMs - startMs) / 60_000L;
+        }
+    }
+}
+```
+
+
+- [ ] **Step 5: Create CGM analytics event model**
+
+
+```java
+// flink-processing/.../models/CGMAnalyticsEvent.java
+package com.cardiofit.flink.models;
+
+
+import java.io.Serializable;
+import java.util.*;
+
+
+/**
+ * Output event from Module 3 CGM Analytics.
+ * Emitted at configurable intervals (per-reading incremental + daily summary + 14-day report).
+ */
+public class CGMAnalyticsEvent implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+
+    // Identity
+    private String patientId;
+    private String correlationId;
+    private long computedAt;
+    private String reportType;  // "INCREMENTAL", "DAILY_SUMMARY", "PERIOD_REPORT"
+
+
+    // Data quality
+    private double coveragePct;         // % of expected readings present
+    private int totalReadings;
+    private int windowDays;
+    private boolean sufficientData;     // coverage >= 70%
+    private String confidenceLevel;     // HIGH (>=70%), MODERATE (50-70%), LOW (<50%)
+
+
+    // Core metrics — International Consensus 2023
+    private double meanGlucose;         // mg/dL
+    private double sdGlucose;           // mg/dL
+    private double cvPct;               // coefficient of variation (%)
+    private boolean glucoseStable;      // CV <= 36%
+
+
+    // Time in range metrics (% of time)
+    private double tirPct;              // 70-180 mg/dL
+    private double tbrL1Pct;            // 54-70 mg/dL (Level 1 hypo)
+    private double tbrL2Pct;            // <54 mg/dL (Level 2 hypo)
+    private double tarL1Pct;            // 180-250 mg/dL (Level 1 hyper)
+    private double tarL2Pct;            // >250 mg/dL (Level 2 hyper)
+
+
+    // Derived metrics
+    private double gmi;                 // Glucose Management Indicator (%)
+    private Double gmiHba1cDiscrepancy; // |GMI - lab HbA1c| if lab HbA1c available
+    private double gri;                 // Glycaemic Risk Index (0-100)
+    private String griZone;             // A/B/C/D/E
+
+
+    // Alert flags
+    private boolean sustainedHypoDetected;        // <70 for ≥15 consecutive min
+    private boolean sustainedSevereHypoDetected;  // <54 for ≥15 consecutive min
+    private boolean sustainedHyperDetected;        // >250 for ≥120 consecutive min
+    private boolean nocturnalHypoDetected;         // hypo during 00:00-06:00
+    private boolean rapidRiseDetected;             // >3 mg/dL/min
+    private boolean rapidFallDetected;             // >3 mg/dL/min fall
+
+
+    // Target comparison
+    private Map<String, Boolean> targetsMetMap;    // HashMap, not EnumMap!
+    // e.g., {"tir": true, "tbr_l1": true, "tbr_l2": true, "tar_l1": false, ...}
+
+
+    // AGP data (only in PERIOD_REPORT type)
+    private Map<Integer, double[]> agpPercentiles;
+    // bucket_index (0-47 for 30-min buckets) → [p10, p25, p50, p75, p90]
+
+
+    // Constructors, getters, setters...
+    public CGMAnalyticsEvent() {
+        this.targetsMetMap = new HashMap<>();
+    }
+
+
+    // Builder pattern for construction
+    public static Builder builder() { return new Builder(); }
+
+
+    public static class Builder {
+        private final CGMAnalyticsEvent event = new CGMAnalyticsEvent();
+
+
+        public Builder patientId(String v) { event.patientId = v; return this; }
+        public Builder correlationId(String v) { event.correlationId = v; return this; }
+        public Builder computedAt(long v) { event.computedAt = v; return this; }
+        public Builder reportType(String v) { event.reportType = v; return this; }
+        public Builder coveragePct(double v) { event.coveragePct = v; return this; }
+        public Builder totalReadings(int v) { event.totalReadings = v; return this; }
+        public Builder windowDays(int v) { event.windowDays = v; return this; }
+        public Builder sufficientData(boolean v) { event.sufficientData = v; return this; }
+        public Builder confidenceLevel(String v) { event.confidenceLevel = v; return this; }
+        public Builder meanGlucose(double v) { event.meanGlucose = v; return this; }
+        public Builder sdGlucose(double v) { event.sdGlucose = v; return this; }
+        public Builder cvPct(double v) { event.cvPct = v; event.glucoseStable = v <= 36.0; return this; }
+        public Builder tirPct(double v) { event.tirPct = v; return this; }
+        public Builder tbrL1Pct(double v) { event.tbrL1Pct = v; return this; }
+        public Builder tbrL2Pct(double v) { event.tbrL2Pct = v; return this; }
+        public Builder tarL1Pct(double v) { event.tarL1Pct = v; return this; }
+        public Builder tarL2Pct(double v) { event.tarL2Pct = v; return this; }
+        public Builder gmi(double v) { event.gmi = v; return this; }
+        public Builder gri(double v) {
+            event.gri = v;
+            if (v <= 20) event.griZone = "A";
+            else if (v <= 40) event.griZone = "B";
+            else if (v <= 60) event.griZone = "C";
+            else if (v <= 80) event.griZone = "D";
+            else event.griZone = "E";
+            return this;
+        }
+        public CGMAnalyticsEvent build() { return event; }
+    }
+
+
+    // All getters...
+    public String getPatientId() { return patientId; }
+    public String getReportType() { return reportType; }
+    public double getTirPct() { return tirPct; }
+    public double getTbrL1Pct() { return tbrL1Pct; }
+    public double getTbrL2Pct() { return tbrL2Pct; }
+    public double getTarL1Pct() { return tarL1Pct; }
+    public double getTarL2Pct() { return tarL2Pct; }
+    public double getCvPct() { return cvPct; }
+    public boolean isGlucoseStable() { return glucoseStable; }
+    public double getGmi() { return gmi; }
+    public double getGri() { return gri; }
+    public String getGriZone() { return griZone; }
+    public double getCoveragePct() { return coveragePct; }
+    public boolean isSufficientData() { return sufficientData; }
+    public boolean isSustainedHypoDetected() { return sustainedHypoDetected; }
+    public boolean isSustainedSevereHypoDetected() { return sustainedSevereHypoDetected; }
+    public boolean isSustainedHyperDetected() { return sustainedHyperDetected; }
+    public boolean isNocturnalHypoDetected() { return nocturnalHypoDetected; }
+    public double getMeanGlucose() { return meanGlucose; }
+    public double getSdGlucose() { return sdGlucose; }
+    public Map<Integer, double[]> getAgpPercentiles() { return agpPercentiles; }
+    public void setAgpPercentiles(Map<Integer, double[]> v) { this.agpPercentiles = v; }
+    public void setSustainedHypoDetected(boolean v) { this.sustainedHypoDetected = v; }
+    public void setSustainedSevereHypoDetected(boolean v) { this.sustainedSevereHypoDetected = v; }
+    public void setSustainedHyperDetected(boolean v) { this.sustainedHyperDetected = v; }
+    public void setNocturnalHypoDetected(boolean v) { this.nocturnalHypoDetected = v; }
+    public void setRapidRiseDetected(boolean v) { this.rapidRiseDetected = v; }
+    public void setRapidFallDetected(boolean v) { this.rapidFallDetected = v; }
+    public void setGmiHba1cDiscrepancy(Double v) { this.gmiHba1cDiscrepancy = v; }
+    public void setTargetsMet(String key, boolean met) { this.targetsMetMap.put(key, met); }
+    public String getConfidenceLevel() { return confidenceLevel; }
+}
+```
+
+
+- [ ] **Step 6: Write failing test for CGM core computation**
+
+
+```java
+// flink-processing/.../operators/Module3_CGMAnalyticsTest.java
+package com.cardiofit.flink.operators;
+
+
+import com.cardiofit.flink.models.CGMAnalyticsEvent;
+import com.cardiofit.flink.models.CGMReadingBuffer;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
+
+
+import java.util.*;
+
+
+import static org.junit.jupiter.api.Assertions.*;
+
+
+public class Module3_CGMAnalyticsTest {
+
+
+    private Module3_CGMAnalytics analytics;
+
+
+    @BeforeEach
+    void setup() {
+        analytics = new Module3_CGMAnalytics();
+    }
+
+
+    // === TIR / TBR / TAR COMPUTATION ===
+
+
+    @Test
+    void testTIR_AllInRange() {
+        List<Double> readings = Collections.nCopies(100, 120.0); // all at 120
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertEquals(100.0, result.getTirPct(), 0.01);
+        assertEquals(0.0, result.getTbrL1Pct(), 0.01);
+        assertEquals(0.0, result.getTbrL2Pct(), 0.01);
+        assertEquals(0.0, result.getTarL1Pct(), 0.01);
+        assertEquals(0.0, result.getTarL2Pct(), 0.01);
+    }
+
+
+    @Test
+    void testTIR_MixedRanges() {
+        List<Double> readings = new ArrayList<>();
+        // 70 readings at 130 (in range)
+        for (int i = 0; i < 70; i++) readings.add(130.0);
+        // 10 readings at 60 (Level 1 hypo, 54-70)
+        for (int i = 0; i < 10; i++) readings.add(60.0);
+        // 5 readings at 45 (Level 2 hypo, <54)
+        for (int i = 0; i < 5; i++) readings.add(45.0);
+        // 10 readings at 200 (Level 1 hyper, 180-250)
+        for (int i = 0; i < 10; i++) readings.add(200.0);
+        // 5 readings at 280 (Level 2 hyper, >250)
+        for (int i = 0; i < 5; i++) readings.add(280.0);
+
+
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertEquals(70.0, result.getTirPct(), 0.01);
+        assertEquals(10.0, result.getTbrL1Pct(), 0.01);
+        assertEquals(5.0, result.getTbrL2Pct(), 0.01);
+        assertEquals(10.0, result.getTarL1Pct(), 0.01);
+        assertEquals(5.0, result.getTarL2Pct(), 0.01);
+    }
+
+
+    // === CV COMPUTATION ===
+
+
+    @Test
+    void testCV_StableGlucose() {
+        // Readings with small variation around mean 120
+        List<Double> readings = Arrays.asList(
+            115.0, 118.0, 120.0, 122.0, 125.0, 119.0, 121.0, 117.0, 123.0, 120.0
+        );
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertTrue(result.getCvPct() < 36.0, "CV should be < 36% for stable glucose, got " + result.getCvPct());
+        assertTrue(result.isGlucoseStable());
+    }
+
+
+    @Test
+    void testCV_UnstableGlucose() {
+        // Wide swings: hypo to hyper
+        List<Double> readings = Arrays.asList(
+            55.0, 180.0, 60.0, 220.0, 50.0, 250.0, 65.0, 190.0, 55.0, 200.0
+        );
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertTrue(result.getCvPct() > 36.0, "CV should be > 36% for unstable glucose, got " + result.getCvPct());
+        assertFalse(result.isGlucoseStable());
+    }
+
+
+    // === GMI COMPUTATION ===
+
+
+    @Test
+    void testGMI_StandardFormula() {
+        // Mean glucose 154 mg/dL → GMI = 3.31 + (0.02392 × 154) = 3.31 + 3.68 = 6.99
+        List<Double> readings = Collections.nCopies(100, 154.0);
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertEquals(6.99, result.getGmi(), 0.05);
+    }
+
+
+    @Test
+    void testGMI_HighMean() {
+        // Mean glucose 200 mg/dL → GMI = 3.31 + (0.02392 × 200) = 3.31 + 4.784 = 8.09
+        List<Double> readings = Collections.nCopies(100, 200.0);
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertEquals(8.09, result.getGmi(), 0.05);
+    }
+
+
+    // === GRI COMPUTATION ===
+
+
+    @Test
+    void testGRI_ZoneA() {
+        // All in range → GRI = 0
+        List<Double> readings = Collections.nCopies(100, 120.0);
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        assertEquals(0.0, result.getGri(), 0.01);
+        assertEquals("A", result.getGriZone());
+    }
+
+
+    @Test
+    void testGRI_ZoneE() {
+        // 50% above 250, 20% below 54 → very high GRI
+        List<Double> readings = new ArrayList<>();
+        for (int i = 0; i < 50; i++) readings.add(280.0);  // >250
+        for (int i = 0; i < 20; i++) readings.add(45.0);   // <54
+        for (int i = 0; i < 30; i++) readings.add(120.0);   // in range
+
+
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 1);
+
+
+        // GRI = (3.0 × 20) + (2.4 × 0) + (1.6 × 50) + (0.8 × 0) = 60 + 80 = 140 → capped at 100
+        assertTrue(result.getGri() > 80, "Expected GRI Zone E, got " + result.getGri());
+        assertEquals("E", result.getGriZone());
+    }
+
+
+    // === DATA SUFFICIENCY ===
+
+
+    @Test
+    void testCoverage_SufficientData() {
+        // 96 readings per day × 14 days = 1344 expected; 70% = 941
+        List<Double> readings = Collections.nCopies(1000, 120.0);
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 14);
+
+
+        assertTrue(result.getCoveragePct() >= 70.0);
+        assertTrue(result.isSufficientData());
+        assertEquals("HIGH", result.getConfidenceLevel());
+    }
+
+
+    @Test
+    void testCoverage_InsufficientData() {
+        // Only 50 readings in 14 days — way below 70%
+        List<Double> readings = Collections.nCopies(50, 120.0);
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 14);
+
+
+        assertFalse(result.isSufficientData());
+        assertEquals("LOW", result.getConfidenceLevel());
+    }
+
+
+    // === SUSTAINED EVENT DETECTION ===
+
+
+    @Test
+    void testSustainedHypo_Detected() {
+        CGMReadingBuffer buffer = new CGMReadingBuffer();
+        long base = System.currentTimeMillis();
+        // 20 readings at 65 mg/dL, 15 min apart = 300 min (well above 15 min threshold)
+        for (int i = 0; i < 20; i++) {
+            buffer.addReading(base + i * 15 * 60_000L, 65.0);
+        }
+
+
+        boolean detected = analytics.detectSustainedHypo(buffer, base, base + 20 * 15 * 60_000L, 70.0, 15);
+        assertTrue(detected);
+    }
+
+
+    @Test
+    void testSustainedHypo_NotDetected_TooShort() {
+        CGMReadingBuffer buffer = new CGMReadingBuffer();
+        long base = System.currentTimeMillis();
+        // 1 reading below threshold (only ~0 minutes of sustained)
+        buffer.addReading(base, 65.0);
+        buffer.addReading(base + 15 * 60_000L, 120.0); // back to normal
+
+
+        boolean detected = analytics.detectSustainedHypo(buffer, base, base + 30 * 60_000L, 70.0, 15);
+        assertFalse(detected);
+    }
+
+
+    @Test
+    void testNocturnalHypo() {
+        CGMReadingBuffer buffer = new CGMReadingBuffer();
+        // Simulate readings across midnight-6am with hypo at 3am
+        long midnight = 1774324800000L; // arbitrary midnight epoch
+        // Normal readings until 2:30am
+        for (int i = 0; i < 10; i++) {
+            buffer.addReading(midnight + i * 15 * 60_000L, 110.0);
+        }
+        // Hypo readings 2:30am - 4:00am (6 readings × 15 min = 90 min)
+        for (int i = 10; i < 16; i++) {
+            buffer.addReading(midnight + i * 15 * 60_000L, 58.0);
+        }
+        // Recovery
+        for (int i = 16; i < 24; i++) {
+            buffer.addReading(midnight + i * 15 * 60_000L, 105.0);
+        }
+
+
+        boolean detected = analytics.detectNocturnalHypo(
+            buffer, midnight, midnight + 6 * 3600_000L, 70.0, 15);
+        assertTrue(detected);
+    }
+
+
+    // === RAJESH KUMAR SCENARIO ===
+
+
+    @Test
+    void testRajeshCGMProfile() {
+        // Simulate Rajesh: T2DM, HbA1c 8.2, mostly above range
+        List<Double> readings = new ArrayList<>();
+        Random rng = new Random(42);
+
+
+        // 14 days × 96 readings = 1344 readings
+        for (int day = 0; day < 14; day++) {
+            for (int r = 0; r < 96; r++) {
+                int minuteOfDay = r * 15;
+                double base;
+
+
+                if (minuteOfDay < 360) {
+                    // 00:00-06:00: fasting, elevated baseline
+                    base = 145 + rng.nextGaussian() * 15;
+                } else if (minuteOfDay < 480) {
+                    // 06:00-08:00: dawn phenomenon spike
+                    base = 170 + rng.nextGaussian() * 20;
+                } else if (minuteOfDay < 600) {
+                    // 08:00-10:00: post-breakfast spike
+                    base = 210 + rng.nextGaussian() * 25;
+                } else if (minuteOfDay < 720) {
+                    // 10:00-12:00: coming down from breakfast
+                    base = 175 + rng.nextGaussian() * 20;
+                } else if (minuteOfDay < 840) {
+                    // 12:00-14:00: post-lunch spike
+                    base = 200 + rng.nextGaussian() * 25;
+                } else if (minuteOfDay < 1020) {
+                    // 14:00-17:00: afternoon plateau
+                    base = 160 + rng.nextGaussian() * 15;
+                } else if (minuteOfDay < 1200) {
+                    // 17:00-20:00: post-dinner spike
+                    base = 195 + rng.nextGaussian() * 25;
+                } else {
+                    // 20:00-24:00: settling
+                    base = 155 + rng.nextGaussian() * 15;
+                }
+
+
+                readings.add(Math.max(40, Math.min(400, base)));
+            }
+        }
+
+
+        CGMAnalyticsEvent result = analytics.computeMetrics(readings, 14);
+
+
+        // Rajesh profile: HbA1c 8.2 → mean glucose ~190, TIR should be low
+        assertTrue(result.getTirPct() < 50, "Rajesh TIR should be < 50%, got " + result.getTirPct());
+        assertTrue(result.getTarL1Pct() > 20, "Rajesh TAR L1 should be > 20%, got " + result.getTarL1Pct());
+        assertTrue(result.getGmi() > 7.5, "Rajesh GMI should be > 7.5%, got " + result.getGmi());
+        assertEquals("HIGH", result.getConfidenceLevel());
+        // GRI should be elevated given high TAR
+        assertTrue(result.getGri() > 20, "Rajesh GRI should be elevated, got " + result.getGri());
+    }
+
+
+    // === BUFFER TESTS ===
+
+
+    @Test
+    void testBuffer_SensorWarmupExcluded() {
+        CGMReadingBuffer buffer = new CGMReadingBuffer();
+        long sensorStart = System.currentTimeMillis();
+        buffer.setSensorStartTime(sensorStart);
+
+
+        // Reading during warmup (30 min after start) — should be excluded
+        assertFalse(buffer.addReading(sensorStart + 30 * 60_000L, 150.0));
+        assertEquals(0, buffer.size());
+        assertEquals(1, buffer.getReadingsExcluded());
+
+
+        // Reading after warmup (90 min after start) — should be included
+        assertTrue(buffer.addReading(sensorStart + 90 * 60_000L, 150.0));
+        assertEquals(1, buffer.size());
+    }
+
+
+    @Test
+    void testBuffer_PhysiologicallyImpossibleExcluded() {
+        CGMReadingBuffer buffer = new CGMReadingBuffer();
+        assertFalse(buffer.addReading(System.currentTimeMillis(), 10.0));  // too low
+        assertFalse(buffer.addReading(System.currentTimeMillis() + 1000, 550.0)); // too high
+        assertEquals(0, buffer.size());
+    }
+}
+```
+
+
+- [ ] **Step 7: Run test to verify it fails**
+
+
+```bash
+cd backend/shared-infrastructure/flink-processing
+mvn test -pl . -Dtest=Module3_CGMAnalyticsTest
+```
+
+
+Expected: FAIL — `Module3_CGMAnalytics` class not defined.
+
+
+- [ ] **Step 8: Implement CGM analytics core computation**
+
+
+```java
+// flink-processing/.../operators/Module3_CGMAnalytics.java
+package com.cardiofit.flink.operators;
+
+
+import com.cardiofit.flink.models.CGMAnalyticsEvent;
+import com.cardiofit.flink.models.CGMReadingBuffer;
+
+
+import java.util.*;
+
+
+/**
+ * CGM Analytics engine implementing International Consensus on CGM Metrics
+ * (Battelino et al. 2023), GRI (Klonoff et al. 2023).
+ *
+ * Computes: TIR, TBR (L1/L2), TAR (L1/L2), CV, GMI, GRI, AGP percentiles.
+ * Handles data sufficiency validation per consensus (≥70% coverage required).
+ */
+public class Module3_CGMAnalytics {
+
+
+    // Range thresholds (mg/dL) — International Consensus 2023
+    private static final double VERY_LOW = 54.0;
+    private static final double LOW = 70.0;
+    private static final double HIGH = 180.0;
+    private static final double VERY_HIGH = 250.0;
+
+
+    // GMI formula constants — Bergenstal et al. 2018
+    private static final double GMI_INTERCEPT = 3.31;
+    private static final double GMI_SLOPE = 0.02392;
+
+
+    // GRI weights — Klonoff et al. 2023
+    private static final double GRI_W_VLOW = 3.0;
+    private static final double GRI_W_LOW = 2.4;
+    private static final double GRI_W_VHIGH = 1.6;
+    private static final double GRI_W_HIGH = 0.8;
+
+
+    // CV stability threshold — Monnier et al. 2017
+    private static final double CV_STABLE_THRESHOLD = 36.0;
+
+
+    // Data sufficiency
+    private static final int READINGS_PER_DAY = 96;
+    private static final double MIN_COVERAGE_PCT = 70.0;
+
+
+    /**
+     * Compute all CGM metrics from a list of glucose values.
+     * @param readings glucose values in mg/dL
+     * @param windowDays number of days the readings span
+     */
+    public CGMAnalyticsEvent computeMetrics(List<Double> readings, int windowDays) {
+        int n = readings.size();
+        int expected = windowDays * READINGS_PER_DAY;
+        double coverage = expected > 0 ? (double) n / expected * 100.0 : 0.0;
+        boolean sufficient = coverage >= MIN_COVERAGE_PCT;
+
+
+        String confidence;
+        if (coverage >= 70.0) confidence = "HIGH";
+        else if (coverage >= 50.0) confidence = "MODERATE";
+        else confidence = "LOW";
+
+
+        // Range classification
+        int countVeryLow = 0, countLow = 0, countInRange = 0, countHigh = 0, countVeryHigh = 0;
+        double sum = 0;
+
+
+        for (double g : readings) {
+            sum += g;
+            if (g < VERY_LOW) countVeryLow++;
+            else if (g < LOW) countLow++;
+            else if (g <= HIGH) countInRange++;
+            else if (g <= VERY_HIGH) countHigh++;
+            else countVeryHigh++;
+        }
+
+
+        double mean = n > 0 ? sum / n : 0;
+
+
+        // Standard deviation
+        double sumSqDiff = 0;
+        for (double g : readings) {
+            sumSqDiff += (g - mean) * (g - mean);
+        }
+        double sd = n > 1 ? Math.sqrt(sumSqDiff / (n - 1)) : 0;
+
+
+        // CV
+        double cv = mean > 0 ? (sd / mean) * 100.0 : 0;
+
+
+        // Time in range percentages
+        double tirPct = n > 0 ? (double) countInRange / n * 100.0 : 0;
+        double tbrL1Pct = n > 0 ? (double) countLow / n * 100.0 : 0;
+        double tbrL2Pct = n > 0 ? (double) countVeryLow / n * 100.0 : 0;
+        double tarL1Pct = n > 0 ? (double) countHigh / n * 100.0 : 0;
+        double tarL2Pct = n > 0 ? (double) countVeryHigh / n * 100.0 : 0;
+
+
+        // GMI
+        double gmi = GMI_INTERCEPT + (GMI_SLOPE * mean);
+
+
+        // GRI
+        double gri = (GRI_W_VLOW * tbrL2Pct) + (GRI_W_LOW * tbrL1Pct)
+                    + (GRI_W_VHIGH * tarL2Pct) + (GRI_W_HIGH * tarL1Pct);
+        gri = Math.min(gri, 100.0); // cap at 100
+
+
+        return CGMAnalyticsEvent.builder()
+                .coveragePct(Math.round(coverage * 100.0) / 100.0)
+                .totalReadings(n)
+                .windowDays(windowDays)
+                .sufficientData(sufficient)
+                .confidenceLevel(confidence)
+                .meanGlucose(Math.round(mean * 10.0) / 10.0)
+                .sdGlucose(Math.round(sd * 10.0) / 10.0)
+                .cvPct(Math.round(cv * 10.0) / 10.0)
+                .tirPct(Math.round(tirPct * 100.0) / 100.0)
+                .tbrL1Pct(Math.round(tbrL1Pct * 100.0) / 100.0)
+                .tbrL2Pct(Math.round(tbrL2Pct * 100.0) / 100.0)
+                .tarL1Pct(Math.round(tarL1Pct * 100.0) / 100.0)
+                .tarL2Pct(Math.round(tarL2Pct * 100.0) / 100.0)
+                .gmi(Math.round(gmi * 100.0) / 100.0)
+                .gri(Math.round(gri * 100.0) / 100.0)
+                .build();
+    }
+
+
+    /**
+     * Detect sustained hypoglycaemia (consecutive readings below threshold for >= durationMinutes).
+     */
+    public boolean detectSustainedHypo(CGMReadingBuffer buffer, long windowStart, long windowEnd,
+                                        double threshold, int durationMinutes) {
+        List<CGMReadingBuffer.ConsecutiveRun> runs =
+            buffer.findConsecutiveRunsBelowThreshold(threshold, windowStart, windowEnd);
+        for (CGMReadingBuffer.ConsecutiveRun run : runs) {
+            if (run.durationMinutes() >= durationMinutes) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    /**
+     * Detect sustained hyperglycaemia (consecutive readings above threshold for >= durationMinutes).
+     */
+    public boolean detectSustainedHyper(CGMReadingBuffer buffer, long windowStart, long windowEnd,
+                                         double threshold, int durationMinutes) {
+        List<CGMReadingBuffer.ConsecutiveRun> runs =
+            buffer.findConsecutiveRunsAboveThreshold(threshold, windowStart, windowEnd);
+        for (CGMReadingBuffer.ConsecutiveRun run : runs) {
+            if (run.durationMinutes() >= durationMinutes) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    /**
+     * Detect nocturnal hypoglycaemia (hypo during 00:00-06:00 window).
+     */
+    public boolean detectNocturnalHypo(CGMReadingBuffer buffer, long nocturnalStart, long nocturnalEnd,
+                                        double threshold, int durationMinutes) {
+        return detectSustainedHypo(buffer, nocturnalStart, nocturnalEnd, threshold, durationMinutes);
+    }
+
+
+    /**
+     * Compute AGP percentile profile for a 24-hour period.
+     * Buckets readings by time-of-day into 30-minute intervals (48 buckets).
+     * Computes p10, p25, p50, p75, p90 for each bucket.
+     *
+     * @param timestampedReadings list of [timestampMs, glucoseAsLongBits]
+     * @param minDaysPerBucket minimum days contributing to a bucket for it to be valid
+     * @return map of bucket index (0-47) → [p10, p25, p50, p75, p90], null values for insufficient data
+     */
+    public Map<Integer, double[]> computeAGP(List<long[]> timestampedReadings, int minDaysPerBucket) {
+        // Bucket readings by time-of-day
+        Map<Integer, List<Double>> buckets = new HashMap<>();
+        for (int i = 0; i < 48; i++) buckets.put(i, new ArrayList<>());
+
+
+        for (long[] reading : timestampedReadings) {
+            long ts = reading[0];
+            double glucose = Double.longBitsToDouble(reading[1]);
+
+
+            // Extract time-of-day in minutes from timestamp
+            Calendar cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+            cal.setTimeInMillis(ts);
+            int minuteOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
+            int bucket = minuteOfDay / 30;
+            if (bucket >= 0 && bucket < 48) {
+                buckets.get(bucket).add(glucose);
+            }
+        }
+
+
+        // Compute percentiles for each bucket
+        Map<Integer, double[]> agp = new HashMap<>();
+        for (int i = 0; i < 48; i++) {
+            List<Double> values = buckets.get(i);
+            if (values.size() < minDaysPerBucket) {
+                agp.put(i, null); // insufficient data for this bucket
+                continue;
+            }
+            Collections.sort(values);
+            agp.put(i, new double[]{
+                percentile(values, 10),
+                percentile(values, 25),
+                percentile(values, 50),
+                percentile(values, 75),
+                percentile(values, 90)
+            });
+        }
+        return agp;
+    }
+
+
+    private double percentile(List<Double> sorted, int p) {
+        double idx = (p / 100.0) * (sorted.size() - 1);
+        int lower = (int) Math.floor(idx);
+        int upper = (int) Math.ceil(idx);
+        if (lower == upper) return sorted.get(lower);
+        double frac = idx - lower;
+        return sorted.get(lower) * (1 - frac) + sorted.get(upper) * frac;
+    }
+}
+```
+
+
+- [ ] **Step 9: Run CGM analytics tests**
+
+
+```bash
+cd backend/shared-infrastructure/flink-processing
+mvn test -pl . -Dtest=Module3_CGMAnalyticsTest
+```
+
+
+Expected: All 13 tests PASS.
+
+
+- [ ] **Step 10: Commit Phase G2**
+
+
+```bash
+git add flink-processing/src/main/java/com/cardiofit/flink/models/CGMReadingBuffer.java
+git add flink-processing/src/main/java/com/cardiofit/flink/models/CGMAnalyticsEvent.java
+git add flink-processing/src/main/java/com/cardiofit/flink/operators/Module3_CGMAnalytics.java
+git add flink-processing/src/test/java/com/cardiofit/flink/operators/Module3_CGMAnalyticsTest.java
+git commit -m "feat(cgm): core CGM analytics engine — TIR/TBR/TAR/CV/GMI/GRI/AGP
+
+
+International Consensus 2023 compliant. 5-range classification (very_low/low/
+in_range/high/very_high). CV stability threshold 36% (Monnier 2017). GMI
+formula (Bergenstal 2018). GRI composite with zone A-E (Klonoff 2023). AGP
+48-bucket percentile profile. Sustained hypo/hyper detection with configurable
+duration threshold. Nocturnal hypo detection. Sensor warmup exclusion.
+Data sufficiency validation (≥70% coverage). CGMReadingBuffer with 1500-
+reading capacity, sorted insertion, physiological range filtering."
+```
+
+
+---
+
+
+## Phase G3: KB-26 MHRI Integration
+
+
+### Step 11: Create CGM metric models for KB-26
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/models/cgm_metrics.go
+package models
+
+
+import "time"
+
+
+// CGMPeriodReport stores a 14-day CGM analytics summary.
+type CGMPeriodReport struct {
+    ID              string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+    PatientID       string    `gorm:"size:100;index;not null" json:"patient_id"`
+    PeriodStart     time.Time `gorm:"not null" json:"period_start"`
+    PeriodEnd       time.Time `gorm:"not null" json:"period_end"`
+    WindowDays      int       `json:"window_days"`
+
+
+    // Data quality
+    CoveragePct     float64   `json:"coverage_pct"`
+    TotalReadings   int       `json:"total_readings"`
+    SufficientData  bool      `json:"sufficient_data"`
+    ConfidenceLevel string    `gorm:"size:10" json:"confidence_level"`
+
+
+    // Core metrics
+    MeanGlucose     float64   `json:"mean_glucose"`
+    SDGlucose       float64   `json:"sd_glucose"`
+    CVPct           float64   `json:"cv_pct"`
+    GlucoseStable   bool      `json:"glucose_stable"`
+
+
+    // Time in range
+    TIRPct          float64   `json:"tir_pct"`
+    TBRL1Pct        float64   `json:"tbr_l1_pct"`
+    TBRL2Pct        float64   `json:"tbr_l2_pct"`
+    TARL1Pct        float64   `json:"tar_l1_pct"`
+    TARL2Pct        float64   `json:"tar_l2_pct"`
+
+
+    // Derived
+    GMI             float64   `json:"gmi"`
+    GRI             float64   `json:"gri"`
+    GRIZone         string    `gorm:"size:1" json:"gri_zone"`
+
+
+    // Alerts during period
+    HypoEvents      int       `json:"hypo_events"`
+    SevereHypoEvents int      `json:"severe_hypo_events"`
+    NocturnalHypos  int       `json:"nocturnal_hypos"`
+    HyperEvents     int       `json:"hyper_events"`
+
+
+    CreatedAt       time.Time `json:"created_at"`
+}
+
+
+// CGMDailySummary stores daily CGM summaries for trend analysis.
+type CGMDailySummary struct {
+    ID          string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+    PatientID   string    `gorm:"size:100;index;not null" json:"patient_id"`
+    Date        time.Time `gorm:"index;not null" json:"date"`
+    MeanGlucose float64   `json:"mean_glucose"`
+    SDGlucose   float64   `json:"sd_glucose"`
+    TIRPct      float64   `json:"tir_pct"`
+    TBRL1Pct    float64   `json:"tbr_l1_pct"`
+    TBRL2Pct    float64   `json:"tbr_l2_pct"`
+    TARL1Pct    float64   `json:"tar_l1_pct"`
+    TARL2Pct    float64   `json:"tar_l2_pct"`
+    Readings    int       `json:"readings"`
+    CoveragePct float64   `json:"coverage_pct"`
+    CreatedAt   time.Time `json:"created_at"`
+}
+
+
+// CGMStatus tracks whether a patient has active CGM data.
+type CGMStatus struct {
+    PatientID       string     `json:"patient_id"`
+    HasCGM          bool       `json:"has_cgm"`
+    DeviceType      string     `json:"device_type,omitempty"`
+    LastReadingAt   *time.Time `json:"last_reading_at,omitempty"`
+    SensorStartedAt *time.Time `json:"sensor_started_at,omitempty"`
+    DataFreshness   string     `json:"data_freshness"`       // CURRENT, STALE, NONE
+    LatestTIR       *float64   `json:"latest_tir,omitempty"`
+    LatestGRI       *float64   `json:"latest_gri,omitempty"`
+    LatestGRIZone   string     `json:"latest_gri_zone,omitempty"`
+}
+```
+
+
+- [ ] **Step 12: Write failing test for CGM-aware MHRI scoring**
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/cgm_analytics_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+func TestComputeGlucoseDomainScore_WithCGM(t *testing.T) {
+    // Rajesh-like profile: TIR 42%, CV 38%, GMI 8.1, GRI Zone D
+    cgm := &models.CGMPeriodReport{
+        TIRPct:        42.0,
+        CVPct:         38.0,
+        GMI:           8.1,
+        GRI:           65.0,
+        GRIZone:       "D",
+        SufficientData: true,
+        ConfidenceLevel: "HIGH",
+    }
+
+
+    score := ComputeGlucoseDomainScore(nil, nil, cgm)
+
+
+    // With poor CGM metrics, glucose domain score should be low (bad)
+    assert.True(t, score < 40.0, "Expected low glucose domain score, got %.1f", score)
+}
+
+
+func TestComputeGlucoseDomainScore_WithGoodCGM(t *testing.T) {
+    // Well-managed patient: TIR 78%, CV 30%, GMI 6.5, GRI Zone A
+    cgm := &models.CGMPeriodReport{
+        TIRPct:        78.0,
+        CVPct:         30.0,
+        GMI:           6.5,
+        GRI:           12.0,
+        GRIZone:       "A",
+        SufficientData: true,
+        ConfidenceLevel: "HIGH",
+    }
+
+
+    score := ComputeGlucoseDomainScore(nil, nil, cgm)
+    assert.True(t, score > 70.0, "Expected high glucose domain score, got %.1f", score)
+}
+
+
+func TestComputeGlucoseDomainScore_FallbackToFBG(t *testing.T) {
+    // No CGM data — fall back to FBG/HbA1c scoring
+    fbg := 148.0
+    hba1c := 8.2
+
+
+    score := ComputeGlucoseDomainScore(&fbg, &hba1c, nil)
+    assert.True(t, score < 50.0, "Expected moderate-low score from FBG/HbA1c, got %.1f", score)
+}
+
+
+func TestComputeGlucoseDomainScore_CGMInsufficientData_FallsBackToFBG(t *testing.T) {
+    // CGM data present but insufficient coverage
+    fbg := 110.0
+    hba1c := 6.8
+    cgm := &models.CGMPeriodReport{
+        TIRPct:        65.0,
+        SufficientData: false,
+        ConfidenceLevel: "LOW",
+    }
+
+
+    score := ComputeGlucoseDomainScore(&fbg, &hba1c, cgm)
+    // Should fall back to FBG/HbA1c, ignoring low-confidence CGM
+    assert.True(t, score > 60.0, "Expected decent score from FBG/HbA1c fallback, got %.1f", score)
+}
+
+
+func TestGMI_HbA1cDiscrepancy(t *testing.T) {
+    tests := []struct {
+        gmi        float64
+        labHbA1c   float64
+        discrepant bool
+    }{
+        {7.0, 7.2, false},         // within 0.5
+        {7.0, 8.0, true},          // 1.0 difference — investigate
+        {6.5, 6.3, false},
+        {8.0, 6.8, true},          // large discrepancy — hemoglobin variant?
+    }
+
+
+    for _, tt := range tests {
+        result := DetectGMIDiscrepancy(tt.gmi, tt.labHbA1c)
+        assert.Equal(t, tt.discrepant, result.Discrepant,
+            "GMI=%.1f HbA1c=%.1f: expected discrepant=%v", tt.gmi, tt.labHbA1c, tt.discrepant)
+    }
+}
+
+
+func TestCGMTrend_Improving(t *testing.T) {
+    now := time.Now()
+    summaries := []models.CGMDailySummary{
+        {Date: now.Add(-6 * 24 * time.Hour), TIRPct: 40.0},
+        {Date: now.Add(-4 * 24 * time.Hour), TIRPct: 48.0},
+        {Date: now.Add(-2 * 24 * time.Hour), TIRPct: 55.0},
+        {Date: now, TIRPct: 62.0},
+    }
+
+
+    trend := ComputeCGMTrend(summaries)
+    assert.Equal(t, "IMPROVING", trend.TIRTrend)
+    assert.True(t, trend.TIRSlopePerDay > 0)
+}
+
+
+func TestCGMTrend_Deteriorating(t *testing.T) {
+    now := time.Now()
+    summaries := []models.CGMDailySummary{
+        {Date: now.Add(-6 * 24 * time.Hour), TIRPct: 72.0},
+        {Date: now.Add(-4 * 24 * time.Hour), TIRPct: 65.0},
+        {Date: now.Add(-2 * 24 * time.Hour), TIRPct: 55.0},
+        {Date: now, TIRPct: 45.0},
+    }
+
+
+    trend := ComputeCGMTrend(summaries)
+    assert.Equal(t, "DETERIORATING", trend.TIRTrend)
+    assert.True(t, trend.TIRSlopePerDay < 0)
+}
+```
+
+
+- [ ] **Step 13: Implement CGM-aware glucose domain scoring**
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/cgm_analytics.go
+package services
+
+
+import (
+    "math"
+    "time"
+
+
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+// ComputeGlucoseDomainScore computes the MHRI glucose domain (35% weight).
+// When CGM data is available and sufficient, uses TIR/CV/GRI for scoring.
+// When CGM data is unavailable or insufficient, falls back to FBG/HbA1c.
+func ComputeGlucoseDomainScore(fbg *float64, hba1c *float64, cgm *models.CGMPeriodReport) float64 {
+    // Priority: CGM with sufficient data > FBG/HbA1c snapshot
+    if cgm != nil && cgm.SufficientData {
+        return computeCGMBasedScore(cgm)
+    }
+
+
+    // Fallback to point-in-time scoring
+    return computeFBGBasedScore(fbg, hba1c)
+}
+
+
+func computeCGMBasedScore(cgm *models.CGMPeriodReport) float64 {
+    // CGM glucose domain score (0-100) composited from:
+    // TIR (40% weight): 0-100 scaled, target >70%
+    // CV stability (20% weight): bonus for CV ≤36%, penalty for CV >36%
+    // GRI (25% weight): inverse scale, Zone A = 100, Zone E = 0
+    // TBR safety (15% weight): heavy penalty for any time below range
+
+
+    tirScore := scaleLinear(cgm.TIRPct, 0, 100, 0, 100) // direct mapping
+    tirScore = math.Min(tirScore, 100)
+
+
+    cvScore := 100.0
+    if cgm.CVPct > 36.0 {
+        cvScore = scaleLinear(cgm.CVPct, 36, 60, 70, 0) // 36% → 70, 60% → 0
+        cvScore = math.Max(cvScore, 0)
+    }
+
+
+    griScore := scaleLinear(100-cgm.GRI, 0, 100, 0, 100) // inverse: GRI 0 → 100, GRI 100 → 0
+
+
+    // TBR penalty: exponential penalty for time below range
+    tbrTotal := cgm.TBRL1Pct + cgm.TBRL2Pct
+    tbrScore := 100.0
+    if tbrTotal > 0 {
+        tbrScore = math.Max(0, 100-tbrTotal*15) // each 1% TBR costs 15 points
+    }
+    if cgm.TBRL2Pct > 1.0 {
+        tbrScore *= 0.5 // halve score if severe hypo exceeds target
+    }
+
+
+    composite := (tirScore * 0.40) + (cvScore * 0.20) + (griScore * 0.25) + (tbrScore * 0.15)
+    return math.Round(composite*10) / 10
+}
+
+
+func computeFBGBasedScore(fbg *float64, hba1c *float64) float64 {
+    score := 50.0 // default mid-range when no data
+
+
+    if hba1c != nil {
+        // HbA1c scoring: 6.5% → 85, 7.0% → 70, 8.0% → 40, 9.0% → 20, 10+ → 5
+        score = scaleLinear(*hba1c, 6.0, 10.0, 90, 5)
+        score = math.Max(5, math.Min(95, score))
+    }
+
+
+    if fbg != nil {
+        // FBG modifier: <100 → +10, 100-130 → 0, 130-180 → -10, >180 → -20
+        fbgMod := 0.0
+        if *fbg < 100 {
+            fbgMod = 10.0
+        } else if *fbg > 180 {
+            fbgMod = -20.0
+        } else if *fbg > 130 {
+            fbgMod = -10.0
+        }
+        score += fbgMod
+    }
+
+
+    return math.Max(0, math.Min(100, score))
+}
+
+
+func scaleLinear(value, inMin, inMax, outMin, outMax float64) float64 {
+    if inMax == inMin {
+        return outMin
+    }
+    return outMin + (value-inMin)*(outMax-outMin)/(inMax-inMin)
+}
+
+
+// GMIDiscrepancy represents the difference between CGM-derived GMI and lab HbA1c.
+type GMIDiscrepancy struct {
+    GMI           float64 `json:"gmi"`
+    LabHbA1c      float64 `json:"lab_hba1c"`
+    Difference    float64 `json:"difference"`
+    Discrepant    bool    `json:"discrepant"`
+    PossibleCauses []string `json:"possible_causes,omitempty"`
+}
+
+
+// DetectGMIDiscrepancy checks if GMI and lab HbA1c diverge significantly.
+func DetectGMIDiscrepancy(gmi, labHbA1c float64) GMIDiscrepancy {
+    diff := math.Abs(gmi - labHbA1c)
+    result := GMIDiscrepancy{
+        GMI:        gmi,
+        LabHbA1c:   labHbA1c,
+        Difference: math.Round(diff*10) / 10,
+        Discrepant: diff > 0.5,
+    }
+
+
+    if result.Discrepant {
+        if gmi > labHbA1c+0.5 {
+            result.PossibleCauses = []string{
+                "Recent glycaemic improvement not yet reflected in HbA1c",
+                "Hemoglobin variant affecting HbA1c assay",
+                "Conditions reducing red cell lifespan (hemolytic anemia, recent blood loss)",
+            }
+        } else {
+            result.PossibleCauses = []string{
+                "Recent glycaemic deterioration not yet reflected in HbA1c",
+                "Iron deficiency anemia (falsely elevates HbA1c)",
+                "Hemoglobin variant affecting HbA1c assay",
+            }
+        }
+    }
+    return result
+}
+
+
+// CGMTrend represents the trajectory of CGM metrics over time.
+type CGMTrend struct {
+    TIRTrend       string  `json:"tir_trend"`        // IMPROVING, STABLE, DETERIORATING
+    TIRSlopePerDay float64 `json:"tir_slope_per_day"` // % TIR change per day
+    CVTrend        string  `json:"cv_trend"`
+    CVSlopePerDay  float64 `json:"cv_slope_per_day"`
+    DataPoints     int     `json:"data_points"`
+}
+
+
+// ComputeCGMTrend computes OLS trend over daily CGM summaries.
+func ComputeCGMTrend(summaries []models.CGMDailySummary) CGMTrend {
+    if len(summaries) < 3 {
+        return CGMTrend{TIRTrend: "INSUFFICIENT_DATA", CVTrend: "INSUFFICIENT_DATA"}
+    }
+
+
+    baseTime := summaries[0].Date
+    n := float64(len(summaries))
+    var sumX, sumTIR, sumXTIR, sumX2 float64
+    var sumCV, sumXCV float64
+
+
+    for _, s := range summaries {
+        x := s.Date.Sub(baseTime).Hours() / 24.0
+        sumX += x
+        sumTIR += s.TIRPct
+        sumXTIR += x * s.TIRPct
+        sumX2 += x * x
+        sumCV += s.CVPct
+        sumXCV += x * s.CVPct
+    }
+
+
+    denom := n*sumX2 - sumX*sumX
+    tirSlope, cvSlope := 0.0, 0.0
+    if math.Abs(denom) > 1e-10 {
+        tirSlope = (n*sumXTIR - sumX*sumTIR) / denom
+        cvSlope = (n*sumXCV - sumX*sumCV) / denom
+    }
+
+
+    return CGMTrend{
+        TIRTrend:       classifyTrend(tirSlope, 0.5),  // >0.5%/day = improving
+        TIRSlopePerDay: math.Round(tirSlope*1000) / 1000,
+        CVTrend:        classifyTrend(-cvSlope, 0.3),   // negative CV slope = improving
+        CVSlopePerDay:  math.Round(cvSlope*1000) / 1000,
+        DataPoints:     len(summaries),
+    }
+}
+
+
+func classifyTrend(slope, threshold float64) string {
+    if slope > threshold {
+        return "IMPROVING"
+    }
+    if slope < -threshold {
+        return "DETERIORATING"
+    }
+    return "STABLE"
+}
+```
+
+
+- [ ] **Step 14: Modify MHRI scorer to be CGM-aware**
+
+
+In `mri_scorer.go`, modify the glucose domain computation in `ComputeMRI()`:
+
+
+```go
+// In ComputeMRI(), replace the glucose domain calculation with:
+
+
+// Glucose domain (35% weight) — CGM-aware
+var glucoseScore float64
+if patient.HasActiveCGM() {
+    latestCGM, err := s.getLatestCGMReport(patient.PatientID)
+    if err == nil && latestCGM != nil && latestCGM.SufficientData {
+        glucoseScore = ComputeGlucoseDomainScore(nil, nil, latestCGM)
+    } else {
+        // CGM present but insufficient data — fall back to FBG/HbA1c
+        glucoseScore = ComputeGlucoseDomainScore(patient.FBG, patient.HbA1c, nil)
+    }
+} else {
+    glucoseScore = ComputeGlucoseDomainScore(patient.FBG, patient.HbA1c, nil)
+}
+```
+
+
+- [ ] **Step 15: Create CGM migration SQL**
+
+
+```sql
+-- kb-26-metabolic-digital-twin/migrations/004_cgm_tables.sql
+
+
+CREATE TABLE IF NOT EXISTS cgm_period_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end TIMESTAMPTZ NOT NULL,
+    window_days INT,
+    coverage_pct DECIMAL(5,2),
+    total_readings INT,
+    sufficient_data BOOLEAN,
+    confidence_level VARCHAR(10),
+    mean_glucose DECIMAL(6,1),
+    sd_glucose DECIMAL(6,1),
+    cv_pct DECIMAL(5,1),
+    glucose_stable BOOLEAN,
+    tir_pct DECIMAL(5,2),
+    tbr_l1_pct DECIMAL(5,2),
+    tbr_l2_pct DECIMAL(5,2),
+    tar_l1_pct DECIMAL(5,2),
+    tar_l2_pct DECIMAL(5,2),
+    gmi DECIMAL(4,2),
+    gri DECIMAL(5,2),
+    gri_zone VARCHAR(1),
+    hypo_events INT DEFAULT 0,
+    severe_hypo_events INT DEFAULT 0,
+    nocturnal_hypos INT DEFAULT 0,
+    hyper_events INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+CREATE INDEX idx_cgm_report_patient ON cgm_period_reports(patient_id);
+CREATE INDEX idx_cgm_report_period ON cgm_period_reports(patient_id, period_end DESC);
+
+
+CREATE TABLE IF NOT EXISTS cgm_daily_summaries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    date DATE NOT NULL,
+    mean_glucose DECIMAL(6,1),
+    sd_glucose DECIMAL(6,1),
+    tir_pct DECIMAL(5,2),
+    tbr_l1_pct DECIMAL(5,2),
+    tbr_l2_pct DECIMAL(5,2),
+    tar_l1_pct DECIMAL(5,2),
+    tar_l2_pct DECIMAL(5,2),
+    readings INT,
+    coverage_pct DECIMAL(5,2),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(patient_id, date)
+);
+
+
+CREATE INDEX idx_cgm_daily_patient ON cgm_daily_summaries(patient_id, date DESC);
+```
+
+
+- [ ] **Step 16: Run CGM analytics tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
+go test ./internal/services/ -run "TestComputeGlucoseDomain|TestGMI_HbA1c|TestCGMTrend" -v
+```
+
+
+Expected: All 7 tests PASS.
+
+
+- [ ] **Step 17: Commit Phase G3**
+
+
+```bash
+git add kb-26-metabolic-digital-twin/internal/models/cgm_metrics.go
+git add kb-26-metabolic-digital-twin/internal/services/cgm_analytics.go
+git add kb-26-metabolic-digital-twin/internal/services/cgm_analytics_test.go
+git add kb-26-metabolic-digital-twin/internal/services/mri_scorer.go
+git add kb-26-metabolic-digital-twin/migrations/004_cgm_tables.sql
+git commit -m "feat(kb26): CGM-aware MHRI glucose domain scoring
+
+
+ComputeGlucoseDomainScore() uses TIR (40%), CV stability (20%), GRI inverse
+(25%), TBR safety penalty (15%) when CGM data is available with sufficient
+coverage. Falls back to FBG/HbA1c snapshot scoring when CGM absent or
+insufficient. GMI-HbA1c discrepancy detection (>0.5% threshold) with
+differential diagnosis suggestions. CGM trend computation via OLS on daily
+TIR/CV summaries. CGMPeriodReport + CGMDailySummary PostgreSQL models."
+```
+
+
+---
+
+
+## Phase G4: KB-23 CGM Card Rules
+
+
+### Step 18: Write failing test for CGM card rules
+
+
+```go
+// kb-23-decision-cards/internal/services/cgm_card_rules_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-decision-cards/internal/models"
+)
+
+
+func TestCGMCardRules_HighTBR_HypoCard(t *testing.T) {
+    cgm := &CGMCardInput{
+        TIRPct:   55.0,
+        TBRL1Pct: 8.0,    // >4% target
+        TBRL2Pct: 2.5,    // >1% target — dangerous
+        TARL1Pct: 20.0,
+        TARL2Pct: 5.0,
+        CVPct:    42.0,    // unstable
+        GRI:      58.0,
+        GRIZone:  "C",
+        SufficientData: true,
+        ActiveMeds: []string{"SULFONYLUREA", "INSULIN"},
+    }
+
+
+    cards := EvaluateCGMCards(cgm)
+    hasHypoCard := false
+    for _, c := range cards {
+        if c.CardType == "HYPOGLYCAEMIA_RISK" {
+            hasHypoCard = true
+            assert.Equal(t, "IMMEDIATE", c.Urgency)
+            assert.Contains(t, c.Rationale, "TBR")
+        }
+    }
+    assert.True(t, hasHypoCard, "Expected hypoglycaemia risk card")
+}
+
+
+func TestCGMCardRules_HighTAR_HyperCard(t *testing.T) {
+    cgm := &CGMCardInput{
+        TIRPct:   30.0,
+        TBRL1Pct: 1.0,
+        TBRL2Pct: 0.0,
+        TARL1Pct: 40.0,
+        TARL2Pct: 15.0,   // >5% target — sustained severe hyper
+        CVPct:    28.0,    // stable but high
+        GRI:      75.0,
+        GRIZone:  "D",
+        SufficientData: true,
+    }
+
+
+    cards := EvaluateCGMCards(cgm)
+    hasHyperCard := false
+    for _, c := range cards {
+        if c.CardType == "SUSTAINED_HYPERGLYCAEMIA" {
+            hasHyperCard = true
+            assert.Equal(t, "URGENT", c.Urgency)
+        }
+    }
+    assert.True(t, hasHyperCard, "Expected sustained hyperglycaemia card")
+}
+
+
+func TestCGMCardRules_HighCV_VariabilityCard(t *testing.T) {
+    cgm := &CGMCardInput{
+        TIRPct:   60.0,
+        TBRL1Pct: 5.0,
+        TBRL2Pct: 1.0,
+        CVPct:    45.0,    // >36% — labile diabetes
+        GRI:      50.0,
+        GRIZone:  "C",
+        SufficientData: true,
+    }
+
+
+    cards := EvaluateCGMCards(cgm)
+    hasVariabilityCard := false
+    for _, c := range cards {
+        if c.CardType == "GLUCOSE_VARIABILITY" {
+            hasVariabilityCard = true
+            assert.Contains(t, c.Rationale, "CV")
+        }
+    }
+    assert.True(t, hasVariabilityCard, "Expected glucose variability card")
+}
+
+
+func TestCGMCardRules_WellManaged_NoCards(t *testing.T) {
+    cgm := &CGMCardInput{
+        TIRPct:   78.0,
+        TBRL1Pct: 2.0,
+        TBRL2Pct: 0.0,
+        TARL1Pct: 15.0,
+        TARL2Pct: 2.0,
+        CVPct:    30.0,
+        GRI:      12.0,
+        GRIZone:  "A",
+        SufficientData: true,
+    }
+
+
+    cards := EvaluateCGMCards(cgm)
+    // Well-managed patient should generate no action cards
+    urgentCards := 0
+    for _, c := range cards {
+        if c.Urgency == "IMMEDIATE" || c.Urgency == "URGENT" {
+            urgentCards++
+        }
+    }
+    assert.Equal(t, 0, urgentCards, "Well-managed patient should have no urgent cards")
+}
+
+
+func TestCGMCardRules_InsufficientData_DataQualityCard(t *testing.T) {
+    cgm := &CGMCardInput{
+        TIRPct:        45.0,
+        SufficientData: false,
+        CoveragePct:    35.0,
+    }
+
+
+    cards := EvaluateCGMCards(cgm)
+    hasQualityCard := false
+    for _, c := range cards {
+        if c.CardType == "CGM_DATA_QUALITY" {
+            hasQualityCard = true
+        }
+    }
+    assert.True(t, hasQualityCard, "Expected data quality card for insufficient coverage")
+}
+```
+
+
+- [ ] **Step 19: Implement CGM card rules**
+
+
+```go
+// kb-23-decision-cards/internal/services/cgm_card_rules.go
+package services
+
+
+import "fmt"
+
+
+// CGMCardInput holds CGM metrics needed for card evaluation.
+type CGMCardInput struct {
+    TIRPct         float64
+    TBRL1Pct       float64
+    TBRL2Pct       float64
+    TARL1Pct       float64
+    TARL2Pct       float64
+    CVPct          float64
+    GRI            float64
+    GRIZone        string
+    GMI            float64
+    LabHbA1c       *float64
+    SufficientData bool
+    CoveragePct    float64
+    ActiveMeds     []string
+    NocturnalHypos int
+}
+
+
+// CGMCard represents a decision card generated from CGM analytics.
+type CGMCard struct {
+    CardType   string   `json:"card_type"`
+    Urgency    string   `json:"urgency"`
+    Title      string   `json:"title"`
+    Rationale  string   `json:"rationale"`
+    Actions    []string `json:"actions"`
+    Metrics    map[string]float64 `json:"metrics"`
+}
+
+
+// EvaluateCGMCards generates decision cards from CGM analytics.
+func EvaluateCGMCards(input *CGMCardInput) []CGMCard {
+    var cards []CGMCard
+
+
+    // 0. Data quality check — must come first
+    if !input.SufficientData {
+        cards = append(cards, CGMCard{
+            CardType: "CGM_DATA_QUALITY",
+            Urgency:  "ROUTINE",
+            Title:    "CGM Data Coverage Below Threshold",
+            Rationale: fmt.Sprintf("CGM coverage %.0f%% is below the 70%% minimum required for reliable metrics. "+
+                "Encourage more frequent scanning (isCGM) or check sensor adhesion.", input.CoveragePct),
+            Actions: []string{
+                "Review CGM scanning frequency with patient",
+                "Check sensor adhesion and placement",
+                "Consider real-time CGM if patient consistently under-scans",
+            },
+        })
+        return cards // don't generate clinical cards from insufficient data
+    }
+
+
+    // 1. Hypoglycaemia risk — highest priority safety card
+    tbrTotal := input.TBRL1Pct + input.TBRL2Pct
+    if input.TBRL2Pct > 1.0 {
+        urgency := "URGENT"
+        if input.TBRL2Pct > 3.0 {
+            urgency = "IMMEDIATE"
+        }
+        // Check for hypo-prone medications
+        hasHypoMed := false
+        for _, med := range input.ActiveMeds {
+            if med == "SULFONYLUREA" || med == "INSULIN" {
+                hasHypoMed = true
+                break
+            }
+        }
+        if hasHypoMed {
+            urgency = "IMMEDIATE" // hypo-prone med + actual hypo = immediate
+        }
+
+
+        actions := []string{"Review medication regimen for hypoglycaemia risk"}
+        if hasHypoMed {
+            actions = append(actions, "Consider reducing sulfonylurea/insulin dose",
+                "Evaluate switch to DPP4i or GLP-1 RA (lower hypo risk)")
+        }
+        actions = append(actions, "Set CGM low glucose alert at 80 mg/dL for early warning")
+
+
+        cards = append(cards, CGMCard{
+            CardType: "HYPOGLYCAEMIA_RISK",
+            Urgency:  urgency,
+            Title:    "Significant Time Below Range Detected",
+            Rationale: fmt.Sprintf("TBR Level 2 (severe, <54 mg/dL): %.1f%% (target <1%%). "+
+                "TBR Level 1 (<70 mg/dL): %.1f%% (target <4%%). "+
+                "Total time below range: %.1f%%. CV %.1f%% indicates %s glucose.",
+                input.TBRL2Pct, input.TBRL1Pct, tbrTotal,
+                input.CVPct, cvLabel(input.CVPct)),
+            Actions: actions,
+            Metrics: map[string]float64{
+                "tbr_l2_pct": input.TBRL2Pct, "tbr_l1_pct": input.TBRL1Pct,
+                "cv_pct": input.CVPct,
+            },
+        })
+    } else if tbrTotal > 4.0 {
+        cards = append(cards, CGMCard{
+            CardType: "HYPOGLYCAEMIA_RISK",
+            Urgency:  "ROUTINE",
+            Title:    "Elevated Time Below Range",
+            Rationale: fmt.Sprintf("TBR total %.1f%% exceeds 4%% target. Monitor trend.", tbrTotal),
+            Actions:  []string{"Review timing of hypoglycaemic episodes in AGP",
+                "Consider medication timing adjustment"},
+        })
+    }
+
+
+    // 2. Sustained hyperglycaemia
+    if input.TARL2Pct > 5.0 {
+        cards = append(cards, CGMCard{
+            CardType: "SUSTAINED_HYPERGLYCAEMIA",
+            Urgency:  "URGENT",
+            Title:    "Excessive Time Above 250 mg/dL",
+            Rationale: fmt.Sprintf("TAR Level 2 (>250 mg/dL): %.1f%% (target <5%%). "+
+                "GRI Zone %s (%.0f). Therapy intensification indicated.",
+                input.TARL2Pct, input.GRIZone, input.GRI),
+            Actions: []string{
+                "Review post-meal glucose patterns in AGP",
+                "Consider therapy intensification",
+                "Evaluate medication adherence",
+                "Assess dietary carbohydrate intake",
+            },
+            Metrics: map[string]float64{
+                "tar_l2_pct": input.TARL2Pct, "gri": input.GRI,
+            },
+        })
+    }
+
+
+    // 3. Low TIR without specific hypo/hyper emergency
+    if input.TIRPct < 50.0 && input.TBRL2Pct <= 1.0 && input.TARL2Pct <= 5.0 {
+        cards = append(cards, CGMCard{
+            CardType: "LOW_TIME_IN_RANGE",
+            Urgency:  "ROUTINE",
+            Title:    "Time in Range Below Target",
+            Rationale: fmt.Sprintf("TIR %.1f%% (target >70%%). GMI %.1f%%. "+
+                "Predominant issue: %s.", input.TIRPct, input.GMI, predominantIssue(input)),
+            Actions: []string{
+                "Review AGP profile for actionable patterns",
+                "Identify peak glucose times for targeted intervention",
+            },
+        })
+    }
+
+
+    // 4. Glucose variability
+    if input.CVPct > 36.0 {
+        cards = append(cards, CGMCard{
+            CardType: "GLUCOSE_VARIABILITY",
+            Urgency:  "ROUTINE",
+            Title:    "Labile Glucose Pattern Detected",
+            Rationale: fmt.Sprintf("CV %.1f%% exceeds 36%% stability threshold. "+
+                "Labile glucose is an independent predictor of hypoglycaemia risk "+
+                "and indicates unstable glycaemic control regardless of mean glucose.", input.CVPct),
+            Actions: []string{
+                "Prioritize variability reduction over mean glucose lowering",
+                "Consider basal insulin optimization over bolus intensification",
+                "Evaluate meal consistency and timing",
+                "Screen for gastroparesis if pattern is irregular",
+            },
+        })
+    }
+
+
+    // 5. Nocturnal hypoglycaemia
+    if input.NocturnalHypos > 0 {
+        cards = append(cards, CGMCard{
+            CardType: "NOCTURNAL_HYPOGLYCAEMIA",
+            Urgency:  "URGENT",
+            Title:    "Nocturnal Hypoglycaemia Detected",
+            Rationale: fmt.Sprintf("%d nocturnal hypo event(s) detected in current period. "+
+                "Nocturnal hypoglycaemia increases cardiac arrhythmia risk.", input.NocturnalHypos),
+            Actions: []string{
+                "Review bedtime snack routine",
+                "Adjust evening/bedtime insulin dose",
+                "Set CGM predictive low alert if available",
+            },
+        })
+    }
+
+
+    // 6. GMI-HbA1c discrepancy
+    if input.LabHbA1c != nil {
+        diff := input.GMI - *input.LabHbA1c
+        if diff > 0.5 || diff < -0.5 {
+            cards = append(cards, CGMCard{
+                CardType: "GMI_HBAIC_DISCREPANCY",
+                Urgency:  "ROUTINE",
+                Title:    "GMI and Lab HbA1c Discrepancy",
+                Rationale: fmt.Sprintf("GMI %.1f%% vs Lab HbA1c %.1f%% (difference %.1f%%). "+
+                    "Investigate potential causes: hemoglobin variant, anemia, "+
+                    "recent glycaemic change not yet reflected in HbA1c.",
+                    input.GMI, *input.LabHbA1c, diff),
+                Actions: []string{
+                    "Check for hemoglobin variants (HbS, HbC, HbE)",
+                    "Screen for iron deficiency or hemolytic anemia",
+                    "Compare trend — recent improvement or deterioration?",
+                },
+            })
+        }
+    }
+
+
+    return cards
+}
+
+
+func cvLabel(cv float64) string {
+    if cv <= 36.0 {
+        return "stable"
+    }
+    return "unstable/labile"
+}
+
+
+func predominantIssue(input *CGMCardInput) string {
+    if input.TARL1Pct+input.TARL2Pct > input.TBRL1Pct+input.TBRL2Pct {
+        return "hyperglycaemia (excessive time above range)"
+    }
+    return "hypoglycaemia (excessive time below range)"
+}
+```
+
+
+- [ ] **Step 20: Run CGM card rules tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
+go test ./internal/services/ -run "TestCGMCardRules" -v
+```
+
+
+Expected: All 5 tests PASS.
+
+
+- [ ] **Step 21: Commit Phase G4**
+
+
+```bash
+git add kb-23-decision-cards/internal/services/cgm_card_rules.go
+git add kb-23-decision-cards/internal/services/cgm_card_rules_test.go
+git commit -m "feat(kb23): CGM-specific decision card rules — 7 card types
+
+
+HYPOGLYCAEMIA_RISK (TBR >4% or severe >1%, escalated with SU/insulin),
+SUSTAINED_HYPERGLYCAEMIA (TAR L2 >5%), LOW_TIME_IN_RANGE (TIR <50%),
+GLUCOSE_VARIABILITY (CV >36% — labile diabetes), NOCTURNAL_HYPOGLYCAEMIA,
+GMI_HBAIC_DISCREPANCY (>0.5% difference), CGM_DATA_QUALITY (coverage <70%).
+Data quality gate prevents clinical cards from insufficient CGM data."
+```
+
+
+---
+
+
+## Phase G5: KB-20 CGM Status + API Endpoints
+
+
+### Step 22-27: KB-20 CGM status endpoint, KB-26 CGM API handlers, route registration, full regression, commit
+
+
+These follow the same pattern as the renal gating API phase — create handlers that expose CGM status for a patient (has CGM, latest TIR, GRI zone, data freshness), register routes, test, commit.
+
+
+- [ ] **Steps 22-27** follow identical patterns to Phase R5 of the renal gating plan. The KB-20 endpoint fetches latest CGM period report and daily summaries, exposes them for card generation context. KB-26 exposes GET `/cgm/:patientId/report` and GET `/cgm/:patientId/trend` endpoints.
+
+
+- [ ] **Step 28: Full regression**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./... -v -count=1
+cd ../kb-23-decision-cards
+go test ./... -v -count=1
+cd ../kb-26-metabolic-digital-twin
+go test ./... -v -count=1
+cd ../../flink-processing
+mvn test -pl .
+```
+
+
+- [ ] **Step 29: Final commit**
+
+
+```bash
+git commit -m "feat(cgm): complete CGM analytics layer — Flink operator + MHRI + cards + API
+
+
+Module 3 CGM operator: streaming TIR/TBR/TAR/CV/GMI/GRI computation per
+International Consensus 2023. Sustained hypo/hyper detection. Nocturnal
+hypo detection. AGP 48-bucket percentile profile. Sensor warmup exclusion.
+Data sufficiency validation (≥70% coverage).
+
+
+KB-26: CGM-aware MHRI glucose domain (TIR 40%, CV 20%, GRI 25%, TBR 15%
+weighting). Falls back to FBG/HbA1c when CGM unavailable. GMI-HbA1c
+discrepancy detection. CGM trend via daily TIR/CV OLS regression.
+
+
+KB-23: 7 CGM card types with data quality gating. Hypo-prone medication
+escalation (SU/insulin + TBR → IMMEDIATE).
+
+
+Market configs: India (RSSDI 2023, Ramadan IDF-DAR, isCGM scan patterns,
+intermittent use handling). Australia (ADS-ADEA 2024, NDSS subsidy,
+indigenous remote-sync, MHR FHIR integration)."
+```
+
+
+---
+
+
+## Plan Summary
+
+
+| Phase | Steps | Key Deliverables |
+|-------|-------|-----------------|
+| G1: Models + Config | 1-3 | CGM targets YAML (International Consensus 2023), India/Australia overrides, Ramadan handling |
+| G2: Flink Operator | 4-10 | `Module3_CGMAnalytics` — TIR/TBR/TAR/CV/GMI/GRI/AGP, sustained event detection, CGMReadingBuffer |
+| G3: MHRI Integration | 11-17 | CGM-aware glucose domain scoring, GMI-HbA1c discrepancy, CGM trend, PostgreSQL models |
+| G4: Card Rules | 18-21 | 7 CGM card types, data quality gating, hypo-prone medication escalation |
+| G5: API + Regression | 22-29 | KB-20 CGM status endpoint, KB-26 CGM report/trend API, full regression |
+
+
+**Total: 29 steps, 21 files (16 create, 5 modify), 5 phases.**
+
+
+**Clinical completeness checklist:**
+- All 14 International Consensus metrics computed (TIR, TBR L1/L2, TAR L1/L2, CV, mean, SD, GMI, GRI, AGP)
+- GRI zones A-E per Klonoff 2023
+- CV stability threshold 36% per Monnier 2017
+- Data sufficiency ≥70% per consensus
+- Sensor warmup exclusion
+- Sustained hypo/hyper detection with configurable duration
+- Nocturnal hypoglycaemia detection
+- GMI-HbA1c discrepancy with differential diagnosis
+- MHRI glucose domain switches to CGM-derived scoring when available
+- Falls back gracefully to FBG/HbA1c when CGM absent
+- India: Ramadan target adjustments, isCGM scanning gaps, intermittent use, cost-driven patterns
+- Australia: Indigenous remote-sync, NDSS subsidy context, MHR integration readiness
+
+
+Ready to proceed with Therapeutic Inertia Detection (#3) when you are.

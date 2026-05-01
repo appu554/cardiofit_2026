@@ -1,0 +1,2160 @@
+﻿IOR Confounder Scoring Enhancement — Implementation Plan
+Clinical Rationale
+Why the current confounder model is clinically dangerous:
+The Intervention-Outcome Record (IOR) system is the platform's evidence engine. When a physician sees a decision card saying "Similar patients (n=43) on SGLT2i showed median HbA1c delta of -0.9 at 12 weeks," that evidence comes from IOR outcome records. The credibility of every similar-patient comparison, every therapy response validation, and every phenotype cluster pathway recommendation depends on whether the IOR outcome data accurately attributes changes to the intervention rather than to confounders.
+The current ComputeConfounderScore in ior_generator.go computes a 0-1 score from two inputs: concurrent medication count (×0.15 per med, capped at 0.45) and adherence drop (×0.5, capped at 0.25). If there are 3 concurrent med changes and a 0.3 adherence drop, the confounder score is 0.45 + 0.15 = 0.60, and the outcome record gets ConfidenceLevel: "LOW".
+This model misses every non-pharmacological confounder — which in cardiometabolic care are frequently the dominant confounders. Consider these real scenarios:
+Scenario 1 — Ramadan attribution error: A Muslim diabetic patient in Hyderabad starts SGLT2i in February. The 12-week IOR checkpoint falls in April — during Ramadan. His HbA1c drops from 8.2 to 7.4 (delta -0.8). The IOR system attributes this to SGLT2i with confounder score 0.0 (no concurrent meds, no adherence drop), confidence HIGH. But Ramadan fasting dramatically alters glucose patterns — extended fasting produces lower mean glucose, and many patients have genuinely lower HbA1c during Ramadan that rebounds afterward (Salti et al., 2004, Diabetes Care; Beshyah et al., 2019, Diabetes Research and Clinical Practice). The -0.8 delta is partly SGLT2i and partly Ramadan. Without the Ramadan confounder, the IOR overstates SGLT2i efficacy for this patient, and the similar-patient query overstates expected benefit for future patients.
+Scenario 2 — Seasonal HbA1c attribution error: An Australian patient in Melbourne starts metformin intensification in March (autumn). The 26-week checkpoint falls in September (end of winter). HbA1c drops from 7.8 to 7.2. The IOR attributes this to metformin. But Tseng et al. (2005, Diabetologia) and Gikas et al. (2009, European Journal of Clinical Investigation) demonstrated a 0.2-0.4% seasonal HbA1c variation — higher in winter, lower in summer in temperate climates (reversed in tropical climates where summer heat reduces activity). In Melbourne, autumn-to-winter would typically show HbA1c rising, not falling — so the metformin effect may actually be stronger than the delta suggests. In Chennai (tropical), the seasonal pattern reverses. Without seasonal adjustment, IOR data from temperate-climate patients and tropical-climate patients is pooled without correction, introducing systematic bias in similar-patient queries.
+Scenario 3 — Sick-day contamination: A patient on ACEi + SGLT2i develops a UTI (common SGLT2i side effect). During the 2-week illness, they experience dehydration, temporarily elevated creatinine, and apparent eGFR decline. The 4-week IOR checkpoint captures eGFR 48 (down from baseline 55). Confounder score: 0.0 (no concurrent meds, no adherence drop). The IOR records DELTA_EGFR of -7, confidence HIGH. This is a sick-day artifact, not a real renal decline — eGFR would recover after illness resolution. Without sick-day detection, the outcome record permanently attributes renal decline to the ACEi + SGLT2i combination, poisoning future similar-patient queries for patients with comparable eGFR.
+Scenario 4 — Festival season weight gain misattributed to drug failure: An Indian patient starts GLP-1 RA for weight management in September. The 12-week checkpoint falls in December — after Diwali (October/November), Navratri feasting, and the wedding season. Weight increased from 88kg to 91kg despite GLP-1 RA. Confounder score: 0.0. The IOR records the GLP-1 RA as having FAILED for weight management, confidence HIGH. But the 3kg gain is likely 2-3kg festival weight gain partially offset by 1-2kg of drug-driven weight loss. Without seasonal/cultural confounder detection, the similar-patient query shows "GLP-1 RA failed for weight management in this phenotype cluster" — a dangerously misleading conclusion that discourages appropriate prescribing.
+Scenario 5 — Steroid course contamination: Patient with CKD + T2DM receives a 2-week prednisolone course for a gout flare. During those 2 weeks, FBG jumps from 140 to 220, HbA1c measured at the 4-week checkpoint shows 8.5 (up from 7.8). The IOR attributes this to the current glycaemic regimen "failing." In reality, the steroid-induced hyperglycaemia is transient and unrelated to the regimen's efficacy. This is the most common iatrogenic confounder in cardiometabolic care — steroids affect both glucose AND blood pressure dramatically.
+________________
+
+
+What the literature says about confounding in treatment effect estimation:
+Hernán and Robins (2020, "Causal Inference: What If") establish that valid causal inference from observational data requires adjusting for time-varying confounders. In cardiometabolic care, the dominant time-varying confounders are:
+1. Concurrent medication changes (partially captured in current model)
+2. Adherence variation (partially captured)
+3. Seasonal variation — HbA1c (Tseng 2005, Gikas 2009), BP (Barnett 2007, Stergiou 2002), weight (Visscher & Seidell 2004)
+4. Religious/cultural fasting — Ramadan (IDF-DAR 2021), Navratri, Lent, Yom Kippur
+5. Acute illness — infections, hospitalization, acute kidney injury episodes
+6. Iatrogenic confounders — steroid courses, post-surgical state, chemotherapy
+7. Lifestyle disruption — job change, bereavement, migration, financial stress
+8. Pregnancy/lactation — dramatically alters glucose, BP, weight, and eGFR
+9. Dietary shifts — festival seasons, vacation, diet program initiation
+10. Exercise discontinuation/initiation — seasonal (monsoon reduces outdoor activity in India)
+The current model captures #1 and #2. We need to capture #3-#10 to produce clinically trustworthy IOR evidence.
+The statistical approach — propensity-score-adjacent confounder adjustment:
+We're not doing full causal inference (that requires counterfactual estimation and is computationally expensive for real-time clinical use). Instead, we're computing a confounder burden score that:
+* Quantifies how many confounders were active during the outcome measurement window
+* Weights each confounder by its expected effect size on the outcome type
+* Produces a 0-1 score where higher = more confounded = less attributable to the intervention
+* Maps to a confidence level (HIGH/MODERATE/LOW) that downstream consumers use to weight the evidence
+This is closer to a "quality of evidence" score than a formal causal adjustment. It doesn't correct the delta — it flags how much to trust it. A confounder score of 0.7 means "70% of the plausible confounding space is active — interpret this outcome with extreme caution." The similar-patient query can then filter or down-weight high-confounder outcomes.
+________________
+
+
+India-Specific Confounder Landscape:
+India has the richest confounder calendar of any market due to the intersection of religious diversity, seasonal extremes, and cultural food practices:
+* Ramadan (30 days): Dawn-to-sunset fasting. Glucose patterns dramatically altered. IDF-DAR 2021 guidelines specific to diabetic patients during Ramadan. Affects ~15% of India's patient population (200M+ Muslims). HbA1c may drop 0.3-0.5% during Ramadan and rebound 2-4 weeks after.
+* Navratri (9 days, twice yearly): Many Hindu patients fast or restrict to vegetarian/sattvic diet. Can lower caloric intake significantly. Affects glucose and weight metrics.
+* Diwali season (2-4 weeks): Sweets, festive meals, reduced exercise. Weight gain 1-3kg typical. HbA1c and FBG may rise 0.2-0.5%.
+* Wedding season (October-February): Extended social eating. Duration makes this a stronger confounder than single festivals.
+* Monsoon season (June-September): Outdoor exercise drops dramatically. Patients in Mumbai, Chennai, Kolkata may show seasonal deconditioning. BP may rise due to reduced physical activity.
+* Summer heat (April-June): Dehydration can cause apparent eGFR decline (pre-renal azotemia), BP changes due to vasodilation. Patients in Rajasthan, central India affected most.
+Australia-Specific Confounder Landscape:
+* Seasonal variation (temperate): Melbourne, Sydney, Adelaide show winter HbA1c elevation of 0.2-0.3%. Perth and Brisbane show less variation. Darwin (tropical) shows minimal seasonal effect.
+* Holiday season (December-January): Extended summer holidays, dietary changes, alcohol consumption. Weight gain and glucose deterioration common.
+* Indigenous cultural events: Sorry Business (bereavement practices), ceremony season — may affect medication adherence and lifestyle for extended periods. Must be handled with cultural sensitivity — the system should flag as confounder without pathologizing cultural practice.
+* Bushfire/flood season: Natural disasters disrupt medication supply, access to care, and create stress responses. The 2019-2020 bushfire season caused measurable population-level HbA1c increases in affected regions (McArthur et al., 2021).
+________________
+
+
+Architecture Overview
+The enhanced confounder scoring system extends the existing IOR infrastructure in KB-20 with three new components:
+1. Confounder Calendar Service (KB-20): Loads and queries seasonal, religious, and cultural confounder windows from market-config YAML. For any given patient-date-market combination, returns active confounders with expected effect sizes.
+
+2. Clinical Event Confounder Detector (KB-20): Scans the patient's recent clinical history for acute illness markers (elevated CRP, hospitalization events, steroid prescriptions, UTI diagnoses) that constitute iatrogenic or illness confounders.
+
+3. Enhanced Confounder Scorer (KB-20): Replaces the current ComputeConfounderScore with a multi-factor scoring engine that integrates medication confounders (existing), calendar confounders (new), clinical event confounders (new), and lifestyle disruption signals (from engagement data).
+
+Data flow:
+IOR Generator (existing)
+    │
+    ├── Fetch concurrent meds (existing)
+    ├── Fetch adherence data (existing)
+    │
+    ├── NEW: Query Confounder Calendar
+    │     ├── Is this window during Ramadan? (+weight)
+    │     ├── Is this window during Diwali season? (+weight)
+    │     ├── Is this a seasonal high/low for this outcome type? (+weight)
+    │     └── Is this a monsoon/heat period? (+weight)
+    │
+    ├── NEW: Query Clinical Event History
+    │     ├── Any steroid course in window? (+weight)
+    │     ├── Any hospitalization in window? (+weight)
+    │     ├── Any acute illness markers? (+weight)
+    │     └── Any sick-day events? (+weight)
+    │
+    ├── NEW: Query Engagement/Lifestyle Signals
+    │     ├── Engagement collapse during window? (+weight)
+    │     ├── Exercise pattern change? (+weight)
+    │     └── Dietary pattern change (sodium, carbs)? (+weight)
+    │
+    └── Enhanced ComputeConfounderScore()
+          ├── Medication subscore (existing, refined)
+          ├── Calendar subscore (new)
+          ├── Clinical event subscore (new)
+          ├── Lifestyle subscore (new)
+          ├── Composite score (0-1)
+          ├── Confidence level (HIGH/MODERATE/LOW)
+          └── Confounder narrative (human-readable explanation)
+
+
+Critical design principle: The confounder score doesn't adjust the outcome delta. It provides a quality-of-evidence flag. A delta of -0.8 HbA1c with confounder score 0.7 still records delta -0.8, but with confidence LOW and a narrative explaining which confounders were active. Downstream consumers (similar-patient query, therapy response validation, card evidence chains) decide how to weight the evidence based on the confidence level.
+________________
+
+
+Tech Stack Alignment
+   * Go 1.21 (Gin, GORM) for KB-20 confounder services
+   * PostgreSQL 15 for clinical event history queries
+   * YAML market configs for confounder calendars
+   * Existing IOR infrastructure (models, store, generator)
+________________
+
+
+File Inventory
+KB-20 (Patient Profile) — Enhanced Confounder System
+Action
+	File
+	Create
+	kb-20-patient-profile/internal/models/confounder.go
+	Create
+	kb-20-patient-profile/internal/services/confounder_calendar.go
+	Create
+	kb-20-patient-profile/internal/services/confounder_calendar_test.go
+	Create
+	kb-20-patient-profile/internal/services/clinical_event_confounder.go
+	Create
+	kb-20-patient-profile/internal/services/clinical_event_confounder_test.go
+	Create
+	kb-20-patient-profile/internal/services/enhanced_confounder_scorer.go
+	Create
+	kb-20-patient-profile/internal/services/enhanced_confounder_scorer_test.go
+	Modify
+	kb-20-patient-profile/internal/services/ior_generator.go (use enhanced scorer)
+	Modify
+	kb-20-patient-profile/internal/services/ior_store.go (confounder narrative field)
+	Market Configs — Confounder Calendars
+Action
+	File
+	Create
+	market-configs/shared/confounder_weights.yaml
+	Create
+	market-configs/india/confounder_calendar.yaml
+	Create
+	market-configs/australia/confounder_calendar.yaml
+	KB-23 (Decision Cards) — Confounder-Aware Evidence Display
+Action
+	File
+	Create
+	kb-23-decision-cards/internal/services/confounder_evidence_filter.go
+	Create
+	kb-23-decision-cards/internal/services/confounder_evidence_filter_test.go
+	Total: 14 files (11 create, 3 modify)
+________________
+
+
+Phase F1: Confounder Models + Calendar Configuration
+Step 1: Create confounder data models
+// kb-20-patient-profile/internal/models/confounder.go
+package models
+
+
+import "time"
+
+
+// ConfounderCategory classifies the type of confounder.
+type ConfounderCategory string
+
+
+const (
+    ConfounderMedication     ConfounderCategory = "MEDICATION"
+    ConfounderAdherence      ConfounderCategory = "ADHERENCE"
+    ConfounderSeasonal       ConfounderCategory = "SEASONAL"
+    ConfounderReligiousFast  ConfounderCategory = "RELIGIOUS_FASTING"
+    ConfounderFestivalDiet   ConfounderCategory = "FESTIVAL_DIETARY"
+    ConfounderAcuteIllness   ConfounderCategory = "ACUTE_ILLNESS"
+    ConfounderIatrogenic     ConfounderCategory = "IATROGENIC"
+    ConfounderLifestyle      ConfounderCategory = "LIFESTYLE"
+    ConfounderEnvironmental  ConfounderCategory = "ENVIRONMENTAL"
+)
+
+
+// ConfounderFactor represents a single active confounder during an outcome window.
+type ConfounderFactor struct {
+    Category          ConfounderCategory `json:"category"`
+    Name              string             `json:"name"`                // e.g., "RAMADAN_2026", "STEROID_COURSE", "MONSOON_SEASON"
+    Weight            float64            `json:"weight"`              // 0-1 contribution to composite score
+    AffectedOutcomes  []string           `json:"affected_outcomes"`   // DELTA_HBA1C, DELTA_SBP, DELTA_WEIGHT, DELTA_EGFR
+    ExpectedDirection string             `json:"expected_direction"`  // INCREASES, DECREASES, VARIABLE
+    ExpectedMagnitude string             `json:"expected_magnitude"`  // e.g., "0.2-0.4% HbA1c", "2-3 kg weight"
+    WindowStart       time.Time          `json:"window_start"`
+    WindowEnd         time.Time          `json:"window_end"`
+    OverlapDays       int                `json:"overlap_days"`        // days overlapping with the outcome window
+    OverlapPct        float64            `json:"overlap_pct"`         // % of outcome window affected
+    Source            string             `json:"source"`              // CALENDAR, CLINICAL_EVENT, ENGAGEMENT, LAB
+    Confidence        string             `json:"confidence"`          // HIGH (documented event), MODERATE (calendar), LOW (inferred)
+}
+
+
+// EnhancedConfounderResult is the full output of the enhanced confounder scorer.
+type EnhancedConfounderResult struct {
+    // Composite
+    CompositeScore    float64            `json:"composite_score"`     // 0-1
+    ConfidenceLevel   string             `json:"confidence_level"`    // HIGH (<0.2), MODERATE (0.2-0.5), LOW (>0.5)
+    
+    // Per-category subscores
+    MedicationScore   float64            `json:"medication_score"`
+    CalendarScore     float64            `json:"calendar_score"`
+    ClinicalEventScore float64           `json:"clinical_event_score"`
+    LifestyleScore    float64            `json:"lifestyle_score"`
+    
+    // Detailed factors
+    ActiveFactors     []ConfounderFactor `json:"active_factors"`
+    FactorCount       int                `json:"factor_count"`
+    
+    // Narrative
+    Narrative         string             `json:"narrative"`           // human-readable summary
+    
+    // Recommendations
+    ShouldDefer       bool               `json:"should_defer"`        // true if confounder load is so high that outcome should be deferred
+    DeferReasonCode   string             `json:"defer_reason_code,omitempty"` // e.g., "RAMADAN_ACTIVE", "STEROID_WASHOUT"
+    SuggestedRecheckWeeks int            `json:"suggested_recheck_weeks,omitempty"`
+}
+
+
+// CalendarEvent represents a seasonal/religious/cultural event in the confounder calendar.
+type CalendarEvent struct {
+    Name              string   `yaml:"name" json:"name"`
+    Category          string   `yaml:"category" json:"category"` // RELIGIOUS_FASTING, FESTIVAL_DIETARY, SEASONAL, ENVIRONMENTAL
+    RecurrenceType    string   `yaml:"recurrence_type" json:"recurrence_type"` // ISLAMIC_LUNAR, HINDU_LUNAR, GREGORIAN_FIXED, GREGORIAN_SEASONAL
+    GregorianApprox   []int    `yaml:"gregorian_approx_month" json:"gregorian_approx_month,omitempty"` // for seasonal
+    DurationDays      int      `yaml:"duration_days" json:"duration_days"`
+    AffectedOutcomes  []string `yaml:"affected_outcomes" json:"affected_outcomes"`
+    ExpectedDirection string   `yaml:"expected_direction" json:"expected_direction"` // DECREASES_GLUCOSE, INCREASES_GLUCOSE, INCREASES_WEIGHT, etc.
+    ExpectedMagnitude string   `yaml:"expected_magnitude" json:"expected_magnitude"`
+    BaseWeight        float64  `yaml:"base_weight" json:"base_weight"` // weight when fully overlapping
+    PostEventWashout  int      `yaml:"post_event_washout_days" json:"post_event_washout_days"` // days after event end before effects clear
+    AppliesTo         string   `yaml:"applies_to" json:"applies_to"` // ALL, MUSLIM, HINDU, CHRISTIAN
+    Notes             string   `yaml:"notes" json:"notes,omitempty"`
+}
+
+
+// ClinicalEventConfounder represents an acute clinical event that confounds outcomes.
+type ClinicalEventConfounder struct {
+    EventType         string   `json:"event_type"`   // STEROID_COURSE, HOSPITALIZATION, ACUTE_INFECTION, SURGERY, PREGNANCY
+    DetectionMethod   string   `json:"detection_method"` // LAB_MARKER, MEDICATION_RECORD, DIAGNOSIS_CODE, PATIENT_REPORTED
+    AffectedOutcomes  []string `json:"affected_outcomes"`
+    ExpectedDirection string   `json:"expected_direction"`
+    Weight            float64  `json:"weight"`
+    WashoutDays       int      `json:"washout_days"` // days after event resolution before outcomes are reliable
+}
+
+
+// OutcomeConfounderAnnotation extends the existing OutcomeRecord with confounder detail.
+type OutcomeConfounderAnnotation struct {
+    OutcomeID         string                  `json:"outcome_id"`
+    ConfounderResult  EnhancedConfounderResult `json:"confounder_result"`
+    AdjustedConfidence string                 `json:"adjusted_confidence"`
+    OriginalDelta     float64                 `json:"original_delta"`
+    // We do NOT adjust the delta — we annotate it
+}
+
+
+   * [ ] Step 2: Create shared confounder weights YAML
+# backend/shared-infrastructure/market-configs/shared/confounder_weights.yaml
+# Base weights for each confounder category.
+# Market-specific calendars add event-level detail.
+
+
+# Category-level maximum contribution to composite score
+category_caps:
+  MEDICATION: 0.40          # concurrent meds can contribute up to 0.40
+  ADHERENCE: 0.25           # adherence drop up to 0.25
+  SEASONAL: 0.15            # seasonal variation up to 0.15
+  RELIGIOUS_FASTING: 0.25   # Ramadan/Navratri can be strong confounders
+  FESTIVAL_DIETARY: 0.15    # festival dietary changes
+  ACUTE_ILLNESS: 0.35       # acute illness is a strong confounder
+  IATROGENIC: 0.40          # steroid courses etc. — very strong
+  LIFESTYLE: 0.20           # exercise/diet changes
+  ENVIRONMENTAL: 0.10       # weather, natural disasters
+
+
+# Medication confounder detail (refined from original)
+medication:
+  per_concurrent_change: 0.12       # each concurrent med change adds 0.12
+  max_concurrent_contribution: 0.40 # capped at 0.40
+  dose_change_weight: 0.08          # dose changes are weaker than new starts
+  class_change_weight: 0.15         # class changes are stronger
+
+
+# Adherence confounder detail
+adherence:
+  per_10pct_drop: 0.10             # each 10% adherence drop adds 0.10
+  max_contribution: 0.25
+
+
+# Clinical event weights
+clinical_events:
+  steroid_course:
+    weight: 0.35
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG", "DELTA_SBP", "DELTA_WEIGHT"]
+    expected_direction: "WORSENS_ALL"
+    washout_days: 28
+    detection: ["MEDICATION_RECORD_PREDNISOLONE", "MEDICATION_RECORD_DEXAMETHASONE",
+                "MEDICATION_RECORD_METHYLPREDNISOLONE"]
+  
+  hospitalization:
+    weight: 0.30
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_SBP", "DELTA_EGFR", "DELTA_WEIGHT"]
+    expected_direction: "VARIABLE"
+    washout_days: 42  # 6 weeks post-discharge
+    detection: ["ADMISSION_EVENT", "DISCHARGE_EVENT"]
+  
+  acute_infection:
+    weight: 0.20
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG", "DELTA_EGFR"]
+    expected_direction: "WORSENS_GLUCOSE_AND_RENAL"
+    washout_days: 21
+    detection: ["ELEVATED_CRP", "ANTIBIOTIC_PRESCRIPTION", "UTI_DIAGNOSIS"]
+  
+  surgery:
+    weight: 0.30
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_SBP", "DELTA_WEIGHT", "DELTA_EGFR"]
+    expected_direction: "VARIABLE"
+    washout_days: 56  # 8 weeks post-surgery
+    detection: ["SURGICAL_EVENT"]
+  
+  acute_kidney_injury:
+    weight: 0.40
+    affected_outcomes: ["DELTA_EGFR"]
+    expected_direction: "WORSENS_RENAL"
+    washout_days: 90  # AKI recovery can take months
+    detection: ["CREATININE_SPIKE", "EGFR_ACUTE_DROP"]
+
+
+# Lifestyle confounder weights
+lifestyle:
+  engagement_collapse:
+    weight: 0.15
+    threshold: 0.30    # engagement score drop >0.30 is significant
+    detection: "MODULE_9_ENGAGEMENT"
+  
+  exercise_cessation:
+    weight: 0.10
+    detection: "MODULE_11_FITNESS"
+  
+  dietary_shift:
+    weight: 0.10
+    detection: "MODULE_10_MEAL"
+
+
+# Outcome deferral thresholds
+deferral:
+  composite_threshold: 0.70         # defer outcome if composite score >0.70
+  steroid_active_defer: true         # always defer if steroid course is active
+  ramadan_active_defer_glucose: true # defer glucose outcomes during Ramadan
+  hospitalization_washout_defer: true # defer during hospitalization washout
+
+
+   * [ ] Step 3: Create India confounder calendar
+# backend/shared-infrastructure/market-configs/india/confounder_calendar.yaml
+# India-specific seasonal, religious, and cultural confounder events.
+# Sources: IDF-DAR 2021, RSSDI 2023, ICMR dietary guidelines
+
+
+# Religious fasting events
+religious_events:
+  - name: "RAMADAN"
+    category: "RELIGIOUS_FASTING"
+    recurrence_type: "ISLAMIC_LUNAR"
+    duration_days: 30
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG", "DELTA_WEIGHT"]
+    expected_direction: "DECREASES_GLUCOSE_DURING_INCREASES_AFTER"
+    expected_magnitude: "HbA1c -0.3 to -0.5% during, rebound +0.2-0.3% within 4 weeks after"
+    base_weight: 0.25
+    post_event_washout_days: 28
+    applies_to: "MUSLIM"
+    notes: "IDF-DAR 2021: dawn-to-sunset fasting. Extended fasting produces lower mean glucose. Post-Iftar hyperglycaemia spikes common. Medication timing must shift. Weight change variable (some gain from Iftar feasting, some lose from fasting)."
+    # Approximate Gregorian dates (shifts ~11 days/year)
+    # 2026: ~Feb 18 - Mar 19
+    # 2027: ~Feb 7 - Mar 8
+    dates_2026:
+      start: "2026-02-18"
+      end: "2026-03-19"
+    dates_2027:
+      start: "2027-02-07"
+      end: "2027-03-08"
+
+
+  - name: "NAVRATRI_CHAITRA"
+    category: "RELIGIOUS_FASTING"
+    recurrence_type: "HINDU_LUNAR"
+    duration_days: 9
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG", "DELTA_WEIGHT"]
+    expected_direction: "DECREASES_GLUCOSE"
+    expected_magnitude: "Mild glucose reduction from caloric restriction"
+    base_weight: 0.10
+    post_event_washout_days: 7
+    applies_to: "HINDU"
+    dates_2026:
+      start: "2026-03-29"
+      end: "2026-04-06"
+
+
+  - name: "NAVRATRI_SHARAD"
+    category: "RELIGIOUS_FASTING"
+    recurrence_type: "HINDU_LUNAR"
+    duration_days: 9
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG", "DELTA_WEIGHT"]
+    expected_direction: "DECREASES_GLUCOSE"
+    expected_magnitude: "Mild glucose reduction from caloric restriction"
+    base_weight: 0.10
+    post_event_washout_days: 7
+    applies_to: "HINDU"
+    dates_2026:
+      start: "2026-10-02"
+      end: "2026-10-10"
+
+
+# Festival dietary events
+festival_events:
+  - name: "DIWALI_SEASON"
+    category: "FESTIVAL_DIETARY"
+    recurrence_type: "HINDU_LUNAR"
+    duration_days: 21  # extended season including pre-Diwali sweets
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG", "DELTA_WEIGHT", "DELTA_SBP"]
+    expected_direction: "WORSENS_ALL"
+    expected_magnitude: "Weight +1-3kg, HbA1c +0.2-0.5%, FBG +20-40 mg/dL, SBP +5-10 mmHg (sodium from snacks)"
+    base_weight: 0.20
+    post_event_washout_days: 21
+    applies_to: "ALL"
+    dates_2026:
+      start: "2026-10-10"
+      end: "2026-10-31"
+
+
+  - name: "WEDDING_SEASON"
+    category: "FESTIVAL_DIETARY"
+    recurrence_type: "GREGORIAN_SEASONAL"
+    duration_days: 120  # October through January
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_WEIGHT"]
+    expected_direction: "WORSENS_GLUCOSE_AND_WEIGHT"
+    expected_magnitude: "Sustained dietary excess. Weight +2-4kg over season. HbA1c +0.2-0.4%"
+    base_weight: 0.15
+    post_event_washout_days: 30
+    applies_to: "ALL"
+    gregorian_approx_month: [10, 11, 12, 1]
+
+
+  - name: "PONGAL_MAKAR_SANKRANTI"
+    category: "FESTIVAL_DIETARY"
+    recurrence_type: "GREGORIAN_FIXED"
+    duration_days: 4
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_FBG"]
+    expected_direction: "INCREASES_GLUCOSE"
+    expected_magnitude: "Rice-heavy feast + jaggery sweets. FBG +15-30 mg/dL transient"
+    base_weight: 0.08
+    post_event_washout_days: 7
+    applies_to: "ALL"
+    dates_2026:
+      start: "2026-01-14"
+      end: "2026-01-17"
+
+
+# Seasonal/environmental events
+seasonal_events:
+  - name: "MONSOON_SEASON"
+    category: "ENVIRONMENTAL"
+    recurrence_type: "GREGORIAN_SEASONAL"
+    duration_days: 120
+    affected_outcomes: ["DELTA_WEIGHT", "DELTA_SBP"]
+    expected_direction: "REDUCES_EXERCISE_INCREASES_BP"
+    expected_magnitude: "Outdoor exercise drops 40-60%. Weight +1-2kg. SBP +3-5 mmHg"
+    base_weight: 0.10
+    post_event_washout_days: 14
+    applies_to: "ALL"
+    gregorian_approx_month: [6, 7, 8, 9]
+    region_specific: true
+    regions: ["MUMBAI", "KOLKATA", "CHENNAI", "KERALA", "GOA"]
+
+
+  - name: "EXTREME_SUMMER"
+    category: "ENVIRONMENTAL"
+    recurrence_type: "GREGORIAN_SEASONAL"
+    duration_days: 90
+    affected_outcomes: ["DELTA_EGFR", "DELTA_SBP"]
+    expected_direction: "DEHYDRATION_WORSENS_RENAL"
+    expected_magnitude: "Dehydration → pre-renal azotemia → apparent eGFR drop 5-10. BP variable (vasodilation vs dehydration)"
+    base_weight: 0.12
+    post_event_washout_days: 14
+    applies_to: "ALL"
+    gregorian_approx_month: [4, 5, 6]
+    region_specific: true
+    regions: ["RAJASTHAN", "MADHYA_PRADESH", "DELHI", "UTTAR_PRADESH"]
+
+
+# Seasonal HbA1c variation (tropical India — less pronounced than temperate)
+seasonal_hba1c:
+  pattern: "TROPICAL_MILD"
+  peak_months: [7, 8, 9]  # monsoon — slightly higher HbA1c due to reduced activity
+  trough_months: [1, 2, 3]  # winter — slightly lower
+  magnitude_pct: 0.15  # ±0.15% seasonal swing (less than temperate 0.2-0.4%)
+
+
+   * [ ] Step 4: Create Australia confounder calendar
+# backend/shared-infrastructure/market-configs/australia/confounder_calendar.yaml
+# Sources: RACGP 2024, ADS-ADEA 2024, BOM climate data
+
+
+# Festival/holiday events
+festival_events:
+  - name: "CHRISTMAS_NEW_YEAR_HOLIDAYS"
+    category: "FESTIVAL_DIETARY"
+    recurrence_type: "GREGORIAN_FIXED"
+    duration_days: 21
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_WEIGHT", "DELTA_SBP"]
+    expected_direction: "WORSENS_ALL"
+    expected_magnitude: "Weight +1-3kg, alcohol intake increased, exercise reduced. HbA1c +0.1-0.3%"
+    base_weight: 0.15
+    post_event_washout_days: 21
+    applies_to: "ALL"
+    dates_2026:
+      start: "2026-12-20"
+      end: "2027-01-10"
+
+
+  - name: "EASTER_SCHOOL_HOLIDAYS"
+    category: "FESTIVAL_DIETARY"
+    recurrence_type: "GREGORIAN_FIXED"
+    duration_days: 14
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_WEIGHT"]
+    expected_direction: "WORSENS_GLUCOSE_AND_WEIGHT"
+    expected_magnitude: "Moderate dietary disruption. Weight +0.5-1.5kg"
+    base_weight: 0.08
+    post_event_washout_days: 7
+    applies_to: "ALL"
+    dates_2026:
+      start: "2026-04-03"
+      end: "2026-04-17"
+
+
+# Seasonal events
+seasonal_events:
+  - name: "WINTER_TEMPERATE"
+    category: "SEASONAL"
+    recurrence_type: "GREGORIAN_SEASONAL"
+    duration_days: 90
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_WEIGHT", "DELTA_SBP"]
+    expected_direction: "WORSENS_ALL"
+    expected_magnitude: "HbA1c +0.2-0.4% (Tseng 2005). Weight +1-2kg. SBP +3-5 mmHg (cold vasoconstriction)"
+    base_weight: 0.15
+    post_event_washout_days: 21
+    applies_to: "ALL"
+    gregorian_approx_month: [6, 7, 8]
+    region_specific: true
+    regions: ["VIC", "NSW", "TAS", "SA", "ACT"]
+
+
+  - name: "BUSHFIRE_SEASON"
+    category: "ENVIRONMENTAL"
+    recurrence_type: "GREGORIAN_SEASONAL"
+    duration_days: 120
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_SBP", "DELTA_WEIGHT"]
+    expected_direction: "STRESS_WORSENS_ALL"
+    expected_magnitude: "Stress response, medication disruption, evacuation. Population-level HbA1c +0.2-0.3% in affected areas (McArthur 2021)"
+    base_weight: 0.20
+    post_event_washout_days: 42
+    applies_to: "ALL"
+    gregorian_approx_month: [11, 12, 1, 2]
+    region_specific: true
+    regions: ["NSW", "VIC", "SA", "QLD"]
+    notes: "Only apply if patient is in an affected region during an active bushfire event. Requires external bushfire alert integration in future."
+
+
+# Indigenous-specific confounders
+indigenous_events:
+  - name: "SORRY_BUSINESS"
+    category: "LIFESTYLE"
+    recurrence_type: "PATIENT_SPECIFIC"
+    duration_days: 14
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_SBP", "DELTA_WEIGHT"]
+    expected_direction: "VARIABLE"
+    expected_magnitude: "Medication adherence disruption, dietary change, stress response"
+    base_weight: 0.15
+    post_event_washout_days: 14
+    applies_to: "INDIGENOUS"
+    notes: "Bereavement cultural practice. Duration and impact variable. Must be handled with cultural sensitivity — flag as confounder without pathologizing."
+
+
+  - name: "CEREMONY_SEASON"
+    category: "LIFESTYLE"
+    recurrence_type: "PATIENT_SPECIFIC"
+    duration_days: 21
+    affected_outcomes: ["DELTA_HBA1C", "DELTA_WEIGHT"]
+    expected_direction: "VARIABLE"
+    expected_magnitude: "Travel to country, altered diet, potential medication gaps"
+    base_weight: 0.12
+    post_event_washout_days: 14
+    applies_to: "INDIGENOUS"
+
+
+# Seasonal HbA1c variation (temperate Australia)
+seasonal_hba1c:
+  pattern: "TEMPERATE_SOUTHERN_HEMISPHERE"
+  peak_months: [7, 8, 9]    # winter — HbA1c highest
+  trough_months: [1, 2, 3]  # summer — HbA1c lowest
+  magnitude_pct: 0.30        # ±0.30% seasonal swing (Tseng 2005 temperate data)
+
+
+________________
+
+
+Phase F2: Confounder Calendar Service
+Step 5: Write failing test for confounder calendar
+// kb-20-patient-profile/internal/services/confounder_calendar_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "kb-patient-profile/internal/models"
+)
+
+
+func TestCalendar_RamadanOverlap(t *testing.T) {
+    calendar := loadTestCalendar(t, "india")
+
+
+    // Window: Feb 1 - Apr 30, 2026 (overlaps Ramadan Feb 18 - Mar 19)
+    windowStart := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+
+
+    factors := calendar.FindActiveConfounders(windowStart, windowEnd, "MUSLIM", "MUMBAI")
+
+
+    hasRamadan := false
+    for _, f := range factors {
+        if f.Name == "RAMADAN" {
+            hasRamadan = true
+            assert.Equal(t, models.ConfounderReligiousFast, f.Category)
+            assert.True(t, f.OverlapDays >= 28)
+            assert.True(t, f.Weight > 0.15)
+            assert.Contains(t, f.AffectedOutcomes, "DELTA_HBA1C")
+        }
+    }
+    assert.True(t, hasRamadan, "Should detect Ramadan overlap")
+}
+
+
+func TestCalendar_RamadanWashout(t *testing.T) {
+    calendar := loadTestCalendar(t, "india")
+
+
+    // Window: Mar 20 - Apr 20, 2026 (Ramadan ended Mar 19, washout 28 days → Apr 16)
+    windowStart := time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
+
+
+    factors := calendar.FindActiveConfounders(windowStart, windowEnd, "MUSLIM", "")
+
+
+    hasRamadanWashout := false
+    for _, f := range factors {
+        if f.Name == "RAMADAN" {
+            hasRamadanWashout = true
+            assert.Contains(t, f.Name, "RAMADAN") // washout period still counts
+        }
+    }
+    assert.True(t, hasRamadanWashout, "Should detect Ramadan washout period")
+}
+
+
+func TestCalendar_DiwaliSeason(t *testing.T) {
+    calendar := loadTestCalendar(t, "india")
+
+
+    // Window: Oct 1 - Dec 31, 2026
+    windowStart := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+
+
+    factors := calendar.FindActiveConfounders(windowStart, windowEnd, "HINDU", "")
+
+
+    hasDiwali := false
+    hasNavratri := false
+    for _, f := range factors {
+        if f.Name == "DIWALI_SEASON" {
+            hasDiwali = true
+            assert.Contains(t, f.AffectedOutcomes, "DELTA_WEIGHT")
+        }
+        if f.Name == "NAVRATRI_SHARAD" {
+            hasNavratri = true
+        }
+    }
+    assert.True(t, hasDiwali)
+    assert.True(t, hasNavratri)
+}
+
+
+func TestCalendar_MonsoonMumbai(t *testing.T) {
+    calendar := loadTestCalendar(t, "india")
+
+
+    // Window: June-September in Mumbai
+    windowStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+
+
+    factorsMumbai := calendar.FindActiveConfounders(windowStart, windowEnd, "ALL", "MUMBAI")
+    factorsDelhi := calendar.FindActiveConfounders(windowStart, windowEnd, "ALL", "DELHI")
+
+
+    // Mumbai should have monsoon confounder
+    hasMonsoonMumbai := false
+    for _, f := range factorsMumbai {
+        if f.Name == "MONSOON_SEASON" {
+            hasMonsoonMumbai = true
+        }
+    }
+    assert.True(t, hasMonsoonMumbai)
+
+
+    // Delhi should NOT have monsoon (not in monsoon region list — Delhi has different weather pattern)
+    hasMonsoonDelhi := false
+    for _, f := range factorsDelhi {
+        if f.Name == "MONSOON_SEASON" {
+            hasMonsoonDelhi = true
+        }
+    }
+    assert.False(t, hasMonsoonDelhi)
+}
+
+
+func TestCalendar_NonMuslimSkipsRamadan(t *testing.T) {
+    calendar := loadTestCalendar(t, "india")
+
+
+    windowStart := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
+
+
+    factors := calendar.FindActiveConfounders(windowStart, windowEnd, "HINDU", "")
+
+
+    for _, f := range factors {
+        assert.NotEqual(t, "RAMADAN", f.Name, "Hindu patient should not get Ramadan confounder")
+    }
+}
+
+
+func TestCalendar_AustraliaWinter(t *testing.T) {
+    calendar := loadTestCalendar(t, "australia")
+
+
+    windowStart := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+
+
+    factorsVIC := calendar.FindActiveConfounders(windowStart, windowEnd, "ALL", "VIC")
+
+
+    hasWinter := false
+    for _, f := range factorsVIC {
+        if f.Name == "WINTER_TEMPERATE" {
+            hasWinter = true
+            assert.True(t, f.Weight >= 0.10)
+        }
+    }
+    assert.True(t, hasWinter)
+}
+
+
+func TestCalendar_NoOverlap_EmptyFactors(t *testing.T) {
+    calendar := loadTestCalendar(t, "india")
+
+
+    // Window in March with no festivals for Hindu patient in non-monsoon region
+    windowStart := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+    windowEnd := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+
+
+    factors := calendar.FindActiveConfounders(windowStart, windowEnd, "HINDU", "DELHI")
+    // Should be empty or only have minor seasonal confounders
+    for _, f := range factors {
+        assert.True(t, f.Weight < 0.15, "No major confounder expected in this window, got %s with weight %.2f", f.Name, f.Weight)
+    }
+}
+
+
+func TestCalendar_SeasonalHbA1cAdjustment(t *testing.T) {
+    calendar := loadTestCalendar(t, "australia")
+
+
+    // Winter peak (July) → expected +0.30% HbA1c
+    winterAdj := calendar.GetSeasonalHbA1cAdjustment(7) // July
+    assert.True(t, winterAdj > 0, "Winter should have positive HbA1c adjustment")
+
+
+    // Summer trough (January) → expected -0.30% HbA1c
+    summerAdj := calendar.GetSeasonalHbA1cAdjustment(1) // January
+    assert.True(t, summerAdj < 0, "Summer should have negative HbA1c adjustment")
+}
+
+
+   * [ ] Step 6: Implement confounder calendar service
+// kb-20-patient-profile/internal/services/confounder_calendar.go
+package services
+
+
+import (
+    "fmt"
+    "math"
+    "os"
+    "path/filepath"
+    "time"
+
+
+    "gopkg.in/yaml.v3"
+    "kb-patient-profile/internal/models"
+)
+
+
+type ConfounderCalendar struct {
+    market            string
+    religiousEvents   []calendarEventConfig
+    festivalEvents    []calendarEventConfig
+    seasonalEvents    []calendarEventConfig
+    indigenousEvents  []calendarEventConfig
+    seasonalHbA1c     seasonalHbA1cConfig
+}
+
+
+type calendarEventConfig struct {
+    Name              string   `yaml:"name"`
+    Category          string   `yaml:"category"`
+    DurationDays      int      `yaml:"duration_days"`
+    AffectedOutcomes  []string `yaml:"affected_outcomes"`
+    ExpectedDirection string   `yaml:"expected_direction"`
+    ExpectedMagnitude string   `yaml:"expected_magnitude"`
+    BaseWeight        float64  `yaml:"base_weight"`
+    PostEventWashout  int      `yaml:"post_event_washout_days"`
+    AppliesTo         string   `yaml:"applies_to"`
+    RegionSpecific    bool     `yaml:"region_specific"`
+    Regions           []string `yaml:"regions"`
+    GregorianMonths   []int    `yaml:"gregorian_approx_month"`
+    Dates2026         struct {
+        Start string `yaml:"start"`
+        End   string `yaml:"end"`
+    } `yaml:"dates_2026"`
+    Dates2027 struct {
+        Start string `yaml:"start"`
+        End   string `yaml:"end"`
+    } `yaml:"dates_2027"`
+}
+
+
+type seasonalHbA1cConfig struct {
+    Pattern       string  `yaml:"pattern"`
+    PeakMonths    []int   `yaml:"peak_months"`
+    TroughMonths  []int   `yaml:"trough_months"`
+    MagnitudePct  float64 `yaml:"magnitude_pct"`
+}
+
+
+type calendarYAML struct {
+    ReligiousEvents  []calendarEventConfig `yaml:"religious_events"`
+    FestivalEvents   []calendarEventConfig `yaml:"festival_events"`
+    SeasonalEvents   []calendarEventConfig `yaml:"seasonal_events"`
+    IndigenousEvents []calendarEventConfig `yaml:"indigenous_events"`
+    SeasonalHbA1c    seasonalHbA1cConfig   `yaml:"seasonal_hba1c"`
+}
+
+
+func LoadConfounderCalendar(configDir, market string) (*ConfounderCalendar, error) {
+    path := filepath.Join(configDir, market, "confounder_calendar.yaml")
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return nil, fmt.Errorf("loading confounder calendar for %s: %w", market, err)
+    }
+
+
+    var raw calendarYAML
+    if err := yaml.Unmarshal(data, &raw); err != nil {
+        return nil, fmt.Errorf("parsing confounder calendar: %w", err)
+    }
+
+
+    return &ConfounderCalendar{
+        market:           market,
+        religiousEvents:  raw.ReligiousEvents,
+        festivalEvents:   raw.FestivalEvents,
+        seasonalEvents:   raw.SeasonalEvents,
+        indigenousEvents: raw.IndigenousEvents,
+        seasonalHbA1c:    raw.SeasonalHbA1c,
+    }, nil
+}
+
+
+// FindActiveConfounders returns all calendar-based confounders active during the given window.
+func (c *ConfounderCalendar) FindActiveConfounders(
+    windowStart, windowEnd time.Time,
+    religiousAffiliation string,
+    region string,
+) []models.ConfounderFactor {
+    var factors []models.ConfounderFactor
+
+
+    allEvents := make([]calendarEventConfig, 0)
+    allEvents = append(allEvents, c.religiousEvents...)
+    allEvents = append(allEvents, c.festivalEvents...)
+    allEvents = append(allEvents, c.seasonalEvents...)
+    allEvents = append(allEvents, c.indigenousEvents...)
+
+
+    for _, event := range allEvents {
+        // Check religious applicability
+        if event.AppliesTo != "ALL" && event.AppliesTo != religiousAffiliation {
+            continue
+        }
+
+
+        // Check region applicability
+        if event.RegionSpecific && !containsString(event.Regions, region) {
+            continue
+        }
+
+
+        // Determine event window
+        eventStart, eventEnd := c.resolveEventDates(event, windowStart.Year())
+        if eventStart.IsZero() {
+            continue
+        }
+
+
+        // Extend event end by washout period
+        washoutEnd := eventEnd.Add(time.Duration(event.PostEventWashout) * 24 * time.Hour)
+
+
+        // Check overlap with outcome window
+        overlapStart := maxTime(windowStart, eventStart)
+        overlapEnd := minTime(windowEnd, washoutEnd)
+
+
+        if overlapStart.Before(overlapEnd) {
+            overlapDays := int(overlapEnd.Sub(overlapStart).Hours() / 24)
+            windowDays := int(windowEnd.Sub(windowStart).Hours() / 24)
+            overlapPct := 0.0
+            if windowDays > 0 {
+                overlapPct = float64(overlapDays) / float64(windowDays) * 100
+            }
+
+
+            // Weight scales with overlap percentage
+            weight := event.BaseWeight * math.Min(overlapPct/100.0, 1.0)
+
+
+            factors = append(factors, models.ConfounderFactor{
+                Category:          models.ConfounderCategory(event.Category),
+                Name:              event.Name,
+                Weight:            math.Round(weight*1000) / 1000,
+                AffectedOutcomes:  event.AffectedOutcomes,
+                ExpectedDirection: event.ExpectedDirection,
+                ExpectedMagnitude: event.ExpectedMagnitude,
+                WindowStart:       eventStart,
+                WindowEnd:         washoutEnd,
+                OverlapDays:       overlapDays,
+                OverlapPct:        math.Round(overlapPct*10) / 10,
+                Source:            "CALENDAR",
+                Confidence:        "MODERATE",
+            })
+        }
+    }
+
+
+    return factors
+}
+
+
+func (c *ConfounderCalendar) resolveEventDates(event calendarEventConfig, year int) (time.Time, time.Time) {
+    // Try exact dates first (for religious events with known dates)
+    if year == 2026 && event.Dates2026.Start != "" {
+        start, _ := time.Parse("2006-01-02", event.Dates2026.Start)
+        end, _ := time.Parse("2006-01-02", event.Dates2026.End)
+        if !start.IsZero() && !end.IsZero() {
+            return start, end
+        }
+    }
+    if year == 2027 && event.Dates2027.Start != "" {
+        start, _ := time.Parse("2006-01-02", event.Dates2027.Start)
+        end, _ := time.Parse("2006-01-02", event.Dates2027.End)
+        if !start.IsZero() && !end.IsZero() {
+            return start, end
+        }
+    }
+
+
+    // Fall back to seasonal approximation
+    if len(event.GregorianMonths) > 0 {
+        startMonth := event.GregorianMonths[0]
+        start := time.Date(year, time.Month(startMonth), 1, 0, 0, 0, 0, time.UTC)
+        end := start.Add(time.Duration(event.DurationDays) * 24 * time.Hour)
+        return start, end
+    }
+
+
+    return time.Time{}, time.Time{}
+}
+
+
+// GetSeasonalHbA1cAdjustment returns the expected seasonal HbA1c deviation for a given month.
+// Positive = HbA1c expected to be higher than annual mean; negative = lower.
+func (c *ConfounderCalendar) GetSeasonalHbA1cAdjustment(month int) float64 {
+    for _, m := range c.seasonalHbA1c.PeakMonths {
+        if m == month {
+            return c.seasonalHbA1c.MagnitudePct
+        }
+    }
+    for _, m := range c.seasonalHbA1c.TroughMonths {
+        if m == month {
+            return -c.seasonalHbA1c.MagnitudePct
+        }
+    }
+    return 0.0
+}
+
+
+func maxTime(a, b time.Time) time.Time {
+    if a.After(b) { return a }
+    return b
+}
+
+
+func minTime(a, b time.Time) time.Time {
+    if a.Before(b) { return a }
+    return b
+}
+
+
+func containsString(slice []string, s string) bool {
+    for _, v := range slice {
+        if v == s { return true }
+    }
+    return false
+}
+
+
+   * [ ] Step 7: Run calendar tests
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./internal/services/ -run "TestCalendar_" -v
+
+
+Expected: All 8 tests PASS.
+   * [ ] Step 8: Commit Phase F2
+git add kb-20-patient-profile/internal/models/confounder.go
+git add kb-20-patient-profile/internal/services/confounder_calendar.go
+git add kb-20-patient-profile/internal/services/confounder_calendar_test.go
+git add market-configs/shared/confounder_weights.yaml
+git add market-configs/india/confounder_calendar.yaml
+git add market-configs/australia/confounder_calendar.yaml
+git commit -m "feat(kb20): confounder calendar service — seasonal/religious/cultural events
+
+
+India: Ramadan (30d fasting, IDF-DAR 2021), Navratri (2×/year), Diwali season
+(21d dietary), wedding season (120d), monsoon (120d regional), extreme summer
+(90d regional). Australia: Christmas/NYE (21d), winter temperate (90d, Tseng
+2005), bushfire season (120d, McArthur 2021), indigenous Sorry Business and
+ceremony season. FindActiveConfounders() with religious affiliation filtering,
+region-specific gating, overlap-proportional weight scaling, washout period
+inclusion. GetSeasonalHbA1cAdjustment() for temperate/tropical patterns."
+
+
+________________
+
+
+Phase F3: Clinical Event Confounder Detector
+Step 9: Write failing test for clinical event detection
+// kb-20-patient-profile/internal/services/clinical_event_confounder_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-patient-profile/internal/models"
+)
+
+
+func TestClinicalEvent_SteroidCourse(t *testing.T) {
+    now := time.Now()
+    detector := NewClinicalEventDetector(testConfounderWeights())
+
+
+    events := []PatientClinicalEvent{
+        {Type: "MEDICATION_START", DrugName: "Prednisolone", Date: now.Add(-20 * 24 * time.Hour)},
+        {Type: "MEDICATION_STOP", DrugName: "Prednisolone", Date: now.Add(-6 * 24 * time.Hour)},
+    }
+
+
+    windowStart := now.Add(-30 * 24 * time.Hour)
+    factors := detector.DetectConfounders(events, windowStart, now)
+
+
+    hasSteroid := false
+    for _, f := range factors {
+        if f.Name == "STEROID_COURSE" {
+            hasSteroid = true
+            assert.Equal(t, models.ConfounderIatrogenic, f.Category)
+            assert.True(t, f.Weight >= 0.30)
+            assert.Contains(t, f.AffectedOutcomes, "DELTA_HBA1C")
+        }
+    }
+    assert.True(t, hasSteroid)
+}
+
+
+func TestClinicalEvent_SteroidWashout(t *testing.T) {
+    now := time.Now()
+    detector := NewClinicalEventDetector(testConfounderWeights())
+
+
+    // Steroid ended 10 days ago — still in 28-day washout
+    events := []PatientClinicalEvent{
+        {Type: "MEDICATION_START", DrugName: "Prednisolone", Date: now.Add(-25 * 24 * time.Hour)},
+        {Type: "MEDICATION_STOP", DrugName: "Prednisolone", Date: now.Add(-10 * 24 * time.Hour)},
+    }
+
+
+    factors := detector.DetectConfounders(events, now.Add(-5*24*time.Hour), now)
+
+
+    // Should still detect because of washout period
+    hasSteroid := false
+    for _, f := range factors {
+        if f.Name == "STEROID_COURSE" {
+            hasSteroid = true
+        }
+    }
+    assert.True(t, hasSteroid, "Should detect steroid washout period")
+}
+
+
+func TestClinicalEvent_Hospitalization(t *testing.T) {
+    now := time.Now()
+    detector := NewClinicalEventDetector(testConfounderWeights())
+
+
+    events := []PatientClinicalEvent{
+        {Type: "HOSPITALIZATION", Date: now.Add(-15 * 24 * time.Hour), Duration: 5},
+    }
+
+
+    factors := detector.DetectConfounders(events, now.Add(-30*24*time.Hour), now)
+
+
+    hasHosp := false
+    for _, f := range factors {
+        if f.Name == "HOSPITALIZATION" {
+            hasHosp = true
+            assert.True(t, f.Weight >= 0.25)
+        }
+    }
+    assert.True(t, hasHosp)
+}
+
+
+func TestClinicalEvent_AcuteInfection_DetectedByAntibiotic(t *testing.T) {
+    now := time.Now()
+    detector := NewClinicalEventDetector(testConfounderWeights())
+
+
+    events := []PatientClinicalEvent{
+        {Type: "MEDICATION_START", DrugName: "Amoxicillin", Date: now.Add(-12 * 24 * time.Hour), Duration: 7},
+    }
+
+
+    factors := detector.DetectConfounders(events, now.Add(-30*24*time.Hour), now)
+
+
+    hasInfection := false
+    for _, f := range factors {
+        if f.Name == "ACUTE_INFECTION" {
+            hasInfection = true
+        }
+    }
+    assert.True(t, hasInfection, "Antibiotic prescription should signal acute infection")
+}
+
+
+func TestClinicalEvent_AKI_DetectedByCreatinineSpike(t *testing.T) {
+    now := time.Now()
+    detector := NewClinicalEventDetector(testConfounderWeights())
+
+
+    events := []PatientClinicalEvent{
+        {Type: "LAB_RESULT", LabType: "CREATININE", Value: 2.8, Date: now.Add(-10 * 24 * time.Hour)},
+        {Type: "LAB_RESULT", LabType: "CREATININE", Value: 1.2, Date: now.Add(-60 * 24 * time.Hour)}, // baseline
+    }
+
+
+    factors := detector.DetectConfounders(events, now.Add(-30*24*time.Hour), now)
+
+
+    hasAKI := false
+    for _, f := range factors {
+        if f.Name == "ACUTE_KIDNEY_INJURY" {
+            hasAKI = true
+            assert.Contains(t, f.AffectedOutcomes, "DELTA_EGFR")
+            assert.True(t, f.Weight >= 0.35)
+        }
+    }
+    assert.True(t, hasAKI, "Creatinine doubling should signal AKI")
+}
+
+
+func TestClinicalEvent_NoEvents_EmptyFactors(t *testing.T) {
+    now := time.Now()
+    detector := NewClinicalEventDetector(testConfounderWeights())
+
+
+    factors := detector.DetectConfounders(nil, now.Add(-30*24*time.Hour), now)
+    assert.Empty(t, factors)
+}
+
+
+   * [ ] Step 10: Implement clinical event detector
+// kb-20-patient-profile/internal/services/clinical_event_confounder.go
+package services
+
+
+import (
+    "math"
+    "strings"
+    "time"
+
+
+    "kb-patient-profile/internal/models"
+)
+
+
+// PatientClinicalEvent represents a clinical event from the patient's history.
+type PatientClinicalEvent struct {
+    Type     string    `json:"type"`     // MEDICATION_START, MEDICATION_STOP, HOSPITALIZATION, LAB_RESULT, DIAGNOSIS
+    DrugName string    `json:"drug_name,omitempty"`
+    LabType  string    `json:"lab_type,omitempty"`
+    Value    float64   `json:"value,omitempty"`
+    Date     time.Time `json:"date"`
+    Duration int       `json:"duration_days,omitempty"`
+}
+
+
+type ClinicalEventDetector struct {
+    weights *ConfounderWeights
+}
+
+
+type ConfounderWeights struct {
+    SteroidWeight        float64
+    SteroidWashoutDays   int
+    HospWeight           float64
+    HospWashoutDays      int
+    InfectionWeight      float64
+    InfectionWashoutDays int
+    AKIWeight            float64
+    AKIWashoutDays       int
+    SurgeryWeight        float64
+    SurgeryWashoutDays   int
+}
+
+
+func NewClinicalEventDetector(weights *ConfounderWeights) *ClinicalEventDetector {
+    return &ClinicalEventDetector{weights: weights}
+}
+
+
+// Steroid drug name patterns
+var steroidPatterns = []string{
+    "prednisolone", "prednisone", "dexamethasone", "methylprednisolone",
+    "hydrocortisone", "cortisone", "betamethasone", "triamcinolone",
+}
+
+
+// Antibiotic patterns (signal acute infection)
+var antibioticPatterns = []string{
+    "amoxicillin", "azithromycin", "ciprofloxacin", "levofloxacin",
+    "doxycycline", "cephalexin", "trimethoprim", "nitrofurantoin",
+    "metronidazole", "clindamycin", "augmentin", "cefuroxime",
+}
+
+
+func (d *ClinicalEventDetector) DetectConfounders(
+    events []PatientClinicalEvent,
+    windowStart, windowEnd time.Time,
+) []models.ConfounderFactor {
+    var factors []models.ConfounderFactor
+
+
+    var steroidStart, steroidEnd *time.Time
+    var hasHospitalization bool
+    var hospDate time.Time
+    var hospDuration int
+    var hasAntibiotic bool
+    var antibioticDate time.Time
+    var creatinineValues []struct {
+        Value float64
+        Date  time.Time
+    }
+
+
+    for _, event := range events {
+        switch event.Type {
+        case "MEDICATION_START":
+            drugLower := strings.ToLower(event.DrugName)
+            if matchesAny(drugLower, steroidPatterns) {
+                t := event.Date
+                steroidStart = &t
+            }
+            if matchesAny(drugLower, antibioticPatterns) {
+                hasAntibiotic = true
+                antibioticDate = event.Date
+            }
+
+
+        case "MEDICATION_STOP":
+            drugLower := strings.ToLower(event.DrugName)
+            if matchesAny(drugLower, steroidPatterns) {
+                t := event.Date
+                steroidEnd = &t
+            }
+
+
+        case "HOSPITALIZATION":
+            hasHospitalization = true
+            hospDate = event.Date
+            hospDuration = event.Duration
+
+
+        case "LAB_RESULT":
+            if event.LabType == "CREATININE" {
+                creatinineValues = append(creatinineValues, struct {
+                    Value float64
+                    Date  time.Time
+                }{event.Value, event.Date})
+            }
+        }
+    }
+
+
+    // Steroid course detection
+    if steroidStart != nil {
+        end := windowEnd
+        if steroidEnd != nil {
+            end = *steroidEnd
+        }
+        washoutEnd := end.Add(time.Duration(d.weights.SteroidWashoutDays) * 24 * time.Hour)
+
+
+        if overlaps(*steroidStart, washoutEnd, windowStart, windowEnd) {
+            overlapDays := computeOverlapDays(*steroidStart, washoutEnd, windowStart, windowEnd)
+            factors = append(factors, models.ConfounderFactor{
+                Category:          models.ConfounderIatrogenic,
+                Name:              "STEROID_COURSE",
+                Weight:            d.weights.SteroidWeight,
+                AffectedOutcomes:  []string{"DELTA_HBA1C", "DELTA_FBG", "DELTA_SBP", "DELTA_WEIGHT"},
+                ExpectedDirection: "WORSENS_ALL",
+                ExpectedMagnitude: "Steroids raise glucose 50-100%, raise BP 10-20 mmHg, cause fluid retention",
+                WindowStart:       *steroidStart,
+                WindowEnd:         washoutEnd,
+                OverlapDays:       overlapDays,
+                Source:            "CLINICAL_EVENT",
+                Confidence:        "HIGH",
+            })
+        }
+    }
+
+
+    // Hospitalization detection
+    if hasHospitalization {
+        hospEnd := hospDate.Add(time.Duration(hospDuration) * 24 * time.Hour)
+        washoutEnd := hospEnd.Add(time.Duration(d.weights.HospWashoutDays) * 24 * time.Hour)
+
+
+        if overlaps(hospDate, washoutEnd, windowStart, windowEnd) {
+            factors = append(factors, models.ConfounderFactor{
+                Category:          models.ConfounderAcuteIllness,
+                Name:              "HOSPITALIZATION",
+                Weight:            d.weights.HospWeight,
+                AffectedOutcomes:  []string{"DELTA_HBA1C", "DELTA_SBP", "DELTA_EGFR", "DELTA_WEIGHT"},
+                ExpectedDirection: "VARIABLE",
+                ExpectedMagnitude: "Hospitalization disrupts all metabolic parameters. 6-week recovery expected.",
+                WindowStart:       hospDate,
+                WindowEnd:         washoutEnd,
+                OverlapDays:       computeOverlapDays(hospDate, washoutEnd, windowStart, windowEnd),
+                Source:            "CLINICAL_EVENT",
+                Confidence:        "HIGH",
+            })
+        }
+    }
+
+
+    // Antibiotic → acute infection proxy
+    if hasAntibiotic {
+        infectionEnd := antibioticDate.Add(time.Duration(14) * 24 * time.Hour) // assume 2-week course
+        washoutEnd := infectionEnd.Add(time.Duration(d.weights.InfectionWashoutDays) * 24 * time.Hour)
+
+
+        if overlaps(antibioticDate, washoutEnd, windowStart, windowEnd) {
+            factors = append(factors, models.ConfounderFactor{
+                Category:          models.ConfounderAcuteIllness,
+                Name:              "ACUTE_INFECTION",
+                Weight:            d.weights.InfectionWeight,
+                AffectedOutcomes:  []string{"DELTA_HBA1C", "DELTA_FBG", "DELTA_EGFR"},
+                ExpectedDirection: "WORSENS_GLUCOSE_AND_RENAL",
+                ExpectedMagnitude: "Infection-driven stress hyperglycaemia + transient renal impairment",
+                WindowStart:       antibioticDate,
+                WindowEnd:         washoutEnd,
+                OverlapDays:       computeOverlapDays(antibioticDate, washoutEnd, windowStart, windowEnd),
+                Source:            "CLINICAL_EVENT",
+                Confidence:        "MODERATE",
+            })
+        }
+    }
+
+
+    // AKI detection from creatinine spike
+    if len(creatinineValues) >= 2 {
+        // Find baseline (oldest) and peak (highest recent)
+        var baseline, peak struct {
+            Value float64
+            Date  time.Time
+        }
+        for _, cv := range creatinineValues {
+            if baseline.Date.IsZero() || cv.Date.Before(baseline.Date) {
+                baseline = cv
+            }
+            if cv.Date.After(windowStart.Add(-90*24*time.Hour)) && cv.Value > peak.Value {
+                peak = cv
+            }
+        }
+
+
+        // AKI: creatinine increase ≥1.5× baseline (KDIGO definition)
+        if baseline.Value > 0 && peak.Value >= baseline.Value*1.5 {
+            washoutEnd := peak.Date.Add(time.Duration(d.weights.AKIWashoutDays) * 24 * time.Hour)
+
+
+            if overlaps(peak.Date, washoutEnd, windowStart, windowEnd) {
+                factors = append(factors, models.ConfounderFactor{
+                    Category:          models.ConfounderAcuteIllness,
+                    Name:              "ACUTE_KIDNEY_INJURY",
+                    Weight:            d.weights.AKIWeight,
+                    AffectedOutcomes:  []string{"DELTA_EGFR"},
+                    ExpectedDirection: "WORSENS_RENAL",
+                    ExpectedMagnitude: "AKI causes transient eGFR decline that may recover. Washout 90 days.",
+                    WindowStart:       peak.Date,
+                    WindowEnd:         washoutEnd,
+                    OverlapDays:       computeOverlapDays(peak.Date, washoutEnd, windowStart, windowEnd),
+                    Source:            "CLINICAL_EVENT",
+                    Confidence:        "HIGH",
+                })
+            }
+        }
+    }
+
+
+    return factors
+}
+
+
+func matchesAny(s string, patterns []string) bool {
+    for _, p := range patterns {
+        if strings.Contains(s, p) {
+            return true
+        }
+    }
+    return false
+}
+
+
+func overlaps(aStart, aEnd, bStart, bEnd time.Time) bool {
+    return aStart.Before(bEnd) && bStart.Before(aEnd)
+}
+
+
+func computeOverlapDays(aStart, aEnd, bStart, bEnd time.Time) int {
+    start := maxTime(aStart, bStart)
+    end := minTime(aEnd, bEnd)
+    if start.After(end) {
+        return 0
+    }
+    return int(math.Ceil(end.Sub(start).Hours() / 24))
+}
+
+
+   * [ ] Step 11: Run clinical event tests
+go test ./internal/services/ -run "TestClinicalEvent_" -v
+
+
+Expected: All 6 tests PASS.
+   * [ ] Step 12: Commit Phase F3
+git add kb-20-patient-profile/internal/services/clinical_event_confounder.go
+git add kb-20-patient-profile/internal/services/clinical_event_confounder_test.go
+git commit -m "feat(kb20): clinical event confounder detector — steroid/hospitalization/AKI
+
+
+Detects steroids (prednisolone, dexamethasone, etc.) from medication records
+with 28-day washout. Hospitalization with 42-day washout. Antibiotic
+prescriptions as acute infection proxy with 21-day washout. AKI detection
+from creatinine spike ≥1.5× baseline (KDIGO definition) with 90-day washout.
+Each factor carries weight, affected outcomes, expected direction/magnitude."
+
+
+________________
+
+
+Phase F4: Enhanced Confounder Scorer + Integration
+Step 13: Write failing test for enhanced scorer
+// kb-20-patient-profile/internal/services/enhanced_confounder_scorer_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-patient-profile/internal/models"
+)
+
+
+func TestEnhancedScorer_NoConfounders(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{})
+
+
+    assert.Equal(t, 0.0, result.CompositeScore)
+    assert.Equal(t, "HIGH", result.ConfidenceLevel)
+    assert.Empty(t, result.ActiveFactors)
+    assert.False(t, result.ShouldDefer)
+}
+
+
+func TestEnhancedScorer_MedicationOnly_BackwardCompatible(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        ConcurrentMedCount: 2,
+        AdherenceDrop:      0.15,
+    })
+
+
+    // Should roughly match the old scorer behavior
+    assert.True(t, result.MedicationScore > 0)
+    assert.True(t, result.CompositeScore > 0)
+    assert.True(t, result.CompositeScore < 0.5) // 2 meds + mild adherence drop
+    assert.Equal(t, "MODERATE", result.ConfidenceLevel)
+}
+
+
+func TestEnhancedScorer_RamadanDuringWindow(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        CalendarFactors: []models.ConfounderFactor{
+            {
+                Category: models.ConfounderReligiousFast,
+                Name:     "RAMADAN",
+                Weight:   0.25,
+                AffectedOutcomes: []string{"DELTA_HBA1C"},
+                OverlapPct: 80.0,
+            },
+        },
+        OutcomeType: "DELTA_HBA1C",
+    })
+
+
+    assert.True(t, result.CalendarScore > 0)
+    assert.True(t, result.CompositeScore >= 0.20)
+    assert.Contains(t, result.Narrative, "RAMADAN")
+}
+
+
+func TestEnhancedScorer_SteroidCourse_HighConfounder(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        ClinicalEventFactors: []models.ConfounderFactor{
+            {
+                Category: models.ConfounderIatrogenic,
+                Name:     "STEROID_COURSE",
+                Weight:   0.35,
+                AffectedOutcomes: []string{"DELTA_HBA1C", "DELTA_SBP"},
+            },
+        },
+        OutcomeType: "DELTA_HBA1C",
+    })
+
+
+    assert.True(t, result.ClinicalEventScore >= 0.30)
+    assert.Equal(t, "LOW", result.ConfidenceLevel) // steroid = very confounded
+    assert.True(t, result.ShouldDefer)
+}
+
+
+func TestEnhancedScorer_MultipleFactors_Compound(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        ConcurrentMedCount: 1,
+        AdherenceDrop:      0.10,
+        CalendarFactors: []models.ConfounderFactor{
+            {
+                Category: models.ConfounderFestivalDiet,
+                Name:     "DIWALI_SEASON",
+                Weight:   0.15,
+                AffectedOutcomes: []string{"DELTA_HBA1C", "DELTA_WEIGHT"},
+                OverlapPct: 60.0,
+            },
+        },
+        LifestyleFactors: []models.ConfounderFactor{
+            {
+                Category: models.ConfounderLifestyle,
+                Name:     "ENGAGEMENT_COLLAPSE",
+                Weight:   0.15,
+            },
+        },
+        OutcomeType: "DELTA_HBA1C",
+    })
+
+
+    // Multiple confounders should compound
+    assert.True(t, result.CompositeScore > 0.30)
+    assert.GreaterOrEqual(t, result.FactorCount, 3) // med + Diwali + engagement
+    assert.Contains(t, result.Narrative, "DIWALI_SEASON")
+    assert.Contains(t, result.Narrative, "ENGAGEMENT_COLLAPSE")
+}
+
+
+func TestEnhancedScorer_IrrelevantConfounder_NotCounted(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        CalendarFactors: []models.ConfounderFactor{
+            {
+                Name:             "MONSOON_SEASON",
+                Weight:           0.10,
+                AffectedOutcomes: []string{"DELTA_WEIGHT", "DELTA_SBP"}, // NOT HBA1C
+            },
+        },
+        OutcomeType: "DELTA_HBA1C", // monsoon doesn't affect HbA1c
+    })
+
+
+    assert.Equal(t, 0.0, result.CalendarScore) // monsoon shouldn't contribute to HbA1c outcome
+}
+
+
+func TestEnhancedScorer_DeferDuringActiveRamadan(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        CalendarFactors: []models.ConfounderFactor{
+            {
+                Category:         models.ConfounderReligiousFast,
+                Name:             "RAMADAN",
+                Weight:           0.25,
+                AffectedOutcomes: []string{"DELTA_HBA1C"},
+                OverlapPct:       90.0, // heavily overlapping
+            },
+        },
+        OutcomeType:       "DELTA_HBA1C",
+        DeferOnRamadan:    true,
+    })
+
+
+    assert.True(t, result.ShouldDefer)
+    assert.Equal(t, "RAMADAN_ACTIVE", result.DeferReasonCode)
+    assert.True(t, result.SuggestedRecheckWeeks > 0)
+}
+
+
+func TestEnhancedScorer_NarrativeContainsAllFactors(t *testing.T) {
+    scorer := NewEnhancedConfounderScorer()
+    result := scorer.Compute(EnhancedConfounderInput{
+        ConcurrentMedCount: 2,
+        CalendarFactors: []models.ConfounderFactor{
+            {Name: "RAMADAN", Weight: 0.20, AffectedOutcomes: []string{"DELTA_HBA1C"}},
+        },
+        ClinicalEventFactors: []models.ConfounderFactor{
+            {Name: "ACUTE_INFECTION", Weight: 0.15, AffectedOutcomes: []string{"DELTA_HBA1C"}},
+        },
+        OutcomeType: "DELTA_HBA1C",
+    })
+
+
+    assert.Contains(t, result.Narrative, "concurrent medication")
+    assert.Contains(t, result.Narrative, "RAMADAN")
+    assert.Contains(t, result.Narrative, "ACUTE_INFECTION")
+}
+
+
+   * [ ] Step 14: Implement enhanced confounder scorer
+// kb-20-patient-profile/internal/services/enhanced_confounder_scorer.go
+package services
+
+
+import (
+    "fmt"
+    "math"
+    "strings"
+
+
+    "kb-patient-profile/internal/models"
+)
+
+
+type EnhancedConfounderInput struct {
+    // Medication confounders (existing)
+    ConcurrentMedCount int
+    AdherenceDrop      float64
+
+
+    // Calendar confounders (new)
+    CalendarFactors []models.ConfounderFactor
+
+
+    // Clinical event confounders (new)
+    ClinicalEventFactors []models.ConfounderFactor
+
+
+    // Lifestyle confounders (new)
+    LifestyleFactors []models.ConfounderFactor
+
+
+    // Context
+    OutcomeType    string // DELTA_HBA1C, DELTA_SBP, DELTA_EGFR, DELTA_WEIGHT
+    DeferOnRamadan bool
+    DeferOnSteroid bool
+}
+
+
+type EnhancedConfounderScorer struct{}
+
+
+func NewEnhancedConfounderScorer() *EnhancedConfounderScorer {
+    return &EnhancedConfounderScorer{}
+}
+
+
+func (s *EnhancedConfounderScorer) Compute(input EnhancedConfounderInput) models.EnhancedConfounderResult {
+    result := models.EnhancedConfounderResult{}
+    var narrativeParts []string
+
+
+    // 1. Medication subscore (refined from original)
+    medScore := math.Min(float64(input.ConcurrentMedCount)*0.12, 0.40)
+    adhScore := math.Min(input.AdherenceDrop*1.0, 0.25) // 10% drop → 0.10 score
+    result.MedicationScore = math.Min(medScore+adhScore, 0.45)
+
+
+    if input.ConcurrentMedCount > 0 {
+        narrativeParts = append(narrativeParts,
+            fmt.Sprintf("%d concurrent medication change(s)", input.ConcurrentMedCount))
+        result.ActiveFactors = append(result.ActiveFactors, models.ConfounderFactor{
+            Category: models.ConfounderMedication,
+            Name:     "CONCURRENT_MED_CHANGES",
+            Weight:   medScore,
+        })
+    }
+    if input.AdherenceDrop > 0.05 {
+        narrativeParts = append(narrativeParts,
+            fmt.Sprintf("adherence drop of %.0f%%", input.AdherenceDrop*100))
+        result.ActiveFactors = append(result.ActiveFactors, models.ConfounderFactor{
+            Category: models.ConfounderAdherence,
+            Name:     "ADHERENCE_DROP",
+            Weight:   adhScore,
+        })
+    }
+
+
+    // 2. Calendar subscore — only count factors that affect this outcome type
+    for _, factor := range input.CalendarFactors {
+        if !affectsOutcome(factor.AffectedOutcomes, input.OutcomeType) {
+            continue
+        }
+        result.CalendarScore += factor.Weight
+        result.ActiveFactors = append(result.ActiveFactors, factor)
+        narrativeParts = append(narrativeParts, factor.Name)
+
+
+        // Deferral check
+        if input.DeferOnRamadan && factor.Name == "RAMADAN" && factor.OverlapPct > 50 {
+            result.ShouldDefer = true
+            result.DeferReasonCode = "RAMADAN_ACTIVE"
+            result.SuggestedRecheckWeeks = 6 // recheck 6 weeks after Ramadan ends
+        }
+    }
+    result.CalendarScore = math.Min(result.CalendarScore, 0.30) // cap calendar contribution
+
+
+    // 3. Clinical event subscore
+    for _, factor := range input.ClinicalEventFactors {
+        if !affectsOutcome(factor.AffectedOutcomes, input.OutcomeType) {
+            continue
+        }
+        result.ClinicalEventScore += factor.Weight
+        result.ActiveFactors = append(result.ActiveFactors, factor)
+        narrativeParts = append(narrativeParts, factor.Name)
+
+
+        // Steroid deferral
+        if input.DeferOnSteroid && factor.Name == "STEROID_COURSE" {
+            result.ShouldDefer = true
+            result.DeferReasonCode = "STEROID_WASHOUT"
+            result.SuggestedRecheckWeeks = 4
+        }
+    }
+    result.ClinicalEventScore = math.Min(result.ClinicalEventScore, 0.45) // cap
+
+
+    // 4. Lifestyle subscore
+    for _, factor := range input.LifestyleFactors {
+        result.LifestyleScore += factor.Weight
+        result.ActiveFactors = append(result.ActiveFactors, factor)
+        narrativeParts = append(narrativeParts, factor.Name)
+    }
+    result.LifestyleScore = math.Min(result.LifestyleScore, 0.20) // cap
+
+
+    // 5. Composite
+    result.CompositeScore = math.Min(
+        result.MedicationScore+result.CalendarScore+result.ClinicalEventScore+result.LifestyleScore,
+        1.0,
+    )
+    result.CompositeScore = math.Round(result.CompositeScore*100) / 100
+    result.FactorCount = len(result.ActiveFactors)
+
+
+    // 6. Confidence level
+    if result.CompositeScore < 0.20 {
+        result.ConfidenceLevel = "HIGH"
+    } else if result.CompositeScore < 0.50 {
+        result.ConfidenceLevel = "MODERATE"
+    } else {
+        result.ConfidenceLevel = "LOW"
+    }
+
+
+    // High clinical event score forces deferral consideration
+    if result.ClinicalEventScore >= 0.35 {
+        result.ShouldDefer = true
+        if result.DeferReasonCode == "" {
+            result.DeferReasonCode = "HIGH_CLINICAL_EVENT_CONFOUNDING"
+            result.SuggestedRecheckWeeks = 6
+        }
+    }
+
+
+    // 7. Narrative
+    if len(narrativeParts) == 0 {
+        result.Narrative = "No significant confounders detected during outcome measurement window."
+    } else {
+        result.Narrative = fmt.Sprintf("Outcome confidence %s (score %.2f). Active confounders: %s.",
+            result.ConfidenceLevel, result.CompositeScore, strings.Join(narrativeParts, ", "))
+    }
+
+
+    return result
+}
+
+
+func affectsOutcome(affectedOutcomes []string, outcomeType string) bool {
+    if outcomeType == "" || len(affectedOutcomes) == 0 {
+        return true // if no outcome type specified, assume relevant
+    }
+    for _, ao := range affectedOutcomes {
+        if ao == outcomeType {
+            return true
+        }
+    }
+    return false
+}
+
+
+   * [ ] Step 15: Run enhanced scorer tests
+go test ./internal/services/ -run "TestEnhancedScorer_" -v
+
+
+Expected: All 8 tests PASS.
+   * [ ] Step 16: Integrate enhanced scorer into IOR generator
+Modify ior_generator.go to use the enhanced scorer:
+// In assessConfounders(), replace the existing simple scoring with:
+
+
+func (g *IORGenerator) assessConfounders(iv models.InterventionRecord, windowWeeks int) models.EnhancedConfounderResult {
+    windowStart := iv.StartDate
+    windowEnd := windowStart.Add(time.Duration(windowWeeks) * 7 * 24 * time.Hour)
+    if windowEnd.After(time.Now()) {
+        windowEnd = time.Now()
+    }
+
+
+    // Existing: count concurrent meds
+    var medCount int64
+    g.db.Model(&models.InterventionRecord{}).
+        Where("patient_id = ? AND id != ? AND start_date BETWEEN ? AND ?",
+            iv.PatientID, iv.ID, iv.StartDate.Add(-7*24*time.Hour), windowEnd).
+        Count(&medCount)
+
+
+    // Existing: adherence drop
+    adherenceDrop := 0.0
+    if iv.AdherenceAtStart != nil && iv.AdherenceAtEnd != nil {
+        adherenceDrop = *iv.AdherenceAtStart - *iv.AdherenceAtEnd
+        if adherenceDrop < 0 { adherenceDrop = 0 }
+    }
+
+
+    // NEW: calendar confounders
+    var calendarFactors []models.ConfounderFactor
+    if g.calendar != nil {
+        religious := ""
+        if iv.ReligiousAffiliation != nil {
+            religious = *iv.ReligiousAffiliation
+        }
+        region := ""
+        if iv.PatientRegion != nil {
+            region = *iv.PatientRegion
+        }
+        calendarFactors = g.calendar.FindActiveConfounders(windowStart, windowEnd, religious, region)
+    }
+
+
+    // NEW: clinical event confounders
+    var clinicalFactors []models.ConfounderFactor
+    if g.clinicalEventDetector != nil {
+        events := g.fetchPatientClinicalEvents(iv.PatientID, windowStart, windowEnd)
+        clinicalFactors = g.clinicalEventDetector.DetectConfounders(events, windowStart, windowEnd)
+    }
+
+
+    // Determine outcome type
+    outcomeType := "DELTA_HBA1C"
+    if iv.InterventionType == "LIFESTYLE_RX" {
+        outcomeType = "DELTA_WEIGHT"
+    }
+
+
+    scorer := NewEnhancedConfounderScorer()
+    return scorer.Compute(EnhancedConfounderInput{
+        ConcurrentMedCount:   int(medCount),
+        AdherenceDrop:        adherenceDrop,
+        CalendarFactors:      calendarFactors,
+        ClinicalEventFactors: clinicalFactors,
+        OutcomeType:          outcomeType,
+        DeferOnRamadan:       true,
+        DeferOnSteroid:       true,
+    })
+}
+
+
+Also update buildOutcome to use the enhanced result:
+   confounders := g.assessConfounders(iv, windowWeeks)
+    
+    confidence := confounders.ConfidenceLevel
+    
+    // If deferral recommended, skip this outcome generation
+    if confounders.ShouldDefer {
+        g.logger.Info("deferring outcome generation due to confounders",
+            zap.String("intervention_id", iv.ID.String()),
+            zap.String("reason", confounders.DeferReasonCode),
+            zap.Int("recheck_weeks", confounders.SuggestedRecheckWeeks))
+        return nil, fmt.Errorf("outcome deferred: %s", confounders.DeferReasonCode)
+    }
+
+
+   * [ ] Step 17: Write confounder evidence filter for KB-23
+// kb-23-decision-cards/internal/services/confounder_evidence_filter.go
+package services
+
+
+// FilterIORByConfidence filters or down-weights IOR outcomes based on confounder confidence.
+// Used when building similar-patient evidence for decision cards.
+func FilterIORByConfidence(outcomes []IOROutcomeResult, minConfidence string) []IOROutcomeResult {
+    confidenceRank := map[string]int{"HIGH": 3, "MODERATE": 2, "LOW": 1}
+    minRank := confidenceRank[minConfidence]
+    if minRank == 0 {
+        minRank = 1 // default to accepting everything
+    }
+
+
+    var filtered []IOROutcomeResult
+    for _, o := range outcomes {
+        rank := confidenceRank[o.ConfidenceLevel]
+        if rank >= minRank {
+            filtered = append(filtered, o)
+        }
+    }
+    return filtered
+}
+
+
+// IOROutcomeResult is the outcome data consumed by KB-23 for evidence display.
+type IOROutcomeResult struct {
+    DeltaValue      float64 `json:"delta_value"`
+    ConfidenceLevel string  `json:"confidence_level"`
+    ConfounderScore float64 `json:"confounder_score"`
+    Narrative       string  `json:"narrative,omitempty"`
+}
+
+
+// AnnotateEvidenceWithConfounderContext adds confounder context to card evidence chains.
+func AnnotateEvidenceWithConfounderContext(
+    evidenceSummary string,
+    totalOutcomes int,
+    highConfidenceCount int,
+    moderateCount int,
+    lowCount int,
+) string {
+    if totalOutcomes == 0 {
+        return evidenceSummary
+    }
+
+
+    highPct := float64(highConfidenceCount) / float64(totalOutcomes) * 100
+
+
+    if highPct >= 70 {
+        return evidenceSummary + " (evidence quality: HIGH — majority of outcomes have minimal confounding)"
+    }
+    if highPct >= 40 {
+        return evidenceSummary + " (evidence quality: MODERATE — some outcomes affected by confounders)"
+    }
+    return evidenceSummary + " (evidence quality: LOW — significant confounding in outcome data; interpret with caution)"
+}
+
+
+   * [ ] Step 18: Write evidence filter test and run full regression
+// kb-23-decision-cards/internal/services/confounder_evidence_filter_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+)
+
+
+func TestFilterIOR_HighConfidenceOnly(t *testing.T) {
+    outcomes := []IOROutcomeResult{
+        {DeltaValue: -0.8, ConfidenceLevel: "HIGH"},
+        {DeltaValue: -0.5, ConfidenceLevel: "MODERATE"},
+        {DeltaValue: -1.2, ConfidenceLevel: "LOW"},
+        {DeltaValue: -0.9, ConfidenceLevel: "HIGH"},
+    }
+
+
+    filtered := FilterIORByConfidence(outcomes, "HIGH")
+    assert.Len(t, filtered, 2) // only HIGH confidence outcomes
+}
+
+
+func TestFilterIOR_ModerateAndAbove(t *testing.T) {
+    outcomes := []IOROutcomeResult{
+        {DeltaValue: -0.8, ConfidenceLevel: "HIGH"},
+        {DeltaValue: -0.5, ConfidenceLevel: "MODERATE"},
+        {DeltaValue: -1.2, ConfidenceLevel: "LOW"},
+    }
+
+
+    filtered := FilterIORByConfidence(outcomes, "MODERATE")
+    assert.Len(t, filtered, 2) // HIGH + MODERATE
+}
+
+
+func TestAnnotateEvidence_HighQuality(t *testing.T) {
+    result := AnnotateEvidenceWithConfounderContext("Median delta -0.8", 10, 8, 1, 1)
+    assert.Contains(t, result, "HIGH")
+}
+
+
+func TestAnnotateEvidence_LowQuality(t *testing.T) {
+    result := AnnotateEvidenceWithConfounderContext("Median delta -0.8", 10, 2, 3, 5)
+    assert.Contains(t, result, "LOW")
+    assert.Contains(t, result, "caution")
+}
+
+
+   * [ ] Step 19: Run full regression and final commit
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./... -v -count=1
+cd ../kb-23-decision-cards
+go test ./... -v -count=1
+
+
+Expected: All tests PASS, no regressions.
+git add -A
+git commit -m "feat: enhanced IOR confounder scoring — calendar + clinical events + lifestyle
+
+
+Replaces simple 2-factor confounder model with multi-dimensional scorer.
+4 subscore categories: medication (refined), calendar (seasonal/religious/
+cultural), clinical events (steroid/hospitalization/AKI/infection),
+lifestyle (engagement collapse). Composite score 0-1 with category caps.
+
+
+Confounder Calendar: India (Ramadan 30d + IDF-DAR 2021, Navratri 2×/year,
+Diwali 21d, wedding season 120d, monsoon regional, extreme summer regional).
+Australia (Christmas/NYE 21d, winter temperate + Tseng 2005, bushfire
+season + McArthur 2021, indigenous Sorry Business + ceremony season).
+FindActiveConfounders() with religious/regional filtering and washout.
+
+
+Clinical Event Detector: steroid courses (28d washout), hospitalization
+(42d washout), antibiotic→infection proxy (21d washout), AKI from
+creatinine ≥1.5× baseline (KDIGO, 90d washout).
+
+
+Outcome deferral: steroid active → defer, Ramadan overlap >50% → defer
+glucose outcomes, high clinical event score → defer. Prevents recording
+confounded outcomes that poison similar-patient evidence.
+
+
+KB-23 evidence filter: FilterIORByConfidence() for card evidence chains.
+AnnotateEvidenceWithConfounderContext() adds quality tier to evidence
+display. Cards now show '(evidence quality: HIGH/MODERATE/LOW)' alongside
+similar-patient statistics."
+
+
+________________
+
+
+Plan Summary
+Phase
+	Steps
+	Key Deliverables
+	F1: Models + Config
+	1-4
+	ConfounderFactor (12 fields), EnhancedConfounderResult, calendar event configs, India calendar (8 events), Australia calendar (6 events), shared weights
+	F2: Calendar Service
+	5-8
+	FindActiveConfounders() with religious/regional filtering, overlap-proportional weighting, washout inclusion, seasonal HbA1c adjustment
+	F3: Clinical Events
+	9-12
+	Steroid detection (12 drug patterns), hospitalization, antibiotic→infection, AKI from creatinine ≥1.5× (KDIGO), all with washouts
+	F4: Scorer + Integration
+	13-19
+	EnhancedConfounderScorer (4 subscores, category caps, outcome-specific relevance filtering), IOR generator integration, outcome deferral, KB-23 evidence filter
+	Total: 19 steps, 14 files (11 create, 3 modify), 4 phases.
+Clinical evidence base:
+   * Salti et al. 2004 (Diabetes Care) — Ramadan effect on glucose in diabetic patients
+   * Beshyah et al. 2019 (Diabetes Research and Clinical Practice) — Ramadan HbA1c variation
+   * IDF-DAR 2021 — Diabetes and Ramadan practical guidelines
+   * Tseng et al. 2005 (Diabetologia) — seasonal HbA1c variation 0.2-0.4%
+   * Gikas et al. 2009 (European J Clinical Investigation) — seasonal glycaemic variation
+   * Barnett et al. 2007 — seasonal BP variation
+   * Stergiou et al. 2002 — seasonal home BP patterns
+   * McArthur et al. 2021 — bushfire impact on population HbA1c
+   * KDIGO AKI criteria — creatinine ≥1.5× baseline
+   * Hernán & Robins 2020 — causal inference and time-varying confounders
+   * Visscher & Seidell 2004 — seasonal weight variation
+The cross-domain innovation: The confounder scorer integrates medication records, calendar events, lab results (creatinine spike), engagement data, and cultural context to produce a quality-of-evidence assessment. No existing IOR/outcome tracking system accounts for Ramadan fasting, monsoon-driven exercise cessation, or steroid washout periods. By annotating outcomes rather than adjusting deltas, the system preserves raw data integrity while flagging interpretation context — the physician sees "HbA1c dropped 0.8% but this window overlapped with Ramadan (confounder score 0.45, confidence MODERATE)" and can make their own judgment. That's decision support, not decision replacement.

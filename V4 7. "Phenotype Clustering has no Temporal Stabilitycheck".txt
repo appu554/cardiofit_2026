@@ -1,0 +1,1853 @@
+﻿## Platform-Wide Cross-Domain Review — What We've Built and What Emerges
+
+
+Before diving into phenotype stability, let me map the full cross-domain reasoning network we've constructed across 7 implementation plans. This reveals both what's working and what new cross-domain patterns become possible specifically because of the stability check we're about to build.
+
+
+### The Cross-Domain Reasoning Network — Current State
+
+
+```
+                    RENAL DOSE GATING
+                    (eGFR × medications × potassium)
+                           │
+                           ▼
+    CGM ANALYTICS ──────► MHRI SCORER ◄────── BP VARIABILITY
+    (TIR/CV/GRI)         (4-domain composite)      (ARV/surge/dip)
+         │                     │                         │
+         ▼                     ▼                         ▼
+    THERAPEUTIC          DOMAIN-DECOMPOSED          MASKED HTN
+    INERTIA              TRAJECTORY                 DETECTION
+    (CGM 14d vs         (divergence,                (clinic-home ×
+     HbA1c 12wk)        leading indicator)           DM × CKD × surge)
+         │                     │                         │
+         ▼                     ▼                         ▼
+    ┌─────────────── DECISION CARD GENERATOR ──────────────┐
+    │  Four-Pillar Evaluator                               │
+    │  ├── Renal safety gate (HARD BLOCK)                  │
+    │  ├── HF medication gate (Stage 4c)                   │
+    │  ├── Therapeutic inertia (duration + evidence)        │
+    │  ├── Masked HTN context (treat home BP, not clinic)   │
+    │  ├── Domain trajectory (concordant/discordant)        │
+    │  └── Dual-domain classifier (9-state matrix)         │
+    └──────────────────────────────────────────────────────┘
+                           │
+                           ▼
+                    PHENOTYPE CLUSTERING
+                    (21 features → UMAP → HDBSCAN)
+                    ??? stability ???
+```
+
+
+### Cross-Domain Patterns We've Enabled — The Ones No Other Platform Has
+
+
+**Pattern 1 (Operational):** Renal gating blocks a card that therapeutic inertia would otherwise generate. Patient has HbA1c 8.5 for 6 months with no medication change — inertia detector fires. But eGFR is 22 and the recommended next step is SGLT2i. Renal gate blocks: "Cannot initiate SGLT2i below eGFR 20." The system doesn't just flag inertia — it explains *why* the physician may not have intensified: the obvious next step is contraindicated. This prevents false-positive inertia alerts and instead generates: "Glycaemic inertia detected. Standard next step (SGLT2i) is contraindicated at current eGFR. Consider alternative: DPP4i with renal dose adjustment."
+
+
+**Pattern 2 (Operational):** Masked HTN reclassifies inertia severity. Patient appears controlled in clinic (128/78). Inertia detector sees no BP inertia (clinic BP at target). But masked HTN classifier reveals home BP is 152/94. Now the inertia detector should retroactively fire for hemodynamic inertia — the patient has been above home BP target for weeks, but clinic visits showed "controlled." This cross-reference transforms a "no inertia" assessment into "masked inertia" — the most dangerous kind because the physician believes therapy is working.
+
+
+**Pattern 3 (Operational):** CGM trajectory divergence detects medication-timing mismatch. CGM analytics shows TIR improving over 14 days (medication working). But domain decomposition shows cardio domain declining simultaneously. Divergence detector fires: "Glucose improving while cardio declining." Meanwhile, masked HTN classifier shows morning BP is 20 mmHg higher than evening. Medication timing hypothesis: the patient takes their antihypertensive in the morning (covering the clinic visit window) but their antidiabetic in the evening (covering overnight glucose). The glucose medication works because it covers the right window. The BP medication appears to work (clinic visit in afternoon, peak effect) but doesn't cover the morning surge. Cross-domain reasoning produces: "Consider switching antihypertensive to bedtime dosing."
+
+
+**Pattern 4 (Enabled by stability check — what we're about to build):** Cluster flapping reveals unstable clinical phenotype. Patient oscillates between Cluster 3 (insulin-resistant, high variability) and Cluster 5 (well-managed, stable) across successive batch runs. The stability check detects this oscillation. But *why* is the patient oscillating? Cross-referencing with domain decomposition reveals: glucose domain oscillates (CGM TIR swings 45-70% between sensor cycles), while cardio and body comp are stable. The cluster flapping is driven by a single unstable domain, not genuine phenotype change. The system should: (a) hold the patient in their current cluster (stability policy), (b) flag the glucose domain instability as the root cause, (c) generate a card: "Patient's phenotype classification is unstable due to glucose variability — stabilize glycaemic control before reassigning therapy pathway."
+
+
+**Pattern 5 (Enabled by stability check):** Cluster transition validates therapy response. Patient was in Cluster 2 (concordant deterioration, high CKM velocity) for 8 weeks. SGLT2i was added. After 6 weeks, the next clustering run moves them to Cluster 4 (improving trajectory, dual-domain benefit). The stability check sees this as a genuine transition (not flapping) because: (a) it's a single directional move, (b) it coincides with a medication change in the IOR timeline, (c) the domain decomposition confirms improvement in both glucose and cardio domains. The system generates: "Phenotype transition Cluster 2 → Cluster 4 following SGLT2i initiation — therapy response confirmed. Continue current regimen."
+
+
+**Pattern 6 (Enabled by stability check):** Cluster stability predicts inertia safety. When the inertia detector flags "no medication change for 16 weeks" but the patient's cluster assignment has been stable in a good-outcome cluster for 12+ weeks, the inertia alert should be deprioritized. Stable phenotype + stable cluster = the current regimen is maintaining the patient. Inertia in this context is appropriate therapeutic maintenance, not clinical negligence. The stability check provides the evidence to distinguish "justified stability" from "dangerous inertia."
+
+
+---
+
+
+### What Becomes Possible After Phenotype Stability
+
+
+The stability check is the last piece that connects the clustering pipeline to the clinical reasoning layer. Without stability, clusters are batch outputs that overwrite KB-20 state without context. With stability, clusters become longitudinal clinical narratives — a patient's phenotype trajectory over months tells a story about their disease progression and therapy response that no single snapshot provides.
+
+
+This is the transition from **phenotype classification** (what cluster is this patient in today?) to **phenotype dynamics** (how has this patient moved through phenotype space over time, and what does that trajectory predict?). It's the difference between a photograph and a movie.
+
+
+---
+
+
+# Phenotype Clustering Temporal Stability Check — Implementation Plan
+
+
+## Clinical Rationale
+
+
+**Why cluster stability is a clinical requirement, not just a data quality concern:**
+
+
+The phenotype clustering pipeline (V4 Task 13) runs UMAP→HDBSCAN on 21 features, assigns each patient a cluster label (e.g., CLUSTER_3), and PATCHes the assignment into KB-20 via `/api/v1/patient/:id/v4-state`. The therapy mapper then associates each cluster with a therapeutic pathway (INTENSIVE_DUAL_DOMAIN_ADHERENCE, CONSERVATIVE_DEPRESCRIBING, LIFESTYLE_FIRST_AGGRESSIVE, etc.). Decision cards reference the cluster to contextualize recommendations ("patients like you in Cluster 3 on SGLT2i showed median HbA1c delta of -0.9 at 12 weeks").
+
+
+The problem is temporal instability. HDBSCAN is a density-based algorithm — patients near cluster boundaries can oscillate between clusters across successive batch runs due to minor changes in the input feature space. A patient whose glucose domain swings between TIR 48% and 52% might alternate between a "deteriorating" cluster and a "stable" cluster, even though the clinical difference is negligible. This creates three specific harms:
+
+
+**Harm 1 — Therapy pathway whiplash.** If Cluster 3 maps to "INTENSIVE_DUAL_DOMAIN_ADHERENCE" and Cluster 5 maps to "MAINTENANCE_OPTIMIZATION," a flapping patient alternates between being told to intensify and being told to maintain. The physician sees contradictory recommendations week over week, loses trust in the system, and ignores future recommendations — even when they're correct.
+
+
+**Harm 2 — IOR evidence contamination.** The similar-patient query in the IOR system filters by phenotype cluster. If a patient flaps between clusters, their intervention-outcome records are split across clusters — half in Cluster 3, half in Cluster 5. Neither cluster has a complete outcome history for the patient, and the aggregate statistics for each cluster are contaminated by a patient who doesn't stably belong to either.
+
+
+**Harm 3 — False phenotype transitions masking real ones.** If the system doesn't distinguish flapping from genuine transitions, it can't detect when a patient truly changes phenotype (e.g., from insulin-resistant to well-managed after SGLT2i initiation). The signal (genuine transition driven by therapy response) is drowned in noise (boundary oscillation driven by measurement variability). The clinician needs to know: "This patient moved from Cluster 2 to Cluster 4 — this is real, caused by SGLT2i response" vs. "This patient appeared in Cluster 4 this week but was in Cluster 2 last week — this is noise, ignore it."
+
+
+**What the clustering literature says about temporal stability:**
+
+
+Von Luxburg et al. (2010, Statistics and Computing) established that clustering stability — the consistency of cluster assignments across perturbations of the data — is a fundamental quality criterion for any clustering that will be used for downstream decisions. Unstable assignments indicate that the clustering is fitting noise rather than structure.
+
+
+For clinical phenotyping specifically, Ahlqvist et al. (2018) noted in their diabetes subtyping work that 15-20% of patients at cluster boundaries reclassified across bootstrap resamples. They addressed this with a confidence score (posterior probability of cluster membership) and excluded low-confidence patients from subgroup analyses. The CardioFit pipeline needs an equivalent mechanism.
+
+
+Hennig (2007, Journal of Classification) proposed the "dissolution point" concept — the minimum perturbation needed to dissolve a cluster assignment. Patients with low dissolution points are unstable by construction. The practical implementation is a membership probability or distance-to-centroid metric that quantifies how firmly a patient belongs to their assigned cluster.
+
+
+**The specific stability mechanisms required:**
+
+
+1. **Membership confidence score:** For each patient-cluster assignment, compute a confidence score reflecting how firmly the patient belongs. HDBSCAN natively provides membership probabilities (`probabilities_` attribute) — patients with probability <0.5 are boundary cases. Additionally, compute distance-to-assigned-centroid vs. distance-to-nearest-other-centroid — the ratio indicates separability.
+
+
+2. **Minimum dwell policy:** A patient stays in their assigned cluster for a configurable minimum period (default 4 weeks) unless a qualifying override event occurs. This prevents weekly flapping while allowing genuine transitions triggered by clinical events.
+
+
+3. **Override event detection:** Certain clinical events should bypass the dwell policy and allow immediate reclassification: MHRI category crossing (OPTIMAL→MODERATE), CKM stage transition, medication class addition/removal, hospitalization event, or domain decomposition showing concordant deterioration. These are "genuine phenotype-altering events" that warrant reclassification even within the dwell period.
+
+
+4. **Transition classification:** When a patient's cluster assignment changes, classify the transition as: GENUINE_TRANSITION (directional, coincides with clinical event, confirmed by domain decomposition), PROBABLE_FLAP (oscillation between same two clusters, no clinical event, boundary confidence), or UNCERTAIN (insufficient history to classify).
+
+
+5. **Cluster trajectory tracking:** Store the sequence of cluster assignments over time. A patient's cluster trajectory (Cluster 2 × 12 weeks → Cluster 4 × 8 weeks → Cluster 4 ongoing) is itself a clinical narrative that feeds into IOR similar-patient queries and therapy response evaluation.
+
+
+6. **Flap dampening:** When a patient is detected as flapping (≥2 oscillations between the same pair of clusters within 3 months), freeze their assignment at the more clinically conservative cluster (the one that triggers more monitoring, not less) and flag for manual phenotype review.
+
+
+---
+
+
+**Cross-domain integration points unique to stability:**
+
+
+**Stability × Inertia Detection:** A patient stable in a well-managed cluster for 3+ months, with clinical targets met, should suppress inertia alerts. "No medication change for 4 months" is appropriate maintenance, not inertia, when the phenotype is stable-good. Conversely, a patient stable in a deteriorating cluster for 3+ months with no medication change is *confirmed* inertia — the stability proves it's not a transient state.
+
+
+**Stability × IOR Evidence Quality:** When querying similar-patient outcomes, filter by patients with stable cluster membership (≥4 weeks in the query cluster). Flapping patients contaminate aggregate statistics and should be excluded or down-weighted. This directly improves the quality of IOR insight summaries on decision cards.
+
+
+**Stability × Domain Decomposition:** When a cluster transition occurs, the domain decomposition reveals which domain drove the transition. If the patient moved from Cluster 2 (high-risk) to Cluster 4 (improving) and the domain decomposition shows cardio domain improved while glucose stayed flat, the transition was driven by BP improvement — possibly validating an antihypertensive change. This feedback loop connects clustering → domain trajectory → therapy validation.
+
+
+**Stability × Engagement Context:** A patient whose cluster assignment changes coincident with an engagement collapse (Module 9 RED, MEASUREMENT_AVOIDANT) may have changed cluster because their *data* changed (fewer readings, different measurement context), not because their *phenotype* changed. The stability system should flag: "Cluster transition coincides with engagement collapse — reassignment may reflect data quality change, not clinical change. Hold previous cluster pending engagement recovery."
+
+
+---
+
+
+**India-Specific Stability Considerations:**
+
+
+- **Seasonal feature variation:** Indian patients show seasonal variation in BMI (festival weight gain), glucose (Ramadan/Diwali dietary changes), and BP (heat-related variation). Batch runs in different seasons will produce different feature vectors for the same patient, causing apparent cluster transitions that are seasonal, not clinical. The stability system should track seasonal context and extend the dwell period during known seasonal variation windows.
+
+
+- **Intermittent CGM users:** When a patient uses CGM for 2 weeks (features include TIR, CV, GMI) and then reverts to SMBG (features fall back to FBG/HbA1c only), the feature vector changes dramatically — not because the patient changed, but because the data source changed. This is a **data modality transition**, not a phenotype transition. The stability system must detect data modality shifts and handle them as missing-data imputation rather than feature change.
+
+
+**Australia-Specific Stability Considerations:**
+
+
+- **Remote community batch timing:** Aboriginal community health data may arrive in bursts after connectivity is restored. Batch clustering runs that coincide with data bursts may show rapid apparent transitions for remote patients. The stability system should weight recent data availability when assessing transition genuineness.
+
+
+- **GPMP review cycle alignment:** The 6-month GPMP review is a natural point for phenotype reassessment. Cluster assignments that change at GPMP review time should be flagged as "REVIEW_ALIGNED" — the GP can use the cluster transition as part of the chronic disease management review.
+
+
+---
+
+
+## Architecture Overview
+
+
+The stability system sits between the clustering pipeline (batch Python) and KB-20 (state persistence):
+
+
+```
+Clustering Pipeline (Python batch)
+    ├── UMAP → HDBSCAN → cluster labels + probabilities
+    ├── Centroid computation + therapy mapping
+    └── Raw assignments + confidence scores
+              │
+              ▼
+    Stability Engine (Go, KB-20 adjacent)
+    ├── Load patient's cluster history from DB
+    ├── Compute transition classification (genuine/flap/uncertain)
+    ├── Apply dwell policy (min 4 weeks unless override)
+    ├── Check override events (MHRI crossing, CKM transition, med change, etc.)
+    ├── Cross-reference domain decomposition for driver identification
+    ├── Cross-reference engagement for data quality context
+    ├── Compute final stable assignment + confidence
+    └── Persist stable assignment + transition record
+              │
+              ▼
+    KB-20 PATCH /v4-state
+    ├── phenotype_cluster: "CLUSTER_4" (stable assignment, not raw)
+    ├── phenotype_confidence: 0.82
+    ├── phenotype_stable_since: "2026-02-15"
+    └── phenotype_transition_pending: false
+```
+
+
+**The critical design decision:** The clustering pipeline produces *raw* assignments. The stability engine produces *stable* assignments. Only stable assignments are written to KB-20 and consumed by downstream systems (IOR queries, card generation, therapy mapping). Raw assignments are stored in a history table for audit and stability analysis but never directly consumed for clinical decisions.
+
+
+---
+
+
+## Tech Stack Alignment
+
+
+- Python 3.11 for clustering pipeline extensions (confidence score extraction)
+- Go 1.21 (Gin, GORM) for stability engine, KB-20 integration
+- PostgreSQL 15 for cluster history, transition records
+- YAML market configs for dwell policies
+
+
+---
+
+
+## File Inventory
+
+
+### Clustering Pipeline (Python) — Confidence Extraction
+| Action | File |
+|--------|------|
+| Create | `phenotype-clustering/src/stability_scorer.py` |
+| Create | `phenotype-clustering/tests/test_stability_scorer.py` |
+| Modify | `phenotype-clustering/src/clustering_pipeline.py` (expose probabilities) |
+| Modify | `phenotype-clustering/src/kb20_updater.py` (pass confidence to stability engine) |
+
+
+### KB-20 (Patient Profile) — Stability Engine
+| Action | File |
+|--------|------|
+| Create | `kb-20-patient-profile/internal/services/phenotype_stability.go` |
+| Create | `kb-20-patient-profile/internal/services/phenotype_stability_test.go` |
+| Create | `kb-20-patient-profile/internal/services/cluster_transition_classifier.go` |
+| Create | `kb-20-patient-profile/internal/services/cluster_transition_classifier_test.go` |
+| Create | `kb-20-patient-profile/internal/models/cluster_history.go` |
+| Create | `kb-20-patient-profile/migrations/007_cluster_stability.sql` |
+| Modify | `kb-20-patient-profile/internal/api/v4_state_handlers.go` (stability-aware PATCH) |
+
+
+### KB-23 (Decision Cards) — Stability-Aware Cards
+| Action | File |
+|--------|------|
+| Create | `kb-23-decision-cards/internal/services/phenotype_transition_cards.go` |
+| Create | `kb-23-decision-cards/internal/services/phenotype_transition_cards_test.go` |
+
+
+### Market Configs
+| Action | File |
+|--------|------|
+| Create | `market-configs/shared/phenotype_stability.yaml` |
+
+
+**Total: 14 files (10 create, 4 modify)**
+
+
+---
+
+
+## Phase S1: Stability Models + Configuration
+
+
+### Step 1: Create cluster history and stability models
+
+
+```go
+// kb-20-patient-profile/internal/models/cluster_history.go
+package models
+
+
+import "time"
+
+
+// ClusterAssignmentRecord stores each raw cluster assignment from the batch pipeline.
+type ClusterAssignmentRecord struct {
+    ID                string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+    PatientID         string    `gorm:"size:100;index;not null" json:"patient_id"`
+    RunID             string    `gorm:"size:100;index;not null" json:"run_id"`         // batch pipeline run identifier
+    RunDate           time.Time `gorm:"not null" json:"run_date"`
+    RawClusterLabel   string    `gorm:"size:30;not null" json:"raw_cluster_label"`     // raw HDBSCAN assignment
+    MembershipProb    float64   `json:"membership_probability"`                        // HDBSCAN probability
+    DistToCentroid    float64   `json:"distance_to_centroid"`                          // distance to assigned centroid
+    DistToNearest     float64   `json:"distance_to_nearest_other"`                     // distance to nearest OTHER centroid
+    SeparabilityRatio float64   `json:"separability_ratio"`                            // dist_nearest / dist_own (>2 = well-separated)
+    IsNoise           bool      `json:"is_noise"`                                      // HDBSCAN label -1
+    StableCluster     string    `gorm:"size:30" json:"stable_cluster"`                 // the assignment after stability processing
+    WasOverridden     bool      `json:"was_overridden"`                                // true if stability engine changed the raw assignment
+    OverrideReason    string    `gorm:"size:50" json:"override_reason,omitempty"`
+    CreatedAt         time.Time `json:"created_at"`
+}
+
+
+// ClusterTransitionRecord logs each time a patient's stable cluster changes.
+type ClusterTransitionRecord struct {
+    ID                  string    `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+    PatientID           string    `gorm:"size:100;index;not null" json:"patient_id"`
+    TransitionDate      time.Time `gorm:"not null" json:"transition_date"`
+    PreviousCluster     string    `gorm:"size:30;not null" json:"previous_cluster"`
+    NewCluster          string    `gorm:"size:30;not null" json:"new_cluster"`
+    TransitionType      string    `gorm:"size:30;not null" json:"transition_type"`      // GENUINE, FLAP_DAMPENED, OVERRIDE, INITIAL
+    Classification      string    `gorm:"size:30;not null" json:"classification"`       // GENUINE_TRANSITION, PROBABLE_FLAP, UNCERTAIN, DWELL_HELD
+    DwellDaysInPrevious int       `json:"dwell_days_in_previous"`
+    ConfidenceInNew     float64   `json:"confidence_in_new"`
+
+
+    // Cross-domain context at transition
+    TriggerEvent        string    `gorm:"size:50" json:"trigger_event,omitempty"`        // what triggered the transition
+    DominantDomainDriver string   `gorm:"size:20" json:"dominant_domain_driver,omitempty"` // which MHRI domain drove it
+    MHRICategoryAtTransition string `gorm:"size:20" json:"mhri_category_at_transition,omitempty"`
+    EngagementStatusAtTransition string `gorm:"size:10" json:"engagement_status_at_transition,omitempty"`
+    DataModalityChange  bool      `json:"data_modality_change"`                          // CGM started/stopped
+
+
+    CreatedAt           time.Time `json:"created_at"`
+}
+
+
+// PatientClusterState is the current stability state for a patient.
+type PatientClusterState struct {
+    PatientID            string     `json:"patient_id"`
+    CurrentStableCluster string     `json:"current_stable_cluster"`
+    StableSince          time.Time  `json:"stable_since"`
+    DwellDays            int        `json:"dwell_days"`
+    Confidence           float64    `json:"confidence"`
+    PendingRawCluster    *string    `json:"pending_raw_cluster,omitempty"`   // raw assignment that differs but is being held
+    PendingSince         *time.Time `json:"pending_since,omitempty"`
+    FlapCount            int        `json:"flap_count"`                     // oscillations in last 90 days
+    IsFlapping           bool       `json:"is_flapping"`                    // ≥2 oscillations between same pair
+    FlapPair             []string   `json:"flap_pair,omitempty"`            // the two clusters being flapped between
+    TransitionHistory    []ClusterTransitionRecord `json:"transition_history,omitempty"`
+}
+
+
+// StabilityDecision is the output of the stability engine for a single patient-run evaluation.
+type StabilityDecision struct {
+    PatientID           string  `json:"patient_id"`
+    RawClusterLabel     string  `json:"raw_cluster_label"`
+    StableClusterLabel  string  `json:"stable_cluster_label"`  // may differ from raw
+    Decision            string  `json:"decision"`               // ACCEPT, HOLD_DWELL, HOLD_FLAP, OVERRIDE_EVENT
+    Reason              string  `json:"reason"`
+    Confidence          float64 `json:"confidence"`
+    TransitionType      string  `json:"transition_type,omitempty"`
+    TriggerEvent        string  `json:"trigger_event,omitempty"`
+    DomainDriver        string  `json:"domain_driver,omitempty"`
+}
+
+
+// OverrideEvent represents a clinical event that can bypass the dwell policy.
+type OverrideEvent struct {
+    EventType string    `json:"event_type"`
+    EventDate time.Time `json:"event_date"`
+    Domain    string    `json:"domain,omitempty"`
+    Detail    string    `json:"detail,omitempty"`
+}
+```
+
+
+- [ ] **Step 2: Create stability configuration YAML**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/shared/phenotype_stability.yaml
+# Temporal stability policy for phenotype cluster assignments.
+
+
+# Minimum dwell policy
+dwell:
+  min_dwell_weeks: 4            # patient stays in cluster for ≥4 weeks
+  extended_dwell_weeks: 8       # for patients with history of flapping
+  grace_period_after_override: 2 # weeks of grace after an override event
+
+
+# Flap detection
+flap_detection:
+  lookback_days: 90             # check for oscillation in last 90 days
+  min_oscillations: 2           # ≥2 back-and-forth = flapping
+  dampening_strategy: "CONSERVATIVE" # hold at more conservative (higher-monitoring) cluster
+  manual_review_threshold: 3    # ≥3 oscillations → flag for manual phenotype review
+
+
+# Confidence thresholds
+confidence:
+  high_membership_prob: 0.7     # HDBSCAN probability ≥0.7 = high confidence
+  moderate_membership_prob: 0.4 # 0.4-0.7 = moderate
+  low_membership_prob: 0.4      # <0.4 = low — boundary patient
+  separability_ratio_good: 2.0  # dist_nearest/dist_own ≥2 = well-separated
+  noise_handling: "HOLD_PREVIOUS" # if HDBSCAN labels as noise (-1), hold previous cluster
+
+
+# Override events — bypass dwell policy
+override_events:
+  - event_type: "MHRI_CATEGORY_CROSSING"
+    description: "MHRI composite crosses OPTIMAL/MILD/MODERATE/HIGH boundary"
+  - event_type: "CKM_STAGE_TRANSITION"
+    description: "CKM stage changes (e.g., Stage 2 → Stage 3, or substage change)"
+  - event_type: "MEDICATION_CLASS_ADD"
+    description: "New medication class added (IOR event)"
+  - event_type: "MEDICATION_CLASS_REMOVE"
+    description: "Medication class discontinued"
+  - event_type: "HOSPITALIZATION"
+    description: "CV, renal, or metabolic hospitalization"
+  - event_type: "CONCORDANT_DETERIORATION"
+    description: "Domain decomposition: ≥2 domains declining simultaneously"
+  - event_type: "CGM_INITIATION"
+    description: "Patient started CGM — data modality change"
+  - event_type: "CGM_CESSATION"
+    description: "Patient stopped CGM — data modality change"
+
+
+# Transition classification criteria
+transition_classification:
+  genuine:
+    requires_clinical_event: true        # must coincide with override event
+    min_confidence_in_new: 0.5           # new cluster confidence ≥0.5
+    requires_directional: true           # not a return to a recent previous cluster
+  probable_flap:
+    same_pair_oscillation: true          # back-and-forth between same two clusters
+    no_clinical_event: true              # no qualifying override event
+    low_confidence: true                 # low membership probability
+  uncertain:
+    fallback: true                       # anything that doesn't match genuine or flap
+
+
+# Cluster conservatism ranking (which cluster is "more conservative"?)
+# When dampening flaps, hold at the more conservative cluster.
+# Lower rank = more conservative (more monitoring, more intensive pathway)
+conservatism_rank:
+  INTENSIVE_DUAL_DOMAIN_ADHERENCE: 1     # most conservative
+  BP_VARIABILITY_FOCUSED: 2
+  GLYCAEMIC_INTENSIFICATION: 3
+  LIFESTYLE_FIRST_AGGRESSIVE: 4
+  MAINTENANCE_OPTIMIZATION: 5
+  CONSERVATIVE_DEPRESCRIBING: 6          # least conservative (reduce therapy)
+
+
+# Data modality change handling
+data_modality:
+  cgm_start_grace_weeks: 2               # allow 2 weeks of CGM data before reclassifying
+  cgm_stop_grace_weeks: 4                # hold cluster for 4 weeks after CGM stops
+  reason: "Feature vector changes dramatically when CGM starts/stops — hold cluster to avoid data-driven flapping"
+```
+
+
+---
+
+
+## Phase S2: Stability Engine (KB-20)
+
+
+### Step 3: Write failing test for stability engine
+
+
+```go
+// kb-20-patient-profile/internal/services/phenotype_stability_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "kb-patient-profile/internal/models"
+)
+
+
+// === DWELL POLICY ===
+
+
+func TestStability_FirstAssignment_Accepted(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-001",
+        RawCluster:      "CLUSTER_3",
+        MembershipProb:  0.82,
+        CurrentState:    nil, // no prior assignment
+    })
+
+
+    assert.Equal(t, "ACCEPT", decision.Decision)
+    assert.Equal(t, "CLUSTER_3", decision.StableClusterLabel)
+    assert.Equal(t, "INITIAL", decision.TransitionType)
+}
+
+
+func TestStability_SameCluster_NoChange(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-002",
+        RawCluster:      "CLUSTER_3",
+        MembershipProb:  0.75,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            StableSince:          now.Add(-30 * 24 * time.Hour),
+            DwellDays:            30,
+            Confidence:           0.80,
+        },
+    })
+
+
+    assert.Equal(t, "ACCEPT", decision.Decision)
+    assert.Equal(t, "CLUSTER_3", decision.StableClusterLabel)
+}
+
+
+func TestStability_DifferentCluster_WithinDwell_Held(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-003",
+        RawCluster:      "CLUSTER_5",
+        MembershipProb:  0.65,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            StableSince:          now.Add(-14 * 24 * time.Hour), // only 2 weeks — within 4-week dwell
+            DwellDays:            14,
+        },
+        OverrideEvents: nil, // no override events
+    })
+
+
+    assert.Equal(t, "HOLD_DWELL", decision.Decision)
+    assert.Equal(t, "CLUSTER_3", decision.StableClusterLabel) // held at current
+    assert.Contains(t, decision.Reason, "dwell")
+}
+
+
+func TestStability_DifferentCluster_PastDwell_Accepted(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-004",
+        RawCluster:      "CLUSTER_5",
+        MembershipProb:  0.78,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            StableSince:          now.Add(-35 * 24 * time.Hour), // 5 weeks — past 4-week dwell
+            DwellDays:            35,
+        },
+        OverrideEvents: nil,
+    })
+
+
+    assert.Equal(t, "ACCEPT", decision.Decision)
+    assert.Equal(t, "CLUSTER_5", decision.StableClusterLabel)
+    assert.Equal(t, "GENUINE_TRANSITION", decision.TransitionType)
+}
+
+
+// === OVERRIDE EVENTS ===
+
+
+func TestStability_DifferentCluster_WithinDwell_OverrideEvent_Accepted(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-005",
+        RawCluster:      "CLUSTER_5",
+        MembershipProb:  0.72,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            StableSince:          now.Add(-10 * 24 * time.Hour), // only 10 days — within dwell
+            DwellDays:            10,
+        },
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "MEDICATION_CLASS_ADD", EventDate: now.Add(-5 * 24 * time.Hour), Detail: "SGLT2i started"},
+        },
+    })
+
+
+    assert.Equal(t, "OVERRIDE_EVENT", decision.Decision)
+    assert.Equal(t, "CLUSTER_5", decision.StableClusterLabel)
+    assert.Equal(t, "GENUINE_TRANSITION", decision.TransitionType)
+    assert.Contains(t, decision.TriggerEvent, "MEDICATION_CLASS_ADD")
+}
+
+
+func TestStability_CKMStageTransition_OverridesDwell(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-006",
+        RawCluster:      "CLUSTER_1",
+        MembershipProb:  0.60,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_4",
+            StableSince:          now.Add(-7 * 24 * time.Hour),
+            DwellDays:            7,
+        },
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "CKM_STAGE_TRANSITION", EventDate: now.Add(-3 * 24 * time.Hour), Detail: "Stage 2 → Stage 3"},
+        },
+    })
+
+
+    assert.Equal(t, "OVERRIDE_EVENT", decision.Decision)
+    assert.Equal(t, "CLUSTER_1", decision.StableClusterLabel)
+}
+
+
+// === FLAP DETECTION ===
+
+
+func TestStability_FlapDetected_HeldAtConservative(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-007",
+        RawCluster:      "CLUSTER_5",
+        MembershipProb:  0.45,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            StableSince:          now.Add(-35 * 24 * time.Hour),
+            DwellDays:            35,
+            FlapCount:            2,
+            IsFlapping:           true,
+            FlapPair:             []string{"CLUSTER_3", "CLUSTER_5"},
+        },
+    })
+
+
+    assert.Equal(t, "HOLD_FLAP", decision.Decision)
+    assert.Equal(t, "CLUSTER_3", decision.StableClusterLabel) // held at more conservative
+    assert.Contains(t, decision.Reason, "flap")
+}
+
+
+func TestStability_FlapDetected_OverrideStillWorks(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-008",
+        RawCluster:      "CLUSTER_5",
+        MembershipProb:  0.70,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            IsFlapping:           true,
+            FlapPair:             []string{"CLUSTER_3", "CLUSTER_5"},
+            FlapCount:            2,
+        },
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "CONCORDANT_DETERIORATION", EventDate: now.Add(-2 * 24 * time.Hour)},
+        },
+    })
+
+
+    assert.Equal(t, "OVERRIDE_EVENT", decision.Decision)
+    assert.Equal(t, "CLUSTER_5", decision.StableClusterLabel) // override bypasses flap dampening
+}
+
+
+// === NOISE HANDLING ===
+
+
+func TestStability_NoiseLabel_HoldPrevious(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-009",
+        RawCluster:      "NOISE",
+        MembershipProb:  0.0,
+        IsNoise:         true,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_3",
+            StableSince:          now.Add(-60 * 24 * time.Hour),
+            Confidence:           0.75,
+        },
+    })
+
+
+    assert.Equal(t, "HOLD_DWELL", decision.Decision)
+    assert.Equal(t, "CLUSTER_3", decision.StableClusterLabel) // held at previous
+    assert.Contains(t, decision.Reason, "noise")
+}
+
+
+// === LOW CONFIDENCE ===
+
+
+func TestStability_LowConfidence_Flagged(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-010",
+        RawCluster:      "CLUSTER_2",
+        MembershipProb:  0.32,
+        CurrentState:    nil,
+    })
+
+
+    assert.Equal(t, "ACCEPT", decision.Decision) // still accepted for first assignment
+    assert.True(t, decision.Confidence < 0.5)
+}
+
+
+// === DATA MODALITY CHANGE ===
+
+
+func TestStability_CGMStarted_GracePeriod(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-011",
+        RawCluster:      "CLUSTER_4",
+        MembershipProb:  0.68,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_2",
+            StableSince:          now.Add(-60 * 24 * time.Hour),
+            DwellDays:            60,
+        },
+        DataModalityChange: true,
+        DataModalityDetail: "CGM_INITIATION",
+    })
+
+
+    assert.Equal(t, "HOLD_DWELL", decision.Decision) // grace period for data modality change
+    assert.Contains(t, decision.Reason, "modality")
+}
+
+
+// === CROSS-DOMAIN CONTEXT ===
+
+
+func TestStability_TransitionWithDomainDriver(t *testing.T) {
+    engine := NewStabilityEngine(testStabilityConfig())
+    now := time.Now()
+
+
+    decision := engine.Evaluate(StabilityInput{
+        PatientID:       "STAB-012",
+        RawCluster:      "CLUSTER_4",
+        MembershipProb:  0.80,
+        CurrentState: &models.PatientClusterState{
+            CurrentStableCluster: "CLUSTER_2",
+            StableSince:          now.Add(-40 * 24 * time.Hour),
+            DwellDays:            40,
+        },
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "MEDICATION_CLASS_ADD", EventDate: now.Add(-30 * 24 * time.Hour), Detail: "SGLT2i"},
+        },
+        DominantDomainDriver: "CARDIO",
+    })
+
+
+    assert.Equal(t, "OVERRIDE_EVENT", decision.Decision)
+    assert.Equal(t, "CARDIO", decision.DomainDriver)
+}
+
+
+func testStabilityConfig() *StabilityConfig {
+    return &StabilityConfig{
+        MinDwellWeeks:           4,
+        ExtendedDwellWeeks:      8,
+        FlapLookbackDays:        90,
+        MinOscillationsForFlap:  2,
+        HighMembershipProb:      0.7,
+        ModerateMembershipProb:  0.4,
+        CGMStartGraceWeeks:      2,
+        CGMStopGraceWeeks:       4,
+        ConservatismRank: map[string]int{
+            "CLUSTER_1": 1, "CLUSTER_2": 2, "CLUSTER_3": 3,
+            "CLUSTER_4": 4, "CLUSTER_5": 5, "CLUSTER_6": 6,
+        },
+    }
+}
+```
+
+
+- [ ] **Step 4: Implement stability engine**
+
+
+```go
+// kb-20-patient-profile/internal/services/phenotype_stability.go
+package services
+
+
+import (
+    "fmt"
+    "time"
+
+
+    "kb-patient-profile/internal/models"
+)
+
+
+type StabilityConfig struct {
+    MinDwellWeeks          int
+    ExtendedDwellWeeks     int
+    FlapLookbackDays       int
+    MinOscillationsForFlap int
+    HighMembershipProb     float64
+    ModerateMembershipProb float64
+    CGMStartGraceWeeks     int
+    CGMStopGraceWeeks      int
+    ConservatismRank       map[string]int // cluster → rank (lower = more conservative)
+}
+
+
+type StabilityInput struct {
+    PatientID            string
+    RawCluster           string
+    MembershipProb       float64
+    IsNoise              bool
+    CurrentState         *models.PatientClusterState
+    OverrideEvents       []models.OverrideEvent
+    DataModalityChange   bool
+    DataModalityDetail   string
+    DominantDomainDriver string
+    EngagementStatus     string
+}
+
+
+type StabilityEngine struct {
+    config *StabilityConfig
+}
+
+
+func NewStabilityEngine(config *StabilityConfig) *StabilityEngine {
+    return &StabilityEngine{config: config}
+}
+
+
+func (e *StabilityEngine) Evaluate(input StabilityInput) models.StabilityDecision {
+    decision := models.StabilityDecision{
+        PatientID:       input.PatientID,
+        RawClusterLabel: input.RawCluster,
+        DomainDriver:    input.DominantDomainDriver,
+    }
+
+
+    // Compute confidence from membership probability
+    decision.Confidence = input.MembershipProb
+
+
+    // Case 1: First assignment — always accept
+    if input.CurrentState == nil {
+        decision.Decision = "ACCEPT"
+        decision.StableClusterLabel = input.RawCluster
+        decision.TransitionType = "INITIAL"
+        decision.Reason = "First cluster assignment"
+        return decision
+    }
+
+
+    currentCluster := input.CurrentState.CurrentStableCluster
+
+
+    // Case 2: Same cluster — no transition needed
+    if input.RawCluster == currentCluster {
+        decision.Decision = "ACCEPT"
+        decision.StableClusterLabel = currentCluster
+        decision.Reason = "Same cluster as current stable assignment"
+        return decision
+    }
+
+
+    // Case 3: Noise label — hold previous
+    if input.IsNoise {
+        decision.Decision = "HOLD_DWELL"
+        decision.StableClusterLabel = currentCluster
+        decision.Reason = "HDBSCAN assigned noise label (-1) — holding previous cluster"
+        return decision
+    }
+
+
+    // Case 4: Data modality change — grace period
+    if input.DataModalityChange {
+        graceWeeks := e.config.CGMStartGraceWeeks
+        if input.DataModalityDetail == "CGM_CESSATION" {
+            graceWeeks = e.config.CGMStopGraceWeeks
+        }
+        decision.Decision = "HOLD_DWELL"
+        decision.StableClusterLabel = currentCluster
+        decision.Reason = fmt.Sprintf("Data modality change (%s) — %d-week grace period before reclassification",
+            input.DataModalityDetail, graceWeeks)
+        return decision
+    }
+
+
+    // Case 5: Check for override events — can bypass dwell and flap dampening
+    if len(input.OverrideEvents) > 0 {
+        for _, event := range input.OverrideEvents {
+            if isQualifyingOverride(event) {
+                decision.Decision = "OVERRIDE_EVENT"
+                decision.StableClusterLabel = input.RawCluster
+                decision.TransitionType = "GENUINE_TRANSITION"
+                decision.TriggerEvent = event.EventType
+                decision.Reason = fmt.Sprintf("Override event: %s — dwell policy bypassed", event.EventType)
+                return decision
+            }
+        }
+    }
+
+
+    // Case 6: Flap detection — if flapping between same pair, hold at conservative
+    if input.CurrentState.IsFlapping {
+        for _, fp := range input.CurrentState.FlapPair {
+            if fp == input.RawCluster {
+                conservativeCluster := e.moreConservativeCluster(currentCluster, input.RawCluster)
+                decision.Decision = "HOLD_FLAP"
+                decision.StableClusterLabel = conservativeCluster
+                decision.Reason = fmt.Sprintf("Flap detected: oscillating between %s and %s (%d times in 90 days) — "+
+                    "held at more conservative cluster %s",
+                    input.CurrentState.FlapPair[0], input.CurrentState.FlapPair[1],
+                    input.CurrentState.FlapCount, conservativeCluster)
+                return decision
+            }
+        }
+    }
+
+
+    // Case 7: Dwell policy — check if minimum dwell period has elapsed
+    minDwell := e.config.MinDwellWeeks
+    if input.CurrentState.FlapCount > 0 {
+        minDwell = e.config.ExtendedDwellWeeks // extended dwell for previously flapping patients
+    }
+    minDwellDays := minDwell * 7
+
+
+    if input.CurrentState.DwellDays < minDwellDays {
+        decision.Decision = "HOLD_DWELL"
+        decision.StableClusterLabel = currentCluster
+        decision.Reason = fmt.Sprintf("Dwell policy: %d days in current cluster, minimum %d days required",
+            input.CurrentState.DwellDays, minDwellDays)
+        return decision
+    }
+
+
+    // Case 8: Past dwell, no flap, no override — accept transition
+    decision.Decision = "ACCEPT"
+    decision.StableClusterLabel = input.RawCluster
+    decision.TransitionType = "GENUINE_TRANSITION"
+    decision.Reason = fmt.Sprintf("Dwell period elapsed (%d days ≥ %d minimum), new cluster accepted",
+        input.CurrentState.DwellDays, minDwellDays)
+    return decision
+}
+
+
+func isQualifyingOverride(event models.OverrideEvent) bool {
+    qualifiers := map[string]bool{
+        "MHRI_CATEGORY_CROSSING":    true,
+        "CKM_STAGE_TRANSITION":      true,
+        "MEDICATION_CLASS_ADD":       true,
+        "MEDICATION_CLASS_REMOVE":    true,
+        "HOSPITALIZATION":           true,
+        "CONCORDANT_DETERIORATION":  true,
+        "CGM_INITIATION":           true,
+        "CGM_CESSATION":            true,
+    }
+    return qualifiers[event.EventType]
+}
+
+
+func (e *StabilityEngine) moreConservativeCluster(a, b string) string {
+    rankA, okA := e.config.ConservatismRank[a]
+    rankB, okB := e.config.ConservatismRank[b]
+    if !okA && !okB {
+        return a // default to current
+    }
+    if !okA {
+        return b
+    }
+    if !okB {
+        return a
+    }
+    if rankA <= rankB {
+        return a // lower rank = more conservative
+    }
+    return b
+}
+```
+
+
+- [ ] **Step 5: Run stability tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./internal/services/ -run "TestStability_" -v
+```
+
+
+Expected: All 12 tests PASS.
+
+
+- [ ] **Step 6: Commit Phase S2**
+
+
+```bash
+git add kb-20-patient-profile/internal/models/cluster_history.go
+git add kb-20-patient-profile/internal/services/phenotype_stability.go
+git add kb-20-patient-profile/internal/services/phenotype_stability_test.go
+git add market-configs/shared/phenotype_stability.yaml
+git commit -m "feat(kb20): phenotype cluster stability engine — dwell + flap + override
+
+
+8-case evaluation cascade: initial → same → noise → modality → override →
+flap → dwell → accept. Minimum 4-week dwell (8-week for previously flapping).
+Flap detection: ≥2 oscillations in 90 days → hold at conservative cluster.
+Override events (MHRI crossing, CKM transition, med change, hospitalization,
+concordant deterioration) bypass dwell. Data modality grace (CGM start 2wk,
+stop 4wk). Conservatism ranking for flap dampening."
+```
+
+
+---
+
+
+## Phase S3: Transition Classifier + Python Integration
+
+
+### Step 7: Write failing test for transition classifier
+
+
+```go
+// kb-20-patient-profile/internal/services/cluster_transition_classifier_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-patient-profile/internal/models"
+)
+
+
+func TestClassifyTransition_Genuine_WithMedChange(t *testing.T) {
+    now := time.Now()
+    result := ClassifyTransition(TransitionContext{
+        PreviousCluster: "CLUSTER_2",
+        NewCluster:      "CLUSTER_4",
+        ConfidenceInNew: 0.78,
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "MEDICATION_CLASS_ADD", EventDate: now.Add(-14 * 24 * time.Hour)},
+        },
+        History: []models.ClusterTransitionRecord{
+            // No recent back-and-forth
+        },
+    })
+
+
+    assert.Equal(t, "GENUINE_TRANSITION", result.Classification)
+    assert.Contains(t, result.Narrative, "MEDICATION_CLASS_ADD")
+}
+
+
+func TestClassifyTransition_ProbableFlap_NoEvent(t *testing.T) {
+    now := time.Now()
+    result := ClassifyTransition(TransitionContext{
+        PreviousCluster: "CLUSTER_3",
+        NewCluster:      "CLUSTER_5",
+        ConfidenceInNew: 0.42,
+        OverrideEvents:  nil,
+        History: []models.ClusterTransitionRecord{
+            {PreviousCluster: "CLUSTER_5", NewCluster: "CLUSTER_3", TransitionDate: now.Add(-45 * 24 * time.Hour)},
+            {PreviousCluster: "CLUSTER_3", NewCluster: "CLUSTER_5", TransitionDate: now.Add(-75 * 24 * time.Hour)},
+        },
+    })
+
+
+    assert.Equal(t, "PROBABLE_FLAP", result.Classification)
+}
+
+
+func TestClassifyTransition_Genuine_CKMStageChange(t *testing.T) {
+    now := time.Now()
+    result := ClassifyTransition(TransitionContext{
+        PreviousCluster: "CLUSTER_4",
+        NewCluster:      "CLUSTER_1",
+        ConfidenceInNew: 0.65,
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "CKM_STAGE_TRANSITION", EventDate: now.Add(-10 * 24 * time.Hour)},
+        },
+    })
+
+
+    assert.Equal(t, "GENUINE_TRANSITION", result.Classification)
+}
+
+
+func TestClassifyTransition_Uncertain_NoHistory(t *testing.T) {
+    result := ClassifyTransition(TransitionContext{
+        PreviousCluster: "CLUSTER_2",
+        NewCluster:      "CLUSTER_6",
+        ConfidenceInNew: 0.55,
+        OverrideEvents:  nil,
+        History:          nil,
+    })
+
+
+    assert.Equal(t, "UNCERTAIN", result.Classification)
+}
+
+
+func TestGenerateTransitionNarrative_TherapyResponse(t *testing.T) {
+    now := time.Now()
+    result := ClassifyTransition(TransitionContext{
+        PreviousCluster:      "CLUSTER_2",
+        NewCluster:           "CLUSTER_4",
+        ConfidenceInNew:      0.82,
+        DominantDomainDriver: "GLUCOSE",
+        OverrideEvents: []models.OverrideEvent{
+            {EventType: "MEDICATION_CLASS_ADD", EventDate: now.Add(-30 * 24 * time.Hour), Detail: "SGLT2i"},
+        },
+    })
+
+
+    assert.Contains(t, result.Narrative, "SGLT2i")
+    assert.Contains(t, result.Narrative, "GLUCOSE")
+    assert.Contains(t, result.Narrative, "therapy response")
+}
+```
+
+
+- [ ] **Step 8: Implement transition classifier**
+
+
+```go
+// kb-20-patient-profile/internal/services/cluster_transition_classifier.go
+package services
+
+
+import (
+    "fmt"
+    "strings"
+    "time"
+
+
+    "kb-patient-profile/internal/models"
+)
+
+
+type TransitionContext struct {
+    PreviousCluster      string
+    NewCluster           string
+    ConfidenceInNew      float64
+    OverrideEvents       []models.OverrideEvent
+    History              []models.ClusterTransitionRecord
+    DominantDomainDriver string
+    EngagementStatus     string
+    DataModalityChange   bool
+}
+
+
+type TransitionClassification struct {
+    Classification string `json:"classification"` // GENUINE_TRANSITION, PROBABLE_FLAP, UNCERTAIN, DWELL_HELD
+    Narrative      string `json:"narrative"`       // human-readable explanation
+    Confidence     float64 `json:"confidence"`
+    IsClinicallyMeaningful bool `json:"clinically_meaningful"`
+}
+
+
+func ClassifyTransition(ctx TransitionContext) TransitionClassification {
+    result := TransitionClassification{
+        Confidence: ctx.ConfidenceInNew,
+    }
+
+
+    // Check for genuine transition indicators
+    hasOverrideEvent := len(ctx.OverrideEvents) > 0
+    highConfidence := ctx.ConfidenceInNew >= 0.5
+    isReturn := isReturnToRecent(ctx.NewCluster, ctx.History)
+
+
+    // Check for flap indicators
+    isSamePairOscillation := detectSamePairOscillation(ctx.PreviousCluster, ctx.NewCluster, ctx.History)
+    lowConfidence := ctx.ConfidenceInNew < 0.5
+
+
+    switch {
+    case hasOverrideEvent && highConfidence:
+        result.Classification = "GENUINE_TRANSITION"
+        result.IsClinicallyMeaningful = true
+        result.Narrative = buildGenuineNarrative(ctx)
+
+
+    case isSamePairOscillation && !hasOverrideEvent && lowConfidence:
+        result.Classification = "PROBABLE_FLAP"
+        result.IsClinicallyMeaningful = false
+        result.Narrative = fmt.Sprintf("Oscillation between %s and %s detected without clinical event — "+
+            "likely boundary instability rather than genuine phenotype change.",
+            ctx.PreviousCluster, ctx.NewCluster)
+
+
+    case hasOverrideEvent && !highConfidence:
+        result.Classification = "GENUINE_TRANSITION"
+        result.IsClinicallyMeaningful = true
+        result.Narrative = buildGenuineNarrative(ctx) + " (note: moderate confidence in new cluster — monitor closely)"
+
+
+    case !hasOverrideEvent && highConfidence && !isReturn:
+        result.Classification = "UNCERTAIN"
+        result.IsClinicallyMeaningful = false
+        result.Narrative = fmt.Sprintf("Cluster change from %s to %s with reasonable confidence (%.0f%%) "+
+            "but no clear clinical trigger. May reflect gradual phenotype drift.",
+            ctx.PreviousCluster, ctx.NewCluster, ctx.ConfidenceInNew*100)
+
+
+    default:
+        result.Classification = "UNCERTAIN"
+        result.IsClinicallyMeaningful = false
+        result.Narrative = fmt.Sprintf("Cluster change from %s to %s — insufficient context to classify.",
+            ctx.PreviousCluster, ctx.NewCluster)
+    }
+
+
+    return result
+}
+
+
+func buildGenuineNarrative(ctx TransitionContext) string {
+    parts := []string{
+        fmt.Sprintf("Phenotype transition %s → %s", ctx.PreviousCluster, ctx.NewCluster),
+    }
+
+
+    // Add trigger event context
+    for _, event := range ctx.OverrideEvents {
+        detail := event.Detail
+        if detail == "" {
+            detail = event.EventType
+        }
+        parts = append(parts, fmt.Sprintf("triggered by %s", detail))
+    }
+
+
+    // Add domain driver context
+    if ctx.DominantDomainDriver != "" {
+        parts = append(parts, fmt.Sprintf("driven primarily by %s domain change", ctx.DominantDomainDriver))
+    }
+
+
+    // Add therapy response narrative if medication event + improvement
+    for _, event := range ctx.OverrideEvents {
+        if event.EventType == "MEDICATION_CLASS_ADD" && ctx.DominantDomainDriver != "" {
+            parts = append(parts, "— consistent with therapy response")
+            break
+        }
+    }
+
+
+    return strings.Join(parts, " ")
+}
+
+
+func isReturnToRecent(newCluster string, history []models.ClusterTransitionRecord) bool {
+    lookback := time.Now().Add(-90 * 24 * time.Hour)
+    for _, h := range history {
+        if h.TransitionDate.After(lookback) && h.PreviousCluster == newCluster {
+            return true
+        }
+    }
+    return false
+}
+
+
+func detectSamePairOscillation(prev, curr string, history []models.ClusterTransitionRecord) bool {
+    if len(history) < 1 {
+        return false
+    }
+    lookback := time.Now().Add(-90 * 24 * time.Hour)
+    for _, h := range history {
+        if h.TransitionDate.After(lookback) {
+            if (h.PreviousCluster == curr && h.NewCluster == prev) ||
+                (h.PreviousCluster == prev && h.NewCluster == curr) {
+                return true
+            }
+        }
+    }
+    return false
+}
+```
+
+
+- [ ] **Step 9: Write Python stability scorer**
+
+
+```python
+# phenotype-clustering/src/stability_scorer.py
+"""
+Extracts stability-relevant metrics from HDBSCAN clustering results.
+Feeds into the Go stability engine via the KB-20 updater.
+"""
+import numpy as np
+from typing import List, Tuple, Optional
+
+
+
+
+class StabilityScorer:
+    """Computes per-patient stability metrics from HDBSCAN output."""
+
+
+    def __init__(self, labels: np.ndarray, probabilities: np.ndarray,
+                 embedding: np.ndarray, centroids: np.ndarray):
+        self.labels = labels
+        self.probabilities = probabilities
+        self.embedding = embedding
+        self.centroids = centroids
+
+
+    def compute_patient_stability(self, patient_idx: int) -> dict:
+        """Compute stability metrics for a single patient."""
+        label = int(self.labels[patient_idx])
+        prob = float(self.probabilities[patient_idx]) if self.probabilities is not None else 0.0
+
+
+        if label == -1:
+            return {
+                "cluster_label": "NOISE",
+                "membership_probability": 0.0,
+                "distance_to_centroid": float("inf"),
+                "distance_to_nearest_other": 0.0,
+                "separability_ratio": 0.0,
+                "is_noise": True,
+                "confidence": "NONE",
+            }
+
+
+        patient_embedding = self.embedding[patient_idx]
+
+
+        # Distance to assigned centroid
+        dist_own = np.linalg.norm(patient_embedding - self.centroids[label])
+
+
+        # Distance to nearest OTHER centroid
+        dist_nearest = float("inf")
+        for i, centroid in enumerate(self.centroids):
+            if i == label:
+                continue
+            d = np.linalg.norm(patient_embedding - centroid)
+            if d < dist_nearest:
+                dist_nearest = d
+
+
+        separability = dist_nearest / max(dist_own, 1e-10)
+
+
+        # Confidence classification
+        if prob >= 0.7 and separability >= 2.0:
+            confidence = "HIGH"
+        elif prob >= 0.4:
+            confidence = "MODERATE"
+        else:
+            confidence = "LOW"
+
+
+        return {
+            "cluster_label": f"CLUSTER_{label}",
+            "membership_probability": round(prob, 4),
+            "distance_to_centroid": round(float(dist_own), 4),
+            "distance_to_nearest_other": round(float(dist_nearest), 4),
+            "separability_ratio": round(float(separability), 4),
+            "is_noise": False,
+            "confidence": confidence,
+        }
+
+
+    def compute_all_stability(self) -> List[dict]:
+        """Compute stability metrics for all patients."""
+        return [self.compute_patient_stability(i) for i in range(len(self.labels))]
+
+
+    def get_boundary_patients(self, prob_threshold: float = 0.4) -> List[int]:
+        """Returns indices of patients near cluster boundaries (low probability)."""
+        boundary = []
+        for i, (label, prob) in enumerate(zip(self.labels, self.probabilities)):
+            if label != -1 and prob < prob_threshold:
+                boundary.append(i)
+        return boundary
+```
+
+
+- [ ] **Step 10: Write Python stability tests**
+
+
+```python
+# phenotype-clustering/tests/test_stability_scorer.py
+import numpy as np
+import pytest
+from src.stability_scorer import StabilityScorer
+
+
+
+
+@pytest.fixture
+def sample_clustering():
+    """3 well-separated clusters with one boundary patient."""
+    rng = np.random.RandomState(42)
+    c1 = rng.normal(loc=[0, 0, 0, 0, 0], scale=0.5, size=(20, 5))
+    c2 = rng.normal(loc=[5, 5, 5, 5, 5], scale=0.5, size=(20, 5))
+    c3 = rng.normal(loc=[10, 10, 10, 10, 10], scale=0.5, size=(20, 5))
+    boundary = np.array([[2.5, 2.5, 2.5, 2.5, 2.5]])  # between c1 and c2
+
+
+    embedding = np.vstack([c1, c2, c3, boundary])
+    labels = np.array([0]*20 + [1]*20 + [2]*20 + [0])  # boundary assigned to cluster 0
+    probs = np.array([0.9]*20 + [0.85]*20 + [0.88]*20 + [0.35])  # boundary has low prob
+
+
+    centroids = np.array([c1.mean(0), c2.mean(0), c3.mean(0)])
+
+
+    return StabilityScorer(labels, probs, embedding, centroids)
+
+
+
+
+def test_well_separated_patient_high_confidence(sample_clustering):
+    result = sample_clustering.compute_patient_stability(0)  # center of cluster 0
+    assert result["confidence"] == "HIGH"
+    assert result["separability_ratio"] > 2.0
+    assert not result["is_noise"]
+
+
+
+
+def test_boundary_patient_low_confidence(sample_clustering):
+    result = sample_clustering.compute_patient_stability(60)  # the boundary patient
+    assert result["confidence"] == "LOW"
+    assert result["membership_probability"] < 0.4
+    assert result["separability_ratio"] < 2.0
+
+
+
+
+def test_noise_patient():
+    scorer = StabilityScorer(
+        labels=np.array([-1]),
+        probabilities=np.array([0.0]),
+        embedding=np.array([[0, 0, 0, 0, 0]]),
+        centroids=np.array([[1, 1, 1, 1, 1]])
+    )
+    result = scorer.compute_patient_stability(0)
+    assert result["is_noise"]
+    assert result["confidence"] == "NONE"
+
+
+
+
+def test_boundary_patients_identified(sample_clustering):
+    boundary = sample_clustering.get_boundary_patients(0.4)
+    assert 60 in boundary  # the boundary patient
+    assert len(boundary) < 5  # only a few should be boundary
+
+
+
+
+def test_all_stability_metrics(sample_clustering):
+    all_results = sample_clustering.compute_all_stability()
+    assert len(all_results) == 61
+    high_confidence = sum(1 for r in all_results if r["confidence"] == "HIGH")
+    assert high_confidence >= 55  # most patients should be high confidence
+```
+
+
+- [ ] **Step 11: Run all Phase S3 tests**
+
+
+```bash
+# Go tests
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./internal/services/ -run "TestClassifyTransition|TestGenerateTransition" -v
+
+
+# Python tests
+cd backend/shared-infrastructure/phenotype-clustering
+python -m pytest tests/test_stability_scorer.py -v
+```
+
+
+Expected: All tests PASS.
+
+
+- [ ] **Step 12: Commit Phase S3**
+
+
+```bash
+git add kb-20-patient-profile/internal/services/cluster_transition_classifier.go
+git add kb-20-patient-profile/internal/services/cluster_transition_classifier_test.go
+git add phenotype-clustering/src/stability_scorer.py
+git add phenotype-clustering/tests/test_stability_scorer.py
+git commit -m "feat: cluster transition classifier + Python stability scorer
+
+
+Transition classifier: GENUINE_TRANSITION (clinical event + high confidence),
+PROBABLE_FLAP (same-pair oscillation + no event + low confidence), UNCERTAIN.
+Clinical narrative generation linking trigger event + domain driver to
+transition explanation ('SGLT2i → GLUCOSE domain → therapy response').
+
+
+Python StabilityScorer: extracts HDBSCAN membership probabilities +
+distance-to-centroid + separability ratio. Identifies boundary patients
+(prob <0.4). Feeds confidence metrics into Go stability engine."
+```
+
+
+---
+
+
+## Phase S4: Transition Cards + Migration + Final Integration
+
+
+### Step 13: Write phenotype transition card rules
+
+
+```go
+// kb-23-decision-cards/internal/services/phenotype_transition_cards.go
+package services
+
+
+import (
+    "fmt"
+
+
+    "kb-patient-profile/internal/models"
+)
+
+
+type PhenotypeCard struct {
+    CardType  string `json:"card_type"`
+    Urgency   string `json:"urgency"`
+    Title     string `json:"title"`
+    Rationale string `json:"rationale"`
+    Actions   []string `json:"actions"`
+}
+
+
+func EvaluatePhenotypeTransitionCards(
+    decision models.StabilityDecision,
+    classification TransitionClassification,
+) []PhenotypeCard {
+    var cards []PhenotypeCard
+
+
+    switch decision.Decision {
+    case "OVERRIDE_EVENT":
+        if classification.IsClinicallyMeaningful {
+            cards = append(cards, PhenotypeCard{
+                CardType: "PHENOTYPE_TRANSITION",
+                Urgency:  "ROUTINE",
+                Title: fmt.Sprintf("Phenotype Transition: %s → %s",
+                    decision.RawClusterLabel, decision.StableClusterLabel),
+                Rationale: classification.Narrative,
+                Actions: []string{
+                    "Review therapy pathway for new phenotype",
+                    "Update similar-patient comparisons based on new cluster",
+                },
+            })
+        }
+
+
+    case "HOLD_FLAP":
+        cards = append(cards, PhenotypeCard{
+            CardType: "PHENOTYPE_INSTABILITY",
+            Urgency:  "ROUTINE",
+            Title:    "Phenotype Classification Unstable — Cluster Boundary Patient",
+            Rationale: fmt.Sprintf("%s. Patient's clinical features place them near the boundary "+
+                "between phenotype clusters. Current therapy pathway held at more conservative option "+
+                "pending stabilization.", decision.Reason),
+            Actions: []string{
+                "Review which clinical domain is driving instability",
+                "Stabilize the oscillating domain before reassessing phenotype",
+                "Consider manual phenotype assignment if oscillation persists >3 months",
+            },
+        })
+
+
+    case "HOLD_DWELL":
+        // Usually no card — dwell holds are silent. Exception: data modality change.
+        if decision.Reason != "" && contains(decision.Reason, "modality") {
+            cards = append(cards, PhenotypeCard{
+                CardType: "DATA_MODALITY_CHANGE",
+                Urgency:  "ROUTINE",
+                Title:    "CGM Data Change — Phenotype Reassessment Pending",
+                Rationale: "Patient's data source changed (CGM started or stopped). Phenotype cluster " +
+                    "held at current assignment during grace period to avoid data-driven reclassification.",
+                Actions: []string{
+                    "Allow 2-4 weeks of new data modality before reassessing",
+                    "Current therapy pathway unchanged",
+                },
+            })
+        }
+    }
+
+
+    return cards
+}
+
+
+func contains(s, substr string) bool {
+    return len(s) >= len(substr) && (s == substr || len(s) > 0 && searchSubstring(s, substr))
+}
+
+
+func searchSubstring(s, sub string) bool {
+    for i := 0; i <= len(s)-len(sub); i++ {
+        if s[i:i+len(sub)] == sub {
+            return true
+        }
+    }
+    return false
+}
+```
+
+
+- [ ] **Step 14: Write transition card tests**
+
+
+```go
+// kb-23-decision-cards/internal/services/phenotype_transition_cards_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-patient-profile/internal/models"
+)
+
+
+func TestPhenotypeCards_GenuineTransition(t *testing.T) {
+    decision := models.StabilityDecision{
+        Decision:           "OVERRIDE_EVENT",
+        StableClusterLabel: "CLUSTER_4",
+        RawClusterLabel:    "CLUSTER_4",
+        TriggerEvent:       "MEDICATION_CLASS_ADD",
+    }
+    classification := TransitionClassification{
+        Classification:         "GENUINE_TRANSITION",
+        IsClinicallyMeaningful: true,
+        Narrative:              "Phenotype transition CLUSTER_2 → CLUSTER_4 triggered by SGLT2i driven primarily by GLUCOSE domain change — consistent with therapy response",
+    }
+
+
+    cards := EvaluatePhenotypeTransitionCards(decision, classification)
+    assert.Len(t, cards, 1)
+    assert.Equal(t, "PHENOTYPE_TRANSITION", cards[0].CardType)
+    assert.Contains(t, cards[0].Rationale, "therapy response")
+}
+
+
+func TestPhenotypeCards_FlapHeld(t *testing.T) {
+    decision := models.StabilityDecision{
+        Decision:           "HOLD_FLAP",
+        StableClusterLabel: "CLUSTER_3",
+        Reason:             "Flap detected: oscillating between CLUSTER_3 and CLUSTER_5",
+    }
+    classification := TransitionClassification{
+        Classification:         "PROBABLE_FLAP",
+        IsClinicallyMeaningful: false,
+    }
+
+
+    cards := EvaluatePhenotypeTransitionCards(decision, classification)
+    assert.Len(t, cards, 1)
+    assert.Equal(t, "PHENOTYPE_INSTABILITY", cards[0].CardType)
+    assert.Contains(t, cards[0].Rationale, "boundary")
+}
+
+
+func TestPhenotypeCards_NormalAccept_NoCard(t *testing.T) {
+    decision := models.StabilityDecision{Decision: "ACCEPT", StableClusterLabel: "CLUSTER_3"}
+    classification := TransitionClassification{Classification: "GENUINE_TRANSITION"}
+
+
+    cards := EvaluatePhenotypeTransitionCards(decision, classification)
+    assert.Empty(t, cards) // routine accept doesn't generate a card
+}
+```
+
+
+- [ ] **Step 15: Create migration SQL**
+
+
+```sql
+-- kb-20-patient-profile/migrations/007_cluster_stability.sql
+
+
+CREATE TABLE IF NOT EXISTS cluster_assignment_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    run_id VARCHAR(100) NOT NULL,
+    run_date TIMESTAMPTZ NOT NULL,
+    raw_cluster_label VARCHAR(30) NOT NULL,
+    membership_probability DECIMAL(5,4),
+    distance_to_centroid DECIMAL(10,4),
+    distance_to_nearest_other DECIMAL(10,4),
+    separability_ratio DECIMAL(8,4),
+    is_noise BOOLEAN DEFAULT FALSE,
+    stable_cluster VARCHAR(30),
+    was_overridden BOOLEAN DEFAULT FALSE,
+    override_reason VARCHAR(50),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+CREATE INDEX idx_car_patient ON cluster_assignment_records(patient_id, run_date DESC);
+CREATE INDEX idx_car_run ON cluster_assignment_records(run_id);
+
+
+CREATE TABLE IF NOT EXISTS cluster_transition_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    transition_date TIMESTAMPTZ NOT NULL,
+    previous_cluster VARCHAR(30) NOT NULL,
+    new_cluster VARCHAR(30) NOT NULL,
+    transition_type VARCHAR(30) NOT NULL,
+    classification VARCHAR(30) NOT NULL,
+    dwell_days_in_previous INT,
+    confidence_in_new DECIMAL(5,4),
+    trigger_event VARCHAR(50),
+    dominant_domain_driver VARCHAR(20),
+    mhri_category_at_transition VARCHAR(20),
+    engagement_status_at_transition VARCHAR(10),
+    data_modality_change BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+CREATE INDEX idx_ctr_patient ON cluster_transition_records(patient_id, transition_date DESC);
+CREATE INDEX idx_ctr_classification ON cluster_transition_records(classification);
+
+
+-- Add stability fields to patient_profiles
+ALTER TABLE patient_profiles
+    ADD COLUMN IF NOT EXISTS phenotype_stable_since TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS phenotype_flap_count INT DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS phenotype_transition_pending BOOLEAN DEFAULT FALSE;
+```
+
+
+- [ ] **Step 16: Run full regression and final commit**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-20-patient-profile
+go test ./... -v -count=1
+cd ../kb-23-decision-cards
+go test ./... -v -count=1
+cd ../kb-26-metabolic-digital-twin
+go test ./... -v -count=1
+cd ../../phenotype-clustering
+python -m pytest tests/ -v
+```
+
+
+Expected: All tests PASS, no regressions.
+
+
+- [ ] **Step 17: Final commit**
+
+
+```bash
+git add -A
+git commit -m "feat: phenotype cluster temporal stability — complete system
+
+
+Stability Engine (KB-20): 8-case evaluation cascade preventing cluster
+flapping and ensuring clinically meaningful transitions. 4-week minimum
+dwell (8-week for flapping patients). Flap detection with conservative
+cluster dampening. Override events (MHRI crossing, CKM transition, med
+change, hospitalization, concordant deterioration) bypass dwell.
+Data modality grace period (CGM start/stop).
+
+
+Transition Classifier: GENUINE_TRANSITION (clinical event + confidence),
+PROBABLE_FLAP (oscillation + no event), UNCERTAIN. Clinical narrative
+generation linking trigger → domain driver → therapy response validation.
+
+
+Python StabilityScorer: HDBSCAN membership probability + centroid
+distance + separability ratio extraction. Boundary patient identification.
+
+
+KB-23: PHENOTYPE_TRANSITION, PHENOTYPE_INSTABILITY, DATA_MODALITY_CHANGE
+cards. Instability card advises stabilizing oscillating domain before
+reassigning therapy pathway.
+
+
+Cross-domain integration: stability × inertia (stable good cluster
+suppresses inertia alerts), stability × IOR (exclude flapping patients
+from similar-patient queries), stability × domain decomposition (identify
+which domain drives transitions), stability × engagement (flag data-quality-
+driven transitions vs clinical transitions)."
+```
+
+
+---
+
+
+## Plan Summary
+
+
+| Phase | Steps | Key Deliverables |
+|-------|-------|-----------------|
+| S1: Models + Config | 1-2 | `ClusterAssignmentRecord`, `ClusterTransitionRecord`, `PatientClusterState`, `StabilityDecision`, stability YAML |
+| S2: Stability Engine | 3-6 | 8-case evaluation cascade, dwell policy, flap detection, override events, noise handling, data modality grace |
+| S3: Classifier + Python | 7-12 | Transition classifier (genuine/flap/uncertain), clinical narrative generation, Python `StabilityScorer` with HDBSCAN metrics |
+| S4: Cards + Migration | 13-17 | 3 card types, PostgreSQL migration, full regression |
+
+
+**Total: 17 steps, 14 files (10 create, 4 modify), 4 phases.**
+
+
+**Clinical evidence base:**
+- Von Luxburg et al. 2010 (Statistics and Computing) — clustering stability as quality criterion
+- Ahlqvist et al. 2018 (Lancet D&E) — 15-20% boundary reclassification in diabetes subtyping
+- Hennig 2007 (Journal of Classification) — dissolution point concept for cluster stability
+- Dagliati et al. 2018 (J Biomed Inform) — temporal trajectory stability predicts outcomes
+
+
+**The cross-domain innovation in stability:** This isn't just "prevent flapping." It's a system that understands *why* a patient's phenotype changed — was it a medication response (genuine, celebrate), a measurement behavior change (data artifact, ignore), a seasonal variation (temporary, wait), or boundary noise (dampened, monitor). That classification requires simultaneously holding the patient's clustering output, their IOR intervention timeline, their engagement phenotype, their domain decomposition, and their data modality context. No clustering pipeline in the literature does this. They all produce labels and walk away. This system produces labels, evaluates them against clinical context, and decides whether to trust them.

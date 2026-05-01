@@ -191,6 +191,50 @@ def _resolution_status(pct: float) -> str:
     return "FAIL"
 
 
+def _normalize_icd10(code: str) -> str:
+    """Strip dots and uppercase an ICD-10 code.
+
+    'E10.10' -> 'E1010', 'E10' -> 'E10', ' D50.0 ' -> 'D500'.
+    Used to bridge WHO ICD-10 (dotted) vs ICD-10-CM (dotless billable) — see
+    claudedocs/audits/2026-04-29_kb_cross_reference_gap_report.md §"Format mismatch".
+    """
+    return (code or "").replace(".", "").strip().upper()
+
+
+def _resolve_icd10(consumer_codes: set[str], ref_codes: set[str]) -> tuple[set[str], set[str]]:
+    """Match WHO ICD-10 consumer codes against ICD-10-CM reference codes.
+
+    KB-7 holds ICD-10-CM (dotless, billable 5-char like 'E1010').
+    KB-4 START_V3 holds WHO ICD-10 (dotted, often 3-char rollup like 'E10').
+
+    A consumer code is resolved if:
+      (a) its dotless form is an exact match in the reference set, OR
+      (b) it's a 3- or 4-character rollup AND any reference code starts
+          with that dotless prefix (e.g. 'E10' resolves because 'E1010',
+          'E1011', etc. exist in the reference set).
+
+    Returns (resolved_set, unresolved_set) using ORIGINAL consumer-code form
+    so the report retains the source-faithful spelling.
+    """
+    import bisect
+    ref_norm = {_normalize_icd10(c) for c in ref_codes if c}
+    ref_sorted = sorted(ref_norm)
+    resolved: set[str] = set()
+    for code in consumer_codes:
+        norm = _normalize_icd10(code)
+        if not norm:
+            continue
+        if norm in ref_norm:
+            resolved.add(code)
+            continue
+        # Rollup match: only for short codes (3-4 dotless chars)
+        if 3 <= len(norm) <= 4:
+            i = bisect.bisect_left(ref_sorted, norm)
+            if i < len(ref_sorted) and ref_sorted[i].startswith(norm):
+                resolved.add(code)
+    return resolved, consumer_codes - resolved
+
+
 def reference_summary() -> list[dict]:
     rows: list[dict] = []
     with psycopg2.connect(**KB7_DSN) as conn, conn.cursor() as cur:
@@ -269,8 +313,15 @@ def validate_consumer(check: ConsumerCheck, sample_n: int,
         ref_codes = {r[0] for r in cur.fetchall()}
 
     # 3. Compute resolution
-    resolved_set = consumer_codes & ref_codes
-    unresolved_set = consumer_codes - ref_codes
+    # ICD-10 needs normalized matching — KB-7 holds ICD-10-CM (dotless,
+    # 5-char billable) while consumer KBs typically hold WHO ICD-10 (dotted,
+    # often 3-char rollups). Plain set difference reports ~2.3% resolution
+    # which is a format mismatch, not a data-quality failure.
+    if "ICD-10" in check.target_system:
+        resolved_set, unresolved_set = _resolve_icd10(consumer_codes, ref_codes)
+    else:
+        resolved_set = consumer_codes & ref_codes
+        unresolved_set = consumer_codes - ref_codes
     resolved = len(resolved_set)
     unresolved = len(unresolved_set)
     pct = (resolved / distinct * 100.0) if distinct else 100.0
@@ -359,7 +410,13 @@ def build_checks() -> list[ConsumerCheck]:
             table="kb4_explicit_criteria",
             column="condition_icd10",
             target_system="ICD-10 (START condition codes)",
-            reference_query="SELECT code FROM concepts_icd10",
+            # Union of ICD-10-CM (dotless billable) + WHO ICD-10 (dotted).
+            # _resolve_icd10 normalizes both sides for comparison; WHO codes
+            # bridge the gap for residual taxonomic divergences (F00 dementia
+            # series, H40.10-13 glaucoma subcodes, J46 status asthmaticus,
+            # M82 osteoporosis in diseases — see migration 019).
+            reference_query=("SELECT code FROM concepts_icd10 "
+                             "UNION ALL SELECT code FROM concepts_icd10_who"),
             is_array=True,
         ),
     ]

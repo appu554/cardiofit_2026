@@ -1,0 +1,423 @@
+Ate an implmeation Gap 17: Care Transition Bridge — Implementation Plan
+Clinical Rationale
+Why the 30-day post-discharge window is the platform's single highest-leverage clinical moment:
+Every clinical intelligence system the platform has built — domain decomposition, inertia detection, masked hypertension screening, renal gating, CGM analytics, compound syndrome detection, acute-on-chronic monitoring, PAI triage, escalation routing — is designed for patients in steady-state ambulatory care. The platform assumes the patient has a stable medication regimen, a baseline vital sign pattern, an engagement rhythm, and a clinician who reviewed their chart recently enough to have accurate context.
+None of these assumptions hold in the 30-day post-discharge window.
+The patient arrives home with a medication list that differs from their pre-admission regimen — sometimes dramatically, sometimes in ways the patient doesn't understand, and almost always in ways the GP's system hasn't yet reflected. The patient's vital signs during hospitalization were measured in a controlled environment with IV fluids, bed rest, and medication administration timing that bears no relationship to their home patterns. Their engagement was artificially high (constant monitoring, structured care) and is about to crash as that scaffolding disappears. And the GP who sees them at their 7-day follow-up has often not yet received the discharge summary, let alone read and actioned it.
+The clinical epidemiology is stark:
+For heart failure patients, the 30-day readmission rate is 20-25% (Dharmarajan et al., 2013, JAMA, n=1.3 million). Half of those readmissions occur within the first 7 days. The dominant causes are not primary HF recurrence — they are: (1) medication reconciliation failures, (2) inadequate follow-up, (3) unrecognized clinical deterioration that a single coordinated review could have prevented.
+For diabetic patients with AKI, 30-day readmission approaches 20% (Silver et al., 2017, JASN). The post-discharge trajectory is particularly dangerous because the hospital discharge medications often include new nephrotoxic agents added during admission (contrast, antibiotics, diuretics) while the patient's baseline renal function is still recovering.
+For post-MI patients, 30-day mortality is 7-10% (Krumholz et al., 2009, JAMA), concentrated in the first 7-10 days. The clinical pattern: discharge on aggressive antiplatelet + anticoagulation + statin + beta-blocker + ACEi, all started or up-titrated during admission, without the primary care team having accurate information about the patient's baseline tolerance.
+For frail elderly patients, 30-day readmission can exceed 30% (Jencks et al., 2009, NEJM). The dominant trigger is medication-related adverse events from polypharmacy changes during admission that the community care team cannot reconcile.
+The three discrete failure modes the platform must address:
+Failure Mode 1 — Medication reconciliation gap. The patient's discharge medication list is not the same as their pre-admission medication list. Common scenarios: anti-hypertensives stopped during admission due to low BP and not restarted at discharge, insulin dose changed during admission and the new dose communicated to patient but not to GP, diuretic added during admission that needs dose titration the GP doesn't know about. The platform's IOR timeline has pre-admission medication data. FHIR discharge summaries contain the new regimen. Nothing currently compares them and flags discrepancies for clinician review.
+Failure Mode 2 — Baseline instability. The platform's per-patient baseline engine (Gap 16) uses a 7-day rolling median as the reference for deviation detection. For a post-discharge patient, the 7-day pre-discharge window contains hospital measurements (with IV fluids, different medications, bed rest) that have no relevance to their home steady state. Using hospital measurements as the post-discharge baseline produces either false positives (home readings look like "deviations" from hospital readings) or false negatives (hospital readings mask what the home pattern would reveal). The platform needs to know that a 30-day adjustment window is required to rebuild an accurate home-care baseline.
+Failure Mode 3 — Engagement cliff. During hospitalization, the patient is monitored continuously (vital signs every 4-6 hours), has structured medication administration, and has immediate access to clinical staff. At discharge, this scaffolding disappears. The patient is expected to self-monitor, self-medicate, and self-triage. Adherence studies (Bosworth et al., 2011, Circulation) show that 25-30% of newly discharged patients fail to fill one or more new prescriptions within 7 days of discharge, and 30-40% have medication administration errors in the first 2 weeks. The platform's engagement detection (V4-3) catches disengagement over weeks — it's not calibrated for the specific post-discharge cliff, where a 3-day measurement gap in the first 10 days is clinically significant even if it wouldn't be in steady-state ambulatory care.
+The cross-domain reasoning opportunity unique to CardioFit:
+Every single-domain readmission prevention program addresses one failure mode. Remote BP monitoring programs catch hypertension-related readmissions. Medication therapy management programs catch reconciliation failures. Post-discharge nurse calls catch engagement cliffs. No single program catches all three because the three failure modes require different data sources, different clinical reasoning, and different intervention pathways.
+The platform has the data for all three. It has the IOR timeline for medication reconciliation. It has the vital sign ingestion for baseline reconstruction. It has the engagement detection infrastructure for cliff monitoring. It has the PAI for compound urgency scoring. It has the escalation engine for intervention routing. What it doesn't have is a coordinated module that treats "this patient was just discharged" as a distinct clinical state requiring all three domains to be addressed simultaneously with heightened sensitivity.
+The readmission reduction opportunity specifically for the HCF CHF pilot:
+HCF's Catalyst program targets 15% readmission reduction for 500 CHF members. The CMS literature on HF readmission reduction programs shows consistent 15-20% reductions when the program integrates: (1) medication reconciliation within 48 hours, (2) early follow-up within 7 days, (3) vital sign monitoring with clinician review within 72 hours, (4) symptom assessment with care manager contact within 24 hours (Hernandez et al., 2010, JAMA; Jha et al., 2009, NEJM). The Care Transition Bridge is the module that operationalizes all four of those evidence-based interventions on the platform's existing infrastructure.
+The readmission reduction opportunity specifically for the Aged Care pilot:
+Post-hospital transitions for aged care residents carry particularly high risk because the transition is bidirectional: hospital admission → hospital discharge back to facility. Each transition is a medication reconciliation event, a care team handover, and a potential site of error. The MARQUIS study (Schnipper et al., 2018, BMJ Quality & Safety) demonstrated that structured medication reconciliation at admission and discharge reduced adverse drug events by 29% in elderly patients. For the Aged Care pilot's 200-bed target, the Care Transition Bridge addresses both the community-hospital-community transitions and the intra-facility clinical state changes that represent care setting transitions.
+________________
+
+
+India-Specific Care Transition Considerations:
+In the Indian healthcare system, discharge summaries often exist as paper documents handed to the patient rather than as structured FHIR resources transmitted to primary care. The platform's FHIR inbound was designed for Australian MHR and Indian ABDM integrations, but many Indian discharge scenarios involve patients physically carrying paper summaries to their GP days or weeks after discharge. The Care Transition Bridge must handle both structured FHIR discharge data AND manual patient-entered or ASHA-worker-entered discharge information. A patient reporting "I was discharged from Apollo yesterday, they changed my BP medicine" via WhatsApp to an ASHA worker is a valid care transition event that should trigger the 30-day heightened monitoring mode even without an FHIR discharge summary.
+Post-discharge medication supply gaps are a significant Indian concern. A patient discharged on a medication may be unable to afford the continuation prescription at the local pharmacy, or may experience supply gaps if the medication isn't stocked locally. The formulary accessibility module (Gap 13) already handles market-specific drug availability, but the Care Transition Bridge should specifically query formulary availability for discharge medications and flag patients whose discharge regimens include drugs unavailable or unaffordable in their local market — before the patient attempts to fill the prescription and silently defaults to not taking the medication.
+Care transition to ASHA worker oversight is a distinctly Indian pathway. A patient discharged from a tertiary hospital in Delhi back to a rural village may transition from cardiologist care to ASHA worker monitoring. The Care Transition Bridge should enable this handover: the 30-day heightened monitoring mode should include ASHA worker assignment, structured weekly check-ins (not just algorithmic monitoring), and clear escalation pathways from ASHA → PHC physician → district hospital. This pathway doesn't exist in Australian or Western healthcare systems and requires India-specific configuration.
+Australia-Specific Care Transition Considerations:
+The 7-day discharge summary communication requirement: the Australian Digital Health Agency requires discharge summaries to be sent to the primary care provider within 48 hours (ideally) and mandated within 7 days. The Care Transition Bridge should monitor discharge summary transmission and flag cases where the summary hasn't arrived at the GP within 48 hours — the absence is itself a clinical risk signal because the GP is making clinical decisions about the patient without hospital information.
+The Hospital in the Home (HITH) transition: many Australian patients discharge not to home but to Hospital in the Home programs (including HCF Catalyst). The Care Transition Bridge should recognize HITH as a distinct post-discharge state — these patients receive continued clinical monitoring from the HITH team, which changes the monitoring intensity the platform should apply. A HITH patient has a nurse visiting daily; the platform's monitoring should complement rather than duplicate that oversight.
+Aged care facility transitions: patients discharged from hospital to residential aged care facilities require coordinated clinical handover between the hospital, the GP, and the facility nursing team. The MBS item 735-749 range covers chronic disease management plans and team care arrangements that the platform should support through structured care plan integration.
+The MyHealthRecord post-discharge update pattern: for SAFETY tier transitions (discharge with incomplete medication reconciliation, discharge with known contraindication, discharge with trajectory still deteriorating), the Care Transition Bridge should trigger an MHR Shared Health Summary update (via the Gap 9 FHIR outbound) so that if the patient presents to an ED during the post-discharge window, the ED clinician sees the transition context.
+________________
+
+
+Architecture Overview
+The Care Transition Bridge is a new module that sits between the existing clinical detection systems and the PAI/escalation infrastructure, with a specific temporal scope: the 30-day window following any discharge event. Within this window, the module modifies how other systems process data — it's not a parallel system but a contextual overlay.
+Discharge Event Detected
+(FHIR Encounter.status=finished,
+ manual discharge trigger,
+ HL7 ADT message)
+        │
+        ▼
+┌─ Care Transition Bridge ─────────────────────────────┐
+│                                                       │
+│  ┌─ Discharge Event Detector ──────────────────────┐ │
+│  │  Sources: FHIR Encounter, manual trigger,       │ │
+│  │  HL7 ADT A03, patient-reported discharge        │ │
+│  │  Validates discharge is recent (<7 days)         │ │
+│  └────────────────────┬────────────────────────────┘ │
+│                       ▼                               │
+│  ┌─ Transition Context Enricher ───────────────────┐ │
+│  │  Fetches: pre-admission med list (IOR),         │ │
+│  │  discharge summary (FHIR), hospital course,     │ │
+│  │  primary diagnosis, length of stay              │ │
+│  └────────────────────┬────────────────────────────┘ │
+│                       ▼                               │
+│  ┌─ Medication Reconciliation Engine ──────────────┐ │
+│  │  Compares pre-admission regimen vs discharge    │ │
+│  │  regimen. Identifies: NEW, STOPPED, CHANGED,    │ │
+│  │  CONTINUED. Flags high-risk changes.            │ │
+│  │  Checks formulary accessibility per market.     │ │
+│  └────────────────────┬────────────────────────────┘ │
+│                       ▼                               │
+│  ┌─ Baseline Adjustment Controller ────────────────┐ │
+│  │  Marks patient's baseline as POST_DISCHARGE     │ │
+│  │  for 30 days. Resets baseline computation       │ │
+│  │  window to start from discharge date + 48h      │ │
+│  │  (allow stabilization).                         │ │
+│  └────────────────────┬────────────────────────────┘ │
+│                       ▼                               │
+│  ┌─ Heightened Surveillance Mode Activator ────────┐ │
+│  │  Tightens deviation thresholds by 25%           │ │
+│  │  (earlier alerting). Raises PAI context score.  │ │
+│  │  Extends engagement gap sensitivity: 72h gap    │ │
+│  │  triggers alert (vs 7d in steady state).        │ │
+│  └────────────────────┬────────────────────────────┘ │
+│                       ▼                               │
+│  ┌─ Transition Milestone Scheduler ────────────────┐ │
+│  │  Schedules automatic check-ins at:              │ │
+│  │  48h — medication reconciliation review         │ │
+│  │  7d — first follow-up window + summary          │ │
+│  │  14d — mid-window trajectory review             │ │
+│  │  30d — transition exit assessment               │ │
+│  └────────────────────┬────────────────────────────┘ │
+│                       ▼                               │
+│  ┌─ Transition Exit Controller ────────────────────┐ │
+│  │  At 30-day mark: computes transition outcome    │ │
+│  │  (successful vs readmitted vs deteriorating),   │ │
+│  │  exits heightened mode, resets baseline, logs   │ │
+│  │  to outcome registry for closed-loop learning.  │ │
+│  └─────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+    PAI Engine    Gap 16 Acute      Gap 15 Escalation
+    (modifier)    Detector          (amplifier)
+    receives      receives          receives
+    context tier  tightened         POST_DISCHARGE
+    amplification thresholds        amplification
+
+
+Core design principles:
+Principle 1 — Temporal state, not separate system. The Care Transition Bridge doesn't replace any existing detector. It modifies their behavior during the 30-day window. A deviation that would normally score MODERATE scores HIGH during post-discharge. A PAI context dimension that would normally contribute 25 points contributes 40. The existing systems do their normal work; the Bridge adjusts the parameters.
+Principle 2 — Three parallel workstreams per patient. Medication reconciliation, baseline adjustment, and engagement monitoring run simultaneously for each patient in the window. A patient can fail any of the three independently, and the platform must handle each failure path. A patient whose medications are reconciled perfectly but whose engagement cliffs into disengagement is at risk. A patient who stays engaged but has unreconciled medications is at risk. Both need detection.
+Principle 3 — Milestone-triggered reviews, not continuous surveillance noise. Rather than recomputing everything on every data point, the Bridge schedules specific milestone reviews at 48h, 7d, 14d, and 30d. At each milestone, it performs a structured assessment and generates a transition-specific card for the care team. This prevents alert fatigue while ensuring no patient silently completes the transition window without a structured review.
+Principle 4 — Explicit transition outcome tracking. Every transition resolves in one of four outcomes: SUCCESSFUL (completed 30 days without readmission or significant deterioration), READMITTED (returned to hospital during window), DETERIORATED (PAI remained HIGH/CRITICAL through window without readmission), DISENGAGED (patient stopped providing data). These outcomes feed the closed-loop learning system (Gap 21) and enable pilot metrics like "We managed 200 transitions, 180 were SUCCESSFUL, 12 were READMITTED, 8 were DETERIORATED or DISENGAGED."
+________________
+
+
+Tech Stack Alignment
+* Go 1.25 (Gin, GORM, Zap, Prometheus) for the Care Transition Bridge service within KB-23 (decision cards) and KB-20 (patient profile)
+* PostgreSQL 15 for transition state, milestone tracking, and outcome registry
+* Kafka for internal event consumption (FHIR discharge events from KB-20, PAI updates from KB-26)
+* Existing Gap 9 (FHIR outbound), Gap 13 (formulary), Gap 14 (PAI), Gap 15 (escalation), Gap 16 (acute-on-chronic) as dependencies
+* YAML market configs for transition parameters, milestone schedules, and reconciliation rules
+________________
+
+
+File Inventory
+KB-20 — Discharge Event Detection + Context Enrichment
+Action
+	File
+	Create
+	kb-20/internal/models/care_transition.go
+	Create
+	kb-20/internal/services/discharge_event_detector.go
+	Create
+	kb-20/internal/services/discharge_event_detector_test.go
+	Create
+	kb-20/internal/services/transition_context_enricher.go
+	Create
+	kb-20/internal/services/transition_context_enricher_test.go
+	Create
+	kb-20/internal/services/medication_reconciliation_engine.go
+	Create
+	kb-20/internal/services/medication_reconciliation_engine_test.go
+	Create
+	kb-20/internal/api/care_transition_handlers.go
+	Create
+	kb-20/internal/api/care_transition_handlers_test.go
+	Modify
+	kb-20/internal/fhir/fhir_sync_worker.go
+	Create
+	kb-20/migrations/015_care_transition.sql
+	KB-26 — Baseline Adjustment + Heightened Surveillance
+Action
+	File
+	Create
+	kb-26/internal/services/baseline_adjustment_controller.go
+	Create
+	kb-26/internal/services/baseline_adjustment_controller_test.go
+	Create
+	kb-26/internal/services/heightened_surveillance_mode.go
+	Create
+	kb-26/internal/services/heightened_surveillance_mode_test.go
+	Modify
+	kb-26/internal/services/patient_baseline.go
+	Modify
+	kb-26/internal/services/deviation_scorer.go
+	Modify
+	kb-26/internal/services/pai_context.go
+	Create
+	kb-26/migrations/016_transition_baseline.sql
+	KB-23 — Milestone Scheduler + Card Generation
+Action
+	File
+	Create
+	kb-23/internal/services/transition_milestone_scheduler.go
+	Create
+	kb-23/internal/services/transition_milestone_scheduler_test.go
+	Create
+	kb-23/internal/services/transition_milestone_batch.go
+	Create
+	kb-23/internal/services/transition_exit_controller.go
+	Create
+	kb-23/internal/services/transition_exit_controller_test.go
+	Create
+	kb-23/internal/services/transition_event_consumer.go
+	Create
+	kb-23/internal/services/transition_event_consumer_test.go
+	Create
+	kb-23/templates/transition/dc-transition-medication-reconciliation-v1.yaml
+	Create
+	kb-23/templates/transition/dc-transition-48h-review-v1.yaml
+	Create
+	kb-23/templates/transition/dc-transition-7d-followup-v1.yaml
+	Create
+	kb-23/templates/transition/dc-transition-14d-midpoint-v1.yaml
+	Create
+	kb-23/templates/transition/dc-transition-30d-exit-v1.yaml
+	Create
+	kb-23/templates/transition/dc-transition-medication-supply-gap-v1.yaml
+	Create
+	kb-23/templates/transition/dc-transition-engagement-cliff-v1.yaml
+	Create
+	kb-23/migrations/002_transition_outcome_registry.sql
+	Market Configs
+Action
+	File
+	Create
+	market-configs/shared/care_transition_parameters.yaml
+	Create
+	market-configs/shared/medication_reconciliation_rules.yaml
+	Create
+	market-configs/india/care_transition_overrides.yaml
+	Create
+	market-configs/australia/care_transition_overrides.yaml
+	Total: ~34 files (31 create, 3 modify)
+________________
+
+
+Phase CT1: Discharge Event Detection + Transition Data Models
+Step 1: Create care transition data models
+Create kb-20/internal/models/care_transition.go containing:
+CareTransition — the core entity tracking a single transition episode for a single patient. Fields: ID (uuid), PatientID, DischargeDate, DetectedAt, DischargeSource (FHIR_ENCOUNTER, HL7_ADT, MANUAL_CLINICIAN, PATIENT_REPORTED, ASHA_REPORTED), FacilityID (hospital or facility name), FacilityType (ACUTE_HOSPITAL, REHAB, AGED_CARE, HITH_PROGRAM), PrimaryDiagnosis, SecondaryDiagnoses, LengthOfStayDays, DischargeDispositon (HOME, AGED_CARE_FACILITY, HITH, REHAB), TransitionState (ACTIVE, COMPLETED_SUCCESSFUL, COMPLETED_READMITTED, COMPLETED_DETERIORATED, COMPLETED_DISENGAGED), TransitionStartDate, TransitionEndDate (nullable until complete), PreAdmissionMedicationListID (links to IOR timeline snapshot), DischargeMedicationListID (links to discharge summary parse), ReconciliationStatus (PENDING, IN_PROGRESS, RECONCILED, DISCREPANCIES_FOUND, ABANDONED), HeightenedSurveillanceActive (boolean), AssignedCareTeam (structured: GP, care_manager, specialist, ASHA_worker), MilestoneScheduleID (links to MilestoneSchedule). CreatedAt, UpdatedAt, Notes.
+DischargeMedication — a single medication on the discharge regimen. Fields: ID, TransitionID, DrugName, DrugClass, Dose, Frequency, Route, Duration, Instructions, ReconciliationStatus (NEW, CONTINUED, CHANGED_DOSE, CHANGED_FREQUENCY, STOPPED, UNCLEAR), PreAdmissionReferenceID (nullable, links to pre-admission medication if applicable), ChangeReason (if changed/stopped), PrescriberName, PrescriberRole, FormularyStatus (AVAILABLE, AVAILABLE_AUTHORITY_REQUIRED, UNAVAILABLE, SUBSTITUTE_AVAILABLE), SupplyGapRisk (LOW, MEDIUM, HIGH based on cost/availability), ClinicalRiskLevel (LOW, MEDIUM, HIGH, CRITICAL — assessed from drug class, interaction potential, dose complexity). CreatedAt.
+TransitionMilestone — a scheduled or completed milestone in the transition. Fields: ID, TransitionID, MilestoneType (MEDICATION_RECONCILIATION_48H, FIRST_FOLLOWUP_7D, MIDPOINT_REVIEW_14D, EXIT_ASSESSMENT_30D, MEDICATION_SUPPLY_CHECK, ENGAGEMENT_CHECK_72H), ScheduledFor, CompletedAt (nullable), CompletionStatus (SCHEDULED, TRIGGERED, COMPLETED_SUCCESSFUL, COMPLETED_WITH_CONCERNS, COMPLETED_WITH_ESCALATION, MISSED_PATIENT_UNREACHABLE, MISSED_SYSTEM_ERROR, SUPERSEDED_BY_READMISSION), CardsGenerated (array of DecisionCard IDs generated at this milestone), ClinicianAssigned, ActionTaken, Notes.
+TransitionOutcome — the final assessment at transition exit (30 days or early termination). Fields: ID, TransitionID, OutcomeCategory (SUCCESSFUL, READMITTED, DETERIORATED, DISENGAGED), ReadmissionDate (nullable), ReadmissionReason, DeteriorationIndicators, DisengagementStartDate, FinalPAITier, PAITrajectoryDuringWindow (improving/stable/deteriorating), MedicationReconciliationOutcome, EngagementMetric (readings per week during window), ClinicianContactCount, CardsGeneratedCount, EscalationsTriggeredCount, ActionsTakenCount, ClosedLoopLearnings (structured reflections for Gap 21). ComputedAt.
+MedicationReconciliationReport — the output of comparing pre-admission vs discharge regimens. Fields: TransitionID, ReportDate, NewMedications (list), StoppedMedications (list), ChangedDoseMedications (list), ChangedFrequencyMedications (list), UnclearMedications (list), DiscrepanciesFound (integer count), HighRiskChanges (list with rationale), FormularyIssues (list), TotalMedicationCount, EstimatedDailyComplexityScore (for polypharmacy risk), ReconciliationOutcome (CLEAN_RECONCILIATION, DISCREPANCIES_CLINICIAN_REVIEW_NEEDED, HIGH_RISK_URGENT_REVIEW, UNCLEAR_DATA_INSUFFICIENT).
+Step 2: Create shared care transition parameters YAML
+Create market-configs/shared/care_transition_parameters.yaml containing:
+Transition window parameters. StandardWindowDays: 30. ShortWindowDays: 14 (for low-complexity discharges like elective minor procedures). ExtendedWindowDays: 60 (for high-complexity discharges like post-transplant, post-major-cardiac-surgery). WindowSelectionRules: map from admission type to window length.
+Baseline adjustment parameters. PostDischargeBaselineStartDelayHours: 48 (don't start building new baseline until 48h after discharge — allow hospital-effect washout). MinimumReadingsForNewBaseline: 5. FallbackToPreAdmissionBaselineDays: 14 (if fewer than 5 readings by day 14, use pre-admission baseline as fallback). HospitalBaselineValidFor: EXCLUDED (never use hospital measurements as baseline).
+Heightened surveillance parameters. DeviationThresholdMultiplier: 0.75 (tighten thresholds by 25% — a deviation that would normally need to be 25% to trigger MODERATE now triggers at 19%). PAIContextBoostPoints: 15 (add 15 to PAI context dimension during window). EngagementGapAlertHours: 72 (alert if no data for 72h, vs 7d in steady state). MeasurementFrequencyBaselinePeriod: 14_DAYS_PRE_ADMISSION (compare current frequency to pre-admission frequency, not hospital-period frequency).
+Milestone schedule parameters. Milestone48h: { offset: 48h, type: MEDICATION_RECONCILIATION, required: true }. Milestone7d: { offset: 168h, type: FIRST_FOLLOWUP, required: true }. Milestone14d: { offset: 336h, type: MIDPOINT_REVIEW, required: true }. Milestone30d: { offset: 720h, type: EXIT_ASSESSMENT, required: true }. EngagementCheck72h: { offset: 72h, type: ENGAGEMENT_CHECK, required: conditional — only if patient hasn't measured in past 24h }. MedicationSupplyCheck: { offset: 24h, type: MEDICATION_SUPPLY, required: conditional — only if discharge regimen includes drugs with HIGH supply gap risk }.
+Reconciliation risk thresholds. HighRiskDrugClasses: [ANTICOAGULANT, INSULIN, OPIOID, DIGOXIN, AMIODARONE, IMMUNOSUPPRESSANT, CHEMOTHERAPY, LITHIUM]. HighRiskChangeTypes: [NEW_ANTICOAGULANT, INSULIN_DOSE_CHANGE, STOPPED_CARDIOPROTECTIVE, NEW_NEPHROTOXIC_WITH_LOW_EGFR, NEW_HYPOGLYCEMIC_WITH_RECENT_HYPO]. ReconciliationUrgencyMapping: CLEAN → ROUTINE card, DISCREPANCIES → URGENT card, HIGH_RISK → IMMEDIATE card, UNCLEAR → URGENT card with clarification request.
+Step 3: Create India care transition overrides
+Create market-configs/india/care_transition_overrides.yaml containing:
+ASHA worker integration. ASHATransitionRoleEnabled: true. ASHAHeightenedContactSchedule: weekly in-person visits during the 30-day window. ASHAEscalationPath: ASHA → ANM → PHC physician (per Gap 15 India escalation overrides). DischargeLanguageLocalizationRequired: true (discharge summaries may be in English, instructions needed in Hindi/regional languages for patient comprehension).
+Paper discharge summary handling. ManualDischargeEntryEnabled: true. PatientReportedDischargeAccepted: true. ASHAReportedDischargeAccepted: true. DischargeSummaryValidationWindow: 7_DAYS (a discharge can be registered up to 7 days retroactively if the patient or ASHA worker reports it late). ManualDataQualityFlag: LOW_CONFIDENCE (manually entered discharge data is flagged for clinician review).
+Formulary supply gap sensitivity. Heightened sensitivity for Tier-2/3 city markets where drug supply may be inconsistent. SupplyGapCheckFrequency: 48h (check drug availability at local pharmacies twice during first week). SupplyGapAlertThreshold: LOW (any drug marked LOW availability triggers alert, vs HIGH threshold in Tier-1 cities).
+Monsoon/festival season considerations. If transition window overlaps active monsoon season (Jun-Sep) or festival season (Oct-Nov), extend ASHA visit frequency from weekly to twice-weekly. Rationale: both periods are known to increase adherence disruption and clinical deterioration risk.
+Tele-consultation integration. TeleconsultationEnabledForFollowup: true. MilestoneFollowupMethods: [TELECONSULT, IN_PERSON_GP, ASHA_VISIT]. MilestoneFollowupPreference: dynamic based on geographic accessibility and clinical complexity.
+Step 4: Create Australia care transition overrides
+Create market-configs/australia/care_transition_overrides.yaml containing:
+Discharge summary transmission monitoring. DischargeSummaryRequiredWithin: 48h. DischargeSummaryTransmissionAlert: if not received at GP by 48h, generate PRACTICE_COMMUNICATION_GAP card directed at the discharging facility. DischargeSummaryTransmissionEscalation: 7-day mandatory transmission failure triggers URGENT escalation.
+HITH program integration. HITHFacilityTypes: recognized as distinct FacilityType. HITHMonitoringIntensity: REDUCED (the HITH team provides their own monitoring; platform monitoring is complementary, not primary). HITHMilestoneSchedule: modified — 48h and 7d milestones become HITH team assessments rather than platform-generated cards. Platform still runs 14d and 30d milestones as transition exit checks.
+Aged care facility transition. FacilityType: AGED_CARE_FACILITY triggers FACILITY_NURSE_PRIMARY routing. Medication reconciliation routed to facility pharmacist + GP rather than direct-to-GP. Extended milestone schedule: add 21-day medication review specific to aged care (aligned with typical aged care medication chart review cycles).
+Indigenous patient considerations. Indigenous patient transitions trigger enhanced cultural sensitivity parameters. CulturallyAppropriateContactAllowed: true. FamilyAndCommunityInvolvement: enabled as part of care team. SorryBusinessAwareness: if bereavement event coincides with transition window, automatic extension of transition window by 14 days and reduction of surveillance intensity (cultural sensitivity takes precedence over algorithmic monitoring).
+Medicare billing code alignment. TransitionMilestoneSupportsMBSBilling: true. MBSItemCodes for 48h pharmacist review, 7d GP follow-up, team care arrangements billing trigger. DischargeSummaryReceivedVerification: MBS item 735 linkage for chronic disease management plan requirements.
+MHR Shared Health Summary updates. DischargeTransitionTriggersMHRUpdate: true (post-discharge status visible in ED if patient presents). MHRUpdateFrequency: on discharge + at each milestone + on transition exit. MHRUpdateContent: current transition state, key risks identified, care team contacts.
+________________
+
+
+Phase CT2: Medication Reconciliation Engine
+Step 5: Build the medication reconciliation comparison engine
+Create kb-20/internal/services/medication_reconciliation_engine.go containing:
+ReconcileRegimens function takes a pre-admission medication list (from IOR timeline snapshot) and a discharge medication list (from FHIR discharge summary or manual entry) and produces a MedicationReconciliationReport identifying:
+NEW medications: present in discharge list but not in pre-admission list. Each NEW medication is classified by clinical risk: CRITICAL_RISK if the drug is in the high-risk drug class list (anticoagulants, insulin, opioids, digoxin, amiodarone, immunosuppressants). HIGH_RISK if the drug has known significant interactions with the patient's continuing medications. MEDIUM_RISK otherwise.
+STOPPED medications: present in pre-admission list but not in discharge list. STOPPED medications are assessed for clinical implications: if a cardioprotective medication (beta-blocker, ACEi, statin in post-MI patient) is stopped without clear rationale in discharge summary, flag as HIGH_RISK — this is the "fell off the regimen during admission" failure mode. If a medication was stopped because of an adverse reaction documented in the hospital course, flag as APPROPRIATE_STOP.
+CHANGED dose medications: same drug appears in both lists but with different dose or frequency. Risk classification: HIGH if the change involves high-risk drugs (insulin dose change, digoxin dose change, anticoagulant dose change). MEDIUM for other dose changes. Include change direction (INCREASED, DECREASED) and magnitude.
+CONTINUED medications: same drug, same dose, same frequency in both lists. Not flagged for review unless drug-drug interactions are introduced by NEW medications.
+UNCLEAR medications: cases where the discharge summary is ambiguous — "continue current cardiac medications" without specifying which, or drug name variants that can't be reliably mapped (generic vs brand names, international vs local names). UNCLEAR medications always trigger a clarification request card.
+Formulary cross-check for each NEW medication. Query the Gap 13 formulary service to determine: is this drug available in the patient's market? Is authority required (Australia PBS)? Is it on the essential medicines list (India NLEM)? What's the estimated monthly cost? Generate a MEDICATION_SUPPLY_GAP flag if availability is questionable or cost exceeds market-appropriate thresholds.
+Drug-drug interaction check. For each NEW medication, check against the patient's CONTINUED medications for known significant interactions. Specifically check: potassium-elevating combinations (ACEi/ARB + spironolactone + NSAID/trimethoprim), bleeding-risk combinations (anticoagulant + antiplatelet without clear indication), QT-prolonging combinations, nephrotoxic combinations, hypoglycemia risk combinations.
+Renal appropriateness check. For each NEW medication with renal dosing considerations, retrieve the patient's most recent eGFR and verify the prescribed dose is appropriate. Specifically: metformin at eGFR <45 requires dose reduction; SGLT2i contraindicated below eGFR 20-25 (drug-specific); ACEi/ARB initiation requires monitoring below eGFR 30; NSAIDs generally contraindicated below eGFR 30. If the discharge medication dose is inappropriate for the patient's eGFR, generate HIGH_RISK flag regardless of other factors.
+Complexity scoring. Compute a TotalMedicationCount and DailyComplexityScore (accounting for different dosing frequencies — a medication taken TID scores higher than OD). Polypharmacy thresholds: 5+ medications = moderate complexity, 10+ = high complexity, 15+ = very high complexity. Very high complexity transitions automatically trigger a pharmacist review request.
+Write tests covering: new anticoagulant without apparent indication is flagged HIGH_RISK; stopped beta-blocker in post-MI patient flagged HIGH_RISK; continued statin at same dose not flagged; unclear "cardiac medications" triggers clarification request; new metformin at eGFR 35 flagged HIGH_RISK (dose inappropriate); ACEi + spironolactone + new trimethoprim triggers potassium interaction flag; India formulary check — expensive drug in Tier-2 city triggers SUPPLY_GAP flag; polypharmacy with 12 medications triggers pharmacist review.
+Step 6: Build the discharge event detector
+Create kb-20/internal/services/discharge_event_detector.go containing:
+Multi-source discharge detection. The detector subscribes to multiple input sources and produces normalized CareTransition records:
+FHIR Encounter events. Subscribe to the existing FHIR sync worker's event stream. When an Encounter with status=finished is received, check if the encounter class is inpatient or emergency (not outpatient visit). If inpatient, parse the encounter for discharge date, admission date (for LOS calculation), primary diagnosis, discharge disposition, and facility. Create a CareTransition record.
+HL7 ADT A03 messages. For Australian hospital integrations that use HL7 rather than FHIR, subscribe to the ADT message stream. A03 messages signal discharge. Parse the segments for patient ID, discharge date/time, discharge disposition.
+Manual clinician entry. An API endpoint allows a clinician to register a discharge event manually when automated FHIR/HL7 integration isn't available or failed. Required fields: patient ID, discharge date, facility name. Optional enrichment fields: LOS, primary diagnosis, discharge disposition.
+Patient-reported discharge. Particularly for India deployments, patients can report discharge via WhatsApp to their ASHA worker or care manager, who enters it through a simplified mobile interface. Patient-reported discharges are flagged as LOW_CONFIDENCE and require verification at the 48h milestone through either documentation or care team confirmation.
+ASHA worker reported discharge. Similar to patient-reported but with slightly higher confidence because the ASHA worker has verified through community observation or hospital contact. Flagged as MODERATE_CONFIDENCE.
+Discharge deduplication. If multiple discharge sources report the same discharge (e.g., FHIR event AND patient report for same date), consolidate into a single CareTransition record with the highest-confidence source as primary and other sources as supporting evidence.
+Retroactive discharge handling. If a discharge is reported more than 48 hours after the actual discharge date, the initial milestones may already have passed. Handle gracefully: log the missed milestones as MISSED_RETROACTIVE_REGISTRATION, start the transition from the registration date, adjust remaining milestone schedule accordingly. Don't attempt to retroactively fire 48h cards for a transition registered on day 5.
+Discharge validity checks. Reject discharges older than 14 days (too late to provide meaningful transition support). Reject duplicate discharges within 24h (likely system error). Reject discharges without patient ID or discharge date. Log rejected discharges for review.
+Write tests covering: FHIR Encounter finished → CareTransition created; HL7 A03 → CareTransition created; manual entry with full data → CareTransition created; patient-reported with confidence flag → CareTransition created with LOW_CONFIDENCE; duplicate discharge from two sources → deduplicated correctly; 10-day-old discharge registered retroactively → transition starts from registration, missed milestones logged; 20-day-old discharge → rejected; discharge without patient ID → rejected.
+Step 7: Build the transition context enricher
+Create kb-20/internal/services/transition_context_enricher.go containing:
+EnrichContext function takes a CareTransition with basic discharge data and enriches it with the context needed for downstream reconciliation and surveillance:
+Pre-admission medication list retrieval. Query the IOR timeline for the most recent complete medication snapshot prior to admission. If multiple snapshots exist, use the most recent one that precedes admission by at least 24 hours (avoiding snapshots that may be "in transit" at admission).
+Discharge medication list retrieval. If FHIR discharge summary contains structured medications, parse directly. If HL7 discharge summary, parse medication orders segments. If manual entry, use clinician-provided list. If patient-reported discharge, schedule a MANUAL_MEDICATION_ENTRY card for the care team to complete at the 48h milestone.
+Hospital course summary retrieval. Parse the FHIR narrative or HL7 message for key events during admission: procedures performed, complications, consultations, lab trends. This context informs the reconciliation engine (e.g., if the discharge summary shows "beta-blocker held due to hypotension," that's an appropriate stop; if no rationale is given, it's a discrepancy).
+Primary diagnosis and comorbidity extraction. Extract ICD-10 codes or SNOMED codes for the admission diagnosis. Cross-reference with the patient's pre-admission problem list to identify new diagnoses acquired during admission (e.g., new AKI, new HF diagnosis, new atrial fibrillation). New diagnoses significantly change the post-discharge monitoring profile.
+Care team assignment. Query patient profile for primary GP, assigned care manager (if HCF CHF patient), specialist relationships, and ASHA worker (India). Assign the transition-specific care team based on facility type and patient characteristics. HCF CHF transitions primarily route to the Catalyst care manager. Aged care facility transitions route to facility nurse manager + GP. Indigenous remote community transitions route to local ACCHO team + ASHA-equivalent.
+Previous transition history. Query for prior transitions within past 12 months. A patient with 3+ transitions in 12 months is high-risk (frequent flyer pattern) and triggers ENHANCED_SURVEILLANCE flag — tighter thresholds, more frequent milestones, earlier escalation on any concerning signal.
+Current PAI and clinical state snapshot. Capture the patient's PAI, MHRI, phenotype cluster, and active clinical conditions at the moment of discharge. This becomes the baseline comparison point for transition outcome assessment.
+Write tests covering: FHIR discharge with structured medications → full enrichment; patient-reported discharge without medications → enrichment schedules MANUAL_MEDICATION_ENTRY; HCF CHF patient → Catalyst care manager assigned; aged care transition → facility nurse + GP assigned; patient with 3 prior transitions → ENHANCED_SURVEILLANCE flag; discharge with new HF diagnosis added to problem list.
+________________
+
+
+Phase CT3: Baseline Adjustment + Heightened Surveillance
+Step 8: Build the baseline adjustment controller
+Create kb-26/internal/services/baseline_adjustment_controller.go containing:
+Baseline state machine for post-discharge patients. The patient's baseline for each vital sign moves through three states during transition:
+State 1 — HOSPITAL_INFLUENCED (days 0-2 post-discharge). The patient's most recent readings are hospital measurements. The baseline engine explicitly excludes hospital readings from baseline computation — if a reading has a source marker of HOSPITAL_INPATIENT, it's not used as baseline data. During days 0-2, the patient has no valid baseline; deviation detection is suspended for this patient.
+State 2 — BUILDING_NEW_BASELINE (days 2-14 post-discharge). Starting 48h post-discharge, home readings begin accumulating. The baseline engine starts a new baseline computation window, explicitly tagged as POST_DISCHARGE. Minimum 5 readings required before the new baseline is valid. Until 5 readings accumulate or 14 days pass, the system uses PRE_ADMISSION baseline as a fallback (the patient's baseline from before hospitalization).
+State 3 — STABILIZED_POST_DISCHARGE (days 14-30 post-discharge). Enough post-discharge readings have accumulated to build a reliable new baseline. Deviation detection resumes using the post-discharge baseline. However, the baseline is flagged as POST_DISCHARGE_EVOLVING so other systems know this isn't yet the patient's true steady-state baseline.
+State 4 — STEADY_STATE (post day 30). Transition window closes. Baseline is promoted from POST_DISCHARGE_EVOLVING to STEADY_STATE. Normal deviation detection applies.
+Handling incomplete baseline scenarios. If by day 14 the patient has fewer than 5 post-discharge readings, fall back to PRE_ADMISSION baseline for the remainder of the transition window. Flag this patient for ENGAGEMENT_REVIEW because the reading sparsity itself is a clinical concern. If PRE_ADMISSION baseline is also unavailable (new patient, no prior platform history), use population-level thresholds with LOW_CONFIDENCE flag.
+Explicit marker on baseline snapshots. Extend PatientBaselineSnapshot (from Gap 16) with a BaselineStage field: PRE_ADMISSION, HOSPITAL_EXCLUDED, POST_DISCHARGE_BUILDING, POST_DISCHARGE_EVOLVING, STEADY_STATE. Every deviation detection records which baseline stage was used. This provides transparency for clinicians reviewing cards ("this alert compared current reading to pre-admission baseline because post-discharge baseline wasn't yet established").
+Integration with Gap 16 deviation scorer. Modify the deviation scorer to consult the baseline stage. During HOSPITAL_INFLUENCED state, suppress all deviation alerts (except for CRITICAL absolute threshold breaches — SBP >180, eGFR <20, K+ >6.0 still alert regardless of baseline state). During BUILDING_NEW_BASELINE state, use fallback baseline with widened thresholds (1.5× standard). During POST_DISCHARGE_EVOLVING state, use post-discharge baseline but flag deviations with POST_DISCHARGE_BASELINE_EVOLVING confidence note.
+Write tests covering: day 1 post-discharge reading doesn't trigger deviation alert (hospital-influenced state); day 5 post-discharge with 3 readings uses pre-admission fallback; day 15 post-discharge with 7 readings uses evolved baseline; CRITICAL threshold breach (SBP 185) triggers alert even in hospital-influenced state; baseline snapshot correctly tags stage; patient with no pre-admission baseline and few post-discharge readings uses population thresholds.
+Step 9: Build the heightened surveillance mode activator
+Create kb-26/internal/services/heightened_surveillance_mode.go containing:
+Surveillance parameter adjustment during transition window. For every patient with TransitionState=ACTIVE, apply these modifications to the monitoring systems:
+Deviation threshold tightening. The standard deviation thresholds (eGFR drop >25% = HIGH severity) become tighter (eGFR drop >19% = HIGH severity during transition). This catches deterioration that would normally score as MODERATE at a level where clinical intervention is still practical. The multiplier is configurable per vital sign.
+PAI context dimension boost. During the transition window, the patient's PAI context dimension score receives a +15 point boost (out of 100). This elevates the PAI score without changing the other dimensions — reflecting that the transition window itself is a clinical risk state independent of current clinical values. A patient with normal PAI velocity and proximity during transition would normally score 30; during transition they score 45.
+Engagement gap sensitivity increase. Standard engagement monitoring alerts on 7-day measurement gaps. During transition, the threshold drops to 72 hours. A patient who hasn't measured their BP in 72 hours during the post-discharge window is a clinical concern — they may be unable to (physically impaired), unwilling to (disengaged), or experiencing a deterioration that's preventing self-care. The 72-hour threshold catches the engagement cliff pattern.
+Escalation tier amplification. Any card generated during the transition window that would normally route to ROUTINE tier gets amplified to URGENT. Any card that would normally route to URGENT gets amplified to IMMEDIATE. SAFETY and IMMEDIATE tier cards stay at their tier (already maximum appropriate). This amplification reflects the principle that any deterioration signal during transition deserves faster response than the same signal in steady state.
+Compound pattern sensitivity. The Gap 16 compound pattern detector receives an additional pattern during transition: POST_DISCHARGE_DETERIORATION (already in the library) fires at lower individual deviation thresholds. A patient with only one deviating vital sign that would normally be MODERATE, during transition, matches POST_DISCHARGE_DETERIORATION and escalates to HIGH.
+Reading frequency recommendation boost. For CHF patients during transition, recommended daily weight monitoring and twice-daily BP monitoring (vs standard weekly/daily). For diabetic patients during transition, recommended 4x daily glucose checks or continuous CGM (vs standard 2x daily). These recommendations appear on patient-facing cards and in care manager notes.
+Write tests covering: eGFR drop 20% during transition scores HIGH (vs MODERATE outside transition); PAI with no clinical issues during transition scores 45 vs 30; 72h measurement gap during transition generates alert; URGENT card during transition amplified to IMMEDIATE; compound pattern triggered at lower threshold during transition; transition exit returns all parameters to standard.
+________________
+
+
+Phase CT4: Milestone Scheduler + Outcome Tracking
+Step 10: Build the transition milestone scheduler
+Create kb-23/internal/services/transition_milestone_scheduler.go containing:
+ScheduleMilestones function creates the milestone schedule when a new CareTransition is registered. Based on market config, facility type, and patient risk profile, generate the set of TransitionMilestone records with scheduled times:
+Standard schedule (default for most patients):
+* MEDICATION_RECONCILIATION at discharge + 48 hours
+* FIRST_FOLLOWUP at discharge + 7 days
+* MIDPOINT_REVIEW at discharge + 14 days
+* EXIT_ASSESSMENT at discharge + 30 days
+HCF CHF patient schedule additions:
+* MEDICATION_SUPPLY_CHECK at discharge + 24h if any discharge medication flagged with supply gap risk
+* ENGAGEMENT_CHECK at discharge + 72h if patient hasn't measured BP in first 72h
+* HCF_CATALYST_CHECKIN aligned with Catalyst program's scheduled contact (typically day 3, day 10, day 21)
+Aged care facility transition schedule additions:
+* FACILITY_PHARMACIST_REVIEW at discharge + 48h
+* AGED_CARE_MEDICATION_CHART_REVIEW at discharge + 21 days (aligned with typical chart review cycle)
+* GP_FACILITY_VISIT at discharge + 14 days (if possible)
+Indian rural patient schedule additions:
+* ASHA_WEEKLY_VISITS at day 3, 10, 17, 24 (weekly during window)
+* PHC_PHYSICIAN_REVIEW at day 7 and day 28 (in-person or telehealth)
+* MEDICATION_SUPPLY_CHECK at day 2 and day 16 (two checks during window)
+Milestone trigger mechanism. A background goroutine runs every 15 minutes, queries for TransitionMilestone records where ScheduledFor is in the past and CompletionStatus is SCHEDULED, and triggers them. Triggering a milestone means: (1) marking it TRIGGERED, (2) gathering the assessment data for that milestone type, (3) generating the appropriate transition card(s), (4) escalating if the milestone identifies concerning findings.
+Milestone assessment logic. Each milestone type has specific assessment logic:
+48h milestone assessment: Retrieve medication reconciliation report. If reconciliation is CLEAN, generate ROUTINE card confirming reconciliation. If DISCREPANCIES_FOUND, generate URGENT card listing specific discrepancies. If HIGH_RISK, generate IMMEDIATE card with urgent review request. Check supply gap flags — if any high-risk medications have supply issues, generate accompanying MEDICATION_SUPPLY_GAP card. Check whether patient has measured any vital signs — if zero readings in 48h, flag engagement concern.
+7d milestone assessment: Check whether patient has had clinical contact (GP visit, care manager call, telehealth, facility nurse round). Retrieve the current PAI score and compare to discharge PAI. Retrieve vital sign readings accumulated since discharge and perform baseline-aware trend analysis. Generate 7D_FOLLOWUP card summarizing: medication reconciliation status, clinical contact status, trajectory assessment, any new concerns.
+14d milestone assessment: Full re-review of transition progress. Has the new baseline been established? What's the PAI trajectory? Any unresolved medication issues? Any engagement concerns? Generate MIDPOINT_REVIEW card with structured status for each of the three workstreams (medication, baseline, engagement).
+30d milestone assessment: Full outcome computation (handed to the transition exit controller below).
+Missed milestone handling. If a milestone hasn't completed within its window + 48h grace period, mark it MISSED_PATIENT_UNREACHABLE or MISSED_SYSTEM_ERROR. Generate a MISSED_MILESTONE alert card directed at the care team. Do not silently skip milestones — every missed milestone is itself a clinical risk signal indicating the care pathway broke down.
+Write tests covering: standard schedule generation creates 4 milestones at correct offsets; HCF CHF patient with supply gap risk triggers additional supply check milestone; aged care facility transition adds facility-specific milestones; India rural patient gets ASHA weekly visit schedule; background trigger fires milestone when scheduled time arrives; 48h milestone with CLEAN reconciliation generates ROUTINE card; 48h with HIGH_RISK generates IMMEDIATE card; missed milestone generates MISSED alert; grace period allows slight delays.
+Step 11: Build the transition exit controller and outcome registry
+Create kb-23/internal/services/transition_exit_controller.go containing:
+ComputeTransitionOutcome function runs at the 30-day milestone or when terminated early by readmission/disengagement:
+SUCCESSFUL outcome determination. Criteria: no readmission during window, PAI remained below CRITICAL at all times, no more than 2 escalations triggered during window, medication reconciliation resolved to CLEAN or DISCREPANCIES_RESOLVED, patient maintained measurement frequency at >50% of pre-admission baseline.
+READMITTED outcome. If patient returned to hospital during window (detected via new FHIR admission or ADT A01 message or manual clinical report). Record readmission date, reason if available, days from discharge to readmission. Link the readmission to the transition for outcome analysis.
+DETERIORATED outcome. No readmission but PAI remained HIGH or CRITICAL at 30-day mark, or PAI trajectory during window was consistently worsening (negative slope across 14d-30d window), or multiple SAFETY tier escalations triggered.
+DISENGAGED outcome. Patient stopped providing data during window. Specifically: no vital sign readings for 14+ consecutive days, no response to care manager contacts, no appointment attendance. Disengagement during transition is a high-risk state separate from deterioration because the clinical trajectory is unknown.
+Transition exit card generation. Regardless of outcome, generate an EXIT_ASSESSMENT card for the care team documenting: outcome category, key findings, lessons for future transitions, recommendations for steady-state monitoring post-transition. For SUCCESSFUL outcomes, the card confirms transition completion and resumes normal monitoring. For READMITTED, DETERIORATED, or DISENGAGED outcomes, the card triggers a structured review.
+Outcome registry persistence. Write TransitionOutcome record to the transition outcome registry table. This registry becomes the training data for Gap 21 closed-loop learning — over time, the registry enables analysis like "transitions with medication discrepancies at 48h have 2.3× higher readmission rate" or "patients who miss their 7-day follow-up have 1.8× higher deterioration rate."
+Exit post-transition mode. Reset patient's baseline stage from POST_DISCHARGE_EVOLVING to STEADY_STATE. Remove heightened surveillance parameters. Return PAI scoring to standard. The patient returns to steady-state ambulatory monitoring.
+Readmission-triggered early exit. If readmission is detected during the transition window, the exit controller fires immediately rather than waiting for day 30. Outcome is marked READMITTED, the current transition is closed, and upon future discharge a new transition begins with full heightened surveillance reactivated.
+Write tests covering: day 30 with clean trajectory → SUCCESSFUL; readmission at day 8 → READMITTED with correct timing; PAI HIGH throughout window → DETERIORATED; 14 days no readings → DISENGAGED; exit card generated for each outcome type; outcome registry record written; steady-state baseline restored; future discharge triggers new transition.
+________________
+
+
+Phase CT5: Card Templates + Cross-Service Integration
+Step 12: Create the 7 transition card templates
+Create YAML templates in kb-23/templates/transition/:
+dc-transition-medication-reconciliation-v1.yaml — generated at 48h milestone with reconciliation results. Includes sections for: new medications list with risk flags, stopped medications with rationale check, changed dose medications, unclear medications requiring clarification, formulary/supply concerns, drug-drug interaction flags. Clinician fragment lists specific actions by risk level. Patient fragment explains what changed and what to watch for.
+dc-transition-48h-review-v1.yaml — general 48h milestone card covering medication reconciliation summary + initial engagement assessment + symptom check prompt + care team contact recommendation.
+dc-transition-7d-followup-v1.yaml — 7-day milestone card summarizing first week trajectory. Includes: PAI comparison (discharge vs day 7), new baseline status, clinical contact confirmation, any concerning findings, recommendations for week 2.
+dc-transition-14d-midpoint-v1.yaml — midpoint assessment with full workstream review (medication reconciliation final status, baseline establishment status, engagement pattern assessment, trajectory analysis).
+dc-transition-30d-exit-v1.yaml — transition exit summary card showing final outcome, key metrics, lessons, and transition to steady-state monitoring. Generated at 30d milestone or early termination.
+dc-transition-medication-supply-gap-v1.yaml — specific card for medication supply/accessibility concerns. Includes: drug name, identified issue (unavailable, unaffordable, authority required), suggested alternatives from formulary module, pharmacy contact recommendations.
+dc-transition-engagement-cliff-v1.yaml — specific card for post-discharge engagement cliff detection. Generated when 72h measurement gap detected. Includes: last reading values, days since last reading, care manager contact recommendation with suggested script, patient-facing encouragement to resume monitoring.
+Each template follows the established clinician_label + patient_label pattern from the Gap 16 enhancement. Each includes market-specific overrides for India (WhatsApp-friendly formatting, ASHA worker action items) and Australia (MBS billing code references, MHR update triggers).
+Step 13: Build the transition event consumer
+Create kb-23/internal/services/transition_event_consumer.go containing:
+A Kafka consumer subscribing to clinical.priority-events.v1 (existing topic) that filters for events the transition module should react to:
+DISCHARGE_EVENT_DETECTED — triggers transition bridge activation, enrichment, milestone scheduling.
+PAI_ACUITY_CHANGED — during active transition window, amplified PAI changes trigger appropriate cards.
+ACUTE_EVENT_DETECTED — during transition, acute events within transition window are amplified per heightened surveillance rules.
+READMISSION_DETECTED — triggers early transition exit with READMITTED outcome.
+CLINICIAN_CONTACT_RECORDED — updates milestone status for clinical contact confirmation.
+The consumer routes each event type to the appropriate transition handler. Graceful error handling: if an event can't be processed, log and skip rather than blocking the consumer queue.
+Step 14: Integration tests
+Create end-to-end integration tests covering realistic scenarios:
+Scenario 1 — Clean HCF CHF transition: Patient discharged with clear medication changes, all reconciled cleanly at 48h, maintains engagement, trajectory improves over 30 days, exits SUCCESSFUL. Verify: CareTransition created, milestones scheduled, 48h reconciliation card generated with CLEAN status, 7d and 14d cards show improving trajectory, 30d exit card marks SUCCESSFUL, baseline transitions through stages correctly.
+Scenario 2 — Medication discrepancy transition: Patient discharged with unclear medication list (continued "cardiac medications" without specifics). Verify: 48h milestone generates URGENT clarification card, care manager provides clarification before 72h, transition proceeds normally after resolution, full audit trail preserved.
+Scenario 3 — Readmission during transition: Patient discharged, deteriorates in week 2, readmitted on day 14. Verify: transition registered, milestones 48h and 7d complete normally, day 10-13 shows rising PAI with escalations, readmission detection triggers immediate exit, outcome recorded as READMITTED with correct timing, future discharge starts new transition.
+Scenario 4 — Engagement cliff during transition: Patient discharged, measures for first 3 days, then stops. Verify: 72h engagement check fires at day 3.5 (no measurement in 72h), ENGAGEMENT_CLIFF card generated, care manager contact triggered, if no recovery by day 14 DISENGAGED outcome at 14d assessment.
+Scenario 5 — India ASHA-managed transition: Rural patient discharged from tertiary hospital to village, ASHA worker reports discharge, Hindi-language materials generated, weekly ASHA visits scheduled, phone-based PHC physician consultation at day 7 and 28. Verify: manual discharge registration works, ASHA milestones created correctly, India-specific card rendering in Hindi where applicable, escalation path follows ASHA → ANM → PHC.
+Scenario 6 — Aged care facility transition: Elderly patient discharged from hospital back to facility, facility pharmacist review at 48h, facility nurse + GP as care team, aged-care-specific medication review at day 21. Verify: facility-appropriate milestones, pharmacist routing, MBS billing codes referenced correctly, coordination with facility medication chart.
+Step 15: Full regression and commit
+Run complete test suites across KB-20, KB-23, KB-26. Verify zero regressions in existing functionality. Verify the Sprint 1 PAI + Gap 15 + Gap 16 integration still works correctly with the new Care Transition overlay.
+________________
+
+
+Plan Summary
+Phase
+	Steps
+	Key Deliverables
+	CT1: Models + Config
+	1-4
+	CareTransition entity (30+ fields), DischargeMedication, TransitionMilestone, TransitionOutcome, MedicationReconciliationReport, shared YAML with windows/baselines/surveillance/milestones, India overrides (ASHA + paper discharge + supply sensitivity), Australia overrides (MBS + HITH + MHR + aged care)
+	CT2: Reconciliation
+	5-7
+	ReconcileRegimens with 5 change classifications, formulary cross-check, DDI check, renal appropriateness check, complexity scoring; DischargeEventDetector with 5 input sources, deduplication, retroactive handling; ContextEnricher with medication lists, hospital course, diagnosis evolution, care team assignment, prior transition history
+	CT3: Baseline + Surveillance
+	8-9
+	BaselineAdjustmentController with 4-state machine (HOSPITAL_INFLUENCED → BUILDING → EVOLVING → STEADY_STATE), fallback strategies; HeightenedSurveillanceMode with threshold tightening, PAI boost, engagement gap sensitivity, escalation amplification, compound pattern sensitivity
+	CT4: Milestones + Exit
+	10-11
+	MilestoneScheduler with market-specific schedules (HCF, aged care, India rural), background trigger mechanism, missed milestone handling; ExitController with 4 outcome categories (SUCCESSFUL, READMITTED, DETERIORATED, DISENGAGED), outcome registry for Gap 21 learning, steady-state restoration
+	CT5: Cards + Integration
+	12-15
+	7 transition-specific card templates (reconciliation, 48h, 7d, 14d, 30d exit, supply gap, engagement cliff); Kafka consumer for transition events; integration tests covering 6 realistic scenarios
+	Total: 15 steps, ~34 files, 5 phases.
+Clinical evidence base:
+* Dharmarajan et al. 2013 (JAMA) — HF 30-day readmission 20-25%, causes dominated by transition failures
+* Krumholz et al. 2009 (JAMA) — post-MI 30-day mortality 7-10%, concentrated first 7-10 days
+* Jencks et al. 2009 (NEJM) — elderly 30-day readmission up to 30%, polypharmacy dominant trigger
+* Silver et al. 2017 (JASN) — AKI post-discharge readmission approaching 20%
+* Hernandez et al. 2010 (JAMA) — structured transition programs reduce HF readmission 15-20%
+* Jha et al. 2009 (NEJM) — care coordination interventions for HF readmission
+* Schnipper et al. 2018 (BMJ Quality & Safety) — MARQUIS study, medication reconciliation reduces ADEs 29% in elderly
+* Bosworth et al. 2011 (Circulation) — 25-30% failure to fill new prescriptions within 7 days of discharge
+* Koehler et al. 2011 (Circulation) — telemonitoring validation studies
+* Chaudhry et al. 2010 (NEJM) — telemonitoring in HF, baseline-relative monitoring
+* Ancker et al. 2017 (JAMIA) — alert fatigue and specificity thresholds
+The cross-domain innovation: The Care Transition Bridge is the first module that treats discharge as a distinct clinical state requiring coordinated intervention across medication, baseline establishment, and engagement monitoring simultaneously. No existing single-domain program handles all three. The platform's unique ability to integrate IOR medication timeline, multi-domain baseline tracking, engagement detection, and PAI triage enables the coordinated 30-day intervention that the literature shows reduces readmissions by 15-20%. The module converts the platform's steady-state monitoring infrastructure into a dynamic transition support system without duplicating any existing capability — it's an overlay, not a parallel system. For the HCF CHF pilot, this module IS the mechanism that delivers the promised 15% readmission reduction. For the Aged Care pilot, this module IS the mechanism that prevents the medication-related adverse events that dominate hospital-facility transitions. The 30-day window is the highest-leverage clinical moment in ambulatory care, and this module is the platform's response to that leverage.

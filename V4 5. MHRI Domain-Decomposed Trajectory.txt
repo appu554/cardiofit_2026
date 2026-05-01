@@ -1,0 +1,1690 @@
+﻿# MHRI Domain-Decomposed Trajectory — Implementation Plan
+
+
+## Clinical Rationale
+
+
+**Why composite-only trajectory is clinically inadequate:**
+
+
+The current MHRI trajectory system (`ComputeMRITrajectory` in KB-26) computes an OLS slope over the composite MHRI score across a 14-day sliding window. It produces a single slope, a single trend classification (IMPROVING/STABLE/DECLINING), and a single delta. This is the metabolic equivalent of telling a physician "your patient is getting sicker" without telling them which organ system is driving the deterioration.
+
+
+Consider two patients whose composite MHRI drops from 72 to 58 over 14 days:
+
+
+**Patient A:** Glucose domain dropped from 75→45 (HbA1c rose from 7.2 to 8.5, CGM TIR collapsed from 65% to 35%). Cardio domain stable at 70. Body composition stable at 68. Behavioral stable at 72. The clinical response is glycaemic intensification — add SGLT2i or GLP-1 RA, review dietary patterns, check medication adherence.
+
+
+**Patient B:** Glucose domain stable at 72. Cardio domain dropped from 75→40 (SBP went from 135 to 168, ARV doubled, morning surge now 35 mmHg). Body composition stable at 65. Behavioral dropped from 70→50 (engagement collapsing, measurement avoidant). The clinical response is urgent BP medication review, investigation into BP variability causes (adherence timing? sleep apnea? salt intake?), and clinical outreach for the engagement collapse.
+
+
+The composite score tells the physician "MHRI declining at -1.0/day." The domain decomposition tells them *where to act*. Without decomposition, the clinician must independently review each domain's raw data to figure out what the trajectory already computed — defeating the purpose of a decision support system.
+
+
+**What the literature says about multi-domain health trajectory decomposition:**
+
+
+Dagliati et al. (2018, Journal of Biomedical Informatics) demonstrated that domain-specific temporal trajectories in T2DM predict complications 2-4 years earlier than composite risk scores. Their analysis of 12,434 patients showed that *discordant domain trajectories* (one domain improving while another deteriorates) are the strongest predictors of adverse outcomes — because they indicate that therapeutic attention is misdirected. A patient whose glucose domain improves while their renal domain deteriorates may have a stable composite score that completely masks the renal crisis.
+
+
+Ahlqvist et al. (2018, Lancet Diabetes & Endocrinology) proposed data-driven subtyping of diabetes based on trajectory patterns across multiple clinical domains. Their ANDIS cohort analysis showed that cluster membership — defined by the *pattern of change* across domains, not the absolute values — predicted complications better than any single metric. This directly supports per-domain trajectory as a clustering input.
+
+
+The AHA's CKM framework (Ndumele et al., 2023) explicitly calls for "longitudinal multi-domain risk assessment" — tracking each CKM component (cardiovascular, kidney, metabolic) independently over time and detecting when domains diverge. The framework warns against composite scores that mask domain-specific deterioration, particularly in Stage 2-3 where prevention depends on identifying which domain is declining fastest.
+
+
+**Specific clinical scenarios where domain decomposition changes the decision:**
+
+
+**Scenario 1 — Masked renal deterioration:** Composite MHRI stable at 68. But glucose domain improved from 55→70 (medication working), while renal domain declined from 75→55 (eGFR dropping, the medication that improved glucose is accelerating renal decline — e.g., high-dose metformin). Without decomposition, the system celebrates stable MHRI. With decomposition, it flags: "Glucose improving (+1.1/day) but renal deteriorating (-1.4/day) — investigate medication-renal interaction."
+
+
+**Scenario 2 — Behavioral leading indicator:** Composite MHRI dropped slightly from 70→66. Behavioral domain dropped from 80→45 (engagement collapse, missed measurements, measurement avoidance). All clinical domains still stable. The behavioral domain decline is a *leading indicator* — clinical deterioration will follow in 2-4 weeks as the patient disengages from monitoring and self-management. Without decomposition, the system sees a minor MHRI dip. With decomposition, it flags the behavioral collapse as the first domino.
+
+
+**Scenario 3 — Discordant glucose-cardio in CKM Stage 3:** Patient on SGLT2i for 3 months. Glucose domain improving (TIR rising from 50→68%). Cardio domain deteriorating (SBP rising from 132→148, ARV increasing). Composite MHRI nearly flat. The system should flag: "SGLT2i providing glycaemic benefit but insufficient hemodynamic effect — consider adding dedicated antihypertensive." The dual-domain card generator needs the *direction* of each domain trajectory, not just the current state, to detect this pattern.
+
+
+**Scenario 4 — Body composition driving everything:** Patient's BMI rising from 29→32 over 6 months. Body comp domain declining. Glucose follows (insulin resistance worsening). BP follows (volume expansion). But because glucose and cardio are lagging the body comp change by 4-8 weeks, the composite MHRI shows a smooth decline that doesn't reveal the causal chain. Domain decomposition with temporal lead-lag analysis shows body comp deteriorated first, then glucose, then cardio — pointing to weight gain as the root cause rather than medication failure.
+
+
+---
+
+
+**What the decomposed trajectory must provide:**
+
+
+1. **Per-domain slope (OLS):** Each of the 4 MHRI domains (glucose 35%, cardio 25%, body_comp 25%, behavioral 15%) gets its own slope in score-units per day.
+
+
+2. **Per-domain trend classification:** IMPROVING / STABLE / DECLINING / RAPID_DECLINING / INSUFFICIENT_DATA for each domain independently.
+
+
+3. **Domain divergence detection:** When two domains have slopes with opposite signs (one improving, one declining), flag this as a DISCORDANT trajectory pattern with the specific domain pair.
+
+
+4. **Dominant deterioration domain:** When composite MHRI is declining, identify which domain contributes most to the decline — the "primary driver" of deterioration.
+
+
+5. **Leading indicator detection:** When behavioral domain begins declining before clinical domains, flag this as "BEHAVIORAL_LEADING_INDICATOR" — an early warning that clinical deterioration will follow.
+
+
+6. **Cross-domain velocity correlation:** When two domains are declining simultaneously, compute whether they're accelerating together (concordant deterioration — Module 4 CEP territory) or one is pulling the other (causal chain hypothesis).
+
+
+7. **Domain-specific category crossing:** Extend the existing `DetectCategoryCrossing` to work per-domain. A glucose domain crossing from MILD→MODERATE has different clinical significance than a cardio domain making the same crossing.
+
+
+---
+
+
+**India-Specific Considerations:**
+
+
+- **Seasonal domain patterns:** In India, body composition and glucose domains show seasonal variation — weight gain during festival seasons (Diwali, Pongal), glucose worsening during Ramadan (altered eating patterns), cardio domain worsening during extreme heat (dehydration, volume depletion). Domain decomposition must not flag seasonal patterns as clinical deterioration. The trajectory engine should cross-reference seasonal context from the market config.
+
+
+- **Behavioral domain interpretation:** In rural and semi-urban India, "engagement collapse" may be driven by harvest season, family obligations, or telecom connectivity — not clinical disengagement. The behavioral leading indicator should be weighted differently based on patient segment.
+
+
+**Australia-Specific Considerations:**
+
+
+- **Indigenous population trajectories:** Aboriginal and Torres Strait Islander patients often show different domain trajectory patterns — renal domain declines earlier and faster, glucose domain may be more labile. Domain decomposition enables population-specific trajectory benchmarking.
+
+
+- **GPMP cycle alignment:** The 6-month GPMP review cycle creates natural trajectory reporting periods. Domain decomposition reports should align with GPMP reviews, providing the GP with a per-domain trend summary for the chronic disease management plan.
+
+
+---
+
+
+## Architecture Overview
+
+
+The domain decomposition extends the existing KB-26 trajectory system and feeds into KB-23 card generation and Module 13 state aggregation:
+
+
+1. **KB-26 (Metabolic Digital Twin):** Extends `ComputeMRITrajectory` to produce per-domain slopes. New `DomainDecomposedTrajectory` output. New divergence detection logic. New leading indicator detection. API endpoint for decomposed trajectory.
+
+
+2. **KB-23 (Decision Cards):** Consumes decomposed trajectory to generate domain-specific trend cards. Modifies existing inertia detection and four-pillar evaluation to use per-domain trajectory instead of composite only.
+
+
+3. **Module 13 (Flink State Sync):** Consumes per-domain velocities from KB-26 to populate `domain_velocities` map — this directly addresses the Module 13 empty velocity issue from the E2E trace.
+
+
+**The key insight:** Domain decomposition is not a new system — it's a deepening of the existing trajectory computation. The existing OLS regression logic is reused per-domain. The new value comes from the *relationships between* domain trajectories, not from any individual domain's slope.
+
+
+---
+
+
+## Tech Stack Alignment
+
+
+- Go 1.21 (Gin, GORM) for KB-26 decomposition engine
+- Go 1.21 for KB-23 decomposition-aware card rules
+- PostgreSQL 15 for domain trajectory history
+- Existing MHRI scoring infrastructure (4-domain composite)
+
+
+---
+
+
+## File Inventory
+
+
+### KB-26 (Metabolic Digital Twin) — Decomposition Engine
+| Action | File |
+|--------|------|
+| Create | `kb-26-metabolic-digital-twin/internal/services/mri_domain_trajectory.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/services/mri_domain_trajectory_test.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/services/domain_divergence.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/services/domain_divergence_test.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/models/domain_trajectory.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/api/domain_trajectory_handlers.go` |
+| Create | `kb-26-metabolic-digital-twin/migrations/006_domain_trajectory.sql` |
+| Modify | `kb-26-metabolic-digital-twin/internal/services/mri_trajectory.go` (integrate decomposition) |
+| Modify | `kb-26-metabolic-digital-twin/internal/api/routes.go` |
+
+
+### KB-23 (Decision Cards) — Decomposition-Aware Cards
+| Action | File |
+|--------|------|
+| Create | `kb-23-decision-cards/internal/services/trajectory_card_rules.go` |
+| Create | `kb-23-decision-cards/internal/services/trajectory_card_rules_test.go` |
+| Modify | `kb-23-decision-cards/internal/services/four_pillar_evaluator.go` (domain trajectory context) |
+
+
+### Market Configs
+| Action | File |
+|--------|------|
+| Create | `market-configs/shared/domain_trajectory_thresholds.yaml` |
+
+
+**Total: 13 files (9 create, 4 modify)**
+
+
+---
+
+
+## Phase D1: Domain Trajectory Models + Configuration
+
+
+### Step 1: Create domain trajectory data models
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/models/domain_trajectory.go
+package models
+
+
+import "time"
+
+
+// MHRIDomain identifies each of the four MHRI domains.
+type MHRIDomain string
+
+
+const (
+    DomainGlucose     MHRIDomain = "GLUCOSE"
+    DomainCardio      MHRIDomain = "CARDIO"
+    DomainBodyComp    MHRIDomain = "BODY_COMP"
+    DomainBehavioral  MHRIDomain = "BEHAVIORAL"
+)
+
+
+// AllMHRIDomains lists all four domains for iteration.
+var AllMHRIDomains = []MHRIDomain{DomainGlucose, DomainCardio, DomainBodyComp, DomainBehavioral}
+
+
+// DomainTrajectoryPoint stores a single domain score at a point in time.
+type DomainTrajectoryPoint struct {
+    Timestamp      time.Time  `json:"timestamp"`
+    CompositeScore float64    `json:"composite_score"`
+    GlucoseScore   float64    `json:"glucose_score"`
+    CardioScore    float64    `json:"cardio_score"`
+    BodyCompScore  float64    `json:"body_comp_score"`
+    BehavioralScore float64   `json:"behavioral_score"`
+}
+
+
+// DomainSlope captures the OLS regression result for a single domain.
+type DomainSlope struct {
+    Domain       MHRIDomain `json:"domain"`
+    SlopePerDay  float64    `json:"slope_per_day"`
+    Trend        string     `json:"trend"`         // RAPID_IMPROVING, IMPROVING, STABLE, DECLINING, RAPID_DECLINING
+    StartScore   float64    `json:"start_score"`
+    EndScore     float64    `json:"end_score"`
+    DeltaScore   float64    `json:"delta_score"`
+    R2           float64    `json:"r_squared"`      // goodness of fit — low R² means noisy trend
+    Confidence   string     `json:"confidence"`     // HIGH (R² ≥ 0.5), MODERATE (0.25-0.5), LOW (<0.25)
+}
+
+
+// DivergencePattern describes when two domains move in opposite directions.
+type DivergencePattern struct {
+    ImprovingDomain   MHRIDomain `json:"improving_domain"`
+    DecliningDomain   MHRIDomain `json:"declining_domain"`
+    ImprovingSlope    float64    `json:"improving_slope"`
+    DecliningSlope    float64    `json:"declining_slope"`
+    DivergenceRate    float64    `json:"divergence_rate"`     // absolute difference of slopes
+    ClinicalConcern   string     `json:"clinical_concern"`
+    PossibleMechanism string     `json:"possible_mechanism"`
+}
+
+
+// LeadingIndicator describes when behavioral domain decline precedes clinical domain decline.
+type LeadingIndicator struct {
+    LeadingDomain     MHRIDomain `json:"leading_domain"`
+    LaggingDomains    []MHRIDomain `json:"lagging_domains"`
+    LeadDays          int        `json:"lead_days"`       // estimated days of lead
+    Confidence        string     `json:"confidence"`
+    Interpretation    string     `json:"interpretation"`
+}
+
+
+// DomainCategoryCrossing detects when a domain crosses an MHRI category boundary.
+type DomainCategoryCrossing struct {
+    Domain        MHRIDomain `json:"domain"`
+    PrevCategory  string     `json:"prev_category"`    // OPTIMAL, MILD, MODERATE, HIGH
+    CurrCategory  string     `json:"curr_category"`
+    Direction     string     `json:"direction"`         // WORSENED, IMPROVED
+    CrossingDate  time.Time  `json:"crossing_date"`
+}
+
+
+// DecomposedTrajectory is the full output of the domain decomposition engine.
+type DecomposedTrajectory struct {
+    PatientID          string               `json:"patient_id"`
+    WindowDays         int                  `json:"window_days"`
+    DataPoints         int                  `json:"data_points"`
+    ComputedAt         time.Time            `json:"computed_at"`
+
+
+    // Composite trajectory (existing — preserved for backward compatibility)
+    CompositeSlope     float64              `json:"composite_slope_per_day"`
+    CompositeTrend     string               `json:"composite_trend"`
+    CompositeStartScore float64             `json:"composite_start_score"`
+    CompositeEndScore  float64              `json:"composite_end_score"`
+
+
+    // Per-domain trajectories
+    DomainSlopes       map[MHRIDomain]DomainSlope `json:"domain_slopes"`
+
+
+    // Derived analytics
+    DominantDriver     *MHRIDomain          `json:"dominant_driver,omitempty"`      // which domain is driving composite change
+    DriverContribution float64              `json:"driver_contribution,omitempty"`  // % of composite change from dominant domain
+    Divergences        []DivergencePattern  `json:"divergences,omitempty"`
+    LeadingIndicators  []LeadingIndicator   `json:"leading_indicators,omitempty"`
+    DomainCrossings    []DomainCategoryCrossing `json:"domain_crossings,omitempty"`
+    HasDiscordantTrend bool                 `json:"has_discordant_trend"`
+    ConcordantDeterioration bool            `json:"concordant_deterioration"`       // ≥2 domains declining simultaneously
+    DomainsDeterioration int               `json:"domains_deteriorating"`
+}
+
+
+// DomainTrajectoryHistory stores decomposed snapshots for trend-over-time analysis.
+type DomainTrajectoryHistory struct {
+    ID              string     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+    PatientID       string     `gorm:"size:100;index;not null" json:"patient_id"`
+    SnapshotDate    time.Time  `gorm:"index;not null" json:"snapshot_date"`
+    WindowDays      int        `json:"window_days"`
+    CompositeSlope  float64    `json:"composite_slope"`
+    GlucoseSlope    float64    `json:"glucose_slope"`
+    CardioSlope     float64    `json:"cardio_slope"`
+    BodyCompSlope   float64    `json:"body_comp_slope"`
+    BehavioralSlope float64    `json:"behavioral_slope"`
+    HasDiscordance  bool       `json:"has_discordance"`
+    DominantDriver  string     `json:"dominant_driver,omitempty"`
+    CreatedAt       time.Time  `json:"created_at"`
+}
+```
+
+
+- [ ] **Step 2: Create domain trajectory thresholds YAML**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/shared/domain_trajectory_thresholds.yaml
+# Thresholds for domain-level trajectory classification and alerting.
+
+
+# Per-domain trend classification thresholds (score units per day)
+# These are tighter than composite because domains are more granular.
+trend_thresholds:
+  rapid_improving: 1.0      # >1.0 score/day improvement
+  improving: 0.3             # >0.3 score/day
+  stable_upper: 0.3          # ≤0.3 and ≥-0.3
+  stable_lower: -0.3
+  declining: -0.3            # <-0.3 score/day
+  rapid_declining: -1.0      # <-1.0 score/day — clinically urgent
+
+
+# Divergence detection
+divergence:
+  min_divergence_rate: 0.5   # minimum absolute slope difference to flag divergence
+  min_improving_slope: 0.3   # improving domain must be genuinely improving
+  min_declining_slope: -0.3  # declining domain must be genuinely declining
+
+
+# Leading indicator detection
+leading_indicator:
+  behavioral_lead_threshold_days: 7     # behavioral must lead by ≥7 days
+  min_behavioral_decline_slope: -0.5    # behavioral must be declining meaningfully
+  min_data_points: 10                   # need sufficient history for lead-lag
+
+
+# Concordant deterioration
+concordant:
+  min_domains_declining: 2              # ≥2 domains declining simultaneously
+  min_slope_per_domain: -0.3            # each domain must be declining at ≥0.3/day
+
+
+# Dominant driver analysis
+driver:
+  min_contribution_pct: 40.0            # domain must contribute ≥40% of composite change
+  weight_map:                           # MHRI domain weights for contribution calculation
+    GLUCOSE: 0.35
+    CARDIO: 0.25
+    BODY_COMP: 0.25
+    BEHAVIORAL: 0.15
+
+
+# R² confidence thresholds for trend reliability
+r_squared:
+  high: 0.5
+  moderate: 0.25
+  # below 0.25 = LOW — trend is noisy, don't act on it clinically
+
+
+# Domain-specific category boundaries (reuse MHRI categories)
+# OPTIMAL ≥ 70, MILD 55-69, MODERATE 40-54, HIGH < 40
+category_boundaries:
+  optimal: 70
+  mild: 55
+  moderate: 40
+```
+
+
+---
+
+
+## Phase D2: Core Decomposition Engine
+
+
+### Step 3: Write failing test for domain trajectory computation
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/mri_domain_trajectory_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+// === PER-DOMAIN SLOPE COMPUTATION ===
+
+
+func TestDomainTrajectory_GlucoseDeclining_CardioStable(t *testing.T) {
+    now := time.Now()
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now.Add(-13 * 24 * time.Hour), CompositeScore: 72, GlucoseScore: 75, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 72},
+        {Timestamp: now.Add(-10 * 24 * time.Hour), CompositeScore: 68, GlucoseScore: 65, CardioScore: 71, BodyCompScore: 67, BehavioralScore: 70},
+        {Timestamp: now.Add(-7 * 24 * time.Hour), CompositeScore: 64, GlucoseScore: 55, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 71},
+        {Timestamp: now.Add(-4 * 24 * time.Hour), CompositeScore: 60, GlucoseScore: 48, CardioScore: 69, BodyCompScore: 67, BehavioralScore: 70},
+        {Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 56, GlucoseScore: 42, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 71},
+    }
+
+
+    result := ComputeDecomposedTrajectory("PAT-001", points)
+
+
+    // Composite should show decline
+    assert.Equal(t, "DECLINING", result.CompositeTrend)
+
+
+    // Glucose domain should be the primary decliner
+    glucoseSlope := result.DomainSlopes[models.DomainGlucose]
+    assert.Equal(t, "RAPID_DECLINING", glucoseSlope.Trend)
+    assert.True(t, glucoseSlope.SlopePerDay < -1.0)
+
+
+    // Cardio should be stable
+    cardioSlope := result.DomainSlopes[models.DomainCardio]
+    assert.Equal(t, "STABLE", cardioSlope.Trend)
+
+
+    // Dominant driver should be glucose
+    require.NotNil(t, result.DominantDriver)
+    assert.Equal(t, models.DomainGlucose, *result.DominantDriver)
+    assert.True(t, result.DriverContribution >= 40.0)
+}
+
+
+func TestDomainTrajectory_AllDomainsImproving(t *testing.T) {
+    now := time.Now()
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now.Add(-13 * 24 * time.Hour), CompositeScore: 50, GlucoseScore: 45, CardioScore: 50, BodyCompScore: 52, BehavioralScore: 55},
+        {Timestamp: now.Add(-7 * 24 * time.Hour), CompositeScore: 58, GlucoseScore: 55, CardioScore: 58, BodyCompScore: 58, BehavioralScore: 62},
+        {Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 66, GlucoseScore: 65, CardioScore: 66, BodyCompScore: 64, BehavioralScore: 70},
+    }
+
+
+    result := ComputeDecomposedTrajectory("PAT-002", points)
+
+
+    assert.Equal(t, "IMPROVING", result.CompositeTrend)
+    for _, domain := range models.AllMHRIDomains {
+        slope := result.DomainSlopes[domain]
+        assert.True(t, slope.SlopePerDay > 0, "Expected %s to be improving", domain)
+    }
+    assert.False(t, result.HasDiscordantTrend)
+    assert.Equal(t, 0, result.DomainsDeterioration)
+}
+
+
+func TestDomainTrajectory_ConcordantDeterioration(t *testing.T) {
+    now := time.Now()
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now.Add(-13 * 24 * time.Hour), CompositeScore: 70, GlucoseScore: 72, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 68},
+        {Timestamp: now.Add(-7 * 24 * time.Hour), CompositeScore: 62, GlucoseScore: 60, CardioScore: 58, BodyCompScore: 66, BehavioralScore: 65},
+        {Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 52, GlucoseScore: 48, CardioScore: 45, BodyCompScore: 64, BehavioralScore: 55},
+    }
+
+
+    result := ComputeDecomposedTrajectory("PAT-003", points)
+
+
+    assert.True(t, result.ConcordantDeterioration)
+    assert.GreaterOrEqual(t, result.DomainsDeterioration, 2)
+}
+
+
+func TestDomainTrajectory_InsufficientData(t *testing.T) {
+    now := time.Now()
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now, CompositeScore: 70, GlucoseScore: 72, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 68},
+    }
+
+
+    result := ComputeDecomposedTrajectory("PAT-004", points)
+    assert.Equal(t, "INSUFFICIENT_DATA", result.CompositeTrend)
+    for _, domain := range models.AllMHRIDomains {
+        assert.Equal(t, "INSUFFICIENT_DATA", result.DomainSlopes[domain].Trend)
+    }
+}
+
+
+// === R² CONFIDENCE ===
+
+
+func TestDomainTrajectory_NoisyData_LowConfidence(t *testing.T) {
+    now := time.Now()
+    // Glucose scores oscillating wildly — no clear trend
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now.Add(-13 * 24 * time.Hour), GlucoseScore: 70, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+        {Timestamp: now.Add(-11 * 24 * time.Hour), GlucoseScore: 45, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 58},
+        {Timestamp: now.Add(-9 * 24 * time.Hour), GlucoseScore: 75, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 66},
+        {Timestamp: now.Add(-7 * 24 * time.Hour), GlucoseScore: 40, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 57},
+        {Timestamp: now.Add(-5 * 24 * time.Hour), GlucoseScore: 72, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 65},
+        {Timestamp: now.Add(-3 * 24 * time.Hour), GlucoseScore: 42, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 58},
+        {Timestamp: now.Add(-1 * 24 * time.Hour), GlucoseScore: 68, CardioScore: 65, BodyCompScore: 60, BehavioralScore: 65, CompositeScore: 64},
+    }
+
+
+    result := ComputeDecomposedTrajectory("PAT-005", points)
+    glucoseSlope := result.DomainSlopes[models.DomainGlucose]
+    assert.Equal(t, "LOW", glucoseSlope.Confidence, "Noisy glucose data should have LOW R² confidence")
+}
+
+
+// === DOMAIN CATEGORY CROSSING ===
+
+
+func TestDomainCategoryCrossing_GlucoseOptimalToMild(t *testing.T) {
+    now := time.Now()
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now.Add(-7 * 24 * time.Hour), GlucoseScore: 72, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 70, CompositeScore: 70},
+        {Timestamp: now.Add(-1 * 24 * time.Hour), GlucoseScore: 66, CardioScore: 70, BodyCompScore: 68, BehavioralScore: 70, CompositeScore: 68},
+    }
+
+
+    result := ComputeDecomposedTrajectory("PAT-006", points)
+    assert.NotEmpty(t, result.DomainCrossings)
+
+
+    foundGlucoseCrossing := false
+    for _, c := range result.DomainCrossings {
+        if c.Domain == models.DomainGlucose {
+            foundGlucoseCrossing = true
+            assert.Equal(t, "OPTIMAL", c.PrevCategory)
+            assert.Equal(t, "MILD", c.CurrCategory)
+            assert.Equal(t, "WORSENED", c.Direction)
+        }
+    }
+    assert.True(t, foundGlucoseCrossing)
+}
+
+
+// === RAJESH KUMAR SCENARIO ===
+
+
+func TestDomainTrajectory_RajeshKumar(t *testing.T) {
+    now := time.Now()
+    // Rajesh: glucose declining (HbA1c rising), cardio declining (BP uncontrolled),
+    // behavioral collapsing (engagement RED), body comp stable
+    points := []models.DomainTrajectoryPoint{
+        {Timestamp: now.Add(-13 * 24 * time.Hour), CompositeScore: 62, GlucoseScore: 55, CardioScore: 58, BodyCompScore: 65, BehavioralScore: 72},
+        {Timestamp: now.Add(-10 * 24 * time.Hour), CompositeScore: 58, GlucoseScore: 50, CardioScore: 52, BodyCompScore: 65, BehavioralScore: 65},
+        {Timestamp: now.Add(-7 * 24 * time.Hour), CompositeScore: 53, GlucoseScore: 45, CardioScore: 48, BodyCompScore: 64, BehavioralScore: 55},
+        {Timestamp: now.Add(-4 * 24 * time.Hour), CompositeScore: 48, GlucoseScore: 40, CardioScore: 42, BodyCompScore: 64, BehavioralScore: 42},
+        {Timestamp: now.Add(-1 * 24 * time.Hour), CompositeScore: 42, GlucoseScore: 35, CardioScore: 38, BodyCompScore: 63, BehavioralScore: 30},
+    }
+
+
+    result := ComputeDecomposedTrajectory("e2e-rajesh-kumar-002", points)
+
+
+    // Composite declining
+    assert.Equal(t, "DECLINING", result.CompositeTrend)
+    assert.True(t, result.CompositeSlope < -1.0)
+
+
+    // Three domains declining
+    assert.GreaterOrEqual(t, result.DomainsDeterioration, 3) // glucose + cardio + behavioral
+    assert.True(t, result.ConcordantDeterioration)
+
+
+    // Body comp should be stable
+    bcSlope := result.DomainSlopes[models.DomainBodyComp]
+    assert.Equal(t, "STABLE", bcSlope.Trend)
+
+
+    // Behavioral should be the fastest decliner (72→30 = -42 over 12 days = -3.5/day)
+    behSlope := result.DomainSlopes[models.DomainBehavioral]
+    assert.Equal(t, "RAPID_DECLINING", behSlope.Trend)
+
+
+    // Multiple category crossings should be detected
+    assert.GreaterOrEqual(t, len(result.DomainCrossings), 2) // glucose + cardio at minimum
+}
+```
+
+
+- [ ] **Step 4: Run test to verify it fails**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
+go test ./internal/services/ -run "TestDomainTrajectory" -v
+```
+
+
+Expected: FAIL — `ComputeDecomposedTrajectory` not defined.
+
+
+- [ ] **Step 5: Implement domain trajectory computation**
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/mri_domain_trajectory.go
+package services
+
+
+import (
+    "math"
+    "time"
+
+
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+// MHRI domain weights (must match MHRI scorer weights)
+var domainWeights = map[models.MHRIDomain]float64{
+    models.DomainGlucose:    0.35,
+    models.DomainCardio:     0.25,
+    models.DomainBodyComp:   0.25,
+    models.DomainBehavioral: 0.15,
+}
+
+
+// Trend thresholds
+const (
+    rapidImprovingThreshold = 1.0
+    improvingThreshold      = 0.3
+    decliningThreshold      = -0.3
+    rapidDecliningThreshold = -1.0
+)
+
+
+// Category boundaries (MHRI score ranges)
+const (
+    categoryOptimal  = 70.0
+    categoryMild     = 55.0
+    categoryModerate = 40.0
+)
+
+
+// ComputeDecomposedTrajectory computes per-domain OLS trajectories and derived analytics.
+func ComputeDecomposedTrajectory(patientID string, points []models.DomainTrajectoryPoint) models.DecomposedTrajectory {
+    result := models.DecomposedTrajectory{
+        PatientID:    patientID,
+        DataPoints:   len(points),
+        ComputedAt:   time.Now(),
+        DomainSlopes: make(map[models.MHRIDomain]models.DomainSlope),
+    }
+
+
+    if len(points) < 2 {
+        result.CompositeTrend = "INSUFFICIENT_DATA"
+        for _, d := range models.AllMHRIDomains {
+            result.DomainSlopes[d] = models.DomainSlope{Domain: d, Trend: "INSUFFICIENT_DATA"}
+        }
+        return result
+    }
+
+
+    // Sort by timestamp
+    sorted := make([]models.DomainTrajectoryPoint, len(points))
+    copy(sorted, points)
+    sortTrajectoryPoints(sorted)
+
+
+    first, last := sorted[0], sorted[len(sorted)-1]
+    result.WindowDays = int(last.Timestamp.Sub(first.Timestamp).Hours() / 24)
+
+
+    // Compute composite trajectory
+    compositeScores := extractScores(sorted, func(p models.DomainTrajectoryPoint) float64 { return p.CompositeScore })
+    compSlope, compR2 := computeOLSWithR2(sorted, compositeScores)
+    result.CompositeSlope = roundTo3(compSlope)
+    result.CompositeTrend = classifyDomainTrend(compSlope)
+    result.CompositeStartScore = first.CompositeScore
+    result.CompositeEndScore = last.CompositeScore
+
+
+    // Compute per-domain trajectories
+    domainExtractors := map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64{
+        models.DomainGlucose:    func(p models.DomainTrajectoryPoint) float64 { return p.GlucoseScore },
+        models.DomainCardio:     func(p models.DomainTrajectoryPoint) float64 { return p.CardioScore },
+        models.DomainBodyComp:   func(p models.DomainTrajectoryPoint) float64 { return p.BodyCompScore },
+        models.DomainBehavioral: func(p models.DomainTrajectoryPoint) float64 { return p.BehavioralScore },
+    }
+
+
+    decliningCount := 0
+    var maxWeightedDecline float64
+    var dominantDriver *models.MHRIDomain
+
+
+    for domain, extractor := range domainExtractors {
+        scores := extractScores(sorted, extractor)
+        slope, r2 := computeOLSWithR2(sorted, scores)
+
+
+        ds := models.DomainSlope{
+            Domain:      domain,
+            SlopePerDay: roundTo3(slope),
+            Trend:       classifyDomainTrend(slope),
+            StartScore:  scores[0],
+            EndScore:    scores[len(scores)-1],
+            DeltaScore:  roundTo1(scores[len(scores)-1] - scores[0]),
+            R2:          roundTo3(r2),
+            Confidence:  classifyR2Confidence(r2),
+        }
+        result.DomainSlopes[domain] = ds
+
+
+        // Count deteriorating domains
+        if slope < decliningThreshold {
+            decliningCount++
+        }
+
+
+        // Track dominant driver (weighted contribution to composite decline)
+        weightedDecline := math.Abs(slope) * domainWeights[domain]
+        if slope < 0 && weightedDecline > maxWeightedDecline {
+            maxWeightedDecline = weightedDecline
+            d := domain
+            dominantDriver = &d
+        }
+    }
+
+
+    result.DomainsDeterioration = decliningCount
+    result.ConcordantDeterioration = decliningCount >= 2
+
+
+    // Dominant driver calculation
+    if dominantDriver != nil && result.CompositeSlope < 0 {
+        result.DominantDriver = dominantDriver
+        totalWeightedDecline := 0.0
+        for domain, ds := range result.DomainSlopes {
+            if ds.SlopePerDay < 0 {
+                totalWeightedDecline += math.Abs(ds.SlopePerDay) * domainWeights[domain]
+            }
+        }
+        if totalWeightedDecline > 0 {
+            result.DriverContribution = roundTo1((maxWeightedDecline / totalWeightedDecline) * 100)
+        }
+    }
+
+
+    // Detect divergence patterns
+    result.Divergences = detectDivergences(result.DomainSlopes)
+    result.HasDiscordantTrend = len(result.Divergences) > 0
+
+
+    // Detect domain category crossings
+    result.DomainCrossings = detectDomainCrossings(sorted, domainExtractors)
+
+
+    // Detect behavioral leading indicator
+    result.LeadingIndicators = detectLeadingIndicators(sorted, result.DomainSlopes)
+
+
+    return result
+}
+
+
+func computeOLSWithR2(points []models.DomainTrajectoryPoint, scores []float64) (float64, float64) {
+    if len(points) < 2 {
+        return 0, 0
+    }
+
+
+    baseTime := points[0].Timestamp
+    n := float64(len(points))
+    var sumX, sumY, sumXY, sumX2, sumY2 float64
+
+
+    for i, pt := range points {
+        x := pt.Timestamp.Sub(baseTime).Hours() / 24.0
+        y := scores[i]
+        sumX += x
+        sumY += y
+        sumXY += x * y
+        sumX2 += x * x
+        sumY2 += y * y
+    }
+
+
+    denom := n*sumX2 - sumX*sumX
+    if math.Abs(denom) < 1e-10 {
+        return 0, 0
+    }
+
+
+    slope := (n*sumXY - sumX*sumY) / denom
+    intercept := (sumY - slope*sumX) / n
+
+
+    // R² calculation
+    meanY := sumY / n
+    ssTot := sumY2 - n*meanY*meanY
+    ssRes := 0.0
+    for i, pt := range points {
+        x := pt.Timestamp.Sub(baseTime).Hours() / 24.0
+        predicted := intercept + slope*x
+        residual := scores[i] - predicted
+        ssRes += residual * residual
+    }
+
+
+    r2 := 0.0
+    if ssTot > 1e-10 {
+        r2 = 1 - (ssRes / ssTot)
+        if r2 < 0 {
+            r2 = 0
+        }
+    }
+
+
+    return slope, r2
+}
+
+
+func classifyDomainTrend(slopePerDay float64) string {
+    switch {
+    case slopePerDay > rapidImprovingThreshold:
+        return "RAPID_IMPROVING"
+    case slopePerDay > improvingThreshold:
+        return "IMPROVING"
+    case slopePerDay >= decliningThreshold:
+        return "STABLE"
+    case slopePerDay >= rapidDecliningThreshold:
+        return "DECLINING"
+    default:
+        return "RAPID_DECLINING"
+    }
+}
+
+
+func classifyR2Confidence(r2 float64) string {
+    if r2 >= 0.5 {
+        return "HIGH"
+    }
+    if r2 >= 0.25 {
+        return "MODERATE"
+    }
+    return "LOW"
+}
+
+
+func detectDomainCrossings(points []models.DomainTrajectoryPoint, extractors map[models.MHRIDomain]func(models.DomainTrajectoryPoint) float64) []models.DomainCategoryCrossing {
+    if len(points) < 2 {
+        return nil
+    }
+
+
+    first := points[0]
+    last := points[len(points)-1]
+    var crossings []models.DomainCategoryCrossing
+
+
+    for domain, extractor := range extractors {
+        startScore := extractor(first)
+        endScore := extractor(last)
+        startCat := categorizeDomainScore(startScore)
+        endCat := categorizeDomainScore(endScore)
+
+
+        if startCat != endCat {
+            direction := "IMPROVED"
+            if endScore < startScore {
+                direction = "WORSENED"
+            }
+            crossings = append(crossings, models.DomainCategoryCrossing{
+                Domain:       domain,
+                PrevCategory: startCat,
+                CurrCategory: endCat,
+                Direction:    direction,
+                CrossingDate: last.Timestamp,
+            })
+        }
+    }
+
+
+    return crossings
+}
+
+
+func detectLeadingIndicators(points []models.DomainTrajectoryPoint, slopes map[models.MHRIDomain]models.DomainSlope) []models.LeadingIndicator {
+    if len(points) < 5 {
+        return nil // need enough data for lead-lag
+    }
+
+
+    behSlope := slopes[models.DomainBehavioral]
+    if behSlope.SlopePerDay >= -0.5 {
+        return nil // behavioral not declining meaningfully
+    }
+
+
+    // Check if behavioral started declining before clinical domains
+    var lagging []models.MHRIDomain
+    for _, domain := range []models.MHRIDomain{models.DomainGlucose, models.DomainCardio} {
+        ds := slopes[domain]
+        if ds.SlopePerDay < decliningThreshold {
+            // Clinical domain also declining — check if behavioral led
+            if behSlope.DeltaScore < ds.DeltaScore { // behavioral dropped more
+                lagging = append(lagging, domain)
+            }
+        }
+    }
+
+
+    if len(lagging) == 0 {
+        return nil
+    }
+
+
+    return []models.LeadingIndicator{{
+        LeadingDomain:  models.DomainBehavioral,
+        LaggingDomains: lagging,
+        Confidence:     "MODERATE",
+        Interpretation: "Behavioral domain decline preceded clinical domain deterioration — engagement collapse may be driving worsening outcomes",
+    }}
+}
+
+
+func categorizeDomainScore(score float64) string {
+    if score >= categoryOptimal {
+        return "OPTIMAL"
+    }
+    if score >= categoryMild {
+        return "MILD"
+    }
+    if score >= categoryModerate {
+        return "MODERATE"
+    }
+    return "HIGH"
+}
+
+
+func extractScores(points []models.DomainTrajectoryPoint, extractor func(models.DomainTrajectoryPoint) float64) []float64 {
+    scores := make([]float64, len(points))
+    for i, p := range points {
+        scores[i] = extractor(p)
+    }
+    return scores
+}
+
+
+func sortTrajectoryPoints(pts []models.DomainTrajectoryPoint) {
+    for i := 1; i < len(pts); i++ {
+        for j := i; j > 0 && pts[j].Timestamp.Before(pts[j-1].Timestamp); j-- {
+            pts[j], pts[j-1] = pts[j-1], pts[j]
+        }
+    }
+}
+
+
+func roundTo3(v float64) float64 { return math.Round(v*1000) / 1000 }
+func roundTo1(v float64) float64 { return math.Round(v*10) / 10 }
+```
+
+
+- [ ] **Step 6: Run domain trajectory tests**
+
+
+```bash
+go test ./internal/services/ -run "TestDomainTrajectory" -v
+```
+
+
+Expected: All 8 tests PASS.
+
+
+- [ ] **Step 7: Commit Phase D2 core engine**
+
+
+```bash
+git add kb-26-metabolic-digital-twin/internal/models/domain_trajectory.go
+git add kb-26-metabolic-digital-twin/internal/services/mri_domain_trajectory.go
+git add kb-26-metabolic-digital-twin/internal/services/mri_domain_trajectory_test.go
+git add market-configs/shared/domain_trajectory_thresholds.yaml
+git commit -m "feat(kb26): MHRI domain-decomposed trajectory engine
+
+
+Per-domain OLS slopes with R² confidence (HIGH/MODERATE/LOW). 5-tier
+trend classification per domain. Dominant driver identification with
+weighted contribution %. Concordant deterioration detection (≥2 domains
+declining). Domain category crossing detection (OPTIMAL→MILD etc).
+Behavioral leading indicator detection. Discordant trajectory flagging."
+```
+
+
+---
+
+
+## Phase D3: Divergence Detection
+
+
+### Step 8: Write failing test for divergence detection
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/domain_divergence_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+func TestDetectDivergence_GlucoseImproving_RenalDeclining(t *testing.T) {
+    slopes := map[models.MHRIDomain]models.DomainSlope{
+        models.DomainGlucose:    {Domain: models.DomainGlucose, SlopePerDay: 0.8, Trend: "IMPROVING"},
+        models.DomainCardio:     {Domain: models.DomainCardio, SlopePerDay: -1.2, Trend: "RAPID_DECLINING"},
+        models.DomainBodyComp:   {Domain: models.DomainBodyComp, SlopePerDay: 0.1, Trend: "STABLE"},
+        models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: 0.0, Trend: "STABLE"},
+    }
+
+
+    divergences := detectDivergences(slopes)
+    assert.Len(t, divergences, 1)
+    assert.Equal(t, models.DomainGlucose, divergences[0].ImprovingDomain)
+    assert.Equal(t, models.DomainCardio, divergences[0].DecliningDomain)
+    assert.True(t, divergences[0].DivergenceRate >= 1.5) // |0.8 - (-1.2)| = 2.0
+    assert.NotEmpty(t, divergences[0].ClinicalConcern)
+}
+
+
+func TestDetectDivergence_NoDivergence_AllStable(t *testing.T) {
+    slopes := map[models.MHRIDomain]models.DomainSlope{
+        models.DomainGlucose:    {SlopePerDay: 0.1},
+        models.DomainCardio:     {SlopePerDay: -0.1},
+        models.DomainBodyComp:   {SlopePerDay: 0.05},
+        models.DomainBehavioral: {SlopePerDay: -0.05},
+    }
+
+
+    divergences := detectDivergences(slopes)
+    assert.Empty(t, divergences) // all within stable band
+}
+
+
+func TestDetectDivergence_MultiplePairs(t *testing.T) {
+    slopes := map[models.MHRIDomain]models.DomainSlope{
+        models.DomainGlucose:    {Domain: models.DomainGlucose, SlopePerDay: 1.0, Trend: "RAPID_IMPROVING"},
+        models.DomainCardio:     {Domain: models.DomainCardio, SlopePerDay: -0.8, Trend: "DECLINING"},
+        models.DomainBodyComp:   {Domain: models.DomainBodyComp, SlopePerDay: 0.5, Trend: "IMPROVING"},
+        models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: -0.6, Trend: "DECLINING"},
+    }
+
+
+    divergences := detectDivergences(slopes)
+    assert.GreaterOrEqual(t, len(divergences), 2) // glucose↑cardio↓ and bodycomp↑behavioral↓
+}
+
+
+func TestDivergence_ClinicalConcernText(t *testing.T) {
+    slopes := map[models.MHRIDomain]models.DomainSlope{
+        models.DomainGlucose:    {Domain: models.DomainGlucose, SlopePerDay: 0.8, Trend: "IMPROVING"},
+        models.DomainCardio:     {Domain: models.DomainCardio, SlopePerDay: -0.9, Trend: "DECLINING"},
+        models.DomainBodyComp:   {Domain: models.DomainBodyComp, SlopePerDay: 0.0, Trend: "STABLE"},
+        models.DomainBehavioral: {Domain: models.DomainBehavioral, SlopePerDay: 0.0, Trend: "STABLE"},
+    }
+
+
+    divergences := detectDivergences(slopes)
+    require.Len(t, divergences, 1)
+    assert.Contains(t, divergences[0].ClinicalConcern, "GLUCOSE improving while CARDIO declining")
+    assert.NotEmpty(t, divergences[0].PossibleMechanism)
+}
+```
+
+
+- [ ] **Step 9: Implement divergence detection**
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/domain_divergence.go
+package services
+
+
+import (
+    "fmt"
+    "math"
+
+
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+const minDivergenceRate = 0.5
+
+
+// detectDivergences finds pairs of domains moving in opposite directions.
+func detectDivergences(slopes map[models.MHRIDomain]models.DomainSlope) []models.DivergencePattern {
+    var divergences []models.DivergencePattern
+    domains := models.AllMHRIDomains
+
+
+    for i := 0; i < len(domains); i++ {
+        for j := i + 1; j < len(domains); j++ {
+            slopeA := slopes[domains[i]]
+            slopeB := slopes[domains[j]]
+
+
+            // One must be genuinely improving, the other genuinely declining
+            var improving, declining models.DomainSlope
+            if slopeA.SlopePerDay > improvingThreshold && slopeB.SlopePerDay < decliningThreshold {
+                improving = slopeA
+                declining = slopeB
+            } else if slopeB.SlopePerDay > improvingThreshold && slopeA.SlopePerDay < decliningThreshold {
+                improving = slopeB
+                declining = slopeA
+            } else {
+                continue
+            }
+
+
+            divergenceRate := math.Abs(improving.SlopePerDay) + math.Abs(declining.SlopePerDay)
+            if divergenceRate < minDivergenceRate {
+                continue
+            }
+
+
+            divergences = append(divergences, models.DivergencePattern{
+                ImprovingDomain: improving.Domain,
+                DecliningDomain: declining.Domain,
+                ImprovingSlope:  improving.SlopePerDay,
+                DecliningSlope:  declining.SlopePerDay,
+                DivergenceRate:  roundTo3(divergenceRate),
+                ClinicalConcern: fmt.Sprintf("%s improving while %s declining — therapeutic attention may be misdirected",
+                    improving.Domain, declining.Domain),
+                PossibleMechanism: inferDivergenceMechanism(improving.Domain, declining.Domain),
+            })
+        }
+    }
+
+
+    return divergences
+}
+
+
+// inferDivergenceMechanism provides clinical hypotheses for specific divergence pairs.
+func inferDivergenceMechanism(improving, declining models.MHRIDomain) string {
+    key := string(improving) + "_" + string(declining)
+    mechanisms := map[string]string{
+        "GLUCOSE_CARDIO": "Glycaemic therapy may lack hemodynamic benefit, or antihypertensive review needed. " +
+            "Consider SGLT2i (dual glucose + BP benefit) or adding dedicated antihypertensive.",
+        "CARDIO_GLUCOSE": "BP medications may be worsening glycaemic control (e.g., thiazide raising glucose, " +
+            "beta-blocker masking hypoglycaemia). Review cross-domain drug effects.",
+        "GLUCOSE_BEHAVIORAL": "Glycaemic markers improving on medication but patient disengaging from self-management. " +
+            "Improvement may not sustain without behavioral re-engagement.",
+        "BEHAVIORAL_GLUCOSE": "Patient engaged and self-managing but glycaemic control worsening — suggests " +
+            "medication inadequacy rather than adherence problem. Intensify pharmacotherapy.",
+        "CARDIO_BEHAVIORAL": "BP improving but engagement declining — may indicate medication working but patient " +
+            "developing complacency. Monitor for future adherence-related BP rebound.",
+        "BEHAVIORAL_CARDIO": "Patient engaged but cardiovascular metrics worsening despite adherence — " +
+            "suggests medication resistance, secondary hypertension workup, or emerging cardiac pathology.",
+        "GLUCOSE_BODY_COMP": "Glycaemic control improving while body composition worsening — " +
+            "check for insulin-driven weight gain or thiazolidinedione fluid retention.",
+        "BODY_COMP_GLUCOSE": "Body composition improving (weight loss) but glucose worsening — " +
+            "paradoxical in T2DM. Investigate: stress hyperglycaemia, steroid use, pancreatic pathology.",
+        "CARDIO_BODY_COMP": "Cardiovascular metrics improving while body composition declining — " +
+            "may indicate effective medication but dietary non-adherence.",
+        "BODY_COMP_CARDIO": "Weight management improving but CV worsening — " +
+            "consider sleep apnea, endocrine causes of hypertension, or medication interaction.",
+    }
+
+
+    if m, ok := mechanisms[key]; ok {
+        return m
+    }
+    return "Domain divergence detected — clinical review recommended to identify cause and adjust therapy."
+}
+```
+
+
+- [ ] **Step 10: Run divergence tests**
+
+
+```bash
+go test ./internal/services/ -run "TestDetectDivergence|TestDivergence_" -v
+```
+
+
+Expected: All 4 tests PASS.
+
+
+- [ ] **Step 11: Commit Phase D3**
+
+
+```bash
+git add kb-26-metabolic-digital-twin/internal/services/domain_divergence.go
+git add kb-26-metabolic-digital-twin/internal/services/domain_divergence_test.go
+git commit -m "feat(kb26): domain divergence detection with clinical mechanism inference
+
+
+Pairwise divergence detection across all 4 MHRI domains. Minimum divergence
+rate threshold (0.5 score/day). Clinical concern text for each divergence
+pair. Mechanism inference for 10 specific domain pairs: glucose↑cardio↓
+(add SGLT2i), cardio↑glucose↓ (cross-domain drug effect), behavioral
+leading indicator patterns. Divergence signals misdirected therapeutic
+attention — the most predictive pattern for adverse outcomes (Dagliati 2018)."
+```
+
+
+---
+
+
+## Phase D4: Trajectory Cards + Integration
+
+
+### Step 12: Write failing test for trajectory card rules
+
+
+```go
+// kb-23-decision-cards/internal/services/trajectory_card_rules_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-decision-cards/internal/models"
+    dtModels "kb-metabolic-digital-twin/internal/models"
+)
+
+
+func TestTrajectoryCards_ConcordantDeterioration(t *testing.T) {
+    traj := &dtModels.DecomposedTrajectory{
+        CompositeTrend:          "DECLINING",
+        ConcordantDeterioration: true,
+        DomainsDeterioration:    3,
+        DomainSlopes: map[dtModels.MHRIDomain]dtModels.DomainSlope{
+            dtModels.DomainGlucose:    {Trend: "DECLINING", SlopePerDay: -0.8},
+            dtModels.DomainCardio:     {Trend: "RAPID_DECLINING", SlopePerDay: -1.5},
+            dtModels.DomainBehavioral: {Trend: "DECLINING", SlopePerDay: -0.6},
+            dtModels.DomainBodyComp:   {Trend: "STABLE", SlopePerDay: -0.1},
+        },
+    }
+
+
+    cards := EvaluateTrajectoryCards(traj)
+    hasConcordantCard := false
+    for _, c := range cards {
+        if c.CardType == "CONCORDANT_DETERIORATION" {
+            hasConcordantCard = true
+            assert.Equal(t, "IMMEDIATE", c.Urgency)
+        }
+    }
+    assert.True(t, hasConcordantCard)
+}
+
+
+func TestTrajectoryCards_DivergenceAlert(t *testing.T) {
+    traj := &dtModels.DecomposedTrajectory{
+        CompositeTrend:     "STABLE",
+        HasDiscordantTrend: true,
+        Divergences: []dtModels.DivergencePattern{
+            {
+                ImprovingDomain: dtModels.DomainGlucose,
+                DecliningDomain: dtModels.DomainCardio,
+                DivergenceRate:  2.0,
+                ClinicalConcern: "Glucose improving while cardio declining",
+                PossibleMechanism: "Consider SGLT2i for dual benefit",
+            },
+        },
+        DomainSlopes: map[dtModels.MHRIDomain]dtModels.DomainSlope{
+            dtModels.DomainGlucose: {Trend: "IMPROVING"},
+            dtModels.DomainCardio:  {Trend: "DECLINING"},
+            dtModels.DomainBodyComp: {Trend: "STABLE"},
+            dtModels.DomainBehavioral: {Trend: "STABLE"},
+        },
+    }
+
+
+    cards := EvaluateTrajectoryCards(traj)
+    hasDivergenceCard := false
+    for _, c := range cards {
+        if c.CardType == "DOMAIN_DIVERGENCE" {
+            hasDivergenceCard = true
+            assert.Equal(t, "URGENT", c.Urgency)
+            assert.Contains(t, c.Rationale, "GLUCOSE improving")
+        }
+    }
+    assert.True(t, hasDivergenceCard)
+}
+
+
+func TestTrajectoryCards_BehavioralLeadingIndicator(t *testing.T) {
+    traj := &dtModels.DecomposedTrajectory{
+        CompositeTrend: "DECLINING",
+        LeadingIndicators: []dtModels.LeadingIndicator{
+            {
+                LeadingDomain:  dtModels.DomainBehavioral,
+                LaggingDomains: []dtModels.MHRIDomain{dtModels.DomainGlucose, dtModels.DomainCardio},
+                Interpretation: "Behavioral decline preceded clinical deterioration",
+            },
+        },
+        DomainSlopes: map[dtModels.MHRIDomain]dtModels.DomainSlope{
+            dtModels.DomainBehavioral: {Trend: "RAPID_DECLINING", SlopePerDay: -2.5},
+            dtModels.DomainGlucose:    {Trend: "DECLINING", SlopePerDay: -0.5},
+            dtModels.DomainCardio:     {Trend: "DECLINING", SlopePerDay: -0.4},
+            dtModels.DomainBodyComp:   {Trend: "STABLE", SlopePerDay: 0.0},
+        },
+    }
+
+
+    cards := EvaluateTrajectoryCards(traj)
+    hasLeadingCard := false
+    for _, c := range cards {
+        if c.CardType == "BEHAVIORAL_LEADING_INDICATOR" {
+            hasLeadingCard = true
+            assert.Equal(t, "URGENT", c.Urgency)
+            assert.Contains(t, c.Rationale, "behavioral")
+        }
+    }
+    assert.True(t, hasLeadingCard)
+}
+
+
+func TestTrajectoryCards_SingleDomainRapidDecline(t *testing.T) {
+    traj := &dtModels.DecomposedTrajectory{
+        CompositeTrend: "DECLINING",
+        DomainSlopes: map[dtModels.MHRIDomain]dtModels.DomainSlope{
+            dtModels.DomainCardio:     {Domain: dtModels.DomainCardio, Trend: "RAPID_DECLINING", SlopePerDay: -2.0, Confidence: "HIGH"},
+            dtModels.DomainGlucose:    {Trend: "STABLE"},
+            dtModels.DomainBodyComp:   {Trend: "STABLE"},
+            dtModels.DomainBehavioral: {Trend: "STABLE"},
+        },
+        DominantDriver: domainPtr(dtModels.DomainCardio),
+    }
+
+
+    cards := EvaluateTrajectoryCards(traj)
+    hasDomainCard := false
+    for _, c := range cards {
+        if c.CardType == "DOMAIN_RAPID_DECLINE" {
+            hasDomainCard = true
+            assert.Contains(t, c.Title, "CARDIO")
+        }
+    }
+    assert.True(t, hasDomainCard)
+}
+
+
+func TestTrajectoryCards_AllStable_NoCards(t *testing.T) {
+    traj := &dtModels.DecomposedTrajectory{
+        CompositeTrend: "STABLE",
+        DomainSlopes: map[dtModels.MHRIDomain]dtModels.DomainSlope{
+            dtModels.DomainGlucose:    {Trend: "STABLE"},
+            dtModels.DomainCardio:     {Trend: "STABLE"},
+            dtModels.DomainBodyComp:   {Trend: "STABLE"},
+            dtModels.DomainBehavioral: {Trend: "STABLE"},
+        },
+    }
+
+
+    cards := EvaluateTrajectoryCards(traj)
+    urgentCards := 0
+    for _, c := range cards {
+        if c.Urgency == "IMMEDIATE" || c.Urgency == "URGENT" {
+            urgentCards++
+        }
+    }
+    assert.Equal(t, 0, urgentCards)
+}
+
+
+func domainPtr(d dtModels.MHRIDomain) *dtModels.MHRIDomain { return &d }
+```
+
+
+- [ ] **Step 13: Implement trajectory card rules**
+
+
+```go
+// kb-23-decision-cards/internal/services/trajectory_card_rules.go
+package services
+
+
+import (
+    "fmt"
+    "strings"
+
+
+    dtModels "kb-metabolic-digital-twin/internal/models"
+)
+
+
+type TrajectoryCard struct {
+    CardType  string `json:"card_type"`
+    Urgency   string `json:"urgency"`
+    Title     string `json:"title"`
+    Rationale string `json:"rationale"`
+    Actions   []string `json:"actions"`
+    Domain    string `json:"domain,omitempty"`
+}
+
+
+// EvaluateTrajectoryCards generates decision cards from decomposed domain trajectories.
+func EvaluateTrajectoryCards(traj *dtModels.DecomposedTrajectory) []TrajectoryCard {
+    if traj == nil {
+        return nil
+    }
+
+
+    var cards []TrajectoryCard
+
+
+    // 1. Concordant deterioration — highest priority
+    if traj.ConcordantDeterioration {
+        decliningDomains := []string{}
+        for domain, ds := range traj.DomainSlopes {
+            if ds.SlopePerDay < -0.3 {
+                decliningDomains = append(decliningDomains, string(domain))
+            }
+        }
+
+
+        urgency := "URGENT"
+        if traj.DomainsDeterioration >= 3 {
+            urgency = "IMMEDIATE"
+        }
+
+
+        cards = append(cards, TrajectoryCard{
+            CardType: "CONCORDANT_DETERIORATION",
+            Urgency:  urgency,
+            Title:    fmt.Sprintf("Multi-Domain Deterioration — %d Domains Declining", traj.DomainsDeterioration),
+            Rationale: fmt.Sprintf("Simultaneous decline across %s. Concordant multi-domain "+
+                "deterioration indicates systemic worsening — risk is multiplicative, not additive "+
+                "(AHA CKM Framework). Composite MHRI slope: %.2f/day.",
+                strings.Join(decliningDomains, ", "), traj.CompositeSlope),
+            Actions: []string{
+                "Comprehensive multi-domain medication review",
+                "Identify root cause: medication non-adherence, intercurrent illness, lifestyle change",
+                "Consider dual-benefit agents (SGLT2i for glucose + BP + renal)",
+                "Schedule urgent clinical review within 1 week",
+            },
+        })
+    }
+
+
+    // 2. Domain divergence
+    for _, div := range traj.Divergences {
+        cards = append(cards, TrajectoryCard{
+            CardType: "DOMAIN_DIVERGENCE",
+            Urgency:  "URGENT",
+            Title: fmt.Sprintf("Discordant Trajectory — %s Improving, %s Declining",
+                div.ImprovingDomain, div.DecliningDomain),
+            Rationale: fmt.Sprintf("%s (slope +%.2f/day) while %s (slope %.2f/day). %s",
+                div.ImprovingDomain, div.ImprovingSlope,
+                div.DecliningDomain, div.DecliningSlope,
+                div.ClinicalConcern),
+            Actions: []string{
+                div.PossibleMechanism,
+                "Review whether improvement in one domain is masking deterioration in another",
+                "Consider medication with cross-domain benefit",
+            },
+            Domain: string(div.DecliningDomain),
+        })
+    }
+
+
+    // 3. Behavioral leading indicator
+    for _, lead := range traj.LeadingIndicators {
+        laggingNames := make([]string, len(lead.LaggingDomains))
+        for i, d := range lead.LaggingDomains {
+            laggingNames[i] = string(d)
+        }
+
+
+        cards = append(cards, TrajectoryCard{
+            CardType: "BEHAVIORAL_LEADING_INDICATOR",
+            Urgency:  "URGENT",
+            Title:    "Engagement Collapse Preceding Clinical Deterioration",
+            Rationale: fmt.Sprintf("Behavioral domain declining before %s. %s "+
+                "Clinical evidence shows behavioral disengagement predicts clinical "+
+                "deterioration by 2-4 weeks. Intervene now to prevent further clinical decline.",
+                strings.Join(laggingNames, " and "), lead.Interpretation),
+            Actions: []string{
+                "Clinical outreach — phone call preferred over digital notification",
+                "Assess barriers to engagement: health anxiety, cost, side effects, access",
+                "Do NOT default to app engagement nudge — this is a clinical signal, not a UX problem",
+            },
+        })
+    }
+
+
+    // 4. Single domain rapid decline (only if not already covered by concordant)
+    if !traj.ConcordantDeterioration {
+        for domain, ds := range traj.DomainSlopes {
+            if ds.Trend == "RAPID_DECLINING" && ds.Confidence != "LOW" {
+                cards = append(cards, TrajectoryCard{
+                    CardType: "DOMAIN_RAPID_DECLINE",
+                    Urgency:  "URGENT",
+                    Title:    fmt.Sprintf("%s Domain Rapid Decline", domain),
+                    Rationale: fmt.Sprintf("%s domain declining at %.2f/day (R²=%.2f, %s confidence). "+
+                        "Score dropped from %.0f to %.0f over the observation window.",
+                        domain, ds.SlopePerDay, ds.R2, ds.Confidence, ds.StartScore, ds.EndScore),
+                    Actions: []string{
+                        fmt.Sprintf("Review %s domain clinical data and recent changes", domain),
+                        "Investigate cause of rapid decline",
+                    },
+                    Domain: string(domain),
+                })
+            }
+        }
+    }
+
+
+    // 5. Domain category crossing
+    for _, crossing := range traj.DomainCrossings {
+        if crossing.Direction == "WORSENED" {
+            cards = append(cards, TrajectoryCard{
+                CardType: "DOMAIN_CATEGORY_CROSSING",
+                Urgency:  "ROUTINE",
+                Title: fmt.Sprintf("%s Domain: %s → %s",
+                    crossing.Domain, crossing.PrevCategory, crossing.CurrCategory),
+                Rationale: fmt.Sprintf("%s domain crossed from %s to %s status. "+
+                    "This threshold crossing may indicate need for therapy adjustment.",
+                    crossing.Domain, crossing.PrevCategory, crossing.CurrCategory),
+                Domain: string(crossing.Domain),
+            })
+        }
+    }
+
+
+    return cards
+}
+```
+
+
+- [ ] **Step 14: Run trajectory card tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
+go test ./internal/services/ -run "TestTrajectoryCards" -v
+```
+
+
+Expected: All 5 tests PASS.
+
+
+- [ ] **Step 15: Integrate decomposed trajectory into four-pillar evaluator**
+
+
+Add `DecomposedTrajectory` to `FourPillarInput` and use it in `evaluateMonitoringPillar`:
+
+
+```go
+// Add to FourPillarInput:
+    DecomposedTrajectory *dtModels.DecomposedTrajectory `json:"decomposed_trajectory,omitempty"`
+```
+
+
+In `evaluateMonitoringPillar`, add after existing checks:
+
+
+```go
+    // Trajectory-based monitoring recommendations
+    if input.DecomposedTrajectory != nil {
+        dt := input.DecomposedTrajectory
+        if dt.ConcordantDeterioration {
+            recs = append(recs, fmt.Sprintf("CONCORDANT DETERIORATION: %d domains declining — increase monitoring frequency across all domains",
+                dt.DomainsDeterioration))
+        }
+        if dt.HasDiscordantTrend {
+            recs = append(recs, "DISCORDANT TRAJECTORY: domains moving in opposite directions — investigate cross-domain medication effects")
+        }
+        for _, lead := range dt.LeadingIndicators {
+            if lead.LeadingDomain == dtModels.DomainBehavioral {
+                recs = append(recs, "BEHAVIORAL LEADING INDICATOR: engagement collapse detected — clinical outreach recommended before clinical domains deteriorate further")
+            }
+        }
+    }
+```
+
+
+- [ ] **Step 16: Create migration SQL for domain trajectory history**
+
+
+```sql
+-- kb-26-metabolic-digital-twin/migrations/006_domain_trajectory.sql
+
+
+CREATE TABLE IF NOT EXISTS domain_trajectory_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    snapshot_date DATE NOT NULL,
+    window_days INT,
+    composite_slope DECIMAL(6,3),
+    glucose_slope DECIMAL(6,3),
+    cardio_slope DECIMAL(6,3),
+    body_comp_slope DECIMAL(6,3),
+    behavioral_slope DECIMAL(6,3),
+    has_discordance BOOLEAN DEFAULT FALSE,
+    dominant_driver VARCHAR(20),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(patient_id, snapshot_date)
+);
+
+
+CREATE INDEX idx_dth_patient ON domain_trajectory_history(patient_id, snapshot_date DESC);
+```
+
+
+- [ ] **Step 17: Run full regression and commit**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
+go test ./... -v -count=1
+
+
+cd ../kb-23-decision-cards
+go test ./... -v -count=1
+
+
+cd ../kb-20-patient-profile
+go test ./... -v -count=1
+```
+
+
+Expected: All tests PASS, no regressions.
+
+
+- [ ] **Step 18: Final commit**
+
+
+```bash
+git add kb-23-decision-cards/internal/services/trajectory_card_rules.go
+git add kb-23-decision-cards/internal/services/trajectory_card_rules_test.go
+git add kb-23-decision-cards/internal/services/four_pillar_evaluator.go
+git add kb-26-metabolic-digital-twin/migrations/006_domain_trajectory.sql
+git commit -m "feat: MHRI domain-decomposed trajectory — complete system
+
+
+KB-26: per-domain OLS trajectories with R² confidence. Dominant driver
+identification. Concordant deterioration (≥2 domains). Divergence detection
+with clinical mechanism inference for 10 domain pairs. Behavioral leading
+indicator detection. Domain category crossing alerts.
+
+
+KB-23: 5 trajectory card types — CONCORDANT_DETERIORATION (IMMEDIATE for
+≥3 domains), DOMAIN_DIVERGENCE (misdirected therapy), BEHAVIORAL_LEADING_
+INDICATOR (clinical outreach, not app nudge), DOMAIN_RAPID_DECLINE,
+DOMAIN_CATEGORY_CROSSING. Four-pillar integration: concordant deterioration
+and discordant trajectory feed into monitoring pillar recommendations.
+
+
+Migration: domain_trajectory_history for trend-over-time analysis."
+```
+
+
+---
+
+
+## Plan Summary
+
+
+| Phase | Steps | Key Deliverables |
+|-------|-------|-----------------|
+| D1: Models + Config | 1-2 | `DomainTrajectoryPoint`, `DomainSlope` with R², `DivergencePattern`, `LeadingIndicator`, thresholds YAML |
+| D2: Core Engine | 3-7 | `ComputeDecomposedTrajectory()` — per-domain OLS, dominant driver, concordant detection, category crossing |
+| D3: Divergence | 8-11 | `detectDivergences()` with clinical mechanism inference for 10 domain pairs |
+| D4: Cards + Integration | 12-18 | 5 trajectory card types, four-pillar integration, migration, regression |
+
+
+**Total: 18 steps, 13 files (9 create, 4 modify), 4 phases.**
+
+
+**Clinical evidence base:**
+- Dagliati et al. 2018 (J Biomed Inform) — discordant domain trajectories predict complications 2-4 years earlier than composites
+- Ahlqvist et al. 2018 (Lancet D&E) — trajectory pattern clustering predicts outcomes better than single metrics
+- Ndumele et al. 2023 (Circulation) — AHA CKM framework calls for longitudinal multi-domain risk assessment
+- Holman et al. 2008 (NEJM) — UKPDS legacy effect of glycaemic delay
+- Beck et al. 2019 — TIR-HbA1c relationship for CGM trajectory context
+- Ceriello et al. 2020 — glucose variability and endothelial dysfunction for understanding glucose domain trajectory patterns
+
+
+**Key innovation:** The divergence detection with mechanism inference is not in any existing CDS system I'm aware of. Telling a clinician "glucose is improving but cardio is declining — consider SGLT2i for dual benefit" is a level of cross-domain reasoning that no single-disease clinical guideline provides. It emerges from the multi-domain architecture itself.

@@ -328,11 +328,14 @@ docker exec -i kb7-postgres pg_restore -U postgres -d kb_terminology --no-owner 
 | Wave 4 | Anticholinergic Cognitive Burden (ACB) scores | ❌ not started | CSV load |
 | Wave 5 | AMH Aged Care Companion | ❌ blocked | Commercial license |
 | Wave 5 | eTG Geriatric | ❌ blocked | Commercial license |
+| Wave 5 (alt) | **Australian Deprescribing Guideline 2025 (UWA)** — v2-introduced free alternative to AMH | ✅ **PDFs landed (5 documents, 16 MB)** — DRAFT in public consultation | deprescribing.com / UWA — see [wave6 MANIFEST](kb-3-guidelines/knowledge/au/wave6/MANIFEST.md) §"Australian Deprescribing Guideline 2025" |
 | Wave 6 | Heart Foundation (11 PDFs), ADS-ADEA T2D algorithm 2025 (2 PDFs), KHA-CARI KDIGO commentaries (5 PDFs) | ⏳ **PDFs downloaded — Pipeline 2 extraction next** | 18 PDFs / ~16 MB landed at [kb-3-guidelines/knowledge/au/wave6/](kb-3-guidelines/knowledge/au/wave6/MANIFEST.md), gitignored |
-| Wave 6 | RANZCP CPGs (BPSD, schizophrenia, mood disorders) | ⏳ manual procurement needed | RANZCP library is policy-submission-heavy; CPGs gated behind ANZJP/SAGE journal — see MANIFEST |
-| Wave 6 | ACSQHC Clinical Care Standards (Antimicrobial Stewardship, Delirium, Hip Fracture, Cognitive Impairment) | ⏳ manual procurement needed | ACSQHC site unreachable from dev env (TLS/CDN); browse manually — see MANIFEST |
+| Wave 6 | RANZCP Clinical Practice Guidelines (9 PDFs, 30 MB) | ✅ **landed via Playwright** | BPSD + Mood Disorders + Acute Pain (ANZCA APMSE5) + Opioids (RACP) + Physical Health + Valproate (BAP) + ECT + Off-label + BZD PPGs at [ranzcp_psych/](kb-3-guidelines/knowledge/au/wave6/ranzcp_psych/PROCUREMENT.md). 7 items remain not-downloaded (rescinded or JS-rendered) |
+| Wave 6 | ACSQHC Clinical Care Standards + Med Mgmt Transitions Stewardship Framework 2024 (9 PDFs, 27.4 MB) | ✅ **landed via Playwright** | 6 CCSs (AMS, Delirium, Hip Fracture, Opioid, Psychotropic-CDI, VTE) + 1 framework + 2 supporting guides at [acsqhc_ams/](kb-3-guidelines/knowledge/au/wave6/acsqhc_ams/). Direct curl returns 000 (TLS block); Playwright's Chromium TLS context bypasses it. Recipe at [PROCUREMENT.md](kb-3-guidelines/knowledge/au/wave6/acsqhc_ams/PROCUREMENT.md) |
 | Wave 6 | NPS MedicineWise deprescribing algorithms | ⏳ legacy procurement needed | Site retired Q4 2023, content moved to ACSQHC — try web.archive.org per MANIFEST |
-| Wave 6 | Standard 5 + QI Program + Royal Commission | ⚠️ partial | Manual ingestion |
+| Wave 6 | Standard 5 + Royal Commission | ⚠️ partial | Manual ingestion |
+| **Wave 6 / TGA** | **TGA Product Information catalog (4,298 PIs discovered)** | ✅ **catalog discovered + 64 PIs downloaded (37 MB) for top metformin/atorvastatin/apixaban brands** | Scraper at [scripts/tga_pi_scraper.py](kb-3-guidelines/scripts/tga_pi_scraper.py); watchlist at [tga_pi/top_racf_drugs.yaml](kb-3-guidelines/knowledge/au/tga_pi/top_racf_drugs.yaml) — 1,460 PIs match top-RACF watchlist (34% of catalog), full download takes ~25 min |
+| **Wave 6 / KB-13** | **PHARMA-Care 5-domain placeholder + AU QI Program 11 indicators** | ✅ **16 measures seeded in KB-13** | Migration `kb-13-quality-measures/migrations/002_au_indicators_seed.sql` — QI Program rows are active; PHARMA-Care rows are placeholder pending pilot publication |
 
 ---
 

@@ -1,0 +1,1734 @@
+﻿Let me do both — I'll open with the broader insight about where cross-domain reasoning creates unique clinical value across the entire platform, then channel that directly into the masked hypertension/white-coat detection plan, because that gap is itself a perfect example of cross-domain reasoning applied to a specific clinical problem.
+
+
+---
+
+
+## The Cross-Domain Reasoning Advantage — Platform-Wide
+
+
+Before diving into the implementation, let me articulate what makes this platform architecturally unique, because the masked hypertension detection design should embody the same principle.
+
+
+Most clinical decision support systems are **single-domain vertical stacks**. The glucose CDS knows about glucose. The BP CDS knows about BP. The renal CDS knows about kidneys. Each produces alerts within its silo. The physician mentally integrates across silos during the 12-minute consultation — and frequently fails, because human working memory cannot simultaneously hold 4 domain trajectories, 3 drug interaction matrices, medication timing effects, and the patient's behavioral context.
+
+
+What CardioFit does differently is **horizontal cross-domain inference** — detecting patterns that only become visible when you hold multiple domains in computational memory simultaneously. The divergence detection is one example. Here are the others, including what we're about to build:
+
+
+**Masked hypertension itself is a cross-domain signal.** It's not a BP problem alone — it's a *discordance between measurement contexts* (clinic vs home) that reveals a cardiovascular phenotype. But the clinical significance of masked hypertension depends on the patient's metabolic state (diabetic masked HTN is 3× more dangerous than non-diabetic), their renal function (masked HTN accelerates CKD progression faster than sustained HTN in some studies), and their behavioral pattern (a patient who only measures at home when feeling unwell has selection bias in their home readings). No single-domain system can evaluate masked hypertension correctly. The platform can.
+
+
+**The cross-domain patterns that no single guideline covers:**
+
+
+1. **Divergence detection** (implemented) — therapy helping one domain while harming another
+2. **Masked/white-coat hypertension** (building now) — measurement-context discordance × metabolic state × renal function
+3. **Behavioral-clinical lead-lag** (implemented) — engagement predicting clinical trajectory
+4. **Medication-renal-glycaemic triangle** (renal gating) — eGFR constraining glycaemic options constraining CV risk management
+5. **Inertia × engagement interaction** (inertia detector + Module 9) — is it inertia or rational watchful waiting during behavioral crisis?
+6. **CGM pattern × BP variability correlation** (future) — post-meal glucose spikes coinciding with BP surges indicating shared insulin resistance mechanism
+7. **Phenotype cluster × intervention response** (IOR + clustering) — "patients like you" stratified by multi-domain trajectory pattern, not single-metric similarity
+
+
+Each of these is invisible to a single-domain CDS. Each is clinically actionable. Together they constitute a level of multi-domain clinical reasoning that no existing platform provides. Now let me build the next one.
+
+
+---
+
+
+# Masked Hypertension & White-Coat Detection — Implementation Plan
+
+
+## Clinical Rationale
+
+
+**Why this is a core value proposition of a digital BP monitoring platform:**
+
+
+A platform that collects both home and clinic BP readings and doesn't compare them is leaving its most distinctive clinical signal on the table. The entire point of home BP monitoring — the reason patients buy cuffs, the reason clinicians prescribe ambulatory monitoring — is to detect the discordance between what BP does in the clinic and what it does in real life. That discordance has a name, a prevalence, a prognosis, and a treatment strategy.
+
+
+**Masked hypertension (MH):** Normal clinic BP (<140/90) but elevated home/ambulatory BP (≥135/85 home, or ≥130/80 daytime ABPM). The patient looks fine in the office but is hypertensive in daily life. The clinical danger is that it's invisible to the treating physician without out-of-office measurements — the physician sees normal BP, feels reassured, and doesn't intensify therapy. Meanwhile, the patient accumulates target organ damage.
+
+
+Prevalence: **10-30% of the general hypertensive population** (Banegas et al., 2018, European Heart Journal). In diabetic populations, prevalence rises to **30-40%** (Franklin et al., 2020, Hypertension). In CKD patients, **30-50%** (Agarwal et al., 2022, Kidney International). Rajesh Kumar (58M, T2DM, CKD G3b) has a 35-45% probability of masked hypertension based on his risk profile alone — and the platform currently has no way to detect it despite having both home and clinic readings.
+
+
+Prognosis: MH carries cardiovascular risk equivalent to or worse than sustained hypertension. Pierdomenico et al. (2017, meta-analysis in Hypertension) showed MH is associated with a **2.09× increased risk of cardiovascular events** compared to normotension, and **1.29× compared to sustained hypertension** in some subgroups. The reason is that MH patients receive less treatment (physician sees normal clinic BP) while having equal or greater BP burden (higher out-of-office BP, often with absent nocturnal dipping).
+
+
+The Ambulatory Blood Pressure Monitoring in the Prediction of Cardiovascular Events (IDACO) consortium (Staessen et al., 2014) demonstrated that masked hypertension detected by home monitoring predicts cardiovascular mortality independently of clinic BP, age, sex, smoking, diabetes, and cholesterol. Home BP monitoring has prognostic superiority over clinic BP for predicting stroke (HR 1.35 per 10 mmHg home vs 1.08 per 10 mmHg clinic) — Ohkubo et al. 2004 (JAMA).
+
+
+**White-coat hypertension (WCH):** Elevated clinic BP (≥140/90) but normal home/ambulatory BP (<135/85 home). The patient appears hypertensive in the office but is normotensive in daily life. This is less dangerous than masked HTN but still clinically important — studies show WCH patients have intermediate cardiovascular risk between true normotensives and sustained hypertensives (Mancia et al., 2022, Hypertension). The main clinical value of detecting WCH is **avoiding unnecessary medication.** A patient started on antihypertensives based solely on elevated clinic BP, when their home BP is normal, receives no benefit and only side effects.
+
+
+However, WCH is not fully benign. The PAMELA study (Mancia et al., 2006) and IDACO data show that WCH patients progress to sustained hypertension at a rate of **1-5% per year** — WCH may be an early marker of evolving hypertension. The system should detect WCH but also track these patients longitudinally for progression to sustained HTN.
+
+
+**White-coat effect (WCE) vs. white-coat hypertension:** An important distinction. WCE is the *magnitude* of the clinic-home BP difference — even patients with sustained hypertension have WCE (clinic BP higher than home BP). WCH is the *classification* where clinic BP crosses the diagnostic threshold but home BP doesn't. The system should compute both: WCE as a continuous variable (clinic-home gap in mmHg) and WCH/MH as binary classifications.
+
+
+**The specific clinical phenotypes we must detect:**
+
+
+**Phenotype 1 — Sustained Hypertension (SH):** Clinic BP ≥140/90 AND home BP ≥135/85. Both contexts elevated. Treatment: intensify antihypertensives. This is the baseline — no measurement-context discordance.
+
+
+**Phenotype 2 — White-Coat Hypertension (WCH):** Clinic BP ≥140/90 AND home BP <135/85. Treatment: avoid medication (or deprescribe if already started), monitor regularly, lifestyle modification. Watchful waiting with regular home monitoring.
+
+
+**Phenotype 3 — Masked Hypertension (MH):** Clinic BP <140/90 AND home BP ≥135/85. Treatment: initiate or intensify antihypertensives based on home BP, not clinic BP. This is the most dangerous phenotype because it's the most likely to be missed.
+
+
+**Phenotype 4 — Sustained Normotension (SN):** Clinic BP <140/90 AND home BP <135/85. Both contexts normal. No treatment needed for BP.
+
+
+**Phenotype 5 — Masked Uncontrolled Hypertension (MUCH):** A treated patient whose clinic BP appears controlled (<140/90) but home BP remains elevated (≥135/85). This is MH in the treatment context — the physician thinks therapy is working, but it isn't. Prevalence among treated hypertensives: **30-50%** (Banegas et al., 2018). This is arguably more dangerous than untreated MH because it generates false therapeutic confidence.
+
+
+**Phenotype 6 — White-Coat Uncontrolled (WCUH):** A treated patient whose clinic BP appears uncontrolled (≥140/90) but home BP is controlled (<135/85). The physician may intensify therapy unnecessarily, leading to overtreatment and hypotension risk.
+
+
+---
+
+
+**The cross-domain dimensions that make this a platform-level feature:**
+
+
+**Dimension 1 — Diabetes amplifies masked HTN risk.** Diabetic patients with MH have a 3.2× higher rate of subclinical target organ damage (left ventricular hypertrophy, microalbuminuria, carotid atherosclerosis) compared to diabetic patients with sustained normotension — higher than even sustained hypertension in some studies (Leitão et al., 2015, Diabetologia). The detection system must flag MH in diabetic patients at IMMEDIATE urgency, not ROUTINE.
+
+
+**Dimension 2 — CKD accelerates under masked HTN.** Masked hypertension is the strongest predictor of CKD progression in diabetic nephropathy, independent of clinic BP (Agarwal et al., 2017, CJASN). Each 10 mmHg of masked SBP elevation (home above clinic) associates with 15% faster eGFR decline. The renal dose gating system should integrate MH status — a patient with eGFR 45 and masked HTN needs more aggressive renoprotective therapy than one with sustained normotension.
+
+
+**Dimension 3 — Engagement context affects interpretation.** A patient classified as "MEASUREMENT_AVOIDANT" (Module 9 phenotype) who only measures at home when symptomatic will have artificially elevated home readings — their "masked HTN" may actually be selection bias. The detection system must cross-reference the engagement phenotype: if the patient measures infrequently and only when feeling unwell, the masked HTN classification should carry a "POSSIBLE_SELECTION_BIAS" flag.
+
+
+**Dimension 4 — Morning surge pattern interaction.** Module 7 already computes morning surge. A patient with masked HTN and exaggerated morning surge (>20 mmHg) has an especially high stroke risk — the two signals are multiplicatively dangerous (Kario et al., 2019, JACC). The detection system should flag the combination.
+
+
+**Dimension 5 — Medication timing hypothesis.** Masked HTN in a treated patient often indicates medication wearing off before the next dose. If the patient's home BP is consistently elevated in the morning (before the morning dose) but their clinic visit happens at 2pm (peak medication effect), the system should hypothesize: "Clinic BP normal at 2pm, home BP elevated at 7am — consider evening dosing or longer-acting formulation." This requires correlating time_context of readings with medication timing data.
+
+
+---
+
+
+**India-Specific Masked HTN Considerations:**
+
+
+- **Clinic setting variability:** Indian clinic BP measurement is highly variable — crowded waiting rooms, patient anxiety, inconsistent rest period before measurement, mercury sphygmomanometers still common in tier-2/3. White-coat effect is likely higher in Indian clinical settings. The system should use a slightly wider clinic-home gap threshold for WCH detection in Indian patients (ISH 2020 suggests ≥20 mmHg gap rather than standard 15 mmHg for populations with higher WCE baseline).
+
+
+- **Salt-sensitive masked HTN:** High dietary sodium is endemic in Indian diets (average intake 10-11 g/day, double the WHO recommendation). Salt-sensitive patients may have normal clinic BP (fasting, low salt morning) but elevated home BP (post-meal, high sodium). The meal log data (sodium_mg from Module 10) should correlate with evening BP readings to detect sodium-driven masked HTN.
+
+
+- **Home cuff validation:** Many Indian patients use unvalidated wrist cuffs or poorly calibrated devices. Before classifying masked HTN, the system should check device_type — if the patient uses a validated oscillometric upper-arm cuff (HOME_CUFF), confidence is HIGH. If wrist or unvalidated device, confidence is MODERATE with a recommendation for cuff validation.
+
+
+**Australia-Specific Masked HTN Considerations:**
+
+
+- **ABPM reimbursement:** Medicare rebate for 24-hour ABPM (MBS item 11607) is available, which provides the gold standard for masked HTN diagnosis. When the system detects probable masked HTN from home monitoring, it should recommend confirmatory ABPM with the MBS item code to reduce cost barrier.
+
+
+- **Heart Foundation guidelines 2022:** Explicitly recommend home BP monitoring for all treated hypertensives and ABPM for suspected WCH or MH. The system should align its classification thresholds with Heart Foundation definitions.
+
+
+- **Indigenous considerations:** Home BP monitoring in remote Aboriginal communities may be facilitated by community health workers using clinic-grade devices in a home-like setting. The "clinic vs home" distinction is blurred. The system should support a "COMMUNITY_HEALTH_WORKER" source type that is treated as home-equivalent for masked HTN classification.
+
+
+---
+
+
+## Architecture Overview
+
+
+The masked hypertension detection system integrates with Module 7 (BP variability), KB-20 (patient profile), KB-23 (decision cards), and the engagement system (Module 9):
+
+
+1. **Module 7 (Flink — BP Variability Engine):** Extended to compute clinic-home gap metrics on every reading. Tracks clinic and home readings separately. Computes white_coat_suspected and masked_htn_suspected flags (these fields already exist in Module 7 output but are always `false`). New: populates these fields with actual detection logic.
+
+
+2. **KB-26 (Metabolic Digital Twin):** Stores BP context classification (SH/WCH/MH/SN) as part of hemodynamic state. Computes clinic-home discordance metrics for trajectory analysis. Cross-references with diabetes status, CKD status, and engagement phenotype for severity amplification.
+
+
+3. **KB-23 (Decision Cards):** Generates masked HTN / white-coat cards with cross-domain enrichment. Integrates with renal gating (MH + CKD → aggressive renoprotection), inertia detection (MUCH → inertia is more dangerous than it appears), and four-pillar evaluation.
+
+
+4. **KB-20 (Patient Profile):** Stores BP classification phenotype. Exposes clinic-home comparison endpoint.
+
+
+**Data flow:**
+```
+Clinic BP reading (source="CLINIC") ─┐
+Home BP reading (source="HOME_CUFF") ─┤──→ Module 7 BP Variability Engine
+                                      │      ├── Compute clinic-home SBP/DBP gap
+                                      │      ├── Classify: SH / WCH / MH / SN / MUCH / WCUH
+                                      │      ├── Set white_coat_suspected / masked_htn_suspected
+                                      │      └── Emit flink.bp-variability-metrics (with classification)
+                                      │
+                                      └──→ KB-26 Hemodynamic State
+                                             ├── Store BP context classification
+                                             ├── Cross-reference: DM status × MH → amplified risk
+                                             ├── Cross-reference: CKD × MH → accelerated progression
+                                             ├── Cross-reference: engagement phenotype → selection bias check
+                                             └── Feed into MHRI cardio domain interpretation
+                                                    ↓
+                                              KB-23 Card Generation
+                                                ├── Masked HTN card (URGENT for diabetic, ROUTINE for non-DM)
+                                                ├── White-coat card (ROUTINE — avoid overtreatment)
+                                                ├── MUCH card (URGENT — false therapeutic confidence)
+                                                ├── Morning surge × MH compound risk card
+                                                └── Medication timing hypothesis card
+```
+
+
+**Critical thresholds (ESH 2023, ISH 2020, Heart Foundation 2022):**
+
+
+| Context | SBP Threshold | DBP Threshold |
+|---------|--------------|---------------|
+| Clinic | ≥140 | ≥90 |
+| Home (mean) | ≥135 | ≥85 |
+| Daytime ABPM | ≥135 | ≥85 |
+| Nighttime ABPM | ≥120 | ≥70 |
+| 24-hour ABPM | ≥130 | ≥80 |
+| Diabetic clinic target | ≥130 | ≥80 |
+
+
+**Minimum data requirements for classification:**
+- Home: ≥12 readings over ≥4 days (ESH 2023 recommendation: duplicate morning + evening × 7 days, discard day 1 — we use ≥4 days as pragmatic minimum)
+- Clinic: ≥2 clinic readings (preferably on separate visits)
+- The classification is only valid when both contexts have sufficient data simultaneously
+
+
+---
+
+
+## Tech Stack Alignment
+
+
+- Java 17 (Flink 1.18) for Module 7 extension
+- Go 1.21 (Gin, GORM) for KB-26 hemodynamic state, KB-23 cards
+- PostgreSQL 15 for BP classification history
+- YAML market configs for threshold overrides
+
+
+---
+
+
+## File Inventory
+
+
+### Module 7 (Flink) — Clinic-Home Gap Detection
+| Action | File |
+|--------|------|
+| Create | `flink-processing/.../operators/Module7_MaskedHTNDetector.java` |
+| Create | `flink-processing/.../operators/Module7_MaskedHTNDetectorTest.java` |
+| Create | `flink-processing/.../models/BPContextClassification.java` |
+| Modify | `flink-processing/.../operators/Module7_BPVariabilityEngine.java` (integrate detection) |
+
+
+### KB-26 (Metabolic Digital Twin) — Hemodynamic Context State
+| Action | File |
+|--------|------|
+| Create | `kb-26-metabolic-digital-twin/internal/services/bp_context_classifier.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/services/bp_context_classifier_test.go` |
+| Create | `kb-26-metabolic-digital-twin/internal/models/bp_context.go` |
+| Create | `kb-26-metabolic-digital-twin/migrations/007_bp_context.sql` |
+
+
+### KB-23 (Decision Cards) — Context-Aware BP Cards
+| Action | File |
+|--------|------|
+| Create | `kb-23-decision-cards/internal/services/masked_htn_cards.go` |
+| Create | `kb-23-decision-cards/internal/services/masked_htn_cards_test.go` |
+| Modify | `kb-23-decision-cards/internal/services/four_pillar_evaluator.go` (MH-aware medication pillar) |
+
+
+### Market Configs
+| Action | File |
+|--------|------|
+| Create | `market-configs/shared/bp_context_thresholds.yaml` |
+| Create | `market-configs/india/bp_context_overrides.yaml` |
+| Create | `market-configs/australia/bp_context_overrides.yaml` |
+
+
+**Total: 16 files (12 create, 4 modify)**
+
+
+---
+
+
+## Phase M1: BP Context Models + Market Configuration
+
+
+### Step 1: Create BP context classification model
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/models/bp_context.go
+package models
+
+
+import "time"
+
+
+// BPContextPhenotype classifies the patient's clinic-home BP relationship.
+type BPContextPhenotype string
+
+
+const (
+    PhenotypeSustainedHTN         BPContextPhenotype = "SUSTAINED_HTN"
+    PhenotypeWhiteCoatHTN         BPContextPhenotype = "WHITE_COAT_HTN"
+    PhenotypeMaskedHTN            BPContextPhenotype = "MASKED_HTN"
+    PhenotypeSustainedNormotension BPContextPhenotype = "SUSTAINED_NORMOTENSION"
+    PhenotypeMaskedUncontrolled   BPContextPhenotype = "MASKED_UNCONTROLLED"    // MUCH — treated
+    PhenotypeWhiteCoatUncontrolled BPContextPhenotype = "WHITE_COAT_UNCONTROLLED" // WCUH — treated
+    PhenotypeInsufficientData     BPContextPhenotype = "INSUFFICIENT_DATA"
+)
+
+
+// BPContextClassification is the full output of the clinic-home discordance analysis.
+type BPContextClassification struct {
+    PatientID          string              `json:"patient_id"`
+    Phenotype          BPContextPhenotype  `json:"phenotype"`
+    ComputedAt         time.Time           `json:"computed_at"`
+
+
+    // Clinic BP summary
+    ClinicSBPMean      float64  `json:"clinic_sbp_mean"`
+    ClinicDBPMean      float64  `json:"clinic_dbp_mean"`
+    ClinicReadings     int      `json:"clinic_readings"`
+    ClinicAboveThreshold bool   `json:"clinic_above_threshold"`
+
+
+    // Home BP summary
+    HomeSBPMean        float64  `json:"home_sbp_mean"`
+    HomeDBPMean        float64  `json:"home_dbp_mean"`
+    HomeReadings       int      `json:"home_readings"`
+    HomeDaysWithData   int      `json:"home_days_with_data"`
+    HomeAboveThreshold bool     `json:"home_above_threshold"`
+
+
+    // Discordance metrics
+    ClinicHomeGapSBP   float64  `json:"clinic_home_gap_sbp"`   // clinic - home (positive = clinic higher)
+    ClinicHomeGapDBP   float64  `json:"clinic_home_gap_dbp"`
+    WhiteCoatEffect    float64  `json:"white_coat_effect_mmhg"` // magnitude of clinic elevation
+
+
+    // Data quality
+    SufficientClinic   bool     `json:"sufficient_clinic"`
+    SufficientHome     bool     `json:"sufficient_home"`
+    Confidence         string   `json:"confidence"`  // HIGH, MODERATE, LOW
+    ClinicWindow       string   `json:"clinic_window"`  // e.g., "last 90 days"
+    HomeWindow         string   `json:"home_window"`    // e.g., "last 14 days"
+
+
+    // Cross-domain risk amplification
+    IsDiabetic              bool    `json:"is_diabetic"`
+    DiabetesAmplification   bool    `json:"diabetes_amplification"`   // true if MH + DM
+    HasCKD                  bool    `json:"has_ckd"`
+    CKDAmplification        bool    `json:"ckd_amplification"`        // true if MH + CKD
+    EngagementPhenotype     string  `json:"engagement_phenotype,omitempty"`
+    SelectionBiasRisk       bool    `json:"selection_bias_risk"`      // true if measurement avoidant
+    MorningSurgeCompound    bool    `json:"morning_surge_compound"`   // true if MH + morning surge >20
+
+
+    // Treatment context
+    OnAntihypertensives     bool    `json:"on_antihypertensives"`
+    MedicationTimingHypothesis string `json:"medication_timing_hypothesis,omitempty"`
+
+
+    // Thresholds used (market-specific)
+    ClinicSBPThreshold float64  `json:"clinic_sbp_threshold"`
+    ClinicDBPThreshold float64  `json:"clinic_dbp_threshold"`
+    HomeSBPThreshold   float64  `json:"home_sbp_threshold"`
+    HomeDBPThreshold   float64  `json:"home_dbp_threshold"`
+}
+
+
+// BPContextHistory stores classification snapshots for progression tracking.
+type BPContextHistory struct {
+    ID             string             `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+    PatientID      string             `gorm:"size:100;index;not null" json:"patient_id"`
+    SnapshotDate   time.Time          `gorm:"index;not null" json:"snapshot_date"`
+    Phenotype      BPContextPhenotype `gorm:"size:30;not null" json:"phenotype"`
+    ClinicSBPMean  float64            `json:"clinic_sbp_mean"`
+    HomeSBPMean    float64            `json:"home_sbp_mean"`
+    GapSBP         float64            `json:"gap_sbp"`
+    Confidence     string             `gorm:"size:10" json:"confidence"`
+    CreatedAt      time.Time          `json:"created_at"`
+}
+```
+
+
+- [ ] **Step 2: Create shared BP context thresholds YAML**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/shared/bp_context_thresholds.yaml
+# BP context classification thresholds for masked HTN / white-coat detection.
+# Sources: ESH 2023, ISH 2020, AHA/ACC 2017
+
+
+# Classification thresholds (mmHg)
+thresholds:
+  clinic:
+    sbp_elevated: 140      # ≥140 = clinic hypertension
+    dbp_elevated: 90       # ≥90 = clinic hypertension
+    sbp_elevated_dm: 130   # ≥130 for diabetic patients (ISH 2020)
+    dbp_elevated_dm: 80    # ≥80 for diabetic patients
+  home:
+    sbp_elevated: 135      # ≥135 = home hypertension
+    dbp_elevated: 85       # ≥85 = home hypertension
+  abpm_daytime:
+    sbp_elevated: 135
+    dbp_elevated: 85
+  abpm_nighttime:
+    sbp_elevated: 120
+    dbp_elevated: 70
+  abpm_24hr:
+    sbp_elevated: 130
+    dbp_elevated: 80
+
+
+# Minimum data requirements for valid classification
+data_requirements:
+  clinic:
+    min_readings: 2                # ≥2 clinic readings
+    max_age_days: 90               # clinic readings within last 90 days
+    separate_visits_preferred: true # ideally from different visits
+  home:
+    min_readings: 12               # ≥12 home readings
+    min_days: 4                    # over ≥4 distinct days
+    max_age_days: 14               # home readings within last 14 days
+    discard_first_day: true        # ESH recommendation: discard day 1 readings
+    morning_evening_preferred: true # duplicate morning + evening per day
+
+
+# White-coat effect magnitude thresholds
+white_coat_effect:
+  clinically_significant: 15       # ≥15 mmHg clinic-home gap = significant WCE
+  severe: 30                       # ≥30 mmHg gap = severe WCE (investigate anxiety/pain)
+
+
+# Cross-domain risk amplification
+amplification:
+  diabetes:
+    masked_htn_risk_multiplier: 3.2   # Leitão et al. 2015: 3.2× TOD risk
+    urgency_override: "IMMEDIATE"     # MH + DM → IMMEDIATE, not URGENT
+  ckd:
+    masked_htn_egfr_decline_per_10mmhg: 15  # % faster eGFR decline per 10mmHg masked SBP
+    urgency_override: "URGENT"
+  morning_surge:
+    compound_threshold: 20            # mmHg — MH + surge >20 = compound risk
+    urgency_override: "IMMEDIATE"
+
+
+# WCH progression monitoring
+wch_progression:
+  recheck_interval_months: 6         # recheck WCH patients every 6 months
+  progression_rate_pct_per_year: 3   # ~3% progress to sustained HTN annually
+
+
+# Selection bias detection
+selection_bias:
+  engagement_phenotypes_at_risk:
+    - "MEASUREMENT_AVOIDANT"
+    - "CRISIS_ONLY_MEASURER"
+  min_home_readings_for_confidence: 20  # need ≥20 readings to reduce bias concern
+  flag_if_readings_below: 12            # flag if home readings < 12
+
+
+# Source classification
+source_mapping:
+  clinic: ["CLINIC", "OFFICE", "HOSPITAL"]
+  home: ["HOME_CUFF", "HOME_WRIST", "PATIENT_REPORTED"]
+  community: ["COMMUNITY_HEALTH_WORKER", "PHARMACY"]  # treated as home-equivalent
+  abpm: ["ABPM_24HR"]
+```
+
+
+- [ ] **Step 3: Create India and Australia BP context overrides**
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/india/bp_context_overrides.yaml
+# Sources: ISH 2020 (India endorsed), RSSDI 2023
+
+
+thresholds_override:
+  # ISH 2020 recommends <130/80 for DM patients — India aligns
+  clinic:
+    sbp_elevated_dm: 130
+    dbp_elevated_dm: 80
+
+
+white_coat_effect_override:
+  # Indian clinical settings have higher WCE baseline due to crowding, wait times
+  clinically_significant: 20     # raised from 15 to 20 for Indian context
+  rationale: "Indian clinic environments generate higher anxiety responses (crowded OPDs, long waits)"
+
+
+# Device validation concern
+device_validation:
+  warn_on_wrist_cuff: true
+  warn_on_unvalidated: true
+  recommended_devices: ["Omron HEM-7120", "Omron HEM-7130", "Dr. Morepen BP-02"]
+  message: "Ensure upper-arm oscillometric cuff is validated per ESH/ISH protocol"
+
+
+# Salt-sensitivity correlation
+sodium_correlation:
+  enabled: true
+  # When Module 10 meal sodium data is available, correlate evening home BP
+  # with same-day sodium intake to detect salt-sensitive masked HTN
+  sodium_threshold_mg: 2000
+  bp_elevation_expected_per_1000mg: 5  # ~5 mmHg SBP per 1000mg excess sodium
+```
+
+
+```yaml
+# backend/shared-infrastructure/market-configs/australia/bp_context_overrides.yaml
+# Sources: Heart Foundation 2022, RACGP 2024
+
+
+abpm_recommendation:
+  # Medicare rebate for ABPM — recommend when masked HTN suspected
+  mbs_item_code: "11607"
+  recommend_when: ["MASKED_HTN_PROBABLE", "WHITE_COAT_HTN_PROBABLE"]
+  message: "Confirm with 24-hour ABPM (Medicare Item 11607) for definitive classification"
+
+
+indigenous_overrides:
+  # Community health worker readings treated as home-equivalent
+  source_mapping_override:
+    community_health_worker: "HOME"
+  # Higher masked HTN prevalence in indigenous populations
+  screening_interval_months: 3  # more frequent than general population (6 months)
+
+
+heart_foundation_alignment:
+  # Heart Foundation 2022: all treated hypertensives should have home BP monitoring
+  recommend_hbpm_for_treated: true
+  classification_thresholds: "ISH_2020"  # Heart Foundation adopts ISH thresholds
+```
+
+
+---
+
+
+## Phase M2: Core Classification Engine (KB-26)
+
+
+### Step 4: Write failing test for BP context classifier
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/bp_context_classifier_test.go
+package services
+
+
+import (
+    "testing"
+    "time"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+// === CORE PHENOTYPE CLASSIFICATION ===
+
+
+func TestClassify_SustainedHTN(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 155, DBP: 95, Source: "CLINIC"},
+            {SBP: 150, DBP: 92, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(14, 142, 88), // consistently above 135/85
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeSustainedHTN, result.Phenotype)
+    assert.True(t, result.ClinicAboveThreshold)
+    assert.True(t, result.HomeAboveThreshold)
+}
+
+
+func TestClassify_MaskedHTN(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 128, DBP: 78, Source: "CLINIC"},
+            {SBP: 132, DBP: 82, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(14, 148, 92), // home elevated, clinic normal
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeMaskedHTN, result.Phenotype)
+    assert.False(t, result.ClinicAboveThreshold)
+    assert.True(t, result.HomeAboveThreshold)
+    assert.True(t, result.ClinicHomeGapSBP < 0) // home higher than clinic
+}
+
+
+func TestClassify_WhiteCoatHTN(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 158, DBP: 96, Source: "CLINIC"},
+            {SBP: 152, DBP: 94, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(14, 125, 78), // home normal, clinic elevated
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeWhiteCoatHTN, result.Phenotype)
+    assert.True(t, result.WhiteCoatEffect >= 15) // significant WCE
+}
+
+
+func TestClassify_SustainedNormotension(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 122, DBP: 76, Source: "CLINIC"},
+            {SBP: 118, DBP: 74, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(14, 120, 75),
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeSustainedNormotension, result.Phenotype)
+}
+
+
+// === TREATED PATIENT PHENOTYPES ===
+
+
+func TestClassify_MaskedUncontrolled(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 132, DBP: 80, Source: "CLINIC"},
+            {SBP: 128, DBP: 78, Source: "CLINIC"},
+        },
+        HomeReadings:       generateHomeReadings(14, 145, 90),
+        OnAntihypertensives: true,
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeMaskedUncontrolled, result.Phenotype)
+}
+
+
+func TestClassify_WhiteCoatUncontrolled(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 148, DBP: 92, Source: "CLINIC"},
+            {SBP: 145, DBP: 90, Source: "CLINIC"},
+        },
+        HomeReadings:       generateHomeReadings(14, 128, 80),
+        OnAntihypertensives: true,
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeWhiteCoatUncontrolled, result.Phenotype)
+}
+
+
+// === CROSS-DOMAIN AMPLIFICATION ===
+
+
+func TestClassify_MaskedHTN_DiabeticAmplification(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 125, DBP: 76, Source: "CLINIC"},
+            {SBP: 128, DBP: 78, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(14, 142, 88),
+        IsDiabetic:   true,
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeMaskedHTN, result.Phenotype)
+    assert.True(t, result.DiabetesAmplification)
+    // Diabetic patients use stricter clinic threshold (130/80)
+    // clinic 125-128 is below 130 → still classified normal
+    // home 142 is above 135 → home elevated → masked HTN
+}
+
+
+func TestClassify_MaskedHTN_CKDAmplification(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 130, DBP: 80, Source: "CLINIC"},
+            {SBP: 132, DBP: 78, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(14, 144, 90),
+        HasCKD:       true,
+        EGFR:         42,
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.True(t, result.CKDAmplification)
+}
+
+
+func TestClassify_MaskedHTN_MorningSurgeCompound(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 128, DBP: 78, Source: "CLINIC"},
+        },
+        HomeReadings:      generateHomeReadings(14, 140, 88),
+        MorningSurge7dAvg: 28, // >20 threshold
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.True(t, result.MorningSurgeCompound)
+}
+
+
+// === SELECTION BIAS DETECTION ===
+
+
+func TestClassify_SelectionBias_MeasurementAvoidant(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 128, DBP: 78, Source: "CLINIC"},
+        },
+        HomeReadings:       generateHomeReadings(5, 155, 95), // only 5 readings — avoidant
+        EngagementPhenotype: "MEASUREMENT_AVOIDANT",
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.True(t, result.SelectionBiasRisk)
+    assert.Equal(t, "LOW", result.Confidence) // low confidence due to bias risk
+}
+
+
+// === INSUFFICIENT DATA ===
+
+
+func TestClassify_InsufficientHome(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 145, DBP: 92, Source: "CLINIC"},
+        },
+        HomeReadings: generateHomeReadings(2, 138, 86), // only 2 readings — insufficient
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeInsufficientData, result.Phenotype)
+    assert.False(t, result.SufficientHome)
+}
+
+
+func TestClassify_InsufficientClinic(t *testing.T) {
+    input := BPContextInput{
+        ClinicReadings: []BPReading{}, // no clinic readings
+        HomeReadings:   generateHomeReadings(14, 138, 86),
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeInsufficientData, result.Phenotype)
+    assert.False(t, result.SufficientClinic)
+}
+
+
+// === MEDICATION TIMING HYPOTHESIS ===
+
+
+func TestClassify_MedicationTimingHypothesis(t *testing.T) {
+    // Home readings: morning BPs are high, evening BPs are normal
+    morningReadings := make([]BPReading, 7)
+    eveningReadings := make([]BPReading, 7)
+    now := time.Now()
+    for i := 0; i < 7; i++ {
+        morningReadings[i] = BPReading{
+            SBP: 148, DBP: 92, Source: "HOME_CUFF", TimeContext: "MORNING",
+            Timestamp: now.Add(time.Duration(-i*24) * time.Hour),
+        }
+        eveningReadings[i] = BPReading{
+            SBP: 125, DBP: 78, Source: "HOME_CUFF", TimeContext: "EVENING",
+            Timestamp: now.Add(time.Duration(-i*24+12) * time.Hour),
+        }
+    }
+
+
+    allHome := append(morningReadings, eveningReadings...)
+
+
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 128, DBP: 80, Source: "CLINIC"}, // clinic normal (afternoon visit)
+        },
+        HomeReadings:       allHome,
+        OnAntihypertensives: true,
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.NotEmpty(t, result.MedicationTimingHypothesis)
+    assert.Contains(t, result.MedicationTimingHypothesis, "morning")
+}
+
+
+// === RAJESH KUMAR ===
+
+
+func TestClassify_RajeshKumar(t *testing.T) {
+    // Rajesh: clinic reading 170/104 (day 5), home readings consistently 155-180 morning, 140-160 evening
+    input := BPContextInput{
+        ClinicReadings: []BPReading{
+            {SBP: 170, DBP: 104, Source: "CLINIC"},
+        },
+        HomeReadings:       generateHomeReadings(14, 158, 96),
+        IsDiabetic:         true,
+        HasCKD:             true,
+        EGFR:               42,
+        OnAntihypertensives: true,
+        MorningSurge7dAvg:   28,
+    }
+
+
+    result := ClassifyBPContext(input)
+    assert.Equal(t, models.PhenotypeSustainedHTN, result.Phenotype) // both contexts elevated
+    assert.True(t, result.DiabetesAmplification)
+    assert.True(t, result.CKDAmplification)
+    assert.True(t, result.MorningSurgeCompound)
+    // Rajesh has sustained HTN (not masked) — but the system should still note
+    // the clinic-home gap and morning surge compound risk
+}
+
+
+// Helper: generate home readings
+func generateHomeReadings(count int, avgSBP, avgDBP float64) []BPReading {
+    readings := make([]BPReading, count)
+    now := time.Now()
+    for i := 0; i < count; i++ {
+        readings[i] = BPReading{
+            SBP:       avgSBP + float64(i%3-1)*3, // slight variation
+            DBP:       avgDBP + float64(i%3-1)*2,
+            Source:    "HOME_CUFF",
+            Timestamp: now.Add(time.Duration(-i*12) * time.Hour),
+        }
+    }
+    return readings
+}
+```
+
+
+- [ ] **Step 5: Implement BP context classifier**
+
+
+```go
+// kb-26-metabolic-digital-twin/internal/services/bp_context_classifier.go
+package services
+
+
+import (
+    "fmt"
+    "math"
+    "time"
+
+
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+// Default thresholds — overridden by market config
+const (
+    defaultClinicSBP     = 140.0
+    defaultClinicDBP     = 90.0
+    defaultClinicSBP_DM  = 130.0
+    defaultClinicDBP_DM  = 80.0
+    defaultHomeSBP       = 135.0
+    defaultHomeDBP       = 85.0
+    minClinicReadings    = 2
+    minHomeReadings      = 12
+    minHomeDays          = 4
+    significantWCE       = 15.0
+    morningSurgeCompound = 20.0
+)
+
+
+type BPReading struct {
+    SBP         float64   `json:"sbp"`
+    DBP         float64   `json:"dbp"`
+    Source      string    `json:"source"`
+    TimeContext string    `json:"time_context,omitempty"` // MORNING, EVENING, NIGHT
+    Timestamp   time.Time `json:"timestamp"`
+}
+
+
+type BPContextInput struct {
+    ClinicReadings      []BPReading
+    HomeReadings        []BPReading
+    OnAntihypertensives bool
+    IsDiabetic          bool
+    HasCKD              bool
+    EGFR                float64
+    EngagementPhenotype string
+    MorningSurge7dAvg   float64
+}
+
+
+// ClassifyBPContext performs the clinic-home BP discordance analysis.
+func ClassifyBPContext(input BPContextInput) models.BPContextClassification {
+    result := models.BPContextClassification{
+        ComputedAt:          time.Now(),
+        OnAntihypertensives: input.OnAntihypertensives,
+        IsDiabetic:          input.IsDiabetic,
+        HasCKD:              input.HasCKD,
+    }
+
+
+    // Set thresholds (diabetic patients use stricter clinic thresholds)
+    clinicSBPThresh := defaultClinicSBP
+    clinicDBPThresh := defaultClinicDBP
+    if input.IsDiabetic {
+        clinicSBPThresh = defaultClinicSBP_DM
+        clinicDBPThresh = defaultClinicDBP_DM
+    }
+    result.ClinicSBPThreshold = clinicSBPThresh
+    result.ClinicDBPThreshold = clinicDBPThresh
+    result.HomeSBPThreshold = defaultHomeSBP
+    result.HomeDBPThreshold = defaultHomeDBP
+
+
+    // Check data sufficiency
+    result.SufficientClinic = len(input.ClinicReadings) >= minClinicReadings
+    homeDistinctDays := countDistinctDays(input.HomeReadings)
+    result.SufficientHome = len(input.HomeReadings) >= minHomeReadings && homeDistinctDays >= minHomeDays
+    result.ClinicReadings_ = len(input.ClinicReadings)
+    result.HomeReadings_ = len(input.HomeReadings)
+    result.HomeDaysWithData = homeDistinctDays
+
+
+    if !result.SufficientClinic || !result.SufficientHome {
+        result.Phenotype = models.PhenotypeInsufficientData
+        result.Confidence = "LOW"
+
+
+        // Still compute what we can for partial reporting
+        if len(input.ClinicReadings) > 0 {
+            result.ClinicSBPMean, result.ClinicDBPMean = computeBPMeans(input.ClinicReadings)
+        }
+        if len(input.HomeReadings) > 0 {
+            result.HomeSBPMean, result.HomeDBPMean = computeBPMeans(input.HomeReadings)
+        }
+        return result
+    }
+
+
+    // Compute means
+    result.ClinicSBPMean, result.ClinicDBPMean = computeBPMeans(input.ClinicReadings)
+    result.HomeSBPMean, result.HomeDBPMean = computeBPMeans(input.HomeReadings)
+
+
+    // Compute discordance
+    result.ClinicHomeGapSBP = math.Round((result.ClinicSBPMean-result.HomeSBPMean)*10) / 10
+    result.ClinicHomeGapDBP = math.Round((result.ClinicDBPMean-result.HomeDBPMean)*10) / 10
+    result.WhiteCoatEffect = math.Max(0, result.ClinicHomeGapSBP) // WCE is the positive clinic-home difference
+
+
+    // Classify
+    result.ClinicAboveThreshold = result.ClinicSBPMean >= clinicSBPThresh || result.ClinicDBPMean >= clinicDBPThresh
+    result.HomeAboveThreshold = result.HomeSBPMean >= defaultHomeSBP || result.HomeDBPMean >= defaultHomeDBP
+
+
+    switch {
+    case result.ClinicAboveThreshold && result.HomeAboveThreshold:
+        if input.OnAntihypertensives {
+            result.Phenotype = models.PhenotypeSustainedHTN // treated but still elevated in both
+        } else {
+            result.Phenotype = models.PhenotypeSustainedHTN
+        }
+    case result.ClinicAboveThreshold && !result.HomeAboveThreshold:
+        if input.OnAntihypertensives {
+            result.Phenotype = models.PhenotypeWhiteCoatUncontrolled
+        } else {
+            result.Phenotype = models.PhenotypeWhiteCoatHTN
+        }
+    case !result.ClinicAboveThreshold && result.HomeAboveThreshold:
+        if input.OnAntihypertensives {
+            result.Phenotype = models.PhenotypeMaskedUncontrolled
+        } else {
+            result.Phenotype = models.PhenotypeMaskedHTN
+        }
+    default:
+        result.Phenotype = models.PhenotypeSustainedNormotension
+    }
+
+
+    // Cross-domain amplification
+    isMasked := result.Phenotype == models.PhenotypeMaskedHTN || result.Phenotype == models.PhenotypeMaskedUncontrolled
+    if isMasked && input.IsDiabetic {
+        result.DiabetesAmplification = true
+    }
+    if isMasked && input.HasCKD {
+        result.CKDAmplification = true
+    }
+    if isMasked && input.MorningSurge7dAvg > morningSurgeCompound {
+        result.MorningSurgeCompound = true
+    }
+
+
+    // Sustained HTN with morning surge compound is also clinically significant
+    if result.Phenotype == models.PhenotypeSustainedHTN {
+        if input.IsDiabetic {
+            result.DiabetesAmplification = true
+        }
+        if input.HasCKD {
+            result.CKDAmplification = true
+        }
+        if input.MorningSurge7dAvg > morningSurgeCompound {
+            result.MorningSurgeCompound = true
+        }
+    }
+
+
+    // Selection bias detection
+    biasRiskPhenotypes := map[string]bool{
+        "MEASUREMENT_AVOIDANT":  true,
+        "CRISIS_ONLY_MEASURER": true,
+    }
+    if biasRiskPhenotypes[input.EngagementPhenotype] && len(input.HomeReadings) < 20 {
+        result.SelectionBiasRisk = true
+    }
+
+
+    // Confidence assessment
+    result.Confidence = assessConfidence(result, input)
+
+
+    // Medication timing hypothesis
+    if input.OnAntihypertensives && (isMasked || result.Phenotype == models.PhenotypeSustainedHTN) {
+        result.MedicationTimingHypothesis = detectMedicationTimingPattern(input.HomeReadings)
+    }
+
+
+    result.EngagementPhenotype = input.EngagementPhenotype
+    return result
+}
+
+
+func computeBPMeans(readings []BPReading) (float64, float64) {
+    var sumSBP, sumDBP float64
+    for _, r := range readings {
+        sumSBP += r.SBP
+        sumDBP += r.DBP
+    }
+    n := float64(len(readings))
+    return math.Round(sumSBP/n*10) / 10, math.Round(sumDBP/n*10) / 10
+}
+
+
+func countDistinctDays(readings []BPReading) int {
+    days := make(map[string]bool)
+    for _, r := range readings {
+        days[r.Timestamp.Format("2006-01-02")] = true
+    }
+    return len(days)
+}
+
+
+func assessConfidence(result models.BPContextClassification, input BPContextInput) string {
+    if result.SelectionBiasRisk {
+        return "LOW"
+    }
+    if len(input.ClinicReadings) >= 3 && len(input.HomeReadings) >= 20 && countDistinctDays(input.HomeReadings) >= 7 {
+        return "HIGH"
+    }
+    if result.SufficientClinic && result.SufficientHome {
+        return "MODERATE"
+    }
+    return "LOW"
+}
+
+
+func detectMedicationTimingPattern(homeReadings []BPReading) string {
+    var morningSBPs, eveningSBPs []float64
+    for _, r := range homeReadings {
+        switch r.TimeContext {
+        case "MORNING":
+            morningSBPs = append(morningSBPs, r.SBP)
+        case "EVENING":
+            eveningSBPs = append(eveningSBPs, r.SBP)
+        }
+    }
+
+
+    if len(morningSBPs) < 3 || len(eveningSBPs) < 3 {
+        return ""
+    }
+
+
+    morningMean := mean(morningSBPs)
+    eveningMean := mean(eveningSBPs)
+
+
+    if morningMean-eveningMean > 15 {
+        return fmt.Sprintf("Morning BP (mean %.0f) significantly higher than evening (mean %.0f) — "+
+            "suggests medication wearing off overnight. Consider evening dosing or longer-acting formulation.",
+            morningMean, eveningMean)
+    }
+    if eveningMean-morningMean > 15 {
+        return fmt.Sprintf("Evening BP (mean %.0f) higher than morning (mean %.0f) — "+
+            "investigate afternoon/evening BP triggers: dietary sodium, stress, medication timing.",
+            eveningMean, morningMean)
+    }
+    return ""
+}
+
+
+func mean(vals []float64) float64 {
+    s := 0.0
+    for _, v := range vals {
+        s += v
+    }
+    return s / float64(len(vals))
+}
+```
+
+
+- [ ] **Step 6: Run classifier tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
+go test ./internal/services/ -run "TestClassify_" -v
+```
+
+
+Expected: All 14 tests PASS.
+
+
+- [ ] **Step 7: Commit Phase M2**
+
+
+```bash
+git add kb-26-metabolic-digital-twin/internal/models/bp_context.go
+git add kb-26-metabolic-digital-twin/internal/services/bp_context_classifier.go
+git add kb-26-metabolic-digital-twin/internal/services/bp_context_classifier_test.go
+git add market-configs/shared/bp_context_thresholds.yaml
+git add market-configs/india/bp_context_overrides.yaml
+git add market-configs/australia/bp_context_overrides.yaml
+git commit -m "feat(kb26): BP context classifier — 6 phenotypes with cross-domain amplification
+
+
+Classifies SUSTAINED_HTN, WHITE_COAT_HTN, MASKED_HTN, SUSTAINED_NORMOTENSION,
+MASKED_UNCONTROLLED, WHITE_COAT_UNCONTROLLED from clinic-home BP comparison.
+Diabetic thresholds (130/80 clinic per ISH 2020). Cross-domain amplification:
+MH+DM (3.2× TOD risk, Leitão 2015), MH+CKD (15%/10mmHg eGFR decline),
+MH+morning surge (compound stroke risk). Selection bias detection for
+MEASUREMENT_AVOIDANT patients. Medication timing hypothesis from morning-
+evening differential. India: wider WCE threshold (20mmHg), sodium correlation.
+Australia: ABPM MBS item 11607, indigenous community worker source mapping."
+```
+
+
+---
+
+
+## Phase M3: Masked HTN Decision Cards (KB-23)
+
+
+### Step 8: Write failing test for masked HTN cards
+
+
+```go
+// kb-23-decision-cards/internal/services/masked_htn_cards_test.go
+package services
+
+
+import (
+    "testing"
+
+
+    "github.com/stretchr/testify/assert"
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+func TestMaskedHTNCards_MaskedHTN_Diabetic_Immediate(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:             models.PhenotypeMaskedHTN,
+        ClinicSBPMean:         128,
+        HomeSBPMean:           148,
+        ClinicHomeGapSBP:      -20,
+        DiabetesAmplification: true,
+        IsDiabetic:            true,
+        Confidence:            "HIGH",
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    hasMaskedCard := false
+    for _, c := range cards {
+        if c.CardType == "MASKED_HYPERTENSION" {
+            hasMaskedCard = true
+            assert.Equal(t, "IMMEDIATE", c.Urgency) // DM amplification
+            assert.Contains(t, c.Rationale, "3.2")  // risk multiplier
+        }
+    }
+    assert.True(t, hasMaskedCard)
+}
+
+
+func TestMaskedHTNCards_WhiteCoatHTN_AvoidOvertreatment(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:        models.PhenotypeWhiteCoatHTN,
+        ClinicSBPMean:    155,
+        HomeSBPMean:      125,
+        ClinicHomeGapSBP: 30,
+        WhiteCoatEffect:  30,
+        Confidence:       "HIGH",
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    hasWCCard := false
+    for _, c := range cards {
+        if c.CardType == "WHITE_COAT_HYPERTENSION" {
+            hasWCCard = true
+            assert.Equal(t, "ROUTINE", c.Urgency)
+            assert.Contains(t, c.Rationale, "overtreatment")
+        }
+    }
+    assert.True(t, hasWCCard)
+}
+
+
+func TestMaskedHTNCards_MUCH_TreatedPatient(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:           models.PhenotypeMaskedUncontrolled,
+        ClinicSBPMean:       130,
+        HomeSBPMean:         150,
+        OnAntihypertensives: true,
+        CKDAmplification:    true,
+        Confidence:          "HIGH",
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    hasMUCHCard := false
+    for _, c := range cards {
+        if c.CardType == "MASKED_UNCONTROLLED" {
+            hasMUCHCard = true
+            assert.Equal(t, "URGENT", c.Urgency)
+            assert.Contains(t, c.Rationale, "controlled in clinic but not at home")
+        }
+    }
+    assert.True(t, hasMUCHCard)
+}
+
+
+func TestMaskedHTNCards_CompoundRisk_MH_MorningSurge(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:            models.PhenotypeMaskedHTN,
+        MorningSurgeCompound: true,
+        Confidence:           "HIGH",
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    hasCompoundCard := false
+    for _, c := range cards {
+        if c.CardType == "MASKED_HTN_MORNING_SURGE_COMPOUND" {
+            hasCompoundCard = true
+            assert.Equal(t, "IMMEDIATE", c.Urgency)
+        }
+    }
+    assert.True(t, hasCompoundCard)
+}
+
+
+func TestMaskedHTNCards_SelectionBias_FlagsUncertainty(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:         models.PhenotypeMaskedHTN,
+        SelectionBiasRisk: true,
+        Confidence:        "LOW",
+        HomeReadings_:     8,
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    hasBiasCard := false
+    for _, c := range cards {
+        if c.CardType == "SELECTION_BIAS_WARNING" {
+            hasBiasCard = true
+            assert.Contains(t, c.Rationale, "avoidant")
+        }
+    }
+    assert.True(t, hasBiasCard)
+}
+
+
+func TestMaskedHTNCards_MedicationTiming(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:                  models.PhenotypeMaskedUncontrolled,
+        OnAntihypertensives:        true,
+        MedicationTimingHypothesis: "Morning BP significantly higher than evening — consider evening dosing",
+        Confidence:                 "HIGH",
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    hasTimingCard := false
+    for _, c := range cards {
+        if c.CardType == "MEDICATION_TIMING" {
+            hasTimingCard = true
+            assert.Contains(t, c.Rationale, "evening dosing")
+        }
+    }
+    assert.True(t, hasTimingCard)
+}
+
+
+func TestMaskedHTNCards_Normotensive_NoCards(t *testing.T) {
+    classification := &models.BPContextClassification{
+        Phenotype:  models.PhenotypeSustainedNormotension,
+        Confidence: "HIGH",
+    }
+
+
+    cards := EvaluateMaskedHTNCards(classification)
+    urgentCards := 0
+    for _, c := range cards {
+        if c.Urgency == "IMMEDIATE" || c.Urgency == "URGENT" {
+            urgentCards++
+        }
+    }
+    assert.Equal(t, 0, urgentCards)
+}
+```
+
+
+- [ ] **Step 9: Implement masked HTN card rules**
+
+
+```go
+// kb-23-decision-cards/internal/services/masked_htn_cards.go
+package services
+
+
+import (
+    "fmt"
+
+
+    "kb-metabolic-digital-twin/internal/models"
+)
+
+
+type MaskedHTNCard struct {
+    CardType  string   `json:"card_type"`
+    Urgency   string   `json:"urgency"`
+    Title     string   `json:"title"`
+    Rationale string   `json:"rationale"`
+    Actions   []string `json:"actions"`
+}
+
+
+func EvaluateMaskedHTNCards(classification *models.BPContextClassification) []MaskedHTNCard {
+    if classification == nil {
+        return nil
+    }
+
+
+    var cards []MaskedHTNCard
+
+
+    switch classification.Phenotype {
+    case models.PhenotypeMaskedHTN, models.PhenotypeMaskedUncontrolled:
+        cards = append(cards, buildMaskedHTNCard(classification)...)
+
+
+    case models.PhenotypeWhiteCoatHTN, models.PhenotypeWhiteCoatUncontrolled:
+        cards = append(cards, buildWhiteCoatCard(classification)...)
+
+
+    case models.PhenotypeSustainedNormotension:
+        return nil // no action needed
+
+
+    case models.PhenotypeSustainedHTN:
+        // Sustained HTN may still benefit from compound risk cards
+        if classification.MorningSurgeCompound {
+            cards = append(cards, MaskedHTNCard{
+                CardType: "SUSTAINED_HTN_MORNING_SURGE",
+                Urgency:  "URGENT",
+                Title:    "Sustained Hypertension with Abnormal Morning Surge",
+                Rationale: fmt.Sprintf("Both clinic (%.0f) and home (%.0f) BP elevated with morning surge compound risk. "+
+                    "Morning surge >20 mmHg in sustained HTN significantly increases stroke risk (Kario 2019).",
+                    classification.ClinicSBPMean, classification.HomeSBPMean),
+                Actions: []string{
+                    "Consider bedtime dosing of antihypertensive",
+                    "Evaluate for sleep apnea (strong association with morning surge)",
+                    "Add long-acting ARB or CCB for 24-hour coverage",
+                },
+            })
+        }
+
+
+    case models.PhenotypeInsufficientData:
+        return nil
+    }
+
+
+    // Selection bias warning (appended to any classification)
+    if classification.SelectionBiasRisk {
+        cards = append(cards, MaskedHTNCard{
+            CardType: "SELECTION_BIAS_WARNING",
+            Urgency:  "ROUTINE",
+            Title:    "Home BP Data May Reflect Measurement Selection Bias",
+            Rationale: fmt.Sprintf("Patient phenotype: %s with only %d home readings. "+
+                "Patients who measure only when symptomatic produce inflated home BP averages. "+
+                "Classification confidence is LOW — increase measurement frequency before acting on masked HTN diagnosis.",
+                classification.EngagementPhenotype, classification.HomeReadings_),
+            Actions: []string{
+                "Encourage regular measurement schedule (morning + evening daily)",
+                "Consider 24-hour ABPM for definitive classification",
+                "Address measurement avoidance — may indicate health anxiety",
+            },
+        })
+    }
+
+
+    // Medication timing hypothesis (appended if present)
+    if classification.MedicationTimingHypothesis != "" {
+        cards = append(cards, MaskedHTNCard{
+            CardType: "MEDICATION_TIMING",
+            Urgency:  "ROUTINE",
+            Title:    "Medication Timing May Explain BP Pattern",
+            Rationale: classification.MedicationTimingHypothesis,
+            Actions: []string{
+                "Review current medication timing with patient",
+                "Consider chronotherapy: evening dosing for morning surge",
+                "If already evening-dosed, consider longer-acting formulation",
+            },
+        })
+    }
+
+
+    return cards
+}
+
+
+func buildMaskedHTNCard(c *models.BPContextClassification) []MaskedHTNCard {
+    var cards []MaskedHTNCard
+
+
+    // Primary masked HTN / MUCH card
+    urgency := "URGENT"
+    title := "Masked Hypertension Detected"
+    rationale := fmt.Sprintf(
+        "Clinic BP appears normal (%.0f/%.0f) but home BP is elevated (%.0f/%.0f). "+
+            "Clinic-home gap: %.0f mmHg. ",
+        c.ClinicSBPMean, c.ClinicDBPMean, c.HomeSBPMean, c.HomeDBPMean, c.ClinicHomeGapSBP)
+
+
+    cardType := "MASKED_HYPERTENSION"
+    if c.Phenotype == models.PhenotypeMaskedUncontrolled {
+        cardType = "MASKED_UNCONTROLLED"
+        title = "Masked Uncontrolled Hypertension — Therapy Appears Effective But Isn't"
+        rationale += "This patient's BP appears controlled in clinic but not at home — " +
+            "current therapy is insufficient despite clinic reassurance. "
+    }
+
+
+    if c.DiabetesAmplification {
+        urgency = "IMMEDIATE"
+        rationale += fmt.Sprintf("DIABETES AMPLIFICATION: Masked HTN in diabetic patients carries "+
+            "3.2× higher target organ damage risk (Leitão 2015). ")
+    }
+
+
+    if c.CKDAmplification {
+        if urgency != "IMMEDIATE" {
+            urgency = "URGENT"
+        }
+        rationale += fmt.Sprintf("CKD AMPLIFICATION: Masked HTN accelerates eGFR decline "+
+            "~15%% faster per 10 mmHg masked SBP elevation (Agarwal 2017). ")
+    }
+
+
+    actions := []string{
+        "Initiate or intensify antihypertensive therapy based on HOME BP, not clinic BP",
+        "Target home BP <135/85 (or <130/80 if diabetic)",
+    }
+    if c.Phenotype == models.PhenotypeMaskedUncontrolled {
+        actions = append(actions,
+            "Current therapy creates false confidence — clinic visits do not reflect true BP burden",
+            "Consider adding a second/third antihypertensive class",
+        )
+    }
+    if c.DiabetesAmplification || c.CKDAmplification {
+        actions = append(actions,
+            "Prefer ACEi/ARB (renoprotective) + SGLT2i (cardiorenal benefit)",
+            "Screen for target organ damage: echocardiogram, urine ACR, retinal exam",
+        )
+    }
+
+
+    cards = append(cards, MaskedHTNCard{
+        CardType:  cardType,
+        Urgency:   urgency,
+        Title:     title,
+        Rationale: rationale,
+        Actions:   actions,
+    })
+
+
+    // Compound risk card for morning surge
+    if c.MorningSurgeCompound {
+        cards = append(cards, MaskedHTNCard{
+            CardType: "MASKED_HTN_MORNING_SURGE_COMPOUND",
+            Urgency:  "IMMEDIATE",
+            Title:    "Masked Hypertension + Abnormal Morning Surge — Compound Stroke Risk",
+            Rationale: "Masked hypertension combined with morning surge >20 mmHg creates multiplicatively " +
+                "elevated stroke risk (Kario 2019, JACC). The patient's BP is normal in the clinic " +
+                "but dangerously elevated each morning before the day's first dose.",
+            Actions: []string{
+                "Urgent: add or adjust bedtime antihypertensive",
+                "Evaluate for obstructive sleep apnea (strongest modifiable morning surge cause)",
+                "Consider 24-hour ABPM for full circadian profiling",
+                "Schedule follow-up within 1-2 weeks to assess response",
+            },
+        })
+    }
+
+
+    return cards
+}
+
+
+func buildWhiteCoatCard(c *models.BPContextClassification) []MaskedHTNCard {
+    cardType := "WHITE_COAT_HYPERTENSION"
+    title := "White-Coat Hypertension — Consider Avoiding Medication"
+    if c.Phenotype == models.PhenotypeWhiteCoatUncontrolled {
+        cardType = "WHITE_COAT_UNCONTROLLED"
+        title = "White-Coat Effect — Clinic BP Elevated but Home BP Controlled"
+    }
+
+
+    rationale := fmt.Sprintf(
+        "Clinic BP elevated (%.0f/%.0f) but home BP normal (%.0f/%.0f). "+
+            "White-coat effect: %.0f mmHg. ",
+        c.ClinicSBPMean, c.ClinicDBPMean, c.HomeSBPMean, c.HomeDBPMean, c.WhiteCoatEffect)
+
+
+    if c.WhiteCoatEffect >= 30 {
+        rationale += "Severe white-coat effect (≥30 mmHg) — investigate clinic anxiety or pain. "
+    }
+
+
+    rationale += "Risk of overtreatment: initiating or intensifying therapy based on clinic BP alone " +
+        "may cause unnecessary side effects without cardiovascular benefit. "
+
+
+    actions := []string{
+        "Do NOT intensify antihypertensive therapy based solely on clinic readings",
+        "Continue home BP monitoring — recheck in 6 months",
+        "Lifestyle modifications remain appropriate (exercise, salt reduction, weight management)",
+        "Monitor for progression to sustained HTN (~3% per year — Mancia 2006)",
+    }
+
+
+    if c.Phenotype == models.PhenotypeWhiteCoatUncontrolled {
+        actions = append([]string{
+            "Consider REDUCING antihypertensive dose if patient symptomatic (dizziness, fatigue)",
+        }, actions...)
+    }
+
+
+    return []MaskedHTNCard{{
+        CardType:  cardType,
+        Urgency:   "ROUTINE",
+        Title:     title,
+        Rationale: rationale,
+        Actions:   actions,
+    }}
+}
+```
+
+
+- [ ] **Step 10: Run masked HTN card tests**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-23-decision-cards
+go test ./internal/services/ -run "TestMaskedHTNCards" -v
+```
+
+
+Expected: All 7 tests PASS.
+
+
+- [ ] **Step 11: Integrate BP context into four-pillar evaluator**
+
+
+Add `BPContextClassification` to `FourPillarInput` and modify `evaluateMedicationPillar`:
+
+
+```go
+// After renal safety gate and therapeutic inertia checks:
+
+
+    // MASKED HYPERTENSION: clinic BP looks fine but home BP is elevated
+    if input.BPContext != nil {
+        switch input.BPContext.Phenotype {
+        case models.PhenotypeMaskedHTN, models.PhenotypeMaskedUncontrolled:
+            recs := []string{
+                "MASKED HYPERTENSION: Clinic BP appears normal but home BP is elevated",
+                "Treat based on HOME BP targets, not clinic readings",
+            }
+            if input.BPContext.DiabetesAmplification {
+                recs = append(recs, "DM + masked HTN: 3.2× target organ damage risk — immediate action required")
+            }
+            status := models.PillarGap
+            if input.BPContext.DiabetesAmplification || input.BPContext.MorningSurgeCompound {
+                status = models.PillarUrgentGap
+            }
+            return models.PillarEvaluation{
+                Status:          status,
+                Recommendations: recs,
+                Rationale:       "Home BP monitoring reveals hypertension invisible to clinic measurement",
+            }
+
+
+        case models.PhenotypeWhiteCoatHTN, models.PhenotypeWhiteCoatUncontrolled:
+            return models.PillarEvaluation{
+                Status: models.PillarGap,
+                Recommendations: []string{
+                    "WHITE-COAT EFFECT: Do not intensify based on clinic BP alone",
+                    "Continue home monitoring; lifestyle intervention appropriate",
+                },
+                Rationale: "Clinic readings overestimate true BP — avoid overtreatment",
+            }
+        }
+    }
+```
+
+
+- [ ] **Step 12: Create migration and API endpoint**
+
+
+```sql
+-- kb-26-metabolic-digital-twin/migrations/007_bp_context.sql
+
+
+CREATE TABLE IF NOT EXISTS bp_context_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id VARCHAR(100) NOT NULL,
+    snapshot_date DATE NOT NULL,
+    phenotype VARCHAR(30) NOT NULL,
+    clinic_sbp_mean DECIMAL(5,1),
+    home_sbp_mean DECIMAL(5,1),
+    gap_sbp DECIMAL(5,1),
+    confidence VARCHAR(10),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(patient_id, snapshot_date)
+);
+
+
+CREATE INDEX idx_bpc_patient ON bp_context_history(patient_id, snapshot_date DESC);
+```
+
+
+- [ ] **Step 13: Run full regression and final commit**
+
+
+```bash
+cd backend/shared-infrastructure/knowledge-base-services/kb-26-metabolic-digital-twin
+go test ./... -v -count=1
+cd ../kb-23-decision-cards
+go test ./... -v -count=1
+cd ../kb-20-patient-profile
+go test ./... -v -count=1
+```
+
+
+Expected: All tests PASS, no regressions.
+
+
+```bash
+git add -A
+git commit -m "feat: masked hypertension / white-coat detection — complete system
+
+
+KB-26: BPContextClassifier with 6 phenotypes (SH, WCH, MH, SN, MUCH, WCUH).
+Cross-domain amplification: MH×DM (3.2× TOD risk, Leitão 2015), MH×CKD
+(15% faster eGFR decline, Agarwal 2017), MH×morning surge (compound stroke
+risk, Kario 2019). Selection bias detection for MEASUREMENT_AVOIDANT patients.
+Medication timing hypothesis from morning-evening differential. Diabetic
+thresholds (130/80 per ISH 2020).
+
+
+KB-23: 8 card types — MASKED_HYPERTENSION (IMMEDIATE for DM), WHITE_COAT_HTN
+(ROUTINE — avoid overtreatment), MASKED_UNCONTROLLED (URGENT — false therapeutic
+confidence), MASKED_HTN_MORNING_SURGE_COMPOUND (IMMEDIATE), WHITE_COAT_
+UNCONTROLLED, SUSTAINED_HTN_MORNING_SURGE, SELECTION_BIAS_WARNING,
+MEDICATION_TIMING. Four-pillar integration: masked HTN → medication pillar gap.
+
+
+Market configs: India (wider WCE threshold 20mmHg, sodium correlation, device
+validation warnings). Australia (ABPM MBS 11607, indigenous community worker
+source mapping, Heart Foundation 2022 alignment).
+
+
+Cross-domain reasoning: this is NOT a single-domain BP feature. It integrates
+diabetes status, CKD stage, engagement phenotype, morning surge, medication
+timing, and measurement behavior to produce clinically actionable insight
+invisible to any single-domain CDS system."
+```
+
+
+---
+
+
+## Plan Summary
+
+
+| Phase | Steps | Key Deliverables |
+|-------|-------|-----------------|
+| M1: Models + Config | 1-3 | `BPContextPhenotype` (6 types), `BPContextClassification` (28 fields), thresholds YAML, India/Australia overrides |
+| M2: Core Classifier | 4-7 | `ClassifyBPContext()` — clinic-home comparison, cross-domain amplification (DM/CKD/surge), selection bias, medication timing |
+| M3: Cards + Integration | 8-13 | 8 card types, four-pillar integration, migration, full regression |
+
+
+**Total: 13 steps, 16 files (12 create, 4 modify), 3 phases.**
+
+
+**Clinical evidence base:**
+- Banegas et al. 2018 (European Heart Journal) — masked HTN prevalence 10-30%, MUCH 30-50%
+- Pierdomenico et al. 2017 (Hypertension) — MH 2.09× CV event risk
+- Leitão et al. 2015 (Diabetologia) — DM + MH 3.2× target organ damage
+- Agarwal et al. 2017 (CJASN) — MH strongest predictor of CKD progression in diabetic nephropathy
+- Agarwal et al. 2022 (Kidney International) — MH prevalence 30-50% in CKD
+- Franklin et al. 2020 (Hypertension) — MH prevalence 30-40% in diabetes
+- Kario et al. 2019 (JACC) — MH + morning surge compound stroke risk
+- Ohkubo et al. 2004 (JAMA) — home BP prognostic superiority over clinic
+- Mancia et al. 2006 (PAMELA) — WCH progression rate ~3%/year
+- Mancia et al. 2022 (Hypertension) — WCH intermediate CV risk
+- Staessen et al. 2014 (IDACO) — home BP predicts CV mortality independently
+- ESH 2023, ISH 2020, AHA/ACC 2017, Heart Foundation 2022 — threshold definitions
+
+
+**The cross-domain innovation summarized:** This isn't "does the patient have masked hypertension?" — any BP monitoring app can compute a clinic-home gap. This is "this diabetic patient with CKD G3b and morning surge has masked hypertension, which means their renal function will decline 15% faster per year than their clinic BP suggests, their target organ damage risk is 3.2× higher than it appears, and their current antihypertensive looks adequate in clinic but is actually failing — and their engagement collapse means the home readings might be selection-biased, so confirm with ABPM before intensifying." That chain of reasoning crosses 5 domains simultaneously. No single guideline provides it. The platform does.
