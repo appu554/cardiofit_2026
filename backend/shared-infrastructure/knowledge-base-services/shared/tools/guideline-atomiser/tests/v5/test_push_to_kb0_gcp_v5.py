@@ -169,19 +169,23 @@ def test_provenance_v5_written_for_v5_span(tmp_path):
     )
     assert len(captured["rows"]) == 1
     row = captured["rows"][0]
-    # Find the provenance_v5 value — it must be a JSON string (non-null).
-    json_strs = [v for v in row if isinstance(v, str) and v.startswith("[")]
+    # Find the provenance_v5 value — it must be a psycopg2.extras.Json
+    # wrapper containing the serialised channel-provenance list.
+    import psycopg2.extras as _pgx
     parsed = None
-    for js in json_strs:
-        try:
-            obj = json.loads(js)
-        except Exception:
-            continue
-        if isinstance(obj, list) and obj and isinstance(obj[0], dict) and "channel_id" in obj[0]:
-            parsed = obj
-            break
+    for v in row:
+        if isinstance(v, _pgx.Json):
+            obj = v.adapted
+            if (
+                isinstance(obj, list)
+                and obj
+                and isinstance(obj[0], dict)
+                and "channel_id" in obj[0]
+            ):
+                parsed = obj
+                break
     assert parsed is not None, (
-        f"provenance_v5 JSON not found in INSERT row: {row!r}"
+        f"provenance_v5 Json wrapper not found in INSERT row: {row!r}"
     )
     assert parsed[0]["channel_id"] == "B"
     assert parsed[0]["bbox"] == {"x0": 10.0, "y0": 20.0, "x1": 100.0, "y1": 40.0}

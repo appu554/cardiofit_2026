@@ -210,7 +210,7 @@ def push_job(conn, job_dir: Path, dry_run: bool = False) -> dict:
         prov_raw = s.get("channel_provenance") or []
         if prov_raw:
             prov_models = [ChannelProvenance.model_validate(d) for d in prov_raw]
-            provenance_v5_json = json.dumps(serialise_provenance_list(prov_models))
+            provenance_v5_json = psycopg2.extras.Json(serialise_provenance_list(prov_models))
         else:
             provenance_v5_json = None
 
