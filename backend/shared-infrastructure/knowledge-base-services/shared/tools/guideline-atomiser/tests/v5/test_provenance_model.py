@@ -160,3 +160,49 @@ def test_merge_dedups_under_ulp_bbox_drift() -> None:
     merged = merge_provenance_lists([[a], [a_drift]])
     assert len(merged) == 1
     assert merged[0].confidence == 0.95
+
+
+def test_merged_span_accepts_channel_provenance_field() -> None:
+    """MergedSpan accepts an optional channel_provenance list."""
+    from extraction.v4.models import MergedSpan
+    p = ChannelProvenance(
+        channel_id="A", bbox=_bbox(),
+        page_number=1, confidence=0.9, model_version="v",
+    )
+    span_kwargs = {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "job_id": "00000000-0000-0000-0000-000000000000",
+        "text": "test",
+        "start": 0,
+        "end": 4,
+        "contributing_channels": ["B"],
+        "channel_confidences": {"B": 0.9},
+        "merged_confidence": 0.9,
+        "has_disagreement": False,
+        "tier": "TIER_1",
+        "tier_reason": "single channel",
+        "channel_provenance": [p],
+    }
+    span = MergedSpan(**span_kwargs)
+    assert len(span.channel_provenance) == 1
+    assert span.channel_provenance[0].channel_id == "A"
+
+
+def test_merged_span_defaults_empty_provenance_when_omitted() -> None:
+    """V4 spans without channel_provenance still validate (backward-compat)."""
+    from extraction.v4.models import MergedSpan
+    span_kwargs = {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "job_id": "00000000-0000-0000-0000-000000000000",
+        "text": "test",
+        "start": 0,
+        "end": 4,
+        "contributing_channels": ["B"],
+        "channel_confidences": {"B": 0.9},
+        "merged_confidence": 0.9,
+        "has_disagreement": False,
+        "tier": "TIER_1",
+        "tier_reason": "single channel",
+    }
+    span = MergedSpan(**span_kwargs)
+    assert span.channel_provenance == []

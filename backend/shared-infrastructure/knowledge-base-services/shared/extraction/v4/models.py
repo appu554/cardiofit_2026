@@ -25,6 +25,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from .provenance import ChannelProvenance
+
 
 # =============================================================================
 # Enums
@@ -270,6 +272,10 @@ class MergedSpan(BaseModel):
     reviewer_text: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    # V5 #2 Bbox Provenance — backward-compatible additive field.
+    # Empty list when V5_BBOX_PROVENANCE is off; populated when on.
+    # See extraction.v4.provenance.ChannelProvenance.
+    channel_provenance: list[ChannelProvenance] = Field(default_factory=list)
 
     model_config = {"frozen": False}
 
