@@ -44,6 +44,7 @@ from .tiering_classifier import TieringClassifier
 def _build_raw_provenance(
     raw_span: RawSpan,
     profile,
+    page_bbox_map: Optional[dict[int, list[float]]] = None,
 ) -> Optional[ChannelProvenance]:
     """Build a ChannelProvenance entry for one contributing RawSpan.
 
@@ -51,7 +52,12 @@ def _build_raw_provenance(
     Returns None when:
       - no builder is registered for the channel (e.g., REVIEWER), or
       - V5_BBOX_PROVENANCE flag is off (helpers self-no-op), or
-      - the raw span carries no bbox.
+      - the raw span carries no bbox AND page_bbox_map provides no fallback.
+
+    page_bbox_map: optional dict of page_number → [x0, y0, x1, y1] used as
+    a page-level bbox fallback when the raw span has no block-level bbox.
+    This is populated by L1 backends (e.g. Docling) that provide page
+    geometry but not per-block geometry for NER channels.
 
     Channel D's helper accepts an extra ``table_source`` kwarg; we
     propagate it from RawSpan.channel_metadata when present so the
@@ -60,12 +66,21 @@ def _build_raw_provenance(
     builder = get_channel_provenance_builder(raw_span.channel)
     if builder is None:
         return None
+    bbox = raw_span.bbox
+    # Page-level bbox fallback: when the channel has no block geometry but the
+    # L1 backend recorded page dimensions, use (0,0,w,h) as provenance bbox.
+    # This records WHICH PAGE the span is on rather than its exact position.
+    notes = None
+    if bbox is None and page_bbox_map is not None and raw_span.page_number is not None:
+        bbox = page_bbox_map.get(raw_span.page_number)
+        if bbox is not None:
+            notes = "page-level-bbox"
     kwargs = {
-        "bbox": raw_span.bbox,
+        "bbox": bbox,
         "page_number": raw_span.page_number,
         "confidence": raw_span.confidence,
         "profile": profile,
-        "notes": None,
+        "notes": notes,
     }
     if raw_span.channel == "D":
         table_source = raw_span.channel_metadata.get("table_source")
@@ -101,6 +116,7 @@ class SignalMerger:
         classifier: Optional[TieringClassifier] = None,
         v5_bbox_provenance: bool = False,
         profile=None,
+        page_bbox_map: Optional[dict[int, list[float]]] = None,
     ) -> list[MergedSpan]:
         """Merge all channel outputs into MergedSpans.
 
@@ -117,6 +133,11 @@ class SignalMerger:
             profile: Optional profile object passed to per-channel helpers
                 for V5 feature-flag resolution. Only consulted when
                 v5_bbox_provenance is True.
+            page_bbox_map: Optional dict of page_number → [x0, y0, x1, y1]
+                providing page-level bbox fallback for L1 backends (e.g.
+                Docling) that record page dimensions but not per-block
+                geometry for NER channels. Only used when v5_bbox_provenance
+                is True.
 
         Returns:
             List of MergedSpan objects ready for reviewer queue
@@ -140,6 +161,7 @@ class SignalMerger:
                 classifier,
                 v5_bbox_provenance=v5_bbox_provenance,
                 profile=profile,
+                page_bbox_map=page_bbox_map,
             )
             merged_spans.append(merged)
 
@@ -274,6 +296,7 @@ class SignalMerger:
         classifier: Optional[TieringClassifier] = None,
         v5_bbox_provenance: bool = False,
         profile=None,
+        page_bbox_map: Optional[dict[int, list[float]]] = None,
     ) -> MergedSpan:
         """Build a MergedSpan from a cluster of overlapping RawSpans."""
         # Step 3: CONFIDENCE BOOST
@@ -379,7 +402,7 @@ class SignalMerger:
         if v5_bbox_provenance:
             per_channel_lists: list[list[ChannelProvenance]] = []
             for raw in cluster:
-                prov = _build_raw_provenance(raw, profile=profile)
+                prov = _build_raw_provenance(raw, profile=profile, page_bbox_map=page_bbox_map)
                 if prov is not None:
                     per_channel_lists.append([prov])
             if per_channel_lists:

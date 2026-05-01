@@ -322,6 +322,16 @@ def pipeline_1():
     print(f"   ✅ Tables: {len(l1_result.tables)}")
     print(f"   ✅ Markdown: {len(markdown_text):,} chars")
 
+    # Build page→bbox map for V5 provenance fallback.
+    # When blocks carry per-page bbox (Docling: full-page; MonkeyOCR: block-level),
+    # store the first non-null bbox per page. The signal merger uses this as a
+    # fallback when a NER channel span has no block-level bbox of its own.
+    _page_bbox_map: dict[int, list[float]] = {}
+    for _blk in l1_result.blocks:
+        if _blk.bbox is not None and _blk.page_number not in _page_bbox_map:
+            _b = _blk.bbox
+            _page_bbox_map[_blk.page_number] = [_b.x0, _b.y0, _b.x1, _b.y1]
+
     # Show detected tables
     if l1_result.tables:
         print()
@@ -633,6 +643,7 @@ def pipeline_1():
     merged_spans = _merge_with_v5_flag(
         merger, job_id, channel_outputs, tree,
         classifier=tiering_classifier, profile=profile,
+        page_bbox_map=_page_bbox_map or None,
     )
 
     # Assign prediction tracking metadata for ML feedback loop
@@ -672,6 +683,7 @@ def pipeline_1():
             h_merged = _merge_with_v5_flag(
                 merger, job_id, recovery_co, tree,
                 classifier=tiering_classifier, profile=profile,
+                page_bbox_map=_page_bbox_map or None,
             )
             # Assign prediction tracking to recovery spans
             for span in h_merged:

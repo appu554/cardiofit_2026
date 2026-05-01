@@ -142,6 +142,22 @@ class DoclingExtractor:
         conv_result = converter.convert(str(pdf_path))
         doc = conv_result.document
 
+        # Extract page dimensions for V5 bbox provenance fallback.
+        # Docling NER channels operate on text offsets, not geometry.
+        # Storing page sizes lets the signal merger synthesize page-level
+        # bboxes (x0=0, y0=0, x1=w, y1=h) when block-level coords are absent.
+        page_sizes: dict[int, tuple[float, float]] = {}
+        try:
+            for page_no, page in (doc.pages or {}).items():
+                sz = getattr(page, "size", None)
+                if sz is not None:
+                    w = getattr(sz, "width", 0.0) or 0.0
+                    h = getattr(sz, "height", 0.0) or 0.0
+                    if w > 0 and h > 0:
+                        page_sizes[int(page_no)] = (float(w), float(h))
+        except Exception:
+            pass  # page_sizes stays empty — fallback bbox won't be available
+
         # Export to markdown
         markdown_text = doc.export_to_markdown()
 
@@ -149,8 +165,8 @@ class DoclingExtractor:
         # Docling's markdown may not include page markers, so we add them
         markdown_text = self._inject_page_markers(markdown_text, doc)
 
-        # Parse markdown into blocks (same approach as MarkerExtractor)
-        blocks = self._parse_markdown_to_blocks(markdown_text)
+        # Parse markdown into blocks with page-level bboxes for V5 provenance
+        blocks = self._parse_markdown_to_blocks(markdown_text, page_sizes=page_sizes)
         tables = self._extract_tables_from_doc(doc)
 
         # Apply OCR post-processing
@@ -257,8 +273,19 @@ class DoclingExtractor:
         # Fallback: just wrap entire content as page 1
         return f"<!-- PAGE 1 -->\n{markdown_text}"
 
-    def _parse_markdown_to_blocks(self, markdown_text: str) -> list[TextBlock]:
-        """Parse Docling markdown output into structured blocks."""
+    def _parse_markdown_to_blocks(
+        self,
+        markdown_text: str,
+        page_sizes: dict[int, tuple[float, float]] | None = None,
+    ) -> list[TextBlock]:
+        """Parse Docling markdown output into structured blocks.
+
+        page_sizes: optional dict of page_number → (width, height) in PDF
+        points. When provided, each TextBlock receives a page-level bbox
+        (x0=0, y0=0, x1=w, y1=h) so that V5 bbox provenance can attribute
+        NER spans to their source page even when block-level geometry is
+        unavailable from this L1 backend.
+        """
         blocks = []
         current_page = 1
         byte_offset = 0
@@ -301,6 +328,15 @@ class DoclingExtractor:
             elif stripped.startswith("*") and stripped.endswith("*"):
                 is_italic = True
 
+            # Page-level bbox for V5 provenance: covers full page area.
+            # Exact block geometry is unavailable for text-based NER channels;
+            # this records WHICH PAGE the span belongs to, not its sub-page pos.
+            page_bbox: BoundingBox | None = None
+            if page_sizes:
+                dims = page_sizes.get(current_page)
+                if dims:
+                    page_bbox = BoundingBox(x0=0.0, y0=0.0, x1=dims[0], y1=dims[1])
+
             blocks.append(
                 TextBlock(
                     text=line,
@@ -311,6 +347,7 @@ class DoclingExtractor:
                     heading_level=heading_level,
                     is_bold=is_bold,
                     is_italic=is_italic,
+                    bbox=page_bbox,
                 )
             )
 
