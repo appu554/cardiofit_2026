@@ -74,3 +74,62 @@ def test_profile_without_v5_features_attr() -> None:
 def test_unknown_feature_name_off() -> None:
     profile = _FakeProfile()
     assert is_v5_enabled("nonexistent_feature", profile) is False
+
+
+def test_profile_loads_v5_features_from_yaml(tmp_path) -> None:
+    """GuidelineProfile.from_yaml() round-trips v5_features dict."""
+    from extraction.v4.guideline_profile import GuidelineProfile
+    yaml_text = """
+profile_id: test
+display_name: Test
+authority: TEST
+document_title: Test
+effective_date: "2026-01-01"
+doi: ""
+version: "1.0"
+pdf_sources: {main: foo.pdf}
+extra_drug_ingredients: {}
+extra_drug_classes: {}
+extra_patterns: []
+drug_class_skip_list: []
+reference_section_headings: []
+tiering_classifier: rule_based
+v5_features:
+  bbox_provenance: true
+  table_specialist: false
+  consensus_entropy: null
+"""
+    p = tmp_path / "test.yaml"
+    p.write_text(yaml_text)
+    profile = GuidelineProfile.from_yaml(str(p))
+    assert profile.v5_features == {
+        "bbox_provenance": True,
+        "table_specialist": False,
+        "consensus_entropy": None,
+    }
+
+
+def test_profile_without_v5_features_yaml_section(tmp_path) -> None:
+    """Old profiles without v5_features still load (backward compat)."""
+    from extraction.v4.guideline_profile import GuidelineProfile
+    yaml_text = """
+profile_id: test
+display_name: Test
+authority: TEST
+document_title: Test
+effective_date: "2026-01-01"
+doi: ""
+version: "1.0"
+pdf_sources: {main: foo.pdf}
+extra_drug_ingredients: {}
+extra_drug_classes: {}
+extra_patterns: []
+drug_class_skip_list: []
+reference_section_headings: []
+tiering_classifier: rule_based
+"""
+    p = tmp_path / "test.yaml"
+    p.write_text(yaml_text)
+    profile = GuidelineProfile.from_yaml(str(p))
+    # Default empty dict, NOT None
+    assert profile.v5_features == {}

@@ -112,6 +112,19 @@ class GuidelineProfile:
     # Pages below use MonkeyOCR (VLM-based OCR).
     born_digital_char_threshold: int = 200
 
+    # ── V5 Feature Flag Overrides ──────────────────────────────────────
+    # Per-guideline overrides for V5 features — see v5_flags.is_v5_enabled()
+    # and the master spec at
+    # docs/superpowers/specs/2026-05-01-v5-master-architecture-design.md.
+    # Each key is a lowercase V5 feature name (bbox_provenance,
+    # table_specialist, consensus_entropy, schema_first, decomposition).
+    # Value semantics:
+    #   True  -> force feature ON for this guideline (overrides env var)
+    #   False -> force feature OFF for this guideline
+    #   None  -> fall through to env var V5_<FEATURE>
+    # Missing key behaves as None.
+    v5_features: dict = field(default_factory=dict)
+
     # ══════════════════════════════════════════════════════════════════
     # Factory Methods
     # ══════════════════════════════════════════════════════════════════
@@ -243,6 +256,7 @@ class GuidelineProfile:
             chapter_reset_headings=[
                 h.lower() for h in data.get("chapter_reset_headings", [])
             ],
+            v5_features=data.get("v5_features") or {},
         )
 
     # ══════════════════════════════════════════════════════════════════
