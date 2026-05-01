@@ -101,3 +101,62 @@ def test_serialise_to_jsonb_compatible_dict() -> None:
 
 def test_empty_list_serialises_to_empty_list() -> None:
     assert serialise_provenance_list([]) == []
+
+
+def test_bbox_y_coords_must_be_ordered() -> None:
+    """y1 < y0 is rejected (companion to test_bbox_coords_must_be_ordered)."""
+    with pytest.raises(ValidationError):
+        ChannelProvenance(
+            channel_id="A",
+            bbox={"x0": 0, "y0": 100, "x1": 50, "y1": 50},  # y1 < y0
+            page_number=1,
+            confidence=0.9,
+            model_version="v",
+        )
+
+
+def test_bbox_too_large_rejected() -> None:
+    """Coords above the sanity ceiling (100_000 pt) are rejected."""
+    with pytest.raises(ValidationError):
+        ChannelProvenance(
+            channel_id="A",
+            bbox={"x0": 0, "y0": 0, "x1": 1e9, "y1": 50},
+            page_number=1,
+            confidence=0.9,
+            model_version="v",
+        )
+
+
+def test_channel_id_accepts_recovery_and_reviewer() -> None:
+    """L1_RECOVERY and REVIEWER are valid channel IDs (audit must record them)."""
+    for c in ("L1_RECOVERY", "REVIEWER"):
+        ChannelProvenance(
+            channel_id=c, bbox=_bbox(), page_number=1,
+            confidence=0.9, model_version="v",
+        )
+
+
+def test_empty_model_version_rejected() -> None:
+    """model_version must be at least 1 char."""
+    with pytest.raises(ValidationError):
+        ChannelProvenance(
+            channel_id="A", bbox=_bbox(), page_number=1,
+            confidence=0.9, model_version="",
+        )
+
+
+def test_merge_dedups_under_ulp_bbox_drift() -> None:
+    """Two entries with bboxes differing by ULP-level floats collapse to one."""
+    a = ChannelProvenance(
+        channel_id="A", bbox=_bbox(0.0, 0.0, 100.0, 50.0),
+        page_number=1, confidence=0.9, model_version="v",
+    )
+    a_drift = ChannelProvenance(
+        channel_id="A",
+        # x1 differs by ~1 ULP — would survive raw float-equality dedup
+        bbox=_bbox(0.0, 0.0, 100.0 + 1e-9, 50.0),
+        page_number=1, confidence=0.95, model_version="v",
+    )
+    merged = merge_provenance_lists([[a], [a_drift]])
+    assert len(merged) == 1
+    assert merged[0].confidence == 0.95

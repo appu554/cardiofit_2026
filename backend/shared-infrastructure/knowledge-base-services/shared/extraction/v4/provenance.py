@@ -15,17 +15,36 @@ Used by:
 
 Schema is backward-compatible: spans without channel_provenance default to
 an empty list, so existing V4 jobs continue to validate.
+
+Note for migrators: V4's MergedSpan.bbox is `Optional[list[float]]` (flat 4-tuple).
+Translate to the V5 BoundingBox via:
+    BoundingBox(x0=b[0], y0=b[1], x1=b[2], y1=b[3])
 """
 from __future__ import annotations
 
-from typing import Annotated, Iterable
+from typing import Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# Channel IDs are stable across V4 and V5: 0 (normaliser), A (docling),
-# B (drug dict), C (grammar), D (table), E (gliner), F (nuextract),
-# G (sentence), H (recovery).
-ChannelId = Annotated[str, Field(pattern=r"^[0A-H]$")]
+# Channel IDs — the union of all channels that may observe spans across V4 and V5:
+#   "0"           — text normaliser (pre-merger stage)
+#   "A"           — docling structure parser (pre-merger stage)
+#   "B"-"H"       — V4 main extraction channels (drug dict, grammar, table,
+#                   gliner, nuextract, sentence, recovery)
+#   "L1_RECOVERY" — L1 Completeness Oracle injection
+#   "REVIEWER"    — human-edited spans from KB-0 review
+# Mirrors MergedSpan.contributing_channels in extraction/v4/models.py and adds
+# the pre-merger stages (0, A) that produce structure consumed by B-H.
+ChannelId = Literal[
+    "0", "A", "B", "C", "D", "E", "F", "G", "H",
+    "L1_RECOVERY", "REVIEWER",
+]
+
+
+# Sanity ceiling for bbox coords — ~7× the largest realistic PDF page (14400 pt).
+# Catches garbage upstream (e.g. float-overflow producing 1e308) without
+# rejecting any genuine document.
+_MAX_PT = 100_000.0
 
 
 class BoundingBox(BaseModel):
@@ -34,10 +53,10 @@ class BoundingBox(BaseModel):
     Coordinates are in PDF points (typographic), origin at top-left.
     """
     model_config = ConfigDict(extra="forbid")
-    x0: float = Field(ge=0)
-    y0: float = Field(ge=0)
-    x1: float
-    y1: float
+    x0: float = Field(ge=0, le=_MAX_PT)
+    y0: float = Field(ge=0, le=_MAX_PT)
+    x1: float = Field(ge=0, le=_MAX_PT)
+    y1: float = Field(ge=0, le=_MAX_PT)
 
     @model_validator(mode="after")
     def _check_ordered(self) -> "BoundingBox":
@@ -61,23 +80,42 @@ class ChannelProvenance(BaseModel):
     page_number: int = Field(ge=1)
     confidence: float = Field(ge=0.0, le=1.0)
     model_version: str = Field(min_length=1, max_length=200)
-    notes: str | None = None  # optional free-text per-observation note
+    notes: str | None = Field(default=None, max_length=500)
+
+
+# Bbox-coordinate rounding precision for dedup keys. PDF audit only needs
+# ~0.01 pt resolution, and rounding here makes dedup robust to ULP-level
+# differences from upstream `max()` arithmetic in table_boundary_oracle and
+# similar bbox-merging code paths.
+_BBOX_DEDUP_NDIGITS = 2
+
+
+def _bbox_dedup_key(b: BoundingBox) -> tuple[float, float, float, float]:
+    """Bbox key for dedup that tolerates ULP-level float differences."""
+    return (
+        round(b.x0, _BBOX_DEDUP_NDIGITS),
+        round(b.y0, _BBOX_DEDUP_NDIGITS),
+        round(b.x1, _BBOX_DEDUP_NDIGITS),
+        round(b.y1, _BBOX_DEDUP_NDIGITS),
+    )
 
 
 def merge_provenance_lists(
-    lists: Iterable[list[ChannelProvenance]],
+    lists: Iterable[Iterable[ChannelProvenance]],
 ) -> list[ChannelProvenance]:
     """Concat multiple per-channel provenance lists into one for a merged span.
 
-    Dedup rule: when two entries share the same (channel_id, bbox, page_number),
-    keep the one with the higher confidence. This matches the signal_merger
-    semantics of "channels can re-fire on the same region; the strongest wins".
+    Dedup rule: when two entries share the same (channel_id, page_number,
+    rounded-bbox), keep the one with the higher confidence. This matches the
+    signal_merger semantics of "channels can re-fire on the same region;
+    the strongest wins". Bbox coords are rounded to ~0.01 pt for dedup so
+    that ULP-level differences from upstream bbox arithmetic do not produce
+    spurious duplicates.
     """
-    out: dict[tuple[str, int, float, float, float, float], ChannelProvenance] = {}
+    out: dict[tuple, ChannelProvenance] = {}
     for lst in lists:
         for p in lst:
-            key = (p.channel_id, p.page_number,
-                   p.bbox.x0, p.bbox.y0, p.bbox.x1, p.bbox.y1)
+            key = (p.channel_id, p.page_number) + _bbox_dedup_key(p.bbox)
             existing = out.get(key)
             if existing is None or p.confidence > existing.confidence:
                 out[key] = p
@@ -86,6 +124,6 @@ def merge_provenance_lists(
 
 def serialise_provenance_list(
     items: Iterable[ChannelProvenance],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Render a list to JSON-compatible dicts for jsonb storage."""
     return [item.model_dump() for item in items]
