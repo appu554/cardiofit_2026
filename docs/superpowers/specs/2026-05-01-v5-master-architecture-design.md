@@ -161,15 +161,121 @@ Each V5 run produces a sidecar `metrics.json` next to `merged_spans.json` in the
 | KB-0 push success rate | 100% | Schema/format compatibility regression |
 | New ERROR-level log patterns | 0 | Crash or unexpected error path |
 
-### Per-subsystem primary metrics
+### Per-subsystem primary metrics — full detail
 
-| Subsystem | Primary metric | Threshold | Test mechanism |
-|-----------|---------------|-----------|----------------|
-| #2 Bbox Provenance | Span coverage with non-null `bbox` + non-empty `channel_provenance` jsonb | ≥99% on smoke | Auto-check in pytest |
-| #1 Table Specialist | Table-cell row×col extraction accuracy | ≥85% (vs V4 ~50% baseline) | 15 hand-graded tables in regression set |
-| #4 Consensus Entropy | False-positive span rate (single-channel low-confidence spans) | drops ≥20% on smoke vs V4 | Channel agreement metric pre/post |
-| #3 Schema-first | Pydantic-schema validation pass rate on extracted facts | ≥95% | Validation gate in extractor |
-| #5 Decomposition | Edge precision + recall on cross-section relationships | both ≥80% | 15 hand-graded relationships |
+Each subsystem has a **primary metric** (the "we improved" claim), one or more **secondary metrics** (regression-safety specific to that subsystem, beyond the universal regression checks), a **V4 baseline** (current measured value or "n/a, not implemented"), a **V5 target** (what we're shooting for), a **threshold** (minimum value to pass), the **test mechanism** (how it's automated), the **test data** (which PDFs/tables/relationships), the **failure action** (what happens if metric fails), and the **computation formula** (exact math so reproducibility is unambiguous).
+
+#### Subsystem #2 — Bbox Provenance
+
+| Field | Value |
+|-------|-------|
+| **Primary metric** | Span coverage with non-null `bbox` AND non-empty `channel_provenance` jsonb |
+| **Threshold** | **≥99%** of merged spans on smoke set |
+| **V4 baseline** | ~30% (only when MonkeyOCR L1 happens to capture bbox; channels A-H don't write provenance) |
+| **V5 target** | 100% |
+| **Computation formula** | `100 × count(spans where bbox IS NOT NULL AND jsonb_array_length(channel_provenance) >= 1) / count(*)` |
+| **Test mechanism** | pytest assertion on `merged_spans.json`; CI hook fails the build if <99% |
+| **Test data** | Smoke set (2 PDFs); promoted to full regression once stable |
+| **Failure action** | Do NOT flip flag default; keep `V5_BBOX_PROVENANCE=0`; log exact span IDs missing provenance for debug |
+| **Secondary metrics** | (a) per-channel bbox: each contributing channel writes its own bbox, jsonb keys = channels; threshold ≥95%. (b) provenance round-trips through KB-0 push: `push → SELECT → diff` is byte-identical, threshold 100%. (c) bbox coords are within page bounds (0 ≤ x,y ≤ page_w/h); threshold 100% |
+
+#### Subsystem #1 — Table Specialist
+
+| Field | Value |
+|-------|-------|
+| **Primary metric** | Table-cell extraction accuracy: per-table, % of (row, col) cells where extracted text matches ground truth (case-insensitive, whitespace-normalized exact match) |
+| **Threshold** | **≥85%** mean across all 15 hand-graded tables (vs V4 ~50% measured baseline on 5 spot-checked tables) |
+| **V4 baseline** | ~50% (measured: KDIGO drug-risk-rationale 3 of 6 cells correct, ACS Reference dosing 4 of 8 correct — full 15-table baseline curated as part of #1 work) |
+| **V5 target** | ≥90% |
+| **Computation formula** | `100 × Σ_table (correct_cells / total_cells) / num_tables` (macro-average across tables; rationale: avoid bias toward larger tables) |
+| **Test mechanism** | pytest fixture loads ground-truth CSV per table → diffs against extracted table from job artefact → reports per-cell match % + macro-average |
+| **Test data** | 15 hand-graded tables (composition below) |
+| **Failure action** | Investigate per-table breakdown; if ≥3 of 15 score <70%, fall back to Nemotron Nano VL alternative; if ≥5 of 15 fail, revert flag and reopen brainstorm for #1 |
+| **Hand-graded table composition (15)** | KDIGO drug-risk-rationale (1), ACS Reference dosing tables (3 — STEMI/NSTEMI/post-discharge), CVD Risk decision matrix (1), Lipid-lowering chart (1), Hypertension targets (1), Diabetes T2D algorithm tables (3 — KDIGO Wallace + ADS algo + ADS Position), Cholesterol-Action lipid table (1), ACS Supp-A endpoint trial table (2), Hypertension-Slides BP target slide (1), HF Heart Failure NYHA-class table (1) |
+| **Secondary metrics** | (a) Cell-merge accuracy: spans that should be in one cell aren't split, threshold ≥95%. (b) Header detection: row-0/col-0 correctly identified as headers, threshold ≥95%. (c) Numeric coercion: numbers in cells parse as numbers (not "0.5%" left as string), threshold ≥98% |
+
+#### Subsystem #4 — Consensus Entropy gate
+
+| Field | Value |
+|-------|-------|
+| **Primary metric** | False-positive span rate — proportion of merged spans where only 1 channel contributed AND that channel's confidence is below the median; these are spans most likely to be noise |
+| **Threshold** | **Drops ≥20%** on smoke set vs V4 (relative reduction) |
+| **V4 baseline** | TBD-measure on smoke (auto-computed during #2 ground-truth pass) — typical for our V4 runs is ~12-18% of merged spans |
+| **V5 target** | ≤10% (cuts ~40% relative) |
+| **Computation formula** | `100 × count(spans where len(contributing_channels)=1 AND channel_confidence_median(span) < median(all_spans_confidence)) / count(*)` |
+| **Test mechanism** | Compare V4 baseline run vs V5 flag-on run on smoke set; pytest computes both and asserts delta |
+| **Test data** | Smoke set (2 PDFs) primary; full regression for confirmation |
+| **Failure action** | Tune Consensus Entropy threshold (`tau` hyperparameter); if no `tau` achieves both -20% FP AND universal `±15%` total spans, escalate to design review |
+| **Secondary metrics** | (a) Escalation rate (spans that triggered re-extraction): threshold ≤5% on smoke. (b) End-to-end run-time delta: ≤+10% wall time vs V4. (c) Channel-coverage rebalancing: which channels gain/lose share post-CE — sanity check, no threshold |
+
+#### Subsystem #3 — Schema-first extraction
+
+| Field | Value |
+|-------|-------|
+| **Primary metric** | Pydantic-schema validation pass rate: % of extracted facts (per region type) that successfully validate against their schema |
+| **Threshold** | **≥95%** on smoke + full regression |
+| **V4 baseline** | ~70-80% (estimated; V4 produces freeform text spans, not schema-validated facts — measured by post-hoc validation of existing merged_spans through draft schemas) |
+| **V5 target** | ≥98% |
+| **Computation formula** | `100 × count(facts where pydantic_validate(fact, schema_for(region_type)).is_valid) / count(facts)` |
+| **Test mechanism** | pytest hooks Pydantic ValidationError; CI fails if <95% pass |
+| **Test data** | Smoke for tight loop, full regression for completeness |
+| **Failure action** | Per-schema failure breakdown — if 1 schema fails ≥20%, that schema is too strict (loosen); if all schemas fail ≥5%, the upstream extraction is producing junk (fix #1 / #4 first) |
+| **Schema inventory (10 schemas to define before #3 starts)** | (1) RecommendationStatement, (2) DrugConditionMatrix, (3) eGFRThresholdTable, (4) MonitoringFrequencyRow, (5) EvidenceGradeBlock, (6) AlgorithmStep, (7) ContraindicationStatement, (8) DoseAdjustmentRow, (9) RiskScoreCalculator, (10) FollowUpScheduleEntry |
+| **Secondary metrics** | (a) Validation latency: schema check adds ≤50 ms per fact, threshold ≤100 ms. (b) Schema-coverage breadth: ≥80% of extracted facts route to a defined schema (rest go to "freeform" catchall). (c) Escalation-on-fail rate: facts that fail validation get re-extracted; escalation rate ≤8% |
+
+#### Subsystem #5 — Decomposition (Guideline2Graph-style)
+
+| Field | Value |
+|-------|-------|
+| **Primary metric** | Edge precision AND edge recall on cross-section relationships — paired metric, both must clear threshold |
+| **Threshold** | **Both ≥80%** on hand-graded relationship set |
+| **V4 baseline** | Edge precision 19.6%, edge recall 16.1% (measured per Guideline2Graph paper's reproduction methodology on KDIGO 2022) |
+| **V5 target** | Edge precision ≥87%, edge recall ≥87% (matches Guideline2Graph paper's 87.5% on the same task) |
+| **Computation formula** | Precision: `count(extracted_edges ∩ graded_edges) / count(extracted_edges)`. Recall: `count(extracted_edges ∩ graded_edges) / count(graded_edges)`. Edge equality: same source-node-id, same target-node-id, same edge-type label |
+| **Test mechanism** | pytest fixture loads ground-truth `relationships.yaml` → loads extracted graph → set-difference comparison |
+| **Test data** | 15 hand-graded relationships across HF + KDIGO corpora |
+| **Failure action** | If precision <80% but recall ≥80% → tighten interface constraint (over-linking; cut spurious edges). If recall <80% but precision ≥80% → loosen chunking boundaries (missing edges). If both <80% → architectural problem with #5; pause and re-design |
+| **Hand-graded relationship composition (15)** | KDIGO 2022 — Recommendation 1.2.3 → Algorithm Fig 1 → Drug Class SGLT2i (3 edges, treat as 1 path = 1 graded relationship). Repeat pattern across: ACS-Guideline (Initial Assessment → Reperfusion Algorithm → Antithrombotic Class), CVD Risk (Score → Action → Drug Class), Cholesterol Action (Statin choice → LDL Target → Monitoring), HF Heart Failure (NYHA Stage → ACE-I/ARB → Dose Titration). Total: 15 such paths |
+| **Secondary metrics** | (a) Triplet precision/recall (subject-predicate-object): ≥85% per Guideline2Graph numbers. (b) Node recall: ≥93% (matches paper). (c) Provenance preservation through chunking: every node in final graph has at least one chunk-id provenance reference, threshold 100% |
+
+### Hand-graded ground truth (one-time investment)
+
+| Asset | Count | Approx clinician effort | Sub-project that creates it | Reused by |
+|-------|------:|-------------------------:|---------------------------|-----------|
+| Tables (cell-by-cell ground truth CSVs) | 15 | ~3 hr | Subsystem #1 (Table Specialist) | #3 schema, #5 decomposition |
+| Relationships (graded edge YAMLs) | 15 | ~3 hr | Subsystem #5 (Decomposition) | future V6 |
+| Schema-validation negative samples (facts that *should* fail) | ~30 | ~2 hr | Subsystem #3 (Schema-first) | future V6 |
+| **Total one-time effort** | | **~8 hr** | | |
+
+Stored under `tests/v5/golden/{tables,relationships,negative_facts}/` in the repo. Versioned with the spec; updates to ground truth require co-located commit messages explaining the rationale.
+
+### Sidecar metrics.json shape (extended)
+
+```json
+{
+  "job_id": "<uuid>",
+  "v5_features_enabled": ["bbox_provenance", "table_specialist"],
+  "v4_baseline_job_id": "<uuid>",
+  "v4_baseline_source_pdf": "AU-HF-ACS-Guideline-2025.pdf",
+  "regression": {
+    "total_spans":        {"v4": 398, "v5": 412, "delta_pct": 3.5,  "threshold_pct": 15.0, "status": "PASS"},
+    "tier_1_pct":         {"v4": 87.4, "v5": 89.1, "delta_pp": 1.7,  "threshold_pp": 0.0, "status": "PASS"},
+    "kb0_push":           {"status": "PASS"},
+    "new_error_patterns": {"count": 0, "threshold": 0, "status": "PASS"}
+  },
+  "primary": {
+    "bbox_coverage_pct":          {"v5": 99.7, "v4": 30.2, "threshold": 99.0, "status": "PASS"},
+    "channel_provenance_pct":     {"v5": 99.4, "v4":  0.0, "threshold": 99.0, "status": "PASS"},
+    "table_cell_accuracy_pct":    {"v5": 88.2, "v4": 51.3, "threshold": 85.0, "status": "PASS"},
+    "table_header_detection_pct": {"v5": 96.8, "v4": 73.1, "threshold": 95.0, "status": "PASS"}
+  },
+  "secondary": {
+    "bbox_in_page_bounds_pct":    {"v5": 100.0, "threshold": 100.0, "status": "PASS"},
+    "kb0_round_trip_byte_identical": true
+  },
+  "verdict": "PASS"
+}
+```
 
 ### Hand-graded ground truth (one-time investment)
 
