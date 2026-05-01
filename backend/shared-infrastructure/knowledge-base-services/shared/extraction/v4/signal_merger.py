@@ -33,7 +33,60 @@ from .models import (
     RawSpan,
     SectionPassage,
 )
+from .provenance import (
+    ChannelProvenance,
+    get_channel_provenance_builder,
+    merge_provenance_lists,
+)
 from .tiering_classifier import TieringClassifier
+
+
+def _build_raw_provenance(
+    raw_span: RawSpan,
+    profile,
+    page_bbox_map: Optional[dict[int, list[float]]] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for one contributing RawSpan.
+
+    Looks up the per-channel helper via the registry in provenance.py.
+    Returns None when:
+      - no builder is registered for the channel (e.g., REVIEWER), or
+      - V5_BBOX_PROVENANCE flag is off (helpers self-no-op), or
+      - the raw span carries no bbox AND page_bbox_map provides no fallback.
+
+    page_bbox_map: optional dict of page_number → [x0, y0, x1, y1] used as
+    a page-level bbox fallback when the raw span has no block-level bbox.
+    This is populated by L1 backends (e.g. Docling) that provide page
+    geometry but not per-block geometry for NER channels.
+
+    Channel D's helper accepts an extra ``table_source`` kwarg; we
+    propagate it from RawSpan.channel_metadata when present so the
+    docling-OTSL vs marker-pipe model_version branch is preserved.
+    """
+    builder = get_channel_provenance_builder(raw_span.channel)
+    if builder is None:
+        return None
+    bbox = raw_span.bbox
+    # Page-level bbox fallback: when the channel has no block geometry but the
+    # L1 backend recorded page dimensions, use (0,0,w,h) as provenance bbox.
+    # This records WHICH PAGE the span is on rather than its exact position.
+    notes = None
+    if bbox is None and page_bbox_map is not None and raw_span.page_number is not None:
+        bbox = page_bbox_map.get(raw_span.page_number)
+        if bbox is not None:
+            notes = "page-level-bbox"
+    kwargs = {
+        "bbox": bbox,
+        "page_number": raw_span.page_number,
+        "confidence": raw_span.confidence,
+        "profile": profile,
+        "notes": notes,
+    }
+    if raw_span.channel == "D":
+        table_source = raw_span.channel_metadata.get("table_source")
+        if table_source is not None:
+            kwargs["table_source"] = table_source
+    return builder(**kwargs)
 
 
 # Confidence boost by number of contributing channels
@@ -61,6 +114,9 @@ class SignalMerger:
         channel_outputs: list[ChannelOutput],
         tree: GuidelineTree,
         classifier: Optional[TieringClassifier] = None,
+        v5_bbox_provenance: bool = False,
+        profile=None,
+        page_bbox_map: Optional[dict[int, list[float]]] = None,
     ) -> list[MergedSpan]:
         """Merge all channel outputs into MergedSpans.
 
@@ -70,6 +126,18 @@ class SignalMerger:
             tree: GuidelineTree from Channel A (for section assignment)
             classifier: Optional TieringClassifier to assign tier labels.
                 If None, MergedSpan.tier remains None (backward compat).
+            v5_bbox_provenance: When True, build per-channel ChannelProvenance
+                entries for each contributing RawSpan and attach them to the
+                resulting MergedSpan via channel_provenance. Default False
+                preserves V4 byte-identical output.
+            profile: Optional profile object passed to per-channel helpers
+                for V5 feature-flag resolution. Only consulted when
+                v5_bbox_provenance is True.
+            page_bbox_map: Optional dict of page_number → [x0, y0, x1, y1]
+                providing page-level bbox fallback for L1 backends (e.g.
+                Docling) that record page dimensions but not per-block
+                geometry for NER channels. Only used when v5_bbox_provenance
+                is True.
 
         Returns:
             List of MergedSpan objects ready for reviewer queue
@@ -86,7 +154,15 @@ class SignalMerger:
         # Steps 3-6: Build MergedSpans from clusters
         merged_spans: list[MergedSpan] = []
         for cluster in clusters:
-            merged = self._build_merged_span(job_id, cluster, tree, classifier)
+            merged = self._build_merged_span(
+                job_id,
+                cluster,
+                tree,
+                classifier,
+                v5_bbox_provenance=v5_bbox_provenance,
+                profile=profile,
+                page_bbox_map=page_bbox_map,
+            )
             merged_spans.append(merged)
 
         # Step 7: Page coverage assertion — detect page_map poisoning
@@ -218,6 +294,9 @@ class SignalMerger:
         cluster: list[RawSpan],
         tree: GuidelineTree,
         classifier: Optional[TieringClassifier] = None,
+        v5_bbox_provenance: bool = False,
+        profile=None,
+        page_bbox_map: Optional[dict[int, list[float]]] = None,
     ) -> MergedSpan:
         """Build a MergedSpan from a cluster of overlapping RawSpans."""
         # Step 3: CONFIDENCE BOOST
@@ -314,6 +393,21 @@ class SignalMerger:
             tier = tiering_result.tier
             tier_reason = tiering_result.reason
 
+        # Step 8 (V5 #2): per-channel provenance.
+        # When v5_bbox_provenance is on, build a ChannelProvenance entry for
+        # each contributing RawSpan that has a registered builder + bbox, then
+        # dedup-merge into a single list. When off, this stays an empty list
+        # (Pydantic default) — V4 byte-identical output.
+        channel_provenance: list[ChannelProvenance] = []
+        if v5_bbox_provenance:
+            per_channel_lists: list[list[ChannelProvenance]] = []
+            for raw in cluster:
+                prov = _build_raw_provenance(raw, profile=profile, page_bbox_map=page_bbox_map)
+                if prov is not None:
+                    per_channel_lists.append([prov])
+            if per_channel_lists:
+                channel_provenance = merge_provenance_lists(per_channel_lists)
+
         return MergedSpan(
             job_id=job_id,
             text=merged_text,
@@ -329,6 +423,7 @@ class SignalMerger:
             page_number=page_number,
             section_id=section_id,
             table_id=table_id,
+            channel_provenance=channel_provenance,
         )
 
     # ── V4.2.1: Section Passage Assembly ─────────────────────────────────

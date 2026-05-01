@@ -35,8 +35,62 @@ import unicodedata
 from typing import Optional
 
 from .models import GuidelineSection, GuidelineTree, TableBoundary
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
 
 logger = logging.getLogger(__name__)
+
+
+# Channel A model version for ChannelProvenance.model_version. Pinned to the
+# Granite-Docling extractor's VERSION constant so a bump there propagates
+# automatically to the audit trail.
+def _channel_a_model_version() -> str:
+    try:
+        from .granite_docling_extractor import GraniteDoclingExtractor
+        return f"granite-docling@{GraniteDoclingExtractor.VERSION}"
+    except Exception:
+        # Defensive: never fail span construction over a version-tag lookup.
+        return "granite-docling@unknown"
+
+
+def _channel_a_provenance(
+    bbox: tuple[float, float, float, float] | list[float] | None,
+    page_number: int,
+    confidence: float,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel A.
+
+    Returns None when:
+      - V5_BBOX_PROVENANCE flag is off (default), OR
+      - bbox is None / not a 4-tuple (no fake bboxes — caller is expected
+        to leave provenance unset rather than fabricate coordinates).
+
+    Defensive normalisation:
+      - x0/y0 clamped to >=0 (some upstream parsers emit -0.5 etc.)
+      - x1/y1 clamped to >= x0/y0 to satisfy BoundingBox._check_ordered
+      - page_number clamped to >=1
+      - confidence clamped to [0.0, 1.0]
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="A",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_a_model_version(),
+        notes=notes,
+    )
 
 
 class ChannelAStructuralOracle:
@@ -64,6 +118,7 @@ class ChannelAStructuralOracle:
         self,
         subordinate_headings: Optional[list[str]] = None,
         chapter_reset_headings: Optional[list[str]] = None,
+        profile=None,
     ) -> None:
         """Initialize with optional profile-driven heading sets.
 
@@ -83,6 +138,10 @@ class ChannelAStructuralOracle:
             self._chapter_reset_headings = frozenset(chapter_reset_headings)
         else:
             self._chapter_reset_headings = self._DEFAULT_CHAPTER_RESET_HEADINGS
+
+        # V5: profile is used by _channel_a_provenance() to consult v5_features.
+        # Always allowed to be None (V4 callers don't pass it).
+        self.profile = profile
 
     # ── Regex patterns (shared by both oracle and fallback paths) ──────────
 
@@ -295,6 +354,13 @@ class ChannelAStructuralOracle:
                     block_type=block_type,
                     level=level,
                     children=[],
+                    provenance=_channel_a_provenance(
+                        bbox=None,  # DocTagSection has no bbox today; helper no-ops.
+                        page_number=page_number,
+                        confidence=1.0,
+                        profile=self.profile,
+                        notes=f"docling-aligned: {heading_text[:40]}",
+                    ),
                 ))
                 used_marker_indices.add(best_idx)
                 matched += 1
@@ -326,6 +392,13 @@ class ChannelAStructuralOracle:
                     block_type=block_type,
                     level=level,
                     children=[],
+                    provenance=_channel_a_provenance(
+                        bbox=None,  # Marker-only heading, no docling bbox.
+                        page_number=page_number,
+                        confidence=0.5,  # lower: Marker saw it, docling did not
+                        profile=self.profile,
+                        notes=f"marker-only: {heading_text[:40]}",
+                    ),
                 ))
 
         # Sort by start_offset for hierarchy building
@@ -473,6 +546,13 @@ class ChannelAStructuralOracle:
                     page_number=mt.page_number,
                     source="marker_pipe",
                     otsl_text=otsl_table.raw_otsl,  # store OTSL as enrichment
+                    provenance=_channel_a_provenance(
+                        bbox=None,
+                        page_number=mt.page_number,
+                        confidence=1.0,
+                        profile=self.profile,
+                        notes=f"docling+marker table_{table_id}",
+                    ),
                 ))
                 matched_marker_tables.add(match_idx)
             else:
@@ -490,6 +570,13 @@ class ChannelAStructuralOracle:
                     page_number=otsl_table.page_number,
                     source="granite_otsl",
                     otsl_text=otsl_table.raw_otsl,
+                    provenance=_channel_a_provenance(
+                        bbox=None,
+                        page_number=otsl_table.page_number,
+                        confidence=0.8,  # docling-only table
+                        profile=self.profile,
+                        notes=f"granite_otsl table_{table_id}",
+                    ),
                 ))
 
             table_id += 1
@@ -506,6 +593,13 @@ class ChannelAStructuralOracle:
                     row_count=mt.row_count,
                     page_number=mt.page_number,
                     source="marker_pipe",
+                    provenance=_channel_a_provenance(
+                        bbox=None,
+                        page_number=mt.page_number,
+                        confidence=0.5,  # marker-only, docling missed it
+                        profile=self.profile,
+                        notes=f"marker-only table_{table_id}",
+                    ),
                 ))
                 table_id += 1
 
@@ -681,6 +775,13 @@ class ChannelAStructuralOracle:
                 block_type=block_type,
                 level=level,
                 children=[],
+                provenance=_channel_a_provenance(
+                    bbox=None,
+                    page_number=page_number,
+                    confidence=0.5,
+                    profile=self.profile,
+                    notes=f"marker-fallback: {heading_text[:40]}",
+                ),
             ))
 
         if not sections:
@@ -796,6 +897,13 @@ class ChannelAStructuralOracle:
                         row_count=row_count,
                         page_number=page,
                         source="marker_pipe",
+                        provenance=_channel_a_provenance(
+                            bbox=None,
+                            page_number=page,
+                            confidence=0.5,
+                            profile=self.profile,
+                            notes=f"marker-pipe table_{table_id}",
+                        ),
                     ))
                     table_id += 1
 

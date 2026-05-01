@@ -424,3 +424,62 @@ The platform uses **soft FKs** (uuid/int columns without database-level FK const
 2. Create loader script in that KB's `scripts/` dir following the existing pattern
 3. Add a row to the inventory table at the top of this README
 4. Document in this README's "Where to find more" section
+
+## V5 Feature Flags
+
+Pipeline 1 supports additive V5 subsystems controlled by feature flags. All V5 features are **off by default** — V4 output is byte-identical when no V5 flags are set.
+
+### Available flags
+
+| Flag | Env var | Profile key | Subsystem |
+|------|---------|-------------|-----------|
+| Bbox Provenance | `V5_BBOX_PROVENANCE=1` | `v5_features.bbox_provenance: true` | Per-channel attribution + bbox in every merged span |
+
+### Enabling via environment variable (RunPod / CLI)
+
+```bash
+export V5_BBOX_PROVENANCE=1
+python3 data/run_pipeline_targeted.py --pipeline 1 --guideline heart_foundation_au_2025 --source acs-hcp-summary --l1 monkeyocr --target-kb all
+```
+
+### Enabling via guideline profile (YAML)
+
+Add to your guideline profile YAML (e.g. `data/profiles/heart_foundation_au_2025.yaml`):
+
+```yaml
+v5_features:
+  bbox_provenance: true
+```
+
+### Disabling all V5 features
+
+```bash
+export V5_DISABLE_ALL=1
+```
+
+### Verifying V5 output
+
+After a run with `V5_BBOX_PROVENANCE=1`:
+
+```bash
+# Check bbox coverage metric
+python3 data/v5_metrics.py data/output/v4/job_monkeyocr_*/
+
+# Inspect merged spans JSON directly
+python3 -c "
+import json; spans = json.load(open('data/output/v4/job_monkeyocr_<TIMESTAMP>/merged_spans.json'))
+v5 = [s for s in spans if s.get('channel_provenance')]
+print(f'{len(v5)}/{len(spans)} spans have bbox provenance')
+print('Sample:', json.dumps(v5[0]['channel_provenance'][0], indent=2))
+"
+```
+
+### KB-0 GCP verification
+
+After `push_to_kb0_gcp.py` with V5 enabled, migration 009 adds `provenance_v5 JSONB` to `l2_merged_spans`:
+
+```sql
+SELECT COUNT(*) FROM l2_merged_spans WHERE provenance_v5 IS NOT NULL;
+```
+
+See `data/RUNPOD_SMOKE_V5.md` for the full end-to-end smoke checklist.

@@ -23,6 +23,45 @@ from typing import Optional
 from uuid import uuid4
 
 from .models import ChannelOutput, GuidelineTree, RawSpan
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
+
+
+def _channel_g_model_version() -> str:
+    """Channel G model version (deterministic sentence boundary expansion)."""
+    return "sentence@v1.0"
+
+
+def _channel_g_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel G (sentence-level context).
+
+    Returns None when V5_BBOX_PROVENANCE is off or bbox is missing. Bbox is
+    typically inherited from the originating B-F span's parent block.
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="G",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_g_model_version(),
+        notes=notes,
+    )
 
 
 class ChannelGSentence:

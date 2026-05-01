@@ -39,8 +39,37 @@ from pathlib import Path
 import psycopg2
 import psycopg2.extras
 
+# Make `extraction.v4.*` importable when running as a script from data/.
+# _this_dir = .../guideline-atomiser/data; we need shared/ on sys.path.
+_THIS_DIR = Path(__file__).resolve().parent
+_ATOMISER_DIR = _THIS_DIR.parent                    # guideline-atomiser/
+_SHARED_DIR = _ATOMISER_DIR.parent.parent           # shared/ (contains extraction/)
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+
+# V5 provenance helpers — used to validate + serialise channel_provenance
+# dicts loaded from merged_spans.json before writing to the JSONB column.
+from extraction.v4.provenance import (  # noqa: E402
+    ChannelProvenance,
+    serialise_provenance_list,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
 log = logging.getLogger(__name__)
+
+# kb-0-governance-platform/migrations directory — applied on connect so the
+# pusher is self-bootstrapping for V5 schema additions.
+_KB_SERVICES_DIR = (
+    _ATOMISER_DIR.parent.parent.parent  # backend/shared-infrastructure/knowledge-base-services
+)
+MIGRATIONS_DIR = _KB_SERVICES_DIR / "kb-0-governance-platform" / "migrations"
+
+# Ordered list of V5+ migrations the pusher applies on every connect. All
+# DDL inside must be idempotent (IF NOT EXISTS guards). Older migrations
+# (001-008) are managed by the KB-0 governance platform itself.
+PENDING_MIGRATIONS = (
+    "009_add_provenance_v5.sql",
+)
 
 # GCP Cloud SQL — same credentials the KB-0 server reads from .env
 DB_CONFIG = dict(
@@ -62,6 +91,28 @@ TIER_REVERSE = {"TIER_1": 1, "TIER_2": 2, "NOISE": 3, None: None}
 # default to 1 (Tier 1 = primary peak-body guideline) until reviewers
 # downgrade individual jobs.
 DEFAULT_GUIDELINE_TIER = 1
+
+
+def apply_pending_migrations(conn) -> None:
+    """Apply V5+ migrations against the KB-0 GCP DB.
+
+    All migrations listed in ``PENDING_MIGRATIONS`` must be idempotent
+    (``IF NOT EXISTS`` guards), so this is safe to call on every push.
+    Commits on success; raises on failure (caller may rollback).
+    """
+    cur = conn.cursor()
+    try:
+        for fname in PENDING_MIGRATIONS:
+            mig_path = MIGRATIONS_DIR / fname
+            if not mig_path.exists():
+                log.warning("migration file missing, skipping: %s", mig_path)
+                continue
+            sql = mig_path.read_text(encoding="utf-8")
+            log.info("applying migration: %s", fname)
+            cur.execute(sql)
+        conn.commit()
+    finally:
+        cur.close()
 
 
 def push_job(conn, job_dir: Path, dry_run: bool = False) -> dict:
@@ -153,6 +204,16 @@ def push_job(conn, job_dir: Path, dry_run: bool = False) -> dict:
 
     span_rows = []
     for s in spans:
+        # V5 channel_provenance: round-trip through the model to validate the
+        # JSON shape, then re-serialise to a JSONB-compatible string. NULL when
+        # the span has no V5 provenance (V4 jobs or V5 flag off).
+        prov_raw = s.get("channel_provenance") or []
+        if prov_raw:
+            prov_models = [ChannelProvenance.model_validate(d) for d in prov_raw]
+            provenance_v5_json = psycopg2.extras.Json(serialise_provenance_list(prov_models))
+        else:
+            provenance_v5_json = None
+
         span_rows.append((
             s["id"],
             s["job_id"],
@@ -177,6 +238,7 @@ def push_job(conn, job_dir: Path, dry_run: bool = False) -> dict:
             TIER_REVERSE.get(s.get("tier")),
             psycopg2.extras.Json(s.get("coverage_guard_alert")) if s.get("coverage_guard_alert") else None,
             psycopg2.extras.Json(s.get("semantic_tokens")) if s.get("semantic_tokens") else None,
+            provenance_v5_json,
         ))
     if span_rows:
         psycopg2.extras.execute_batch(cur, """
@@ -186,8 +248,8 @@ def push_job(conn, job_dir: Path, dry_run: bool = False) -> dict:
                 disagreement_detail, page_number, section_id, table_id,
                 review_status, reviewer_text, reviewed_by, reviewed_at,
                 created_at, bbox, surrounding_context, tier, coverage_guard_alert,
-                semantic_tokens
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                semantic_tokens, provenance_v5
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, span_rows, page_size=200)
     counts["spans"] = len(span_rows)
 
@@ -268,6 +330,8 @@ def main() -> int:
         conn = None
     else:
         conn = psycopg2.connect(**DB_CONFIG)
+        # Self-bootstrap V5+ schema additions. All migrations are idempotent.
+        apply_pending_migrations(conn)
 
     totals = {"jobs": 0, "spans": 0, "passages": 0, "tree": 0}
     try:

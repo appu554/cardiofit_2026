@@ -20,7 +20,52 @@ Pipeline Position:
 """
 
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
+
+
+def _channel_0_model_version() -> str:
+    """Channel 0 model version, pinned to Channel0Normalizer.VERSION."""
+    try:
+        return f"normaliser@{Channel0Normalizer.VERSION}"
+    except Exception:
+        return "normaliser@unknown"
+
+
+def _channel_0_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel 0 (text normaliser).
+
+    Returns None when the V5_BBOX_PROVENANCE flag is off or bbox is missing.
+    Channel 0 transforms text rather than emitting spans; provenance is
+    typically attached at the doc level by signal_merger (Task 8) using
+    full-page extents.
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="0",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_0_model_version(),
+        notes=notes,
+    )
 
 
 class Channel0Normalizer:

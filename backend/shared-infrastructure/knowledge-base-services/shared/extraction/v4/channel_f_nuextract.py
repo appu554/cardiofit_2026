@@ -39,8 +39,54 @@ import unicodedata
 from typing import Optional
 
 from .models import ChannelOutput, GuidelineSection, GuidelineTree, RawSpan
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
 
 logger = logging.getLogger(__name__)
+
+
+def _channel_f_model_version() -> str:
+    """Channel F model version, pinned to NUEXTRACT_MODEL env if set."""
+    env_model = os.environ.get("NUEXTRACT_MODEL")
+    if env_model:
+        return f"nuextract@{env_model}"
+    try:
+        return f"nuextract@{ChannelFNuExtract.VERSION}"
+    except Exception:
+        return "nuextract@v1.0"
+
+
+def _channel_f_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel F (NuExtract via Ollama sidecar).
+
+    Returns None when V5_BBOX_PROVENANCE is off or bbox is missing. Bbox is
+    inherited from the parent prose passage. NuExtract does not expose
+    per-proposition probabilities, so confidence is heuristic (0.85 default).
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="F",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_f_model_version(),
+        notes=notes,
+    )
 
 # NuExtract extraction template — defines the JSON schema the model fills
 EXTRACTION_TEMPLATE = json.dumps({

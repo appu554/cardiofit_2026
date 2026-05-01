@@ -25,6 +25,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from .provenance import ChannelProvenance
+
 
 # =============================================================================
 # Enums
@@ -74,6 +76,10 @@ class GuidelineSection:
     block_type: str             # heading, paragraph, table, list_item, recommendation
     level: int = 1              # ATX heading depth (1=#, 2=##, 3=###, etc.)
     children: list[GuidelineSection] = field(default_factory=list)
+    # V5 (Pipeline 1 #2): per-section provenance from Channel A. Populated only
+    # when V5_BBOX_PROVENANCE flag is on AND a bbox is available from the
+    # structural oracle. Default-None preserves byte-identical V4 behaviour.
+    provenance: Optional[ChannelProvenance] = None
 
 
 @dataclass
@@ -93,6 +99,9 @@ class TableBoundary:
     page_number: int
     source: str = "marker_pipe"          # "marker_pipe" | "granite_otsl"
     otsl_text: Optional[str] = None      # raw OTSL text if source="granite_otsl"
+    # V5 (Pipeline 1 #2): per-table provenance from Channel A. Same semantics
+    # as GuidelineSection.provenance (flag-gated, None when bbox unavailable).
+    provenance: Optional[ChannelProvenance] = None
 
 
 @dataclass
@@ -270,6 +279,10 @@ class MergedSpan(BaseModel):
     reviewer_text: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    # V5 #2 Bbox Provenance — backward-compatible additive field.
+    # Empty list when V5_BBOX_PROVENANCE is off; populated when on.
+    # See extraction.v4.provenance.ChannelProvenance.
+    channel_provenance: list[ChannelProvenance] = Field(default_factory=list)
 
     model_config = {"frozen": False}
 

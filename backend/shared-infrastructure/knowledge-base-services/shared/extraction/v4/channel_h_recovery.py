@@ -27,6 +27,45 @@ from typing import Optional
 from uuid import uuid4
 
 from .models import ChannelOutput, GuidelineTree, MergedSpan, RawSpan
+from .provenance import (
+    ChannelProvenance,
+    _normalise_bbox,
+    _normalise_confidence,
+    _normalise_page_number,
+)
+from .v5_flags import is_v5_enabled
+
+
+def _channel_h_model_version() -> str:
+    """Channel H model version (cross-channel recovery + L1 oracle injection)."""
+    return "recovery@v1.0"
+
+
+def _channel_h_provenance(
+    bbox,
+    page_number,
+    confidence,
+    profile,
+    notes: Optional[str] = None,
+) -> Optional[ChannelProvenance]:
+    """Build a ChannelProvenance entry for Channel H (recovery / L1 oracle).
+
+    Returns None when V5_BBOX_PROVENANCE is off or bbox is missing. Bbox is
+    preserved from the originating raw-span when injecting L1-recovered facts.
+    """
+    if not is_v5_enabled("bbox_provenance", profile):
+        return None
+    bb = _normalise_bbox(bbox)
+    if bb is None:
+        return None
+    return ChannelProvenance(
+        channel_id="H",
+        bbox=bb,
+        page_number=_normalise_page_number(page_number),
+        confidence=_normalise_confidence(confidence),
+        model_version=_channel_h_model_version(),
+        notes=notes,
+    )
 
 
 # Common drug names that Channel B should catch
