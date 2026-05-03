@@ -13,14 +13,8 @@ import pytest
 
 from marker_extractor import TableBlock
 
-try:
-    from marker_extractor import BoundingBox as MBBox
-    _BBOX = MBBox(x=10.0, y=20.0, width=400.0, height=120.0)
-except Exception:
-    _BBOX = None
-
 from extraction.v4.channel_d_table import ChannelDTableDecomposer
-from extraction.v4.models import GuidelineTree, TableBoundary
+from extraction.v4.models import GuidelineTree
 
 
 GOLDEN_DIR = Path(__file__).parent / "golden" / "tables"
@@ -142,7 +136,7 @@ def test_header_detection(monkeypatch):
     )
     out = decomp.extract("", tree, l1_tables=[tb])
     data_spans = [s for s in out.spans if s.source_block_type == "table_cell"
-                  and s.channel_metadata.get("row_index", 0) >= 0]
+                  and s.channel_metadata.get("row_index", -1) >= 0]
     headers_seen = {s.channel_metadata.get("col_header") for s in data_spans}
     assert "Drug" in headers_seen
     assert "Dose" in headers_seen
