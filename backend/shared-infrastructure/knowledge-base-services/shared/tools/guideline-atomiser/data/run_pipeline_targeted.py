@@ -156,6 +156,7 @@ def _merge_with_v5_flag(merger, *args_, profile, **kwargs):
     """
     from extraction.v4.v5_flags import is_v5_enabled
     v5_bbox = is_v5_enabled("bbox_provenance", profile)
+    kwargs["v5_consensus_entropy"] = is_v5_enabled("consensus_entropy", profile)
     return merger.merge(
         *args_,
         v5_bbox_provenance=v5_bbox,
@@ -822,7 +823,7 @@ def pipeline_1():
 
     # Job metadata (includes targeted extraction params + oracle results)
     from extraction.v4.v5_flags import is_v5_enabled as _is_v5_enabled
-    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist"]
+    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist", "consensus_entropy"]
     _v5_features_enabled = [f for f in _V5_KNOWN_FEATURES if _is_v5_enabled(f, profile)]
 
     job_meta = {

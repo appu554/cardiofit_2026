@@ -117,6 +117,7 @@ class SignalMerger:
         v5_bbox_provenance: bool = False,
         profile=None,
         page_bbox_map: Optional[dict[int, list[float]]] = None,
+        v5_consensus_entropy: bool = False,
     ) -> list[MergedSpan]:
         """Merge all channel outputs into MergedSpans.
 
@@ -167,6 +168,14 @@ class SignalMerger:
 
         # Step 7: Page coverage assertion — detect page_map poisoning
         self._validate_page_coverage(merged_spans, tree)
+
+        # Step 8 (V5 #3): Consensus Entropy gate — filter low-confidence
+        # single-channel spans that fall below the session confidence median.
+        # Resolve flag: explicit kwarg wins; otherwise check env/profile.
+        from .v5_flags import is_v5_enabled as _is_v5_enabled
+        _ce_enabled = v5_consensus_entropy or _is_v5_enabled("consensus_entropy", profile)
+        if _ce_enabled:
+            merged_spans = self._apply_ce_gate(merged_spans)
 
         return merged_spans
 
@@ -425,6 +434,32 @@ class SignalMerger:
             table_id=table_id,
             channel_provenance=channel_provenance,
         )
+
+    # ── V5 #3: Consensus Entropy Gate ────────────────────────────────────
+
+    def _apply_ce_gate(self, merged_spans: list[MergedSpan]) -> list[MergedSpan]:
+        """Flag single-channel spans below the session confidence median.
+
+        Only single-channel spans (contributing_channels of length 1) whose
+        merged_confidence is strictly below the session median are flagged with
+        ce_flagged=True.  Flagged spans remain in the returned list so callers
+        can inspect or audit them; downstream consumers filter on ce_flagged.
+        Multi-channel spans and spans at or above the median are never flagged.
+        """
+        import statistics as _stats
+
+        if not merged_spans:
+            return merged_spans
+
+        median_conf = _stats.median(s.merged_confidence for s in merged_spans)
+
+        for span in merged_spans:
+            if (
+                len(span.contributing_channels) == 1
+                and span.merged_confidence < median_conf
+            ):
+                span.ce_flagged = True
+        return merged_spans
 
     # ── V4.2.1: Section Passage Assembly ─────────────────────────────────
 
