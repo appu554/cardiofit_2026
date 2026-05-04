@@ -95,12 +95,16 @@ class ChannelDTableDecomposer:
         self,
         text: str,
         tree: GuidelineTree,
+        l1_tables: Optional[list] = None,
+        profile=None,
     ) -> ChannelOutput:
         """Decompose all tables in the tree into cell-level RawSpans.
 
         Args:
             text: Normalized text (Channel 0 output)
             tree: GuidelineTree from Channel A (contains TableBoundary objects)
+            l1_tables: Optional list of Docling TableBlock objects (V5 path)
+            profile: Optional V5 feature flag profile
 
         Returns:
             ChannelOutput with one RawSpan per table cell
@@ -109,21 +113,43 @@ class ChannelDTableDecomposer:
         spans: list[RawSpan] = []
         tables_pipe = 0
         tables_otsl = 0
+        tables_docling = 0
         suspicious_tables = 0
+        table_specialist_used = False
 
-        for table in tree.tables:
-            if table.source == "granite_otsl" and table.otsl_text:
-                table_spans = self._decompose_otsl_table(table)
-                tables_otsl += 1
-            else:
-                # Default: marker_pipe (backward compatible)
-                table_spans = self._decompose_pipe_table(text, table, tree)
-                tables_pipe += 1
-
-            if self._is_suspicious(table, table_spans):
-                suspicious_tables += 1
-
-            spans.extend(table_spans)
+        # V5 #1 Table Specialist: use Docling TableBlock as primary when flag on
+        if l1_tables and is_v5_enabled("table_specialist", profile):
+            table_specialist_used = True
+            for tb in l1_tables:
+                docling_spans = self._decompose_docling_table(tb)
+                tables_docling += 1
+                spans.extend(docling_spans)
+            # Still run OTSL/pipe for any tree.tables NOT covered by l1_tables
+            covered_indices = {getattr(tb, "table_index", None) for tb in l1_tables}
+            for table in tree.tables:
+                if getattr(table, "table_index", None) in covered_indices:
+                    continue
+                if table.source == "granite_otsl" and table.otsl_text:
+                    table_spans = self._decompose_otsl_table(table)
+                    tables_otsl += 1
+                else:
+                    table_spans = self._decompose_pipe_table(text, table, tree)
+                    tables_pipe += 1
+                if self._is_suspicious(table, table_spans):
+                    suspicious_tables += 1
+                spans.extend(table_spans)
+        else:
+            # V4 path: unchanged
+            for table in tree.tables:
+                if table.source == "granite_otsl" and table.otsl_text:
+                    table_spans = self._decompose_otsl_table(table)
+                    tables_otsl += 1
+                else:
+                    table_spans = self._decompose_pipe_table(text, table, tree)
+                    tables_pipe += 1
+                if self._is_suspicious(table, table_spans):
+                    suspicious_tables += 1
+                spans.extend(table_spans)
 
         # V4.2: Extract footnote definitions from figure/table captions
         footnote_spans = self._extract_caption_footnotes(text, tree)
@@ -135,12 +161,14 @@ class ChannelDTableDecomposer:
             channel="D",
             spans=spans,
             metadata={
-                "tables_processed": len(tree.tables),
+                "tables_processed": len(tree.tables) + tables_docling,
                 "tables_pipe": tables_pipe,
                 "tables_otsl": tables_otsl,
+                "tables_docling": tables_docling,
                 "cells_extracted": len(spans) - len(footnote_spans),
                 "caption_footnotes": len(footnote_spans),
                 "suspicious_tables": suspicious_tables,
+                "table_specialist_used": table_specialist_used,
             },
             elapsed_ms=elapsed_ms,
         )
@@ -336,6 +364,67 @@ class ChannelDTableDecomposer:
                 "cell_type": cell_type,
             },
         )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # V5 #1 TABLE SPECIALIST: Docling TableBlock path
+    # ═══════════════════════════════════════════════════════════════════════
+
+    CONFIDENCE_DOCLING = 0.97
+
+    def _decompose_docling_table(self, tb) -> list[RawSpan]:
+        """Decompose a Docling TableBlock (from marker_extractor) into cell RawSpans.
+
+        TableBlock.headers: list[str] — column headers
+        TableBlock.rows: list[list[str]] — data rows
+        Each non-empty cell becomes one RawSpan with row/col/header metadata.
+        """
+        spans: list[RawSpan] = []
+        headers = tb.headers or []
+        bbox_raw = None
+        if tb.bbox is not None:
+            try:
+                bbox_raw = [
+                    float(tb.bbox.x0),
+                    float(tb.bbox.y0),
+                    float(tb.bbox.x1),
+                    float(tb.bbox.y1),
+                ]
+            except (AttributeError, TypeError):
+                bbox_raw = None
+
+        for row_idx, row in enumerate(tb.rows):
+            row_drug = None
+            for cell in row:
+                if cell and cell.strip():
+                    row_drug = cell.strip()
+                    break
+
+            for col_idx, cell_text in enumerate(row):
+                if not cell_text or not cell_text.strip():
+                    continue
+
+                col_header = headers[col_idx] if col_idx < len(headers) else None
+
+                spans.append(RawSpan(
+                    channel="D",
+                    text=cell_text.strip(),
+                    start=-1,
+                    end=-1,
+                    confidence=self.CONFIDENCE_DOCLING,
+                    page_number=tb.page_number,
+                    source_block_type="table_cell",
+                    bbox=bbox_raw,
+                    channel_metadata={
+                        "row_index": row_idx,
+                        "col_index": col_idx,
+                        "col_header": col_header,
+                        "row_drug": row_drug,
+                        "table_source": "docling_tableblock",
+                        "table_index": getattr(tb, "table_index", 0),
+                    },
+                ))
+
+        return spans
 
     def _get_otsl_row_drug(
         self, row_cells: list[tuple[str, str]]
