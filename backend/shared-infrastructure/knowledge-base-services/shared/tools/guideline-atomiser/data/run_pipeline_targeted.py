@@ -457,7 +457,7 @@ def pipeline_1():
 
     print("   [Channel D] Table cell decomposition...")
     channel_d = ChannelD()
-    d_output = channel_d.extract(normalized_text, tree)
+    d_output = channel_d.extract(normalized_text, tree, l1_tables=l1_result.tables, profile=profile)
     d_pipe = d_output.metadata.get("tables_pipe", 0)
     d_otsl = d_output.metadata.get("tables_otsl", 0)
     d_suspicious = d_output.metadata.get("suspicious_tables", 0)
@@ -822,7 +822,7 @@ def pipeline_1():
 
     # Job metadata (includes targeted extraction params + oracle results)
     from extraction.v4.v5_flags import is_v5_enabled as _is_v5_enabled
-    _V5_KNOWN_FEATURES = ["bbox_provenance"]
+    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist"]
     _v5_features_enabled = [f for f in _V5_KNOWN_FEATURES if _is_v5_enabled(f, profile)]
 
     job_meta = {
