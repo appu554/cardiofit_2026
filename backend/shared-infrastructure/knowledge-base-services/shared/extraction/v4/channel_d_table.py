@@ -90,6 +90,7 @@ class ChannelDTableDecomposer:
     VERSION = "4.2.0"
     CONFIDENCE_PIPE = 0.95    # Marker pipe tables
     CONFIDENCE_OTSL = 0.92    # Granite OTSL tables (slightly lower — alignment uncertainty)
+    CONFIDENCE_DOCLING = 0.97 # Docling TableFormer (structured table objects, V5 #1)
 
     def extract(
         self,
@@ -125,7 +126,11 @@ class ChannelDTableDecomposer:
                 tables_docling += 1
                 spans.extend(docling_spans)
             # Still run OTSL/pipe for any tree.tables NOT covered by l1_tables
-            covered_indices = {getattr(tb, "table_index", None) for tb in l1_tables}
+            covered_indices = {
+                idx for idx in
+                (getattr(tb, "table_index", None) for tb in l1_tables)
+                if idx is not None
+            }
             for table in tree.tables:
                 if getattr(table, "table_index", None) in covered_indices:
                     continue
@@ -161,7 +166,7 @@ class ChannelDTableDecomposer:
             channel="D",
             spans=spans,
             metadata={
-                "tables_processed": len(tree.tables) + tables_docling,
+                "tables_processed": tables_docling + tables_pipe + tables_otsl,
                 "tables_pipe": tables_pipe,
                 "tables_otsl": tables_otsl,
                 "tables_docling": tables_docling,
@@ -368,8 +373,6 @@ class ChannelDTableDecomposer:
     # ═══════════════════════════════════════════════════════════════════════
     # V5 #1 TABLE SPECIALIST: Docling TableBlock path
     # ═══════════════════════════════════════════════════════════════════════
-
-    CONFIDENCE_DOCLING = 0.97
 
     def _decompose_docling_table(self, tb) -> list[RawSpan]:
         """Decompose a Docling TableBlock (from marker_extractor) into cell RawSpans.
