@@ -9,11 +9,14 @@ Run:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.smoke
+
+_DECOMP_ENABLED = os.getenv("V5_DECOMPOSITION", "") not in ("", "0")
 
 SMOKE_JOB_DIR = Path("data/output/v4")
 
@@ -55,11 +58,15 @@ def test_every_node_has_provenance():
 
 
 @pytest.mark.skipif(
-    _latest("**/job_metadata.json") is None,
-    reason="No job_metadata.json found — run pipeline first",
+    _latest("**/job_metadata.json") is None or not _DECOMP_ENABLED,
+    reason="No job_metadata.json found or V5_DECOMPOSITION not set — run pipeline with V5_DECOMPOSITION=1 first",
 )
 def test_decomposition_active_in_metadata():
-    """job_metadata.json reports decomposition in v5_features_enabled."""
+    """job_metadata.json reports decomposition in v5_features_enabled.
+
+    Only asserts when V5_DECOMPOSITION=1 because pipeline output from a run
+    without the flag legitimately excludes decomposition from the features list.
+    """
     latest_meta = _latest("**/job_metadata.json")
     with open(latest_meta) as f:
         meta = json.load(f)
@@ -69,8 +76,8 @@ def test_decomposition_active_in_metadata():
 
 
 @pytest.mark.skipif(
-    _latest("**/metrics.json") is None,
-    reason="No metrics.json found — run pipeline first",
+    _latest("**/metrics.json") is None or not _DECOMP_ENABLED,
+    reason="No metrics.json found or V5_DECOMPOSITION not set — run pipeline with V5_DECOMPOSITION=1 first",
 )
 def test_decomposition_metrics_written():
     """metrics.json contains v5_decomposition key with node_count and edge_count."""
