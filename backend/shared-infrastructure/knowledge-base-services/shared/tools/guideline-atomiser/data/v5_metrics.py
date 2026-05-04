@@ -213,10 +213,7 @@ def compute_v5_ce_metrics(merged_spans: list[dict[str, Any]]) -> dict[str, Any]:
     Pure function. No I/O. Reads ce_flagged from MergedSpan dicts.
     """
     total_spans = len(merged_spans)
-    flagged = sum(
-        1 for s in merged_spans
-        if isinstance(s, dict) and s.get("ce_flagged") is True
-    )
+    flagged = sum(1 for s in merged_spans if s.get("ce_flagged") is True)
     suppression_pct = round(flagged / total_spans * 100.0, 2) if total_spans > 0 else 0.0
 
     return {
@@ -266,6 +263,7 @@ def _main(argv: list[str] | None = None) -> int:
                 f"{job_dir.name}: docling_table_spans={ts['docling_table_cell_spans']} "
                 f"({ts['docling_coverage_pct']:.1f}% of table cells)"
             )
+        # CE gate metrics are always written (zero flagged is still a valid audit record).
         ce_metrics = compute_v5_ce_metrics(spans)
         write_v5_metrics(job_dir, ce_metrics)
         ceg = ce_metrics["v5_ce_gate"]
