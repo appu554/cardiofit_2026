@@ -20,6 +20,7 @@ Pipeline Position:
 
 from __future__ import annotations
 
+import statistics
 import time
 from collections import defaultdict
 from typing import Optional
@@ -133,12 +134,15 @@ class SignalMerger:
                 preserves V4 byte-identical output.
             profile: Optional profile object passed to per-channel helpers
                 for V5 feature-flag resolution. Only consulted when
-                v5_bbox_provenance is True.
+                v5_bbox_provenance or v5_consensus_entropy is True.
             page_bbox_map: Optional dict of page_number → [x0, y0, x1, y1]
                 providing page-level bbox fallback for L1 backends (e.g.
                 Docling) that record page dimensions but not per-block
                 geometry for NER channels. Only used when v5_bbox_provenance
                 is True.
+            v5_consensus_entropy: Enable Consensus Entropy gate (V5 #4).
+                Single-channel spans below the session median confidence are
+                flagged ce_flagged=True and excluded from the default output.
 
         Returns:
             List of MergedSpan objects ready for reviewer queue
@@ -171,7 +175,7 @@ class SignalMerger:
 
         # Step 8 (V5 #3): Consensus Entropy gate — filter low-confidence
         # single-channel spans that fall below the session confidence median.
-        # Resolve flag: explicit kwarg wins; otherwise check env/profile.
+        # Profile/env flag takes precedence; kwarg can additionally enable it.
         from .v5_flags import is_v5_enabled as _is_v5_enabled
         _ce_enabled = v5_consensus_entropy or _is_v5_enabled("consensus_entropy", profile)
         if _ce_enabled:
@@ -446,12 +450,10 @@ class SignalMerger:
         can inspect or audit them; downstream consumers filter on ce_flagged.
         Multi-channel spans and spans at or above the median are never flagged.
         """
-        import statistics as _stats
-
         if not merged_spans:
             return merged_spans
 
-        median_conf = _stats.median(s.merged_confidence for s in merged_spans)
+        median_conf = statistics.median(s.merged_confidence for s in merged_spans)
 
         for span in merged_spans:
             if (
