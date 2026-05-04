@@ -816,7 +816,7 @@ def pipeline_1():
     _decomposition_graph = None
     if _is_v5_enabled("decomposition", profile):
         try:
-            from extraction.v4.guideline_decomposer import GuidelineDecomposer
+            from extraction.v4.decomposition import GuidelineDecomposer
             _decomposer = GuidelineDecomposer()
             _decomposition_graph = _decomposer.decompose(
                 job_id=str(job_id),
