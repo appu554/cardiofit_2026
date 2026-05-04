@@ -807,6 +807,35 @@ def pipeline_1():
 
     print()
 
+    # ─── V5 #5: GUIDELINE DECOMPOSITION ─────────────────────────────────
+    # Produces a knowledge graph (graph.json) alongside merged_spans.json.
+    # Runs only when the "decomposition" V5 feature flag is enabled in the
+    # active guideline profile. The decomposer is imported lazily here to
+    # avoid top-level import cycles (matching the pattern used for other V5
+    # feature steps in this file).
+    _decomposition_graph = None
+    if _is_v5_enabled("decomposition", profile):
+        try:
+            from extraction.v4.guideline_decomposer import GuidelineDecomposer
+            _decomposer = GuidelineDecomposer()
+            _decomposition_graph = _decomposer.decompose(
+                job_id=str(job_id),
+                merged_spans=merged_spans,
+                tree=tree,
+                section_passages=section_passages,
+                profile=profile,
+            )
+            if _decomposition_graph is not None:
+                _n_nodes = len(_decomposition_graph.nodes) if hasattr(_decomposition_graph, "nodes") else 0
+                _n_edges = len(_decomposition_graph.edges) if hasattr(_decomposition_graph, "edges") else 0
+                print(f"   [V5 #5] Decomposition: {_n_nodes} nodes, {_n_edges} edges → graph.json")
+            else:
+                print("   [V5 #5] Decomposition: no graph produced (decomposer returned None)")
+        except Exception as e:
+            print(f"   [V5 #5] Decomposition error: {e}")
+
+    print()
+
     # ─── SAVE JOB ARTIFACTS ──────────────────────────────────────────────
     print("┌─────────────────────────────────────────────────────────────────────┐")
     print("│ SAVING JOB ARTIFACTS → Reviewer Queue                              │")
@@ -823,7 +852,7 @@ def pipeline_1():
 
     # Job metadata (includes targeted extraction params + oracle results)
     from extraction.v4.v5_flags import is_v5_enabled as _is_v5_enabled
-    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist", "consensus_entropy"]
+    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist", "consensus_entropy", "decomposition"]
     _v5_features_enabled = [f for f in _V5_KNOWN_FEATURES if _is_v5_enabled(f, profile)]
 
     job_meta = {
@@ -962,6 +991,15 @@ def pipeline_1():
     with open(passages_path, "w") as f:
         json.dump(passages_data, f, indent=2)
     print(f"   💾 Section passages ({len(section_passages)}): {passages_path}")
+
+    # Decomposition graph (V5 #5 — knowledge graph)
+    if _decomposition_graph is not None:
+        graph_path = os.path.join(job_dir, "graph.json")
+        with open(graph_path, "w") as f:
+            f.write(json.dumps(_decomposition_graph.to_dict(), indent=2))
+        _n_nodes = len(_decomposition_graph.nodes) if hasattr(_decomposition_graph, "nodes") else 0
+        _n_edges = len(_decomposition_graph.edges) if hasattr(_decomposition_graph, "edges") else 0
+        print(f"   💾 Decomposition graph ({_n_nodes} nodes, {_n_edges} edges): {graph_path}")
 
     # Reparenting log (V4.2.1 — audit trail)
     if reparent_log:
