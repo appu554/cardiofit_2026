@@ -207,6 +207,27 @@ def compute_v5_table_metrics(
     return result
 
 
+def compute_v5_ce_metrics(merged_spans: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute V5 Consensus Entropy gate metrics.
+
+    Pure function. No I/O. Reads ce_flagged from MergedSpan dicts.
+    """
+    total_spans = len(merged_spans)
+    flagged = sum(
+        1 for s in merged_spans
+        if isinstance(s, dict) and s.get("ce_flagged") is True
+    )
+    suppression_pct = round(flagged / total_spans * 100.0, 2) if total_spans > 0 else 0.0
+
+    return {
+        "v5_ce_gate": {
+            "total_spans": total_spans,
+            "ce_flagged_spans": flagged,
+            "suppression_pct": suppression_pct,
+        },
+    }
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -245,6 +266,13 @@ def _main(argv: list[str] | None = None) -> int:
                 f"{job_dir.name}: docling_table_spans={ts['docling_table_cell_spans']} "
                 f"({ts['docling_coverage_pct']:.1f}% of table cells)"
             )
+        ce_metrics = compute_v5_ce_metrics(spans)
+        write_v5_metrics(job_dir, ce_metrics)
+        ceg = ce_metrics["v5_ce_gate"]
+        print(
+            f"{job_dir.name}: ce_flagged={ceg['ce_flagged_spans']} "
+            f"({ceg['suppression_pct']:.1f}% suppressed)"
+        )
     return rc
 
 
