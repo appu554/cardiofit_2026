@@ -145,7 +145,7 @@ def compute_v5_table_metrics(
                 with open(csv_path) as f:
                     for row in _csv.DictReader(f):
                         golden[(int(row["row_idx"]), int(row["col_idx"]))] = row["expected_text"]
-            except (OSError, KeyError):
+            except (OSError, KeyError, ValueError):
                 continue
 
             extracted: dict[tuple[int, int], str] = {}
@@ -192,7 +192,7 @@ def compute_v5_table_metrics(
             "threshold": _TABLE_CELL_ACCURACY_THRESHOLD,
             "status": primary_status,
         }
-        result["verdict"] = primary_status
+        result["verdict_table"] = primary_status
 
     return result
 
@@ -209,7 +209,7 @@ def _main(argv: list[str] | None = None) -> int:
         metavar="job_dir",
         help="Pipeline 1 output directory (one or more)",
     )
-    args = parser.parse_args(argv if argv is None else argv[1:])
+    args = parser.parse_args(argv[1:] if argv is not None else None)
 
     rc = 0
     for job_dir_str in args.job_dirs:
