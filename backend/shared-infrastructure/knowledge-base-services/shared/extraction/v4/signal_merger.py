@@ -142,7 +142,8 @@ class SignalMerger:
                 is True.
             v5_consensus_entropy: Enable Consensus Entropy gate (V5 #4).
                 Single-channel spans below the session median confidence are
-                flagged ce_flagged=True and excluded from the default output.
+                flagged ce_flagged=True and kept in the returned list.
+                Downstream consumers must filter on ce_flagged to suppress them.
 
         Returns:
             List of MergedSpan objects ready for reviewer queue

@@ -813,6 +813,7 @@ def pipeline_1():
     # active guideline profile. The decomposer is imported lazily here to
     # avoid top-level import cycles (matching the pattern used for other V5
     # feature steps in this file).
+    from extraction.v4.v5_flags import is_v5_enabled as _is_v5_enabled
     _decomposition_graph = None
     if _is_v5_enabled("decomposition", profile):
         try:

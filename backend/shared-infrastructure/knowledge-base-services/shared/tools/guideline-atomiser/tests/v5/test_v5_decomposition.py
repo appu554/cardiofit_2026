@@ -203,8 +203,8 @@ def test_graph_to_dict_includes_required_keys(monkeypatch):
     assert "edge_count" in d
 
 
-def test_node_has_source_span_provenance(monkeypatch):
-    """Nodes derived from spans must have at least one source_span_id."""
+def test_span_derived_nodes_have_source_span_provenance(monkeypatch):
+    """DRUG_CLASS and ALGORITHM nodes (derived from spans) have at least one source_span_id."""
     monkeypatch.setenv("V5_DECOMPOSITION", "1")
     monkeypatch.delenv("V5_DISABLE_ALL", raising=False)
 
@@ -213,7 +213,24 @@ def test_node_has_source_span_provenance(monkeypatch):
     decomposer = GuidelineDecomposer()
     graph = decomposer.decompose(str(uuid4()), [span], tree, [])
 
-    for node in graph.nodes:
+    span_derived = [n for n in graph.nodes if n.node_type in ("DRUG_CLASS", "ALGORITHM")]
+    for node in span_derived:
         assert len(node.source_span_ids) >= 1, (
-            f"Node {node.id!r} (type={node.node_type}) has no source_span_ids"
+            f"Span-derived node {node.id!r} (type={node.node_type}) has no source_span_ids"
         )
+
+
+def test_recommendation_node_may_have_empty_span_ids_when_no_spans_in_section(monkeypatch):
+    """RECOMMENDATION nodes from section headings have empty source_span_ids when no spans match."""
+    monkeypatch.setenv("V5_DECOMPOSITION", "1")
+    monkeypatch.delenv("V5_DISABLE_ALL", raising=False)
+
+    tree = _make_tree_with_section("Recommendation 9.9.9 — test", "9.9.9")
+    decomposer = GuidelineDecomposer()
+    # No spans with section_id="9.9.9" → source_span_ids will be []
+    graph = decomposer.decompose(str(uuid4()), [], tree, [])
+
+    rec_nodes = [n for n in graph.nodes if n.node_type == "RECOMMENDATION"]
+    assert len(rec_nodes) == 1
+    # Empty source_span_ids is expected when no merged spans are in this section
+    assert isinstance(rec_nodes[0].source_span_ids, list)
