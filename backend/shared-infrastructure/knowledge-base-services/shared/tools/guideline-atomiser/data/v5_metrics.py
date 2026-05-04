@@ -265,7 +265,7 @@ def compute_v5_decomposition_metrics(
         with open(ground_truth_yaml) as f:
             data = _yaml.safe_load(f)
         graded = data.get("relationships", []) if isinstance(data, dict) else []
-    except (OSError, Exception):
+    except Exception:
         graded = []
 
     graded_set = {
@@ -320,7 +320,7 @@ def _main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Compute V5 bbox provenance metrics for one or more job dirs."
+        description="Compute V5 metrics (bbox, table, CE gate, decomposition) for one or more job dirs."
     )
     parser.add_argument(
         "job_dirs",

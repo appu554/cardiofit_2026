@@ -78,3 +78,14 @@ def test_missing_gt_file():
     """Missing YAML path -> graceful degradation, no crash."""
     result = compute_v5_decomposition_metrics(_make_graph(), ground_truth_yaml="/nonexistent/gt.yaml")
     assert "v5_decomposition" in result
+
+
+def test_empty_relationships_list(tmp_path):
+    """Valid YAML with empty relationships list → error key, no crash."""
+    import yaml
+    gt = tmp_path / "gt.yaml"
+    gt.write_text(yaml.dump({"relationships": []}))
+    result = compute_v5_decomposition_metrics(_make_graph(), ground_truth_yaml=str(gt))
+    d = result["v5_decomposition"]
+    assert "error" in d
+    assert "edge_precision_pct" not in d
