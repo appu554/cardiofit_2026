@@ -283,6 +283,11 @@ class MergedSpan(BaseModel):
     # Empty list when V5_BBOX_PROVENANCE is off; populated when on.
     # See extraction.v4.provenance.ChannelProvenance.
     channel_provenance: list[ChannelProvenance] = Field(default_factory=list)
+    # V5 #4 Consensus Entropy gate — backward-compatible additive field.
+    # True when this span was flagged by the CE gate (single-channel, below
+    # session median confidence). Spans with ce_flagged=True are suppressed
+    # from the default output when V5_CONSENSUS_ENTROPY is on.
+    ce_flagged: bool = False
 
     model_config = {"frozen": False}
 
