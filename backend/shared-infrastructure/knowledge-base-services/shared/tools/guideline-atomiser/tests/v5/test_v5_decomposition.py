@@ -201,3 +201,19 @@ def test_graph_to_dict_includes_required_keys(monkeypatch):
     assert "edges" in d
     assert "node_count" in d
     assert "edge_count" in d
+
+
+def test_node_has_source_span_provenance(monkeypatch):
+    """Nodes derived from spans must have at least one source_span_id."""
+    monkeypatch.setenv("V5_DECOMPOSITION", "1")
+    monkeypatch.delenv("V5_DISABLE_ALL", raising=False)
+
+    span = _MockSpan(text="SGLT2 inhibitor", contributing_channels=["B"])
+    tree = GuidelineTree(sections=[], tables=[], total_pages=1)
+    decomposer = GuidelineDecomposer()
+    graph = decomposer.decompose(str(uuid4()), [span], tree, [])
+
+    for node in graph.nodes:
+        assert len(node.source_span_ids) >= 1, (
+            f"Node {node.id!r} (type={node.node_type}) has no source_span_ids"
+        )

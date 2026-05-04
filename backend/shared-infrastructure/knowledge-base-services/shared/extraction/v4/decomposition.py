@@ -219,6 +219,10 @@ class GuidelineDecomposer:
                 ))
 
     def _extract_edges(self, graph: GuidelineGraph, merged_spans: list, section_passages: list) -> None:
+        # REQUIRES_MONITORING (RECOMMENDATION → RECOMMENDATION) detection requires
+        # clinical signal not available in V0 (e.g., eGFR threshold cross-references).
+        # The edge type is declared in EdgeType for future extension; no edges are
+        # emitted here for it in V0.
         rec_nodes = {n.id: n for n in graph.nodes if n.node_type == "RECOMMENDATION"}
         alg_nodes = {n.id: n for n in graph.nodes if n.node_type == "ALGORITHM"}
         drug_nodes = {n.id: n for n in graph.nodes if n.node_type == "DRUG_CLASS"}
