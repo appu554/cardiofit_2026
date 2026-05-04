@@ -225,6 +225,97 @@ def compute_v5_ce_metrics(merged_spans: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+_DECOMP_EDGE_THRESHOLD = 80.0
+
+
+def compute_v5_decomposition_metrics(
+    graph_dict: dict[str, Any],
+    ground_truth_yaml: str | None = None,
+) -> dict[str, Any]:
+    """Compute V5 Decomposition metrics (edge precision + recall).
+
+    graph_dict: dict from GuidelineGraph.to_dict() (loaded from graph.json).
+    ground_truth_yaml: optional path to YAML with a 'relationships' list, each
+        entry having source_node_id, target_node_id, edge_type.
+
+    Without ground_truth_yaml: reports structural metadata only.
+    With ground_truth_yaml: computes precision/recall against graded edges.
+    """
+    import yaml as _yaml
+
+    extracted_edges = graph_dict.get("edges", [])
+    extracted_set = {
+        (e["source_node_id"], e["target_node_id"], e["edge_type"])
+        for e in extracted_edges
+        if isinstance(e, dict)
+    }
+
+    node_count = graph_dict.get("node_count", len(graph_dict.get("nodes", [])))
+    edge_count = graph_dict.get("edge_count", len(extracted_edges))
+
+    if ground_truth_yaml is None:
+        return {
+            "v5_decomposition": {
+                "node_count": node_count,
+                "edge_count": edge_count,
+            }
+        }
+
+    try:
+        with open(ground_truth_yaml) as f:
+            data = _yaml.safe_load(f)
+        graded = data.get("relationships", []) if isinstance(data, dict) else []
+    except (OSError, Exception):
+        graded = []
+
+    graded_set = {
+        (r["source_node_id"], r["target_node_id"], r["edge_type"])
+        for r in graded
+        if isinstance(r, dict)
+    }
+
+    if not graded_set:
+        return {
+            "v5_decomposition": {
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "error": "empty or unreadable ground truth",
+            }
+        }
+
+    true_positives = extracted_set & graded_set
+    precision = round(len(true_positives) / len(extracted_set) * 100.0, 2) if extracted_set else 0.0
+    recall = round(len(true_positives) / len(graded_set) * 100.0, 2)
+
+    p_status = "PASS" if precision >= _DECOMP_EDGE_THRESHOLD else "FAIL"
+    r_status = "PASS" if recall >= _DECOMP_EDGE_THRESHOLD else "FAIL"
+    overall = "PASS" if p_status == "PASS" and r_status == "PASS" else "FAIL"
+
+    return {
+        "v5_decomposition": {
+            "node_count": node_count,
+            "edge_count": edge_count,
+            "graded_edge_count": len(graded_set),
+            "true_positive_edges": len(true_positives),
+            "edge_precision_pct": precision,
+            "edge_recall_pct": recall,
+        },
+        "primary": {
+            "edge_precision_pct": {
+                "v5": precision,
+                "threshold": _DECOMP_EDGE_THRESHOLD,
+                "status": p_status,
+            },
+            "edge_recall_pct": {
+                "v5": recall,
+                "threshold": _DECOMP_EDGE_THRESHOLD,
+                "status": r_status,
+            },
+        },
+        "verdict": overall,
+    }
+
+
 def _main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -271,6 +362,13 @@ def _main(argv: list[str] | None = None) -> int:
             f"{job_dir.name}: ce_flagged={ceg['ce_flagged_spans']} "
             f"({ceg['suppression_pct']:.1f}% suppressed)"
         )
+        graph_path = job_dir / "graph.json"
+        if graph_path.exists():
+            graph_dict = json.loads(graph_path.read_text(encoding="utf-8"))
+            decomp_metrics = compute_v5_decomposition_metrics(graph_dict)
+            write_v5_metrics(job_dir, decomp_metrics)
+            dm = decomp_metrics["v5_decomposition"]
+            print(f"{job_dir.name}: decomp nodes={dm['node_count']}, edges={dm['edge_count']}")
     return rc
 
 
