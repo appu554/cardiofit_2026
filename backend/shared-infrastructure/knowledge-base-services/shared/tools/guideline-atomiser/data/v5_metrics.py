@@ -122,17 +122,27 @@ def compute_v5_table_metrics(
     """
     import csv as _csv
 
+    def _has_provenance_version(span: dict, version: str) -> bool:
+        return any(
+            isinstance(p, dict) and p.get("model_version") == version
+            for p in span.get("channel_provenance", [])
+        )
+
+    # MergedSpan stores origin in channel_provenance.model_version, not channel_metadata.
+    # table@v1.0  → Docling TableBlock path (V5 Table Specialist)
+    # pipe-table@v1.0 → V4 pipe/OTSL path
     total_table_spans = len([
         s for s in merged_spans
         if isinstance(s, dict)
-        and s.get("source_block_type") == "table_cell"
+        and any(
+            isinstance(p, dict) and "table" in p.get("model_version", "")
+            for p in s.get("channel_provenance", [])
+        )
     ])
 
     docling_table_spans = len([
         s for s in merged_spans
-        if isinstance(s, dict)
-        and isinstance(s.get("channel_metadata"), dict)
-        and s["channel_metadata"].get("table_source") == "docling_tableblock"
+        if isinstance(s, dict) and _has_provenance_version(s, "table@v1.0")
     ])
 
     accuracy_pct: float | None = None
