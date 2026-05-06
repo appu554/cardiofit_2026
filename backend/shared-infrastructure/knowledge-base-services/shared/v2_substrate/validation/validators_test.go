@@ -720,3 +720,111 @@ func TestValidateActiveConcernResolutionTransition(t *testing.T) {
 		t.Errorf("expected invalid target to fail")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CareIntensity (Wave 2.4)
+// ---------------------------------------------------------------------------
+
+func validCareIntensityForTest() models.CareIntensity {
+	return models.CareIntensity{
+		ResidentRef:         uuid.New(),
+		Tag:                 models.CareIntensityTagActiveTreatment,
+		EffectiveDate:       time.Now().UTC(),
+		DocumentedByRoleRef: uuid.New(),
+	}
+}
+
+func TestValidateCareIntensity_AcceptsMinimal(t *testing.T) {
+	if err := ValidateCareIntensity(validCareIntensityForTest()); err != nil {
+		t.Errorf("expected valid; got %v", err)
+	}
+}
+
+func TestValidateCareIntensity_RejectsZeroResidentRef(t *testing.T) {
+	c := validCareIntensityForTest()
+	c.ResidentRef = uuid.Nil
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for zero ResidentRef")
+	}
+}
+
+func TestValidateCareIntensity_RejectsZeroDocumentedByRoleRef(t *testing.T) {
+	c := validCareIntensityForTest()
+	c.DocumentedByRoleRef = uuid.Nil
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for zero DocumentedByRoleRef")
+	}
+}
+
+func TestValidateCareIntensity_RejectsInvalidTag(t *testing.T) {
+	c := validCareIntensityForTest()
+	c.Tag = "active" // legacy short form is NOT valid in the v2.4 entity vocabulary
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for legacy short tag")
+	}
+	c.Tag = ""
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for empty tag")
+	}
+}
+
+func TestValidateCareIntensity_RejectsZeroEffectiveDate(t *testing.T) {
+	c := validCareIntensityForTest()
+	c.EffectiveDate = time.Time{}
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for zero EffectiveDate")
+	}
+}
+
+func TestValidateCareIntensity_ReviewDueDateBeforeEffectiveRejected(t *testing.T) {
+	c := validCareIntensityForTest()
+	earlier := c.EffectiveDate.Add(-24 * time.Hour)
+	c.ReviewDueDate = &earlier
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for ReviewDueDate before EffectiveDate")
+	}
+}
+
+func TestValidateCareIntensity_RejectsSelfSupersedes(t *testing.T) {
+	c := validCareIntensityForTest()
+	c.ID = uuid.New()
+	self := c.ID
+	c.SupersedesRef = &self
+	if err := ValidateCareIntensity(c); err == nil {
+		t.Errorf("expected error for SupersedesRef == ID")
+	}
+}
+
+func TestValidateCareIntensityTransition_AllPairsAllowed(t *testing.T) {
+	tags := []string{
+		models.CareIntensityTagActiveTreatment,
+		models.CareIntensityTagRehabilitation,
+		models.CareIntensityTagComfortFocused,
+		models.CareIntensityTagPalliative,
+	}
+	for _, from := range tags {
+		for _, to := range tags {
+			if err := ValidateCareIntensityTransition(from, to); err != nil {
+				t.Errorf("expected %s→%s allowed; got %v", from, to, err)
+			}
+		}
+	}
+}
+
+func TestValidateCareIntensityTransition_EmptyFromAllowed(t *testing.T) {
+	if err := ValidateCareIntensityTransition("", models.CareIntensityTagActiveTreatment); err != nil {
+		t.Errorf("expected empty→active_treatment allowed; got %v", err)
+	}
+}
+
+func TestValidateCareIntensityTransition_RejectsInvalidTags(t *testing.T) {
+	if err := ValidateCareIntensityTransition("", ""); err == nil {
+		t.Errorf("expected error for empty target tag")
+	}
+	if err := ValidateCareIntensityTransition("", "bogus"); err == nil {
+		t.Errorf("expected error for invalid target tag")
+	}
+	if err := ValidateCareIntensityTransition("bogus", models.CareIntensityTagPalliative); err == nil {
+		t.Errorf("expected error for invalid source tag")
+	}
+}
