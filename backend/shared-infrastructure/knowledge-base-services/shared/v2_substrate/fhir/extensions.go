@@ -52,6 +52,25 @@ const (
 	ExtObservationSourceID = "https://vaidshala.health/fhir/StructureDefinition/observation-source-id"
 )
 
+// Vaidshala FHIR extension URIs for Event v2-distinguishing fields.
+// Clinical / care-transitions / administrative events map to AU FHIR
+// Encounter; system events map to AU FHIR Communication. Neither
+// resource has native equivalents for Vaidshala's event_type discriminator,
+// severity classification, structured description, regulatory reportable_under
+// list, related-entity refs, or triggered_state_changes — all encoded as
+// Vaidshala-namespaced extensions on the resource.
+const (
+	ExtEventType                  = "https://vaidshala.health/fhir/StructureDefinition/event-type"
+	ExtEventSeverity              = "https://vaidshala.health/fhir/StructureDefinition/event-severity"
+	ExtEventDescriptionStructured = "https://vaidshala.health/fhir/StructureDefinition/event-description-structured"
+	ExtEventReportableUnder       = "https://vaidshala.health/fhir/StructureDefinition/event-reportable-under"
+	ExtEventRelatedObservations   = "https://vaidshala.health/fhir/StructureDefinition/event-related-observations"
+	ExtEventRelatedMedicationUses = "https://vaidshala.health/fhir/StructureDefinition/event-related-medication-uses"
+	ExtEventTriggeredStateChanges = "https://vaidshala.health/fhir/StructureDefinition/event-triggered-state-changes"
+	ExtEventReportedBy            = "https://vaidshala.health/fhir/StructureDefinition/event-reported-by"
+	ExtEventWitnessedBy           = "https://vaidshala.health/fhir/StructureDefinition/event-witnessed-by"
+)
+
 // SystemRouteCode is the FHIR-style code system URI for Vaidshala route
 // values (ORAL, IV, IM, etc.) when serialized as Coding entries.
 const SystemRouteCode = "https://vaidshala.health/fhir/CodeSystem/route"
