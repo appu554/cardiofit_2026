@@ -225,6 +225,22 @@ func main() {
 		identityHandlers := api.NewIdentityHandlers(identityStore)
 		identityHandlers.RegisterRoutes(httpServer.Router.Group("/v2/identity"))
 		logger.Info("v2 identity matching routes registered at /v2/identity (match, review-queue, review/:id/resolve)")
+
+		// Wave 2.3: active-concern lifecycle. Mounts CRUD + lifecycle
+		// endpoints under /v2 (POST /residents/:id/active-concerns,
+		// GET /residents/:id/active-concerns, PATCH /active-concerns/:id,
+		// GET /active-concerns/expiring). The same store also provides
+		// the ConcernTriggerLookup the engine consumes; that wiring is
+		// done in the cron loop / event-write path once Layer 3 calls
+		// it. See shared/v2_substrate/clinical_state/active_concerns.go.
+		activeConcernStore := storage.NewActiveConcernStore(sqlDB)
+		activeConcernHandlers := api.NewActiveConcernHandlers(activeConcernStore)
+		activeConcernHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+		// The baseline-exclusion wiring (BaselineStore.WithActiveConcernStore)
+		// is added in the next commit, which closes the wave-2.2 TODO in
+		// baseline_store.go.
+		_ = activeConcernStore
+		logger.Info("v2 active-concern routes registered at /v2 (residents/:id/active-concerns, active-concerns/expiring)")
 	}
 
 	// Start HTTP server

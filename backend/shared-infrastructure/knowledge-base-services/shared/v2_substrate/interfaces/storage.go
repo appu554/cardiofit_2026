@@ -174,6 +174,62 @@ type IdentityReviewQueueStore interface {
 	UpdateIdentityReviewQueueEntryResolution(ctx context.Context, id uuid.UUID, status string, resolvedRef *uuid.UUID, resolvedBy uuid.UUID, note string) (*IdentityReviewQueueEntry, error)
 }
 
+// ActiveConcernStore is the canonical storage contract for ActiveConcern
+// entities. kb-20-patient-profile is the only KB expected to implement
+// this. Per Layer 2 doc §2.3 (Wave 2.3) — open clinical questions that
+// gate downstream rule firing.
+//
+// Status transitions are validated at the storage boundary: implementers
+// MUST reject UpdateResolution calls whose source status is terminal
+// (resolved_stop_criteria, escalated, expired_unresolved). Use
+// validation.ValidateActiveConcernResolutionTransition for the legal-
+// transitions check.
+type ActiveConcernStore interface {
+	// CreateActiveConcern inserts a new row. Returns the persisted entity.
+	// Implementations must reject inputs that fail
+	// validation.ValidateActiveConcern.
+	CreateActiveConcern(ctx context.Context, c models.ActiveConcern) (*models.ActiveConcern, error)
+	// GetActiveConcern reads a single ActiveConcern by primary key.
+	GetActiveConcern(ctx context.Context, id uuid.UUID) (*models.ActiveConcern, error)
+	// ListActiveConcernsByResident returns all concerns for a resident,
+	// optionally filtered by resolution_status (empty string => any),
+	// newest-first by started_at.
+	ListActiveConcernsByResident(ctx context.Context, residentID uuid.UUID, status string) ([]models.ActiveConcern, error)
+	// ListActiveByResidentAndType returns the open concerns for a resident
+	// matching any of the supplied concern types. Used by the Wave 2.3
+	// baseline-exclusion query path.
+	ListActiveByResidentAndType(ctx context.Context, residentID uuid.UUID, types []string) ([]models.ActiveConcern, error)
+	// ListExpiringConcerns returns open concerns whose
+	// expected_resolution_at < now() + within. Pass within=0 for
+	// already-expired concerns. Ordered by expected_resolution_at ASC
+	// (most-overdue first) so the cron can prioritise.
+	ListExpiringConcerns(ctx context.Context, within time.Duration) ([]models.ActiveConcern, error)
+	// UpdateResolution transitions an ActiveConcern from open to a terminal
+	// status. The implementation MUST reject illegal transitions per
+	// validation.ValidateActiveConcernResolutionTransition.
+	UpdateResolution(ctx context.Context, id uuid.UUID, status string, resolvedAt time.Time, evidenceTraceRef *uuid.UUID) (*models.ActiveConcern, error)
+}
+
+// ConcernTriggerLookupStore is the storage-layer view of the
+// concern_type_triggers seed table (migration 015). Mirrors
+// clinical_state.ConcernTriggerLookup but lives in the interfaces package
+// to avoid circular imports between storage and clinical_state.
+//
+// kb-20-patient-profile implements this and adapts to
+// clinical_state.ConcernTriggerLookup at engine wiring time.
+type ConcernTriggerLookupStore interface {
+	LookupConcernTriggersByEventType(ctx context.Context, eventType string) ([]ConcernTriggerEntry, error)
+	LookupConcernTriggersByMedATC(ctx context.Context, atc, intent string) ([]ConcernTriggerEntry, error)
+}
+
+// ConcernTriggerEntry is a wire-shape mirror of
+// clinical_state.TriggerEntry (kept in interfaces to avoid the import
+// cycle).
+type ConcernTriggerEntry struct {
+	ConcernType        string
+	DefaultWindowHours int
+}
+
 // EventStore is the canonical storage contract for Event entities.
 // kb-20-patient-profile is the only KB expected to implement this. List
 // methods take limit/offset; the implementation may apply a maximum cap
