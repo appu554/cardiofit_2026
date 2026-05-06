@@ -22,6 +22,8 @@ import (
 	"kb-patient-profile/internal/services"
 	"kb-patient-profile/internal/storage"
 	"kb-patient-profile/pkg/resilience"
+
+	"github.com/cardiofit/shared/v2_substrate/delta"
 )
 
 func main() {
@@ -185,12 +187,22 @@ func main() {
 			zap.Error(err))
 	} else {
 		v2Store := storage.NewV2SubstrateStoreWithDB(sqlDB)
-		// Wire delta-on-write BaselineProvider. InMemoryBaselineProvider is the
-		// MVP stub — empty by default, so every UpsertObservation will record
-		// Delta.Flag=no_baseline until either (a) tests/integration code calls
-		// Seed(), or (b) this is replaced with a kb-26 AcuteRepository adapter.
-		// TODO(kb-26-adapter): swap InMemoryBaselineProvider for a kb-26 client.
-		v2Store.SetBaselineProvider(storage.NewInMemoryBaselineProvider())
+		// Wire delta-on-write BaselineProvider via the persistent baseline
+		// store (Layer 2 substrate plan, Wave 2.1 — replaces the in-memory
+		// stub). The BaselineStore reads/writes the baseline_state table
+		// (migration 013); PersistentBaselineProvider serves the read side
+		// of delta.BaselineProvider; UpsertObservation writes the row in
+		// the same transaction as the observation INSERT so persisted
+		// state is always consistent.
+		//
+		// TODO(kb-26-acute-repository): once kb-26's AcuteRepository goes
+		// live with a network API, replace this local PersistentBaseline-
+		// Provider with a kb-26 client. The transactional recompute path
+		// (BaselineStore.RecomputeAndUpsertTx) stays here because it must
+		// be co-located with the observations table.
+		baselineStore := storage.NewBaselineStore(sqlDB)
+		v2Store.SetBaselineStore(baselineStore)
+		v2Store.SetBaselineProvider(delta.NewPersistentBaselineProvider(baselineStore))
 		v2Handlers := api.NewV2SubstrateHandlers(v2Store)
 		v2Handlers.RegisterRoutes(httpServer.Router.Group("/v2"))
 		logger.Info("v2 substrate routes registered at /v2 (residents, persons, roles, medicine_uses, observations)")

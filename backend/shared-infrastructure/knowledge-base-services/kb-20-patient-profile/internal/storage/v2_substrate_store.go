@@ -33,6 +33,8 @@ import (
 type V2SubstrateStore struct {
 	db               *sql.DB
 	baselineProvider delta.BaselineProvider // injected via SetBaselineProvider; nil → all writes get Delta.Flag=no_baseline
+	baselineStore    *BaselineStore         // optional: when non-nil, UpsertObservation recomputes baseline_state inside the same tx
+	baselineLookback int                    // 0 → fall back to delta.DefaultBaselineLookbackDays
 }
 
 // NewV2SubstrateStore opens a Postgres connection at dsn and returns a
@@ -778,6 +780,25 @@ func (s *V2SubstrateStore) SetBaselineProvider(bp delta.BaselineProvider) {
 	s.baselineProvider = bp
 }
 
+// SetBaselineStore wires the persistent BaselineStore into the observation
+// write path. When set, UpsertObservation runs the observation INSERT and
+// the baseline_state recompute inside a single Postgres transaction so the
+// running baseline is always consistent with persisted observations.
+//
+// Leave unset (nil) to preserve the legacy behaviour of writing the
+// observation row only — the running baseline is then expected to come
+// from a different source (e.g. the in-memory provider used by unit tests).
+func (s *V2SubstrateStore) SetBaselineStore(bs *BaselineStore) {
+	s.baselineStore = bs
+}
+
+// SetBaselineLookbackDays overrides the default 14-day lookback window used
+// when recomputing baselines on observation insert. Pass 0 to restore the
+// default.
+func (s *V2SubstrateStore) SetBaselineLookbackDays(days int) {
+	s.baselineLookback = days
+}
+
 // observationColumns matches the projection of observations_v2 (which UNIONs
 // observations + lab_entries with kind='lab').
 const observationColumns = `id, resident_id, loinc_code, snomed_code, kind,
@@ -917,7 +938,24 @@ func (s *V2SubstrateStore) UpsertObservation(ctx context.Context, o models.Obser
 		sourceArg = *o.SourceID
 	}
 
-	if _, err := s.db.ExecContext(ctx, q,
+	// Wrap observation INSERT + baseline recompute in a single transaction
+	// when a BaselineStore is wired. This guarantees the running baseline
+	// row in baseline_state is always consistent with the persisted
+	// observation set: either both succeed and commit, or both roll back.
+	// Without this, a partial state (observation written but baseline
+	// stale, or vice versa) would be a correctness bug per the plan.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx for upsert observation: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, q,
 		o.ID,                    // $1
 		o.ResidentID,            // $2
 		nilIfEmpty(o.LOINCCode), // $3
@@ -932,6 +970,32 @@ func (s *V2SubstrateStore) UpsertObservation(ctx context.Context, o models.Obser
 	); err != nil {
 		return nil, fmt.Errorf("upsert observation: %w", err)
 	}
+
+	// Baseline recompute side-effect. Skipped for non-numeric observations
+	// (no Value, behavioural kind) — they don't contribute to a baseline,
+	// and the recompute SQL would be a wasted round-trip. Also skipped
+	// when no BaselineStore is wired (legacy/in-memory test wiring).
+	if s.baselineStore != nil && o.Value != nil && o.Kind != models.ObservationKindBehavioural {
+		lookback := s.baselineLookback
+		if lookback <= 0 {
+			lookback = delta.DefaultBaselineLookbackDays
+		}
+		if _, err := s.baselineStore.RecomputeAndUpsertTx(ctx, tx, o.ResidentID, vitalTypeKey(o), lookback); err != nil {
+			// delta.ErrNoBaseline is NOT an error here — it just means
+			// the running window doesn't have enough samples yet. The
+			// baseline_state row was still upserted with confidence=
+			// insufficient_data; commit the tx so that accounting row
+			// is preserved.
+			if !errors.Is(err, delta.ErrNoBaseline) {
+				return nil, fmt.Errorf("recompute baseline: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit observation tx: %w", err)
+	}
+	committed = true
 
 	return s.GetObservation(ctx, o.ID)
 }
