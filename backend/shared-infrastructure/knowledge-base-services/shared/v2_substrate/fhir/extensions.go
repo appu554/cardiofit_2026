@@ -93,6 +93,25 @@ const (
 	ExtActiveConcernResolutionEvidenceTraceRef = "https://vaidshala.health/fhir/StructureDefinition/active-concern-resolution-evidence-trace-ref"
 )
 
+// Vaidshala FHIR extension URIs + CodeSystem URI for CapacityAssessment
+// v2-distinguishing fields (Wave 2.5 of Layer 2 substrate plan; Layer 2
+// doc §2.5). CapacityAssessment routes to AU FHIR Observation with
+// category=assessment and a Vaidshala-defined CodeSystem keyed by
+// Domain. None of the cross-field fields (Instrument, Score, Duration,
+// ExpectedReviewDate, RationaleStructured, RationaleFreeText) have
+// native equivalents on Observation — all encoded as Vaidshala-namespaced
+// extensions.
+const (
+	SystemCapacityAssessment                       = "https://vaidshala.health/fhir/CodeSystem/capacity-assessment"
+	ExtCapacityAssessmentInstrument                = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-instrument"
+	ExtCapacityAssessmentScore                     = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-score"
+	ExtCapacityAssessmentDuration                  = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-duration"
+	ExtCapacityAssessmentExpectedReviewDate        = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-expected-review-date"
+	ExtCapacityAssessmentRationaleStructured       = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-rationale-structured"
+	ExtCapacityAssessmentRationaleFreeText         = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-rationale-free-text"
+	ExtCapacityAssessmentSupersedesRef             = "https://vaidshala.health/fhir/StructureDefinition/capacity-assessment-supersedes-ref"
+)
+
 // Vaidshala FHIR extension URIs for EvidenceTrace v2-distinguishing fields.
 // EvidenceTrace nodes route to FHIR Provenance (clinical state machines) or
 // AuditEvent (system state machines: Authorisation, Consent). Neither
