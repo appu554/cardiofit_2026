@@ -75,6 +75,24 @@ const (
 // values (ORAL, IV, IM, etc.) when serialized as Coding entries.
 const SystemRouteCode = "https://vaidshala.health/fhir/CodeSystem/route"
 
+// Vaidshala FHIR extension URIs for ActiveConcern v2-distinguishing fields.
+// AU FHIR Condition is the closest analogue at integration boundaries; it
+// has no native equivalents for Vaidshala's concern_type discriminator,
+// expected_resolution_at, owner_role_ref, related_monitoring_plan_ref,
+// resolution_status / resolved_at, started_by_event_ref, or
+// resolution_evidence_trace_ref — all encoded as Vaidshala-namespaced
+// extensions on the Condition resource.
+const (
+	ExtActiveConcernType                       = "https://vaidshala.health/fhir/StructureDefinition/active-concern-type"
+	ExtActiveConcernStartedByEventRef          = "https://vaidshala.health/fhir/StructureDefinition/active-concern-started-by-event-ref"
+	ExtActiveConcernExpectedResolutionAt       = "https://vaidshala.health/fhir/StructureDefinition/active-concern-expected-resolution-at"
+	ExtActiveConcernOwnerRoleRef               = "https://vaidshala.health/fhir/StructureDefinition/active-concern-owner-role-ref"
+	ExtActiveConcernRelatedMonitoringPlanRef   = "https://vaidshala.health/fhir/StructureDefinition/active-concern-related-monitoring-plan-ref"
+	ExtActiveConcernResolutionStatus           = "https://vaidshala.health/fhir/StructureDefinition/active-concern-resolution-status"
+	ExtActiveConcernResolvedAt                 = "https://vaidshala.health/fhir/StructureDefinition/active-concern-resolved-at"
+	ExtActiveConcernResolutionEvidenceTraceRef = "https://vaidshala.health/fhir/StructureDefinition/active-concern-resolution-evidence-trace-ref"
+)
+
 // Vaidshala FHIR extension URIs for EvidenceTrace v2-distinguishing fields.
 // EvidenceTrace nodes route to FHIR Provenance (clinical state machines) or
 // AuditEvent (system state machines: Authorisation, Consent). Neither
