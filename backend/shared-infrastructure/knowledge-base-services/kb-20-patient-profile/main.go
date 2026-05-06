@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"kb-patient-profile/internal/api"
@@ -268,6 +269,36 @@ func main() {
 		capacityHandlers := api.NewCapacityHandlers(capacityStore)
 		capacityHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
 		logger.Info("v2 capacity routes registered at /v2 (residents/:id/capacity, /current[/:domain], /history/:domain)")
+
+		// Wave 2.6: CFS / AKPS / DBI / ACB scoring instruments
+		// (Layer 2 §2.4 / §2.6). CFS and AKPS are clinician-entered
+		// capture endpoints; DBI and ACB are computed from the
+		// resident's active MedicineUse list using the dbi_drug_weights
+		// + acb_drug_weights seed tables (migration 018).
+		//
+		// CFS>=7 or AKPS<=40 surfaces a CareIntensityReviewHint via the
+		// EvidenceTrace graph (state_machine=ClinicalState,
+		// state_change_type=care_intensity_review_suggested). The
+		// substrate NEVER auto-transitions care intensity from a score.
+		//
+		// The DBI/ACB recompute is wired through the v2 MedicineUse
+		// upsert path via SetOnMedicineUseChanged below: every
+		// MedicineUse insert/update/end synchronously triggers
+		// RecomputeDrugBurden. Recompute is best-effort — errors are
+		// logged and swallowed so the underlying MedicineUse write
+		// always commits. TODO(production): move to outbox-driven
+		// async with per-resident coalescing.
+		scoringStore := storage.NewScoringStore(sqlDB, v2Store)
+		scoringHandlers := api.NewScoringHandlers(scoringStore)
+		scoringHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+		v2Handlers.SetOnMedicineUseChanged(func(ctx context.Context, residentRef uuid.UUID) {
+			if _, err := scoringStore.RecomputeDrugBurden(ctx, residentRef); err != nil {
+				logger.Warn("DBI/ACB recompute failed (best-effort; underlying MedicineUse write succeeded)",
+					zap.String("resident_ref", residentRef.String()),
+					zap.Error(err))
+			}
+		})
+		logger.Info("v2 scoring routes registered at /v2 (residents/:id/{cfs,akps,scores/current,{cfs,akps,dbi,acb}/history}); DBI/ACB recompute wired to MedicineUse changes")
 		// Baseline-exclusion wiring: BaselineStore.buildObsQuery now
 		// joins against active_concerns directly via SQL when a config's
 		// ExcludeDuringActiveConcerns list is non-empty. No additional

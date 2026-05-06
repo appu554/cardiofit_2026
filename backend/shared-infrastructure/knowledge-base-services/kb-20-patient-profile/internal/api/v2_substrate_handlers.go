@@ -14,6 +14,7 @@ package api
 // internal/api/server.go / routes.go in this milestone.
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -31,13 +32,30 @@ import (
 )
 
 // V2SubstrateHandlers serves v2 substrate REST endpoints for kb-20.
+//
+// onMedicineUseChanged is an optional best-effort callback fired after a
+// successful UpsertMedicineUse. Wave 2.6 wires the kb-20 ScoringStore's
+// RecomputeDrugBurden through here so DBI/ACB are recomputed on every
+// MedicineUse insert/update/end. The callback runs synchronously in the
+// request goroutine but its return value is intentionally ignored —
+// recompute MUST NOT fail the underlying MedicineUse write. TODO: move
+// to outbox-driven async in production once the outbox supports
+// per-resident coalescing.
 type V2SubstrateHandlers struct {
-	store *storage.V2SubstrateStore
+	store                *storage.V2SubstrateStore
+	onMedicineUseChanged func(ctx context.Context, residentRef uuid.UUID)
 }
 
 // NewV2SubstrateHandlers constructs a handler set bound to the given store.
 func NewV2SubstrateHandlers(store *storage.V2SubstrateStore) *V2SubstrateHandlers {
 	return &V2SubstrateHandlers{store: store}
+}
+
+// SetOnMedicineUseChanged registers a best-effort post-write callback
+// fired on successful UpsertMedicineUse. Wave 2.6 wires
+// ScoringStore.RecomputeDrugBurden through here.
+func (h *V2SubstrateHandlers) SetOnMedicineUseChanged(cb func(ctx context.Context, residentRef uuid.UUID)) {
+	h.onMedicineUseChanged = cb
 }
 
 // RegisterRoutes wires the v2 substrate endpoints onto the given router group.
@@ -304,6 +322,11 @@ func (h *V2SubstrateHandlers) upsertMedicineUse(c *gin.Context) {
 	if err != nil {
 		respondError(c, err)
 		return
+	}
+	// Wave 2.6: best-effort DBI/ACB recompute. Errors are swallowed so
+	// the underlying MedicineUse write always commits.
+	if h.onMedicineUseChanged != nil && out != nil {
+		h.onMedicineUseChanged(c.Request.Context(), out.ResidentID)
 	}
 	c.JSON(http.StatusOK, out)
 }
