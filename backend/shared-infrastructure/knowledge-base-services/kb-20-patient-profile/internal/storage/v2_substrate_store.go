@@ -982,6 +982,260 @@ func (s *V2SubstrateStore) ListObservationsByResidentAndKind(ctx context.Context
 	return out, rows.Err()
 }
 
+// ============================================================================
+// Event
+// ============================================================================
+
+// eventColumns is the canonical column list selected by GetEvent and the
+// List* methods that materialise full Event structs.
+const eventColumns = `id, event_type, occurred_at, occurred_at_facility,
+       resident_id, reported_by_ref, witnessed_by_refs, severity,
+       description_structured, description_free_text,
+       related_observations, related_medication_uses,
+       triggered_state_changes, reportable_under,
+       created_at, updated_at`
+
+// scanEvent reads one row's columns (in eventColumns order) into a fully-
+// populated Event. Handles nullable occurred_at_facility/severity/
+// description_free_text/description_structured, UUID[] arrays for witness
+// + related-entity refs, and JSONB triggered_state_changes.
+func scanEvent(sc rowScanner) (models.Event, error) {
+	var (
+		e             models.Event
+		facID         uuid.NullUUID
+		severity      sql.NullString
+		freeText      sql.NullString
+		descStruct    []byte
+		witnesses     pq.StringArray
+		relObs        pq.StringArray
+		relMed        pq.StringArray
+		tscBytes      []byte
+		reportable    pq.StringArray
+	)
+	if err := sc.Scan(
+		&e.ID, &e.EventType, &e.OccurredAt, &facID,
+		&e.ResidentID, &e.ReportedByRef, &witnesses, &severity,
+		&descStruct, &freeText,
+		&relObs, &relMed,
+		&tscBytes, &reportable,
+		&e.CreatedAt, &e.UpdatedAt,
+	); err != nil {
+		return models.Event{}, err
+	}
+	if facID.Valid {
+		f := facID.UUID
+		e.OccurredAtFacility = &f
+	}
+	if severity.Valid {
+		e.Severity = severity.String
+	}
+	if freeText.Valid {
+		e.DescriptionFreeText = freeText.String
+	}
+	if len(descStruct) > 0 {
+		e.DescriptionStructured = json.RawMessage(descStruct)
+	}
+	if len(witnesses) > 0 {
+		e.WitnessedByRefs = parseStringUUIDs(witnesses)
+	}
+	if len(relObs) > 0 {
+		e.RelatedObservations = parseStringUUIDs(relObs)
+	}
+	if len(relMed) > 0 {
+		e.RelatedMedicationUses = parseStringUUIDs(relMed)
+	}
+	if len(tscBytes) > 0 {
+		var tscs []models.TriggeredStateChange
+		if err := json.Unmarshal(tscBytes, &tscs); err != nil {
+			return models.Event{}, fmt.Errorf("unmarshal triggered_state_changes: %w", err)
+		}
+		if len(tscs) > 0 {
+			e.TriggeredStateChanges = tscs
+		}
+	}
+	if len(reportable) > 0 {
+		e.ReportableUnder = []string(reportable)
+	}
+	return e, nil
+}
+
+// parseStringUUIDs converts a pq.StringArray of UUID-formatted strings into
+// a []uuid.UUID, dropping malformed entries (Postgres-side data integrity
+// already enforces UUID typing on the columns we use this with).
+func parseStringUUIDs(in pq.StringArray) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(in))
+	for _, s := range in {
+		if u, err := uuid.Parse(s); err == nil {
+			out = append(out, u)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// uuidsToStrings converts []uuid.UUID to []string for pq.Array binding.
+func uuidsToStrings(in []uuid.UUID) []string {
+	out := make([]string, len(in))
+	for i, u := range in {
+		out[i] = u.String()
+	}
+	return out
+}
+
+// GetEvent reads a single Event by primary key.
+func (s *V2SubstrateStore) GetEvent(ctx context.Context, id uuid.UUID) (*models.Event, error) {
+	q := `SELECT ` + eventColumns + ` FROM events WHERE id = $1`
+	e, err := scanEvent(s.db.QueryRowContext(ctx, q, id))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("get event %s: %w", id, interfaces.ErrNotFound)
+		}
+		return nil, fmt.Errorf("get event %s: %w", id, err)
+	}
+	return &e, nil
+}
+
+// UpsertEvent inserts (or updates by id) one Event row. Marshals the JSONB
+// columns and binds UUID[] arrays via pq.Array.
+func (s *V2SubstrateStore) UpsertEvent(ctx context.Context, e models.Event) (*models.Event, error) {
+	const q = `
+		INSERT INTO events
+			(id, event_type, occurred_at, occurred_at_facility,
+			 resident_id, reported_by_ref, witnessed_by_refs, severity,
+			 description_structured, description_free_text,
+			 related_observations, related_medication_uses,
+			 triggered_state_changes, reportable_under,
+			 created_at, updated_at)
+		VALUES
+			($1, $2, $3, $4,
+			 $5, $6, $7, $8,
+			 $9, $10,
+			 $11, $12,
+			 $13, $14,
+			 NOW(), NOW())
+		ON CONFLICT (id) DO UPDATE SET
+			event_type              = EXCLUDED.event_type,
+			occurred_at             = EXCLUDED.occurred_at,
+			occurred_at_facility    = EXCLUDED.occurred_at_facility,
+			resident_id             = EXCLUDED.resident_id,
+			reported_by_ref         = EXCLUDED.reported_by_ref,
+			witnessed_by_refs       = EXCLUDED.witnessed_by_refs,
+			severity                = EXCLUDED.severity,
+			description_structured  = EXCLUDED.description_structured,
+			description_free_text   = EXCLUDED.description_free_text,
+			related_observations    = EXCLUDED.related_observations,
+			related_medication_uses = EXCLUDED.related_medication_uses,
+			triggered_state_changes = EXCLUDED.triggered_state_changes,
+			reportable_under        = EXCLUDED.reportable_under,
+			updated_at              = NOW()
+	`
+
+	var facArg interface{}
+	if e.OccurredAtFacility != nil {
+		facArg = *e.OccurredAtFacility
+	}
+
+	var descStructArg interface{}
+	if len(e.DescriptionStructured) > 0 {
+		descStructArg = []byte(e.DescriptionStructured)
+	}
+
+	tscJSON, err := json.Marshal(e.TriggeredStateChanges)
+	if err != nil {
+		return nil, fmt.Errorf("marshal triggered_state_changes: %w", err)
+	}
+	if len(e.TriggeredStateChanges) == 0 {
+		// Persist '[]' (not 'null') to match the column DEFAULT and avoid
+		// nullable-vs-empty drift on read.
+		tscJSON = []byte("[]")
+	}
+
+	if _, err := s.db.ExecContext(ctx, q,
+		e.ID,                                      // $1
+		e.EventType,                               // $2
+		e.OccurredAt,                              // $3
+		facArg,                                    // $4
+		e.ResidentID,                              // $5
+		e.ReportedByRef,                           // $6
+		pq.Array(uuidsToStrings(e.WitnessedByRefs)), // $7
+		nilIfEmpty(e.Severity),                    // $8
+		descStructArg,                             // $9
+		nilIfEmpty(e.DescriptionFreeText),         // $10
+		pq.Array(uuidsToStrings(e.RelatedObservations)),   // $11
+		pq.Array(uuidsToStrings(e.RelatedMedicationUses)), // $12
+		tscJSON,                                   // $13
+		pq.Array(e.ReportableUnder),               // $14
+	); err != nil {
+		return nil, fmt.Errorf("upsert event: %w", err)
+	}
+	return s.GetEvent(ctx, e.ID)
+}
+
+// ListEventsByResident returns events for a resident, newest first.
+func (s *V2SubstrateStore) ListEventsByResident(ctx context.Context, residentID uuid.UUID, limit, offset int) ([]models.Event, error) {
+	q := `SELECT ` + eventColumns + `
+		  FROM events
+		 WHERE resident_id = $1
+		 ORDER BY occurred_at DESC
+		 LIMIT $2 OFFSET $3`
+	rows, err := s.db.QueryContext(ctx, q, residentID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Event
+	for rows.Next() {
+		ev, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+// ListEventsByType returns events of a given event_type within an optional
+// [from, to) date range. A zero `from` or `to` is treated as no bound.
+func (s *V2SubstrateStore) ListEventsByType(ctx context.Context, eventType string, from, to time.Time, limit, offset int) ([]models.Event, error) {
+	// Build the WHERE incrementally so that zero bounds drop cleanly.
+	where := "event_type = $1"
+	args := []interface{}{eventType}
+	idx := 2
+	if !from.IsZero() {
+		where += fmt.Sprintf(" AND occurred_at >= $%d", idx)
+		args = append(args, from)
+		idx++
+	}
+	if !to.IsZero() {
+		where += fmt.Sprintf(" AND occurred_at < $%d", idx)
+		args = append(args, to)
+		idx++
+	}
+	q := `SELECT ` + eventColumns + `
+		  FROM events
+		 WHERE ` + where + `
+		 ORDER BY occurred_at DESC
+		 LIMIT $` + fmt.Sprintf("%d", idx) + ` OFFSET $` + fmt.Sprintf("%d", idx+1)
+	args = append(args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Event
+	for rows.Next() {
+		ev, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
 // Compile-time interface assertions.
 var (
 	_ interfaces.ResidentStore    = (*V2SubstrateStore)(nil)
@@ -989,4 +1243,5 @@ var (
 	_ interfaces.RoleStore        = (*V2SubstrateStore)(nil)
 	_ interfaces.MedicineUseStore = (*V2SubstrateStore)(nil)
 	_ interfaces.ObservationStore = (*V2SubstrateStore)(nil)
+	_ interfaces.EventStore       = (*V2SubstrateStore)(nil)
 )

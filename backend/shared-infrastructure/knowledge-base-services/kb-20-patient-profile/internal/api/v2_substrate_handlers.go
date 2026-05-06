@@ -17,6 +17,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -62,6 +63,11 @@ func (h *V2SubstrateHandlers) RegisterRoutes(g *gin.RouterGroup) {
 	g.GET("/observations/:id", h.getObservation)
 	g.GET("/residents/:resident_id/observations", h.listObservationsByResident)
 	g.GET("/residents/:resident_id/observations/:kind", h.listObservationsByResidentAndKind)
+
+	g.POST("/events", h.upsertEvent)
+	g.GET("/events/:id", h.getEvent)
+	g.GET("/residents/:resident_id/events", h.listEventsByResident)
+	g.GET("/events", h.listEventsByType)
 }
 
 // respondError dispatches not-found errors to 404 and everything else to 500.
@@ -431,6 +437,119 @@ func (h *V2SubstrateHandlers) listObservationsByResidentAndKind(c *gin.Context) 
 		return
 	}
 	out, err := h.store.ListObservationsByResidentAndKind(c.Request.Context(), residentID, kind, limit, offset)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// ---------------------------------------------------------------------------
+// Event
+// ---------------------------------------------------------------------------
+
+func (h *V2SubstrateHandlers) upsertEvent(c *gin.Context) {
+	var e models.Event
+	if err := c.BindJSON(&e); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validation.ValidateEvent(e); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	out, err := h.store.UpsertEvent(c.Request.Context(), e)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *V2SubstrateHandlers) getEvent(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	e, err := h.store.GetEvent(c.Request.Context(), id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, e)
+}
+
+func (h *V2SubstrateHandlers) listEventsByResident(c *gin.Context) {
+	residentID, err := uuid.Parse(c.Param("resident_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid resident_id"})
+		return
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if err != nil || limit <= 0 || limit > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be in (0, 1000]"})
+		return
+	}
+	offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if err != nil || offset < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+		return
+	}
+	out, err := h.store.ListEventsByResident(c.Request.Context(), residentID, limit, offset)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// listEventsByType serves GET /v2/events?type=&from=&to=&limit=&offset=
+//   - type    is required and must be a valid EventType
+//   - from/to are RFC3339 datetimes; either may be omitted (no bound)
+//   - to must be > from when both are set (returns 400 otherwise)
+func (h *V2SubstrateHandlers) listEventsByType(c *gin.Context) {
+	eventType := c.Query("type")
+	if eventType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "type query parameter required"})
+		return
+	}
+	if !models.IsValidEventType(eventType) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event type"})
+		return
+	}
+	var from, to time.Time
+	if s := c.Query("from"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from (expect RFC3339)"})
+			return
+		}
+		from = t
+	}
+	if s := c.Query("to"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to (expect RFC3339)"})
+			return
+		}
+		to = t
+	}
+	if !from.IsZero() && !to.IsZero() && !to.After(from) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "to must be after from"})
+		return
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	if err != nil || limit <= 0 || limit > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be in (0, 1000]"})
+		return
+	}
+	offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if err != nil || offset < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid offset"})
+		return
+	}
+	out, err := h.store.ListEventsByType(c.Request.Context(), eventType, from, to, limit, offset)
 	if err != nil {
 		respondError(c, err)
 		return
