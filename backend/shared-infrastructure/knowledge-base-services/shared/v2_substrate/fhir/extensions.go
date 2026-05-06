@@ -74,3 +74,20 @@ const (
 // SystemRouteCode is the FHIR-style code system URI for Vaidshala route
 // values (ORAL, IV, IM, etc.) when serialized as Coding entries.
 const SystemRouteCode = "https://vaidshala.health/fhir/CodeSystem/route"
+
+// Vaidshala FHIR extension URIs for EvidenceTrace v2-distinguishing fields.
+// EvidenceTrace nodes route to FHIR Provenance (clinical state machines) or
+// AuditEvent (system state machines: Authorisation, Consent). Neither
+// resource has native equivalents for Vaidshala's state-machine
+// discriminator, state-change-type tag, structured reasoning summary, or
+// the role-in-decision qualifier on inputs — all encoded as Vaidshala-
+// namespaced extensions on the routed resource.
+const (
+	ExtEvidenceTraceStateMachine     = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-state-machine"
+	ExtEvidenceTraceStateChangeType  = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-state-change-type"
+	ExtEvidenceTraceReasoningSummary = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-reasoning-summary"
+	ExtEvidenceTraceInputRole        = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-input-role"
+	ExtEvidenceTraceAuthorityBasis   = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-authority-basis"
+	ExtEvidenceTraceResidentRef      = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-resident-ref"
+	ExtEvidenceTraceOccurredAt       = "https://vaidshala.health/fhir/StructureDefinition/evidence-trace-occurred-at"
+)
