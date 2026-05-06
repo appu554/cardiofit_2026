@@ -236,6 +236,22 @@ func main() {
 		activeConcernStore := storage.NewActiveConcernStore(sqlDB)
 		activeConcernHandlers := api.NewActiveConcernHandlers(activeConcernStore)
 		activeConcernHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+
+		// Wave 2.4: care-intensity transitions. Mounts CRUD endpoints
+		// under /v2 (POST /residents/:id/care-intensity,
+		// GET /residents/:id/care-intensity/current,
+		// GET /residents/:id/care-intensity/history). The store wraps
+		// the pure clinical_state.CareIntensityEngine and persists the
+		// transition Event + one EvidenceTrace node per cascade hint
+		// alongside the new care_intensity_history row in a single
+		// transaction. See migration 016 for the schema +
+		// care_intensity_current view, and
+		// shared/v2_substrate/clinical_state/care_intensity_engine.go
+		// for the cascade rule table.
+		careIntensityStore := storage.NewCareIntensityStore(sqlDB, v2Store)
+		careIntensityHandlers := api.NewCareIntensityHandlers(careIntensityStore)
+		careIntensityHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+		logger.Info("v2 care-intensity routes registered at /v2 (residents/:id/care-intensity, /current, /history)")
 		// Baseline-exclusion wiring: BaselineStore.buildObsQuery now
 		// joins against active_concerns directly via SQL when a config's
 		// ExcludeDuringActiveConcerns list is non-empty. No additional

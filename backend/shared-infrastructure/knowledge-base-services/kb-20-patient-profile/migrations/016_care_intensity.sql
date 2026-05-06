@@ -90,4 +90,32 @@ ORDER BY resident_ref, effective_date DESC;
 COMMENT ON VIEW care_intensity_current IS
     'Latest care_intensity_history row per resident by effective_date DESC. The "current tag" surface for Wave 2.4 reads. Backed by idx_care_intensity_resident_effective.';
 
+-- ============================================================================
+-- Extend events.event_type CHECK to admit care_intensity_transition (and the
+-- earlier-introduced concern_expired_unresolved cascade event from Wave 2.3,
+-- which migration 015 forgot to add). Both are care-transition-bucket events
+-- per shared/v2_substrate/models/event.go; the FHIR mapper routes them to
+-- Communication (system bucket for concern_expired_unresolved) and Encounter
+-- (care-transitions bucket for care_intensity_transition).
+-- ============================================================================
+
+ALTER TABLE events DROP CONSTRAINT IF EXISTS events_event_type_check;
+ALTER TABLE events ADD CONSTRAINT events_event_type_check CHECK (event_type IN (
+    -- Clinical
+    'fall','pressure_injury','behavioural_incident',
+    'medication_error','adverse_drug_event',
+    -- Care transitions
+    'hospital_admission','hospital_discharge','GP_visit','specialist_visit',
+    'emergency_department_presentation','end_of_life_recognition','death',
+    'care_intensity_transition',
+    -- Administrative
+    'admission_to_facility','transfer_between_facilities',
+    'care_planning_meeting','family_meeting',
+    -- System (for EvidenceTrace)
+    'rule_fire','recommendation_submitted','recommendation_decided',
+    'monitoring_plan_activated','consent_granted_or_withdrawn',
+    'credential_verified_or_expired',
+    'concern_expired_unresolved'
+));
+
 COMMIT;
