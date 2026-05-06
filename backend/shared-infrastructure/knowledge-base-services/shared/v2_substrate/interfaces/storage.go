@@ -429,6 +429,158 @@ type CurrentScores struct {
 	ACB  *models.ACBScore  `json:"acb,omitempty"`
 }
 
+// =================================================================
+// Reconciliation (Wave 4) — discharge documents + worklists + decisions
+// =================================================================
+
+// DischargeDocument is the persistence-layer row for the
+// discharge_documents table (Wave 4.1 of Layer 2 substrate plan).
+// The Source values are constrained at the DB level to the closed set
+// {pdf, mhr_cda, manual}; (Source, DocumentID) is the idempotency key.
+type DischargeDocument struct {
+	ID                       uuid.UUID       `json:"id"`
+	ResidentRef              uuid.UUID       `json:"resident_ref"`
+	Source                   string          `json:"source"`
+	DocumentID               string          `json:"document_id,omitempty"`
+	DischargeDate            time.Time       `json:"discharge_date"`
+	DischargingFacilityName  string          `json:"discharging_facility_name,omitempty"`
+	RawText                  string          `json:"raw_text,omitempty"`
+	StructuredPayload        json.RawMessage `json:"structured_payload,omitempty"`
+	IngestedAt               time.Time       `json:"ingested_at"`
+	MedicationLines          []DischargeMedicationLine `json:"medication_lines,omitempty"`
+}
+
+// DischargeMedicationLine is the persistence-layer row for the
+// discharge_medication_lines table.
+type DischargeMedicationLine struct {
+	ID                    uuid.UUID `json:"id"`
+	DischargeDocumentRef  uuid.UUID `json:"discharge_document_ref"`
+	LineNumber            int       `json:"line_number"`
+	MedicationNameRaw     string    `json:"medication_name_raw"`
+	AMTCode               string    `json:"amt_code,omitempty"`
+	DoseRaw               string    `json:"dose_raw,omitempty"`
+	FrequencyRaw          string    `json:"frequency_raw,omitempty"`
+	RouteRaw              string    `json:"route_raw,omitempty"`
+	IndicationText        string    `json:"indication_text,omitempty"`
+	Notes                 string    `json:"notes,omitempty"`
+}
+
+// ReconciliationWorklist is the persistence-layer row for the
+// reconciliation_worklists table.
+type ReconciliationWorklist struct {
+	ID                       uuid.UUID  `json:"id"`
+	DischargeDocumentRef     uuid.UUID  `json:"discharge_document_ref"`
+	ResidentRef              uuid.UUID  `json:"resident_ref"`
+	AssignedRoleRef          *uuid.UUID `json:"assigned_role_ref,omitempty"`
+	FacilityID               *uuid.UUID `json:"facility_id,omitempty"`
+	Status                   string     `json:"status"`
+	DueAt                    time.Time  `json:"due_at"`
+	CompletedAt              *time.Time `json:"completed_at,omitempty"`
+	CompletedByRoleRef       *uuid.UUID `json:"completed_by_role_ref,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+}
+
+// ReconciliationDecision is the persistence-layer row for the
+// reconciliation_decisions table. ACOPDecision is empty until the ACOP
+// records a decision via PATCH.
+type ReconciliationDecision struct {
+	ID                          uuid.UUID  `json:"id"`
+	WorklistRef                 uuid.UUID  `json:"worklist_ref"`
+	DischargeMedLineRef         *uuid.UUID `json:"discharge_med_line_ref,omitempty"`
+	PreAdmissionMedicineUseRef  *uuid.UUID `json:"pre_admission_medicine_use_ref,omitempty"`
+	DiffClass                   string     `json:"diff_class"`
+	IntentClass                 string     `json:"intent_class"`
+	ACOPDecision                string     `json:"acop_decision"`
+	ACOPRoleRef                 *uuid.UUID `json:"acop_role_ref,omitempty"`
+	DecidedAt                   *time.Time `json:"decided_at,omitempty"`
+	Notes                       string     `json:"notes,omitempty"`
+	ResultingMedicineUseRef     *uuid.UUID `json:"resulting_medicine_use_ref,omitempty"`
+	EvidenceTraceNodeRef        *uuid.UUID `json:"evidence_trace_node_ref,omitempty"`
+	CreatedAt                   time.Time  `json:"created_at"`
+}
+
+// DischargeDocumentStore is the canonical storage contract for the
+// discharge_documents + discharge_medication_lines tables.
+// kb-20-patient-profile is the only KB expected to implement this.
+type DischargeDocumentStore interface {
+	// CreateDischargeDocument persists a parsed document + its medication
+	// lines. Source must be one of {pdf, mhr_cda, manual}; (Source,
+	// DocumentID) is the idempotency key — re-ingesting the same external
+	// id returns ErrConflict.
+	CreateDischargeDocument(ctx context.Context, doc DischargeDocument) (*DischargeDocument, error)
+	GetDischargeDocument(ctx context.Context, id uuid.UUID) (*DischargeDocument, error)
+	ListDischargeDocumentsByResident(ctx context.Context, residentRef uuid.UUID, limit, offset int) ([]DischargeDocument, error)
+	ListDischargeMedicationLines(ctx context.Context, dischargeDocumentRef uuid.UUID) ([]DischargeMedicationLine, error)
+}
+
+// ReconciliationStartInputs carries the raw inputs needed to start a
+// reconciliation worklist for a discharge document. The store loads
+// pre-admission MedicineUses, runs the diff + classifier in-process,
+// and writes the worklist + N decision rows in a single transaction.
+type ReconciliationStartInputs struct {
+	DischargeDocumentRef uuid.UUID
+	AssignedRoleRef      *uuid.UUID
+	FacilityID           *uuid.UUID
+	DueWindowHours       int // 0 -> default (24h)
+}
+
+// ReconciliationStartResult bundles the persisted worklist + decision
+// rows after a successful start.
+type ReconciliationStartResult struct {
+	Worklist  *ReconciliationWorklist  `json:"worklist"`
+	Decisions []ReconciliationDecision `json:"decisions"`
+}
+
+// DecideReconciliationInputs is the payload for recording one ACOP
+// decision against a reconciliation_decisions row. IntentClassOverride
+// is non-empty only when the ACOP wants to replace the
+// classifier-supplied class. Override fields populate when ACOPDecision
+// is "modify".
+type DecideReconciliationInputs struct {
+	WorklistRef         uuid.UUID
+	DecisionRef         uuid.UUID
+	ACOPDecision        string
+	ACOPRoleRef         uuid.UUID
+	Notes               string
+	IntentClassOverride string
+	OverrideDose        string
+	OverrideFrequency   string
+	OverrideRoute       string
+}
+
+// FinaliseReconciliationResult is returned by FinaliseWorklist when all
+// decisions have been recorded. ResultingMedicineUseRefs is the union
+// of inserts + updates the write-back produced.
+type FinaliseReconciliationResult struct {
+	Worklist                 *ReconciliationWorklist `json:"worklist"`
+	ResultingMedicineUseRefs []uuid.UUID             `json:"resulting_medicine_use_refs"`
+	CompletionEventID        *uuid.UUID              `json:"completion_event_id,omitempty"`
+}
+
+// ReconciliationStore is the canonical storage contract for the
+// reconciliation worklist + decision lifecycle (Wave 4.3 + 4.4 of Layer 2
+// substrate plan; Layer 2 doc §3.2). kb-20-patient-profile is the only
+// KB expected to implement this.
+//
+// Every decision write is paired with an EvidenceTrace node; the chain
+// is documented in the kb-20 implementation:
+//
+//	discharge_document.evidence_trace_node
+//	  --derived_from→ pre_admission_medicine_use
+//	  --led_to→     decision.evidence_trace_node
+//	                  --led_to→ resulting MedicineUse
+//
+// Implementations MUST run all writes for StartWorklist /
+// DecideReconciliation / FinaliseWorklist in a single transaction so
+// the substrate never observes a partial state.
+type ReconciliationStore interface {
+	StartWorklist(ctx context.Context, in ReconciliationStartInputs) (*ReconciliationStartResult, error)
+	GetWorklist(ctx context.Context, worklistRef uuid.UUID) (*ReconciliationWorklist, []ReconciliationDecision, error)
+	ListWorklistsByRoleAndFacility(ctx context.Context, roleRef *uuid.UUID, facilityID *uuid.UUID, status string, limit, offset int) ([]ReconciliationWorklist, error)
+	DecideReconciliation(ctx context.Context, in DecideReconciliationInputs) (*ReconciliationDecision, error)
+	FinaliseWorklist(ctx context.Context, worklistRef uuid.UUID, completedByRoleRef uuid.UUID) (*FinaliseReconciliationResult, error)
+}
+
 // EventStore is the canonical storage contract for Event entities.
 // kb-20-patient-profile is the only KB expected to implement this. List
 // methods take limit/offset; the implementation may apply a maximum cap

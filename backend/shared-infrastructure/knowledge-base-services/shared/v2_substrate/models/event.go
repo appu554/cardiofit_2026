@@ -108,6 +108,15 @@ const (
 	// capacity_change; only medical-impaired triggers the cascade.
 	EventTypeCapacityChange = "capacity_change"
 
+	// EventTypeReconciliationCompleted is emitted when a reconciliation
+	// worklist transitions to status=completed (Wave 4 of Layer 2 substrate
+	// plan; Layer 2 doc §3.2). Routes to FHIR Communication on egress
+	// (system bucket) because the completion is a substrate-internal
+	// audit event — the underlying clinical changes (MedicineUse
+	// inserts/ends/updates) carry their own FHIR write-backs via
+	// MedicationRequest.
+	EventTypeReconciliationCompleted = "reconciliation_completed"
+
 	// concern_expired_unresolved is registered as a system-bucket event
 	// type via IsSystemEventType so the FHIR mapper routes it to
 	// Communication. The constant lives in active_concern.go as
@@ -162,7 +171,8 @@ func IsSystemEventType(s string) bool {
 		EventTypeConsentGrantedOrWithdrawn,
 		EventTypeCredentialVerifiedOrExpired,
 		EventTypeConcernExpiredUnresolved,
-		EventTypeCapacityChange:
+		EventTypeCapacityChange,
+		EventTypeReconciliationCompleted:
 		return true
 	}
 	return false
