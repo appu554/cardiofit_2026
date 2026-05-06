@@ -280,6 +280,55 @@ type CareIntensityCascadeHint struct {
 	Reason string `json:"reason"`
 }
 
+// CapacityAssessmentStore is the canonical storage contract for
+// CapacityAssessment entities (Wave 2.5 of Layer 2 substrate plan;
+// Layer 2 doc §2.5). kb-20-patient-profile is the only KB expected to
+// implement this.
+//
+// The history is append-only — never UPDATE rows. New assessments are
+// recorded via fresh INSERT calls; the latest row by AssessedAt per
+// (ResidentRef, Domain) is the current assessment for that domain
+// (queried via the capacity_current view).
+//
+// CreateCapacityAssessment is the orchestration entry point: it
+// validates the incoming row, persists it, writes one EvidenceTrace
+// node for the assessment, and conditionally emits an Event of type
+// capacity_change when Outcome=impaired AND Domain=medical_decisions
+// (the only combination that cascades to Consent in Layer 3). All
+// writes happen against the same connection pool so future
+// transactional hardening can wrap them in a single tx.
+type CapacityAssessmentStore interface {
+	// CreateCapacityAssessment persists `incoming` and (conditionally) emits
+	// the capacity_change Event. Returns the persisted row, the optional
+	// Event (nil for non-medical or non-impaired), and the EvidenceTrace
+	// node id that was written.
+	CreateCapacityAssessment(ctx context.Context, incoming models.CapacityAssessment) (*CapacityAssessmentResult, error)
+	// GetCapacityAssessment reads a single row by primary key.
+	GetCapacityAssessment(ctx context.Context, id uuid.UUID) (*models.CapacityAssessment, error)
+	// GetCurrentCapacity returns the latest assessment for (residentRef,
+	// domain), or ErrNotFound when no rows exist for that pair.
+	GetCurrentCapacity(ctx context.Context, residentRef uuid.UUID, domain string) (*models.CapacityAssessment, error)
+	// ListCurrentCapacityByResident returns one row per domain present for
+	// residentRef (the latest by AssessedAt for each domain). Empty slice
+	// when the resident has no assessments at all.
+	ListCurrentCapacityByResident(ctx context.Context, residentRef uuid.UUID) ([]models.CapacityAssessment, error)
+	// ListCapacityHistory returns the full history for (residentRef,
+	// domain), ordered by AssessedAt DESC.
+	ListCapacityHistory(ctx context.Context, residentRef uuid.UUID, domain string) ([]models.CapacityAssessment, error)
+}
+
+// CapacityAssessmentResult is the return shape from
+// CapacityAssessmentStore.CreateCapacityAssessment. Event is nil when
+// the assessment did not trigger a capacity_change Event (i.e. anything
+// other than impaired+medical_decisions). EvidenceTraceNodeRef is always
+// set — every assessment writes one EvidenceTrace node so the audit
+// graph is complete.
+type CapacityAssessmentResult struct {
+	Assessment           *models.CapacityAssessment `json:"assessment"`
+	Event                *models.Event              `json:"event,omitempty"`
+	EvidenceTraceNodeRef uuid.UUID                  `json:"evidence_trace_node_ref"`
+}
+
 // EventStore is the canonical storage contract for Event entities.
 // kb-20-patient-profile is the only KB expected to implement this. List
 // methods take limit/offset; the implementation may apply a maximum cap

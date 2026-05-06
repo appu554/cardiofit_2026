@@ -97,6 +97,16 @@ const (
 	EventTypeMonitoringPlanActivated   = "monitoring_plan_activated"
 	EventTypeConsentGrantedOrWithdrawn = "consent_granted_or_withdrawn"
 	EventTypeCredentialVerifiedOrExpired = "credential_verified_or_expired"
+	// EventTypeCapacityChange is emitted when a CapacityAssessment row is
+	// written with Outcome=impaired AND Domain=medical_decisions (Wave 2.5
+	// of Layer 2 substrate plan; Layer 2 doc §2.5). Routes to FHIR
+	// Communication on egress (system bucket) because it's the trigger
+	// for the Consent state machine to re-evaluate consent state — the
+	// downstream cascade is system-internal, not a clinical encounter.
+	// Other domain+outcome combinations (e.g. impaired financial) write
+	// the assessment + an EvidenceTrace node but do NOT emit
+	// capacity_change; only medical-impaired triggers the cascade.
+	EventTypeCapacityChange = "capacity_change"
 
 	// concern_expired_unresolved is registered as a system-bucket event
 	// type via IsSystemEventType so the FHIR mapper routes it to
@@ -151,7 +161,8 @@ func IsSystemEventType(s string) bool {
 		EventTypeRecommendationDecided, EventTypeMonitoringPlanActivated,
 		EventTypeConsentGrantedOrWithdrawn,
 		EventTypeCredentialVerifiedOrExpired,
-		EventTypeConcernExpiredUnresolved:
+		EventTypeConcernExpiredUnresolved,
+		EventTypeCapacityChange:
 		return true
 	}
 	return false
