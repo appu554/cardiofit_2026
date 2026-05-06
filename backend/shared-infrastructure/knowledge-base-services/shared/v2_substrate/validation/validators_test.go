@@ -953,3 +953,221 @@ func TestValidateCapacityAssessment_RejectsSelfSupersede(t *testing.T) {
 		t.Errorf("expected error for self-supersede")
 	}
 }
+
+// ----------------------------------------------------------------------------
+// Wave 2.6: scoring instrument validators
+// ----------------------------------------------------------------------------
+
+func validCFS() models.CFSScore {
+	return models.CFSScore{
+		ResidentRef:       uuid.New(),
+		AssessedAt:        time.Now().UTC(),
+		AssessorRoleRef:   uuid.New(),
+		InstrumentVersion: "v2.0",
+		Score:             5,
+	}
+}
+
+func TestValidateCFSScore_HappyPath(t *testing.T) {
+	if err := ValidateCFSScore(validCFS()); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateCFSScore_RequiresResidentRef(t *testing.T) {
+	c := validCFS()
+	c.ResidentRef = uuid.Nil
+	if err := ValidateCFSScore(c); err == nil {
+		t.Errorf("expected error for missing resident_ref")
+	}
+}
+
+func TestValidateCFSScore_RequiresAssessorRoleRef(t *testing.T) {
+	c := validCFS()
+	c.AssessorRoleRef = uuid.Nil
+	if err := ValidateCFSScore(c); err == nil {
+		t.Errorf("expected error for missing assessor_role_ref")
+	}
+}
+
+func TestValidateCFSScore_RequiresInstrumentVersion(t *testing.T) {
+	c := validCFS()
+	c.InstrumentVersion = ""
+	if err := ValidateCFSScore(c); err == nil {
+		t.Errorf("expected error for empty instrument_version")
+	}
+}
+
+func TestValidateCFSScore_RejectsScoreOutOfRange(t *testing.T) {
+	for _, score := range []int{0, -1, 10, 99} {
+		c := validCFS()
+		c.Score = score
+		if err := ValidateCFSScore(c); err == nil {
+			t.Errorf("expected error for score=%d", score)
+		}
+	}
+}
+
+func TestValidateCFSScore_AcceptsBoundaryScores(t *testing.T) {
+	for _, score := range []int{1, 9} {
+		c := validCFS()
+		c.Score = score
+		if err := ValidateCFSScore(c); err != nil {
+			t.Errorf("expected pass for score=%d; got %v", score, err)
+		}
+	}
+}
+
+func validAKPS() models.AKPSScore {
+	return models.AKPSScore{
+		ResidentRef:       uuid.New(),
+		AssessedAt:        time.Now().UTC(),
+		AssessorRoleRef:   uuid.New(),
+		InstrumentVersion: "abernethy_2005",
+		Score:             50,
+	}
+}
+
+func TestValidateAKPSScore_HappyPath(t *testing.T) {
+	if err := ValidateAKPSScore(validAKPS()); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateAKPSScore_RejectsScoreOutOfRange(t *testing.T) {
+	for _, score := range []int{-10, 110, 200} {
+		a := validAKPS()
+		a.Score = score
+		if err := ValidateAKPSScore(a); err == nil {
+			t.Errorf("expected error for score=%d", score)
+		}
+	}
+}
+
+func TestValidateAKPSScore_RejectsNonMultipleOfTen(t *testing.T) {
+	for _, score := range []int{15, 33, 47, 99} {
+		a := validAKPS()
+		a.Score = score
+		if err := ValidateAKPSScore(a); err == nil {
+			t.Errorf("expected error for score=%d (not multiple of 10)", score)
+		}
+	}
+}
+
+func TestValidateAKPSScore_AcceptsBoundaryScores(t *testing.T) {
+	for _, score := range []int{0, 10, 50, 90, 100} {
+		a := validAKPS()
+		a.Score = score
+		if err := ValidateAKPSScore(a); err != nil {
+			t.Errorf("expected pass for score=%d; got %v", score, err)
+		}
+	}
+}
+
+func TestValidateAKPSScore_RequiresInstrumentVersion(t *testing.T) {
+	a := validAKPS()
+	a.InstrumentVersion = ""
+	if err := ValidateAKPSScore(a); err == nil {
+		t.Errorf("expected error for empty instrument_version")
+	}
+}
+
+func validDBI() models.DBIScore {
+	return models.DBIScore{
+		ResidentRef:              uuid.New(),
+		ComputedAt:               time.Now().UTC(),
+		Score:                    1.5,
+		AnticholinergicComponent: 1.0,
+		SedativeComponent:        0.5,
+	}
+}
+
+func TestValidateDBIScore_HappyPath(t *testing.T) {
+	if err := ValidateDBIScore(validDBI()); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateDBIScore_ZeroScoreIsValid(t *testing.T) {
+	d := models.DBIScore{
+		ResidentRef: uuid.New(),
+		ComputedAt:  time.Now().UTC(),
+	}
+	if err := ValidateDBIScore(d); err != nil {
+		t.Errorf("expected pass for zero score; got %v", err)
+	}
+}
+
+func TestValidateDBIScore_RejectsNegativeScore(t *testing.T) {
+	d := validDBI()
+	d.Score = -0.5
+	d.AnticholinergicComponent = -0.5
+	d.SedativeComponent = 0
+	if err := ValidateDBIScore(d); err == nil {
+		t.Errorf("expected error for negative score")
+	}
+}
+
+func TestValidateDBIScore_RejectsComponentSumMismatch(t *testing.T) {
+	d := validDBI()
+	d.Score = 2.5 // components sum to 1.5
+	if err := ValidateDBIScore(d); err == nil {
+		t.Errorf("expected error for score != ach + sed")
+	}
+}
+
+func TestValidateDBIScore_RequiresResidentRef(t *testing.T) {
+	d := validDBI()
+	d.ResidentRef = uuid.Nil
+	if err := ValidateDBIScore(d); err == nil {
+		t.Errorf("expected error for missing resident_ref")
+	}
+}
+
+func validACB() models.ACBScore {
+	return models.ACBScore{
+		ResidentRef: uuid.New(),
+		ComputedAt:  time.Now().UTC(),
+		Score:       3,
+	}
+}
+
+func TestValidateACBScore_HappyPath(t *testing.T) {
+	if err := ValidateACBScore(validACB()); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateACBScore_ZeroScoreIsValid(t *testing.T) {
+	a := models.ACBScore{
+		ResidentRef: uuid.New(),
+		ComputedAt:  time.Now().UTC(),
+	}
+	if err := ValidateACBScore(a); err != nil {
+		t.Errorf("expected pass for zero score; got %v", err)
+	}
+}
+
+func TestValidateACBScore_RejectsNegativeScore(t *testing.T) {
+	a := validACB()
+	a.Score = -1
+	if err := ValidateACBScore(a); err == nil {
+		t.Errorf("expected error for negative score")
+	}
+}
+
+func TestValidateACBScore_RequiresResidentRef(t *testing.T) {
+	a := validACB()
+	a.ResidentRef = uuid.Nil
+	if err := ValidateACBScore(a); err == nil {
+		t.Errorf("expected error for missing resident_ref")
+	}
+}
+
+func TestValidateACBScore_RequiresComputedAt(t *testing.T) {
+	a := validACB()
+	a.ComputedAt = time.Time{}
+	if err := ValidateACBScore(a); err == nil {
+		t.Errorf("expected error for missing computed_at")
+	}
+}
