@@ -628,3 +628,165 @@ func TestUpsertObservation_RecomputesBaselineTransactionally(t *testing.T) {
 		t.Errorf("n_observations: got %v want 10", nObs)
 	}
 }
+
+// ============================================================================
+// Wave 2.3: active_concerns exclusion (closes the wave-2.2 TODO)
+// ============================================================================
+
+// TestBaselineStore_ExcludeDuringActiveConcerns_FiltersInsideWindow verifies
+// that observations whose observed_at falls inside an open
+// post_fall_24h concern window are dropped from the baseline recompute
+// when the per-config ExcludeDuringActiveConcerns list contains
+// post_fall_24h. Closes the wave-2.2 TODO in baseline_store.go.
+func TestBaselineStore_ExcludeDuringActiveConcerns_FiltersInsideWindow(t *testing.T) {
+	dsn := os.Getenv("KB20_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("KB20_TEST_DATABASE_URL not set")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ac := NewActiveConcernStore(db)
+	store := NewV2SubstrateStoreWithDB(db)
+	rid := uuid.New()
+	loinc := "8480-6" // systolic BP
+
+	// Open a post_fall_24h concern: started 12h ago, expected resolution
+	// in 12h. Observations within [started_at, expected_resolution_at)
+	// should be excluded.
+	now := time.Now().UTC().Truncate(time.Second)
+	concernStart := now.Add(-12 * time.Hour)
+	concernEnd := now.Add(12 * time.Hour)
+	if _, err := ac.CreateActiveConcern(context.Background(), models.ActiveConcern{
+		ResidentID:           rid,
+		ConcernType:          models.ActiveConcernPostFall24h,
+		StartedAt:            concernStart,
+		ExpectedResolutionAt: concernEnd,
+		ResolutionStatus:     models.ResolutionStatusOpen,
+	}); err != nil {
+		t.Fatalf("seed concern: %v", err)
+	}
+
+	// Seed 5 observations: 3 inside the concern window, 2 outside.
+	insideTimes := []time.Time{
+		now.Add(-10 * time.Hour),
+		now.Add(-6 * time.Hour),
+		now.Add(-2 * time.Hour),
+	}
+	outsideTimes := []time.Time{
+		now.Add(-20 * time.Hour), // before concern start
+		now.Add(-16 * time.Hour), // before concern start
+	}
+	val := func(i int) float64 { return 120.0 + float64(i) }
+
+	all := append([]time.Time{}, insideTimes...)
+	all = append(all, outsideTimes...)
+	for i, ot := range all {
+		v := val(i)
+		_, err := store.UpsertObservation(context.Background(), models.Observation{
+			ID: uuid.New(), ResidentID: rid, Kind: models.ObservationKindVital,
+			LOINCCode: loinc, Value: &v, Unit: "mmHg", ObservedAt: ot,
+		})
+		if err != nil {
+			t.Fatalf("seed obs %d: %v", i, err)
+		}
+	}
+
+	// Recompute with a config that excludes post_fall_24h.
+	cfg := delta.BaselineConfig{
+		WindowDays:                 30,
+		MinObsForHighConfidence:    7,
+		ExcludeDuringActiveConcerns: []string{models.ActiveConcernPostFall24h},
+	}
+	got, err := recomputeAndUpsertWith(context.Background(), db, rid, loinc, cfg)
+	// With only 2 surviving observations (n<3), expect insufficient_data.
+	if err == nil {
+		t.Fatalf("expected delta.ErrNoBaseline (only 2 observations survive); got nil err and baseline=%+v", got)
+	}
+	if !errors.Is(err, delta.ErrNoBaseline) {
+		t.Fatalf("expected delta.ErrNoBaseline; got %v", err)
+	}
+
+	// Verify the persisted accounting row reports n_observations=2 — the
+	// 3 inside-window readings were excluded.
+	var nObs int
+	row := db.QueryRowContext(context.Background(),
+		`SELECT n_observations FROM baseline_state WHERE resident_id=$1 AND vital_type_key=$2`,
+		rid, loinc)
+	if err := row.Scan(&nObs); err != nil {
+		t.Fatalf("read n_observations: %v", err)
+	}
+	if nObs != 2 {
+		t.Errorf("n_observations after exclusion: got %d want 2", nObs)
+	}
+}
+
+// TestBaselineStore_ExcludeDuringActiveConcerns_NoExclusionListIncludesAll
+// is the control: with the same observations + concern, but an empty
+// ExcludeDuringActiveConcerns config, all 5 observations should count.
+// Proves the gating is on the config list, not on concern presence.
+func TestBaselineStore_ExcludeDuringActiveConcerns_NoExclusionListIncludesAll(t *testing.T) {
+	dsn := os.Getenv("KB20_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("KB20_TEST_DATABASE_URL not set")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ac := NewActiveConcernStore(db)
+	store := NewV2SubstrateStoreWithDB(db)
+	rid := uuid.New()
+	loinc := "8480-6"
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := ac.CreateActiveConcern(context.Background(), models.ActiveConcern{
+		ResidentID: rid, ConcernType: models.ActiveConcernPostFall24h,
+		StartedAt:            now.Add(-12 * time.Hour),
+		ExpectedResolutionAt: now.Add(12 * time.Hour),
+		ResolutionStatus:     models.ResolutionStatusOpen,
+	}); err != nil {
+		t.Fatalf("seed concern: %v", err)
+	}
+
+	for i, ot := range []time.Time{
+		now.Add(-10 * time.Hour), // inside window
+		now.Add(-6 * time.Hour),  // inside window
+		now.Add(-2 * time.Hour),  // inside window
+		now.Add(-20 * time.Hour), // outside
+		now.Add(-16 * time.Hour), // outside
+	} {
+		v := 120.0 + float64(i)
+		_, err := store.UpsertObservation(context.Background(), models.Observation{
+			ID: uuid.New(), ResidentID: rid, Kind: models.ObservationKindVital,
+			LOINCCode: loinc, Value: &v, Unit: "mmHg", ObservedAt: ot,
+		})
+		if err != nil {
+			t.Fatalf("seed obs %d: %v", i, err)
+		}
+	}
+
+	// No exclusion list → all 5 readings included.
+	cfg := delta.BaselineConfig{
+		WindowDays:              30,
+		MinObsForHighConfidence: 7,
+	}
+	if _, err := recomputeAndUpsertWith(context.Background(), db, rid, loinc, cfg); err != nil {
+		t.Fatalf("recompute: %v", err)
+	}
+	var nObs int
+	row := db.QueryRowContext(context.Background(),
+		`SELECT n_observations FROM baseline_state WHERE resident_id=$1 AND vital_type_key=$2`,
+		rid, loinc)
+	if err := row.Scan(&nObs); err != nil {
+		t.Fatalf("read n_observations: %v", err)
+	}
+	if nObs != 5 {
+		t.Errorf("n_observations without exclusion list: got %d want 5", nObs)
+	}
+}

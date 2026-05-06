@@ -236,10 +236,11 @@ func main() {
 		activeConcernStore := storage.NewActiveConcernStore(sqlDB)
 		activeConcernHandlers := api.NewActiveConcernHandlers(activeConcernStore)
 		activeConcernHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
-		// The baseline-exclusion wiring (BaselineStore.WithActiveConcernStore)
-		// is added in the next commit, which closes the wave-2.2 TODO in
-		// baseline_store.go.
-		_ = activeConcernStore
+		// Baseline-exclusion wiring: BaselineStore.buildObsQuery now
+		// joins against active_concerns directly via SQL when a config's
+		// ExcludeDuringActiveConcerns list is non-empty. No additional
+		// wiring needed here — the join uses the same DB connection.
+		// Closes the wave-2.2 TODO in baseline_store.go.
 		logger.Info("v2 active-concern routes registered at /v2 (residents/:id/active-concerns, active-concerns/expiring)")
 	}
 

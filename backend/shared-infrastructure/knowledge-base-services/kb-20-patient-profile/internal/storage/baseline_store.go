@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/cardiofit/shared/v2_substrate/delta"
 )
@@ -254,11 +255,28 @@ func (s *BaselineStore) resolveConfig(ctx context.Context, vitalTypeKey string) 
 // applying per-config filters:
 //   - cfg.WindowDays bounds the lookback interval
 //   - cfg.MorningOnly restricts to 06:00-11:00 Australia/Sydney local time
-//   - cfg.ExcludeDuringActiveConcerns is a Wave 2.3 deferred filter; see
-//     the inline TODO below.
+//   - cfg.ExcludeDuringActiveConcerns suppresses any observation that
+//     fell inside an open or recently-closed concern window of one of
+//     the listed types (Wave 2.3, closes the wave-2.2 TODO).
 //
-// Returns the SQL string and the positional argument slice. Keeping the
-// builder pure (no DB access) makes the SQL trivially reviewable in tests.
+// Returns the SQL string and the positional argument slice. The builder
+// remains pure (no DB access) — the active_concerns join is materialised
+// as a NOT EXISTS sub-query referencing the same observations row, with
+// the concern-type list bound as a TEXT[] parameter.
+//
+// The exclusion predicate's window definition mirrors the engine's view
+// of "inside the concern": an observation is excluded when
+//
+//	ac.started_at <= observations.observed_at
+//	AND (ac.resolved_at IS NULL OR observations.observed_at < ac.resolved_at)
+//	AND observations.observed_at < ac.expected_resolution_at
+//
+// — i.e. the observation must fall after the concern started AND before
+// either the resolution OR the expected_resolution_at, whichever came
+// first. Open and recently-resolved concerns both contribute to the
+// exclusion set so a baseline recompute right after a concern resolves
+// still drops the contaminated readings; the active_concerns row is
+// not deleted on resolution, only updated.
 func buildObsQuery(vitalTypeKey string, residentArg interface{}, cfg delta.BaselineConfig) (string, []interface{}) {
 	// Base predicates: matched by resident, vital type key (LOINC OR
 	// SNOMED OR kind), non-NULL value, and within the lookback window.
@@ -278,18 +296,25 @@ func buildObsQuery(vitalTypeKey string, residentArg interface{}, cfg delta.Basel
 		   AND EXTRACT(HOUR FROM observed_at AT TIME ZONE 'Australia/Sydney') BETWEEN 6 AND 10`
 	}
 
-	// TODO(wave-2.3): once active_concerns lands, exclude observations
-	// whose observed_at falls within an active concern window for any
-	// type listed in cfg.ExcludeDuringActiveConcerns. The expected
-	// shape is:
-	//   AND NOT EXISTS (
-	//       SELECT 1 FROM active_concerns ac
-	//        WHERE ac.resident_id = observations.resident_id
-	//          AND ac.type = ANY($N)
-	//          AND observations.observed_at BETWEEN ac.started_at AND COALESCE(ac.ended_at, NOW())
-	//   )
-	// For Wave 2.2 the ExcludeDuringActiveConcerns list is persisted but
-	// not yet enforced — the active_concerns table does not exist yet.
+	// Wave 2.3: active_concerns exclusion. Backed by migration 015's
+	// active_concerns table + the (resident_id, concern_type,
+	// resolution_status) index. Skipped when the config's exclusion
+	// list is empty (e.g. weight, eGFR) so we don't pay the join cost
+	// for vital types that don't use it.
+	if len(cfg.ExcludeDuringActiveConcerns) > 0 {
+		argIdx := len(args) + 1
+		q += fmt.Sprintf(`
+		   AND NOT EXISTS (
+		       SELECT 1 FROM active_concerns ac
+		        WHERE ac.resident_id = observations.resident_id
+		          AND ac.concern_type = ANY($%d::text[])
+		          AND ac.started_at <= observations.observed_at
+		          AND (ac.resolved_at IS NULL
+		               OR observations.observed_at < ac.resolved_at)
+		          AND observations.observed_at < ac.expected_resolution_at
+		   )`, argIdx)
+		args = append(args, pq.Array(cfg.ExcludeDuringActiveConcerns))
+	}
 
 	q += `
 		 ORDER BY observed_at DESC
