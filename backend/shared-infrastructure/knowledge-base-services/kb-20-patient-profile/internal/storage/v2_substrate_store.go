@@ -1568,6 +1568,94 @@ func (s *V2SubstrateStore) TraceBackward(ctx context.Context, startNode uuid.UUI
 	return out, rows.Err()
 }
 
+// OutEdges returns the outgoing edges of `from`, optionally filtered by
+// `kind` (empty string → no kind filter). Wave 5.2: satisfies the
+// evidence_trace.EdgeStore contract used by LineageOf / ConsequencesOf /
+// the Wave 5.4 benchmark harness.
+func (s *V2SubstrateStore) OutEdges(ctx context.Context, from uuid.UUID, kind evidence_trace.EdgeKind) ([]evidence_trace.Edge, error) {
+	q := `SELECT from_node, to_node, edge_kind, created_at
+		FROM evidence_trace_edges
+		WHERE from_node = $1`
+	args := []interface{}{from}
+	if kind != "" {
+		q += ` AND edge_kind = $2`
+		args = append(args, string(kind))
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []evidence_trace.Edge
+	for rows.Next() {
+		var e evidence_trace.Edge
+		var k string
+		if err := rows.Scan(&e.From, &e.To, &k, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.Kind = evidence_trace.EdgeKind(k)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// InEdges returns the incoming edges of `to`, optionally filtered by `kind`.
+func (s *V2SubstrateStore) InEdges(ctx context.Context, to uuid.UUID, kind evidence_trace.EdgeKind) ([]evidence_trace.Edge, error) {
+	q := `SELECT from_node, to_node, edge_kind, created_at
+		FROM evidence_trace_edges
+		WHERE to_node = $1`
+	args := []interface{}{to}
+	if kind != "" {
+		q += ` AND edge_kind = $2`
+		args = append(args, string(kind))
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []evidence_trace.Edge
+	for rows.Next() {
+		var e evidence_trace.Edge
+		var k string
+		if err := rows.Scan(&e.From, &e.To, &k, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.Kind = evidence_trace.EdgeKind(k)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ListEvidenceTraceNodesByResident returns every EvidenceTraceNode for
+// residentRef recorded in [from, to). Wave 5.2: feeds the
+// evidence_trace.ReasoningWindow query helper.
+//
+// Ordering: ascending by recorded_at so consumers can stream the audit
+// window chronologically.
+func (s *V2SubstrateStore) ListEvidenceTraceNodesByResident(ctx context.Context, residentRef uuid.UUID, from, to time.Time) ([]models.EvidenceTraceNode, error) {
+	q := `SELECT ` + evidenceTraceNodeColumns + `
+		FROM evidence_trace_nodes
+		WHERE resident_ref = $1
+		  AND recorded_at >= $2
+		  AND recorded_at <  $3
+		ORDER BY recorded_at ASC`
+	rows, err := s.db.QueryContext(ctx, q, residentRef, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.EvidenceTraceNode
+	for rows.Next() {
+		n, err := scanEvidenceTraceNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // Compile-time interface assertions.
 var (
 	_ interfaces.ResidentStore       = (*V2SubstrateStore)(nil)
@@ -1578,3 +1666,21 @@ var (
 	_ interfaces.EventStore          = (*V2SubstrateStore)(nil)
 	_ interfaces.EvidenceTraceStore  = (*V2SubstrateStore)(nil)
 )
+
+// EvidenceTraceEdgeAdapter adapts V2SubstrateStore to evidence_trace.EdgeStore.
+// V2SubstrateStore exposes InsertEvidenceTraceEdge / OutEdges / InEdges
+// directly; this adapter renames InsertEvidenceTraceEdge → InsertEdge so
+// the type satisfies the EdgeStore interface used by Wave 5.2 query helpers.
+type EvidenceTraceEdgeAdapter struct{ Store *V2SubstrateStore }
+
+func (a EvidenceTraceEdgeAdapter) InsertEdge(ctx context.Context, e evidence_trace.Edge) error {
+	return a.Store.InsertEvidenceTraceEdge(ctx, e)
+}
+func (a EvidenceTraceEdgeAdapter) OutEdges(ctx context.Context, from uuid.UUID, kind evidence_trace.EdgeKind) ([]evidence_trace.Edge, error) {
+	return a.Store.OutEdges(ctx, from, kind)
+}
+func (a EvidenceTraceEdgeAdapter) InEdges(ctx context.Context, to uuid.UUID, kind evidence_trace.EdgeKind) ([]evidence_trace.Edge, error) {
+	return a.Store.InEdges(ctx, to, kind)
+}
+
+var _ evidence_trace.EdgeStore = (*EvidenceTraceEdgeAdapter)(nil)

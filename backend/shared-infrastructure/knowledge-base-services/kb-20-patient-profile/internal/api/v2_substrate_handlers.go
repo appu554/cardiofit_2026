@@ -93,6 +93,11 @@ func (h *V2SubstrateHandlers) RegisterRoutes(g *gin.RouterGroup) {
 	g.POST("/evidence-trace/edges", h.insertEvidenceTraceEdge)
 	g.GET("/evidence-trace/:id/forward", h.traceEvidenceForward)
 	g.GET("/evidence-trace/:id/backward", h.traceEvidenceBackward)
+
+	// Wave 5.2 — Layer 3 / regulator-audit query API.
+	g.GET("/evidence-trace/recommendations/:id/lineage", h.getRecommendationLineage)
+	g.GET("/evidence-trace/observations/:id/consequences", h.getObservationConsequences)
+	g.GET("/residents/:resident_id/reasoning-window", h.getReasoningWindow)
 }
 
 // maxEvidenceTraceDepth is the server-side cap on traversal depth, to

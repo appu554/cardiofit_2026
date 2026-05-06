@@ -3,13 +3,45 @@ package client
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cardiofit/shared/v2_substrate/evidence_trace"
 	"github.com/cardiofit/shared/v2_substrate/models"
 )
+
+var _ = models.EvidenceTraceNode{} // keep models import live across edits
+
+// ---------------------------------------------------------------------------
+// Wave 5.2 — Lineage / Consequences / ReasoningWindow query API
+// ---------------------------------------------------------------------------
+
+// GetRecommendationLineage GETs the backward-evidence rollup for one
+// Recommendation node.
+func (c *KB20Client) GetRecommendationLineage(ctx context.Context, recID uuid.UUID, depth int) (*evidence_trace.Lineage, error) {
+	u := c.baseURL + "/v2/evidence-trace/recommendations/" + recID.String() + "/lineage?depth=" + strconv.Itoa(depth)
+	return doJSON[evidence_trace.Lineage](ctx, c.http, http.MethodGet, u, nil)
+}
+
+// GetObservationConsequences GETs the forward-consequence rollup for one
+// observation-seed node.
+func (c *KB20Client) GetObservationConsequences(ctx context.Context, obsID uuid.UUID, depth int) (*evidence_trace.Consequences, error) {
+	u := c.baseURL + "/v2/evidence-trace/observations/" + obsID.String() + "/consequences?depth=" + strconv.Itoa(depth)
+	return doJSON[evidence_trace.Consequences](ctx, c.http, http.MethodGet, u, nil)
+}
+
+// GetReasoningWindow GETs the regulator-audit window rollup for one
+// resident across [from, to).
+func (c *KB20Client) GetReasoningWindow(ctx context.Context, residentRef uuid.UUID, from, to time.Time) (*evidence_trace.ReasoningSummaryWindow, error) {
+	q := url.Values{}
+	q.Set("from", from.UTC().Format(time.RFC3339))
+	q.Set("to", to.UTC().Format(time.RFC3339))
+	u := c.baseURL + "/v2/residents/" + residentRef.String() + "/reasoning-window?" + q.Encode()
+	return doJSON[evidence_trace.ReasoningSummaryWindow](ctx, c.http, http.MethodGet, u, nil)
+}
 
 // ---------------------------------------------------------------------------
 // EvidenceTrace
