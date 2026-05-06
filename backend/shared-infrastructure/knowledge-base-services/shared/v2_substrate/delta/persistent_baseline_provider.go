@@ -2,6 +2,7 @@ package delta
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
 
@@ -81,7 +82,8 @@ type BaselineStateStore interface {
 // same transaction as the observation write. This provider is the read-side
 // of that loop.
 type PersistentBaselineProvider struct {
-	store BaselineStateStore
+	store     BaselineStateStore
+	cfgStore  BaselineConfigStore // optional; consulted by the recompute path when wired
 }
 
 // NewPersistentBaselineProvider wires a BaselineStateStore into the
@@ -89,6 +91,47 @@ type PersistentBaselineProvider struct {
 // own its lifecycle.
 func NewPersistentBaselineProvider(store BaselineStateStore) *PersistentBaselineProvider {
 	return &PersistentBaselineProvider{store: store}
+}
+
+// WithConfigStore attaches a BaselineConfigStore to the provider. When
+// set, callers (notably the kb-20 BaselineStore.RecomputeAndUpsertTx
+// path) can resolve per-observation-type parameters via
+// ResolveConfig. The read path (FetchBaseline) is unchanged: it still
+// returns the persisted Baseline as-is, because the config governs
+// writes/recomputes, not reads.
+//
+// Returns the receiver for fluent wiring.
+func (p *PersistentBaselineProvider) WithConfigStore(cfg BaselineConfigStore) *PersistentBaselineProvider {
+	p.cfgStore = cfg
+	return p
+}
+
+// ConfigStore returns the wired BaselineConfigStore (or nil). Callers
+// that need to read/list configs should go through this accessor rather
+// than touching the field directly.
+func (p *PersistentBaselineProvider) ConfigStore() BaselineConfigStore {
+	return p.cfgStore
+}
+
+// ResolveConfig returns the BaselineConfig for observationType. When no
+// ConfigStore is wired, or when the store has no row for the type, the
+// fallback DefaultConfig(observationType) is returned. Errors other
+// than ErrBaselineConfigNotFound are propagated.
+//
+// This is the single canonical lookup path; callers MUST NOT reach into
+// the store directly when they want fallback semantics.
+func ResolveConfig(ctx context.Context, store BaselineConfigStore, observationType string) (BaselineConfig, error) {
+	if store == nil {
+		return DefaultConfig(observationType), nil
+	}
+	c, err := store.Get(ctx, observationType)
+	if err != nil {
+		if errors.Is(err, ErrBaselineConfigNotFound) {
+			return DefaultConfig(observationType), nil
+		}
+		return BaselineConfig{}, err
+	}
+	return *c, nil
 }
 
 // FetchBaseline implements BaselineProvider. It reads the cached

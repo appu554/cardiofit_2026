@@ -38,6 +38,12 @@ type Baseline struct {
 	StdDev        float64   `json:"stddev"`
 	SampleSize    int       `json:"sample_size"`
 	ComputedAt    time.Time `json:"computed_at"`
+	// VelocityFlag is set by the recompute path when the associated
+	// BaselineConfig.FlagVelocity is true and the 14-day decline crosses
+	// VelocityDeclineThreshold (Layer 2 §2.2 — eGFR ≥20% decline). Zero
+	// value (false) preserves backwards compatibility for callers that
+	// do not consult per-observation-type configs.
+	VelocityFlag bool `json:"velocity_flag,omitempty"`
 }
 
 // BaselineProvider exposes baseline data for delta computation. kb-26's
