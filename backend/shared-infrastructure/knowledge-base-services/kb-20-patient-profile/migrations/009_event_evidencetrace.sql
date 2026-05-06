@@ -1,18 +1,23 @@
 -- ============================================================================
--- Migration 009: Event v2 Substrate (Wave 1R.1)
+-- Migration 009: Event + EvidenceTrace v2 Substrate (Wave 1R.1 + 1R.2)
 --
--- Implements the v2 substrate Event entity per Layer 2 doc §1.5:
---   - events table (greenfield) — 29 event_type values bucketed Clinical /
---     CareTransitions / Administrative / System; severity in {minor, moderate,
---     major, sentinel}; structured description, reportable_under (open list),
---     related-entity refs (observations, medication_uses), and
---     triggered_state_changes all stored as JSONB / TEXT[] columns
+-- Implements two greenfield v2 substrate components:
 --
--- NOTE: EvidenceTrace tables are intentionally DEFERRED to Wave 1R.2; this
--- migration only delivers the Event portion. The file is named
--- 009_event_evidencetrace.sql to reserve the slot for the EvidenceTrace
--- additions that will land in a follow-up migration (numbered 010 OR an
--- in-place edit of this file once the schema for the trace graph is finalised).
+-- A) Event entity per Layer 2 doc §1.5 (added in 1R.1):
+--    - events table — 29 event_type values bucketed Clinical /
+--      CareTransitions / Administrative / System; severity in {minor, moderate,
+--      major, sentinel}; structured description, reportable_under (open list),
+--      related-entity refs (observations, medication_uses), and
+--      triggered_state_changes all stored as JSONB / TEXT[] columns
+--
+-- B) EvidenceTrace graph per Layer 2 doc §1.6 (added in 1R.2 — appended in
+--    place to this same migration as flagged in the original 1R.1 footer):
+--    - evidence_trace_nodes — clinical-reasoning audit nodes with
+--      state_machine, state_change_type, actor refs, inputs/outputs JSONB,
+--      reasoning_summary JSONB, optional resident_ref
+--    - evidence_trace_edges — directed (from_node, to_node, edge_kind)
+--      relationships with FK to nodes (orphan edges are a correctness bug)
+--    - indexes supporting recursive-CTE forward/backward traversal
 --
 -- Foreign-key policy: NO DB-level FKs — resident_id, occurred_at_facility,
 -- reported_by_ref, witnessed_by_refs, related_observations,
@@ -120,6 +125,104 @@ COMMENT ON COLUMN events.reportable_under IS
 COMMENT ON COLUMN events.description_free_text IS
     'Free-text narrative complement to description_structured. Maps to FHIR Encounter.reasonCode.text or Communication.payload.contentString at the FHIR boundary. Added 2026-05-06 in migration 009.';
 
+-- ============================================================================
+-- Section 4 — evidence_trace_nodes (greenfield, Wave 1R.2)
+-- ============================================================================
+-- Clinical-reasoning audit nodes per Layer 2 doc §1.6. The bidirectional
+-- graph requirement (Recommendation 3 of Part 7) is satisfied via the
+-- separate evidence_trace_edges table below; the node table itself stores
+-- only the per-node data.
+CREATE TABLE IF NOT EXISTS evidence_trace_nodes (
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    state_machine        TEXT NOT NULL CHECK (state_machine IN (
+        'Authorisation','Recommendation','Monitoring','ClinicalState','Consent'
+    )),
+    state_change_type    TEXT NOT NULL,
+    recorded_at          TIMESTAMPTZ NOT NULL,
+    occurred_at          TIMESTAMPTZ NOT NULL,
+    actor_role_ref       UUID,
+    actor_person_ref     UUID,
+    authority_basis_ref  UUID,
+    inputs               JSONB NOT NULL DEFAULT '[]'::JSONB,
+    reasoning_summary    JSONB,
+    outputs              JSONB NOT NULL DEFAULT '[]'::JSONB,
+    resident_ref         UUID,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Per-resident timeline (the dominant read path for clinical UIs).
+CREATE INDEX IF NOT EXISTS idx_etn_resident_recorded
+    ON evidence_trace_nodes (resident_ref, recorded_at DESC);
+
+-- Per-state-machine timeline (regulatory queries: all Authorisation
+-- transitions in last quarter, etc.).
+CREATE INDEX IF NOT EXISTS idx_etn_state_machine
+    ON evidence_trace_nodes (state_machine, recorded_at DESC);
+
+-- ============================================================================
+-- Section 5 — evidence_trace_edges (greenfield, Wave 1R.2)
+-- ============================================================================
+-- Directed edges between EvidenceTrace nodes. PRIMARY KEY enforces edge
+-- uniqueness on (from_node, to_node, edge_kind) — implementations rely on
+-- this to dedupe traversal results and allow simple INSERT-on-conflict
+-- semantics.
+--
+-- FOREIGN KEYs are required here (unlike most other v2 columns): orphan
+-- edges in the audit graph are a correctness bug, not a design choice.
+-- Both edges and nodes live in the same database, so cross-DB concerns
+-- don't apply.
+CREATE TABLE IF NOT EXISTS evidence_trace_edges (
+    from_node   UUID NOT NULL REFERENCES evidence_trace_nodes(id) ON DELETE CASCADE,
+    to_node     UUID NOT NULL REFERENCES evidence_trace_nodes(id) ON DELETE CASCADE,
+    edge_kind   TEXT NOT NULL CHECK (edge_kind IN (
+        'led_to','derived_from','evidence_for','suppressed'
+    )),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (from_node, to_node, edge_kind)
+);
+
+-- Forward traversal index (anchors WITH RECURSIVE descent on from_node).
+CREATE INDEX IF NOT EXISTS idx_ete_from
+    ON evidence_trace_edges (from_node, edge_kind);
+
+-- Backward traversal index (anchors WITH RECURSIVE ascent on to_node).
+CREATE INDEX IF NOT EXISTS idx_ete_to
+    ON evidence_trace_edges (to_node, edge_kind);
+
+-- ============================================================================
+-- Section 6 — EvidenceTrace COMMENTs
+-- ============================================================================
+COMMENT ON TABLE evidence_trace_nodes IS
+    'v2 substrate EvidenceTrace clinical-reasoning audit node — the architectural moat per Layer 2 doc §1.6. Records every state-machine transition with structured actor / inputs / reasoning_summary / outputs. Edges live in evidence_trace_edges so forward+backward traversal can use a recursive CTE. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+
+COMMENT ON COLUMN evidence_trace_nodes.state_machine IS
+    'Authorisation | Recommendation | Monitoring | ClinicalState | Consent. CHECK constraint enforces the closed set; new values require coordinated change to models/evidence_trace.go and this CHECK. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.state_change_type IS
+    'Free-form structured tag for the transition (e.g. "draft -> submitted"). Validated as non-empty at the application layer. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.recorded_at IS
+    'When the node was logged. Distinct from occurred_at: a state-machine transition that happened at T0 may be reconciled and logged at T1>T0. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.occurred_at IS
+    'When the underlying state change happened (may differ from recorded_at). Required. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.actor_role_ref IS
+    'v2 Role.id reference for the role-at-time-of-action. Nullable for system-only nodes (background rule_fire, scheduled credential checks). NO FK (cross-DB-safe in future where Role lives elsewhere). Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.actor_person_ref IS
+    'v2 Person.id reference. Nullable for system actors. NO FK (cross-DB-safe). Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.authority_basis_ref IS
+    'v2 Credential or PrescribingAgreement reference that authorised the action. Nullable: not every transition is gated by an explicit credential. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.inputs IS
+    'JSONB array of {input_type, input_ref, role_in_decision} entries. role_in_decision is one of supportive | primary_evidence | secondary_evidence | counter_evidence (validated at write time). Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.reasoning_summary IS
+    'JSONB object capturing the rule engine reasoning: text, rule_fires[], suppressions_evaluated[], suppressions_fired[], alternatives_considered[], alternative_selection_rationale. Nullable. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.outputs IS
+    'JSONB array of {output_type, output_ref} entries. Common output_types: Recommendation, MonitoringPlan, RecommendationStateChange. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_nodes.resident_ref IS
+    'Resident.id reference — nullable for system-only nodes (global rule_fire, credential checks not yet bound to a resident). NO FK (cross-DB-safe). Added 2026-05-06 in migration 009 (Wave 1R.2).';
+
+COMMENT ON TABLE evidence_trace_edges IS
+    'Directed edges between EvidenceTrace nodes. (from_node, to_node, edge_kind) is unique. FK to evidence_trace_nodes is enforced — orphan edges are a correctness bug. Indexed for both forward and backward recursive CTE traversal. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+COMMENT ON COLUMN evidence_trace_edges.edge_kind IS
+    'led_to | derived_from | evidence_for | suppressed. CHECK constraint enforces closed set; mirrors EdgeKind values in shared/v2_substrate/evidence_trace/graph.go. Added 2026-05-06 in migration 009 (Wave 1R.2).';
+
 COMMIT;
 
 -- ============================================================================
@@ -137,4 +240,19 @@ COMMIT;
 --   SELECT indexname FROM pg_indexes WHERE tablename='events';
 --   -- expect: events_pkey, idx_events_resident_occurred_at,
 --   --         idx_events_type_occurred_at, idx_events_reportable_under_gin
+--
+--   SELECT column_name FROM information_schema.columns
+--     WHERE table_name='evidence_trace_nodes' ORDER BY ordinal_position;
+--   -- expect 13 columns: id, state_machine, state_change_type,
+--   --                    recorded_at, occurred_at,
+--   --                    actor_role_ref, actor_person_ref, authority_basis_ref,
+--   --                    inputs, reasoning_summary, outputs,
+--   --                    resident_ref, created_at
+--
+--   SELECT indexname FROM pg_indexes WHERE tablename='evidence_trace_nodes';
+--   -- expect: evidence_trace_nodes_pkey, idx_etn_resident_recorded,
+--   --         idx_etn_state_machine
+--
+--   SELECT indexname FROM pg_indexes WHERE tablename='evidence_trace_edges';
+--   -- expect: evidence_trace_edges_pkey, idx_ete_from, idx_ete_to
 -- ============================================================================
