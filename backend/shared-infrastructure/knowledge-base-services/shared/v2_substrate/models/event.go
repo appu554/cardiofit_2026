@@ -74,6 +74,15 @@ const (
 	EventTypeEmergencyDepartmentPresentation = "emergency_department_presentation"
 	EventTypeEndOfLifeRecognition           = "end_of_life_recognition" // care intensity transition
 	EventTypeDeath                          = "death"
+	// EventTypeCareIntensityTransition is emitted when a resident's
+	// care_intensity_history row changes (Wave 2.4 of Layer 2 substrate
+	// plan; Layer 2 doc §2.4). Routes to FHIR Encounter on egress because
+	// the transition documents a care-plan posture change visible across
+	// the multidisciplinary team. The cascade hints (review_preventive_-
+	// medications, revisit_monitoring_plan, consent_refresh_needed) are
+	// carried in DescriptionStructured.cascades so Layer 3 worklist rules
+	// can pattern-match.
+	EventTypeCareIntensityTransition = "care_intensity_transition"
 
 	// Administrative events
 	EventTypeAdmissionToFacility       = "admission_to_facility"
@@ -117,7 +126,8 @@ func IsCareTransitionEventType(s string) bool {
 	case EventTypeHospitalAdmission, EventTypeHospitalDischarge,
 		EventTypeGPVisit, EventTypeSpecialistVisit,
 		EventTypeEmergencyDepartmentPresentation,
-		EventTypeEndOfLifeRecognition, EventTypeDeath:
+		EventTypeEndOfLifeRecognition, EventTypeDeath,
+		EventTypeCareIntensityTransition:
 		return true
 	}
 	return false
