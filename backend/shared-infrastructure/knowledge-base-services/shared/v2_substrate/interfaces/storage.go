@@ -6,6 +6,7 @@ package interfaces
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -67,4 +68,18 @@ type ObservationStore interface {
 	UpsertObservation(ctx context.Context, o models.Observation) (*models.Observation, error)
 	ListObservationsByResident(ctx context.Context, residentID uuid.UUID, limit, offset int) ([]models.Observation, error)
 	ListObservationsByResidentAndKind(ctx context.Context, residentID uuid.UUID, kind string, limit, offset int) ([]models.Observation, error)
+}
+
+// EventStore is the canonical storage contract for Event entities.
+// kb-20-patient-profile is the only KB expected to implement this. List
+// methods take limit/offset; the implementation may apply a maximum cap
+// (e.g. 1000) but caller should not rely on that.
+type EventStore interface {
+	GetEvent(ctx context.Context, id uuid.UUID) (*models.Event, error)
+	UpsertEvent(ctx context.Context, e models.Event) (*models.Event, error)
+	ListEventsByResident(ctx context.Context, residentID uuid.UUID, limit, offset int) ([]models.Event, error)
+	// ListEventsByType returns events of a given event_type whose occurred_at
+	// falls inside [from, to). A zero `from` means no lower bound; a zero `to`
+	// means no upper bound. Results are ordered by occurred_at DESC.
+	ListEventsByType(ctx context.Context, eventType string, from, to time.Time, limit, offset int) ([]models.Event, error)
 }

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -171,6 +172,53 @@ func (c *KB20Client) ListObservationsByResidentAndKind(ctx context.Context, resi
 	q.Set("offset", strconv.Itoa(offset))
 	u := c.baseURL + "/v2/residents/" + residentID.String() + "/observations/" + kind + "?" + q.Encode()
 	out, err := doJSON[[]models.Observation](ctx, c.http, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	return *out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Event
+// ---------------------------------------------------------------------------
+
+func (c *KB20Client) UpsertEvent(ctx context.Context, e models.Event) (*models.Event, error) {
+	return doJSON[models.Event](ctx, c.http, http.MethodPost, c.baseURL+"/v2/events", e)
+}
+
+func (c *KB20Client) GetEvent(ctx context.Context, id uuid.UUID) (*models.Event, error) {
+	return doJSON[models.Event](ctx, c.http, http.MethodGet, c.baseURL+"/v2/events/"+id.String(), nil)
+}
+
+func (c *KB20Client) ListEventsByResident(ctx context.Context, residentID uuid.UUID, limit, offset int) ([]models.Event, error) {
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	u := c.baseURL + "/v2/residents/" + residentID.String() + "/events?" + q.Encode()
+	out, err := doJSON[[]models.Event](ctx, c.http, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	return *out, nil
+}
+
+// ListEventsByType queries /v2/events with type / from / to / limit / offset.
+// A zero `from` or `to` is omitted from the query string (no bound).
+func (c *KB20Client) ListEventsByType(ctx context.Context, eventType string, from, to time.Time, limit, offset int) ([]models.Event, error) {
+	q := url.Values{}
+	if eventType != "" {
+		q.Set("type", eventType)
+	}
+	if !from.IsZero() {
+		q.Set("from", from.UTC().Format(time.RFC3339))
+	}
+	if !to.IsZero() {
+		q.Set("to", to.UTC().Format(time.RFC3339))
+	}
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	u := c.baseURL + "/v2/events?" + q.Encode()
+	out, err := doJSON[[]models.Event](ctx, c.http, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
