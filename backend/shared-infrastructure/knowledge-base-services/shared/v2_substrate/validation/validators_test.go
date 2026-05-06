@@ -828,3 +828,128 @@ func TestValidateCareIntensityTransition_RejectsInvalidTags(t *testing.T) {
 		t.Errorf("expected error for invalid source tag")
 	}
 }
+
+// ============================================================================
+// CapacityAssessment validator tests (Wave 2.5 of Layer 2 substrate plan;
+// Layer 2 doc §2.5).
+// ============================================================================
+
+func validCapacityAssessment() models.CapacityAssessment {
+	return models.CapacityAssessment{
+		ID:              uuid.New(),
+		ResidentRef:     uuid.New(),
+		AssessedAt:      time.Now().UTC(),
+		AssessorRoleRef: uuid.New(),
+		Domain:          models.CapacityDomainMedical,
+		Outcome:         models.CapacityOutcomeIntact,
+		Duration:        models.CapacityDurationPermanent,
+	}
+}
+
+func TestValidateCapacityAssessment_HappyPathPerDomain(t *testing.T) {
+	for _, d := range []string{
+		models.CapacityDomainMedical,
+		models.CapacityDomainFinancial,
+		models.CapacityDomainAccommodation,
+		models.CapacityDomainRestrictivePractice,
+		models.CapacityDomainMedicationDecisions,
+	} {
+		c := validCapacityAssessment()
+		c.Domain = d
+		if err := ValidateCapacityAssessment(c); err != nil {
+			t.Errorf("domain=%s: expected pass; got %v", d, err)
+		}
+	}
+}
+
+func TestValidateCapacityAssessment_RejectsMissingRequired(t *testing.T) {
+	type tc struct {
+		name string
+		mut  func(*models.CapacityAssessment)
+	}
+	for _, c := range []tc{
+		{"resident_ref", func(c *models.CapacityAssessment) { c.ResidentRef = uuid.Nil }},
+		{"assessed_at", func(c *models.CapacityAssessment) { c.AssessedAt = time.Time{} }},
+		{"assessor_role_ref", func(c *models.CapacityAssessment) { c.AssessorRoleRef = uuid.Nil }},
+		{"domain_empty", func(c *models.CapacityAssessment) { c.Domain = "" }},
+		{"domain_invalid", func(c *models.CapacityAssessment) { c.Domain = "bogus" }},
+		{"outcome_empty", func(c *models.CapacityAssessment) { c.Outcome = "" }},
+		{"outcome_invalid", func(c *models.CapacityAssessment) { c.Outcome = "bogus" }},
+		{"duration_empty", func(c *models.CapacityAssessment) { c.Duration = "" }},
+		{"duration_invalid", func(c *models.CapacityAssessment) { c.Duration = "bogus" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := validCapacityAssessment()
+			c.mut(&a)
+			if err := ValidateCapacityAssessment(a); err == nil {
+				t.Errorf("expected error for %s", c.name)
+			}
+		})
+	}
+}
+
+func TestValidateCapacityAssessment_IntactRequiresPermanent(t *testing.T) {
+	a := validCapacityAssessment()
+	a.Outcome = models.CapacityOutcomeIntact
+	a.Duration = models.CapacityDurationTemporary
+	rev := a.AssessedAt.Add(48 * time.Hour)
+	a.ExpectedReviewDate = &rev
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for intact+temporary")
+	}
+	a.Duration = models.CapacityDurationUnableToDetermine
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for intact+unable_to_determine")
+	}
+}
+
+func TestValidateCapacityAssessment_TemporaryRequiresReviewDate(t *testing.T) {
+	a := validCapacityAssessment()
+	a.Outcome = models.CapacityOutcomeImpaired
+	a.Duration = models.CapacityDurationTemporary
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for temporary without expected_review_date")
+	}
+	// Review date in the past: invalid.
+	past := a.AssessedAt.Add(-time.Hour)
+	a.ExpectedReviewDate = &past
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for expected_review_date <= assessed_at")
+	}
+	// Review date equal to assessed_at: invalid (must be strictly after).
+	same := a.AssessedAt
+	a.ExpectedReviewDate = &same
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for expected_review_date == assessed_at")
+	}
+	// Review date strictly after: ok.
+	future := a.AssessedAt.Add(48 * time.Hour)
+	a.ExpectedReviewDate = &future
+	if err := ValidateCapacityAssessment(a); err != nil {
+		t.Errorf("expected pass for temporary+future review_date; got %v", err)
+	}
+}
+
+func TestValidateCapacityAssessment_ScoreRequiresInstrument(t *testing.T) {
+	a := validCapacityAssessment()
+	a.Outcome = models.CapacityOutcomeImpaired
+	a.Duration = models.CapacityDurationPermanent
+	score := 18.0
+	a.Score = &score
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for score without instrument")
+	}
+	a.Instrument = models.CapacityInstrumentMoCA
+	if err := ValidateCapacityAssessment(a); err != nil {
+		t.Errorf("expected pass for score+instrument; got %v", err)
+	}
+}
+
+func TestValidateCapacityAssessment_RejectsSelfSupersede(t *testing.T) {
+	a := validCapacityAssessment()
+	id := a.ID
+	a.SupersedesRef = &id
+	if err := ValidateCapacityAssessment(a); err == nil {
+		t.Errorf("expected error for self-supersede")
+	}
+}
