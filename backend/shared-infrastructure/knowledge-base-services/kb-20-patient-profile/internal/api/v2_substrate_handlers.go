@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/cardiofit/shared/v2_substrate/evidence_trace"
 	"github.com/cardiofit/shared/v2_substrate/interfaces"
 	"github.com/cardiofit/shared/v2_substrate/models"
 	"github.com/cardiofit/shared/v2_substrate/validation"
@@ -68,7 +69,17 @@ func (h *V2SubstrateHandlers) RegisterRoutes(g *gin.RouterGroup) {
 	g.GET("/events/:id", h.getEvent)
 	g.GET("/residents/:resident_id/events", h.listEventsByResident)
 	g.GET("/events", h.listEventsByType)
+
+	g.POST("/evidence-trace/nodes", h.upsertEvidenceTraceNode)
+	g.GET("/evidence-trace/nodes/:id", h.getEvidenceTraceNode)
+	g.POST("/evidence-trace/edges", h.insertEvidenceTraceEdge)
+	g.GET("/evidence-trace/:id/forward", h.traceEvidenceForward)
+	g.GET("/evidence-trace/:id/backward", h.traceEvidenceBackward)
 }
+
+// maxEvidenceTraceDepth is the server-side cap on traversal depth, to
+// prevent abuse via a runaway depth query parameter.
+const maxEvidenceTraceDepth = 50
 
 // respondError dispatches not-found errors to 404 and everything else to 500.
 func respondError(c *gin.Context, err error) {
@@ -553,6 +564,136 @@ func (h *V2SubstrateHandlers) listEventsByType(c *gin.Context) {
 	if err != nil {
 		respondError(c, err)
 		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// ---------------------------------------------------------------------------
+// EvidenceTrace
+// ---------------------------------------------------------------------------
+
+func (h *V2SubstrateHandlers) upsertEvidenceTraceNode(c *gin.Context) {
+	var n models.EvidenceTraceNode
+	if err := c.BindJSON(&n); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validation.ValidateEvidenceTraceNode(n); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	out, err := h.store.UpsertEvidenceTraceNode(c.Request.Context(), n)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *V2SubstrateHandlers) getEvidenceTraceNode(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	n, err := h.store.GetEvidenceTraceNode(c.Request.Context(), id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, n)
+}
+
+// edgeRequest is the wire-format payload for POST /v2/evidence-trace/edges.
+// Mirrors evidence_trace.Edge with explicit JSON tags so callers can use
+// either the raw struct or this shape.
+type edgeRequest struct {
+	From string `json:"from_node"`
+	To   string `json:"to_node"`
+	Kind string `json:"edge_kind"`
+}
+
+func (h *V2SubstrateHandlers) insertEvidenceTraceEdge(c *gin.Context) {
+	var req edgeRequest
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	from, err := uuid.Parse(req.From)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from_node"})
+		return
+	}
+	to, err := uuid.Parse(req.To)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to_node"})
+		return
+	}
+	if !evidence_trace.IsValidEdgeKind(req.Kind) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid edge_kind"})
+		return
+	}
+	edge := evidence_trace.Edge{From: from, To: to, Kind: evidence_trace.EdgeKind(req.Kind)}
+	if err := h.store.InsertEvidenceTraceEdge(c.Request.Context(), edge); err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// parseTraversalDepth reads the ?depth= query parameter, defaults to 10,
+// caps at maxEvidenceTraceDepth. Returns (depth, ok). On failure writes
+// the 400 response and returns ok=false.
+func parseTraversalDepth(c *gin.Context) (int, bool) {
+	depth, err := strconv.Atoi(c.DefaultQuery("depth", "10"))
+	if err != nil || depth <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "depth must be a positive integer"})
+		return 0, false
+	}
+	if depth > maxEvidenceTraceDepth {
+		depth = maxEvidenceTraceDepth
+	}
+	return depth, true
+}
+
+func (h *V2SubstrateHandlers) traceEvidenceForward(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	depth, ok := parseTraversalDepth(c)
+	if !ok {
+		return
+	}
+	out, err := h.store.TraceForward(c.Request.Context(), id, depth)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if out == nil {
+		out = []models.EvidenceTraceNode{}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *V2SubstrateHandlers) traceEvidenceBackward(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	depth, ok := parseTraversalDepth(c)
+	if !ok {
+		return
+	}
+	out, err := h.store.TraceBackward(c.Request.Context(), id, depth)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if out == nil {
+		out = []models.EvidenceTraceNode{}
 	}
 	c.JSON(http.StatusOK, out)
 }

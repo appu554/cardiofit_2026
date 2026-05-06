@@ -21,6 +21,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/cardiofit/shared/v2_substrate/delta"
+	"github.com/cardiofit/shared/v2_substrate/evidence_trace"
 	"github.com/cardiofit/shared/v2_substrate/interfaces"
 	"github.com/cardiofit/shared/v2_substrate/models"
 )
@@ -1236,12 +1237,279 @@ func (s *V2SubstrateStore) ListEventsByType(ctx context.Context, eventType strin
 	return out, rows.Err()
 }
 
+// ============================================================================
+// EvidenceTrace
+// ============================================================================
+
+// evidenceTraceNodeColumns is the canonical column list for SELECT/scan.
+const evidenceTraceNodeColumns = `id, state_machine, state_change_type,
+       recorded_at, occurred_at,
+       actor_role_ref, actor_person_ref, authority_basis_ref,
+       inputs, reasoning_summary, outputs,
+       resident_ref, created_at`
+
+// scanEvidenceTraceNode reads one row's columns (in evidenceTraceNodeColumns
+// order) into a fully-populated EvidenceTraceNode.
+func scanEvidenceTraceNode(sc rowScanner) (models.EvidenceTraceNode, error) {
+	var (
+		n          models.EvidenceTraceNode
+		roleRef    uuid.NullUUID
+		personRef  uuid.NullUUID
+		authRef    uuid.NullUUID
+		residentR  uuid.NullUUID
+		inputs     []byte
+		reasoning  []byte
+		outputs    []byte
+	)
+	if err := sc.Scan(
+		&n.ID, &n.StateMachine, &n.StateChangeType,
+		&n.RecordedAt, &n.OccurredAt,
+		&roleRef, &personRef, &authRef,
+		&inputs, &reasoning, &outputs,
+		&residentR, &n.CreatedAt,
+	); err != nil {
+		return models.EvidenceTraceNode{}, err
+	}
+	if roleRef.Valid {
+		u := roleRef.UUID
+		n.Actor.RoleRef = &u
+	}
+	if personRef.Valid {
+		u := personRef.UUID
+		n.Actor.PersonRef = &u
+	}
+	if authRef.Valid {
+		u := authRef.UUID
+		n.Actor.AuthorityBasisRef = &u
+	}
+	if residentR.Valid {
+		u := residentR.UUID
+		n.ResidentRef = &u
+	}
+	if len(inputs) > 0 {
+		var ins []models.TraceInput
+		if err := json.Unmarshal(inputs, &ins); err != nil {
+			return models.EvidenceTraceNode{}, fmt.Errorf("unmarshal inputs: %w", err)
+		}
+		if len(ins) > 0 {
+			n.Inputs = ins
+		}
+	}
+	if len(outputs) > 0 {
+		var outs []models.TraceOutput
+		if err := json.Unmarshal(outputs, &outs); err != nil {
+			return models.EvidenceTraceNode{}, fmt.Errorf("unmarshal outputs: %w", err)
+		}
+		if len(outs) > 0 {
+			n.Outputs = outs
+		}
+	}
+	if len(reasoning) > 0 && string(reasoning) != "null" {
+		var rs models.ReasoningSummary
+		if err := json.Unmarshal(reasoning, &rs); err != nil {
+			return models.EvidenceTraceNode{}, fmt.Errorf("unmarshal reasoning_summary: %w", err)
+		}
+		n.ReasoningSummary = &rs
+	}
+	return n, nil
+}
+
+// GetEvidenceTraceNode reads a single EvidenceTraceNode by primary key.
+func (s *V2SubstrateStore) GetEvidenceTraceNode(ctx context.Context, id uuid.UUID) (*models.EvidenceTraceNode, error) {
+	q := `SELECT ` + evidenceTraceNodeColumns + ` FROM evidence_trace_nodes WHERE id = $1`
+	n, err := scanEvidenceTraceNode(s.db.QueryRowContext(ctx, q, id))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("get evidence_trace_node %s: %w", id, interfaces.ErrNotFound)
+		}
+		return nil, fmt.Errorf("get evidence_trace_node %s: %w", id, err)
+	}
+	return &n, nil
+}
+
+// UpsertEvidenceTraceNode inserts (or updates by id) one EvidenceTraceNode.
+// Marshals JSONB columns and binds nullable UUID columns via interface{}.
+func (s *V2SubstrateStore) UpsertEvidenceTraceNode(ctx context.Context, n models.EvidenceTraceNode) (*models.EvidenceTraceNode, error) {
+	const q = `
+		INSERT INTO evidence_trace_nodes
+			(id, state_machine, state_change_type,
+			 recorded_at, occurred_at,
+			 actor_role_ref, actor_person_ref, authority_basis_ref,
+			 inputs, reasoning_summary, outputs,
+			 resident_ref, created_at)
+		VALUES
+			($1, $2, $3,
+			 $4, $5,
+			 $6, $7, $8,
+			 $9, $10, $11,
+			 $12, NOW())
+		ON CONFLICT (id) DO UPDATE SET
+			state_machine       = EXCLUDED.state_machine,
+			state_change_type   = EXCLUDED.state_change_type,
+			recorded_at         = EXCLUDED.recorded_at,
+			occurred_at         = EXCLUDED.occurred_at,
+			actor_role_ref      = EXCLUDED.actor_role_ref,
+			actor_person_ref    = EXCLUDED.actor_person_ref,
+			authority_basis_ref = EXCLUDED.authority_basis_ref,
+			inputs              = EXCLUDED.inputs,
+			reasoning_summary   = EXCLUDED.reasoning_summary,
+			outputs             = EXCLUDED.outputs,
+			resident_ref        = EXCLUDED.resident_ref
+	`
+
+	inputsJSON, err := json.Marshal(n.Inputs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal inputs: %w", err)
+	}
+	if len(n.Inputs) == 0 {
+		inputsJSON = []byte("[]")
+	}
+	outputsJSON, err := json.Marshal(n.Outputs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal outputs: %w", err)
+	}
+	if len(n.Outputs) == 0 {
+		outputsJSON = []byte("[]")
+	}
+	var reasoningArg interface{}
+	if n.ReasoningSummary != nil {
+		b, err := json.Marshal(n.ReasoningSummary)
+		if err != nil {
+			return nil, fmt.Errorf("marshal reasoning_summary: %w", err)
+		}
+		reasoningArg = b
+	}
+
+	var roleArg, personArg, authArg, residentArg interface{}
+	if n.Actor.RoleRef != nil {
+		roleArg = *n.Actor.RoleRef
+	}
+	if n.Actor.PersonRef != nil {
+		personArg = *n.Actor.PersonRef
+	}
+	if n.Actor.AuthorityBasisRef != nil {
+		authArg = *n.Actor.AuthorityBasisRef
+	}
+	if n.ResidentRef != nil {
+		residentArg = *n.ResidentRef
+	}
+
+	if _, err := s.db.ExecContext(ctx, q,
+		n.ID,                // $1
+		n.StateMachine,      // $2
+		n.StateChangeType,   // $3
+		n.RecordedAt,        // $4
+		n.OccurredAt,        // $5
+		roleArg,             // $6
+		personArg,           // $7
+		authArg,             // $8
+		inputsJSON,          // $9
+		reasoningArg,        // $10
+		outputsJSON,         // $11
+		residentArg,         // $12
+	); err != nil {
+		return nil, fmt.Errorf("upsert evidence_trace_node: %w", err)
+	}
+	return s.GetEvidenceTraceNode(ctx, n.ID)
+}
+
+// InsertEvidenceTraceEdge inserts an edge (idempotent on PK collision).
+// The (from_node, to_node, edge_kind) primary key in the schema means a
+// repeat insert is a no-op rather than an error.
+func (s *V2SubstrateStore) InsertEvidenceTraceEdge(ctx context.Context, e evidence_trace.Edge) error {
+	const q = `
+		INSERT INTO evidence_trace_edges (from_node, to_node, edge_kind, created_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (from_node, to_node, edge_kind) DO NOTHING`
+	if _, err := s.db.ExecContext(ctx, q, e.From, e.To, string(e.Kind)); err != nil {
+		return fmt.Errorf("insert evidence_trace_edge: %w", err)
+	}
+	return nil
+}
+
+// TraceForward returns the distinct EvidenceTrace nodes reachable from
+// startNode by following outgoing edges, capped at maxDepth hops.
+//
+// Implementation: a recursive CTE over evidence_trace_edges. UNION (not
+// UNION ALL) deduplicates as it expands, which handles cycles in the
+// graph automatically; the depth cap is a defence-in-depth limit even so.
+func (s *V2SubstrateStore) TraceForward(ctx context.Context, startNode uuid.UUID, maxDepth int) ([]models.EvidenceTraceNode, error) {
+	if maxDepth <= 0 {
+		return nil, fmt.Errorf("trace_forward: maxDepth must be > 0")
+	}
+	const q = `
+		WITH RECURSIVE downstream AS (
+			SELECT to_node, 1 AS depth
+			  FROM evidence_trace_edges
+			 WHERE from_node = $1
+			UNION
+			SELECT e.to_node, d.depth + 1
+			  FROM evidence_trace_edges e
+			  JOIN downstream d ON e.from_node = d.to_node
+			 WHERE d.depth < $2
+		)
+		SELECT ` + evidenceTraceNodeColumns + `
+		  FROM evidence_trace_nodes
+		 WHERE id IN (SELECT to_node FROM downstream)`
+	rows, err := s.db.QueryContext(ctx, q, startNode, maxDepth)
+	if err != nil {
+		return nil, fmt.Errorf("trace_forward: %w", err)
+	}
+	defer rows.Close()
+	var out []models.EvidenceTraceNode
+	for rows.Next() {
+		n, err := scanEvidenceTraceNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// TraceBackward is the symmetric reverse traversal: nodes reachable by
+// following incoming edges (ancestors), capped at maxDepth hops.
+func (s *V2SubstrateStore) TraceBackward(ctx context.Context, startNode uuid.UUID, maxDepth int) ([]models.EvidenceTraceNode, error) {
+	if maxDepth <= 0 {
+		return nil, fmt.Errorf("trace_backward: maxDepth must be > 0")
+	}
+	const q = `
+		WITH RECURSIVE upstream AS (
+			SELECT from_node, 1 AS depth
+			  FROM evidence_trace_edges
+			 WHERE to_node = $1
+			UNION
+			SELECT e.from_node, u.depth + 1
+			  FROM evidence_trace_edges e
+			  JOIN upstream u ON e.to_node = u.from_node
+			 WHERE u.depth < $2
+		)
+		SELECT ` + evidenceTraceNodeColumns + `
+		  FROM evidence_trace_nodes
+		 WHERE id IN (SELECT from_node FROM upstream)`
+	rows, err := s.db.QueryContext(ctx, q, startNode, maxDepth)
+	if err != nil {
+		return nil, fmt.Errorf("trace_backward: %w", err)
+	}
+	defer rows.Close()
+	var out []models.EvidenceTraceNode
+	for rows.Next() {
+		n, err := scanEvidenceTraceNode(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // Compile-time interface assertions.
 var (
-	_ interfaces.ResidentStore    = (*V2SubstrateStore)(nil)
-	_ interfaces.PersonStore      = (*V2SubstrateStore)(nil)
-	_ interfaces.RoleStore        = (*V2SubstrateStore)(nil)
-	_ interfaces.MedicineUseStore = (*V2SubstrateStore)(nil)
-	_ interfaces.ObservationStore = (*V2SubstrateStore)(nil)
-	_ interfaces.EventStore       = (*V2SubstrateStore)(nil)
+	_ interfaces.ResidentStore       = (*V2SubstrateStore)(nil)
+	_ interfaces.PersonStore         = (*V2SubstrateStore)(nil)
+	_ interfaces.RoleStore           = (*V2SubstrateStore)(nil)
+	_ interfaces.MedicineUseStore    = (*V2SubstrateStore)(nil)
+	_ interfaces.ObservationStore    = (*V2SubstrateStore)(nil)
+	_ interfaces.EventStore          = (*V2SubstrateStore)(nil)
+	_ interfaces.EvidenceTraceStore  = (*V2SubstrateStore)(nil)
 )
