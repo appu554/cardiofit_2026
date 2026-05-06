@@ -299,6 +299,21 @@ func main() {
 			}
 		})
 		logger.Info("v2 scoring routes registered at /v2 (residents/:id/{cfs,akps,scores/current,{cfs,akps,dbi,acb}/history}); DBI/ACB recompute wired to MedicineUse changes")
+
+			// Wave 4: hospital discharge reconciliation (Layer 2 §3.2). Mounts
+			// discharge-document ingestion + reconciliation worklist endpoints
+			// under /v2. The DischargeDocumentStore owns
+			// discharge_documents + discharge_medication_lines (migration 021);
+			// the ReconciliationStore wraps the pure
+			// shared/v2_substrate/reconciliation engine and persists
+			// reconciliation_worklists + reconciliation_decisions plus an
+			// EvidenceTrace node per ACOP decision and a completion node +
+			// reconciliation_completed Event when the worklist is finalised.
+			dischargeDocStore := storage.NewDischargeDocumentStore(sqlDB)
+			reconStore := storage.NewReconciliationStore(sqlDB, v2Store, dischargeDocStore)
+			reconHandlers := api.NewReconciliationHandlers(dischargeDocStore, reconStore)
+			reconHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+			logger.Info("v2 reconciliation routes registered at /v2 (discharge-documents, reconciliation/{start,/:id,/finalise,/lines/:id/decide})")
 		// Baseline-exclusion wiring: BaselineStore.buildObsQuery now
 		// joins against active_concerns directly via SQL when a config's
 		// ExcludeDuringActiveConcerns list is non-empty. No additional
