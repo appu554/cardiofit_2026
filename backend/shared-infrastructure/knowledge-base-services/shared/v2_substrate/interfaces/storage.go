@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cardiofit/shared/v2_substrate/evidence_trace"
 	"github.com/cardiofit/shared/v2_substrate/models"
 )
 
@@ -68,6 +69,26 @@ type ObservationStore interface {
 	UpsertObservation(ctx context.Context, o models.Observation) (*models.Observation, error)
 	ListObservationsByResident(ctx context.Context, residentID uuid.UUID, limit, offset int) ([]models.Observation, error)
 	ListObservationsByResidentAndKind(ctx context.Context, residentID uuid.UUID, kind string, limit, offset int) ([]models.Observation, error)
+}
+
+// EvidenceTraceStore is the canonical storage contract for EvidenceTrace
+// nodes + edges. kb-20-patient-profile is the only KB expected to
+// implement this. Per Layer 2 doc §1.6 — the architectural moat.
+//
+// Forward and backward traversal MUST be supported from day 1
+// (Recommendation 3 of Part 7). Implementations should use a recursive
+// CTE (or equivalent) over the edges table; depth-cap traversal is
+// non-negotiable to prevent runaway queries.
+type EvidenceTraceStore interface {
+	UpsertEvidenceTraceNode(ctx context.Context, n models.EvidenceTraceNode) (*models.EvidenceTraceNode, error)
+	GetEvidenceTraceNode(ctx context.Context, id uuid.UUID) (*models.EvidenceTraceNode, error)
+	InsertEvidenceTraceEdge(ctx context.Context, e evidence_trace.Edge) error
+	// TraceForward returns the distinct EvidenceTrace nodes reachable from
+	// startNode by following outgoing edges, capped at maxDepth hops.
+	TraceForward(ctx context.Context, startNode uuid.UUID, maxDepth int) ([]models.EvidenceTraceNode, error)
+	// TraceBackward is the symmetric reverse traversal: nodes reachable by
+	// following incoming edges (ancestors), capped at maxDepth hops.
+	TraceBackward(ctx context.Context, startNode uuid.UUID, maxDepth int) ([]models.EvidenceTraceNode, error)
 }
 
 // EventStore is the canonical storage contract for Event entities.
