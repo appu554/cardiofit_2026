@@ -194,6 +194,15 @@ func main() {
 		v2Handlers := api.NewV2SubstrateHandlers(v2Store)
 		v2Handlers.RegisterRoutes(httpServer.Router.Group("/v2"))
 		logger.Info("v2 substrate routes registered at /v2 (residents, persons, roles, medicine_uses, observations)")
+
+		// Wave 1R.3: identity matching service (Layer 2 §3.3). Mounted at
+		// /v2/identity so the IdentityMatcher ships non-breakingly. The
+		// IdentityStore shares sqlDB with V2SubstrateStore so EvidenceTrace
+		// audit nodes are written through the same connection pool.
+		identityStore := storage.NewIdentityStore(sqlDB, v2Store)
+		identityHandlers := api.NewIdentityHandlers(identityStore)
+		identityHandlers.RegisterRoutes(httpServer.Router.Group("/v2/identity"))
+		logger.Info("v2 identity matching routes registered at /v2/identity (match, review-queue, review/:id/resolve)")
 	}
 
 	// Start HTTP server
