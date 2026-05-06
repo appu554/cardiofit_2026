@@ -329,6 +329,106 @@ type CapacityAssessmentResult struct {
 	EvidenceTraceNodeRef uuid.UUID                  `json:"evidence_trace_node_ref"`
 }
 
+// ScoringStore is the canonical storage contract for the four Wave 2.6
+// clinical scoring instruments (Layer 2 doc §2.4 / §2.6):
+//
+//   - CFS  — Clinical Frailty Scale, clinician-entered (1-9)
+//   - AKPS — Australia-modified Karnofsky Performance Status, clinician-entered (0-100, %10)
+//   - DBI  — Drug Burden Index, computed from active MedicineUse list
+//   - ACB  — Anticholinergic Cognitive Burden, computed from active MedicineUse list
+//
+// kb-20-patient-profile is the only KB expected to implement this. All
+// four histories are append-only — never UPDATE rows. The latest row by
+// AssessedAt (CFS/AKPS) or ComputedAt (DBI/ACB) per ResidentRef is the
+// current score (queried via the four *_current views).
+//
+// CreateCFSScore / CreateAKPSScore implementations MAY surface a
+// care-intensity review hint via the EvidenceTrace graph when the score
+// crosses the CFS≥7 / AKPS≤40 threshold (Layer 2 doc §2.4 line 540-547).
+// The hint is informational; the substrate never auto-transitions care
+// intensity from a score.
+//
+// RecomputeDrugBurden is the recompute entry point invoked by the
+// MedicineUse write path: pulls the resident's active MedicineUse list,
+// runs the pure scoring.ComputeDBI / scoring.ComputeACB calculators, and
+// writes the new dbi_scores + acb_scores rows. Returns the persisted
+// scores. Callers MUST treat recompute failure as best-effort — the
+// underlying MedicineUse write must still commit.
+type ScoringStore interface {
+	// CFS — clinician-entered.
+	CreateCFSScore(ctx context.Context, c models.CFSScore) (*ScoringResult, error)
+	GetCurrentCFSScore(ctx context.Context, residentRef uuid.UUID) (*models.CFSScore, error)
+	ListCFSHistory(ctx context.Context, residentRef uuid.UUID) ([]models.CFSScore, error)
+
+	// AKPS — clinician-entered.
+	CreateAKPSScore(ctx context.Context, a models.AKPSScore) (*ScoringResult, error)
+	GetCurrentAKPSScore(ctx context.Context, residentRef uuid.UUID) (*models.AKPSScore, error)
+	ListAKPSHistory(ctx context.Context, residentRef uuid.UUID) ([]models.AKPSScore, error)
+
+	// DBI — computed; surfaced as read-only history + current.
+	GetCurrentDBIScore(ctx context.Context, residentRef uuid.UUID) (*models.DBIScore, error)
+	ListDBIHistory(ctx context.Context, residentRef uuid.UUID) ([]models.DBIScore, error)
+
+	// ACB — computed; surfaced as read-only history + current.
+	GetCurrentACBScore(ctx context.Context, residentRef uuid.UUID) (*models.ACBScore, error)
+	ListACBHistory(ctx context.Context, residentRef uuid.UUID) ([]models.ACBScore, error)
+
+	// RecomputeDrugBurden runs the pure DBI + ACB calculators against the
+	// resident's current active MedicineUse list and persists fresh rows.
+	// Invoked by the MedicineUse write path (Wave 2.6); MAY also be invoked
+	// directly by an admin/cron path. Returns both persisted scores so the
+	// caller can include them in the response payload when desired.
+	RecomputeDrugBurden(ctx context.Context, residentRef uuid.UUID) (*DrugBurdenRecomputeResult, error)
+
+	// CurrentScoresByResident returns one struct holding the latest CFS /
+	// AKPS / DBI / ACB rows for residentRef. Any pointer is nil when no
+	// row exists for that instrument. Used by the combined GET
+	// /residents/:id/scores/current endpoint.
+	CurrentScoresByResident(ctx context.Context, residentRef uuid.UUID) (*CurrentScores, error)
+}
+
+// ScoringResult is the return shape from the clinician-entered Create*
+// methods. CareIntensityHint is non-nil when the score crosses the
+// review threshold (CFS≥7 or AKPS≤40); the EvidenceTraceNodeRef is the
+// hint node the storage layer wrote.
+type ScoringResult struct {
+	CFSScore             *models.CFSScore       `json:"cfs_score,omitempty"`
+	AKPSScore            *models.AKPSScore      `json:"akps_score,omitempty"`
+	CareIntensityHint    *CareIntensityReviewHint `json:"care_intensity_hint,omitempty"`
+	EvidenceTraceNodeRef uuid.UUID              `json:"evidence_trace_node_ref"`
+}
+
+// CareIntensityReviewHint is the worklist hint surfaced when a CFS/AKPS
+// score crosses the review threshold (Layer 2 doc §2.4 line 540-547).
+// The hint is informational only — the substrate never auto-transitions
+// care intensity. Layer 4 (worklist UI) consumes the hint via the
+// EvidenceTrace graph.
+type CareIntensityReviewHint struct {
+	Instrument string    `json:"instrument"` // "CFS" | "AKPS"
+	Score      int       `json:"score"`
+	ScoreRef   uuid.UUID `json:"score_ref"` // CFSScore.ID or AKPSScore.ID
+	Reason     string    `json:"reason"`
+}
+
+// DrugBurdenRecomputeResult bundles the freshly-persisted DBI + ACB rows
+// from a RecomputeDrugBurden call. Either field can be nil if the
+// underlying calculator failed — but in normal operation both are set
+// and reflect the same MedicineUse snapshot.
+type DrugBurdenRecomputeResult struct {
+	DBIScore *models.DBIScore `json:"dbi_score,omitempty"`
+	ACBScore *models.ACBScore `json:"acb_score,omitempty"`
+}
+
+// CurrentScores aggregates the latest row of each Wave 2.6 score
+// instrument for a Resident. Any pointer field is nil when no row
+// exists for that instrument.
+type CurrentScores struct {
+	CFS  *models.CFSScore  `json:"cfs,omitempty"`
+	AKPS *models.AKPSScore `json:"akps,omitempty"`
+	DBI  *models.DBIScore  `json:"dbi,omitempty"`
+	ACB  *models.ACBScore  `json:"acb,omitempty"`
+}
+
 // EventStore is the canonical storage contract for Event entities.
 // kb-20-patient-profile is the only KB expected to implement this. List
 // methods take limit/offset; the implementation may apply a maximum cap
