@@ -595,3 +595,128 @@ func TestValidateEvidenceTraceNode_AcceptsAllStateMachines(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// Wave 2.3: ActiveConcern validators
+// ============================================================================
+
+func validBaseActiveConcern() models.ActiveConcern {
+	started := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	return models.ActiveConcern{
+		ID:                   uuid.New(),
+		ResidentID:           uuid.New(),
+		ConcernType:          models.ActiveConcernPostFall72h,
+		StartedAt:            started,
+		ExpectedResolutionAt: started.Add(72 * time.Hour),
+		ResolutionStatus:     models.ResolutionStatusOpen,
+	}
+}
+
+func TestValidateActiveConcernRequiresResidentID(t *testing.T) {
+	c := validBaseActiveConcern()
+	c.ResidentID = uuid.Nil
+	if err := ValidateActiveConcern(c); err == nil {
+		t.Errorf("expected error for missing resident_id")
+	}
+}
+
+func TestValidateActiveConcernRejectsInvalidType(t *testing.T) {
+	c := validBaseActiveConcern()
+	c.ConcernType = "made_up"
+	if err := ValidateActiveConcern(c); err == nil {
+		t.Errorf("expected error for invalid concern_type")
+	}
+}
+
+func TestValidateActiveConcernRequiresExpectedResolutionAfterStarted(t *testing.T) {
+	c := validBaseActiveConcern()
+	c.ExpectedResolutionAt = c.StartedAt
+	if err := ValidateActiveConcern(c); err == nil {
+		t.Errorf("expected error when expected_resolution_at == started_at")
+	}
+	c.ExpectedResolutionAt = c.StartedAt.Add(-time.Hour)
+	if err := ValidateActiveConcern(c); err == nil {
+		t.Errorf("expected error when expected_resolution_at < started_at")
+	}
+}
+
+func TestValidateActiveConcernRejectsInvalidStatus(t *testing.T) {
+	c := validBaseActiveConcern()
+	c.ResolutionStatus = "settled"
+	if err := ValidateActiveConcern(c); err == nil {
+		t.Errorf("expected error for invalid resolution_status")
+	}
+}
+
+func TestValidateActiveConcernOpenForbidsResolvedAt(t *testing.T) {
+	c := validBaseActiveConcern()
+	now := c.StartedAt.Add(time.Hour)
+	c.ResolvedAt = &now
+	if err := ValidateActiveConcern(c); err == nil {
+		t.Errorf("expected error: open concern must not have resolved_at")
+	}
+}
+
+func TestValidateActiveConcernTerminalRequiresResolvedAt(t *testing.T) {
+	for _, term := range []string{
+		models.ResolutionStatusResolvedStopCriteria,
+		models.ResolutionStatusEscalated,
+		models.ResolutionStatusExpiredUnresolved,
+	} {
+		c := validBaseActiveConcern()
+		c.ResolutionStatus = term
+		c.ResolvedAt = nil
+		if err := ValidateActiveConcern(c); err == nil {
+			t.Errorf("%s: expected error when resolved_at is missing", term)
+		}
+		// Set resolved_at before started_at — also rejected.
+		earlier := c.StartedAt.Add(-time.Minute)
+		c.ResolvedAt = &earlier
+		if err := ValidateActiveConcern(c); err == nil {
+			t.Errorf("%s: expected error when resolved_at < started_at", term)
+		}
+		// Valid case.
+		later := c.StartedAt.Add(time.Hour)
+		c.ResolvedAt = &later
+		if err := ValidateActiveConcern(c); err != nil {
+			t.Errorf("%s: expected pass with resolved_at >= started_at; got %v", term, err)
+		}
+	}
+}
+
+func TestValidateActiveConcernResolutionTransition(t *testing.T) {
+	// Legal
+	if err := ValidateActiveConcernResolutionTransition(
+		models.ResolutionStatusOpen, models.ResolutionStatusResolvedStopCriteria,
+	); err != nil {
+		t.Errorf("expected open→resolved_stop_criteria to pass; got %v", err)
+	}
+	if err := ValidateActiveConcernResolutionTransition(
+		models.ResolutionStatusOpen, models.ResolutionStatusEscalated,
+	); err != nil {
+		t.Errorf("expected open→escalated to pass; got %v", err)
+	}
+	if err := ValidateActiveConcernResolutionTransition(
+		models.ResolutionStatusOpen, models.ResolutionStatusExpiredUnresolved,
+	); err != nil {
+		t.Errorf("expected open→expired_unresolved to pass; got %v", err)
+	}
+	// Illegal: terminal source
+	if err := ValidateActiveConcernResolutionTransition(
+		models.ResolutionStatusExpiredUnresolved, models.ResolutionStatusOpen,
+	); err == nil {
+		t.Errorf("expected expired_unresolved→open to fail")
+	}
+	if err := ValidateActiveConcernResolutionTransition(
+		models.ResolutionStatusResolvedStopCriteria, models.ResolutionStatusEscalated,
+	); err == nil {
+		t.Errorf("expected resolved_stop_criteria→escalated to fail")
+	}
+	// Illegal: invalid current/target
+	if err := ValidateActiveConcernResolutionTransition("bogus", models.ResolutionStatusOpen); err == nil {
+		t.Errorf("expected invalid source to fail")
+	}
+	if err := ValidateActiveConcernResolutionTransition(models.ResolutionStatusOpen, "bogus"); err == nil {
+		t.Errorf("expected invalid target to fail")
+	}
+}

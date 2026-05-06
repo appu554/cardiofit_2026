@@ -88,6 +88,11 @@ const (
 	EventTypeMonitoringPlanActivated   = "monitoring_plan_activated"
 	EventTypeConsentGrantedOrWithdrawn = "consent_granted_or_withdrawn"
 	EventTypeCredentialVerifiedOrExpired = "credential_verified_or_expired"
+
+	// concern_expired_unresolved is registered as a system-bucket event
+	// type via IsSystemEventType so the FHIR mapper routes it to
+	// Communication. The constant lives in active_concern.go as
+	// models.EventTypeConcernExpiredUnresolved.
 )
 
 // IsValidEventType reports whether s is one of the recognised EventType values.
@@ -135,7 +140,8 @@ func IsSystemEventType(s string) bool {
 	case EventTypeRuleFire, EventTypeRecommendationSubmitted,
 		EventTypeRecommendationDecided, EventTypeMonitoringPlanActivated,
 		EventTypeConsentGrantedOrWithdrawn,
-		EventTypeCredentialVerifiedOrExpired:
+		EventTypeCredentialVerifiedOrExpired,
+		EventTypeConcernExpiredUnresolved:
 		return true
 	}
 	return false
