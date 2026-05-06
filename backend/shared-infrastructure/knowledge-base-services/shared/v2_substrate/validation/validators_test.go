@@ -296,3 +296,180 @@ func TestValidateObservationWeightPositive(t *testing.T) {
 		t.Errorf("expected error for weight=0; got nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Event validator
+// ---------------------------------------------------------------------------
+
+func validBaseEvent(eventType string) models.Event {
+	return models.Event{
+		ID:            uuid.New(),
+		EventType:     eventType,
+		OccurredAt:    time.Now().UTC(),
+		ResidentID:    uuid.New(),
+		ReportedByRef: uuid.New(),
+	}
+}
+
+func TestValidateEventUniversal_PassesWithMinimumFields(t *testing.T) {
+	e := validBaseEvent(models.EventTypeGPVisit) // no per-type rules
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass for GP_visit minimum; got %v", err)
+	}
+}
+
+func TestValidateEventUniversal_RejectsZeroResidentID(t *testing.T) {
+	e := validBaseEvent(models.EventTypeGPVisit)
+	e.ResidentID = uuid.Nil
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for zero resident_id")
+	}
+}
+
+func TestValidateEventUniversal_RejectsInvalidEventType(t *testing.T) {
+	e := validBaseEvent(models.EventTypeGPVisit)
+	e.EventType = "not_a_real_event"
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for invalid event_type")
+	}
+}
+
+func TestValidateEventUniversal_RejectsZeroOccurredAt(t *testing.T) {
+	e := validBaseEvent(models.EventTypeGPVisit)
+	e.OccurredAt = time.Time{}
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for zero occurred_at")
+	}
+}
+
+func TestValidateEventUniversal_RejectsZeroReportedByRef(t *testing.T) {
+	e := validBaseEvent(models.EventTypeGPVisit)
+	e.ReportedByRef = uuid.Nil
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for zero reported_by_ref")
+	}
+}
+
+func TestValidateEventUniversal_RejectsInvalidSeverity(t *testing.T) {
+	e := validBaseEvent(models.EventTypeGPVisit)
+	e.Severity = "critical"
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for invalid severity")
+	}
+}
+
+func TestValidateEventUniversal_RejectsInvalidStateMachine(t *testing.T) {
+	e := validBaseEvent(models.EventTypeRecommendationDecided)
+	e.TriggeredStateChanges = []models.TriggeredStateChange{
+		{StateMachine: "Bogus", StateChange: json.RawMessage(`{}`)},
+	}
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for invalid state_machine")
+	}
+}
+
+func TestValidateEventFall_RequiresSeverity(t *testing.T) {
+	e := validBaseEvent(models.EventTypeFall)
+	// no severity
+	e.WitnessedByRefs = []uuid.UUID{uuid.New()}
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for fall without severity")
+	}
+	e.Severity = models.EventSeverityModerate
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass once severity + witnessed_by_refs set; got %v", err)
+	}
+}
+
+func TestValidateEventFall_RequiresWitnessedOrDescription(t *testing.T) {
+	e := validBaseEvent(models.EventTypeFall)
+	e.Severity = models.EventSeverityMinor
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error for fall with no witnessed_by_refs and no description_structured")
+	}
+	// either alone passes
+	e.DescriptionStructured = json.RawMessage(`{"location":"bathroom"}`)
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass with description_structured only; got %v", err)
+	}
+	e.DescriptionStructured = nil
+	e.WitnessedByRefs = []uuid.UUID{uuid.New()}
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass with witnessed_by_refs only; got %v", err)
+	}
+}
+
+func TestValidateEventMedicationError_RequiresSeverityAndRelatedMed(t *testing.T) {
+	e := validBaseEvent(models.EventTypeMedicationError)
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error: missing severity + related_medication_uses")
+	}
+	e.Severity = models.EventSeverityMajor
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error: missing related_medication_uses")
+	}
+	e.RelatedMedicationUses = []uuid.UUID{uuid.New()}
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateEventAdverseDrugEvent_RequiresRelatedMed(t *testing.T) {
+	e := validBaseEvent(models.EventTypeAdverseDrugEvent)
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error: missing related_medication_uses")
+	}
+	e.RelatedMedicationUses = []uuid.UUID{uuid.New()}
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass once related_medication_uses set; got %v", err)
+	}
+}
+
+func TestValidateEventDeath_UniversalOnly(t *testing.T) {
+	e := validBaseEvent(models.EventTypeDeath)
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass for death with universal fields; got %v", err)
+	}
+}
+
+func TestValidateEventHospitalAdmission_RequiresSeverityAndDescription(t *testing.T) {
+	e := validBaseEvent(models.EventTypeHospitalAdmission)
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error: missing severity + description")
+	}
+	e.Severity = models.EventSeverityMajor
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error: missing description_structured")
+	}
+	e.DescriptionStructured = json.RawMessage(`{"facility":"acme"}`)
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateEventHospitalDischarge_RequiresSeverityAndDescription(t *testing.T) {
+	e := validBaseEvent(models.EventTypeHospitalDischarge)
+	e.Severity = models.EventSeverityMinor
+	if err := ValidateEvent(e); err == nil {
+		t.Errorf("expected error: missing description_structured")
+	}
+	e.DescriptionStructured = json.RawMessage(`{"summary":"stable"}`)
+	if err := ValidateEvent(e); err != nil {
+		t.Errorf("expected pass; got %v", err)
+	}
+}
+
+func TestValidateEventSystemEvent_UniversalOnly(t *testing.T) {
+	for _, tp := range []string{
+		models.EventTypeRuleFire,
+		models.EventTypeRecommendationSubmitted,
+		models.EventTypeMonitoringPlanActivated,
+		models.EventTypeConsentGrantedOrWithdrawn,
+		models.EventTypeCredentialVerifiedOrExpired,
+	} {
+		e := validBaseEvent(tp)
+		if err := ValidateEvent(e); err != nil {
+			t.Errorf("%s: expected pass with universal fields; got %v", tp, err)
+		}
+	}
+}
