@@ -252,6 +252,22 @@ func main() {
 		careIntensityHandlers := api.NewCareIntensityHandlers(careIntensityStore)
 		careIntensityHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
 		logger.Info("v2 care-intensity routes registered at /v2 (residents/:id/care-intensity, /current, /history)")
+
+		// Wave 2.5: per-domain capacity assessments (Layer 2 §2.5).
+		// Mounts CRUD endpoints under /v2 (POST /residents/:id/capacity,
+		// GET /residents/:id/capacity/current,
+		// GET /residents/:id/capacity/current/:domain,
+		// GET /residents/:id/capacity/history/:domain). The store writes
+		// the assessment + an EvidenceTrace node for every call; when
+		// Outcome=impaired AND Domain=medical_decisions it additionally
+		// emits a capacity_change Event and tags the EvidenceTrace node
+		// with state_machine=Consent. Layer 3's Consent state machine
+		// consumes that Event to re-evaluate consent paths. See
+		// migration 017 for the schema + capacity_current view.
+		capacityStore := storage.NewCapacityAssessmentStore(sqlDB, v2Store)
+		capacityHandlers := api.NewCapacityHandlers(capacityStore)
+		capacityHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+		logger.Info("v2 capacity routes registered at /v2 (residents/:id/capacity, /current[/:domain], /history/:domain)")
 		// Baseline-exclusion wiring: BaselineStore.buildObsQuery now
 		// joins against active_concerns directly via SQL when a config's
 		// ExcludeDuringActiveConcerns list is non-empty. No additional
