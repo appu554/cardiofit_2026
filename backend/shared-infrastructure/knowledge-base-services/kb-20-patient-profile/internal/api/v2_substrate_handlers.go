@@ -98,6 +98,9 @@ func (h *V2SubstrateHandlers) RegisterRoutes(g *gin.RouterGroup) {
 	g.GET("/evidence-trace/recommendations/:id/lineage", h.getRecommendationLineage)
 	g.GET("/evidence-trace/observations/:id/consequences", h.getObservationConsequences)
 	g.GET("/residents/:resident_id/reasoning-window", h.getReasoningWindow)
+
+	// Wave 5.3 — FHIR egress for one node (Provenance OR AuditEvent).
+	g.GET("/evidence-trace/:id/fhir", h.getEvidenceTraceFHIR)
 }
 
 // maxEvidenceTraceDepth is the server-side cap on traversal depth, to
