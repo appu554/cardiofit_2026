@@ -29,14 +29,30 @@ import (
 
 // BaselineStore implements delta.BaselineStateStore against the
 // baseline_state Postgres table (migration 013).
+//
+// Wave 2.2 adds an optional cfgStore: when non-nil, RecomputeAndUpsert(Tx)
+// consults it for per-observation-type parameters (window days, morning-
+// only filter, velocity flag, etc.) per Layer 2 §2.2. When nil, every
+// observation type falls back to delta.DefaultConfig (14-day window, no
+// filters), preserving the Wave 2.1 behaviour byte-for-byte.
 type BaselineStore struct {
-	db *sql.DB
+	db       *sql.DB
+	cfgStore delta.BaselineConfigStore
 }
 
 // NewBaselineStore wires a *sql.DB into the BaselineStateStore contract.
 // The caller owns the database lifecycle.
 func NewBaselineStore(db *sql.DB) *BaselineStore {
 	return &BaselineStore{db: db}
+}
+
+// WithConfigStore attaches a delta.BaselineConfigStore so the recompute
+// path consults per-observation-type parameters. Returns the receiver
+// for fluent wiring. Callers that don't wire a config store get the
+// Wave 2.1 default (14-day window, no filters).
+func (s *BaselineStore) WithConfigStore(cs delta.BaselineConfigStore) *BaselineStore {
+	s.cfgStore = cs
+	return s
 }
 
 // dbExec abstracts *sql.DB and *sql.Tx so the same SELECT/INSERT helpers
@@ -188,10 +204,21 @@ func upsertBaselineRow(ctx context.Context, exec dbExec, residentID uuid.UUID, v
 // outside any caller-managed transaction; suitable for batch recomputes
 // or operator-driven backfills.
 //
+// lookbackDays is treated as an override: pass 0 to use the
+// per-observation-type config (or DefaultConfig if no config row
+// exists); pass a positive integer to override the config's window.
+//
 // For the production observation-insert path use RecomputeAndUpsertTx so
 // the recompute joins the observation INSERT in one atomic unit.
 func (s *BaselineStore) RecomputeAndUpsert(ctx context.Context, residentID uuid.UUID, vitalTypeKey string, lookbackDays int) (*delta.Baseline, error) {
-	return recomputeAndUpsertWith(ctx, s.db, residentID, vitalTypeKey, lookbackDays)
+	cfg, err := s.resolveConfig(ctx, vitalTypeKey)
+	if err != nil {
+		return nil, err
+	}
+	if lookbackDays > 0 {
+		cfg.WindowDays = lookbackDays
+	}
+	return recomputeAndUpsertWith(ctx, s.db, residentID, vitalTypeKey, cfg)
 }
 
 // RecomputeAndUpsertTx is the transactional variant: it reads observations
@@ -200,47 +227,103 @@ func (s *BaselineStore) RecomputeAndUpsert(ctx context.Context, residentID uuid.
 // inside V2SubstrateStore.UpsertObservation) commits or rolls back as a
 // single Postgres transaction.
 //
+// Wave 2.2: the lookback window and per-type filters now come from the
+// BaselineConfigStore (or DefaultConfig if unwired/unknown). Callers no
+// longer pass a lookbackDays parameter; per-type overrides happen via
+// the baseline_configs table.
+//
 // CRITICAL: callers MUST already hold the tx; this method does not begin
 // or commit. It returns the freshly-persisted Baseline (or nil with
 // delta.ErrNoBaseline if the resulting row is insufficient_data).
-func (s *BaselineStore) RecomputeAndUpsertTx(ctx context.Context, tx *sql.Tx, residentID uuid.UUID, vitalTypeKey string, lookbackDays int) (*delta.Baseline, error) {
-	return recomputeAndUpsertWith(ctx, tx, residentID, vitalTypeKey, lookbackDays)
+func (s *BaselineStore) RecomputeAndUpsertTx(ctx context.Context, tx *sql.Tx, residentID uuid.UUID, vitalTypeKey string) (*delta.Baseline, error) {
+	cfg, err := s.resolveConfig(ctx, vitalTypeKey)
+	if err != nil {
+		return nil, err
+	}
+	return recomputeAndUpsertWith(ctx, tx, residentID, vitalTypeKey, cfg)
 }
 
-// recomputeAndUpsertWith is the shared engine. It runs identical SQL
-// regardless of whether `exec` is a *sql.DB (standalone) or *sql.Tx
-// (transactional); this is the entire point of the dbExec abstraction.
-func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UUID, vitalTypeKey string, lookbackDays int) (*delta.Baseline, error) {
-	if lookbackDays <= 0 {
-		lookbackDays = delta.DefaultBaselineLookbackDays
-	}
+// resolveConfig returns the BaselineConfig for vitalTypeKey, falling back
+// to delta.DefaultConfig when no cfgStore is wired or no row matches.
+// Errors other than ErrBaselineConfigNotFound are propagated.
+func (s *BaselineStore) resolveConfig(ctx context.Context, vitalTypeKey string) (delta.BaselineConfig, error) {
+	return delta.ResolveConfig(ctx, s.cfgStore, vitalTypeKey)
+}
 
-	// Pull observations within the lookback window. Mirror the
-	// vitalTypeKey() precedence in V2SubstrateStore: match against
-	// loinc_code OR snomed_code OR kind. Cap to 200 rows to bound the
-	// per-insert critical-section cost; clinical baselines have far
-	// fewer-than-200 readings in any 14-day window so this is purely
-	// defence-in-depth.
-	const obsQuery = `
+// buildObsQuery assembles the observation SELECT used by the recompute,
+// applying per-config filters:
+//   - cfg.WindowDays bounds the lookback interval
+//   - cfg.MorningOnly restricts to 06:00-11:00 Australia/Sydney local time
+//   - cfg.ExcludeDuringActiveConcerns is a Wave 2.3 deferred filter; see
+//     the inline TODO below.
+//
+// Returns the SQL string and the positional argument slice. Keeping the
+// builder pure (no DB access) makes the SQL trivially reviewable in tests.
+func buildObsQuery(vitalTypeKey string, residentArg interface{}, cfg delta.BaselineConfig) (string, []interface{}) {
+	// Base predicates: matched by resident, vital type key (LOINC OR
+	// SNOMED OR kind), non-NULL value, and within the lookback window.
+	q := `
 		SELECT id, value
 		  FROM observations
 		 WHERE resident_id = $1
 		   AND (loinc_code = $2 OR snomed_code = $2 OR kind = $2)
 		   AND value IS NOT NULL
-		   AND observed_at >= NOW() - ($3::int || ' days')::interval
+		   AND observed_at >= NOW() - ($3::int || ' days')::interval`
+	args := []interface{}{residentArg, vitalTypeKey, cfg.WindowDays}
+
+	if cfg.MorningOnly {
+		// Australia/Sydney avoids DST drift for AM filters: 06:00-11:00
+		// local maps deterministically through the Postgres tz stack.
+		q += `
+		   AND EXTRACT(HOUR FROM observed_at AT TIME ZONE 'Australia/Sydney') BETWEEN 6 AND 10`
+	}
+
+	// TODO(wave-2.3): once active_concerns lands, exclude observations
+	// whose observed_at falls within an active concern window for any
+	// type listed in cfg.ExcludeDuringActiveConcerns. The expected
+	// shape is:
+	//   AND NOT EXISTS (
+	//       SELECT 1 FROM active_concerns ac
+	//        WHERE ac.resident_id = observations.resident_id
+	//          AND ac.type = ANY($N)
+	//          AND observations.observed_at BETWEEN ac.started_at AND COALESCE(ac.ended_at, NOW())
+	//   )
+	// For Wave 2.2 the ExcludeDuringActiveConcerns list is persisted but
+	// not yet enforced — the active_concerns table does not exist yet.
+
+	q += `
 		 ORDER BY observed_at DESC
 		 LIMIT 200`
+	return q, args
+}
 
-	rows, err := exec.QueryContext(ctx, obsQuery, residentID, vitalTypeKey, lookbackDays)
+// recomputeAndUpsertWith is the shared engine. It runs identical SQL
+// regardless of whether `exec` is a *sql.DB (standalone) or *sql.Tx
+// (transactional); this is the entire point of the dbExec abstraction.
+func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UUID, vitalTypeKey string, cfg delta.BaselineConfig) (*delta.Baseline, error) {
+	if cfg.WindowDays <= 0 {
+		cfg.WindowDays = delta.DefaultBaselineLookbackDays
+	}
+	if cfg.MinObsForHighConfidence <= 0 {
+		cfg.MinObsForHighConfidence = 7
+	}
+
+	obsQuery, obsArgs := buildObsQuery(vitalTypeKey, residentID, cfg)
+
+	// Pull observations within the (possibly filtered) lookback window.
+	// Cap to 200 rows to bound the per-insert critical-section cost;
+	// clinical baselines have far fewer-than-200 readings in any 90-day
+	// window so this is defence-in-depth.
+	rows, err := exec.QueryContext(ctx, obsQuery, obsArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("baseline recompute query: %w", err)
 	}
 	defer rows.Close()
 
 	var (
-		values        []float64
-		mostRecentID  uuid.NullUUID
-		seenFirstRow  bool
+		values       []float64
+		mostRecentID uuid.NullUUID
+		seenFirstRow bool
 	)
 	for rows.Next() {
 		var (
@@ -266,7 +349,7 @@ func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UU
 	if n < delta.MinSamplesForBaseline {
 		row := baselineRow{
 			BaselineValue:      sql.NullFloat64{}, // NULL
-			BaselineWindowDays: lookbackDays,
+			BaselineWindowDays: cfg.WindowDays,
 			NObservations:      n,
 			IQR:                sql.NullFloat64{},
 			Confidence:         delta.BaselineConfidenceInsufficientData,
@@ -281,11 +364,11 @@ func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UU
 	pcts := delta.Percentiles(values, 0.25, 0.5, 0.75)
 	q1, median, q3 := pcts[0], pcts[1], pcts[2]
 	iqr := q3 - q1
-	confidence := delta.ClassifyBaselineConfidence(n, iqr, median)
+	confidence := classifyWithConfig(n, iqr, median, cfg)
 
 	row := baselineRow{
 		BaselineValue:      sql.NullFloat64{Float64: median, Valid: true},
-		BaselineWindowDays: lookbackDays,
+		BaselineWindowDays: cfg.WindowDays,
 		NObservations:      n,
 		IQR:                sql.NullFloat64{Float64: iqr, Valid: true},
 		Confidence:         confidence,
@@ -295,12 +378,50 @@ func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UU
 		return nil, err
 	}
 
-	return &delta.Baseline{
+	bl := &delta.Baseline{
 		BaselineValue: median,
 		StdDev:        iqr / 1.349, // normal-distribution approximation; matches BaselineStore.Get.
 		SampleSize:    n,
 		ComputedAt:    time.Now().UTC(),
-	}, nil
+	}
+	if cfg.FlagVelocity {
+		bl.VelocityFlag = computeVelocityFlag(values)
+	}
+	return bl, nil
+}
+
+// classifyWithConfig wraps delta.ClassifyBaselineConfidence with the
+// per-config MinObsForHighConfidence override. The default classifier
+// uses n>=7 for the HIGH tier; configs may raise the bar (e.g. systolic
+// BP wants n>=21). When the override applies and n falls below it,
+// the result is downgraded one tier (HIGH → MEDIUM).
+func classifyWithConfig(n int, iqr, median float64, cfg delta.BaselineConfig) delta.BaselineConfidence {
+	base := delta.ClassifyBaselineConfidence(n, iqr, median)
+	if cfg.MinObsForHighConfidence > 7 && base == delta.BaselineConfidenceHigh && n < cfg.MinObsForHighConfidence {
+		return delta.BaselineConfidenceMedium
+	}
+	return base
+}
+
+// computeVelocityFlag returns true when the values series exhibits a
+// ≥VelocityDeclineThreshold (20%) decline over its observed range.
+// Values are passed in observed_at-DESC order (most recent first), so
+// the "old" anchor is the last element and the "new" anchor is the first.
+//
+// Returns false for n<2 or zero/negative anchor (cannot compute a ratio).
+// The compute is intentionally conservative: it operates on the same
+// values the recompute already pulled, so it costs zero extra DB I/O.
+func computeVelocityFlag(values []float64) bool {
+	if len(values) < 2 {
+		return false
+	}
+	newest := values[0]
+	oldest := values[len(values)-1]
+	if oldest <= 0 {
+		return false
+	}
+	decline := (oldest - newest) / oldest
+	return decline >= delta.VelocityDeclineThreshold
 }
 
 // Compile-time interface assertion.

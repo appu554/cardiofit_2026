@@ -200,9 +200,19 @@ func main() {
 		// Provider with a kb-26 client. The transactional recompute path
 		// (BaselineStore.RecomputeAndUpsertTx) stays here because it must
 		// be co-located with the observations table.
-		baselineStore := storage.NewBaselineStore(sqlDB)
+		// Wave 2.2: per-observation-type baseline configuration. The
+		// BaselineConfigStore reads/writes the baseline_configs table
+		// (migration 014) and parameterises the recompute (window days,
+		// morning-only filter, velocity flagging, etc.) per Layer 2 §2.2.
+		// When no row matches a vital type, the recompute falls back to
+		// delta.DefaultConfig (14-day window, no filters) — i.e. exactly
+		// the Wave 2.1 behaviour.
+		baselineConfigStore := storage.NewBaselineConfigStore(sqlDB)
+		baselineStore := storage.NewBaselineStore(sqlDB).WithConfigStore(baselineConfigStore)
 		v2Store.SetBaselineStore(baselineStore)
-		v2Store.SetBaselineProvider(delta.NewPersistentBaselineProvider(baselineStore))
+		v2Store.SetBaselineProvider(
+			delta.NewPersistentBaselineProvider(baselineStore).WithConfigStore(baselineConfigStore),
+		)
 		v2Handlers := api.NewV2SubstrateHandlers(v2Store)
 		v2Handlers.RegisterRoutes(httpServer.Router.Group("/v2"))
 		logger.Info("v2 substrate routes registered at /v2 (residents, persons, roles, medicine_uses, observations)")

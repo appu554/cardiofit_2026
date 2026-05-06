@@ -976,11 +976,12 @@ func (s *V2SubstrateStore) UpsertObservation(ctx context.Context, o models.Obser
 	// and the recompute SQL would be a wasted round-trip. Also skipped
 	// when no BaselineStore is wired (legacy/in-memory test wiring).
 	if s.baselineStore != nil && o.Value != nil && o.Kind != models.ObservationKindBehavioural {
-		lookback := s.baselineLookback
-		if lookback <= 0 {
-			lookback = delta.DefaultBaselineLookbackDays
-		}
-		if _, err := s.baselineStore.RecomputeAndUpsertTx(ctx, tx, o.ResidentID, vitalTypeKey(o), lookback); err != nil {
+		// Wave 2.2: lookback now comes from the BaselineConfigStore via
+		// the recompute path; the per-store baselineLookback override
+		// applies only via SetBaselineLookbackDays (legacy/test wiring)
+		// and is no longer plumbed through here.
+		_ = s.baselineLookback // reserved for future per-store overrides
+		if _, err := s.baselineStore.RecomputeAndUpsertTx(ctx, tx, o.ResidentID, vitalTypeKey(o)); err != nil {
 			// delta.ErrNoBaseline is NOT an error here — it just means
 			// the running window doesn't have enough samples yet. The
 			// baseline_state row was still upserted with confidence=
