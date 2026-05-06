@@ -155,13 +155,21 @@ func (s *BaselineStore) Upsert(ctx context.Context, residentID uuid.UUID, vitalT
 // baselineRow captures the wire-format of the baseline_state row for the
 // shared upsert helper. Keeps the SQL in one place across direct Upsert,
 // recompute, and Tx-recompute call sites.
+//
+// Wave 3.4 added IsTrending, ConsecutiveSameDirection, TrajectoryDirection
+// to persist the TrajectorySnapshot computed alongside the baseline; the
+// fields default to zero values for callers (direct Upsert, tests) that
+// do not compute trajectory, preserving the Wave 2.x behaviour.
 type baselineRow struct {
-	BaselineValue      sql.NullFloat64
-	BaselineWindowDays int
-	NObservations      int
-	IQR                sql.NullFloat64
-	Confidence         delta.BaselineConfidence
-	LastObservationID  uuid.NullUUID
+	BaselineValue            sql.NullFloat64
+	BaselineWindowDays       int
+	NObservations            int
+	IQR                      sql.NullFloat64
+	Confidence               delta.BaselineConfidence
+	LastObservationID        uuid.NullUUID
+	IsTrending               bool
+	ConsecutiveSameDirection int
+	TrajectoryDirection      string
 }
 
 func nullableFloat(v float64, valid bool) sql.NullFloat64 {
@@ -175,21 +183,26 @@ func upsertBaselineRow(ctx context.Context, exec dbExec, residentID uuid.UUID, v
 	const q = `
 		INSERT INTO baseline_state
 			(resident_id, vital_type_key, baseline_value, baseline_window_days,
-			 n_observations, iqr, confidence, last_updated_at, last_observation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+			 n_observations, iqr, confidence, last_updated_at, last_observation_id,
+			 is_trending, consecutive_same_direction_count, trajectory_direction)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8, $9, $10, $11)
 		ON CONFLICT (resident_id, vital_type_key) DO UPDATE SET
-			baseline_value       = EXCLUDED.baseline_value,
-			baseline_window_days = EXCLUDED.baseline_window_days,
-			n_observations       = EXCLUDED.n_observations,
-			iqr                  = EXCLUDED.iqr,
-			confidence           = EXCLUDED.confidence,
-			last_updated_at      = NOW(),
-			last_observation_id  = EXCLUDED.last_observation_id`
+			baseline_value                   = EXCLUDED.baseline_value,
+			baseline_window_days             = EXCLUDED.baseline_window_days,
+			n_observations                   = EXCLUDED.n_observations,
+			iqr                              = EXCLUDED.iqr,
+			confidence                       = EXCLUDED.confidence,
+			last_updated_at                  = NOW(),
+			last_observation_id              = EXCLUDED.last_observation_id,
+			is_trending                      = EXCLUDED.is_trending,
+			consecutive_same_direction_count = EXCLUDED.consecutive_same_direction_count,
+			trajectory_direction             = EXCLUDED.trajectory_direction`
 	if _, err := exec.ExecContext(ctx, q,
 		residentID, vitalTypeKey,
 		r.BaselineValue, r.BaselineWindowDays,
 		r.NObservations, r.IQR, string(r.Confidence),
 		r.LastObservationID,
+		r.IsTrending, r.ConsecutiveSameDirection, r.TrajectoryDirection,
 	); err != nil {
 		return fmt.Errorf("baseline_state upsert: %w", err)
 	}
@@ -391,13 +404,22 @@ func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UU
 	iqr := q3 - q1
 	confidence := classifyWithConfig(n, iqr, median, cfg)
 
+	// Wave 3.4: compute trajectory snapshot on the same value slice the
+	// percentile / classifier consume — zero extra DB I/O. The values
+	// are in observed_at-DESC order (matches DetectTrajectory's
+	// documented input convention).
+	traj := delta.DetectTrajectory(values)
+
 	row := baselineRow{
-		BaselineValue:      sql.NullFloat64{Float64: median, Valid: true},
-		BaselineWindowDays: cfg.WindowDays,
-		NObservations:      n,
-		IQR:                sql.NullFloat64{Float64: iqr, Valid: true},
-		Confidence:         confidence,
-		LastObservationID:  mostRecentID,
+		BaselineValue:            sql.NullFloat64{Float64: median, Valid: true},
+		BaselineWindowDays:       cfg.WindowDays,
+		NObservations:            n,
+		IQR:                      sql.NullFloat64{Float64: iqr, Valid: true},
+		Confidence:               confidence,
+		LastObservationID:        mostRecentID,
+		IsTrending:               traj.IsTrending,
+		ConsecutiveSameDirection: traj.ConsecutiveSameDirection,
+		TrajectoryDirection:      traj.Direction,
 	}
 	if err := upsertBaselineRow(ctx, exec, residentID, vitalTypeKey, row); err != nil {
 		return nil, err
@@ -411,8 +433,33 @@ func recomputeAndUpsertWith(ctx context.Context, exec dbExec, residentID uuid.UU
 	}
 	if cfg.FlagVelocity {
 		bl.VelocityFlag = computeVelocityFlag(values)
+		// Wave 3.4: write the velocity_flag onto the most recent
+		// observation row so downstream rules can filter
+		// observations_v2 directly without joining baseline_state.
+		// "high" reflects the spec's eGFR-decline interpretation
+		// (drop in renal function flagged as a high-severity
+		// velocity event); the schema also allows "low" / "normal"
+		// for future bidirectional configs.
+		if bl.VelocityFlag && mostRecentID.Valid {
+			if err := updateObservationVelocityFlag(ctx, exec, mostRecentID.UUID, "high"); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return bl, nil
+}
+
+// updateObservationVelocityFlag sets observations.velocity_flag for the
+// supplied observation id. Idempotent (UPDATE is a no-op when the
+// existing column already matches), and runs through the same exec
+// (db | tx) the recompute uses so it lives inside the caller's atomic
+// unit when called from RecomputeAndUpsertTx.
+func updateObservationVelocityFlag(ctx context.Context, exec dbExec, observationID uuid.UUID, flag string) error {
+	const q = `UPDATE observations SET velocity_flag = $2 WHERE id = $1`
+	if _, err := exec.ExecContext(ctx, q, observationID, flag); err != nil {
+		return fmt.Errorf("observations.velocity_flag update: %w", err)
+	}
+	return nil
 }
 
 // classifyWithConfig wraps delta.ClassifyBaselineConfidence with the
