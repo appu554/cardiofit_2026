@@ -230,6 +230,56 @@ type ConcernTriggerEntry struct {
 	DefaultWindowHours int
 }
 
+// CareIntensityStore is the canonical storage contract for CareIntensity
+// entities (Wave 2.4 of Layer 2 substrate plan; Layer 2 doc §2.4).
+// kb-20-patient-profile is the only KB expected to implement this.
+//
+// The history is append-only — never UPDATE rows. New transitions are
+// recorded via fresh INSERT calls; the latest row by EffectiveDate per
+// ResidentRef is the current tag (queried via the care_intensity_current
+// view).
+//
+// CreateCareIntensityTransition is the orchestration entry point: it
+// runs the pure clinical_state.CareIntensityEngine, persists the new
+// CareIntensity row, the transition Event, and one EvidenceTrace node
+// per cascade (linked via derived_from edges to the transition Event's
+// EvidenceTrace node). Implementations MUST run all writes in a single
+// transaction so the substrate never observes a partial transition.
+type CareIntensityStore interface {
+	// CreateCareIntensityTransition records a transition from the resident's
+	// current tag (loaded inside the call) to `incoming.Tag`. Returns the
+	// persisted CareIntensity row, the persisted transition Event, and the
+	// cascade hints the engine produced (in the same order the EvidenceTrace
+	// nodes were written).
+	CreateCareIntensityTransition(ctx context.Context, incoming models.CareIntensity) (*CareIntensityTransitionResult, error)
+	// GetCurrentCareIntensity returns the latest tag for residentRef, or
+	// ErrNotFound when the resident has no history rows yet.
+	GetCurrentCareIntensity(ctx context.Context, residentRef uuid.UUID) (*models.CareIntensity, error)
+	// ListCareIntensityHistory returns the full history for residentRef,
+	// ordered by EffectiveDate DESC (newest first). Empty slice when the
+	// resident has no history rows.
+	ListCareIntensityHistory(ctx context.Context, residentRef uuid.UUID) ([]models.CareIntensity, error)
+}
+
+// CareIntensityTransitionResult is the return shape from
+// CareIntensityStore.CreateCareIntensityTransition. It bundles the
+// persisted CareIntensity row, the transition Event, and the cascade hints
+// so callers can return all three to the REST client in a single payload.
+type CareIntensityTransitionResult struct {
+	CareIntensity *models.CareIntensity `json:"care_intensity"`
+	Event         *models.Event         `json:"event"`
+	Cascades      []CareIntensityCascadeHint `json:"cascades"`
+}
+
+// CareIntensityCascadeHint mirrors clinical_state.CareIntensityCascade in
+// the interfaces package to avoid an import cycle (clinical_state already
+// imports models; interfaces is upstream of both clinical_state and the
+// kb-20 storage layer that produces these hints).
+type CareIntensityCascadeHint struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+}
+
 // EventStore is the canonical storage contract for Event entities.
 // kb-20-patient-profile is the only KB expected to implement this. List
 // methods take limit/offset; the implementation may apply a maximum cap
