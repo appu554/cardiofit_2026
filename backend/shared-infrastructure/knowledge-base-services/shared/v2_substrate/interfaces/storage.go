@@ -5,6 +5,7 @@ package interfaces
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -89,6 +90,88 @@ type EvidenceTraceStore interface {
 	// TraceBackward is the symmetric reverse traversal: nodes reachable by
 	// following incoming edges (ancestors), capped at maxDepth hops.
 	TraceBackward(ctx context.Context, startNode uuid.UUID, maxDepth int) ([]models.EvidenceTraceNode, error)
+}
+
+// IdentityMapping is the persistence-layer row for an
+// identifier-kind/value -> Resident mapping. The pure matcher package
+// (shared/v2_substrate/identity) deals in MatchResult; the storage
+// layer persists the chosen mapping as one of these rows so future
+// inbound identifiers reuse the same Resident.
+//
+// IdentifierKind is constrained at the DB level to a closed set
+// ({ihi, medicare, dva, facility_internal, hospital_mrn,
+// dispensing_pharmacy, gp_system}); see migration 010.
+type IdentityMapping struct {
+	ID              uuid.UUID  `json:"id"`
+	IdentifierKind  string     `json:"identifier_kind"`
+	IdentifierValue string     `json:"identifier_value"`
+	ResidentRef     uuid.UUID  `json:"resident_ref"`
+	Confidence      string     `json:"confidence"` // high|medium|low
+	MatchPath       string     `json:"match_path"`
+	Source          string     `json:"source"`
+	VerifiedBy      *uuid.UUID `json:"verified_by,omitempty"`
+	VerifiedAt      *time.Time `json:"verified_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+}
+
+// IdentityMappingStore is the canonical storage contract for the
+// identity_mappings table. kb-20-patient-profile is the only KB
+// expected to implement this.
+type IdentityMappingStore interface {
+	// InsertIdentityMapping writes (or updates by the unique key
+	// (identifier_kind, identifier_value, resident_ref)) one mapping.
+	// Returns the persisted row.
+	InsertIdentityMapping(ctx context.Context, m IdentityMapping) (*IdentityMapping, error)
+	// ListIdentityMappingsByResident returns every mapping pointing at
+	// resident_ref, newest-first. Used by the manual-override re-route
+	// to find rows that need re-pointing.
+	ListIdentityMappingsByResident(ctx context.Context, residentRef uuid.UUID) ([]IdentityMapping, error)
+	// ReassignIdentityMappingsByResidentSince repoints every mapping
+	// whose resident_ref == fromRef AND created_at >= since onto toRef.
+	// Returns the count of rows affected. Used by ResolveIdentityReview
+	// for the post-hoc re-routing requirement at Layer 2 §3.3.
+	ReassignIdentityMappingsByResidentSince(ctx context.Context, fromRef, toRef uuid.UUID, since time.Time) (int, error)
+}
+
+// IdentityReviewQueueEntry is the persistence-layer row for the
+// identity_review_queue table. Low-confidence and no-match decisions
+// land here pending human verification.
+type IdentityReviewQueueEntry struct {
+	ID                   uuid.UUID       `json:"id"`
+	IncomingIdentifier   json.RawMessage `json:"incoming_identifier"` // serialized identity.IncomingIdentifier
+	CandidateResidentRefs []uuid.UUID    `json:"candidate_resident_refs"`
+	BestCandidate        *uuid.UUID      `json:"best_candidate,omitempty"`
+	BestDistance         *int            `json:"best_distance,omitempty"`
+	MatchPath            string          `json:"match_path"`
+	Confidence           string          `json:"confidence"` // low|none
+	Source               string          `json:"source"`
+	Status               string          `json:"status"` // pending|resolved|rejected
+	ResolvedResidentRef  *uuid.UUID      `json:"resolved_resident_ref,omitempty"`
+	ResolvedBy           *uuid.UUID      `json:"resolved_by,omitempty"`
+	ResolvedAt           *time.Time      `json:"resolved_at,omitempty"`
+	ResolutionNote       string          `json:"resolution_note,omitempty"`
+	EvidenceTraceNodeRef *uuid.UUID      `json:"evidence_trace_node_ref,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+}
+
+// IdentityReviewQueueStore is the canonical storage contract for the
+// identity_review_queue table. kb-20-patient-profile is the only KB
+// expected to implement this.
+type IdentityReviewQueueStore interface {
+	// InsertIdentityReviewQueueEntry creates a new pending entry. The
+	// caller is responsible for setting Confidence, MatchPath,
+	// IncomingIdentifier, BestCandidate/BestDistance/Candidates, and
+	// EvidenceTraceNodeRef before calling.
+	InsertIdentityReviewQueueEntry(ctx context.Context, e IdentityReviewQueueEntry) (*IdentityReviewQueueEntry, error)
+	// GetIdentityReviewQueueEntry reads one entry by id.
+	GetIdentityReviewQueueEntry(ctx context.Context, id uuid.UUID) (*IdentityReviewQueueEntry, error)
+	// ListIdentityReviewQueue paginates entries filtered by status
+	// (empty string -> any status), newest-first.
+	ListIdentityReviewQueue(ctx context.Context, status string, limit, offset int) ([]IdentityReviewQueueEntry, error)
+	// UpdateIdentityReviewQueueEntryResolution marks an entry resolved
+	// (or rejected when resolvedRef == uuid.Nil) and records the
+	// reviewer + note + resolved_at = NOW(). Returns the updated row.
+	UpdateIdentityReviewQueueEntryResolution(ctx context.Context, id uuid.UUID, status string, resolvedRef *uuid.UUID, resolvedBy uuid.UUID, note string) (*IdentityReviewQueueEntry, error)
 }
 
 // EventStore is the canonical storage contract for Event entities.
