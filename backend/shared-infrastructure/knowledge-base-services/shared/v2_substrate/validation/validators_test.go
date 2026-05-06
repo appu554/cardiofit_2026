@@ -473,3 +473,125 @@ func TestValidateEventSystemEvent_UniversalOnly(t *testing.T) {
 		}
 	}
 }
+
+// ----------------------------------------------------------------------------
+// EvidenceTraceNode validation
+// ----------------------------------------------------------------------------
+
+func validBaseEvidenceTraceNode() models.EvidenceTraceNode {
+	now := time.Now().UTC()
+	return models.EvidenceTraceNode{
+		ID:              uuid.New(),
+		StateMachine:    models.EvidenceTraceStateMachineRecommendation,
+		StateChangeType: "draft -> submitted",
+		RecordedAt:      now,
+		OccurredAt:      now,
+	}
+}
+
+func TestValidateEvidenceTraceNode_Universal(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	if err := ValidateEvidenceTraceNode(n); err != nil {
+		t.Errorf("expected pass with universal fields; got %v", err)
+	}
+}
+
+func TestValidateEvidenceTraceNode_RejectsInvalidStateMachine(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.StateMachine = "Other"
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for invalid state_machine")
+	}
+}
+
+func TestValidateEvidenceTraceNode_RequiresStateChangeType(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.StateChangeType = ""
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for missing state_change_type")
+	}
+}
+
+func TestValidateEvidenceTraceNode_RequiresRecordedAt(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.RecordedAt = time.Time{}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for zero recorded_at")
+	}
+}
+
+func TestValidateEvidenceTraceNode_RequiresOccurredAt(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.OccurredAt = time.Time{}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for zero occurred_at")
+	}
+}
+
+func TestValidateEvidenceTraceNode_InputsRequireType(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.Inputs = []models.TraceInput{
+		{InputType: "", InputRef: uuid.New(), RoleInDecision: models.TraceRoleInDecisionPrimaryEvidence},
+	}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for empty input_type")
+	}
+}
+
+func TestValidateEvidenceTraceNode_InputsRequireRef(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.Inputs = []models.TraceInput{
+		{InputType: models.TraceInputTypeObservation, InputRef: uuid.Nil, RoleInDecision: models.TraceRoleInDecisionPrimaryEvidence},
+	}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for zero input_ref")
+	}
+}
+
+func TestValidateEvidenceTraceNode_InputsValidateRoleInDecision(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.Inputs = []models.TraceInput{
+		{InputType: models.TraceInputTypeObservation, InputRef: uuid.New(), RoleInDecision: "primary"},
+	}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for invalid role_in_decision (must be primary_evidence)")
+	}
+}
+
+func TestValidateEvidenceTraceNode_OutputsRequireFields(t *testing.T) {
+	n := validBaseEvidenceTraceNode()
+	n.Outputs = []models.TraceOutput{{OutputType: "", OutputRef: uuid.New()}}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for empty output_type")
+	}
+	n.Outputs = []models.TraceOutput{{OutputType: "Recommendation", OutputRef: uuid.Nil}}
+	if err := ValidateEvidenceTraceNode(n); err == nil {
+		t.Error("expected error for zero output_ref")
+	}
+}
+
+func TestValidateEvidenceTraceNode_AllowsNoResidentRef(t *testing.T) {
+	// System-only node (rule_fire on global config, credential check) has no resident.
+	n := validBaseEvidenceTraceNode()
+	n.StateMachine = models.EvidenceTraceStateMachineAuthorisation
+	n.ResidentRef = nil
+	if err := ValidateEvidenceTraceNode(n); err != nil {
+		t.Errorf("expected pass for system-only node; got %v", err)
+	}
+}
+
+func TestValidateEvidenceTraceNode_AcceptsAllStateMachines(t *testing.T) {
+	for _, sm := range []string{
+		models.EvidenceTraceStateMachineAuthorisation,
+		models.EvidenceTraceStateMachineRecommendation,
+		models.EvidenceTraceStateMachineMonitoring,
+		models.EvidenceTraceStateMachineClinicalState,
+		models.EvidenceTraceStateMachineConsent,
+	} {
+		n := validBaseEvidenceTraceNode()
+		n.StateMachine = sm
+		if err := ValidateEvidenceTraceNode(n); err != nil {
+			t.Errorf("%s: expected pass; got %v", sm, err)
+		}
+	}
+}
