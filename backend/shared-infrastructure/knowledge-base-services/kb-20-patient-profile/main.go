@@ -20,6 +20,7 @@ import (
 	"kb-patient-profile/internal/metrics"
 	"kb-patient-profile/internal/models"
 	"kb-patient-profile/internal/services"
+	"kb-patient-profile/internal/storage"
 	"kb-patient-profile/pkg/resilience"
 )
 
@@ -176,6 +177,24 @@ func main() {
 	// when the patient has a recent cgm_period_reports row, or
 	// HasCGM=false + clean fallback when they don't.
 	httpServer.SetKB26CGMFetcher(newKB26CGMFetcherAdapter(kb26Client, logger))
+
+	// V2 substrate routes (milestone 1B-β.1). Mounted at /v2 alongside the
+	// existing /api/v1 routes; opt-in and non-breaking.
+	if sqlDB, err := db.DB.DB(); err != nil {
+		logger.Warn("v2 substrate routes not registered: failed to acquire *sql.DB",
+			zap.Error(err))
+	} else {
+		v2Store := storage.NewV2SubstrateStoreWithDB(sqlDB)
+		// Wire delta-on-write BaselineProvider. InMemoryBaselineProvider is the
+		// MVP stub — empty by default, so every UpsertObservation will record
+		// Delta.Flag=no_baseline until either (a) tests/integration code calls
+		// Seed(), or (b) this is replaced with a kb-26 AcuteRepository adapter.
+		// TODO(kb-26-adapter): swap InMemoryBaselineProvider for a kb-26 client.
+		v2Store.SetBaselineProvider(storage.NewInMemoryBaselineProvider())
+		v2Handlers := api.NewV2SubstrateHandlers(v2Store)
+		v2Handlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+		logger.Info("v2 substrate routes registered at /v2 (residents, persons, roles, medicine_uses, observations)")
+	}
 
 	// Start HTTP server
 	go func() {
