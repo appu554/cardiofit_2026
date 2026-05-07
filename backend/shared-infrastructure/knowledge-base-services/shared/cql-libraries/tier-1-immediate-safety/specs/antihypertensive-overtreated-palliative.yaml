@@ -1,0 +1,75 @@
+rule_id: ANTIHYPERTENSIVE_OVERTREATED_PALLIATIVE
+schema_version: "2.0"
+library: CareIntensityPalliative
+define: "Antihypertensive Over-Treated Palliative"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PALL-003
+content_sha: "aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333aaaa3333"
+tier: tier_1_immediate_safety
+summary: >
+  Antihypertensive active AND palliative AND systolic BP baseline
+  declining (<-10 over 14d) — over-treatment surfaces in palliative
+  context. Drafts a dose-reduction recommendation.
+
+trigger_sources:
+  - source_type: care_intensity_transition
+    predicate: "transition_to_palliative"
+  - source_type: baseline_delta
+    observation_kind: bp_systolic
+    threshold: "<-10_over_14d"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: baseline_state.bp_systolic
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+    - "Palliative_care_specialist"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ANTIHTN_PALL_REVIEW_DONE')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'ANTIHYPERTENSIVE_OVERTREATED_PALLIATIVE', last_30d)"
+
+test_cases:
+  - name: palliative_bp_decline_fires
+    class: baseline_aware_fire
+    fixture: fixtures/antihtn-pall-decline.json
+    expected_fire: true
+    expected_recommendation: "Reduce antihypertensive dose; align with palliative goals"
+  - name: review_done_no_fire
+    class: substrate_state
+    fixture: fixtures/antihtn-pall-review-done.json
+    expected_fire: false
+  - name: active_treatment_no_fire
+    class: care_intensity
+    fixture: fixtures/antihtn-active-treatment.json
+    expected_fire: false

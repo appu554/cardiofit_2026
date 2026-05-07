@@ -1,0 +1,69 @@
+rule_id: BISPHOSPHONATE_PALLIATIVE
+schema_version: "2.0"
+library: CareIntensityPalliative
+define: "Bisphosphonate Palliative"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PALL-002
+content_sha: "aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222aaaa2222"
+tier: tier_1_immediate_safety
+summary: >
+  Bisphosphonate (M05BA / M05BB) active AND care_intensity =
+  palliative. Drafts a deprescribing recommendation.
+
+trigger_sources:
+  - source_type: care_intensity_transition
+    predicate: "transition_to_palliative"
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_M05BA_or_M05BB"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+    - "Palliative_care_specialist"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BISPHOSPHONATE_REVIEW_DONE')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'BISPHOSPHONATE_PALLIATIVE', last_30d)"
+
+test_cases:
+  - name: palliative_bisphosphonate_fires
+    class: baseline_aware_fire
+    fixture: fixtures/bis-pall-fires.json
+    expected_fire: true
+    expected_recommendation: "Consider bisphosphonate deprescribing"
+  - name: review_done_no_fire
+    class: substrate_state
+    fixture: fixtures/bis-review-done.json
+    expected_fire: false
+  - name: active_treatment_no_fire
+    class: care_intensity
+    fixture: fixtures/bis-active-treatment.json
+    expected_fire: false

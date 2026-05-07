@@ -1,0 +1,70 @@
+rule_id: ANTIPLATELET_PALLIATIVE
+schema_version: "2.0"
+library: CareIntensityPalliative
+define: "Antiplatelet Palliative"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PALL-004
+content_sha: "aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444aaaa4444"
+tier: tier_1_immediate_safety
+summary: >
+  Antiplatelet (B01AC) active AND palliative AND no acute cardiovascular
+  event (MI / stroke / TIA) in last 90 days. Drafts a deprescribing
+  recommendation aligned with comfort-focused goals.
+
+trigger_sources:
+  - source_type: care_intensity_transition
+    predicate: "transition_to_palliative"
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_B01AC"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+    - "Palliative_care_specialist"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ACUTE_CARDIOVASCULAR_EVENT_90D')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'ANTIPLATELET_PALLIATIVE', last_30d)"
+
+test_cases:
+  - name: palliative_no_acute_event_fires
+    class: baseline_aware_fire
+    fixture: fixtures/antiplt-pall-no-event.json
+    expected_fire: true
+    expected_recommendation: "Consider antiplatelet deprescribing"
+  - name: acute_event_in_90d_no_fire
+    class: substrate_state
+    fixture: fixtures/antiplt-pall-acute-event.json
+    expected_fire: false
+  - name: active_treatment_no_fire
+    class: care_intensity
+    fixture: fixtures/antiplt-active-treatment.json
+    expected_fire: false

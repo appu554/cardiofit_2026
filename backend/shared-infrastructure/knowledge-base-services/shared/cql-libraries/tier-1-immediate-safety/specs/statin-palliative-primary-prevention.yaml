@@ -1,0 +1,73 @@
+rule_id: STATIN_PALLIATIVE_PRIMARY_PREVENTION
+schema_version: "2.0"
+library: CareIntensityPalliative
+define: "Statin Palliative Primary Prevention"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PALL-001
+content_sha: "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
+tier: tier_1_immediate_safety
+summary: >
+  Statin (C10AA) active AND care_intensity = palliative AND no active
+  CHD/CVD secondary-prevention concern. Drafts a deprescribing
+  recommendation aligned with comfort-focused goals.
+
+trigger_sources:
+  - source_type: care_intensity_transition
+    predicate: "transition_to_palliative"
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_C10AA"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+    - "Palliative_care_specialist"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'CHD_SECONDARY_PREVENTION')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'CVD_SECONDARY_PREVENTION')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'STATIN_PALLIATIVE_PRIMARY_PREVENTION', last_30d)"
+
+test_cases:
+  - name: palliative_primary_prevention_fires
+    class: baseline_aware_fire
+    fixture: fixtures/statin-pall-primary.json
+    expected_fire: true
+    expected_recommendation: "Consider statin deprescribing in line with palliative goals"
+  - name: palliative_with_secondary_prevention_no_fire
+    class: substrate_state
+    fixture: fixtures/statin-pall-secondary.json
+    expected_fire: false
+  - name: active_treatment_no_fire
+    class: care_intensity
+    fixture: fixtures/statin-active-treatment.json
+    expected_fire: false
