@@ -347,3 +347,46 @@ func IsValidConsentClass(s string) bool {
 	}
 	return false
 }
+
+// MonitoringPlanState* — the 5 lifecycle states.
+// Pending → Active → Completed | Escalated | Abandoned
+// (3 terminal: Completed, Escalated, Abandoned).
+// See plan: docs/superpowers/plans/2026-05-07-phase-0-3-monitoring-entity-lifecycle.md
+const (
+	MonitoringPlanStatePending   = "pending"
+	MonitoringPlanStateActive    = "active"
+	MonitoringPlanStateCompleted = "completed"
+	MonitoringPlanStateEscalated = "escalated"
+	MonitoringPlanStateAbandoned = "abandoned"
+)
+
+// MonitoringObligationType* — the kind of obligation a plan tracks.
+const (
+	MonitoringObligationTypeObservation      = "observation"
+	MonitoringObligationTypeFollowUpReview   = "follow_up_review"
+	MonitoringObligationTypeBehaviouralChart = "behavioural_chart"
+	MonitoringObligationTypeLab              = "lab"
+)
+
+// IsValidMonitoringPlanState reports whether s is a known lifecycle state.
+func IsValidMonitoringPlanState(s string) bool {
+	switch s {
+	case MonitoringPlanStatePending, MonitoringPlanStateActive,
+		MonitoringPlanStateCompleted, MonitoringPlanStateEscalated,
+		MonitoringPlanStateAbandoned:
+		return true
+	}
+	return false
+}
+
+// IsValidMonitoringObligationType reports whether s is a known obligation type.
+func IsValidMonitoringObligationType(s string) bool {
+	switch s {
+	case MonitoringObligationTypeObservation,
+		MonitoringObligationTypeFollowUpReview,
+		MonitoringObligationTypeBehaviouralChart,
+		MonitoringObligationTypeLab:
+		return true
+	}
+	return false
+}
