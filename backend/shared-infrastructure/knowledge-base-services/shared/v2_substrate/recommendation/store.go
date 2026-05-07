@@ -93,10 +93,10 @@ FROM recommendations WHERE id = $1`
 		return nil, fmt.Errorf("unmarshal clinical_content: %w", err)
 	}
 	rec.MedicineUseRefs = make([]uuid.UUID, 0, len(medRefs))
-	for _, s := range medRefs {
-		u, err := uuid.Parse(s)
+	for _, ref := range medRefs {
+		u, err := uuid.Parse(ref)
 		if err != nil {
-			return nil, fmt.Errorf("parse medicine_use_ref %q: %w", s, err)
+			return nil, fmt.Errorf("parse medicine_use_ref %q: %w", ref, err)
 		}
 		rec.MedicineUseRefs = append(rec.MedicineUseRefs, u)
 	}
