@@ -1,0 +1,84 @@
+rule_id: AKI_POST_CONTRAST
+schema_version: "2.0"
+library: ElectrolyteRenalTrajectory
+define: "AKI Post Contrast"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-AKI-002
+content_sha: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+tier: tier_1_immediate_safety
+summary: >
+  eGFR baseline delta < -10 over 14d AND a contrast_administration
+  observation logged in last 7 days. Contrast-induced nephropathy
+  trigger.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: eGFR
+    threshold: "<-10_over_14d"
+  - source_type: observation_update
+    observation_kind: contrast_administration
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.eGFR
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_contrast_administration
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "Cardio_renal_prescriber"
+    - "GP"
+    - "NP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - telehealth
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'AKI_WATCH')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'AKI_POST_CONTRAST', last_7d)"
+
+test_cases:
+  - name: egfr_delta_with_contrast_fires
+    class: baseline_aware_fire
+    fixture: fixtures/aki-contrast-delta.json
+    expected_fire: true
+    expected_recommendation: "Recheck eGFR; consider IV hydration"
+  - name: contrast_no_delta_no_fire
+    class: positive
+    fixture: fixtures/aki-contrast-no-delta.json
+    expected_fire: false
+  - name: suppression_aki_watch_open
+    class: substrate_state
+    fixture: fixtures/aki-contrast-watch-open.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/aki-contrast-palliative.json
+    expected_fire: false

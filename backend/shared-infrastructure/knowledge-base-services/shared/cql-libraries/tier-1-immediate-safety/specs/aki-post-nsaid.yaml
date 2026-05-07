@@ -1,0 +1,83 @@
+rule_id: AKI_POST_NSAID
+schema_version: "2.0"
+library: ElectrolyteRenalTrajectory
+define: "AKI Post NSAID"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-AKI-001
+content_sha: "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d"
+tier: tier_1_immediate_safety
+summary: >
+  eGFR baseline delta < -10 over 14d AND active NSAID prescribed.
+  Anticipatory AKI surveillance trigger; routes a paired monitoring
+  plan and a deprescribe/hold review.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: eGFR
+    threshold: "<-10_over_14d"
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_M01A"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.eGFR
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - telehealth
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'AKI_WATCH')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'AKI_POST_NSAID', last_7d)"
+
+test_cases:
+  - name: egfr_delta_with_nsaid_fires
+    class: baseline_aware_fire
+    fixture: fixtures/aki-nsaid-delta.json
+    expected_fire: true
+    expected_recommendation: "Hold NSAID; recheck eGFR within 48h"
+  - name: nsaid_no_egfr_delta_no_fire
+    class: positive
+    fixture: fixtures/aki-nsaid-no-delta.json
+    expected_fire: false
+  - name: suppression_aki_watch_open
+    class: substrate_state
+    fixture: fixtures/aki-nsaid-watch-open.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/aki-nsaid-palliative.json
+    expected_fire: false

@@ -1,0 +1,82 @@
+rule_id: HYPONATREMIA_RISK_TRAJECTORY
+schema_version: "2.0"
+library: ElectrolyteRenalTrajectory
+define: "Hyponatremia Risk Trajectory"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-HYPONA-001
+content_sha: "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b"
+tier: tier_1_immediate_safety
+summary: >
+  Sodium baseline trending down (delta < -3 mmol/L over 7d) with
+  resident on SSRI (N06AB) or thiazide (C03A). Fires before
+  symptomatic hyponatremia.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: sodium
+    threshold: "<-3_over_7d"
+  - source_type: medication_change
+    predicate: "new_or_dose_increase_in_ATC_N06AB_or_C03A"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.sodium
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'SIADH_WATCH')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'HYPONATREMIA_RISK_TRAJECTORY', last_7d)"
+
+test_cases:
+  - name: baseline_delta_ssri_fires
+    class: baseline_aware_fire
+    fixture: fixtures/hypona-ssri-delta.json
+    expected_fire: true
+    expected_recommendation: "Recheck Na+; review SSRI / thiazide"
+  - name: snapshot_only_no_fire
+    class: positive
+    fixture: fixtures/hypona-snapshot-only.json
+    expected_fire: false
+  - name: suppression_siadh_watch
+    class: substrate_state
+    fixture: fixtures/hypona-siadh-watch.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/hypona-palliative.json
+    expected_fire: false

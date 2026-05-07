@@ -1,0 +1,86 @@
+rule_id: EGFR_DECLINE_VELOCITY
+schema_version: "2.0"
+library: ElectrolyteRenalTrajectory
+define: "eGFR Decline Velocity"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-EGFR-001
+content_sha: "3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c"
+tier: tier_1_immediate_safety
+summary: >
+  eGFR velocity flag set (≥20% decline in 14d per Wave 2.2 baseline_config)
+  AND resident on a nephrotoxic medication (NSAID M01A, ACEi/ARB C09, or
+  loop diuretic C03C). Anticipatory renal-protection trigger.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: eGFR
+    threshold: "velocity_flag_set"
+  - source_type: medication_change
+    predicate: "new_or_dose_increase_in_ATC_M01A_or_C09_or_C03C"
+  - source_type: observation_update
+    observation_kind: eGFR
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.eGFR
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "Cardio_renal_prescriber"
+    - "GP"
+    - "NP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - telehealth
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'CKD_PROGRESSION_REVIEWED')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'EGFR_DECLINE_VELOCITY', last_14d)"
+
+test_cases:
+  - name: velocity_flag_with_nsaid_fires
+    class: baseline_aware_fire
+    fixture: fixtures/egfr-vel-nsaid.json
+    expected_fire: true
+    expected_recommendation: "Recheck eGFR; consider nephrotoxic medication review"
+  - name: velocity_flag_no_nephrotox_no_fire
+    class: positive
+    fixture: fixtures/egfr-vel-no-nephrotox.json
+    expected_fire: false
+  - name: suppression_ckd_progression_reviewed
+    class: substrate_state
+    fixture: fixtures/egfr-vel-ckd-reviewed.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/egfr-vel-palliative.json
+    expected_fire: false

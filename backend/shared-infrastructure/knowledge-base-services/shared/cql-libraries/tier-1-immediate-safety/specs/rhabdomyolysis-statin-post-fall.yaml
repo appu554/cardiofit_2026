@@ -1,0 +1,85 @@
+rule_id: RHABDOMYOLYSIS_STATIN_POST_FALL
+schema_version: "2.0"
+library: ElectrolyteRenalTrajectory
+define: "Rhabdomyolysis Statin Post Fall"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-RHABDO-001
+content_sha: "6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f"
+tier: tier_1_immediate_safety
+summary: >
+  CK baseline delta > 2x baseline AND resident on statin (C10AA) AND
+  fall event in last 14d. Rhabdomyolysis screen trigger.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: CK
+    threshold: ">2x_over_14d"
+  - source_type: observation_update
+    observation_kind: fall
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.CK
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_fall
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - telehealth
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'RHABDO_WORKUP_OPEN')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'RHABDOMYOLYSIS_STATIN_POST_FALL', last_14d)"
+
+test_cases:
+  - name: ck_delta_post_fall_statin_fires
+    class: baseline_aware_fire
+    fixture: fixtures/rhabdo-ck-delta-fall.json
+    expected_fire: true
+    expected_recommendation: "Recheck CK + renal panel; hold statin pending review"
+  - name: ck_delta_no_fall_no_fire
+    class: positive
+    fixture: fixtures/rhabdo-no-fall.json
+    expected_fire: false
+  - name: suppression_workup_open
+    class: substrate_state
+    fixture: fixtures/rhabdo-workup-open.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/rhabdo-palliative.json
+    expected_fire: false

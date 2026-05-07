@@ -1,0 +1,91 @@
+rule_id: HYPERKALEMIA_RISK_TRAJECTORY_EXTENDED
+schema_version: "2.0"
+library: ElectrolyteRenalTrajectory
+define: "Hyperkalemia Risk Trajectory Extended"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-HYPERK-002
+content_sha: "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"
+tier: tier_1_immediate_safety
+summary: >
+  Extends HYPERKALEMIA_RISK_TRAJECTORY anchor: K+ baseline delta > 0.8
+  over 7d AND resident on RAAS (C09) OR spironolactone (C03DA). Fires
+  before threshold breach for anticipatory action.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: potassium
+    threshold: ">0.8_over_7d"
+  - source_type: medication_change
+    predicate: "new_or_dose_increase_in_ATC_C09_or_C03DA"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.potassium
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "Cardio_renal_prescriber"
+    - "GP"
+    - "NP"
+  scope_rule_refs: []
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - telehealth
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'AKI_WATCH')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'HYPERKALEMIA_RISK_TRAJECTORY_EXTENDED', last_7d)"
+  - class: authorisation_context
+    predicate: "no Cardio_renal_prescriber/GP/NP available — route via fallback"
+
+test_cases:
+  - name: baseline_delta_with_spironolactone_fires
+    class: baseline_aware_fire
+    fixture: fixtures/hyperk-ext-spironolactone.json
+    expected_fire: true
+    expected_recommendation: "Recheck K+ within 48h; review K+-sparing therapy"
+  - name: snapshot_only_no_baseline_delta_no_fire
+    class: positive
+    fixture: fixtures/hyperk-ext-snapshot-only.json
+    expected_fire: false
+  - name: suppression_active_aki_watch
+    class: substrate_state
+    fixture: fixtures/hyperk-ext-aki-watch-open.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/hyperk-ext-palliative.json
+    expected_fire: false
+  - name: authorisation_routing_fallback
+    class: authorisation_routing
+    fixture: fixtures/hyperk-ext-no-prescriber.json
+    expected_fire: true
