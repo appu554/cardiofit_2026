@@ -1,0 +1,71 @@
+rule_id: ADG2025_ANTIPSYCHOTIC_BPSD_12W_REVIEW
+schema_version: "2.0"
+library: ADG2025
+define: "ADG 2025 Antipsychotic BPSD 12W Review"
+# TODO(layer1-bind): rule_specification.v2 enum has no ADG_2025 value yet.
+criterion_set: VAIDSHALA_TIER2
+# TODO(layer1-bind): replace with real ADG 2025 recommendation ID once
+# kb-3 Pipeline-2 extraction completes.
+criterion_id: ADG2025-APS-12W-PLACEHOLDER
+content_sha: "6666666666666666666666666666666666666666666666666666666666666666"
+tier: tier_2_deprescribing
+summary: >
+  Antipsychotic (ATC N05A) active for BPSD with no documented BPSD
+  review concern closed within 84 days (12 weeks). Drafts a review
+  recommendation per ADG 2025 antipsychotic-BPSD review protocol.
+  Recommendation ID is a placeholder pending Pipeline-2 extraction
+  (TODO(layer1-bind)).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A"
+  - source_type: active_concern_resolution
+    predicate: "BPSD_REVIEW_DONE_12W_concern_closed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BPSD_REVIEW_DONE_12W')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'ADG2025_ANTIPSYCHOTIC_BPSD_12W_REVIEW', 84)"
+
+test_cases:
+  - name: bpsd_aps_no_review_fires
+    class: positive
+    fixture: fixtures/adg2025-aps-bpsd-no-review.json
+    expected_fire: true
+    expected_recommendation: "Review antipsychotic for BPSD per ADG 2025 12-week protocol"
+  - name: bpsd_aps_review_done_no_fire
+    class: substrate_state
+    fixture: fixtures/adg2025-aps-bpsd-review-done.json
+    expected_fire: false
+  - name: bpsd_aps_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/adg2025-aps-bpsd-palliative.json
+    expected_fire: false

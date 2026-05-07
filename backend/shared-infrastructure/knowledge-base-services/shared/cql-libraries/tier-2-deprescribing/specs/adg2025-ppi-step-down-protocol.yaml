@@ -1,0 +1,83 @@
+rule_id: ADG2025_PPI_STEP_DOWN_PROTOCOL
+schema_version: "2.0"
+library: ADG2025
+define: "ADG 2025 PPI Step Down Protocol"
+# TODO(layer1-bind): rule_specification.v2 enum has no ADG_2025 value yet.
+# Using VAIDSHALA_TIER2 as the provenance bucket. Once Pipeline-2 lands
+# the ADG 2025 recommendation IDs, propose schema enum extension to
+# ADG_2025 and migrate this field.
+criterion_set: VAIDSHALA_TIER2
+# TODO(layer1-bind): replace with real ADG 2025 recommendation ID once
+# kb-3 Pipeline-2 extraction completes (Layer 1 Wave 5 free-alternative).
+criterion_id: ADG2025-PPI-STEPDOWN-PLACEHOLDER
+content_sha: "5555555555555555555555555555555555555555555555555555555555555555"
+tier: tier_2_deprescribing
+summary: >
+  PPI (ATC A02BC) active >56 days without documented GI indication
+  concern (GORD, peptic ulcer, Barrett's, NSAID prophylaxis). Drafts a
+  step-down recommendation per ADG 2025 PPI step-down theme. Recommendation
+  ID is a placeholder pending Layer 1 Pipeline-2 extraction
+  (TODO(layer1-bind)).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_A02BC"
+  - source_type: condition_change
+    predicate: "gi_indication_concern_closed_or_resolved"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'GORD')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'PEPTIC_ULCER_DISEASE')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BARRETTS_OESOPHAGUS')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'NSAID_PROPHYLAXIS_INDICATED')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'ADG2025_PPI_STEP_DOWN_PROTOCOL', 90)"
+
+test_cases:
+  - name: ppi_long_term_no_indication_fires
+    class: positive
+    fixture: fixtures/adg2025-ppi-no-indication.json
+    expected_fire: true
+    expected_recommendation: "Step down PPI per ADG 2025 protocol"
+  - name: ppi_with_gord_no_fire
+    class: substrate_state
+    fixture: fixtures/adg2025-ppi-gord.json
+    expected_fire: false
+  - name: ppi_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/adg2025-ppi-palliative.json
+    expected_fire: false
