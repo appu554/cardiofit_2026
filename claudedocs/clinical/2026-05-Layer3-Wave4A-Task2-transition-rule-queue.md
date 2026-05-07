@@ -12,6 +12,14 @@ here for clinical-author input.
 | `VAIDSHALA_TX_DISCHARGE_NOT_RECONCILED_72H` | VAIDSHALA_TIER3 | VAIDSHALA-TX-DISCHARGE-NOT-RECONCILED-72H | Aged Care Quality Standard 5 — Clinical Care 2026, transitions of care |
 | `VAIDSHALA_TX_RMMR_OVERDUE_6MO` | VAIDSHALA_TIER3 | VAIDSHALA-TX-RMMR-OVERDUE-6MO | RACGP / Pharmaceutical Society of Australia 6-month RMMR follow-up cycle (published) |
 
+## Rules Shipped (Wave-extension batch 2026-05 — 3 rules)
+
+| rule_id | criterion_set | criterion_id | citation |
+|---|---|---|---|
+| `VAIDSHALA_TX_ADMISSION_RECON_NOT_STARTED_24H` | VAIDSHALA_TIER3 | VAIDSHALA-TX-ADMISSION-RECON-NOT-STARTED-24H | Aged Care Quality Standard 5 + ACSQHC Medication Safety Standard |
+| `VAIDSHALA_TX_CARE_PLAN_REVIEW_OVERDUE_POST_HOSPITAL` | VAIDSHALA_TIER3 | VAIDSHALA-TX-CARE-PLAN-REVIEW-OVERDUE-POST-HOSPITAL | Aged Care Quality Standard 5 (post-hospital care-plan review 14d) |
+| `VAIDSHALA_TX_STEWARDSHIP_HANDOFF_DOCUMENTATION_MISSING` | VAIDSHALA_TIER3 | VAIDSHALA-TX-STEWARDSHIP-HANDOFF-MISSING | ACSQHC Antimicrobial Stewardship Framework (handoff documentation) |
+
 ## Rules Queued (Deferred to clinical-author input)
 
 Status legend:

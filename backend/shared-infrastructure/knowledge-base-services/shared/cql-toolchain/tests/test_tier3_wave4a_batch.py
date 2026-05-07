@@ -46,6 +46,7 @@ TIER3_DIR = (
 SPECS_DIR = TIER3_DIR / "specs"
 
 EXPECTED_RULE_IDS = {
+    # Wave 4A vertical slice (8)
     "VAIDSHALA_PC_D2_ANTIPSYCHOTIC_PREVALENCE",
     "VAIDSHALA_PC_D1_POLYPHARMACY_10PLUS",
     "VAIDSHALA_PC_D3_ACB_ABOVE_3",
@@ -54,6 +55,17 @@ EXPECTED_RULE_IDS = {
     "VAIDSHALA_TX_RMMR_OVERDUE_6MO",
     "VAIDSHALA_ANACC_FUNCTIONAL_DECLINE",
     "VAIDSHALA_ANACC_BEHAVIOURAL_EVIDENCE",
+    # Wave-extension batch 2026-05 (10)
+    "VAIDSHALA_PC_D5_PAIN_ASSESSMENT_DOCUMENTATION_GAP",
+    "VAIDSHALA_PC_D1_POLYPHARMACY_5PLUS_HIGH_RISK",
+    "VAIDSHALA_PC_D3_FALLS_RISK_DRUG_BURDEN",
+    "VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT",
+    "VAIDSHALA_TX_ADMISSION_RECON_NOT_STARTED_24H",
+    "VAIDSHALA_TX_CARE_PLAN_REVIEW_OVERDUE_POST_HOSPITAL",
+    "VAIDSHALA_TX_STEWARDSHIP_HANDOFF_DOCUMENTATION_MISSING",
+    "VAIDSHALA_ANACC_COGNITIVE_STATUS_EVIDENCE",
+    "VAIDSHALA_ANACC_CONTINENCE_BURDEN_EVIDENCE",
+    "VAIDSHALA_ANACC_PRESSURE_INJURY_RISK_EVIDENCE",
 }
 
 
@@ -80,7 +92,7 @@ def _resolve_body(define: str) -> str:
 
 def test_wave4a_corpus_count():
     specs = _all_specs()
-    assert len(specs) == 8, f"expected 8 Wave 4A specs, found {len(specs)}"
+    assert len(specs) == 18, f"expected 18 Wave 4A + extension specs, found {len(specs)}"
     rule_ids = {load_spec(p)["rule_id"] for p in specs}
     assert rule_ids == EXPECTED_RULE_IDS, (
         f"unexpected rule_ids: {rule_ids ^ EXPECTED_RULE_IDS}"
@@ -249,13 +261,13 @@ def test_wave4a_governance_promotion_eight_signed_packages(
         assert result.signed_package_path.exists()
         signed_paths.append(result.signed_package_path)
 
-    assert len(signed_paths) == 8
+    assert len(signed_paths) == 18
     shas = set()
     for p in signed_paths:
         import json as _json
         pkg = _json.loads(p.read_text())
         shas.add(pkg["content_sha"])
-    assert len(shas) == 8, "expected 8 distinct content_sha values"
+    assert len(shas) == 18, "expected 18 distinct content_sha values"
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +304,7 @@ def test_wave4a_end_to_end_batch_summary():
         if not validate_cds_hooks_v2_response(response):
             counts["cds_hooks"] += 1
 
-    assert total == 8
+    assert total == 18
     assert counts["stage1"] == total
     assert counts["two_gate"] == total
     assert counts["active"] == total

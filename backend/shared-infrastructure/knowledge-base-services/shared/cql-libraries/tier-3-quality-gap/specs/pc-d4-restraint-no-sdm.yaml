@@ -1,0 +1,62 @@
+rule_id: VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT
+schema_version: "2.0"
+library: PharmaCareStandard5
+define: "PharmaCare D4 Restraint Without SDM Consent"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-PC-D4-RESTRAINT-WITHOUT-SDM-CONSENT
+content_sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+tier: tier_3_quality_gap
+summary: >
+  PHARMA-Care domain D4 (restraint / behavioural-care) + Quality of Care Principles 2025 + Aged Care Act 2024. Antipsychotic (N05A) or benzodiazepine (N05BA) active with CHEMICAL_RESTRAINT_PRESCRIBING concern but no SDM_CONSENT_DOCUMENTED. TODO(clinical-author): confirm PHARMA-Care domain-D4 restraint documentation label.
+
+trigger_sources:
+  - source_type: condition_change
+    predicate: "concern_or_event_changed"
+  - source_type: care_transition
+    predicate: "transition_event_recorded"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT', 14)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/pc-d4-restraint-no-sdm-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface restraint-without-SDM-consent gap per PHARMA-Care D4"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/pc-d4-restraint-no-sdm-negative.json
+    expected_fire: false
+  - name: suppression_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/pc-d4-restraint-no-sdm-suppression.json
+    expected_fire: false

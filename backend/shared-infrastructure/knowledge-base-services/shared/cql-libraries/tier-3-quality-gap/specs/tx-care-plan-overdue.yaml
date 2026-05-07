@@ -1,0 +1,59 @@
+rule_id: VAIDSHALA_TX_CARE_PLAN_REVIEW_OVERDUE_POST_HOSPITAL
+schema_version: "2.0"
+library: CareTransition
+define: "Care Plan Review Overdue Post Hospital"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-TX-CARE-PLAN-REVIEW-OVERDUE-POST-HOSPITAL
+content_sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+tier: tier_3_quality_gap
+summary: >
+  Aged Care Quality Standard 5 — care-plan review post-hospitalisation required within 14 days of discharge. Hospital_discharge Event >14 days ago but no care_planning_meeting Event since.
+
+trigger_sources:
+  - source_type: condition_change
+    predicate: "concern_or_event_changed"
+  - source_type: care_transition
+    predicate: "transition_event_recorded"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: events
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_TX_CARE_PLAN_REVIEW_OVERDUE_POST_HOSPITAL', 30)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/tx-care-plan-overdue-positive.json
+    expected_fire: true
+    expected_recommendation: "Schedule care-plan review per Aged Care Quality Standard 5 post-hospital"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/tx-care-plan-overdue-negative.json
+    expected_fire: false
+  - name: suppression_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/tx-care-plan-overdue-suppression.json
+    expected_fire: false

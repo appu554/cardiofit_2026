@@ -26,11 +26,16 @@ include QualityGapHelpers version '1.0' called QG
  *     Government Aged Care Quality and Safety Commission, in force
  *     2026). Standard 5 evidence categories cited per criterion below.
  *
- * Defines:
+ * Defines (Wave 4A vertical slice):
  *   - PharmaCare Antipsychotic Prevalence Without BPSD
  *   - PharmaCare Polypharmacy Trigger 10plus
  *   - PharmaCare Anticholinergic Burden ACB Above 3
  *   - PharmaCare BPSD First Line NonPharm
+ * Defines (Wave-extension batch 2026-05):
+ *   - PharmaCare D5 Pain Assessment Documentation Gap
+ *   - PharmaCare D1 Polypharmacy Trigger 5plus High Risk Class
+ *   - PharmaCare D3 Falls Risk Increasing Drug Burden
+ *   - PharmaCare D4 Restraint Without SDM Consent Documentation
  */
 
 context Patient
@@ -118,3 +123,95 @@ define "PharmaCare BPSD First Line NonPharm":
   and Count(Trace."RuleFiredFor"(
         Patient.id, 'VAIDSHALA_PC_D4_BPSD_FIRST_LINE_NONPHARM',
         Interval[Now() - 84 day, Now()])) = 0
+
+// -----------------------------------------------------------------
+// VAIDSHALA_PC_D5_PAIN_ASSESSMENT_DOCUMENTATION_GAP
+// -----------------------------------------------------------------
+// PHARMA-Care domain D5 (Pain assessment / pain management).
+// Standard 5 evidence: clinical-care comprehensive assessment.
+// Fires when an analgesic (ATC N02A or N02B) is active AND no
+// PAIN_ASSESSMENT_DOCUMENTED concern is closed in last 28 days AND
+// care_intensity is active_treatment.
+//
+// TODO(clinical-author): confirm PHARMA-Care domain-D5 published label.
+define "PharmaCare D5 Pain Assessment Documentation Gap":
+  (
+    Meds."HasActiveAtcPrefix"(Patient.id, 'N02A')
+      or Meds."HasActiveAtcPrefix"(Patient.id, 'N02B')
+  )
+  and not State."HasActiveConcernType"(Patient.id, 'PAIN_ASSESSMENT_DOCUMENTED')
+  and State."CurrentCareIntensity"(Patient.id) = 'active_treatment'
+  and not Suppress."WasActionedRecently"(
+        Patient.id, 'VAIDSHALA_PC_D5_PAIN_ASSESSMENT_DOCUMENTATION_GAP', 28)
+  and Count(Trace."RuleFiredFor"(
+        Patient.id, 'VAIDSHALA_PC_D5_PAIN_ASSESSMENT_DOCUMENTATION_GAP',
+        Interval[Now() - 28 day, Now()])) = 0
+
+// -----------------------------------------------------------------
+// VAIDSHALA_PC_D1_POLYPHARMACY_5PLUS_HIGH_RISK
+// -----------------------------------------------------------------
+// PHARMA-Care domain D1 (Medicines optimisation / polypharmacy).
+// Standard 5 evidence: clinical-care risk identification.
+// Lower-threshold polypharmacy gate (>=5 active medicines) when a
+// HIGH_RISK_DRUG_CLASS_PRESENT concern is open. Complements the
+// existing 10-plus rule with a more sensitive flag for high-risk
+// combinations.
+//
+// TODO(clinical-author): confirm PHARMA-Care domain-D1 published label.
+define "PharmaCare D1 Polypharmacy Trigger 5plus High Risk Class":
+  QG."ActiveMedicineUseCount"(Patient.id) >= 5
+  and State."HasActiveConcernType"(Patient.id, 'HIGH_RISK_DRUG_CLASS_PRESENT')
+  and State."CurrentCareIntensity"(Patient.id) = 'active_treatment'
+  and not Suppress."WasActionedRecently"(
+        Patient.id, 'VAIDSHALA_PC_D1_POLYPHARMACY_5PLUS_HIGH_RISK', 84)
+  and Count(Trace."RuleFiredFor"(
+        Patient.id, 'VAIDSHALA_PC_D1_POLYPHARMACY_5PLUS_HIGH_RISK',
+        Interval[Now() - 84 day, Now()])) = 0
+
+// -----------------------------------------------------------------
+// VAIDSHALA_PC_D3_FALLS_RISK_DRUG_BURDEN
+// -----------------------------------------------------------------
+// PHARMA-Care domain D3 (Adverse-drug-event risk / falls-risk
+// drugs). Standard 5 evidence: clinical-care safety. Fires when the
+// resident has an active FALLS_RISK_INCREASING_DRUG_PRESENT concern
+// AND a recent fall_within_90d Event is recorded AND care_intensity
+// is active_treatment.
+//
+// TODO(clinical-author): confirm PHARMA-Care domain-D3 falls-risk
+// drug taxonomy published label.
+define "PharmaCare D3 Falls Risk Increasing Drug Burden":
+  State."HasActiveConcernType"(Patient.id, 'FALLS_RISK_INCREASING_DRUG_PRESENT')
+  and QG."HasRecentEventOfType"(Patient.id, 'fall', 90)
+  and State."CurrentCareIntensity"(Patient.id) = 'active_treatment'
+  and not Suppress."WasActionedRecently"(
+        Patient.id, 'VAIDSHALA_PC_D3_FALLS_RISK_DRUG_BURDEN', 60)
+  and Count(Trace."RuleFiredFor"(
+        Patient.id, 'VAIDSHALA_PC_D3_FALLS_RISK_DRUG_BURDEN',
+        Interval[Now() - 60 day, Now()])) = 0
+
+// -----------------------------------------------------------------
+// VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT
+// -----------------------------------------------------------------
+// PHARMA-Care domain D4 (Restraint / behavioural-care). Quality of
+// Care Principles 2025 + Aged Care Act 2024 require documented
+// substitute-decision-maker (SDM) consent for chemical restraint.
+// Fires when an antipsychotic (ATC N05A) or benzodiazepine (N05BA)
+// is active AND a CHEMICAL_RESTRAINT_PRESCRIBING concern is open
+// AND no SDM_CONSENT_DOCUMENTED concern is closed AND care_intensity
+// is active_treatment.
+//
+// TODO(clinical-author): confirm PHARMA-Care domain-D4 restraint
+// documentation published label.
+define "PharmaCare D4 Restraint Without SDM Consent":
+  (
+    Meds."HasActiveAtcPrefix"(Patient.id, 'N05A')
+      or Meds."HasActiveAtcPrefix"(Patient.id, 'N05BA')
+  )
+  and State."HasActiveConcernType"(Patient.id, 'CHEMICAL_RESTRAINT_PRESCRIBING')
+  and not State."HasActiveConcernType"(Patient.id, 'SDM_CONSENT_DOCUMENTED')
+  and State."CurrentCareIntensity"(Patient.id) = 'active_treatment'
+  and not Suppress."WasActionedRecently"(
+        Patient.id, 'VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT', 14)
+  and Count(Trace."RuleFiredFor"(
+        Patient.id, 'VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT',
+        Interval[Now() - 14 day, Now()])) = 0

@@ -18,6 +18,14 @@ that surfaces evidence packets supporting AN-ACC class reassessment.
 | `VAIDSHALA_ANACC_FUNCTIONAL_DECLINE` | VAIDSHALA_TIER3 | VAIDSHALA-ANACC-FUNCTIONAL-DECLINE | AN-ACC v1.1 functional-status indicator (AKPS) |
 | `VAIDSHALA_ANACC_BEHAVIOURAL_EVIDENCE` | VAIDSHALA_TIER3 | VAIDSHALA-ANACC-BEHAVIOURAL-EVIDENCE | AN-ACC class 9-13 behavioural indicators |
 
+## Rules Shipped (Wave-extension batch 2026-05 — 3 rules)
+
+| rule_id | criterion_set | criterion_id | citation |
+|---|---|---|---|
+| `VAIDSHALA_ANACC_COGNITIVE_STATUS_EVIDENCE` | VAIDSHALA_TIER3 | VAIDSHALA-ANACC-COGNITIVE-STATUS | AIHW AN-ACC v1.1 cognitive-status indicator |
+| `VAIDSHALA_ANACC_CONTINENCE_BURDEN_EVIDENCE` | VAIDSHALA_TIER3 | VAIDSHALA-ANACC-CONTINENCE-BURDEN | AIHW AN-ACC v1.1 continence-care indicator |
+| `VAIDSHALA_ANACC_PRESSURE_INJURY_RISK_EVIDENCE` | VAIDSHALA_TIER3 | VAIDSHALA-ANACC-PRESSURE-INJURY-RISK | AIHW AN-ACC v1.1 pressure-injury (skin integrity) indicator |
+
 ## Rules Queued (Deferred to clinical-author input)
 
 Status legend:

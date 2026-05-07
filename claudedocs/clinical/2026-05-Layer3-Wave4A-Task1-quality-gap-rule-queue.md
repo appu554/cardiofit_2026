@@ -18,6 +18,15 @@ listed here for clinical-author input.
 All criterion_ids carry a `TODO(clinical-author)` marker pending
 confirmation against the published PHARMA-Care v1 framework PDF.
 
+## Rules Shipped (Wave-extension batch 2026-05 — 4 rules)
+
+| rule_id | criterion_set | criterion_id | citation |
+|---|---|---|---|
+| `VAIDSHALA_PC_D5_PAIN_ASSESSMENT_DOCUMENTATION_GAP` | VAIDSHALA_TIER3 | VAIDSHALA-PC-D5-PAIN-ASSESSMENT-GAP | PHARMA-Care v1 D5 (TODO clinical-author) |
+| `VAIDSHALA_PC_D1_POLYPHARMACY_5PLUS_HIGH_RISK` | VAIDSHALA_TIER3 | VAIDSHALA-PC-D1-POLYPHARMACY-5PLUS-HIGH-RISK | PHARMA-Care v1 D1 (lower-threshold variant) |
+| `VAIDSHALA_PC_D3_FALLS_RISK_DRUG_BURDEN` | VAIDSHALA_TIER3 | VAIDSHALA-PC-D3-FALLS-RISK-DRUG-BURDEN | PHARMA-Care v1 D3 (falls-risk drug taxonomy) |
+| `VAIDSHALA_PC_D4_RESTRAINT_WITHOUT_SDM_CONSENT` | VAIDSHALA_TIER3 | VAIDSHALA-PC-D4-RESTRAINT-WITHOUT-SDM-CONSENT | Quality of Care Principles 2025 + Aged Care Act 2024 |
+
 ## Rules Queued (Deferred to clinical-author input)
 
 Status legend:
