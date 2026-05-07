@@ -1,0 +1,84 @@
+rule_id: ANTIPSYCHOTIC_BPSD_DOCUMENTATION_GAP
+schema_version: "2.0"
+library: RestrictivePractice
+define: "Antipsychotic BPSD Documentation Gap"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PSY-003
+content_sha: "8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d"
+tier: tier_1_immediate_safety
+summary: >
+  Resident on antipsychotic AND no behavioural-chart observation in
+  the last 7 days. Drafts a documentation-completion recommendation
+  to support BPSD authorisation review.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A"
+  - source_type: monitoring_threshold_crossed
+    predicate: "behavioural_chart_overdue_7d"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_behavioural_chart
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: consent_gathering_recommendation
+      action: create_consent_gathering_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+consent_gating:
+  required_consent_class: "Antipsychotic_BPSD_authorisation"
+  expiry_check: false
+  consent_missing_action: fire_informational
+  consent_missing_recommendation_template: "complete_behavioural_chart_for_authorisation_review"
+
+authorisation_gating:
+  required_roles:
+    - "RN"
+    - "EN"
+  latency_budget_ms: 50
+  fallback_routing_if_unavailable:
+    - deferred
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BEHAVIOURAL_CHART_REVIEWED')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'ANTIPSYCHOTIC_BPSD_DOCUMENTATION_GAP', last_7d)"
+
+test_cases:
+  - name: antipsychotic_no_chart_fires
+    class: consent_gating
+    fixture: fixtures/aps-doc-gap-no-chart.json
+    expected_fire: true
+    expected_recommendation: "Complete behavioural chart for authorisation review"
+  - name: antipsychotic_recent_chart_no_fire
+    class: positive
+    fixture: fixtures/aps-doc-gap-recent-chart.json
+    expected_fire: false
+  - name: suppression_chart_reviewed
+    class: substrate_state
+    fixture: fixtures/aps-doc-gap-reviewed.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/aps-doc-gap-palliative.json
+    expected_fire: false

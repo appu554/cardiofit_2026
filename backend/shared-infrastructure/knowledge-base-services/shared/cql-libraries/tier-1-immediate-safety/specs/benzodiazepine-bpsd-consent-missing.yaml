@@ -1,0 +1,79 @@
+rule_id: BENZODIAZEPINE_BPSD_CONSENT_MISSING
+schema_version: "2.0"
+library: RestrictivePractice
+define: "Benzodiazepine BPSD Consent Missing"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-BENZO-001
+content_sha: "8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b"
+tier: tier_1_immediate_safety
+summary: >
+  Active benzodiazepine (N05BA / N05CD) for BPSD without an active
+  BPSD authorisation consent. Drafts a consent-gathering
+  recommendation.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05BA_or_N05CD"
+  - source_type: consent_expiry_approaching
+    predicate: "Benzodiazepine_BPSD_authorisation expires <= 14d"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: consent
+      fact_type: active_consents_for_class
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: consent_gathering_recommendation
+      action: create_consent_gathering_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+consent_gating:
+  required_consent_class: "Benzodiazepine_BPSD_authorisation"
+  expiry_check: true
+  consent_missing_action: create_consent_gathering_recommendation
+  consent_missing_recommendation_template: "discuss_benzodiazepine_BPSD_authorisation_with_SDM"
+
+authorisation_gating:
+  required_roles:
+    - "SDM_workflow_owner"
+    - "RN"
+  latency_budget_ms: 50
+  fallback_routing_if_unavailable:
+    - deferred
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'BENZODIAZEPINE_BPSD_CONSENT_MISSING', last_7d)"
+
+test_cases:
+  - name: benzo_no_consent_fires
+    class: consent_gating
+    fixture: fixtures/benzo-bpsd-no-consent.json
+    expected_fire: true
+    expected_recommendation: "Discuss benzodiazepine BPSD authorisation with SDM"
+  - name: benzo_with_consent_no_fire
+    class: positive
+    fixture: fixtures/benzo-bpsd-with-consent.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/benzo-bpsd-palliative.json
+    expected_fire: false
+  - name: evidence_trace_records_consent_context
+    class: evidence_trace
+    fixture: fixtures/benzo-bpsd-no-consent.json
+    expected_fire: true

@@ -1,0 +1,88 @@
+rule_id: CHEMICAL_RESTRAINT_CRITERIA
+schema_version: "2.0"
+library: RestrictivePractice
+define: "Chemical Restraint Criteria"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PSY-004
+content_sha: "8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e"
+tier: tier_1_immediate_safety
+summary: >
+  Antipsychotic active AND behavioural-chart absent ≥7d AND no
+  de-escalation trial logged AND no chemical restraint authorisation.
+  Drafts a consent-gathering recommendation to assess restrictive
+  practice criteria.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "antipsychotic_dose_escalation"
+  - source_type: condition_change
+    predicate: "BPSD_severity_change"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_behavioural_chart
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: consent
+      fact_type: active_consents_for_class
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: consent_gathering_recommendation
+      action: create_consent_gathering_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+consent_gating:
+  required_consent_class: "Chemical_restraint_authorisation"
+  expiry_check: true
+  consent_missing_action: create_consent_gathering_recommendation
+  consent_missing_recommendation_template: "assess_chemical_restraint_criteria_with_SDM"
+
+authorisation_gating:
+  required_roles:
+    - "SDM_workflow_owner"
+    - "GP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - deferred
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'DE_ESCALATION_TRIAL_LOGGED')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'CHEMICAL_RESTRAINT_CRITERIA', last_7d)"
+
+test_cases:
+  - name: criteria_met_fires
+    class: consent_gating
+    fixture: fixtures/chem-restraint-criteria-met.json
+    expected_fire: true
+    expected_recommendation: "Assess chemical restraint criteria with SDM"
+  - name: de_escalation_trial_logged_no_fire
+    class: substrate_state
+    fixture: fixtures/chem-restraint-deescalation.json
+    expected_fire: false
+  - name: chemical_restraint_consent_active_no_fire
+    class: positive
+    fixture: fixtures/chem-restraint-consent-active.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/chem-restraint-palliative.json
+    expected_fire: false

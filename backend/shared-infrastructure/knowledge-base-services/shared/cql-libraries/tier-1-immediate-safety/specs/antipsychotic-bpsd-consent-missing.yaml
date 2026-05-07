@@ -1,0 +1,83 @@
+rule_id: ANTIPSYCHOTIC_BPSD_CONSENT_MISSING_EXTENDED
+schema_version: "2.0"
+library: RestrictivePractice
+define: "Antipsychotic BPSD Consent Missing Extended"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-PSY-002
+content_sha: "8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a"
+tier: tier_1_immediate_safety
+summary: >
+  Active antipsychotic for BPSD without an active BPSD authorisation
+  consent. Drafts a consent-gathering recommendation (NOT a
+  medication-change recommendation).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A"
+  - source_type: consent_expiry_approaching
+    predicate: "Antipsychotic_BPSD_authorisation expires <= 14d"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: consent
+      fact_type: active_consents_for_class
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: consent_gathering_recommendation
+      action: create_consent_gathering_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+consent_gating:
+  required_consent_class: "Antipsychotic_BPSD_authorisation"
+  expiry_check: true
+  consent_missing_action: create_consent_gathering_recommendation
+  consent_missing_recommendation_template: "discuss_antipsychotic_BPSD_authorisation_with_SDM"
+
+authorisation_gating:
+  required_roles:
+    - "SDM_workflow_owner"
+    - "RN"
+  latency_budget_ms: 50
+  fallback_routing_if_unavailable:
+    - deferred
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'ANTIPSYCHOTIC_BPSD_CONSENT_MISSING_EXTENDED', last_7d)"
+
+test_cases:
+  - name: antipsychotic_no_consent_fires
+    class: consent_gating
+    fixture: fixtures/aps-bpsd-no-consent.json
+    expected_fire: true
+    expected_recommendation: "Discuss antipsychotic BPSD authorisation with SDM"
+  - name: evidence_trace_records_consent_context
+    class: evidence_trace
+    fixture: fixtures/aps-bpsd-no-consent.json
+    expected_fire: true
+  - name: antipsychotic_with_consent_no_fire
+    class: positive
+    fixture: fixtures/aps-bpsd-with-consent.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/aps-bpsd-palliative.json
+    expected_fire: false
+  - name: authorisation_routing_no_sdm_owner
+    class: authorisation_routing
+    fixture: fixtures/aps-bpsd-no-sdm.json
+    expected_fire: true

@@ -1,0 +1,72 @@
+rule_id: RESTRICTIVE_PRACTICE_AUTHORISATION_EXPIRING
+schema_version: "2.0"
+library: RestrictivePractice
+define: "Restrictive Practice Authorisation Expiring"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-RP-001
+content_sha: "8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c"
+tier: tier_1_immediate_safety
+summary: >
+  Active restrictive practice authorisation with expiry < 30 days.
+  Drafts a consent-refresh recommendation.
+
+trigger_sources:
+  - source_type: consent_expiry_approaching
+    predicate: "Restrictive_practice_authorisation expires <= 30d"
+
+state_machine_references:
+  reads_from:
+    - machine: consent
+      fact_type: active_consents_for_class
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: consent_gathering_recommendation
+      action: create_consent_gathering_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+consent_gating:
+  required_consent_class: "Restrictive_practice_authorisation"
+  expiry_check: true
+  consent_missing_action: create_consent_gathering_recommendation
+  consent_missing_recommendation_template: "renew_restrictive_practice_authorisation_with_SDM"
+
+authorisation_gating:
+  required_roles:
+    - "SDM_workflow_owner"
+  latency_budget_ms: 50
+  fallback_routing_if_unavailable:
+    - deferred
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'RESTRICTIVE_PRACTICE_AUTHORISATION_EXPIRING', last_30d)"
+
+test_cases:
+  - name: authorisation_expiring_fires
+    class: consent_gating
+    fixture: fixtures/rp-auth-expiring.json
+    expected_fire: true
+    expected_recommendation: "Renew restrictive practice authorisation with SDM"
+  - name: authorisation_far_from_expiry_no_fire
+    class: positive
+    fixture: fixtures/rp-auth-not-expiring.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/rp-auth-palliative.json
+    expected_fire: false
+  - name: evidence_trace_records_expiry_context
+    class: evidence_trace
+    fixture: fixtures/rp-auth-expiring.json
+    expected_fire: true
