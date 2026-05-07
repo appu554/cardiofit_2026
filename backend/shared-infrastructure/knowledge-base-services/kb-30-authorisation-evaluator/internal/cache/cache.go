@@ -41,21 +41,29 @@ func DefaultTTL(res evaluator.Result) time.Duration {
 	if res.Decision == dsl.DecisionDenied && len(res.Conditions) == 0 {
 		return 24 * time.Hour
 	}
+	if len(res.Conditions) == 0 {
+		return 24 * time.Hour
+	}
+	// The most-volatile dependency wins (shortest TTL).
+	ttl := 24 * time.Hour
 	for _, c := range res.Conditions {
 		check := strings.ToLower(c.Check + " " + c.Condition)
 		switch {
 		case strings.Contains(check, "consent"):
-			return 5 * time.Minute
-		case strings.Contains(check, "prescribingagreement"):
-			return 15 * time.Minute
+			if 5*time.Minute < ttl {
+				ttl = 5 * time.Minute
+			}
+		case strings.Contains(check, "prescribingagreement"), strings.Contains(check, "agreement"):
+			if 15*time.Minute < ttl {
+				ttl = 15 * time.Minute
+			}
 		case strings.Contains(check, "credential"), strings.Contains(check, "endorsement"):
-			return time.Hour
+			if time.Hour < ttl {
+				ttl = time.Hour
+			}
 		}
 	}
-	if len(res.Conditions) == 0 {
-		return 24 * time.Hour
-	}
-	return time.Hour
+	return ttl
 }
 
 // ----- InMemoryCache ---------------------------------------------------------
