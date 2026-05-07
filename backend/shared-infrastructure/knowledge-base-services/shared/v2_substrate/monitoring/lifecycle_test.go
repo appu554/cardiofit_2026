@@ -3,6 +3,7 @@ package monitoring
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,24 +180,7 @@ func TestLifecycle_InvalidActorClassRejected(t *testing.T) {
 		ActorID:    uuid.New(),
 		ActorClass: "bogus_class",
 	})
-	if err == nil || !contains(err.Error(), "actor class") {
+	if err == nil || !strings.Contains(err.Error(), "actor class") {
 		t.Errorf("expected actor class error; got %v", err)
 	}
-}
-
-// contains is a tiny helper to avoid importing "strings" just for one call.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		(len(s) > len(substr) &&
-			(s[:len(substr)] == substr ||
-				s[len(s)-len(substr):] == substr ||
-				containsMid(s, substr))))
-}
-func containsMid(s, substr string) bool {
-	for i := 1; i+len(substr) < len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
