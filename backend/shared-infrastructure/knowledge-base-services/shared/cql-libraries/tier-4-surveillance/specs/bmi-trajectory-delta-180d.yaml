@@ -1,0 +1,56 @@
+rule_id: VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D
+schema_version: "2.0"
+library: Trajectory
+define: "BMI Trajectory Delta 180d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-BMI-DELTA-180D
+content_sha: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+tier: tier_4_surveillance
+summary: >
+  Surveillance signal: BMI delta from baseline over 180 days <= -1.5 kg/m^2 (sustained BMI decline trajectory). AN-ACC v1.1 + Aged Care Quality Standard 5 nutrition surveillance reference 1.5 kg/m^2 as the flagged-decline threshold.
+
+trigger_sources:
+  - source_type: observation_update
+    predicate: "trajectory_or_lifecycle_recomputed"
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.bmi
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "substrate_threshold_not_crossed"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D', 30)"
+
+test_cases:
+  - name: positive_fires
+    class: baseline_aware_fire
+    fixture: fixtures/bmi-trajectory-delta-180d-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface 180-day BMI decline trajectory for clinical-care review"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/bmi-trajectory-delta-180d-negative.json
+    expected_fire: false
+  - name: suppression_no_fire
+    class: suppression
+    fixture: fixtures/bmi-trajectory-delta-180d-suppression.json
+    expected_fire: false

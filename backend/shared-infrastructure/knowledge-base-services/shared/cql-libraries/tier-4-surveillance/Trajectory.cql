@@ -23,6 +23,10 @@ include QualityGapHelpers version '1.0' called QG
  *   - Weight Loss Trajectory 90d
  *   - Behavioural Episode Frequency Change 14d
  *
+ * Wave-extension batch (2026-05) adds 2 more trajectory defines:
+ *   - Sodium Trajectory Delta 90d
+ *   - BMI Trajectory Delta 180d
+ *
  * The remaining surveillance rules are queued — see
  * claudedocs/clinical/2026-05-Layer3-Wave5-Task1-tier4-rule-queue.md.
  *
@@ -91,3 +95,41 @@ define "Behavioural Episode Frequency Change 14d":
   and Count(Trace."RuleFiredFor"(
         Patient.id, 'VAIDSHALA_T4_BEHAVIOURAL_EPISODE_FREQUENCY_CHANGE_14D',
         Interval[Now() - 14 day, Now()])) = 0
+
+// -----------------------------------------------------------------
+// VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D
+// -----------------------------------------------------------------
+// Surveillance signal: sodium delta from baseline over 90 days.
+// Fires when |delta| >= 5 mmol/L (either hyponatraemia or
+// hypernatraemia trajectory). Uses DeltaFromBaseline against the
+// resident sodium baseline.
+//
+// TODO(layer1-bind): bind to KDIGO/AHA dysnatraemia surveillance
+// thresholds once Pipeline-2 publishes the source.
+define "Sodium Trajectory Delta 90d":
+  (
+    State."DeltaFromBaseline"(Patient.id, 'sodium', 90) <= -5.0
+      or State."DeltaFromBaseline"(Patient.id, 'sodium', 90) >= 5.0
+  )
+  and not Suppress."WasActionedRecently"(
+        Patient.id, 'VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D', 30)
+  and Count(Trace."RuleFiredFor"(
+        Patient.id, 'VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D',
+        Interval[Now() - 30 day, Now()])) = 0
+
+// -----------------------------------------------------------------
+// VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D
+// -----------------------------------------------------------------
+// Surveillance signal: BMI delta from baseline over 180 days.
+// Fires when delta <= -1.5 kg/m^2 (sustained BMI decline trajectory).
+// AN-ACC v1.1 + Aged Care Quality Standard 5 nutrition surveillance
+// reference 1.5 kg/m^2 as the flagged-decline threshold.
+define "BMI Trajectory Delta 180d":
+  State."DeltaFromBaseline"(Patient.id, 'bmi', 180) <= -1.5
+  and not State."HasActiveConcernType"(
+        Patient.id, 'WEIGHT_LOSS_INTENTIONAL')
+  and not Suppress."WasActionedRecently"(
+        Patient.id, 'VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D', 30)
+  and Count(Trace."RuleFiredFor"(
+        Patient.id, 'VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D',
+        Interval[Now() - 30 day, Now()])) = 0

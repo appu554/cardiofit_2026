@@ -1,0 +1,56 @@
+rule_id: VAIDSHALA_T4_OPIOID_REVIEW_OVERDUE_3MO
+schema_version: "2.0"
+library: Lifecycle
+define: "Opioid Review Overdue 3mo"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-OPIOID-REVIEW-OVERDUE-PLACEHOLDER
+content_sha: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+tier: tier_4_surveillance
+summary: >
+  Lifecycle surveillance: strong opioid (ATC N02AA) active and no OPIOID_REVIEW_DONE_90D concern. ADG 2025 opioid review cycle (every 90 days). TODO(layer1-bind): bind to ADG 2025 opioid section once Pipeline-2 extracts the source PDF.
+
+trigger_sources:
+  - source_type: observation_update
+    predicate: "trajectory_or_lifecycle_recomputed"
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "substrate_threshold_not_crossed"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_OPIOID_REVIEW_OVERDUE_3MO', 30)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/opioid-review-overdue-3mo-positive.json
+    expected_fire: true
+    expected_recommendation: "Opioid review overdue >3 months — prompt analgesic-effectiveness review"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/opioid-review-overdue-3mo-negative.json
+    expected_fire: false
+  - name: suppression_no_fire
+    class: suppression
+    fixture: fixtures/opioid-review-overdue-3mo-suppression.json
+    expected_fire: false

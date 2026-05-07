@@ -45,12 +45,22 @@ TIER4_DIR = (
 SPECS_DIR = TIER4_DIR / "specs"
 
 EXPECTED_RULE_IDS = {
+    # Wave 5 vertical slice (6)
     "VAIDSHALA_T4_EGFR_TRAJECTORY_DECLINE_90D",
     "VAIDSHALA_T4_WEIGHT_LOSS_TRAJECTORY_90D",
     "VAIDSHALA_T4_BEHAVIOURAL_EPISODE_FREQUENCY_CHANGE_14D",
     "VAIDSHALA_T4_ANTIPSYCHOTIC_REVIEW_OVERDUE_3MO",
     "VAIDSHALA_T4_CONSENT_EXPIRING_WITHIN_30D",
     "VAIDSHALA_T4_MONITORING_PLAN_OVERDUE_OBSERVATION",
+    # Wave-extension batch 2026-05 (8)
+    "VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D",
+    "VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D",
+    "VAIDSHALA_T4_PPI_REVIEW_OVERDUE_6MO",
+    "VAIDSHALA_T4_STATIN_REVIEW_OVERDUE_12MO",
+    "VAIDSHALA_T4_OPIOID_REVIEW_OVERDUE_3MO",
+    "VAIDSHALA_T4_ANTIMICROBIAL_REVIEW_OVERDUE_7D",
+    "VAIDSHALA_T4_PRESCRIBER_CREDENTIAL_EXPIRING_WITHIN_30D",
+    "VAIDSHALA_T4_PRESCRIBING_AGREEMENT_EXPIRING_WITHIN_30D",
 }
 
 
@@ -77,7 +87,7 @@ def _resolve_body(define: str) -> str:
 
 def test_wave5_corpus_count():
     specs = _all_specs()
-    assert len(specs) == 6, f"expected 6 Wave 5 specs, found {len(specs)}"
+    assert len(specs) == 14, f"expected 14 Wave 5 + extension specs, found {len(specs)}"
     rule_ids = {load_spec(p)["rule_id"] for p in specs}
     assert rule_ids == EXPECTED_RULE_IDS, (
         f"unexpected rule_ids: {rule_ids ^ EXPECTED_RULE_IDS}"

@@ -1,0 +1,56 @@
+rule_id: VAIDSHALA_T4_ANTIMICROBIAL_REVIEW_OVERDUE_7D
+schema_version: "2.0"
+library: Lifecycle
+define: "Antimicrobial Review Overdue 7d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-ANTIMICROBIAL-REVIEW-OVERDUE-PLACEHOLDER
+content_sha: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+tier: tier_4_surveillance
+summary: >
+  Lifecycle surveillance: antimicrobial (ATC J01) active and no ANTIMICROBIAL_REVIEW_DONE_7D concern. ADG 2025 antimicrobial review cycle (echoes ACSQHC AMS 7-day review). TODO(layer1-bind): bind to ADG 2025 antimicrobial section once Pipeline-2 extracts the source PDF.
+
+trigger_sources:
+  - source_type: observation_update
+    predicate: "trajectory_or_lifecycle_recomputed"
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "substrate_threshold_not_crossed"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_ANTIMICROBIAL_REVIEW_OVERDUE_7D', 3)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/antimicrobial-review-overdue-7d-positive.json
+    expected_fire: true
+    expected_recommendation: "Antimicrobial review overdue >7 days — prompt continuation review"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/antimicrobial-review-overdue-7d-negative.json
+    expected_fire: false
+  - name: suppression_no_fire
+    class: suppression
+    fixture: fixtures/antimicrobial-review-overdue-7d-suppression.json
+    expected_fire: false

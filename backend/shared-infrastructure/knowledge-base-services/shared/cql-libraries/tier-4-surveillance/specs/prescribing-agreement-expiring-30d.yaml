@@ -1,0 +1,53 @@
+rule_id: VAIDSHALA_T4_PRESCRIBING_AGREEMENT_EXPIRING_WITHIN_30D
+schema_version: "2.0"
+library: Lifecycle
+define: "Prescribing Agreement Expiring Within 30d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-PRESCRIBING-AGREEMENT-EXPIRING-30D
+content_sha: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+tier: tier_4_surveillance
+summary: >
+  Lifecycle surveillance: resident-prescriber prescribing agreement expiring within 30 days (RACGP / PSA aged-care care-plan agreement). Fires informationally to drive renewal workflow.
+
+trigger_sources:
+  - source_type: observation_update
+    predicate: "trajectory_or_lifecycle_recomputed"
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+
+state_machine_references:
+  reads_from:
+    - machine: consent
+      fact_type: active_consents_for_class
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "substrate_threshold_not_crossed"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_PRESCRIBING_AGREEMENT_EXPIRING_WITHIN_30D', 14)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/prescribing-agreement-expiring-30d-positive.json
+    expected_fire: true
+    expected_recommendation: "Prescribing agreement expiring within 30 days — initiate renewal workflow"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/prescribing-agreement-expiring-30d-negative.json
+    expected_fire: false
+  - name: suppression_no_fire
+    class: suppression
+    fixture: fixtures/prescribing-agreement-expiring-30d-suppression.json
+    expected_fire: false

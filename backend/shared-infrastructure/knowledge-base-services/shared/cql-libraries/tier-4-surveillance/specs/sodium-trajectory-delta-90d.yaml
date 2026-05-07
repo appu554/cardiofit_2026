@@ -1,0 +1,53 @@
+rule_id: VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D
+schema_version: "2.0"
+library: Trajectory
+define: "Sodium Trajectory Delta 90d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-SODIUM-DELTA-90D
+content_sha: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+tier: tier_4_surveillance
+summary: >
+  Surveillance signal: sodium delta from baseline over 90 days exceeds +/- 5 mmol/L (dysnatraemia trajectory). Uses DeltaFromBaseline against the resident sodium baseline. TODO(layer1-bind): bind to KDIGO/AHA dysnatraemia surveillance thresholds once Pipeline-2 publishes the source.
+
+trigger_sources:
+  - source_type: observation_update
+    predicate: "trajectory_or_lifecycle_recomputed"
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.sodium
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "substrate_threshold_not_crossed"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D', 30)"
+
+test_cases:
+  - name: positive_fires
+    class: baseline_aware_fire
+    fixture: fixtures/sodium-trajectory-delta-90d-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface 90-day sodium delta trajectory for clinical review"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/sodium-trajectory-delta-90d-negative.json
+    expected_fire: false
+  - name: suppression_no_fire
+    class: suppression
+    fixture: fixtures/sodium-trajectory-delta-90d-suppression.json
+    expected_fire: false

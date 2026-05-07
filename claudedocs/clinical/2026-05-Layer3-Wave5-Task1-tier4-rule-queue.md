@@ -8,6 +8,22 @@ defines (`Trajectory.cql`) + 3 lifecycle defines (`Lifecycle.cql`). All 6 pass
 the toolchain (Stage 1 + two-gate + CompatibilityChecker + CDS Hooks emitter)
 and are exercised by `tests/test_tier4_wave5_batch.py`.
 
+**Wave-extension batch (2026-05):** 8 more shipped — 2 trajectory defines
+(sodium delta-90d, BMI delta-180d) + 6 lifecycle defines (PPI / statin /
+opioid / antimicrobial review-cycle + prescriber credential / prescribing
+agreement expiry). Total Tier 4 shipped: **14** of ~50 target rules.
+
+| rule_id | criterion_id | citation |
+|---|---|---|
+| `VAIDSHALA_T4_SODIUM_TRAJECTORY_DELTA_90D` | VAIDSHALA-T4-SODIUM-DELTA-90D | KDIGO/AHA dysnatraemia surveillance (TODO layer1-bind) |
+| `VAIDSHALA_T4_BMI_TRAJECTORY_DELTA_180D` | VAIDSHALA-T4-BMI-DELTA-180D | AN-ACC v1.1 + Aged Care Quality Standard 5 nutrition |
+| `VAIDSHALA_T4_PPI_REVIEW_OVERDUE_6MO` | VAIDSHALA-T4-PPI-REVIEW-OVERDUE-PLACEHOLDER | ADG 2025 PPI cycle (TODO layer1-bind) |
+| `VAIDSHALA_T4_STATIN_REVIEW_OVERDUE_12MO` | VAIDSHALA-T4-STATIN-REVIEW-OVERDUE-PLACEHOLDER | ADG 2025 statin cycle (TODO layer1-bind) |
+| `VAIDSHALA_T4_OPIOID_REVIEW_OVERDUE_3MO` | VAIDSHALA-T4-OPIOID-REVIEW-OVERDUE-PLACEHOLDER | ADG 2025 opioid cycle (TODO layer1-bind) |
+| `VAIDSHALA_T4_ANTIMICROBIAL_REVIEW_OVERDUE_7D` | VAIDSHALA-T4-ANTIMICROBIAL-REVIEW-OVERDUE-PLACEHOLDER | ADG 2025 antimicrobial cycle + ACSQHC AMS (TODO layer1-bind) |
+| `VAIDSHALA_T4_PRESCRIBER_CREDENTIAL_EXPIRING_WITHIN_30D` | VAIDSHALA-T4-PRESCRIBER-CREDENTIAL-EXPIRING-30D | Aged Care Act 2024 + Quality of Care Principles 2025 |
+| `VAIDSHALA_T4_PRESCRIBING_AGREEMENT_EXPIRING_WITHIN_30D` | VAIDSHALA-T4-PRESCRIBING-AGREEMENT-EXPIRING-30D | RACGP / PSA aged-care care-plan agreement |
+
 The remaining 44 rules are queued with a clear authoring path: each entry below
 identifies the surveillance theme, the published source, the helper(s) the rule
 will call, and the suppression class governing surface behaviour. Authors lift

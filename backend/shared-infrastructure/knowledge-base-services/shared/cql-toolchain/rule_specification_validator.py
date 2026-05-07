@@ -66,6 +66,11 @@ KNOWN_FACT_TYPES: dict[str, set[str]] = {
         # ClinicalStateHelpers.DeltaFromBaseline / IsTrending.
         "baseline_state.weight_kg",
         "baseline_state.egfr",
+        # Wave-extension batch (2026-05) Tier 4 trajectory facts.
+        # baseline_state.bmi backs the 180-day BMI trajectory rule;
+        # baseline_state.sodium is reused for the 90-day sodium delta
+        # surveillance rule (registered above).
+        "baseline_state.bmi",
         "active_concerns",
         # Wave 4A Tier 3 quality-gap fact_types (PHARMA-Care + Standard 5
         # + care-transition + AN-ACC defensibility). Each fact is backed
