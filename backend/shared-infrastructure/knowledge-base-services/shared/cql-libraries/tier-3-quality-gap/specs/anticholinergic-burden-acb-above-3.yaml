@@ -1,0 +1,70 @@
+rule_id: VAIDSHALA_PC_D3_ACB_ABOVE_3
+schema_version: "2.0"
+library: PharmaCareStandard5
+define: "PharmaCare Anticholinergic Burden ACB Above 3"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-PC-D3-ACB-ABOVE-3
+content_sha: "a000000000000000000000000000000000000000000000000000000000000003"
+tier: tier_3_quality_gap
+summary: >
+  PHARMA-Care domain D3 (adverse-drug-event risk) + Aged Care Quality
+  Standard 5 evidence. Resident's computed ACB (Anticholinergic
+  Burden) score exceeds 3, indicating elevated risk of anticholinergic
+  side effects. TODO(clinical-author): confirm exact PHARMA-Care
+  domain-D3 published label.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_anticholinergic_medication"
+  - source_type: condition_change
+    predicate: "anticholinergic_burden_review_concern_closed_or_resolved"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: acb_score
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "AcbScoreFor(resident) <= 3"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ANTICHOLINERGIC_BURDEN_REVIEW_DONE')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_PC_D3_ACB_ABOVE_3', 84)"
+
+test_cases:
+  - name: acb_above_3_fires
+    class: positive
+    fixture: fixtures/anticholinergic-burden-acb-above-3-positive.json
+    expected_fire: true
+    expected_recommendation: "Review anticholinergic burden per PHARMA-Care D3 quality indicator"
+  - name: acb_at_or_below_3_no_fire
+    class: substrate_state
+    fixture: fixtures/anticholinergic-burden-acb-above-3-negative.json
+    expected_fire: false
+  - name: recently_actioned_suppressed
+    class: suppression
+    fixture: fixtures/anticholinergic-burden-acb-above-3-suppression.json
+    expected_fire: false

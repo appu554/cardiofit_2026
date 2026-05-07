@@ -1,0 +1,71 @@
+rule_id: VAIDSHALA_PC_D4_BPSD_FIRST_LINE_NONPHARM
+schema_version: "2.0"
+library: PharmaCareStandard5
+define: "PharmaCare BPSD First Line NonPharm"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-PC-D4-BPSD-FIRST-LINE-NONPHARM
+content_sha: "a000000000000000000000000000000000000000000000000000000000000004"
+tier: tier_3_quality_gap
+summary: >
+  PHARMA-Care domain D4 (behavioural-care first-line non-pharm) +
+  Aged Care Quality Standard 5 evidence. Resident has an active BPSD
+  diagnosis with a psychotropic prescribed (ATC N05A or N05B) but no
+  documented non-pharmacological intervention trial concern. TODO
+  (clinical-author): confirm exact PHARMA-Care domain-D4 published
+  label.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A_or_N05B"
+  - source_type: condition_change
+    predicate: "bpsd_diagnosis_active"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'NONPHARM_INTERVENTION_TRIAL')"
+  - class: substrate_state
+    predicate: "not HasActiveConcernType(resident, 'BPSD_DIAGNOSIS')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_PC_D4_BPSD_FIRST_LINE_NONPHARM', 84)"
+
+test_cases:
+  - name: bpsd_psychotropic_no_nonpharm_trial_fires
+    class: positive
+    fixture: fixtures/bpsd-first-line-nonpharm-positive.json
+    expected_fire: true
+    expected_recommendation: "Document non-pharm intervention trial per PHARMA-Care D4"
+  - name: nonpharm_trial_documented_no_fire
+    class: substrate_state
+    fixture: fixtures/bpsd-first-line-nonpharm-negative.json
+    expected_fire: false
+  - name: recently_actioned_suppressed
+    class: suppression
+    fixture: fixtures/bpsd-first-line-nonpharm-suppression.json
+    expected_fire: false

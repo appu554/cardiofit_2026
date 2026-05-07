@@ -1,0 +1,72 @@
+rule_id: VAIDSHALA_PC_D2_ANTIPSYCHOTIC_PREVALENCE
+schema_version: "2.0"
+library: PharmaCareStandard5
+define: "PharmaCare Antipsychotic Prevalence Without BPSD"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-PC-D2-ANTIPSYCHOTIC-PREVALENCE
+content_sha: "a000000000000000000000000000000000000000000000000000000000000001"
+tier: tier_3_quality_gap
+summary: >
+  PHARMA-Care domain D2 (restraint / antipsychotic prescribing) +
+  Aged Care Quality Standard 5 evidence. Antipsychotic (ATC N05A)
+  active without an active BPSD diagnosis or documented BPSD review
+  in the last 12 weeks. Surfaces a quality-indicator gap; output is
+  workflow exhaust feeding the PHARMA-Care 5-domain indicator. TODO
+  (clinical-author): confirm exact PHARMA-Care domain-D2 published
+  label.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A"
+  - source_type: condition_change
+    predicate: "bpsd_concern_changed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BPSD_DIAGNOSIS')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BPSD_REVIEW_DONE_12W')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_PC_D2_ANTIPSYCHOTIC_PREVALENCE', 84)"
+
+test_cases:
+  - name: antipsychotic_no_bpsd_fires
+    class: positive
+    fixture: fixtures/antipsychotic-prevalence-without-bpsd-positive.json
+    expected_fire: true
+    expected_recommendation: "Review antipsychotic prescribing per PHARMA-Care D2 quality indicator"
+  - name: bpsd_diagnosis_active_no_fire
+    class: substrate_state
+    fixture: fixtures/antipsychotic-prevalence-without-bpsd-negative.json
+    expected_fire: false
+  - name: recently_actioned_suppressed
+    class: suppression
+    fixture: fixtures/antipsychotic-prevalence-without-bpsd-suppression.json
+    expected_fire: false

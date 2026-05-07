@@ -101,6 +101,17 @@ HELPER_TO_FACTS: dict[str, list[tuple[str, str]]] = {
     "RecentlyOpenedSimilarConcern": [
         ("recommendation_state", "recently_opened_similar_concern"),
     ],
+    # QualityGapHelpers (Wave 4A Tier 3)
+    "ActiveMedicineUseCount": [("clinical", "polypharmacy_count")],
+    "AcbScoreFor": [("clinical", "acb_score")],
+    "HasRecentEventOfType": [("clinical", "events")],
+    "EventCountSince": [("clinical", "events")],
+    "HasCompletedReconciliationFor": [
+        ("clinical", "discharge_reconciliation_status"),
+    ],
+    "LatestHospitalDischargeOlderThan": [("clinical", "events")],
+    "LatestHospitalDischargeId": [("clinical", "events")],
+    "AkpsDeltaSince": [("clinical", "baseline_state.akps")],
 }
 
 SUBSTRATE_PRIMITIVES = {

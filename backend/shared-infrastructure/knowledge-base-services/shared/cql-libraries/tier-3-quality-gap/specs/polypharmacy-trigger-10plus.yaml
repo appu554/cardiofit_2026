@@ -1,0 +1,65 @@
+rule_id: VAIDSHALA_PC_D1_POLYPHARMACY_10PLUS
+schema_version: "2.0"
+library: PharmaCareStandard5
+define: "PharmaCare Polypharmacy Trigger 10plus"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-PC-D1-POLYPHARMACY-10PLUS
+content_sha: "a000000000000000000000000000000000000000000000000000000000000002"
+tier: tier_3_quality_gap
+summary: >
+  PHARMA-Care domain D1 (medicines optimisation) + Aged Care Quality
+  Standard 5 evidence. Resident has 10 or more distinct active
+  MedicineUses; surfaces a polypharmacy quality-indicator gap. TODO
+  (clinical-author): confirm exact PHARMA-Care domain-D1 published
+  label.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "active_medicine_use_count_changed"
+  - source_type: care_intensity_transition
+    predicate: "care_intensity_changed_to_active_treatment"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: polypharmacy_count
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "ActiveMedicineUseCount(resident) < 10"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_PC_D1_POLYPHARMACY_10PLUS', 84)"
+
+test_cases:
+  - name: ten_or_more_meds_fires
+    class: positive
+    fixture: fixtures/polypharmacy-trigger-10plus-positive.json
+    expected_fire: true
+    expected_recommendation: "Review medication regimen per PHARMA-Care D1 polypharmacy indicator"
+  - name: under_ten_meds_no_fire
+    class: substrate_state
+    fixture: fixtures/polypharmacy-trigger-10plus-negative.json
+    expected_fire: false
+  - name: recently_actioned_suppressed
+    class: suppression
+    fixture: fixtures/polypharmacy-trigger-10plus-suppression.json
+    expected_fire: false

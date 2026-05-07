@@ -57,7 +57,16 @@ KNOWN_FACT_TYPES: dict[str, set[str]] = {
         "baseline_state.bp_diastolic",
         "baseline_state.CK",
         "baseline_state.BGL",
+        "baseline_state.akps",
         "active_concerns",
+        # Wave 4A Tier 3 quality-gap fact_types (PHARMA-Care + Standard 5
+        # + care-transition + AN-ACC defensibility). Each fact is backed
+        # by a helper in shared/cql-libraries/helpers/QualityGapHelpers.cql
+        # and registered in two_gate_validator.HELPER_TO_FACTS.
+        "polypharmacy_count",
+        "acb_score",
+        "events",
+        "discharge_reconciliation_status",
         "care_intensity",
         "capacity_assessment",
         "latest_observation_potassium",
