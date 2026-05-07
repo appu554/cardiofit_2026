@@ -103,12 +103,42 @@ FROM recommendations WHERE id = $1`
 	return &rec, nil
 }
 
-// UpdateState and ListDeferredOverdue are stubbed in this task and implemented
-// in Tasks 5 and 7 respectively. The build still succeeds because they return
-// real errors describing the deferral.
+// UpdateState applies a state transition. The Lifecycle engine (lifecycle.go)
+// is the only legitimate caller — it has already validated the transition
+// against the DAG, the consent gate, and the deferred review_due_at guard.
+//
+// The CASE-WHEN clauses auto-populate submitted_at/decided_at/closed_at on
+// first entry to those states. The decided_at population in particular is
+// load-bearing for the RIR matview (Task 8): COALESCE(decided_at, closed_at)
+// must not fall through to NULL for actioned recommendations.
+//
+// ListDeferredOverdue remains stubbed and is implemented in Task 7.
 func (s *PostgresStore) UpdateState(ctx context.Context, id uuid.UUID,
 	newState string, reviewDueAt *time.Time) error {
-	return errors.New("UpdateState: implemented in lifecycle.go (Task 5)")
+	if !models.IsValidRecommendationState(newState) {
+		return fmt.Errorf("invalid state: %q", newState)
+	}
+	const q = `
+UPDATE recommendations
+SET state = $1,
+    review_due_at = $2,
+    submitted_at = CASE WHEN $1 = 'submitted' AND submitted_at IS NULL
+                        THEN NOW() ELSE submitted_at END,
+    decided_at   = CASE WHEN $1 = 'decided'   AND decided_at   IS NULL
+                        THEN NOW() ELSE decided_at   END,
+    closed_at    = CASE WHEN $1 = 'closed'    AND closed_at    IS NULL
+                        THEN NOW() ELSE closed_at    END,
+    updated_at   = NOW()
+WHERE id = $3`
+	res, err := s.db.ExecContext(ctx, q, newState, reviewDueAt, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *PostgresStore) ListDeferredOverdue(ctx context.Context,
