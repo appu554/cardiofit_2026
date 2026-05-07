@@ -1,0 +1,69 @@
+rule_id: START_A1_ANTICOAGULATION_AF
+schema_version: "2.0"
+library: StartV3
+define: "START A1 Anticoagulation AF"
+criterion_set: START_V3
+criterion_id: START-V3-A1
+content_sha: "2222222222222222222222222222222222222222222222222222222222222222"
+tier: tier_2_deprescribing
+summary: >
+  Atrial fibrillation diagnosis active without anticoagulant
+  (B01AA / B01AE / B01AF) and no contraindication concern. Drafts a
+  PRESCRIBING_OMISSION recommendation per START v3 §A1 (O'Mahony
+  et al. 2023).
+
+trigger_sources:
+  - source_type: condition_change
+    predicate: "atrial_fibrillation_concern_opened"
+  - source_type: medication_change
+    predicate: "anticoagulant_ceased_or_held"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ANTICOAGULATION_CONTRAINDICATED')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BLEEDING_RISK_HIGH')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'START_A1_ANTICOAGULATION_AF', 90)"
+
+test_cases:
+  - name: af_no_anticoagulant_fires
+    class: positive
+    fixture: fixtures/start-a1-af-no-ac.json
+    expected_fire: true
+    expected_recommendation: "Consider initiating anticoagulation per START v3 A1 (chronic AF)"
+  - name: af_with_apixaban_no_fire
+    class: substrate_state
+    fixture: fixtures/start-a1-af-apixaban.json
+    expected_fire: false
+  - name: af_bleeding_risk_no_fire
+    class: suppression
+    fixture: fixtures/start-a1-af-bleeding-risk.json
+    expected_fire: false

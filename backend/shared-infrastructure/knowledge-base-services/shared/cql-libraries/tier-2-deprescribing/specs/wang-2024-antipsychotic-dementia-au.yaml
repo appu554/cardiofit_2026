@@ -1,0 +1,67 @@
+rule_id: WANG_2024_ANTIPSYCHOTIC_DEMENTIA_AU
+schema_version: "2.0"
+library: Wang2024
+define: "Wang 2024 Antipsychotic Dementia AU"
+criterion_set: PIMS_WANG
+criterion_id: WANG-2024-AU-PIMS-3
+content_sha: "4444444444444444444444444444444444444444444444444444444444444444"
+tier: tier_2_deprescribing
+summary: >
+  Antipsychotic (ATC N05A) active in resident with dementia and no
+  documented BPSD review within last 90 days. Drafts a review/dose
+  reduction recommendation per Wang 2024 AU-PIMs §3 (limit duration
+  ≤12 weeks; document review at each renewal).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A"
+  - source_type: condition_change
+    predicate: "dementia_concern_persistent"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BPSD_REVIEW_DONE_90D')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'WANG_2024_ANTIPSYCHOTIC_DEMENTIA_AU', 90)"
+
+test_cases:
+  - name: antipsychotic_dementia_no_review_fires
+    class: positive
+    fixture: fixtures/wang-aps-dementia-no-review.json
+    expected_fire: true
+    expected_recommendation: "Review antipsychotic for dementia per Wang 2024 AU-PIMs §3"
+  - name: bpsd_review_done_no_fire
+    class: substrate_state
+    fixture: fixtures/wang-aps-dementia-review-done.json
+    expected_fire: false
+  - name: palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/wang-aps-dementia-palliative.json
+    expected_fire: false

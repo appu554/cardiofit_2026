@@ -1,0 +1,68 @@
+rule_id: STOPP_B1_ASPIRIN_PRIMARY_PREVENTION
+schema_version: "2.0"
+library: StoppV3
+define: "STOPP B1 Aspirin Primary Prevention"
+criterion_set: STOPP_V3
+criterion_id: STOPP-V3-B1
+content_sha: "1111111111111111111111111111111111111111111111111111111111111111"
+tier: tier_2_deprescribing
+summary: >
+  Aspirin (ATC B01AC06) active for primary prevention without active
+  cardiovascular secondary-prevention concern. Drafts a deprescribing
+  recommendation per STOPP v3 §B1 (O'Mahony et al. 2023).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_B01AC06"
+  - source_type: condition_change
+    predicate: "cardiovascular_concern_closed_or_resolved"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'CHD_SECONDARY_PREVENTION')"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'CVD_SECONDARY_PREVENTION')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'STOPP_B1_ASPIRIN_PRIMARY_PREVENTION', 90)"
+
+test_cases:
+  - name: aspirin_no_cv_concern_fires
+    class: positive
+    fixture: fixtures/stopp-b1-aspirin-no-cv.json
+    expected_fire: true
+    expected_recommendation: "Consider aspirin cessation per STOPP v3 B1 (no CV indication)"
+  - name: aspirin_with_chd_concern_no_fire
+    class: substrate_state
+    fixture: fixtures/stopp-b1-aspirin-chd.json
+    expected_fire: false
+  - name: aspirin_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/stopp-b1-aspirin-palliative.json
+    expected_fire: false

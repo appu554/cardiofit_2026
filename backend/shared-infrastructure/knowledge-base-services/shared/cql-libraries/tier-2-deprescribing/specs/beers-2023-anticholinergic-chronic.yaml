@@ -1,0 +1,67 @@
+rule_id: BEERS_2023_ANTICHOLINERGIC_CHRONIC_USE
+schema_version: "2.0"
+library: Beers2023
+define: "Beers 2023 Anticholinergic Chronic Use"
+criterion_set: BEERS_2023
+criterion_id: BEERS-2023-T2-ANTIHISTAMINE
+content_sha: "3333333333333333333333333333333333333333333333333333333333333333"
+tier: tier_2_deprescribing
+summary: >
+  First-generation antihistamine (ATC R06AA / R06AB / R06AD / R06AE)
+  active and no anticholinergic-burden review concern closed recently.
+  Drafts a deprescribing recommendation per AGS Beers 2023 Table 2
+  (avoid in older adults; strong recommendation against chronic use).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_R06A"
+  - source_type: care_transition
+    predicate: "post_admission_medication_review"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ANTICHOLINERGIC_BURDEN_REVIEW_DONE')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'BEERS_2023_ANTICHOLINERGIC_CHRONIC_USE', 60)"
+
+test_cases:
+  - name: first_gen_antihistamine_active_fires
+    class: positive
+    fixture: fixtures/beers-anti-r06aa-active.json
+    expected_fire: true
+    expected_recommendation: "Consider switching to non-anticholinergic alternative per Beers 2023 Table 2"
+  - name: review_recently_done_no_fire
+    class: substrate_state
+    fixture: fixtures/beers-anti-review-done.json
+    expected_fire: false
+  - name: palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/beers-anti-palliative.json
+    expected_fire: false
