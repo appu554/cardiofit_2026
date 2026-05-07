@@ -105,6 +105,15 @@ KNOWN_FACT_TYPES: dict[str, set[str]] = {
         "consent_gathering_recommendation",
         "monitoring_proposal",
     },
+    # recommendation_state — Wave 3 Task 4 (SuppressionHelpers). Tracks
+    # the closure-state of prior recommendation fires so Class 2
+    # (recently_actioned) suppressions can read it.
+    "recommendation_state": {
+        "recently_actioned",
+        "recently_deferred",
+        "recent_similar_actioned_count",
+        "recently_opened_similar_concern",
+    },
 }
 
 # Schedule-8 implicated criterion ids (regex match on criterion_id) — used

@@ -162,6 +162,58 @@ def test_substrate_aware_missing_substrate_state_class_fails(hyperk_spec):
     )
 
 
+def test_recommendation_state_recently_actioned_fact_recognised(ppi_spec):
+    """Wave 3 Task 4 — SuppressionHelpers facts must be known to
+    the validator's KNOWN_FACT_TYPES so rules can declare reads of
+    `recommendation_state.*`."""
+    spec = copy.deepcopy(ppi_spec)
+    spec["state_machine_references"]["reads_from"].append(
+        {
+            "machine": "recommendation_state",
+            "fact_type": "recently_actioned",
+            "read_or_write": "read",
+        }
+    )
+    spec["state_machine_references"]["reads_from"].append(
+        {
+            "machine": "recommendation_state",
+            "fact_type": "recently_deferred",
+            "read_or_write": "read",
+        }
+    )
+    spec["state_machine_references"]["reads_from"].append(
+        {
+            "machine": "recommendation_state",
+            "fact_type": "recent_similar_actioned_count",
+            "read_or_write": "read",
+        }
+    )
+    spec["state_machine_references"]["reads_from"].append(
+        {
+            "machine": "recommendation_state",
+            "fact_type": "recently_opened_similar_concern",
+            "read_or_write": "read",
+        }
+    )
+    result = validate_rule_specification(spec)
+    assert result.ok, [str(e) for e in result.errors]
+
+
+def test_recommendation_state_unknown_fact_rejected(ppi_spec):
+    """Unknown fact under recommendation_state machine still flagged."""
+    spec = copy.deepcopy(ppi_spec)
+    spec["state_machine_references"]["reads_from"].append(
+        {
+            "machine": "recommendation_state",
+            "fact_type": "totally_made_up_state",
+            "read_or_write": "read",
+        }
+    )
+    result = validate_rule_specification(spec)
+    assert not result.ok
+    assert any(e.code == "DANGLING_FACT" for e in result.errors)
+
+
 def test_schedule8_taper_without_authorisation_fails(ppi_spec):
     bad = copy.deepcopy(ppi_spec)
     bad["rule_id"] = "OPIOID_TAPER_S8_EXAMPLE"

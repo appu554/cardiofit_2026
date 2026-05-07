@@ -92,6 +92,15 @@ HELPER_TO_FACTS: dict[str, list[tuple[str, str]]] = {
     "ConsequencesOf": [("evidence_trace", "consequences")],
     "RecommendationOriginRule": [("evidence_trace", "recommendation_origin")],
     "ReasoningWindowSummary": [("evidence_trace", "rule_fires_history")],
+    # SuppressionHelpers (Wave 3 Task 4)
+    "WasActionedRecently": [("recommendation_state", "recently_actioned")],
+    "WasDeferredRecently": [("recommendation_state", "recently_deferred")],
+    "RecentSimilarActionedCount": [
+        ("recommendation_state", "recent_similar_actioned_count"),
+    ],
+    "RecentlyOpenedSimilarConcern": [
+        ("recommendation_state", "recently_opened_similar_concern"),
+    ],
 }
 
 SUBSTRATE_PRIMITIVES = {
