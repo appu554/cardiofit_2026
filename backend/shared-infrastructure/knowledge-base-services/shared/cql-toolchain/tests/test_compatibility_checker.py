@@ -126,6 +126,60 @@ def test_scope_rule_change_marks_referencing_rule_stale(populated_checker):
     assert affected == ["HYPERKALEMIA_RISK_TRAJECTORY"]
 
 
+def test_scope_rule_change_marks_three_or_more_rules_stale_wave5_task7(
+    populated_checker,
+):
+    """Wave 5 Task 7 acceptance: synthetic ScopeRule change marks >=3
+    expected defines STALE; no false positives.
+
+    All three pre-registered rules carry an
+    authorisation_gating.scope_rule_refs entry pointing at the synthetic
+    Victorian PCW exclusion ScopeRule (mirroring kb-31 deployment rule
+    AUS-VIC-PCW-S4-EXCLUSION-2026-07-01). One additional unrelated
+    ScopeRule is also injected on a single rule to verify selectivity:
+    a change to the unrelated rule must NOT mark the others STALE."""
+    target_scope_rule = "AUS-VIC-PCW-S4-EXCLUSION-2026-07-01"
+    unrelated_scope_rule = "AUS-NMBA-DRNP-PRESCRIBING-AGREEMENT-2025-09-30"
+
+    for rule_id in (
+        "PPI_LONG_TERM_NO_INDICATION",
+        "HYPERKALEMIA_RISK_TRAJECTORY",
+        "ANTIPSYCHOTIC_CONSENT_MISSING",
+    ):
+        spec = populated_checker.rules[rule_id].spec
+        spec.setdefault("authorisation_gating", {})
+        spec["authorisation_gating"]["scope_rule_refs"] = [target_scope_rule]
+
+    # Add an unrelated scope_rule_ref to ONE rule — its change must not
+    # mark the OTHER two rules STALE.
+    populated_checker.rules["PPI_LONG_TERM_NO_INDICATION"].spec[
+        "authorisation_gating"
+    ]["scope_rule_refs"].append(unrelated_scope_rule)
+
+    affected = populated_checker.OnScopeRuleChange([
+        ScopeRuleChange(scope_rule_ref=target_scope_rule),
+    ])
+    assert set(affected) == {
+        "PPI_LONG_TERM_NO_INDICATION",
+        "HYPERKALEMIA_RISK_TRAJECTORY",
+        "ANTIPSYCHOTIC_CONSENT_MISSING",
+    }, f"expected 3 rules STALE; got {affected}"
+    assert len(affected) >= 3, "Wave 5 Task 7: at least 3 rules must be STALE"
+
+    # Selectivity check: a change to the unrelated rule must mark only
+    # PPI_LONG_TERM_NO_INDICATION (the rule that holds the ref).
+    # Reset to ACTIVE so we can re-test.
+    for rule_id in affected:
+        populated_checker.rules[rule_id].status = CompatStatus.ACTIVE
+
+    selective_affected = populated_checker.OnScopeRuleChange([
+        ScopeRuleChange(scope_rule_ref=unrelated_scope_rule),
+    ])
+    assert selective_affected == ["PPI_LONG_TERM_NO_INDICATION"], (
+        "selectivity violated: unrelated ScopeRule change marked extra rules"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Event A — rule update
 # ---------------------------------------------------------------------------

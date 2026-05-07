@@ -191,6 +191,16 @@ class CompatibilityChecker:
     def OnScopeRuleChange(
         self, manifest: Iterable[ScopeRuleChange]
     ) -> list[str]:
+        """Event D consumer (Layer 3 v2 doc Part 4.2). When kb-31-scope-rules
+        publishes a new ScopeRule version (or retires one), every Layer 3
+        rule whose authorisation_gating.scope_rule_refs[] includes the
+        changed rule is marked STALE so it can be re-validated against
+        the new authorisation surface before it is re-promoted.
+
+        Wave 5 Task 7 acceptance: a synthetic ScopeRule change marks
+        >=3 expected defines STALE without false positives. See
+        tests/test_compatibility_checker.py for the selectivity test.
+        """
         changes = list(manifest)
         affected: list[str] = []
         for rule in self.rules.values():
