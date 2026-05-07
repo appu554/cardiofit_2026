@@ -98,6 +98,8 @@ func TestRecommendationTransitionMatrix(t *testing.T) {
 		{RecommendationStateSubmitted, RecommendationStateClosed, true},
 		{RecommendationStateViewed, RecommendationStateClosed, true},
 		{RecommendationStateDecided, RecommendationStateClosed, true},
+
+		// Skip-monitoring branch (Implemented → OutcomeRecorded directly)
 		{RecommendationStateImplemented, RecommendationStateOutcomeRecorded, true},
 
 		// Forbidden: terminal
@@ -130,6 +132,7 @@ func TestIsValidRecommendationType(t *testing.T) {
 	}{
 		{RecommendationTypeStop, true},
 		{RecommendationTypeMonitor, true},
+		{RecommendationTypeDoseChange, true},
 		{RecommendationTypeAdd, true},
 		{"bogus", false},
 	}
