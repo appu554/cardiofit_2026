@@ -55,8 +55,9 @@ func (f *fakeEdgeStore) EmitEdge(_ context.Context, e EvidenceEdge) error {
 
 func TestLifecycle_TransitionHappyPath(t *testing.T) {
 	store := &fakeStore{rec: &models.Recommendation{
-		ID:    uuid.New(),
-		State: models.RecommendationStateDrafted,
+		ID:         uuid.New(),
+		ResidentID: uuid.New(),
+		State:      models.RecommendationStateDrafted,
 	}}
 	edges := &fakeEdgeStore{}
 	lc := NewLifecycle(store, edges, AlwaysPassConsentChecker{})
@@ -84,6 +85,10 @@ func TestLifecycle_TransitionHappyPath(t *testing.T) {
 	}
 	if got.ActorClass != ActorClassHuman {
 		t.Errorf("actor class wrong: %v", got.ActorClass)
+	}
+	if got.ResidentID != store.rec.ResidentID {
+		t.Errorf("ResidentID not propagated to edge: got %v want %v",
+			got.ResidentID, store.rec.ResidentID)
 	}
 }
 

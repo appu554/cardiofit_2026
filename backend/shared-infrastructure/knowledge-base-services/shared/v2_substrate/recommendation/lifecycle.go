@@ -34,6 +34,10 @@ const (
 // EdgeStore.EmitEdge persists this into the EvidenceTrace graph.
 type EvidenceEdge struct {
 	RecommendationID uuid.UUID
+	// ResidentID is the resident the recommendation belongs to. Populated by
+	// Lifecycle.Transition from the loaded recommendation so the EdgeStore
+	// adapter can set EvidenceTraceNode.ResidentRef without a re-fetch.
+	ResidentID       uuid.UUID
 	FromState        string
 	ToState          string
 	ActorID          uuid.UUID
@@ -144,6 +148,7 @@ func (l *Lifecycle) Transition(ctx context.Context, req TransitionRequest) error
 
 	edge := EvidenceEdge{
 		RecommendationID: rec.ID,
+		ResidentID:       rec.ResidentID,
 		FromState:        fromState,
 		ToState:          req.ToState,
 		ActorID:          req.ActorID,
