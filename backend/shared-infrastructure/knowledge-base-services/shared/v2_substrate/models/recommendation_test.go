@@ -1,0 +1,71 @@
+package models
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+func TestRecommendationJSONRoundTrip(t *testing.T) {
+	medUse := uuid.New()
+	in := Recommendation{
+		ID:         uuid.New(),
+		ResidentID: uuid.New(),
+		AuthorID:   uuid.New(),
+		State:      RecommendationStateDrafted,
+		Type:       RecommendationTypeStop,
+		Urgency:    RecommendationUrgencyAmber,
+		Title:      "Cease oxybutynin",
+		ClinicalContent: ClinicalContent{
+			Issue:           "Anticholinergic burden contributing to fall risk",
+			ClinicalContext: "87yo female, eGFR 32, recent fall, ACB 4",
+			Rationale:       "DBI 0.8 attributable; alternatives reviewed",
+			EvidenceRefs:    []string{"ADG-2025-Rec-42", "Beers-2023-OAB"},
+			ProposedPlan:    "Cease oxybutynin 5mg BD; monitor for urinary retention 14 days",
+			MonitoringPlan:  "Voiding diary 14 days; falls reassessment at 30 days",
+		},
+		MedicineUseRefs: []uuid.UUID{medUse},
+		ConsentRequired: false,
+		ReviewDueAt:     nil,
+		SubmittedAt:     nil,
+		CreatedAt:       time.Now().UTC().Truncate(time.Microsecond),
+		UpdatedAt:       time.Now().UTC().Truncate(time.Microsecond),
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out Recommendation
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ID != in.ID || out.State != in.State || out.Type != in.Type {
+		t.Errorf("round-trip mismatch: got %+v want %+v", out, in)
+	}
+	if out.ClinicalContent.Issue != in.ClinicalContent.Issue {
+		t.Errorf("clinical content lost in round trip")
+	}
+	if len(out.MedicineUseRefs) != 1 || out.MedicineUseRefs[0] != medUse {
+		t.Errorf("medicine use refs lost: %v", out.MedicineUseRefs)
+	}
+}
+
+func TestIsValidRecommendationState(t *testing.T) {
+	cases := []struct {
+		s    string
+		want bool
+	}{
+		{RecommendationStateDetected, true},
+		{RecommendationStateDeferred, true},
+		{RecommendationStateClosed, true},
+		{"bogus", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsValidRecommendationState(c.s); got != c.want {
+			t.Errorf("IsValidRecommendationState(%q)=%v want %v", c.s, got, c.want)
+		}
+	}
+}

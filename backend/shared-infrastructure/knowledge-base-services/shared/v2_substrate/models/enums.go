@@ -222,3 +222,47 @@ func IsValidDeltaFlag(s string) bool {
 	}
 	return false
 }
+
+// RecommendationState* — the 9 lifecycle states plus deferred.
+// See plan: docs/superpowers/plans/2026-05-07-phase-0-1-recommendation-entity-lifecycle.md
+const (
+	RecommendationStateDetected         = "detected"
+	RecommendationStateDrafted          = "drafted"
+	RecommendationStateSubmitted        = "submitted"
+	RecommendationStateViewed           = "viewed"
+	RecommendationStateDeferred         = "deferred"
+	RecommendationStateDecided          = "decided"
+	RecommendationStateImplemented      = "implemented"
+	RecommendationStateMonitoringActive = "monitoring-active"
+	RecommendationStateOutcomeRecorded  = "outcome-recorded"
+	RecommendationStateClosed           = "closed"
+)
+
+// RecommendationType* — ordering hint per v3 §7 line 384.
+// STOP > MONITOR > DOSE_CHANGE > ADD by acceptance probability.
+const (
+	RecommendationTypeStop       = "stop"
+	RecommendationTypeMonitor    = "monitor"
+	RecommendationTypeDoseChange = "dose_change"
+	RecommendationTypeAdd        = "add"
+)
+
+// RecommendationUrgency* — three tiers per v3 §7 line 396.
+const (
+	RecommendationUrgencyRed   = "red"   // 24-48h
+	RecommendationUrgencyAmber = "amber" // 1-2 weeks
+	RecommendationUrgencyGreen = "green" // next review
+)
+
+// IsValidRecommendationState reports whether s is a known lifecycle state.
+func IsValidRecommendationState(s string) bool {
+	switch s {
+	case RecommendationStateDetected, RecommendationStateDrafted,
+		RecommendationStateSubmitted, RecommendationStateViewed,
+		RecommendationStateDeferred, RecommendationStateDecided,
+		RecommendationStateImplemented, RecommendationStateMonitoringActive,
+		RecommendationStateOutcomeRecorded, RecommendationStateClosed:
+		return true
+	}
+	return false
+}
