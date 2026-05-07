@@ -47,6 +47,32 @@ services:
       - PYTHONPATH=/app:/app/guideline-atomiser
       # Force CPU — no MPS in Docker
       - MONKEYOCR_DEVICE=cpu
+      # V5 feature flags — additive on top of V4. Set to 0 to disable individually.
+      # V5_DISABLE_ALL=1 is the emergency rollback that overrides all of these.
+      - V5_BBOX_PROVENANCE=1
+      - V5_TABLE_SPECIALIST=1
+      - V5_VLM_TABLE_SPECIALIST=1
+      - V5_CONSENSUS_ENTROPY=1
+      - V5_DECOMPOSITION=1
+      - V5_SCHEMA_FIRST=1
+      # ── V5 lane specialists (each lane is opt-in via its own creds/URL) ──
+      # Nemotron Parse v1.1 — table specialist. Two backends:
+      #   1. NEMOTRON_PARSE_URL → self-hosted sidecar (preferred, see
+      #      docker-compose.specialists.yml). Free per-call, on-prem.
+      #   2. NVIDIA_API_KEY     → NIM cloud fallback. Per-request cost,
+      #      but no GPU required in this image.
+      # Sidecar wins when both are set. Both empty = lane unavailable
+      # and Channel D falls through to MonkeyOCR VLM silently.
+      - V5_NEMOTRON_PARSE=1
+      - NEMOTRON_PARSE_URL=${NEMOTRON_PARSE_URL:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      # Figure / OCR lanes — sidecar-only (see docker-compose.specialists.yml).
+      # Empty string = lane unavailable (the default — sidecars are
+      # GPU-heavy and opt-in for production deployments).
+      - V5_FIGURE_SPECIALIST=1
+      - NEMOTRON_VL_URL=${NEMOTRON_VL_URL:-}
+      - V5_LIGHTONOCR=1
+      - LIGHTONOCR_URL=${LIGHTONOCR_URL:-}
     volumes:
       # ── Host HuggingFace cache (skip 3GB+ model download) ──
       - ${HOME}/.cache/huggingface:/root/.cache/huggingface
@@ -59,6 +85,8 @@ services:
       - ./fact_extractor.py:/app/guideline-atomiser/fact_extractor.py:ro
       - ./data/run_pipeline_targeted.py:/app/guideline-atomiser/data/run_pipeline_targeted.py:ro
       - ./data/run_chunked_l1.py:/app/guideline-atomiser/data/run_chunked_l1.py:ro
+      # ── V5 extraction modules — live mount so rebuilds aren't needed for Python changes ──
+      - ../../extraction:/app/extraction:ro
 
       # ── Source PDFs ──
       - ./data/pdfs:/data/pdfs:ro

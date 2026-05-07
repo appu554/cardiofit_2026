@@ -236,20 +236,38 @@ class GuidelineDecomposer:
             sid = n.section_id or ""
             section_to_algs.setdefault(sid, []).append(n.id)
 
+        # V5 audit fix R7 (Quality Audit Q5): attach evidence_text to every
+        # synthesised edge. Without it, audit reviewers can't tell *why* the
+        # decomposer linked recommendation X to drug Y — only that the link
+        # exists. We populate it with the target node's label (drug-class
+        # name or algorithm number), which is the strongest single string
+        # the link is actually grounded in. For section-prose-derived edges
+        # (REFERENCES_ALGORITHM via regex match) the regex span is preferred
+        # and already populated below — that path is unchanged.
         for rec_id, rec_node in rec_nodes.items():
             sid = rec_node.section_id or ""
             for drug_id in section_to_drugs.get(sid, []):
+                drug_label = (drug_nodes[drug_id].label or "").strip() if drug_id in drug_nodes else ""
                 graph.edges.append(GraphEdge(
                     source_node_id=rec_id,
                     target_node_id=drug_id,
                     edge_type="IS_TREATED_BY",
+                    evidence_text=(
+                        f"co-located in section {sid}: {drug_label[:200]}"
+                        if drug_label else f"co-located in section {sid}"
+                    ),
                     confidence=0.80,
                 ))
             for alg_id in section_to_algs.get(sid, []):
+                alg_label = (alg_nodes[alg_id].label or "").strip() if alg_id in alg_nodes else ""
                 graph.edges.append(GraphEdge(
                     source_node_id=rec_id,
                     target_node_id=alg_id,
                     edge_type="REFERENCES_ALGORITHM",
+                    evidence_text=(
+                        f"co-located in section {sid}: {alg_label[:200]}"
+                        if alg_label else f"co-located in section {sid}"
+                    ),
                     confidence=0.85,
                 ))
 

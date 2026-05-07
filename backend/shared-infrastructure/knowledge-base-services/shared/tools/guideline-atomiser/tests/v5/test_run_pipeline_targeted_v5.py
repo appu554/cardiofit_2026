@@ -88,8 +88,10 @@ def test_pipeline_1_call_sites_use_helper(run_pipeline_module):
     assert "_merge_with_v5_flag(" in body
 
 
-def test_merge_with_v5_flag_passes_false_when_profile_empty(run_pipeline_module):
-    # V4 default: profile has no v5_features overrides → flag resolves False.
+def test_merge_with_v5_flag_passes_true_when_profile_empty(run_pipeline_module, monkeypatch):
+    # Default-ON: profile has no v5_features overrides → flag resolves True (env default "1").
+    monkeypatch.delenv("V5_DISABLE_ALL", raising=False)
+    monkeypatch.delenv("V5_BBOX_PROVENANCE", raising=False)
     profile = _profile_with_flag(None)
     merger = MagicMock()
     merger.merge.return_value = []
@@ -105,5 +107,5 @@ def test_merge_with_v5_flag_passes_false_when_profile_empty(run_pipeline_module)
 
     merger.merge.assert_called_once()
     _, kwargs = merger.merge.call_args
-    assert kwargs["v5_bbox_provenance"] is False
+    assert kwargs["v5_bbox_provenance"] is True
     assert kwargs["profile"] is profile

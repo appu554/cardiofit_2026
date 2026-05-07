@@ -1,0 +1,72 @@
+# V5 Nemotron Parse v1.1-TC sidecar image
+# ─────────────────────────────────────────────────────────────────────────
+# Why a SEPARATE Dockerfile from Dockerfile.specialists?
+#
+#   Parse v1.1-TC's own install instructions pin:
+#       transformers==4.51.3, timm==1.0.22, albumentations==2.0.8, accelerate==1.12.0
+#
+#   The other specialists (Nano VL, LightOnOCR-2-1B-bbox) need transformers
+#   ≥ 4.55. Sharing one image guarantees a dependency conflict — Parse v1.1
+#   is on a different release branch.
+#
+# Build:
+#   docker build -f Dockerfile.nemotron-parse -t v4-nemotron-parse:0.1 ../..
+#
+# CPU works (slow); GPU is the production target. Weights are NOT baked in —
+# downloaded to mounted ~/.cache/huggingface on first request, or pre-warmed
+# via data/download_specialists.py.
+
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# System deps for image processing (Parse v1.1 input goes through albumentations).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx libglib2.0-0 \
+    build-essential git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Heavy ML deps first — pinned to versions Parse v1.1's modelling code expects.
+RUN pip install --no-cache-dir \
+    'transformers==4.51.3' \
+    'accelerate==1.12.0' \
+    'torch>=2.4.0' \
+    'safetensors>=0.4.0'
+
+# Parse v1.1 hard requirements from its install_requires.
+# open_clip_torch added after a runtime error revealed the modeling file
+# imports it for the C-RADIOv2 vision encoder. The model card's pip line is
+# misleading — this is a hidden dependency only surfaced at first inference.
+RUN pip install --no-cache-dir \
+    'albumentations==2.0.8' \
+    'timm==1.0.22' \
+    'einops>=0.7.0' \
+    'open_clip_torch>=2.24.0'
+
+# PDF rendering (we crop on the *client*, but the server may need to
+# render diagnostic samples — easier to ship pymupdf than to pull it
+# in only when needed).
+RUN pip install --no-cache-dir 'pymupdf>=1.24.0'
+
+# Server framework.
+RUN pip install --no-cache-dir \
+    'fastapi>=0.110.0' \
+    'uvicorn[standard]>=0.30.0' \
+    'pydantic>=2.0.0' \
+    'pillow>=10.0.0' \
+    'huggingface-hub>=0.20.0'
+
+COPY tools/guideline-atomiser/servers /app/servers
+ENV PYTHONPATH=/app
+
+EXPOSE 8503
+
+CMD ["uvicorn", "servers.nemotron_parse_server:app", "--host", "0.0.0.0", "--port", "8503"]
+
+LABEL version="0.1.0" \
+      description="V5 Nemotron Parse v1.1-TC sidecar — table specialist with bbox + class output"

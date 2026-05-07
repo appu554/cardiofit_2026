@@ -228,8 +228,8 @@ def test_channel_a_provenance_helper_off_when_flag_disabled(monkeypatch) -> None
     """_channel_a_provenance returns None when V5_BBOX_PROVENANCE is off."""
     from extraction.v4.channel_a_docling import _channel_a_provenance
 
-    monkeypatch.delenv("V5_BBOX_PROVENANCE", raising=False)
-    profile = _make_profile_obj()  # default off
+    monkeypatch.setenv("V5_BBOX_PROVENANCE", "0")
+    profile = _make_profile_obj()
     assert _channel_a_provenance(
         bbox=(0, 0, 100, 50),
         page_number=1,
@@ -355,10 +355,10 @@ def test_channel_provenance_helper_off_by_default(
     """Each channel's helper returns None when V5_BBOX_PROVENANCE is off (default)."""
     import importlib
 
-    monkeypatch.delenv("V5_BBOX_PROVENANCE", raising=False)
+    monkeypatch.setenv("V5_BBOX_PROVENANCE", "0")
     mod = importlib.import_module(helper_module)
     helper = getattr(mod, helper_name)
-    profile = _make_profile_obj()  # default off
+    profile = _make_profile_obj()
     assert helper(
         bbox=(0, 0, 100, 50),
         page_number=1,

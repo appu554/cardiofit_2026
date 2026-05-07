@@ -45,20 +45,44 @@ def test_table_specialist_active_in_metadata():
     reason="No merged_spans.json found — run pipeline first",
 )
 def test_docling_table_spans_present():
-    """merged_spans.json contains at least one span from docling_tableblock."""
+    """merged_spans.json contains at least one Channel-D span with provenance.
+
+    Channel D's V5 lane chain can produce several distinct model_version values
+    (the original test pinned only one of them):
+
+      - "table@v1.0"              ← generic docling fallback path
+      - "pipe-table@v1.0"         ← V4 marker pipe path
+      - "docling-otsl@v1.0"       ← V4 Granite-Docling OTSL path
+      - "nvidia/NVIDIA-Nemotron-Parse-v1.1-TC@sidecar"  ← V5 nemotron self-hosted
+      - "nvidia/nemotron-parse-1.1@nim"                 ← V5 nemotron cloud
+
+    What we actually care about is that *some* table-cell span made it through
+    Channel D with bbox-provenance attached — that proves V5 #1 (table specialist)
+    + V5 #2 (bbox provenance) cooperated end-to-end. Pinning a single model_version
+    string was a fragility that broke the moment a lane priority changed.
+    """
     latest_spans = _latest("**/merged_spans.json")
     with open(latest_spans) as f:
         spans = json.load(f)
-    # MergedSpan stores origin in channel_provenance.model_version (not channel_metadata).
-    # table@v1.0 is set by the bbox-provenance layer for Docling TableBlock spans.
-    docling_spans = [
+
+    # Any merged span where Channel D contributed AND at least one
+    # channel_provenance entry has channel_id == "D" (the actual invariant —
+    # model_version is downstream of routing decisions and shouldn't be
+    # load-bearing for a smoke test). Note: MergedSpan does NOT have a
+    # ``.channel`` field — that's a RawSpan attribute. Merged spans carry
+    # ``contributing_channels`` (a list of channel-id strings).
+    channel_d_with_prov = [
         s for s in spans
-        if any(
-            isinstance(p, dict) and p.get("model_version") == "table@v1.0"
+        if "D" in (s.get("contributing_channels") or [])
+        and any(
+            isinstance(p, dict) and p.get("channel_id") == "D"
             for p in s.get("channel_provenance", [])
         )
     ]
-    assert len(docling_spans) > 0, "No table@v1.0 provenance spans found in merged_spans.json"
+    assert len(channel_d_with_prov) > 0, (
+        "No Channel-D spans with channel_provenance found in merged_spans.json — "
+        "table_specialist + bbox_provenance not cooperating"
+    )
 
 
 @pytest.mark.skipif(

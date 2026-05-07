@@ -401,7 +401,13 @@ class ChannelFNuExtract:
                     "num_predict": 1024,
                 },
             },
-            timeout=300,  # 5 min per block (generous for CPU fallback)
+            # 15-min per-block budget. Original 5-min was tight when other V5
+            # specialists (Nemotron Parse, LightOnOCR) saturate the CPU
+            # concurrently — Ollama's TTFT goes from ~2s to ~30-90s under
+            # that pressure, and a single block can take 3-4 minutes.
+            # ``CHANNEL_F_OLLAMA_TIMEOUT_S`` env var overrides this for
+            # deployments that know their hardware envelope.
+            timeout=int(os.environ.get("CHANNEL_F_OLLAMA_TIMEOUT_S", "900")),
         )
         response.raise_for_status()
         return response.json().get("response", "")

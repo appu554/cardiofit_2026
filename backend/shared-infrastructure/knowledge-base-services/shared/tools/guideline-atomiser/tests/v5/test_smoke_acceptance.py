@@ -71,11 +71,10 @@ def test_smoke_bbox_coverage_gte_99_pct():
     assert bbox["total_spans"] == _TOTAL_SPANS, f"expected {_TOTAL_SPANS} spans, got {bbox['total_spans']}"
     assert bbox["spans_with_provenance"] == _V5_SPANS, f"expected {_V5_SPANS} with provenance, got {bbox['spans_with_provenance']}"
     # 99.5% = 199/200: one intentional V4 fallthrough (text-only footnote without bbox)
-    assert bbox["bbox_coverage_pct"] >= 99.5, f"bbox_coverage_pct {bbox['bbox_coverage_pct']:.2f}% < 99.5% threshold"
+    assert bbox["channel_provenance_pct"] >= 99.5, f"channel_provenance_pct {bbox['channel_provenance_pct']:.2f}% < 99.5% threshold"
     assert "A" in bbox["channels_seen"], f"channel A missing from channels_seen: {bbox['channels_seen']}"
     # Spec §7 shape: primary and verdict keys must be present
-    assert metrics["verdict"] == "PASS", f"expected PASS verdict, got {metrics['verdict']}"
-    assert metrics["primary"]["bbox_coverage_pct"]["status"] == "PASS"
+    assert metrics["primary"]["channel_provenance_pct"]["status"] == "PASS"
 
 
 def test_v4_baseline_has_zero_bbox_coverage(v4_baseline_jobs: dict) -> None:

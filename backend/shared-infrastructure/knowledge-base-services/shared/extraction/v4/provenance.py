@@ -100,6 +100,44 @@ def _bbox_dedup_key(b: BoundingBox) -> tuple[float, float, float, float]:
     )
 
 
+class FieldProvenance(BaseModel):
+    """Per-extracted-value bounding box within a span.
+
+    Populated when the extraction model returns grounded per-cell geometry
+    (e.g. MonkeyOCR Qwen2.5-VL OCR spans). Enables sub-span traceability:
+    a table cell span carrying "eGFR ≥30 mL/min" can record WHERE on the page
+    that value appeared, separate from the span's overall bbox.
+
+    Schema is additive — RawSpan.field_provenance defaults to an empty list
+    so existing V4 spans remain valid.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str = Field(min_length=1, max_length=200)
+    value: str = Field(default="", max_length=2000)
+    bbox: BoundingBox
+    page_number: int = Field(ge=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+    channel_id: ChannelId
+
+
+def merge_field_provenance_lists(
+    lists: Iterable[Iterable[FieldProvenance]],
+) -> list[FieldProvenance]:
+    """Merge per-fact provenance from a span cluster, deduplicating by (field_name, page, bbox).
+
+    Dedup rule: same (field_name, page_number, rounded-bbox) → keep highest confidence.
+    """
+    out: dict[tuple, FieldProvenance] = {}
+    for lst in lists:
+        for fp in lst:
+            key = (fp.field_name, fp.page_number) + _bbox_dedup_key(fp.bbox)
+            existing = out.get(key)
+            if existing is None or fp.confidence > existing.confidence:
+                out[key] = fp
+    return list(out.values())
+
+
 def merge_provenance_lists(
     lists: Iterable[Iterable[ChannelProvenance]],
 ) -> list[ChannelProvenance]:

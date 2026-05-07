@@ -25,8 +25,8 @@ def _make_minimal_tree() -> GuidelineTree:
 
 
 def test_v4_path_used_when_flag_off(monkeypatch):
-    """When V5_TABLE_SPECIALIST is absent, extract() uses V4 paths."""
-    monkeypatch.delenv("V5_TABLE_SPECIALIST", raising=False)
+    """When V5_TABLE_SPECIALIST is explicitly disabled, extract() uses V4 paths."""
+    monkeypatch.setenv("V5_TABLE_SPECIALIST", "0")
     monkeypatch.delenv("V5_DISABLE_ALL", raising=False)
 
     decomp = ChannelDTableDecomposer()

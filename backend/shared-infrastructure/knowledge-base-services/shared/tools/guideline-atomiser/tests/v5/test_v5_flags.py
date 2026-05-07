@@ -23,9 +23,10 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(k, raising=False)
 
 
-def test_default_off_when_nothing_set() -> None:
+def test_default_on_when_nothing_set() -> None:
+    """All V5 features are ON by default — no env var needed."""
     profile = _FakeProfile()
-    assert is_v5_enabled("bbox_provenance", profile) is False
+    assert is_v5_enabled("bbox_provenance", profile) is True
 
 
 def test_env_var_on_enables(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -66,14 +67,17 @@ def test_disable_all_overrides_everything(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_profile_without_v5_features_attr() -> None:
-    """Older profiles without v5_features field should default to off."""
+    """Older profiles without v5_features field fall through to env default (ON)."""
     profile = object()  # no v5_features attr at all
-    assert is_v5_enabled("bbox_provenance", profile) is False
+    assert is_v5_enabled("bbox_provenance", profile) is True
 
 
-def test_unknown_feature_name_off() -> None:
+def test_unknown_feature_name_on() -> None:
+    """Unknown feature names default to ON (env var not set → default '1')."""
     profile = _FakeProfile()
-    assert is_v5_enabled("nonexistent_feature", profile) is False
+    assert is_v5_enabled("nonexistent_feature", profile) is True
+
+
 
 
 def test_profile_loads_v5_features_from_yaml(tmp_path) -> None:

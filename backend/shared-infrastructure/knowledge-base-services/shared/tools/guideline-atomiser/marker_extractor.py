@@ -66,6 +66,8 @@ class TextBlock:
     heading_level: Optional[int] = None  # 1-6 for headings
     table_data: Optional[list[list[str]]] = None  # For table blocks
     seed: Optional[int] = None  # For reproducibility
+    # V5 MonkeyOCR: DoclayoutYOLO region type for specialist routing downstream
+    region_type: Optional[str] = None
 
     def to_dict(self) -> dict:
         result = {
@@ -104,6 +106,11 @@ class TableBlock:
     confidence: float = 1.0
     caption: Optional[str] = None
     table_index: int = 0  # Index within the document
+    # V5 MonkeyOCR: per-cell data with individual bboxes from Qwen2.5-VL spans.
+    # Each entry: {"text", "row_idx", "col_idx", "bbox": [x0,y0,x1,y1], "confidence"}
+    cell_data: Optional[list[dict]] = None
+    # DoclayoutYOLO region type — used by Channel D to route to specialist paths
+    region_type: str = "table"
 
     def to_markdown(self) -> str:
         """Convert table to markdown format."""

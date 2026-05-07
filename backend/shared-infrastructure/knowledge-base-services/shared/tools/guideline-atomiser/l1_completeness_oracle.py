@@ -268,11 +268,41 @@ class L1CompletenessOracle:
             List of MergedSpan objects (imported from extraction.v4.models).
         """
         from extraction.v4.models import MergedSpan
+        from extraction.v4.provenance import (
+            BoundingBox,
+            ChannelProvenance,
+            _normalise_bbox,
+            _normalise_confidence,
+            _normalise_page_number,
+        )
 
         recovery_spans = []
         for miss in report.missed_blocks:
             if miss.priority != "HIGH":
                 continue
+
+            # V5 audit fix R2 (Quality Audit C2): write ChannelProvenance for
+            # L1_RECOVERY too. The audit found that L1_RECOVERY-injected
+            # spans — which carry the most safety-critical content (numeric
+            # dose thresholds Marker silently dropped) — lacked channel
+            # provenance, so KB-0 jsonb queries on
+            # ``jsonb_array_length(channel_provenance) >= 1`` excluded them.
+            # The provenance lists L1_RECOVERY as the channel_id with
+            # confidence=1.0 (PyMuPDF rawdict is deterministic) and the
+            # PyMuPDF version in model_version for audit reproducibility.
+            recovery_provenance: list[ChannelProvenance] = []
+            normalised_bbox = _normalise_bbox(list(miss.block.bbox))
+            if normalised_bbox is not None:
+                recovery_provenance.append(ChannelProvenance(
+                    channel_id="L1_RECOVERY",
+                    bbox=normalised_bbox,
+                    page_number=_normalise_page_number(miss.block.page_number),
+                    confidence=_normalise_confidence(1.0),
+                    model_version="pymupdf-rawdict@v1.0",
+                    notes=(
+                        f"L1 Oracle HIGH-priority recovery; reason={miss.reason}"
+                    )[:500],
+                ))
 
             span = MergedSpan(
                 id=uuid4(),
@@ -293,6 +323,7 @@ class L1CompletenessOracle:
                 section_id=None,
                 table_id=None,
                 bbox=list(miss.block.bbox),
+                channel_provenance=recovery_provenance,
                 surrounding_context=miss.surrounding_context or None,
                 review_status="PENDING",
             )

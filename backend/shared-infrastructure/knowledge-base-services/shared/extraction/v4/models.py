@@ -25,7 +25,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from .provenance import ChannelProvenance
+from .provenance import ChannelProvenance, FieldProvenance
 
 
 # =============================================================================
@@ -234,6 +234,10 @@ class RawSpan(BaseModel):
     # PDF bounding box [x0, y0, x1, y1] in PDF points. Available for L1_RECOVERY
     # spans (from PyMuPDF rawdict); NULL for Channels B-F until future work.
     bbox: Optional[list[float]] = None
+    # V5 per-fact: sub-span geometry for individual extracted values.
+    # Populated by Channel D when MonkeyOCR cell_data provides per-cell bboxes.
+    # Empty list preserves V4 byte-identical output when unpopulated.
+    field_provenance: list[FieldProvenance] = Field(default_factory=list)
 
     model_config = {"frozen": False}
 
@@ -288,6 +292,9 @@ class MergedSpan(BaseModel):
     # session median confidence). Spans with ce_flagged=True are suppressed
     # from the default output when V5_CONSENSUS_ENTROPY is on.
     ce_flagged: bool = False
+    # V5 per-fact: aggregated sub-span geometry from contributing RawSpans.
+    # Populated by signal_merger when any cluster member carries field_provenance.
+    field_provenance: list[FieldProvenance] = Field(default_factory=list)
 
     model_config = {"frozen": False}
 

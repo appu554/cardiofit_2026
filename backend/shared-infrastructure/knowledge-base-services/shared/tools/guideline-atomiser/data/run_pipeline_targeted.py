@@ -26,6 +26,7 @@ import os
 import json
 import hashlib
 import argparse
+import time
 from datetime import datetime
 from uuid import uuid4
 
@@ -156,7 +157,6 @@ def _merge_with_v5_flag(merger, *args_, profile, **kwargs):
     """
     from extraction.v4.v5_flags import is_v5_enabled
     v5_bbox = is_v5_enabled("bbox_provenance", profile)
-    kwargs["v5_consensus_entropy"] = is_v5_enabled("consensus_entropy", profile)
     return merger.merge(
         *args_,
         v5_bbox_provenance=v5_bbox,
@@ -323,6 +323,76 @@ def pipeline_1():
     print(f"   ✅ Tables: {len(l1_result.tables)}")
     print(f"   ✅ Markdown: {len(markdown_text):,} chars")
 
+    # ─────────────────────────────────────────────────────────────────
+    # V5 LightOnOCR pass: optional per-word geometry from sidecar.
+    # ─────────────────────────────────────────────────────────────────
+    # When V5_LIGHTONOCR=1 and LIGHTONOCR_URL is set, run the sidecar's
+    # body-OCR pass over each PDF page and capture per-word bboxes.
+    # The output is saved to ``lightonocr_pages.json`` in the job dir so
+    # downstream stages (and reviewers) can map RawSpan char offsets back
+    # to page coordinates — this is the eventual feed for FieldProvenance
+    # on Channels E/F. We do NOT yet auto-annotate spans; that requires a
+    # char-offset → bbox alignment which is intentionally split into a
+    # follow-up PR (alignment is the hard part and deserves its own tests).
+    #
+    # The pass is fail-soft: any sidecar exception logs a warning and
+    # continues — we don't fail the whole pipeline because the OCR
+    # specialist had a hiccup.
+    _lightonocr_pages: list[dict] = []
+    if os.environ.get("V5_LIGHTONOCR", "1") == "1" and os.environ.get("LIGHTONOCR_URL"):
+        print("   [V5 lightonocr] Sidecar OCR pass for per-word geometry...")
+        try:
+            from extraction.v4.specialists.lightonocr import LightOnOCRBodySpecialist
+            from extraction.v4.specialists.base import (
+                SpecialistError, SpecialistTimeoutError, SpecialistUnavailableError,
+            )
+            # 240s per-page budget: LightOnOCR-2-1B on CPU takes ~30-90s per
+            # page (vLLM-supported but we're not running vLLM in the smoke).
+            # The default 30s budget is GPU-shaped; on CPU it always trips.
+            # Override at the call site so the smoke is honest about CPU cost.
+            _ocr_timeout_s = float(os.environ.get("LIGHTONOCR_TIMEOUT_S", "240"))
+            _ocr = LightOnOCRBodySpecialist(timeout_s=_ocr_timeout_s)
+            _t0 = time.monotonic()
+            for _pg in range(1, total_pages + 1):
+                try:
+                    _res = _ocr.ocr_page(pdf_path, _pg)
+                    _lightonocr_pages.append({
+                        "page_number": _res.page_number,
+                        "markdown": _res.markdown,
+                        "blocks": [
+                            {
+                                "text": b.text,
+                                "bbox": list(b.bbox) if b.bbox else None,
+                                "confidence": b.confidence,
+                                "word_spans": b.word_spans,
+                            } for b in _res.blocks
+                        ],
+                        "model_version": _res.model_version,
+                    })
+                except SpecialistUnavailableError as e:
+                    print(f"      ⚠️  page {_pg}: lightonocr unavailable — {e}")
+                    break  # url unset / sidecar gone — no point retrying
+                except SpecialistTimeoutError as e:
+                    print(f"      ⚠️  page {_pg}: lightonocr timeout — {e}")
+                    continue
+                except SpecialistError as e:
+                    print(f"      ⚠️  page {_pg}: lightonocr error — {e}")
+                    continue
+            _elapsed_ms = (time.monotonic() - _t0) * 1000
+            _block_total = sum(len(p.get("blocks", [])) for p in _lightonocr_pages)
+            _word_total = sum(
+                len(b.get("word_spans") or [])
+                for p in _lightonocr_pages
+                for b in p.get("blocks", [])
+            )
+            print(
+                f"      ✅ {len(_lightonocr_pages)}/{total_pages} pages OCR'd "
+                f"({_block_total} blocks, {_word_total} word_spans, {_elapsed_ms:.0f} ms)"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"      ⚠️  lightonocr pass aborted: {e}")
+            _lightonocr_pages = []
+
     # Build page→bbox map for V5 provenance fallback.
     # When blocks carry per-page bbox (Docling: full-page; MonkeyOCR: block-level),
     # store the first non-null bbox per page. The signal merger uses this as a
@@ -458,11 +528,23 @@ def pipeline_1():
 
     print("   [Channel D] Table cell decomposition...")
     channel_d = ChannelD()
-    d_output = channel_d.extract(normalized_text, tree, l1_tables=l1_result.tables, profile=profile)
+    d_output = channel_d.extract(
+        normalized_text,
+        tree,
+        l1_tables=l1_result.tables,
+        profile=profile,
+        # V5 nemotron_parse lane crops table regions from the source PDF at
+        # native resolution before sending to NIM. Older lanes ignore it.
+        pdf_path=pdf_path,
+    )
     d_pipe = d_output.metadata.get("tables_pipe", 0)
     d_otsl = d_output.metadata.get("tables_otsl", 0)
+    d_nemotron = d_output.metadata.get("tables_nemotron_parse", 0)
     d_suspicious = d_output.metadata.get("suspicious_tables", 0)
-    print(f"      ✅ {len(d_output.spans)} table cell spans (pipe: {d_pipe}, otsl: {d_otsl})")
+    print(
+        f"      ✅ {len(d_output.spans)} table cell spans "
+        f"(pipe: {d_pipe}, otsl: {d_otsl}, nemotron: {d_nemotron})"
+    )
     if d_suspicious:
         print(f"      ⚠️ {d_suspicious} suspicious tables flagged")
 
@@ -720,6 +802,24 @@ def pipeline_1():
     except Exception as e:
         print(f"      ⚠️ Safety criticality check error: {e}")
 
+    # ─── L1 RECOVERY INJECTION ─────────────────────────────────────────
+    # V5 audit fix R6 (Quality Audit C4): inject L1_RECOVERY BEFORE RIE so
+    # the safety-critical numeric thresholds Marker dropped (>250 mg/dl,
+    # <70 mg/dl, etc.) get validated by the Range Integrity Engine. The
+    # previous order ran RIE first, then injected — meaning the most
+    # safety-critical numbers in the document never reached the validator.
+    # Swapped here so the threshold-bearing spans are part of merged_spans
+    # at validation time.
+    #
+    # These are raw PDF text that Marker dropped — they did NOT go through
+    # Channel 0 normalization or any extraction channel. Tagged distinctly
+    # so the reviewer renders them differently (yellow highlight, not blue).
+    recovery_spans = []
+    if not _oracle_report.gate_passed:
+        recovery_spans = oracle.recovery_merged_spans(_oracle_report, job_id)
+        merged_spans.extend(recovery_spans)
+        print(f"\n   L1_RECOVERY: injected {len(recovery_spans)} HIGH-priority spans into reviewer queue")
+
     # ─── RANGE INTEGRITY ENGINE ─────────────────────────────────────────
     print()
     print("   [RIE] Range Integrity Engine — numeric threshold validation...")
@@ -742,17 +842,6 @@ def pipeline_1():
     except Exception as e:
         rie_report = None
         print(f"      ⚠️ RIE error: {e}")
-
-    # ─── L1 RECOVERY INJECTION ─────────────────────────────────────────
-    # Inject HIGH-priority missed blocks from L1 Oracle as L1_RECOVERY spans.
-    # These are raw PDF text that Marker dropped — they did NOT go through
-    # Channel 0 normalization or any extraction channel. Tagged distinctly
-    # so the reviewer renders them differently (yellow highlight, not blue).
-    recovery_spans = []
-    if not _oracle_report.gate_passed:
-        recovery_spans = oracle.recovery_merged_spans(_oracle_report, job_id)
-        merged_spans.extend(recovery_spans)
-        print(f"\n   L1_RECOVERY: injected {len(recovery_spans)} HIGH-priority spans into reviewer queue")
 
     # ─── COVERAGEGUARD: POST-MERGE QUALITY GATE ──────────────────────────
     print()
@@ -835,6 +924,22 @@ def pipeline_1():
         except Exception as e:
             print(f"   [V5 #5] Decomposition error: {e}")
 
+    # ─── V5 #3: Schema-first extraction ─────────────────────────────────
+    _schema_first_metrics: dict = {}
+    if _is_v5_enabled("schema_first", profile):
+        try:
+            from extraction.v4.schema_first import SchemaFirstValidator
+            _sf_validator = SchemaFirstValidator()
+            _sf_validator.validate_all(merged_spans, passages=section_passages)
+            _schema_first_metrics = _sf_validator.metrics()
+            sf = _schema_first_metrics.get("v5_schema_first", {})
+            print(
+                f"   [V5 #3] Schema-first: {sf.get('total_validated', 0)} validated, "
+                f"pass_rate={sf.get('pass_rate_pct', 0.0):.1f}%"
+            )
+        except Exception as e:
+            print(f"   [V5 #3] Schema-first error: {e}")
+
     print()
 
     # ─── SAVE JOB ARTIFACTS ──────────────────────────────────────────────
@@ -853,7 +958,7 @@ def pipeline_1():
 
     # Job metadata (includes targeted extraction params + oracle results)
     from extraction.v4.v5_flags import is_v5_enabled as _is_v5_enabled
-    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist", "consensus_entropy", "decomposition"]
+    _V5_KNOWN_FEATURES = ["bbox_provenance", "table_specialist", "consensus_entropy", "decomposition", "schema_first"]
     _v5_features_enabled = [f for f in _V5_KNOWN_FEATURES if _is_v5_enabled(f, profile)]
 
     job_meta = {
@@ -1008,6 +1113,23 @@ def pipeline_1():
         with open(reparent_path, "w") as f:
             json.dump(reparent_log, f, indent=2)
         print(f"   💾 Reparenting log ({len(reparent_log)} entries): {reparent_path}")
+
+    # V5 LightOnOCR per-page output (raw sidecar response).
+    # Saved verbatim so downstream tools (alignment builder, reviewer UI,
+    # diff against MonkeyOCR) can consume it without re-running the sidecar.
+    if _lightonocr_pages:
+        lo_path = os.path.join(job_dir, "lightonocr_pages.json")
+        with open(lo_path, "w") as f:
+            json.dump(_lightonocr_pages, f, indent=2)
+        _word_total = sum(
+            len(b.get("word_spans") or [])
+            for p in _lightonocr_pages
+            for b in p.get("blocks", [])
+        )
+        print(
+            f"   💾 LightOnOCR pages ({len(_lightonocr_pages)} pages, "
+            f"{_word_total} word_spans): {lo_path}"
+        )
 
     # Shadow classifier log (3.F4 — flush buffered predictions to artifact)
     # The ShadowTieringClassifier accumulates entries in memory during merge;

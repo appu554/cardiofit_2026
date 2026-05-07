@@ -57,8 +57,8 @@ def _make_tree_with_section(heading: str, section_id: str) -> GuidelineTree:
 
 
 def test_decompose_returns_none_when_flag_off(monkeypatch):
-    """decompose() returns None when V5_DECOMPOSITION is not set."""
-    monkeypatch.delenv("V5_DECOMPOSITION", raising=False)
+    """decompose() returns None when V5_DECOMPOSITION is explicitly disabled."""
+    monkeypatch.setenv("V5_DECOMPOSITION", "0")
     monkeypatch.delenv("V5_DISABLE_ALL", raising=False)
 
     decomposer = GuidelineDecomposer()

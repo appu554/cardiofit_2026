@@ -36,7 +36,9 @@ from .models import (
 )
 from .provenance import (
     ChannelProvenance,
+    FieldProvenance,
     get_channel_provenance_builder,
+    merge_field_provenance_lists,
     merge_provenance_lists,
 )
 from .tiering_classifier import TieringClassifier
@@ -118,7 +120,6 @@ class SignalMerger:
         v5_bbox_provenance: bool = False,
         profile=None,
         page_bbox_map: Optional[dict[int, list[float]]] = None,
-        v5_consensus_entropy: bool = False,
     ) -> list[MergedSpan]:
         """Merge all channel outputs into MergedSpans.
 
@@ -133,17 +134,13 @@ class SignalMerger:
                 resulting MergedSpan via channel_provenance. Default False
                 preserves V4 byte-identical output.
             profile: Optional profile object passed to per-channel helpers
-                for V5 feature-flag resolution. Only consulted when
-                v5_bbox_provenance or v5_consensus_entropy is True.
+                for V5 feature-flag resolution. Consulted for all V5 features
+                (bbox_provenance, consensus_entropy, etc.).
             page_bbox_map: Optional dict of page_number → [x0, y0, x1, y1]
                 providing page-level bbox fallback for L1 backends (e.g.
                 Docling) that record page dimensions but not per-block
                 geometry for NER channels. Only used when v5_bbox_provenance
                 is True.
-            v5_consensus_entropy: Enable Consensus Entropy gate (V5 #4).
-                Single-channel spans below the session median confidence are
-                flagged ce_flagged=True and kept in the returned list.
-                Downstream consumers must filter on ce_flagged to suppress them.
 
         Returns:
             List of MergedSpan objects ready for reviewer queue
@@ -176,9 +173,10 @@ class SignalMerger:
 
         # Step 8 (V5 #3): Consensus Entropy gate — filter low-confidence
         # single-channel spans that fall below the session confidence median.
-        # Profile/env flag takes precedence; kwarg can additionally enable it.
+        # is_v5_enabled is the sole authority (handles V5_DISABLE_ALL, profile,
+        # and env); the kwarg is retained for backward compat but ignored here.
         from .v5_flags import is_v5_enabled as _is_v5_enabled
-        _ce_enabled = v5_consensus_entropy or _is_v5_enabled("consensus_entropy", profile)
+        _ce_enabled = _is_v5_enabled("consensus_entropy", profile)
         if _ce_enabled:
             merged_spans = self._apply_ce_gate(merged_spans)
 
@@ -422,6 +420,30 @@ class SignalMerger:
             if per_channel_lists:
                 channel_provenance = merge_provenance_lists(per_channel_lists)
 
+        # Step 9 (V5 per-fact): aggregate FieldProvenance from cluster spans.
+        # Only populated when VLM table specialist ran (channel D cell_data path).
+        field_provenance: list[FieldProvenance] = []
+        if v5_bbox_provenance:
+            fp_sources = [raw.field_provenance for raw in cluster if raw.field_provenance]
+            if fp_sources:
+                field_provenance = merge_field_provenance_lists(fp_sources)
+
+        # V5 audit fix R/C1 (Quality Audit C1): derive top-level bbox from
+        # channel_provenance when available. The audit found that 75/79 spans
+        # had ``channel_provenance`` populated but ``bbox=null`` at the top
+        # level — making jsonb queries on ``bbox IS NOT NULL`` return ~5%.
+        # We pick the first provenance entry's bbox (highest-priority channel
+        # by merge order) as the canonical span bbox. RawSpans that already
+        # supply ``bbox`` (Channel D table cells) are preferred over derived.
+        merged_bbox: Optional[list[float]] = None
+        for raw in cluster:
+            if getattr(raw, "bbox", None):
+                merged_bbox = list(raw.bbox)
+                break
+        if merged_bbox is None and channel_provenance:
+            bb = channel_provenance[0].bbox
+            merged_bbox = [bb.x0, bb.y0, bb.x1, bb.y1]
+
         return MergedSpan(
             job_id=job_id,
             text=merged_text,
@@ -437,7 +459,9 @@ class SignalMerger:
             page_number=page_number,
             section_id=section_id,
             table_id=table_id,
+            bbox=merged_bbox,
             channel_provenance=channel_provenance,
+            field_provenance=field_provenance,
         )
 
     # ── V5 #3: Consensus Entropy Gate ────────────────────────────────────

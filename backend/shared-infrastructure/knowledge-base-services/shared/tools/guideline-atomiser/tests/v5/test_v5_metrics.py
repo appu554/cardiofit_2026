@@ -30,7 +30,7 @@ def test_compute_metrics_all_provenance():
     m = compute_v5_bbox_metrics(spans)["v5_bbox_provenance"]
     assert m["total_spans"] == 3
     assert m["spans_with_provenance"] == 3
-    assert m["bbox_coverage_pct"] == 100.0
+    assert m["channel_provenance_pct"] == 100.0
 
 
 def test_compute_metrics_partial_provenance():
@@ -43,7 +43,7 @@ def test_compute_metrics_partial_provenance():
     m = compute_v5_bbox_metrics(spans)["v5_bbox_provenance"]
     assert m["total_spans"] == 4
     assert m["spans_with_provenance"] == 2
-    assert m["bbox_coverage_pct"] == 50.0
+    assert m["channel_provenance_pct"] == 50.0
 
 
 def test_compute_metrics_no_provenance():

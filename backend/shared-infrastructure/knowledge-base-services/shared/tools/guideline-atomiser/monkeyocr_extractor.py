@@ -307,10 +307,13 @@ class MonkeyOCRExtractor:
             ],
             "tables": [
                 {
-                    "html": t.html,
-                    "markdown": t.markdown,
+                    "headers": t.headers,
+                    "rows": t.rows,
                     "page_number": t.page_number,
                     "caption": t.caption,
+                    "table_index": t.table_index,
+                    "region_type": t.region_type,
+                    "cell_data": t.cell_data,
                     "bbox": (
                         {"x0": t.bbox.x0, "y0": t.bbox.y0, "x1": t.bbox.x1, "y1": t.bbox.y1}
                         if t.bbox else None
@@ -359,10 +362,13 @@ class MonkeyOCRExtractor:
         ]
         tables = [
             TableBlock(
-                html=t["html"],
-                markdown=t.get("markdown", ""),
+                headers=t.get("headers", []),
+                rows=t.get("rows", []),
                 page_number=t["page_number"],
                 caption=t.get("caption"),
+                table_index=t.get("table_index", 0),
+                region_type=t.get("region_type", "table"),
+                cell_data=t.get("cell_data"),
                 bbox=(
                     BoundingBox(x0=t["bbox"]["x0"], y0=t["bbox"]["y0"],
                                 x1=t["bbox"]["x1"], y1=t["bbox"]["y1"])
@@ -656,12 +662,13 @@ class MonkeyOCRExtractor:
                 if mapped_type == "heading":
                     heading_level = 1  # MonkeyOCR "title" = heading level 1
 
-                # Handle table blocks
+                # Handle table blocks — capture per-cell data with span-level bboxes
                 if mapped_type == "table":
                     table_data = self._parse_table_text(text)
                     if table_data and len(table_data) > 1:
                         headers = table_data[0]
                         rows = table_data[1:]
+                        cell_data = self._extract_table_cell_data(preproc_block)
                         tables.append(
                             TableBlock(
                                 headers=headers,
@@ -670,6 +677,8 @@ class MonkeyOCRExtractor:
                                 bbox=bbox,
                                 confidence=min_confidence,
                                 table_index=table_index,
+                                cell_data=cell_data,
+                                region_type=block_type_raw,
                             )
                         )
                         table_index += 1
@@ -682,11 +691,38 @@ class MonkeyOCRExtractor:
                         bbox=bbox,
                         confidence=min_confidence,
                         heading_level=heading_level,
+                        region_type=block_type_raw,
                         seed=self.seed,
                     )
                 )
 
         return blocks, tables
+
+    def _extract_table_cell_data(self, preproc_block: dict) -> list[dict]:
+        """Extract per-cell data with span-level bboxes from a MonkeyOCR table block.
+
+        MonkeyOCR's middle.json stores each recognized text region as a span with
+        an individual bbox from Qwen2.5-VL's grounded OCR output. For table blocks:
+          lines[row_idx].spans[col_idx].bbox  = the cell's page-coordinate bbox
+          lines[row_idx].spans[col_idx].content = the cell text
+          lines[row_idx].spans[col_idx].score   = OCR confidence
+
+        These per-cell bboxes are the per-fact geometry that Feature 2 needs.
+        """
+        cells: list[dict] = []
+        for row_idx, line in enumerate(preproc_block.get("lines", [])):
+            for col_idx, span in enumerate(line.get("spans", [])):
+                content = span.get("content", "").strip()
+                if not content:
+                    continue
+                cells.append({
+                    "text": content,
+                    "row_idx": row_idx,
+                    "col_idx": col_idx,
+                    "bbox": span.get("bbox", [0.0, 0.0, 0.0, 0.0]),
+                    "confidence": float(span.get("score", 1.0)),
+                })
+        return cells
 
     def _parse_table_text(self, text: str) -> Optional[list[list[str]]]:
         """Parse markdown table text into rows of cells."""

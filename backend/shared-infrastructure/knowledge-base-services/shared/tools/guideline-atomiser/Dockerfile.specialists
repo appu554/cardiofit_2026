@@ -1,0 +1,84 @@
+# V5 Specialists Sidecar Image
+# ─────────────────────────────────────────────────────────────────────────
+# Hosts the figure (Nemotron Nano VL 8B) and body-OCR (LightOnOCR-2-1B-bbox)
+# specialists as FastAPI HTTP services. Kept SEPARATE from the main pipeline
+# image because:
+#
+#   1. transformers version conflict — the main image force-pins to 4.51.0
+#      (magic-pdf / docling / gliner all argue), but LightOnOCR's
+#      ``LightOnOcrForConditionalGeneration`` lands in 4.55+.
+#
+#   2. dependency weight — ``trust_remote_code=True`` on Nano VL pulls
+#      ``timm``, ``open_clip_torch``, ``einops`` and a custom CRADIOv2
+#      vision encoder. ~3GB on top of the base image, no business in the
+#      lean pipeline image.
+#
+# Build:
+#   docker build -f Dockerfile.specialists -t v4-specialists:0.1 ../..
+#
+# The image is GPU-friendly out of the box but also runs CPU-only
+# (degraded throughput) — useful for local dev and CI.
+#
+# Models are NOT baked into the image — they download to the mounted
+# HF cache on first request. Run ``data/download_specialists.py`` once to
+# pre-warm the cache.
+
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# System deps for PyMuPDF and image processing.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils libgl1-mesa-glx libglib2.0-0 \
+    build-essential git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# transformers from git main — ``LightOnOcrForConditionalGeneration`` is not in
+# any released wheel as of 4.57.6 (the latest 4.x stable). It's been merged
+# to main and will land in 4.58. Pinning to main here lets the sidecar load
+# the LightOnOCR-2-1B-bbox model now; once 4.58.0 is released we can switch
+# back to a version pin.
+RUN pip install --no-cache-dir \
+    'git+https://github.com/huggingface/transformers.git@main' \
+    'accelerate>=1.0.0' \
+    'torch>=2.4.0' \
+    'safetensors>=0.4.0'
+
+# Nano VL extras (custom modelling code requires these at runtime).
+RUN pip install --no-cache-dir \
+    'einops>=0.7.0' \
+    'timm>=1.0.0' \
+    'open_clip_torch>=2.24.0'
+
+# LightOnOCR extras (PDF rendering at 200 DPI).
+RUN pip install --no-cache-dir \
+    'pypdfium2>=4.30.0' \
+    'pymupdf>=1.24.0'
+
+# Server framework.
+RUN pip install --no-cache-dir \
+    'fastapi>=0.110.0' \
+    'uvicorn[standard]>=0.30.0' \
+    'pydantic>=2.0.0' \
+    'pillow>=10.0.0'
+
+# Copy the server code only — models live on the mounted HF cache volume.
+COPY tools/guideline-atomiser/servers /app/servers
+ENV PYTHONPATH=/app
+
+# Default command: run both services on different ports via supervisord-lite
+# (a small inline shell loop). Override in docker-compose to run one at a time.
+EXPOSE 8501 8502
+
+CMD ["bash", "-c", "set -e; \
+    uvicorn servers.lightonocr_server:app --host 0.0.0.0 --port 8501 & \
+    uvicorn servers.nemotron_vl_server:app --host 0.0.0.0 --port 8502 & \
+    wait"]
+
+LABEL version="0.1.0" \
+      description="V5 specialists sidecar — LightOnOCR-2-1B-bbox + Nemotron Nano VL 8B"

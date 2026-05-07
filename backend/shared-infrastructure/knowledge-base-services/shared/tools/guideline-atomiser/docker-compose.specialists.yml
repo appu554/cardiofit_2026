@@ -1,0 +1,123 @@
+# V5 Specialists Sidecar Stack
+# ─────────────────────────────────────────────────────────────────────────
+# Brings up the figure (Nemotron Nano VL) and body-OCR (LightOnOCR-2-1B-bbox)
+# specialists as separate containers. The main pipeline talks to them via
+# HTTP — see extraction/v4/specialists/{nemotron_nano_vl,lightonocr}.py.
+#
+# Bring-up:
+#   docker compose -f docker-compose.specialists.yml up -d
+#   docker compose -f docker-compose.specialists.yml exec lightonocr \
+#       python /app/data/download_specialists.py --models lightonocr nano-vl
+#   curl http://localhost:8501/healthz   # LightOnOCR
+#   curl http://localhost:8502/healthz   # Nano VL
+#
+# Then run the main pipeline with:
+#   LIGHTONOCR_URL=http://lightonocr:8501 \
+#   NEMOTRON_VL_URL=http://nano-vl:8502 \
+#   docker compose -f docker-compose.pipeline1.yml up -d
+#
+# GPU note: uncomment the ``deploy.resources.reservations.devices`` blocks
+# below on a host with NVIDIA Container Toolkit. Without GPU the services
+# still come up but inference will be slow (especially Nano VL at 8B).
+
+services:
+  # ── Nemotron Parse v1.1-TC ─ table specialist ────────────────────────
+  # Lives in its own image because Parse v1.1 pins transformers==4.51.3
+  # while LightOnOCR + Nano VL want ≥4.55. See Dockerfile.nemotron-parse
+  # for the version-isolation rationale.
+  nemotron-parse:
+    image: v4-nemotron-parse:0.2
+    build:
+      context: ../..
+      dockerfile: tools/guideline-atomiser/Dockerfile.nemotron-parse
+    container_name: v4-nemotron-parse
+    environment:
+      - NEMOTRON_PARSE_MODEL=nvidia/NVIDIA-Nemotron-Parse-v1.1-TC
+      - NEMOTRON_PARSE_DEVICE=auto   # auto | cuda | cpu
+      - HF_HUB_DISABLE_TELEMETRY=1
+    ports:
+      - "8503:8503"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8503/healthz').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    networks:
+      - specialists-net
+    # Uncomment to enable GPU (requires nvidia-container-toolkit on host).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  lightonocr:
+    image: v4-specialists:0.2
+    build:
+      context: ../..
+      dockerfile: tools/guideline-atomiser/Dockerfile.specialists
+    container_name: v4-lightonocr
+    command: ["uvicorn", "servers.lightonocr_server:app", "--host", "0.0.0.0", "--port", "8501"]
+    environment:
+      - LIGHTONOCR_MODEL=lightonai/LightOnOCR-2-1B-bbox
+      - LIGHTONOCR_DEVICE=auto   # auto | cuda | cpu
+      - HF_HUB_DISABLE_TELEMETRY=1
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist downloaded weights across container restarts.
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/healthz').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - specialists-net
+    # Uncomment to enable GPU (requires nvidia-container-toolkit on host).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  nano-vl:
+    image: v4-specialists:0.1
+    container_name: v4-nano-vl
+    command: ["uvicorn", "servers.nemotron_vl_server:app", "--host", "0.0.0.0", "--port", "8502"]
+    environment:
+      - NEMOTRON_VL_MODEL=nvidia/Llama-3.1-Nemotron-Nano-VL-8B-V1
+      - NEMOTRON_VL_DEVICE=auto
+      - HF_HUB_DISABLE_TELEMETRY=1
+    ports:
+      - "8502:8502"
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8502/healthz').status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # 8B weights take longer to memory-map
+    networks:
+      - specialists-net
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  specialists-net:
+    name: v4-specialists-net
+    driver: bridge
