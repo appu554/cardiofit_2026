@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/cardiofit/shared/v2_substrate/recommendation"
 )
 
 // RecommendationTypeMapper maps a recommendation Type string to the
@@ -51,3 +53,10 @@ func (c *PostgresConsentChecker) ConsentActive(ctx context.Context,
 	}
 	return got != nil, nil
 }
+
+// Compile-time check that PostgresConsentChecker satisfies the
+// recommendation.ConsentChecker interface. If the recommendation
+// package's interface signature changes, this line will fail to
+// compile — catching drift at build time rather than at integration
+// test time.
+var _ recommendation.ConsentChecker = (*PostgresConsentChecker)(nil)
