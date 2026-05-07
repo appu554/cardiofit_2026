@@ -250,3 +250,79 @@ func (f *fakeConsentChecker) ConsentActive(_ context.Context, _ uuid.UUID,
 	_ string) (bool, error) {
 	return f.active, nil
 }
+
+// TestLifecycle_ConsentGateScopedToSubmit verifies the consent gate fires
+// ONLY for drafted→submitted transitions. Other transitions (like
+// drafted→closed) must not invoke the ConsentChecker even when
+// rec.ConsentRequired=true. Pins the lifecycle.go guard predicate against
+// future refactors that might inadvertently broaden the gate.
+func TestLifecycle_ConsentGateScopedToSubmit(t *testing.T) {
+	store := &fakeStore{rec: &models.Recommendation{
+		ID:              uuid.New(),
+		ResidentID:      uuid.New(),
+		State:           models.RecommendationStateDrafted,
+		Type:            models.RecommendationTypeStop,
+		ConsentRequired: true,
+	}}
+	checker := &consentCheckCounter{} // tracks invocations
+	lc := NewLifecycle(store, &fakeEdgeStore{}, checker)
+
+	// drafted → closed should NOT invoke the consent checker even with
+	// ConsentRequired=true, because the gate is scoped to drafted→submitted.
+	err := lc.Transition(context.Background(), TransitionRequest{
+		RecommendationID: store.rec.ID,
+		ToState:          models.RecommendationStateClosed,
+		ActorID:          uuid.New(),
+		ActorClass:       ActorClassHuman,
+	})
+	if err != nil {
+		t.Fatalf("drafted->closed should succeed regardless of consent; got %v", err)
+	}
+	if checker.calls != 0 {
+		t.Errorf("consent checker invoked on non-submit transition: %d calls", checker.calls)
+	}
+}
+
+// consentCheckCounter is a ConsentChecker that counts invocations. Returns
+// true (active) so it never blocks; the test asserts on the call count.
+type consentCheckCounter struct{ calls int }
+
+func (c *consentCheckCounter) ConsentActive(_ context.Context, _ uuid.UUID,
+	_ string) (bool, error) {
+	c.calls++
+	return true, nil
+}
+
+// TestLifecycle_OccurredAtDefaultsToNow verifies that an unset OccurredAt
+// in the request is replaced with the lifecycle's `now` value before being
+// recorded into the EvidenceEdge.
+func TestLifecycle_OccurredAtDefaultsToNow(t *testing.T) {
+	store := &fakeStore{rec: &models.Recommendation{
+		ID:    uuid.New(),
+		State: models.RecommendationStateDrafted,
+	}}
+	edges := &fakeEdgeStore{}
+	lc := NewLifecycle(store, edges, AlwaysPassConsentChecker{})
+
+	// Inject a deterministic now so we can assert exact value.
+	frozen := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	lc.now = func() time.Time { return frozen }
+
+	err := lc.Transition(context.Background(), TransitionRequest{
+		RecommendationID: store.rec.ID,
+		ToState:          models.RecommendationStateSubmitted,
+		ActorID:          uuid.New(),
+		ActorClass:       ActorClassHuman,
+		// OccurredAt deliberately zero
+	})
+	if err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if len(edges.emitted) != 1 {
+		t.Fatalf("want 1 edge; got %d", len(edges.emitted))
+	}
+	if !edges.emitted[0].OccurredAt.Equal(frozen) {
+		t.Errorf("OccurredAt = %v, want %v (frozen now)",
+			edges.emitted[0].OccurredAt, frozen)
+	}
+}

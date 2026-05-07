@@ -108,6 +108,10 @@ func (l *Lifecycle) Transition(ctx context.Context, req TransitionRequest) error
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, rec.State, req.ToState)
 	}
 
+	if !models.IsValidActorClass(string(req.ActorClass)) {
+		return fmt.Errorf("invalid actor class: %q", req.ActorClass)
+	}
+
 	if req.ToState == models.RecommendationStateDeferred && req.ReviewDueAt == nil {
 		return ErrReviewDueRequired
 	}

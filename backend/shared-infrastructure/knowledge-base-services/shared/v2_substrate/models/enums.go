@@ -285,3 +285,17 @@ func IsValidRecommendationUrgency(s string) bool {
 	}
 	return false
 }
+
+// IsValidActorClass reports whether s is a valid recommendation lifecycle
+// actor class. The recommendation package owns the canonical constants
+// (ActorClassHuman, etc.); this validator lives in models so it can be
+// referenced from substrate-level guards without an import cycle.
+func IsValidActorClass(s string) bool {
+	switch s {
+	case "human", "algorithmic",
+		"human-with-algorithmic-suggestion",
+		"human-overriding-algorithmic":
+		return true
+	}
+	return false
+}
