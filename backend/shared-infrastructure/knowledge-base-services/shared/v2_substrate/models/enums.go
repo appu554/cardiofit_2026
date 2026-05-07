@@ -299,3 +299,51 @@ func IsValidActorClass(s string) bool {
 	}
 	return false
 }
+
+// ConsentState* — the 9 lifecycle states (7 active + 2 terminal-like).
+// See plan: docs/superpowers/plans/2026-05-07-phase-0-2-consent-entity-lifecycle.md
+const (
+	ConsentStateRequested             = "requested"
+	ConsentStateDiscussed             = "discussed"
+	ConsentStateGranted               = "granted"
+	ConsentStateGrantedWithConditions = "granted-with-conditions"
+	ConsentStateRefused               = "refused"
+	ConsentStateActive                = "active"
+	ConsentStateUnderReview           = "under_review"
+	ConsentStateWithdrawn             = "withdrawn"
+	ConsentStateExpired               = "expired"
+)
+
+// ConsentClass* — the recommendation classes a Consent applies to.
+// One Consent can cover all psychotropic recommendations for a resident
+// until withdrawn or expired.
+const (
+	ConsentClassPsychotropic        = "psychotropic"
+	ConsentClassRestrictivePractice = "restrictive_practice"
+	ConsentClassChemoTherapy        = "chemotherapy"
+	ConsentClassEndOfLifeMedication = "end_of_life_medication"
+	ConsentClassGeneralMedication   = "general_medication"
+)
+
+// IsValidConsentState reports whether s is a known lifecycle state.
+func IsValidConsentState(s string) bool {
+	switch s {
+	case ConsentStateRequested, ConsentStateDiscussed, ConsentStateGranted,
+		ConsentStateGrantedWithConditions, ConsentStateRefused,
+		ConsentStateActive, ConsentStateUnderReview,
+		ConsentStateWithdrawn, ConsentStateExpired:
+		return true
+	}
+	return false
+}
+
+// IsValidConsentClass reports whether s is a known consent class.
+func IsValidConsentClass(s string) bool {
+	switch s {
+	case ConsentClassPsychotropic, ConsentClassRestrictivePractice,
+		ConsentClassChemoTherapy, ConsentClassEndOfLifeMedication,
+		ConsentClassGeneralMedication:
+		return true
+	}
+	return false
+}
