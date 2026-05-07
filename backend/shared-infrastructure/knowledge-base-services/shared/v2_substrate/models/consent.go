@@ -37,8 +37,10 @@ type Consent struct {
 }
 
 // validConsentTransitions encodes the consent lifecycle DAG. A pair (from, to)
-// is in the map iff the transition is permitted. Refused, Withdrawn, and
-// Expired are terminal (not present as keys).
+// is in the map iff the transition is permitted. Direct mutation outside
+// consent.Lifecycle is a contract violation; this function exists so the
+// Lifecycle engine and storage layer share one source of truth. Refused,
+// Withdrawn, and Expired are terminal (not present as keys).
 var validConsentTransitions = map[string]map[string]bool{
 	ConsentStateRequested: {
 		ConsentStateDiscussed: true,

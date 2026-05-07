@@ -300,7 +300,7 @@ func IsValidActorClass(s string) bool {
 	return false
 }
 
-// ConsentState* — the 9 lifecycle states (7 active + 2 terminal-like).
+// ConsentState* — the 9 lifecycle states (6 non-terminal + 3 terminal).
 // See plan: docs/superpowers/plans/2026-05-07-phase-0-2-consent-entity-lifecycle.md
 const (
 	ConsentStateRequested             = "requested"
@@ -309,7 +309,7 @@ const (
 	ConsentStateGrantedWithConditions = "granted-with-conditions"
 	ConsentStateRefused               = "refused"
 	ConsentStateActive                = "active"
-	ConsentStateUnderReview           = "under_review"
+	ConsentStateUnderReview           = "under-review"
 	ConsentStateWithdrawn             = "withdrawn"
 	ConsentStateExpired               = "expired"
 )
@@ -319,10 +319,10 @@ const (
 // until withdrawn or expired.
 const (
 	ConsentClassPsychotropic        = "psychotropic"
-	ConsentClassRestrictivePractice = "restrictive_practice"
-	ConsentClassChemoTherapy        = "chemotherapy"
-	ConsentClassEndOfLifeMedication = "end_of_life_medication"
-	ConsentClassGeneralMedication   = "general_medication"
+	ConsentClassRestrictivePractice = "restrictive-practice"
+	ConsentClassChemotherapy        = "chemotherapy"
+	ConsentClassEndOfLifeMedication = "end-of-life-medication"
+	ConsentClassGeneralMedication   = "general-medication"
 )
 
 // IsValidConsentState reports whether s is a known lifecycle state.
@@ -341,7 +341,7 @@ func IsValidConsentState(s string) bool {
 func IsValidConsentClass(s string) bool {
 	switch s {
 	case ConsentClassPsychotropic, ConsentClassRestrictivePractice,
-		ConsentClassChemoTherapy, ConsentClassEndOfLifeMedication,
+		ConsentClassChemotherapy, ConsentClassEndOfLifeMedication,
 		ConsentClassGeneralMedication:
 		return true
 	}

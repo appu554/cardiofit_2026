@@ -141,7 +141,7 @@ func TestIsValidConsentClass(t *testing.T) {
 	}{
 		{ConsentClassPsychotropic, true},
 		{ConsentClassRestrictivePractice, true},
-		{ConsentClassChemoTherapy, true},
+		{ConsentClassChemotherapy, true},
 		{ConsentClassEndOfLifeMedication, true},
 		{ConsentClassGeneralMedication, true},
 		{"bogus", false},
