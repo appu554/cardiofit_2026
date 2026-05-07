@@ -17,6 +17,43 @@ import (
 // ErrNotFound is returned when the requested recommendation does not exist.
 var ErrNotFound = errors.New("recommendation not found")
 
+// rowScanner is satisfied by both *sql.Row and *sql.Rows so the scan
+// helper can serve both single-row Get and multi-row List queries.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanRecommendation reads one recommendation row from any rowScanner.
+// Used by both Get (single row from QueryRowContext) and the List* queries
+// (rows.Next loop). Single source of truth for column ordering + JSON
+// unmarshal + UUID-array parse.
+func scanRecommendation(sc rowScanner) (models.Recommendation, error) {
+	var rec models.Recommendation
+	var ccRaw []byte
+	var medRefs pq.StringArray
+	if err := sc.Scan(
+		&rec.ID, &rec.ResidentID, &rec.AuthorID,
+		&rec.State, &rec.Type, &rec.Urgency, &rec.Title,
+		&ccRaw, &medRefs, &rec.ConsentRequired,
+		&rec.ReviewDueAt, &rec.SubmittedAt, &rec.DecidedAt, &rec.ClosedAt,
+		&rec.CreatedAt, &rec.UpdatedAt,
+	); err != nil {
+		return rec, err
+	}
+	if err := json.Unmarshal(ccRaw, &rec.ClinicalContent); err != nil {
+		return rec, fmt.Errorf("unmarshal clinical_content: %w", err)
+	}
+	rec.MedicineUseRefs = make([]uuid.UUID, 0, len(medRefs))
+	for _, ref := range medRefs {
+		u, err := uuid.Parse(ref)
+		if err != nil {
+			return rec, fmt.Errorf("parse medicine_use_ref %q: %w", ref, err)
+		}
+		rec.MedicineUseRefs = append(rec.MedicineUseRefs, u)
+	}
+	return rec, nil
+}
+
 // Store is the persistence boundary for recommendations. The Lifecycle engine
 // (Task 5) is the only legitimate caller of UpdateState; all other mutations
 // go via Create. This contract keeps the transition matrix authoritative.
@@ -71,34 +108,12 @@ SELECT id, resident_id, author_id, state, type, urgency, title,
        review_due_at, submitted_at, decided_at, closed_at,
        created_at, updated_at
 FROM recommendations WHERE id = $1`
-	row := s.db.QueryRowContext(ctx, q, id)
-
-	var rec models.Recommendation
-	var ccRaw []byte
-	var medRefs pq.StringArray
-	err := row.Scan(
-		&rec.ID, &rec.ResidentID, &rec.AuthorID,
-		&rec.State, &rec.Type, &rec.Urgency, &rec.Title,
-		&ccRaw, &medRefs, &rec.ConsentRequired,
-		&rec.ReviewDueAt, &rec.SubmittedAt, &rec.DecidedAt, &rec.ClosedAt,
-		&rec.CreatedAt, &rec.UpdatedAt,
-	)
+	rec, err := scanRecommendation(s.db.QueryRowContext(ctx, q, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
-	}
-	if err := json.Unmarshal(ccRaw, &rec.ClinicalContent); err != nil {
-		return nil, fmt.Errorf("unmarshal clinical_content: %w", err)
-	}
-	rec.MedicineUseRefs = make([]uuid.UUID, 0, len(medRefs))
-	for _, ref := range medRefs {
-		u, err := uuid.Parse(ref)
-		if err != nil {
-			return nil, fmt.Errorf("parse medicine_use_ref %q: %w", ref, err)
-		}
-		rec.MedicineUseRefs = append(rec.MedicineUseRefs, u)
 	}
 	return &rec, nil
 }
@@ -111,8 +126,6 @@ FROM recommendations WHERE id = $1`
 // first entry to those states. The decided_at population in particular is
 // load-bearing for the RIR matview (Task 8): COALESCE(decided_at, closed_at)
 // must not fall through to NULL for actioned recommendations.
-//
-// ListDeferredOverdue remains stubbed and is implemented in Task 7.
 func (s *PostgresStore) UpdateState(ctx context.Context, id uuid.UUID,
 	newState string, reviewDueAt *time.Time) error {
 	if !models.IsValidRecommendationState(newState) {
@@ -160,28 +173,9 @@ LIMIT 1000`
 
 	var out []models.Recommendation
 	for rows.Next() {
-		var rec models.Recommendation
-		var ccRaw []byte
-		var medRefs pq.StringArray
-		if err := rows.Scan(
-			&rec.ID, &rec.ResidentID, &rec.AuthorID,
-			&rec.State, &rec.Type, &rec.Urgency, &rec.Title,
-			&ccRaw, &medRefs, &rec.ConsentRequired,
-			&rec.ReviewDueAt, &rec.SubmittedAt, &rec.DecidedAt, &rec.ClosedAt,
-			&rec.CreatedAt, &rec.UpdatedAt,
-		); err != nil {
+		rec, err := scanRecommendation(rows)
+		if err != nil {
 			return nil, err
-		}
-		if err := json.Unmarshal(ccRaw, &rec.ClinicalContent); err != nil {
-			return nil, fmt.Errorf("unmarshal clinical_content: %w", err)
-		}
-		rec.MedicineUseRefs = make([]uuid.UUID, 0, len(medRefs))
-		for _, ref := range medRefs {
-			u, err := uuid.Parse(ref)
-			if err != nil {
-				return nil, fmt.Errorf("parse medicine_use_ref %q: %w", ref, err)
-			}
-			rec.MedicineUseRefs = append(rec.MedicineUseRefs, u)
 		}
 		out = append(out, rec)
 	}

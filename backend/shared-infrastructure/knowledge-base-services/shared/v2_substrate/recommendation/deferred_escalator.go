@@ -50,6 +50,10 @@ func (d *DeferredEscalator) RunOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Fail-fast on emit error: rely on the next sweep tick + consumer
+	// dedupe (Worklist consumer dedupes on (RecommendationID, day)) to
+	// retry. Partial-drain semantics deliberately rejected to keep the
+	// sweep auditable as an all-or-nothing operation per pass.
 	for _, r := range overdue {
 		ev := EscalationEvent{
 			RecommendationID: r.ID,
