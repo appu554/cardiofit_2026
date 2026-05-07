@@ -1,0 +1,66 @@
+rule_id: VAIDSHALA_TX_RMMR_OVERDUE_6MO
+schema_version: "2.0"
+library: CareTransition
+define: "RMMR Recommendation Overdue 6mo"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-TX-RMMR-OVERDUE-6MO
+content_sha: "a000000000000000000000000000000000000000000000000000000000000006"
+tier: tier_3_quality_gap
+summary: >
+  Care-transition quality gap. A prior RMMR (Residential Medication
+  Management Review) recommendation was deferred more than 6 months
+  ago and no rmmr_followup Event has been recorded since. The 6-month
+  RMMR follow-up cycle is the published RACGP / Pharmaceutical
+  Society of Australia recommendation.
+
+trigger_sources:
+  - source_type: care_transition
+    event_type: rmmr_followup
+    predicate: "no_rmmr_followup_within_180_days"
+  - source_type: care_intensity_transition
+    predicate: "care_intensity_active_treatment"
+
+state_machine_references:
+  reads_from:
+    - machine: recommendation_state
+      fact_type: recently_deferred
+      read_or_write: read
+    - machine: clinical
+      fact_type: events
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasRecentEventOfType(resident, 'rmmr_followup', 180)"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_TX_RMMR_OVERDUE_6MO', 90)"
+
+test_cases:
+  - name: rmmr_deferred_6mo_no_followup_fires
+    class: positive
+    fixture: fixtures/rmmr-recommendation-overdue-6mo-positive.json
+    expected_fire: true
+    expected_recommendation: "Schedule RMMR follow-up review (overdue >6 months)"
+  - name: recent_rmmr_followup_no_fire
+    class: substrate_state
+    fixture: fixtures/rmmr-recommendation-overdue-6mo-negative.json
+    expected_fire: false
+  - name: palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/rmmr-recommendation-overdue-6mo-suppression.json
+    expected_fire: false

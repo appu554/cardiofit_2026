@@ -1,0 +1,69 @@
+rule_id: VAIDSHALA_ANACC_BEHAVIOURAL_EVIDENCE
+schema_version: "2.0"
+library: ANACCDefensibility
+define: "ANACC Behavioural Evidence"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-ANACC-BEHAVIOURAL-EVIDENCE
+content_sha: "a000000000000000000000000000000000000000000000000000000000000008"
+tier: tier_3_quality_gap
+summary: >
+  AN-ACC defensibility evidence. Resident has more than 5 behavioural
+  incident Events in the last 30 days and no AN-ACC reassessment
+  Event has been recorded. Behavioural incident counts feed the
+  published AN-ACC class 9-13 indicators. Output is workflow exhaust
+  supporting AN-ACC class reassessment.
+
+trigger_sources:
+  - source_type: care_transition
+    event_type: behavioural_incident
+    predicate: "behavioural_incident_count_30d_exceeds_5"
+  - source_type: care_transition
+    event_type: anacc_reassessment
+    predicate: "no_recent_anacc_reassessment"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: events
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "EventCountSince(resident, 'behavioural_incident', 30) <= 5"
+  - class: substrate_state
+    predicate: "HasRecentEventOfType(resident, 'anacc_reassessment', 30)"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_ANACC_BEHAVIOURAL_EVIDENCE', 14)"
+
+test_cases:
+  - name: high_incident_count_no_reassessment_fires
+    class: positive
+    fixture: fixtures/anacc-behavioural-evidence-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface AN-ACC behavioural-evidence packet for assessor review"
+  - name: low_incident_count_no_fire
+    class: substrate_state
+    fixture: fixtures/anacc-behavioural-evidence-negative.json
+    expected_fire: false
+  - name: recently_actioned_suppressed
+    class: suppression
+    fixture: fixtures/anacc-behavioural-evidence-suppression.json
+    expected_fire: false

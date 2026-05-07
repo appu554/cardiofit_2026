@@ -1,0 +1,70 @@
+rule_id: VAIDSHALA_TX_DISCHARGE_NOT_RECONCILED_72H
+schema_version: "2.0"
+library: CareTransition
+define: "Hospital Discharge Medications Not Reconciled 72h"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-TX-DISCHARGE-NOT-RECONCILED-72H
+content_sha: "a000000000000000000000000000000000000000000000000000000000000005"
+tier: tier_3_quality_gap
+summary: >
+  Care-transition quality gap. Resident's most recent
+  hospital_discharge Event occurred more than 72 hours ago and the
+  paired reconciliation_worklist is not in a completed state.
+  Surfaces an overdue medication reconciliation that is a Standard 5
+  evidence category for clinical-care safety at care transitions.
+
+trigger_sources:
+  - source_type: care_transition
+    event_type: hospital_discharge
+    predicate: "discharge_age_exceeds_72h"
+  - source_type: care_transition
+    event_type: reconciliation_worklist_state_change
+    predicate: "reconciliation_not_completed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: events
+      read_or_write: read
+    - machine: clinical
+      fact_type: discharge_reconciliation_status
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasCompletedReconciliationFor(resident, LatestHospitalDischargeId(resident))"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_TX_DISCHARGE_NOT_RECONCILED_72H', 14)"
+
+test_cases:
+  - name: discharge_72h_no_reconciliation_fires
+    class: positive
+    fixture: fixtures/hospital-discharge-not-reconciled-72h-positive.json
+    expected_fire: true
+    expected_recommendation: "Complete medication reconciliation worklist for recent hospital discharge"
+  - name: reconciliation_completed_no_fire
+    class: substrate_state
+    fixture: fixtures/hospital-discharge-not-reconciled-72h-negative.json
+    expected_fire: false
+  - name: recently_actioned_suppressed
+    class: suppression
+    fixture: fixtures/hospital-discharge-not-reconciled-72h-suppression.json
+    expected_fire: false

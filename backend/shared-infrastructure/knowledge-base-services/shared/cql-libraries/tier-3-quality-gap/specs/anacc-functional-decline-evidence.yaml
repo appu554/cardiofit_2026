@@ -1,0 +1,68 @@
+rule_id: VAIDSHALA_ANACC_FUNCTIONAL_DECLINE
+schema_version: "2.0"
+library: ANACCDefensibility
+define: "ANACC Functional Decline Evidence"
+criterion_set: VAIDSHALA_TIER3
+criterion_id: VAIDSHALA-ANACC-FUNCTIONAL-DECLINE
+content_sha: "a000000000000000000000000000000000000000000000000000000000000007"
+tier: tier_3_quality_gap
+summary: >
+  AN-ACC defensibility evidence. Resident's AKPS (Australian-modified
+  Karnofsky Performance Scale) score has dropped more than 20 points
+  in the last 90 days and no AN-ACC reassessment Event has been
+  recorded. AKPS is the published AN-ACC v1.1 functional-status
+  indicator. Output is workflow exhaust supporting AN-ACC class
+  reassessment.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: akps
+    predicate: "akps_decline_exceeds_20_in_90_days"
+  - source_type: care_transition
+    event_type: anacc_reassessment
+    predicate: "no_recent_anacc_reassessment"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.akps
+      read_or_write: read
+    - machine: clinical
+      fact_type: events
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "DeltaFromBaseline(resident, 'akps', 90) >= -20"
+  - class: substrate_state
+    predicate: "HasRecentEventOfType(resident, 'anacc_reassessment', 90)"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_ANACC_FUNCTIONAL_DECLINE', 30)"
+
+test_cases:
+  - name: akps_decline_no_reassessment_fires
+    class: baseline_aware_fire
+    fixture: fixtures/anacc-functional-decline-evidence-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface AN-ACC functional-decline evidence packet for assessor review"
+  - name: stable_akps_no_fire
+    class: substrate_state
+    fixture: fixtures/anacc-functional-decline-evidence-negative.json
+    expected_fire: false
+  - name: recent_reassessment_no_fire
+    class: suppression
+    fixture: fixtures/anacc-functional-decline-evidence-suppression.json
+    expected_fire: false
