@@ -48,16 +48,20 @@ func (s *Server) handleAuditCredential(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAuditJurisdiction(w http.ResponseWriter, r *http.Request) {
 	// Path shape: /v1/audit/jurisdiction/{juri}/medications/{schedule}
+	// jurisdiction may contain a slash (e.g. AU/VIC) — find the
+	// /medications/ marker rather than splitting blindly.
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/audit/jurisdiction/")
-	parts := strings.Split(rest, "/")
-	if len(parts) < 1 {
+	if rest == "" {
 		http.Error(w, "missing jurisdiction", http.StatusBadRequest)
 		return
 	}
-	juri := parts[0]
+	juri := rest
 	schedule := ""
-	if len(parts) >= 3 && parts[1] == "medications" {
-		schedule = parts[2]
+	if idx := strings.Index(rest, "/medications/"); idx >= 0 {
+		juri = rest[:idx]
+		schedule = strings.TrimPrefix(rest[idx:], "/medications/")
+		// Strip trailing slash if any.
+		schedule = strings.TrimSuffix(schedule, "/")
 	}
 	days := 30
 	if d := r.URL.Query().Get("days"); d != "" {
