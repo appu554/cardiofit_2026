@@ -143,5 +143,47 @@ WHERE id = $3`
 
 func (s *PostgresStore) ListDeferredOverdue(ctx context.Context,
 	before time.Time) ([]models.Recommendation, error) {
-	return nil, errors.New("ListDeferredOverdue: implemented in Task 7")
+	const q = `
+SELECT id, resident_id, author_id, state, type, urgency, title,
+       clinical_content, medicine_use_refs, consent_required,
+       review_due_at, submitted_at, decided_at, closed_at,
+       created_at, updated_at
+FROM recommendations
+WHERE state = 'deferred' AND review_due_at IS NOT NULL AND review_due_at < $1
+ORDER BY review_due_at ASC
+LIMIT 1000`
+	rows, err := s.db.QueryContext(ctx, q, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []models.Recommendation
+	for rows.Next() {
+		var rec models.Recommendation
+		var ccRaw []byte
+		var medRefs pq.StringArray
+		if err := rows.Scan(
+			&rec.ID, &rec.ResidentID, &rec.AuthorID,
+			&rec.State, &rec.Type, &rec.Urgency, &rec.Title,
+			&ccRaw, &medRefs, &rec.ConsentRequired,
+			&rec.ReviewDueAt, &rec.SubmittedAt, &rec.DecidedAt, &rec.ClosedAt,
+			&rec.CreatedAt, &rec.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(ccRaw, &rec.ClinicalContent); err != nil {
+			return nil, fmt.Errorf("unmarshal clinical_content: %w", err)
+		}
+		rec.MedicineUseRefs = make([]uuid.UUID, 0, len(medRefs))
+		for _, ref := range medRefs {
+			u, err := uuid.Parse(ref)
+			if err != nil {
+				return nil, fmt.Errorf("parse medicine_use_ref %q: %w", ref, err)
+			}
+			rec.MedicineUseRefs = append(rec.MedicineUseRefs, u)
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
