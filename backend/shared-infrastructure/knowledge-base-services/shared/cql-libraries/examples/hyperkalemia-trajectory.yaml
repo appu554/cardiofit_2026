@@ -1,0 +1,86 @@
+# Tier 1 trajectory-based safety example.
+# Validates against shared/cql-toolchain/schemas/rule_specification.v2.json.
+rule_id: HYPERKALEMIA_RISK_TRAJECTORY
+schema_version: "2.0"
+library: TierOneImmediateSafety
+define: "Hyperkalemia Risk Trajectory"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-HYPERK-001
+content_sha: "1111111111111111111111111111111111111111111111111111111111111111"
+tier: tier_1_immediate_safety
+summary: >
+  Resident on RAAS blockade with potassium baseline trending upward
+  (>0.8 mmol/L over 7 days) — fire before threshold breach so the
+  recommendation is anticipatory rather than reactive.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: potassium
+    threshold: ">0.8_over_7d"
+  - source_type: medication_change
+    predicate: "new_or_dose_increase_in_ATC_C09"
+  - source_type: observation_update
+    observation_kind: potassium
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.potassium
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_eGFR
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "Cardio_renal_prescriber"
+    - "GP"
+    - "NP"
+  scope_rule_refs: []
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - telehealth
+    - after_hours_GP
+
+suppressions:
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'HYPERKALEMIA_RISK_TRAJECTORY', last_7d)"
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'AKI_WATCH')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+
+test_cases:
+  - name: baseline_delta_fire
+    class: baseline_aware_fire
+    fixture: fixtures/hyperk-trajectory-baseline-delta.json
+    expected_fire: true
+    expected_recommendation: "Consider K+-sparing review and electrolyte repeat"
+  - name: snapshot_only_no_fire
+    class: positive
+    fixture: fixtures/hyperk-snapshot-only.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/hyperk-palliative.json
+    expected_fire: false
+  - name: authorisation_routing_fallback
+    class: authorisation_routing
+    fixture: fixtures/hyperk-no-cardio-renal-prescriber.json
+    expected_fire: true

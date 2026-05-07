@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vaidshala.cardiofit/schemas/rule_specification.v2.json",
+  "title": "rule_specification.yaml v2",
+  "description": "Layer 3 v2 substrate-aware rule specification. Extends v1.0 with state_machine_references, authorisation_gating, consent_gating, trigger_sources. See: docs/superpowers/specs/2026-05-Layer3-Wave0-cql-helper-surface.md and Layer 3 v2 Implementation Guidelines Part 1.1.",
+  "type": "object",
+  "required": [
+    "rule_id",
+    "schema_version",
+    "library",
+    "define",
+    "criterion_set",
+    "content_sha",
+    "tier",
+    "trigger_sources",
+    "state_machine_references"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "rule_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{2,79}$",
+      "description": "Stable rule identifier; used for EvidenceTrace lineage and CDS Hooks card.uuid."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "2.0",
+      "description": "Pinning to v2.0 of this schema."
+    },
+    "library": {
+      "type": "string",
+      "description": "CQL library name housing the define."
+    },
+    "define": {
+      "type": "string",
+      "description": "CQL define name within the library."
+    },
+    "criterion_set": {
+      "type": "string",
+      "enum": [
+        "STOPP_V3",
+        "START_V3",
+        "BEERS_2023",
+        "BEERS_RENAL",
+        "ACB",
+        "PIMS_WANG",
+        "AU_APINCHS",
+        "AU_TGA_BLACKBOX",
+        "VAIDSHALA_TIER1",
+        "VAIDSHALA_TIER2",
+        "VAIDSHALA_TIER3",
+        "VAIDSHALA_TIER4"
+      ],
+      "description": "Provenance discriminator. See kb-4 migration 007 COMMENT for the legend."
+    },
+    "criterion_id": {
+      "type": "string",
+      "description": "Identifier within the criterion_set (e.g. STOPP A1)."
+    },
+    "content_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hex of the canonicalised rule body; matched against the L6 governance signature."
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["tier_1_immediate_safety", "tier_2_deprescribing", "tier_3_quality_gap", "tier_4_surveillance"]
+    },
+    "summary": { "type": "string" },
+    "trigger_sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/triggerSource" }
+    },
+    "state_machine_references": {
+      "type": "object",
+      "required": ["reads_from", "writes_to"],
+      "additionalProperties": false,
+      "properties": {
+        "reads_from": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/stateMachineRead" }
+        },
+        "writes_to": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/stateMachineWrite" }
+        }
+      }
+    },
+    "authorisation_gating": { "$ref": "#/$defs/authorisationGating" },
+    "consent_gating": { "$ref": "#/$defs/consentGating" },
+    "suppressions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/suppression" }
+    },
+    "alternative_recommendations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "test_cases": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/testCase" }
+    }
+  },
+  "$defs": {
+    "triggerSource": {
+      "type": "object",
+      "required": ["source_type"],
+      "additionalProperties": false,
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "medication_change",
+            "condition_change",
+            "observation_update",
+            "baseline_delta",
+            "active_concern_resolution",
+            "monitoring_threshold_crossed",
+            "consent_expiry_approaching",
+            "authorisation_expiry_approaching",
+            "care_intensity_transition",
+            "care_transition"
+          ]
+        },
+        "event_type": { "type": "string" },
+        "observation_kind": { "type": "string" },
+        "predicate": { "type": "string" },
+        "threshold": { "type": "string" }
+      }
+    },
+    "stateMachineRead": {
+      "type": "object",
+      "required": ["machine", "fact_type"],
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string",
+          "enum": ["clinical", "consent", "authorisation", "monitoring", "evidence_trace", "recommendation"]
+        },
+        "fact_type": { "type": "string" },
+        "read_or_write": { "type": "string", "const": "read" }
+      }
+    },
+    "stateMachineWrite": {
+      "type": "object",
+      "required": ["machine", "fact_type"],
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string",
+          "enum": ["clinical", "consent", "authorisation", "monitoring", "evidence_trace", "recommendation"]
+        },
+        "fact_type": { "type": "string" },
+        "action": { "type": "string" },
+        "read_or_write": { "type": "string", "const": "write" }
+      }
+    },
+    "authorisationGating": {
+      "type": "object",
+      "required": ["required_roles"],
+      "additionalProperties": false,
+      "properties": {
+        "required_roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "scope_rule_refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "latency_budget_ms": { "type": "integer", "minimum": 1, "maximum": 500 },
+        "fallback_routing_if_unavailable": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["telehealth", "ED_transfer_protocol", "after_hours_GP", "deferred"] }
+        }
+      }
+    },
+    "consentGating": {
+      "type": "object",
+      "required": ["required_consent_class", "consent_missing_action"],
+      "additionalProperties": false,
+      "properties": {
+        "required_consent_class": { "type": "string" },
+        "expiry_check": { "type": "boolean" },
+        "consent_missing_action": {
+          "type": "string",
+          "enum": ["create_consent_gathering_recommendation", "suppress", "fire_informational"]
+        },
+        "consent_missing_recommendation_template": { "type": "string" }
+      }
+    },
+    "suppression": {
+      "type": "object",
+      "required": ["class", "predicate"],
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "eligibility",
+            "recently_actioned",
+            "cohort",
+            "workflow",
+            "substrate_state",
+            "authorisation_context"
+          ]
+        },
+        "predicate": { "type": "string" }
+      }
+    },
+    "testCase": {
+      "type": "object",
+      "required": ["name", "class", "fixture"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "class": {
+          "type": "string",
+          "enum": [
+            "positive",
+            "suppression",
+            "boundary",
+            "missing_data",
+            "baseline_aware_fire",
+            "authorisation_routing",
+            "consent_gating",
+            "care_intensity",
+            "evidence_trace",
+            "substrate_state"
+          ]
+        },
+        "fixture": { "type": "string" },
+        "expected_fire": { "type": "boolean" },
+        "expected_recommendation": { "type": "string" }
+      }
+    }
+  }
+}
