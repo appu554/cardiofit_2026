@@ -1,0 +1,62 @@
+rule_id: STOPP_F2_PPI_UNCOMPLICATED_PUD_OVER_8_WEEKS
+schema_version: "2.0"
+library: StoppV3
+define: "STOPP F2 PPI Uncomplicated PUD Over 8 Weeks"
+criterion_set: STOPP_V3
+criterion_id: STOPP-V3-F2
+content_sha: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+tier: tier_2_deprescribing
+summary: >
+  PPI (ATC A02BC) >8 weeks for uncomplicated PUD per STOPP v3 §F2 (O'Mahony et al. 2023). Drafts a deprescribing/dose-reduction recommendation when no GORD/Barrett/NSAID-prophylaxis concern is open.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+  - source_type: condition_change
+    predicate: "indication_concern_changed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'STOPP_F2_PPI_UNCOMPLICATED_PUD_OVER_8_WEEKS', 90)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/stopp-f2-ppi-pud-positive.json
+    expected_fire: true
+    expected_recommendation: "Consider PPI step-down/cessation per STOPP v3 F2"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/stopp-f2-ppi-pud-negative.json
+    expected_fire: false
+  - name: suppression_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/stopp-f2-ppi-pud-suppression.json
+    expected_fire: false

@@ -1,0 +1,59 @@
+rule_id: START_F4_INFLUENZA_VACCINE_ANNUAL_ELDERLY
+schema_version: "2.0"
+library: StartV3
+define: "START F4 Influenza Vaccine Annual Elderly"
+criterion_set: START_V3
+criterion_id: START-V3-F4
+content_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+tier: tier_2_deprescribing
+summary: >
+  No documented INFLUENZA_VACCINATION_CURRENT_SEASON concern closed per START v3 §F4 (O'Mahony et al. 2023). Drafts a PRESCRIBING_OMISSION recommendation for annual seasonal influenza vaccine in elderly.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+  - source_type: condition_change
+    predicate: "indication_concern_changed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'START_F4_INFLUENZA_VACCINE_ANNUAL_ELDERLY', 180)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/start-f4-flu-vax-positive.json
+    expected_fire: true
+    expected_recommendation: "Consider seasonal influenza vaccination per START v3 F4"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/start-f4-flu-vax-negative.json
+    expected_fire: false
+  - name: suppression_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/start-f4-flu-vax-suppression.json
+    expected_fire: false

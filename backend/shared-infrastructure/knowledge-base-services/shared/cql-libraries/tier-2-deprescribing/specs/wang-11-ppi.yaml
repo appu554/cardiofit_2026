@@ -1,0 +1,62 @@
+rule_id: WANG_2024_LONG_TERM_PPI_WITHOUT_INDICATION_AU
+schema_version: "2.0"
+library: Wang2024
+define: "Wang 2024 Long Term PPI Without Indication AU"
+criterion_set: PIMS_WANG
+criterion_id: WANG-2024-AU-PIMS-11
+content_sha: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+tier: tier_2_deprescribing
+summary: >
+  Long-term PPI (ATC A02BC) in older adult without evidence-based indication per Wang 2024 AU-PIMs §11 (AU-specific PIM list).
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+  - source_type: condition_change
+    predicate: "indication_concern_changed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'WANG_2024_LONG_TERM_PPI_WITHOUT_INDICATION_AU', 90)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/wang-11-ppi-positive.json
+    expected_fire: true
+    expected_recommendation: "Consider PPI step-down/cessation per Wang 2024 AU-PIMs 11"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/wang-11-ppi-negative.json
+    expected_fire: false
+  - name: suppression_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/wang-11-ppi-suppression.json
+    expected_fire: false

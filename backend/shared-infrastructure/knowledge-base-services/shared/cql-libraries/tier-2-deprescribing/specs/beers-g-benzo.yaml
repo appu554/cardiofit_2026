@@ -1,0 +1,68 @@
+rule_id: BEERS_2023_BENZODIAZEPINE_IN_ELDERLY
+schema_version: "2.0"
+library: Beers2023
+define: "Beers 2023 Benzodiazepine In Elderly"
+criterion_set: BEERS_2023
+criterion_id: BEERS-2023-G-BENZODIAZEPINE
+content_sha: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+tier: tier_2_deprescribing
+summary: >
+  Benzodiazepine (ATC N05BA) in elderly per AGS Beers 2023 §G (J Am Geriatr Soc 2023). Recommends taper/cease unless documented indication review. Schedule-8 authorisation gating applies.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_relevant_atc"
+  - source_type: condition_change
+    predicate: "indication_concern_changed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - prescriber_clinical
+    - pharmacist_reviewer
+  latency_budget_ms: 300
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) <> 'active_treatment'"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'BEERS_2023_BENZODIAZEPINE_IN_ELDERLY', 60)"
+
+test_cases:
+  - name: positive_fires
+    class: positive
+    fixture: fixtures/beers-g-benzo-positive.json
+    expected_fire: true
+    expected_recommendation: "Consider benzodiazepine taper per Beers 2023 G"
+  - name: negative_no_fire
+    class: substrate_state
+    fixture: fixtures/beers-g-benzo-negative.json
+    expected_fire: false
+  - name: suppression_palliative_no_fire
+    class: care_intensity
+    fixture: fixtures/beers-g-benzo-suppression.json
+    expected_fire: false

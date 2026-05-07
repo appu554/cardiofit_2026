@@ -1,7 +1,7 @@
-"""Wave 3 batch acceptance — 6 Tier 2 deprescribing rules.
+"""Wave 3 (+ Wave-extension 2026-05) batch acceptance for Tier 2.
 
-Plan acceptance (Wave 3 vertical slice) requires that the 6 grounded
-Tier 2 rule specifications:
+Plan acceptance (Wave 3 vertical slice + Wave-extension batch)
+requires that all Tier 2 rule specifications:
 
   1. Validate against rule_specification.v2.json (Stage 1).
   2. Pass the two-gate validator (snapshot + substrate gates).
@@ -10,13 +10,10 @@ Tier 2 rule specifications:
   5. Round-trip through the GovernancePromoter and produce a signed
      package on disk.
 
-The 6 rules are:
-  - STOPP_B1_ASPIRIN_PRIMARY_PREVENTION       (StoppV3.cql)
-  - START_A1_ANTICOAGULATION_AF               (StartV3.cql)
-  - BEERS_2023_ANTICHOLINERGIC_CHRONIC_USE    (Beers2023.cql)
-  - WANG_2024_ANTIPSYCHOTIC_DEMENTIA_AU       (Wang2024.cql)
-  - ADG2025_PPI_STEP_DOWN_PROTOCOL            (ADG2025.cql)
-  - ADG2025_ANTIPSYCHOTIC_BPSD_12W_REVIEW     (ADG2025.cql)
+Wave 3 ships 6 (4 published + 2 ADG placeholder).
+Wave-extension ships 15 more grounded in real published criterion
+sources (4 STOPP, 4 START, 4 Beers, 3 Wang).
+Total: 21 Tier 2 specs.
 """
 
 from __future__ import annotations
@@ -44,12 +41,29 @@ TIER2_DIR = (
 SPECS_DIR = TIER2_DIR / "specs"
 
 EXPECTED_RULE_IDS = {
+    # Wave 3 vertical slice (6)
     "STOPP_B1_ASPIRIN_PRIMARY_PREVENTION",
     "START_A1_ANTICOAGULATION_AF",
     "BEERS_2023_ANTICHOLINERGIC_CHRONIC_USE",
     "WANG_2024_ANTIPSYCHOTIC_DEMENTIA_AU",
     "ADG2025_PPI_STEP_DOWN_PROTOCOL",
     "ADG2025_ANTIPSYCHOTIC_BPSD_12W_REVIEW",
+    # Wave-extension batch (15) — published criterion citations
+    "STOPP_D5_LONG_TERM_BENZODIAZEPINE_HYPNOTIC",
+    "STOPP_F2_PPI_UNCOMPLICATED_PUD_OVER_8_WEEKS",
+    "STOPP_K1_ANTICHOLINERGIC_IN_DELIRIUM_OR_DEMENTIA",
+    "STOPP_J6_SULFONYLUREA_HBA1C_BELOW_7",
+    "START_B5_BETA_BLOCKER_POST_MI_REDUCED_LVEF",
+    "START_D2_CALCIUM_VITAMIN_D_OSTEOPOROSIS",
+    "START_E1_BONE_PROTECTIVE_THERAPY_OSTEOPOROSIS",
+    "START_F4_INFLUENZA_VACCINE_ANNUAL_ELDERLY",
+    "BEERS_2023_SLIDING_SCALE_INSULIN_NURSING_HOME",
+    "BEERS_2023_STRONG_OPIOID_FIRST_LINE_ELDERLY",
+    "BEERS_2023_NSAID_IN_CKD_STAGE_3_PLUS",
+    "BEERS_2023_BENZODIAZEPINE_IN_ELDERLY",
+    "WANG_2024_ANTICHOLINERGIC_COGNITIVE_IMPAIRMENT_AU",
+    "WANG_2024_STRONG_OPIOID_WITHOUT_CANCER_PAIN_AU",
+    "WANG_2024_LONG_TERM_PPI_WITHOUT_INDICATION_AU",
 }
 
 
@@ -76,7 +90,7 @@ def _resolve_body(define: str) -> str:
 
 def test_wave3_corpus_count():
     specs = _all_specs()
-    assert len(specs) == 6, f"expected 6 Wave 3 specs, found {len(specs)}"
+    assert len(specs) == 21, f"expected 21 Wave 3 + extension specs, found {len(specs)}"
     rule_ids = {load_spec(p)["rule_id"] for p in specs}
     assert rule_ids == EXPECTED_RULE_IDS, (
         f"unexpected rule_ids: {rule_ids ^ EXPECTED_RULE_IDS}"
@@ -150,9 +164,11 @@ def test_wave3_cds_hooks_emission_valid_for_all():
 
 
 def test_wave3_published_rules_cite_real_criterion_ids():
-    """The 4 published rules (STOPP/START/Beers/Wang) cite real,
-    citable criterion identifiers — not placeholders."""
+    """All published rules (STOPP/START/Beers/Wang) cite real,
+    citable criterion identifiers — not placeholders. The Wave-extension
+    batch (2026-05) adds 15 more grounded in published criterion lists."""
     expected_published = {
+        # Wave 3 vertical slice
         "STOPP_B1_ASPIRIN_PRIMARY_PREVENTION": ("STOPP_V3", "STOPP-V3-B1"),
         "START_A1_ANTICOAGULATION_AF": ("START_V3", "START-V3-A1"),
         "BEERS_2023_ANTICHOLINERGIC_CHRONIC_USE": (
@@ -162,6 +178,46 @@ def test_wave3_published_rules_cite_real_criterion_ids():
         "WANG_2024_ANTIPSYCHOTIC_DEMENTIA_AU": (
             "PIMS_WANG",
             "WANG-2024-AU-PIMS-3",
+        ),
+        # Wave-extension batch — STOPP v3
+        "STOPP_D5_LONG_TERM_BENZODIAZEPINE_HYPNOTIC": ("STOPP_V3", "STOPP-V3-D5"),
+        "STOPP_F2_PPI_UNCOMPLICATED_PUD_OVER_8_WEEKS": ("STOPP_V3", "STOPP-V3-F2"),
+        "STOPP_K1_ANTICHOLINERGIC_IN_DELIRIUM_OR_DEMENTIA": ("STOPP_V3", "STOPP-V3-K1"),
+        "STOPP_J6_SULFONYLUREA_HBA1C_BELOW_7": ("STOPP_V3", "STOPP-V3-J6"),
+        # Wave-extension — START v3
+        "START_B5_BETA_BLOCKER_POST_MI_REDUCED_LVEF": ("START_V3", "START-V3-B5"),
+        "START_D2_CALCIUM_VITAMIN_D_OSTEOPOROSIS": ("START_V3", "START-V3-D2"),
+        "START_E1_BONE_PROTECTIVE_THERAPY_OSTEOPOROSIS": ("START_V3", "START-V3-E1"),
+        "START_F4_INFLUENZA_VACCINE_ANNUAL_ELDERLY": ("START_V3", "START-V3-F4"),
+        # Wave-extension — Beers 2023
+        "BEERS_2023_SLIDING_SCALE_INSULIN_NURSING_HOME": (
+            "BEERS_2023",
+            "BEERS-2023-K1-SLIDING-SCALE-INSULIN",
+        ),
+        "BEERS_2023_STRONG_OPIOID_FIRST_LINE_ELDERLY": (
+            "BEERS_2023",
+            "BEERS-2023-K7-OPIOID-FIRST-LINE",
+        ),
+        "BEERS_2023_NSAID_IN_CKD_STAGE_3_PLUS": (
+            "BEERS_2023",
+            "BEERS-2023-H-NSAID-CKD",
+        ),
+        "BEERS_2023_BENZODIAZEPINE_IN_ELDERLY": (
+            "BEERS_2023",
+            "BEERS-2023-G-BENZODIAZEPINE",
+        ),
+        # Wave-extension — Wang 2024 AU-PIMs
+        "WANG_2024_ANTICHOLINERGIC_COGNITIVE_IMPAIRMENT_AU": (
+            "PIMS_WANG",
+            "WANG-2024-AU-PIMS-1",
+        ),
+        "WANG_2024_STRONG_OPIOID_WITHOUT_CANCER_PAIN_AU": (
+            "PIMS_WANG",
+            "WANG-2024-AU-PIMS-7",
+        ),
+        "WANG_2024_LONG_TERM_PPI_WITHOUT_INDICATION_AU": (
+            "PIMS_WANG",
+            "WANG-2024-AU-PIMS-11",
         ),
     }
     for spec_path in _all_specs():
@@ -249,14 +305,14 @@ def test_wave3_governance_promotion_six_signed_packages(
         assert result.signed_package_path.exists()
         signed_paths.append(result.signed_package_path)
 
-    assert len(signed_paths) == 6
+    assert len(signed_paths) == 21
     # Each package is uniquely named and SHA-different
     shas = set()
     for p in signed_paths:
         import json as _json
         pkg = _json.loads(p.read_text())
         shas.add(pkg["content_sha"])
-    assert len(shas) == 6, "expected 6 distinct content_sha values"
+    assert len(shas) == 21, "expected 21 distinct content_sha values"
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +349,7 @@ def test_wave3_end_to_end_batch_summary():
         if not validate_cds_hooks_v2_response(response):
             counts["cds_hooks"] += 1
 
-    assert total == 6
+    assert total == 21
     assert counts["stage1"] == total
     assert counts["two_gate"] == total
     assert counts["active"] == total
