@@ -122,3 +122,37 @@ func TestRecommendationTransitionMatrix(t *testing.T) {
 		}
 	}
 }
+
+func TestIsValidRecommendationType(t *testing.T) {
+	cases := []struct {
+		s    string
+		want bool
+	}{
+		{RecommendationTypeStop, true},
+		{RecommendationTypeMonitor, true},
+		{RecommendationTypeAdd, true},
+		{"bogus", false},
+	}
+	for _, c := range cases {
+		if got := IsValidRecommendationType(c.s); got != c.want {
+			t.Errorf("IsValidRecommendationType(%q)=%v want %v", c.s, got, c.want)
+		}
+	}
+}
+
+func TestIsValidRecommendationUrgency(t *testing.T) {
+	cases := []struct {
+		s    string
+		want bool
+	}{
+		{RecommendationUrgencyRed, true},
+		{RecommendationUrgencyAmber, true},
+		{RecommendationUrgencyGreen, true},
+		{"bogus", false},
+	}
+	for _, c := range cases {
+		if got := IsValidRecommendationUrgency(c.s); got != c.want {
+			t.Errorf("IsValidRecommendationUrgency(%q)=%v want %v", c.s, got, c.want)
+		}
+	}
+}

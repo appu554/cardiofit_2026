@@ -266,3 +266,22 @@ func IsValidRecommendationState(s string) bool {
 	}
 	return false
 }
+
+// IsValidRecommendationType reports whether s is a known recommendation type.
+func IsValidRecommendationType(s string) bool {
+	switch s {
+	case RecommendationTypeStop, RecommendationTypeMonitor,
+		RecommendationTypeDoseChange, RecommendationTypeAdd:
+		return true
+	}
+	return false
+}
+
+// IsValidRecommendationUrgency reports whether s is a known urgency tier.
+func IsValidRecommendationUrgency(s string) bool {
+	switch s {
+	case RecommendationUrgencyRed, RecommendationUrgencyAmber, RecommendationUrgencyGreen:
+		return true
+	}
+	return false
+}
