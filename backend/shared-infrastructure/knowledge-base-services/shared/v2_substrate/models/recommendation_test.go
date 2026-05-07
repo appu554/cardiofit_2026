@@ -69,3 +69,56 @@ func TestIsValidRecommendationState(t *testing.T) {
 		}
 	}
 }
+
+func TestRecommendationTransitionMatrix(t *testing.T) {
+	type tc struct {
+		from, to string
+		want     bool
+	}
+	cases := []tc{
+		// Happy path
+		{RecommendationStateDetected, RecommendationStateDrafted, true},
+		{RecommendationStateDrafted, RecommendationStateSubmitted, true},
+		{RecommendationStateSubmitted, RecommendationStateViewed, true},
+		{RecommendationStateViewed, RecommendationStateDecided, true},
+		{RecommendationStateDecided, RecommendationStateImplemented, true},
+		{RecommendationStateImplemented, RecommendationStateMonitoringActive, true},
+		{RecommendationStateMonitoringActive, RecommendationStateOutcomeRecorded, true},
+		{RecommendationStateOutcomeRecorded, RecommendationStateClosed, true},
+
+		// Deferred branches
+		{RecommendationStateSubmitted, RecommendationStateDeferred, true},
+		{RecommendationStateViewed, RecommendationStateDeferred, true},
+		{RecommendationStateDeferred, RecommendationStateSubmitted, true},
+		{RecommendationStateDeferred, RecommendationStateClosed, true},
+
+		// Direct-to-closed escapes
+		{RecommendationStateDetected, RecommendationStateClosed, true},
+		{RecommendationStateDrafted, RecommendationStateClosed, true},
+		{RecommendationStateSubmitted, RecommendationStateClosed, true},
+		{RecommendationStateViewed, RecommendationStateClosed, true},
+		{RecommendationStateDecided, RecommendationStateClosed, true},
+		{RecommendationStateImplemented, RecommendationStateOutcomeRecorded, true},
+
+		// Forbidden: terminal
+		{RecommendationStateClosed, RecommendationStateDrafted, false},
+		{RecommendationStateClosed, RecommendationStateSubmitted, false},
+
+		// Forbidden: skipping decided
+		{RecommendationStateViewed, RecommendationStateImplemented, false},
+		{RecommendationStateSubmitted, RecommendationStateDecided, false},
+
+		// Forbidden: backwards
+		{RecommendationStateDecided, RecommendationStateSubmitted, false},
+		{RecommendationStateMonitoringActive, RecommendationStateImplemented, false},
+
+		// Forbidden: bogus
+		{"bogus", RecommendationStateDrafted, false},
+		{RecommendationStateDrafted, "bogus", false},
+	}
+	for _, c := range cases {
+		if got := IsValidTransition(c.from, c.to); got != c.want {
+			t.Errorf("IsValidTransition(%q, %q) = %v, want %v", c.from, c.to, got, c.want)
+		}
+	}
+}

@@ -63,3 +63,59 @@ type ClinicalContent struct {
 	ProposedPlan    string   `json:"proposed_plan"`
 	MonitoringPlan  string   `json:"monitoring_plan"`
 }
+
+// validTransitions encodes the recommendation lifecycle DAG. A pair (from, to)
+// is in the map iff the transition is permitted. Direct mutation outside
+// recommendation.Lifecycle is a contract violation; this function exists so
+// the Lifecycle engine and storage layer share one source of truth.
+var validTransitions = map[string]map[string]bool{
+	RecommendationStateDetected: {
+		RecommendationStateDrafted: true,
+		RecommendationStateClosed:  true,
+	},
+	RecommendationStateDrafted: {
+		RecommendationStateSubmitted: true,
+		RecommendationStateClosed:    true,
+	},
+	RecommendationStateSubmitted: {
+		RecommendationStateViewed:   true,
+		RecommendationStateDeferred: true,
+		RecommendationStateClosed:   true,
+	},
+	RecommendationStateViewed: {
+		RecommendationStateDecided:  true,
+		RecommendationStateDeferred: true,
+		RecommendationStateClosed:   true,
+	},
+	RecommendationStateDeferred: {
+		RecommendationStateSubmitted: true, // re-surfaced
+		RecommendationStateClosed:    true, // expired without action
+	},
+	RecommendationStateDecided: {
+		RecommendationStateImplemented: true,
+		RecommendationStateClosed:      true, // decided-no-action
+	},
+	RecommendationStateImplemented: {
+		RecommendationStateMonitoringActive: true,
+		RecommendationStateOutcomeRecorded:  true, // skip monitoring if not warranted
+	},
+	RecommendationStateMonitoringActive: {
+		RecommendationStateOutcomeRecorded: true,
+	},
+	RecommendationStateOutcomeRecorded: {
+		RecommendationStateClosed: true,
+	},
+	// RecommendationStateClosed is terminal; no entry.
+}
+
+// IsValidTransition reports whether the lifecycle DAG permits from → to.
+func IsValidTransition(from, to string) bool {
+	if !IsValidRecommendationState(from) || !IsValidRecommendationState(to) {
+		return false
+	}
+	allowed, ok := validTransitions[from]
+	if !ok {
+		return false
+	}
+	return allowed[to]
+}
