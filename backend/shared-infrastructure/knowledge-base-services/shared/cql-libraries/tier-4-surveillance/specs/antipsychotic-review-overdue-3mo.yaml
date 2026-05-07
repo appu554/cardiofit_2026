@@ -1,0 +1,64 @@
+rule_id: VAIDSHALA_T4_ANTIPSYCHOTIC_REVIEW_OVERDUE_3MO
+schema_version: "2.0"
+library: Lifecycle
+define: "Antipsychotic Review Overdue 3mo"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-ANTIPSYCHOTIC-REVIEW-OVERDUE
+content_sha: "b000000000000000000000000000000000000000000000000000000000000004"
+tier: tier_4_surveillance
+summary: >
+  Lifecycle surveillance: antipsychotic (ATC N05A) active and no
+  documented review in the last 90 days. Per ADG (Aged Care
+  Diagnostics Guidelines) 2025 antipsychotic review cycle. Uses
+  HasActiveAtcPrefix + HasActiveConcernType('ANTIPSYCHOTIC_REVIEW_DONE_90D')
+  to detect lifecycle gap. TODO(layer1-bind): bind exact ADG 2025
+  citation once Pipeline-2 publishes the source.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_N05A"
+  - source_type: active_concern_resolution
+    predicate: "antipsychotic_review_concern_status_changed"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ANTIPSYCHOTIC_REVIEW_DONE_90D')"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_ANTIPSYCHOTIC_REVIEW_OVERDUE_3MO', 30)"
+
+test_cases:
+  - name: review_overdue_fires
+    class: positive
+    fixture: fixtures/antipsychotic-review-overdue-3mo-positive.json
+    expected_fire: true
+    expected_recommendation: "Antipsychotic review overdue >12 weeks per ADG 2025 — prompt review"
+  - name: recent_review_done_no_fire
+    class: substrate_state
+    fixture: fixtures/antipsychotic-review-overdue-3mo-negative.json
+    expected_fire: false
+  - name: recently_actioned_no_fire
+    class: suppression
+    fixture: fixtures/antipsychotic-review-overdue-3mo-suppression.json
+    expected_fire: false

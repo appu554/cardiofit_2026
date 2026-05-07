@@ -58,6 +58,14 @@ KNOWN_FACT_TYPES: dict[str, set[str]] = {
         "baseline_state.CK",
         "baseline_state.BGL",
         "baseline_state.akps",
+        # Wave 5 Tier 4 surveillance facts (trajectory rules).
+        # baseline_state.weight_kg backs the 90-day weight-loss trajectory
+        # rule; baseline_state.egfr is the lower-cased twin of the
+        # legacy baseline_state.eGFR fact and is accepted here so authors
+        # can use either casing without surprise. Both are backed by
+        # ClinicalStateHelpers.DeltaFromBaseline / IsTrending.
+        "baseline_state.weight_kg",
+        "baseline_state.egfr",
         "active_concerns",
         # Wave 4A Tier 3 quality-gap fact_types (PHARMA-Care + Standard 5
         # + care-transition + AN-ACC defensibility). Each fact is backed

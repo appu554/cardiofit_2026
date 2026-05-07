@@ -1,0 +1,58 @@
+rule_id: VAIDSHALA_T4_MONITORING_PLAN_OVERDUE_OBSERVATION
+schema_version: "2.0"
+library: Lifecycle
+define: "Monitoring Plan Overdue Observation"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-MONITORING-PLAN-OVERDUE
+content_sha: "b000000000000000000000000000000000000000000000000000000000000006"
+tier: tier_4_surveillance
+summary: >
+  Lifecycle surveillance: at least one observation in an active
+  monitoring plan is overdue per the Layer 2 §4.3 Monitoring state
+  machine. Surfaces a workflow nudge to collect the missing
+  observation. Suppressed for 7 days after the action is recorded.
+
+trigger_sources:
+  - source_type: monitoring_threshold_crossed
+    predicate: "any_active_plan_observation_overdue"
+
+state_machine_references:
+  reads_from:
+    - machine: monitoring
+      fact_type: active_plans
+      read_or_write: read
+    - machine: monitoring
+      fact_type: observation_overdue
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_MONITORING_PLAN_OVERDUE_OBSERVATION', 7)"
+
+test_cases:
+  - name: overdue_observation_fires
+    class: positive
+    fixture: fixtures/monitoring-plan-overdue-observation-positive.json
+    expected_fire: true
+    expected_recommendation: "Monitoring plan has overdue observation — collect or close"
+  - name: all_observations_in_window_no_fire
+    class: positive
+    fixture: fixtures/monitoring-plan-overdue-observation-negative.json
+    expected_fire: false
+  - name: recently_actioned_no_fire
+    class: suppression
+    fixture: fixtures/monitoring-plan-overdue-observation-suppression.json
+    expected_fire: false

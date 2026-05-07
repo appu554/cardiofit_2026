@@ -1,0 +1,58 @@
+rule_id: VAIDSHALA_T4_BEHAVIOURAL_EPISODE_FREQUENCY_CHANGE_14D
+schema_version: "2.0"
+library: Trajectory
+define: "Behavioural Episode Frequency Change 14d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-BEH-EPISODE-FREQ-14D
+content_sha: "b000000000000000000000000000000000000000000000000000000000000003"
+tier: tier_4_surveillance
+summary: >
+  Surveillance signal: behavioural-episode count over the trailing
+  14 days is >= 1.5x the prior 14-day baseline. PHARMA-Care domain
+  D4 surveillance + AN-ACC behavioural-evidence support. The rule
+  reads the behavioural_episode event series via QualityGapHelpers'
+  EventCountSince and gates on the presence of a non-zero baseline.
+  HasActiveConcernType suppression covers the "already under
+  behavioural review" case (substrate-aware classification).
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: behavioural_episode_count_14d
+    predicate: "behavioural_episode_count_increases_50pct_over_baseline"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: events
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'BEHAVIOURAL_REVIEW_OPEN')"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_BEHAVIOURAL_EPISODE_FREQUENCY_CHANGE_14D', 14)"
+
+test_cases:
+  - name: episode_frequency_jump_fires
+    class: baseline_aware_fire
+    fixture: fixtures/behavioural-episode-frequency-change-14d-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface 14-day behavioural-episode frequency uptick for behavioural review"
+  - name: stable_frequency_no_fire
+    class: substrate_state
+    fixture: fixtures/behavioural-episode-frequency-change-14d-negative.json
+    expected_fire: false
+  - name: recently_actioned_no_fire
+    class: suppression
+    fixture: fixtures/behavioural-episode-frequency-change-14d-suppression.json
+    expected_fire: false

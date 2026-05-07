@@ -1,0 +1,55 @@
+rule_id: VAIDSHALA_T4_CONSENT_EXPIRING_WITHIN_30D
+schema_version: "2.0"
+library: Lifecycle
+define: "Consent Expiring Within 30d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-CONSENT-EXPIRY-30D
+content_sha: "b000000000000000000000000000000000000000000000000000000000000005"
+tier: tier_4_surveillance
+summary: >
+  Lifecycle surveillance: restrictive practice authorisation expires
+  within 30 days. Quality of Care Principles 2025 + Aged Care Act
+  2024 require active consent for restrictive practices; the
+  surveillance rule fires informationally to drive renewal workflow.
+
+trigger_sources:
+  - source_type: consent_expiry_approaching
+    predicate: "consent_class_restrictive_practice_within_30d"
+
+state_machine_references:
+  reads_from:
+    - machine: consent
+      fact_type: active_consents_for_class
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_CONSENT_EXPIRING_WITHIN_30D', 14)"
+
+test_cases:
+  - name: consent_expiring_fires
+    class: positive
+    fixture: fixtures/consent-expiring-within-30d-positive.json
+    expected_fire: true
+    expected_recommendation: "Restrictive practice consent expiring within 30 days — initiate renewal"
+  - name: consent_well_in_date_no_fire
+    class: positive
+    fixture: fixtures/consent-expiring-within-30d-negative.json
+    expected_fire: false
+  - name: recently_actioned_no_fire
+    class: suppression
+    fixture: fixtures/consent-expiring-within-30d-suppression.json
+    expected_fire: false

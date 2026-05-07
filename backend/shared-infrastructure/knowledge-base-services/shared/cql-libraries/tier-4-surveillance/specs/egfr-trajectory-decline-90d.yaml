@@ -1,0 +1,62 @@
+rule_id: VAIDSHALA_T4_EGFR_TRAJECTORY_DECLINE_90D
+schema_version: "2.0"
+library: Trajectory
+define: "eGFR Trajectory Decline 90d"
+criterion_set: VAIDSHALA_TIER4
+criterion_id: VAIDSHALA-T4-EGFR-DECLINE-90D
+content_sha: "b000000000000000000000000000000000000000000000000000000000000001"
+tier: tier_4_surveillance
+summary: >
+  Surveillance signal: eGFR trending down for 90 days with delta
+  from baseline <= -5 mL/min/1.73m^2. Uses the Wave 3.4 trajectory
+  detector (IsTrending) plus DeltaFromBaseline. Output is workflow
+  exhaust feeding the kb-20 stratum and the Tier 1 hyperkalemia
+  trajectory cluster. TODO(layer1-bind): bind to KDIGO 2024 eGFR
+  rate-of-decline threshold once Pipeline-2 publishes the source.
+
+trigger_sources:
+  - source_type: observation_update
+    observation_kind: egfr
+    predicate: "egfr_trajectory_recomputed"
+  - source_type: baseline_delta
+    observation_kind: egfr
+    predicate: "delta_90d_below_minus_5"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.egfr
+      read_or_write: read
+    - machine: recommendation_state
+      fact_type: recently_actioned
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+suppressions:
+  - class: substrate_state
+    predicate: "DeltaFromBaseline(resident, 'egfr', 90) > -5"
+  - class: substrate_state
+    predicate: "not IsTrending(resident, 'egfr', 90, 'down')"
+  - class: recently_actioned
+    predicate: "WasActionedRecently(resident, 'VAIDSHALA_T4_EGFR_TRAJECTORY_DECLINE_90D', 30)"
+
+test_cases:
+  - name: egfr_decline_trajectory_fires
+    class: baseline_aware_fire
+    fixture: fixtures/egfr-trajectory-decline-90d-positive.json
+    expected_fire: true
+    expected_recommendation: "Surface eGFR 90-day decline trajectory for stratum review"
+  - name: stable_egfr_no_fire
+    class: substrate_state
+    fixture: fixtures/egfr-trajectory-decline-90d-negative.json
+    expected_fire: false
+  - name: recently_actioned_no_fire
+    class: suppression
+    fixture: fixtures/egfr-trajectory-decline-90d-suppression.json
+    expected_fire: false
