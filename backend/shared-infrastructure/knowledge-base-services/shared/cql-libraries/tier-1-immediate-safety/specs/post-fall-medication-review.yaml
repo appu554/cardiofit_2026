@@ -1,0 +1,77 @@
+rule_id: POST_FALL_MEDICATION_REVIEW
+schema_version: "2.0"
+library: PostFall
+define: "Post Fall Medication Review"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-FALL-002
+content_sha: "7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b"
+tier: tier_1_immediate_safety
+summary: >
+  Fall event in last 7d AND active anticoagulant/antihypertensive/
+  psychotropic. Drafts a med-review recommendation.
+
+trigger_sources:
+  - source_type: observation_update
+    observation_kind: fall
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: latest_observation_fall
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+    - "Pharmacist"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'POST_FALL_MED_REVIEW_DONE')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'POST_FALL_MEDICATION_REVIEW', last_14d)"
+
+test_cases:
+  - name: fall_with_anticoag_fires
+    class: baseline_aware_fire
+    fixture: fixtures/post-fall-med-rev-anticoag.json
+    expected_fire: true
+    expected_recommendation: "Comprehensive medication review post-fall"
+  - name: fall_no_falls_risk_meds_no_fire
+    class: positive
+    fixture: fixtures/post-fall-med-rev-no-meds.json
+    expected_fire: false
+  - name: suppression_review_already_done
+    class: substrate_state
+    fixture: fixtures/post-fall-med-rev-done.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/post-fall-med-rev-palliative.json
+    expected_fire: false

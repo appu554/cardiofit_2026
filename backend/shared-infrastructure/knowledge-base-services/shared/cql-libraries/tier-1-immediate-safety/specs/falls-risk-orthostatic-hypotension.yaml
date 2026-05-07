@@ -1,0 +1,80 @@
+rule_id: FALLS_RISK_ORTHOSTATIC_HYPOTENSION
+schema_version: "2.0"
+library: PostFall
+define: "Falls Risk Orthostatic Hypotension"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-FALL-005
+content_sha: "7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e"
+tier: tier_1_immediate_safety
+summary: >
+  Standing-vs-lying systolic BP delta <= -20 mmHg (vs bp_systolic
+  baseline) AND on antihypertensive (C02/C03/C07/C08/C09).
+  Anticipatory falls-prevention trigger.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: bp_systolic
+    threshold: "<=-20_standing_vs_lying"
+  - source_type: medication_change
+    predicate: "any_change_to_antihypertensive"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.bp_systolic
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP"
+    - "NP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'ORTHOSTATIC_REVIEW_DONE')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'FALLS_RISK_ORTHOSTATIC_HYPOTENSION', last_14d)"
+
+test_cases:
+  - name: orthostatic_drop_with_antihypertensive_fires
+    class: baseline_aware_fire
+    fixture: fixtures/orthostatic-drop-antihtn.json
+    expected_fire: true
+    expected_recommendation: "Review antihypertensive dosing; consider deprescribing"
+  - name: orthostatic_drop_no_meds_no_fire
+    class: positive
+    fixture: fixtures/orthostatic-no-meds.json
+    expected_fire: false
+  - name: suppression_orthostatic_review_done
+    class: substrate_state
+    fixture: fixtures/orthostatic-review-done.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/orthostatic-palliative.json
+    expected_fire: false

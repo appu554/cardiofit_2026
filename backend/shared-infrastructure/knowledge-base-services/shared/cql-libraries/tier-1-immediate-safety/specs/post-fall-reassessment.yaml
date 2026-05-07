@@ -1,0 +1,70 @@
+rule_id: POST_FALL_REASSESSMENT_REQUIRED
+schema_version: "2.0"
+library: PostFall
+define: "Post Fall Reassessment Required"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-FALL-001
+content_sha: "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a"
+tier: tier_1_immediate_safety
+summary: >
+  Fires when the post_fall_72h ActiveConcern expires UNRESOLVED —
+  i.e., a fall occurred 72-96h ago and the concern is no longer
+  active without an explicit resolution.
+
+trigger_sources:
+  - source_type: active_concern_resolution
+    predicate: "post_fall_72h expired without resolution"
+  - source_type: observation_update
+    observation_kind: fall
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: latest_observation_fall
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "RN"
+    - "NP"
+    - "GP"
+  latency_budget_ms: 60
+  fallback_routing_if_unavailable:
+    - after_hours_GP
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'POST_FALL_REASSESSMENT_REQUIRED', last_7d)"
+
+test_cases:
+  - name: fall_72h_concern_expired_fires
+    class: baseline_aware_fire
+    fixture: fixtures/post-fall-reassess-expired.json
+    expected_fire: true
+    expected_recommendation: "Complete post-fall reassessment + falls plan update"
+  - name: concern_still_active_no_fire
+    class: substrate_state
+    fixture: fixtures/post-fall-reassess-concern-active.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/post-fall-reassess-palliative.json
+    expected_fire: false

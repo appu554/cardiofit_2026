@@ -1,0 +1,84 @@
+rule_id: POST_FALL_HEAD_INJURY_WATCH_72H
+schema_version: "2.0"
+library: PostFall
+define: "Post Fall Head Injury Watch 72h"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-FALL-003
+content_sha: "7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
+tier: tier_1_immediate_safety
+summary: >
+  Fall event in last 72h AND on anticoagulant AND no neuro check
+  observation in last 24h. High-priority head-injury surveillance.
+
+trigger_sources:
+  - source_type: observation_update
+    observation_kind: fall
+  - source_type: monitoring_threshold_crossed
+    predicate: "neuro_check_overdue"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: latest_observation_fall
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_neuro_check
+      read_or_write: read
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "RN"
+    - "NP"
+    - "GP"
+  latency_budget_ms: 50
+  fallback_routing_if_unavailable:
+    - ED_transfer_protocol
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'HEAD_INJURY_CLEARED')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'POST_FALL_HEAD_INJURY_WATCH_72H', last_24h)"
+
+test_cases:
+  - name: fall_anticoag_no_neuro_check_fires
+    class: baseline_aware_fire
+    fixture: fixtures/head-injury-watch-fires.json
+    expected_fire: true
+    expected_recommendation: "Initiate hourly neuro-checks; consider CT review"
+  - name: fall_anticoag_recent_neuro_check_no_fire
+    class: positive
+    fixture: fixtures/head-injury-recent-neuro.json
+    expected_fire: false
+  - name: suppression_head_injury_cleared
+    class: substrate_state
+    fixture: fixtures/head-injury-cleared.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/head-injury-palliative.json
+    expected_fire: false
