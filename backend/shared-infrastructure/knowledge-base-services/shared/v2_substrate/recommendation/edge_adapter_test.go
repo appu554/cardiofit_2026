@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,8 +69,12 @@ func TestEvidenceTraceAdapter_UpsertsRichNode(t *testing.T) {
 	if node.ReasoningSummary == nil {
 		t.Fatalf("reasoning_summary nil")
 	}
-	if node.ReasoningSummary.Text != edge.ReasoningSummary {
-		t.Errorf("reasoning_summary.text = %q want %q",
+	if !strings.Contains(node.ReasoningSummary.Text, "actor_class=human") {
+		t.Errorf("reasoning_summary.text missing actor_class prefix; got %q",
+			node.ReasoningSummary.Text)
+	}
+	if !strings.Contains(node.ReasoningSummary.Text, edge.ReasoningSummary) {
+		t.Errorf("reasoning_summary.text = %q does not contain caller reasoning %q",
 			node.ReasoningSummary.Text, edge.ReasoningSummary)
 	}
 	if len(node.Inputs) != 1 {
@@ -136,8 +141,11 @@ func TestEvidenceTraceAdapter_NoInputsNoReasoning(t *testing.T) {
 		t.Fatalf("expected 1 node; got %d", len(writer.nodes))
 	}
 	node := writer.nodes[0]
-	if node.ReasoningSummary != nil {
-		t.Errorf("reasoning_summary should be nil when edge has none")
+	if node.ReasoningSummary == nil {
+		t.Fatalf("expected ReasoningSummary populated with actor_class even when caller's reasoning is empty")
+	}
+	if !strings.Contains(node.ReasoningSummary.Text, "actor_class=human") {
+		t.Errorf("expected actor_class in reasoning; got %q", node.ReasoningSummary.Text)
 	}
 	if len(node.Inputs) != 0 {
 		t.Errorf("inputs should be empty when edge has no input refs")

@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,11 @@ func TestIntegration_FullLifecycleEndToEnd(t *testing.T) {
 		if nodeWriter.nodes[i].StateChangeType != expectedSCT {
 			t.Errorf("node[%d] state_change_type = %q want %q",
 				i, nodeWriter.nodes[i].StateChangeType, expectedSCT)
+		}
+		if nodeWriter.nodes[i].ReasoningSummary == nil ||
+			!strings.Contains(nodeWriter.nodes[i].ReasoningSummary.Text, "actor_class=human") {
+			t.Errorf("node[%d] missing actor_class in reasoning: %+v",
+				i, nodeWriter.nodes[i].ReasoningSummary)
 		}
 	}
 

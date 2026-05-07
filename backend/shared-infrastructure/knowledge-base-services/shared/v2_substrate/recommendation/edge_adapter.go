@@ -53,10 +53,7 @@ func (a *EvidenceTraceAdapter) EmitEdge(ctx context.Context, e EvidenceEdge) err
 	// stack frame; safer to bind to a local.)
 	resident := e.ResidentID
 
-	// Bind ActorID similarly for TraceActor.PersonRef. ActorClass is captured
-	// in ReasoningSummary.Text only when present — TraceActor has no field
-	// for it, and it's already preserved on the EvidenceEdge for any future
-	// adapter that wants to write it elsewhere.
+	// Bind ActorID similarly for TraceActor.PersonRef.
 	person := e.ActorID
 
 	node := models.EvidenceTraceNode{
@@ -71,10 +68,17 @@ func (a *EvidenceTraceAdapter) EmitEdge(ctx context.Context, e EvidenceEdge) err
 		ResidentRef: &resident,
 	}
 
+	// Always populate ReasoningSummary so ActorClass survives into the
+	// persisted node, satisfying v3 §9 Principle 4 (algorithmic vs human
+	// distinguishable in audit trail). models.TraceActor has no ActorClass
+	// field today, so we encode it into the reasoning text as a structured
+	// "actor_class=<value>" prefix that the audit query can parse.
+	reasoningText := "actor_class=" + string(e.ActorClass)
 	if e.ReasoningSummary != "" {
-		node.ReasoningSummary = &models.ReasoningSummary{
-			Text: e.ReasoningSummary,
-		}
+		reasoningText = reasoningText + "; " + e.ReasoningSummary
+	}
+	node.ReasoningSummary = &models.ReasoningSummary{
+		Text: reasoningText,
 	}
 
 	if len(e.InputRefs) > 0 {
