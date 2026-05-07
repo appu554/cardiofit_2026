@@ -1,0 +1,85 @@
+rule_id: INSULIN_DOSE_ADJUSTMENT_REQUIRING_S8
+schema_version: "2.0"
+library: InsulinOpioidS8
+define: "Insulin Dose Adjustment Requiring S8"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-INS-002
+content_sha: "9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b9b"
+tier: tier_1_immediate_safety
+summary: >
+  Active insulin AND BGL baseline change driving dose adjustment AND
+  no S8-authorised prescriber available. Routes via ED_transfer_protocol
+  fallback per Layer 3 v2 doc Part 1.2.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: BGL
+    threshold: ">5_over_3d"
+  - source_type: medication_change
+    predicate: "any_change_to_ATC_A10A"
+  - source_type: authorisation_expiry_approaching
+    predicate: "S8_prescriber_unavailable"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: baseline_state.BGL
+      read_or_write: read
+    - machine: authorisation
+      fact_type: available_prescribers
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP_S8"
+    - "NP_S8"
+    - "Endocrinologist"
+  scope_rule_refs:
+    - "scope_rule/insulin_titration_AU_S8"
+  latency_budget_ms: 80
+  fallback_routing_if_unavailable:
+    - ED_transfer_protocol
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: authorisation_context
+    predicate: "HasAvailablePrescriberForClass(facility, 'Insulin_dose_adjustment')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'INSULIN_DOSE_ADJUSTMENT_REQUIRING_S8', last_12h)"
+
+test_cases:
+  - name: bgl_delta_no_prescriber_fires_fallback
+    class: authorisation_routing
+    fixture: fixtures/ins-adj-no-prescriber.json
+    expected_fire: true
+    expected_recommendation: "Route via ED_transfer_protocol for insulin titration"
+  - name: prescriber_available_no_fire
+    class: positive
+    fixture: fixtures/ins-adj-prescriber-available.json
+    expected_fire: false
+  - name: baseline_aware_no_delta_no_fire
+    class: baseline_aware_fire
+    fixture: fixtures/ins-adj-no-delta.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/ins-adj-palliative.json
+    expected_fire: false

@@ -1,0 +1,84 @@
+rule_id: OPIOID_ESCALATION_S8_AUTHORISATION_CHECK
+schema_version: "2.0"
+library: InsulinOpioidS8
+define: "Opioid Escalation S8 Authorisation Check"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-OPIOID-001
+content_sha: "9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c"
+tier: tier_1_immediate_safety
+summary: >
+  Active opioid (N02A) with MEDD > 60mg/day AND no S8-authorised
+  prescriber available. Routes through AuthorisationHelpers role check
+  and ED_transfer_protocol fallback if unavailable.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "opioid_dose_escalation_>50%"
+  - source_type: authorisation_expiry_approaching
+    predicate: "S8_prescriber_unavailable"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: authorisation
+      fact_type: available_prescribers
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP_S8"
+    - "NP_S8"
+    - "Pain_specialist"
+  scope_rule_refs:
+    - "scope_rule/opioid_S8_AU"
+  latency_budget_ms: 100
+  fallback_routing_if_unavailable:
+    - ED_transfer_protocol
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'PALLIATIVE_PAIN_PLAN_ACTIVE')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: authorisation_context
+    predicate: "HasAvailablePrescriberForClass(facility, 'Schedule_8_opioid')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'OPIOID_ESCALATION_S8_AUTHORISATION_CHECK', last_24h)"
+
+test_cases:
+  - name: medd_high_no_prescriber_routes_fallback
+    class: authorisation_routing
+    fixture: fixtures/op-esc-no-prescriber.json
+    expected_fire: true
+    expected_recommendation: "Route to ED_transfer_protocol for S8 review"
+  - name: medd_high_prescriber_available_no_fire
+    class: positive
+    fixture: fixtures/op-esc-prescriber-available.json
+    expected_fire: false
+  - name: suppression_palliative_pain_plan
+    class: substrate_state
+    fixture: fixtures/op-esc-pall-pain-plan.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/op-esc-palliative.json
+    expected_fire: false

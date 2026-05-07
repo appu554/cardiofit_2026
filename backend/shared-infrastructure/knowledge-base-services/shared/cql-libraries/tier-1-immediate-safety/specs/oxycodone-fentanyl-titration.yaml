@@ -1,0 +1,82 @@
+rule_id: OXYCODONE_FENTANYL_TITRATION
+schema_version: "2.0"
+library: InsulinOpioidS8
+define: "Oxycodone Fentanyl Titration"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-OPIOID-003
+content_sha: "9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e9e"
+tier: tier_1_immediate_safety
+summary: >
+  Both oxycodone (N02AA05) and fentanyl (N02AB03) active simultaneously
+  (suggests conversion attempt) AND no specialist input concern logged
+  AND no specialist S8 prescriber on shift. Drafts a specialist-input
+  recommendation with ED_transfer_protocol fallback.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "oxycodone_AND_fentanyl_active"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: authorisation
+      fact_type: available_prescribers
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "Pain_specialist"
+    - "Palliative_care_specialist"
+  scope_rule_refs:
+    - "scope_rule/opioid_conversion_AU_S8"
+  latency_budget_ms: 100
+  fallback_routing_if_unavailable:
+    - ED_transfer_protocol
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'PAIN_SPECIALIST_INPUT_LOGGED')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: authorisation_context
+    predicate: "HasAvailablePrescriberForClass(facility, 'Schedule_8_opioid_specialist')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'OXYCODONE_FENTANYL_TITRATION', last_24h)"
+
+test_cases:
+  - name: both_opioids_no_specialist_fires
+    class: authorisation_routing
+    fixture: fixtures/oxy-fent-no-specialist.json
+    expected_fire: true
+    expected_recommendation: "Route to pain specialist; consider ED transfer"
+  - name: specialist_logged_no_fire
+    class: substrate_state
+    fixture: fixtures/oxy-fent-specialist-logged.json
+    expected_fire: false
+  - name: only_oxycodone_no_fire
+    class: positive
+    fixture: fixtures/oxy-only.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/oxy-fent-palliative.json
+    expected_fire: false

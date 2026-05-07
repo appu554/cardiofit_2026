@@ -1,0 +1,88 @@
+rule_id: INSULIN_HYPOGLYCEMIA_IMMINENT
+schema_version: "2.0"
+library: InsulinOpioidS8
+define: "Insulin Hypoglycemia Imminent"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-INS-001
+content_sha: "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a"
+tier: tier_1_immediate_safety
+summary: >
+  BGL trajectory descending AND insulin administered in last 4h AND
+  no oral intake observation in last 6h. Anticipatory hypoglycemia
+  intervention trigger.
+
+trigger_sources:
+  - source_type: baseline_delta
+    observation_kind: BGL
+    threshold: "trending_down"
+  - source_type: observation_update
+    observation_kind: insulin_administration
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: baseline_state.BGL
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_insulin_administration
+      read_or_write: read
+    - machine: clinical
+      fact_type: latest_observation_oral_intake
+      read_or_write: read
+    - machine: clinical
+      fact_type: active_concerns
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: monitoring
+      fact_type: monitoring_plan
+      action: propose_paired_monitoring_plan
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "RN"
+    - "EN"
+    - "NP"
+  scope_rule_refs:
+    - "scope_rule/insulin_administration_AU"
+  latency_budget_ms: 50
+  fallback_routing_if_unavailable:
+    - ED_transfer_protocol
+
+suppressions:
+  - class: substrate_state
+    predicate: "HasActiveConcernType(resident, 'HYPOGLYCEMIA_INTERVENTION_OPEN')"
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'INSULIN_HYPOGLYCEMIA_IMMINENT', last_2h)"
+
+test_cases:
+  - name: trending_down_no_oral_intake_fires
+    class: baseline_aware_fire
+    fixture: fixtures/ins-hypo-trending-down.json
+    expected_fire: true
+    expected_recommendation: "Initiate hypoglycemia protocol; oral or IV glucose"
+  - name: oral_intake_recent_no_fire
+    class: positive
+    fixture: fixtures/ins-hypo-recent-intake.json
+    expected_fire: false
+  - name: suppression_intervention_open
+    class: substrate_state
+    fixture: fixtures/ins-hypo-intervention-open.json
+    expected_fire: false
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/ins-hypo-palliative.json
+    expected_fire: false

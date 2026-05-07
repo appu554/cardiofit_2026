@@ -1,0 +1,76 @@
+rule_id: OPIOID_NAIVE_START_S8_AUTHORISATION_CHECK
+schema_version: "2.0"
+library: InsulinOpioidS8
+define: "Opioid Naive Start S8 Authorisation Check"
+criterion_set: VAIDSHALA_TIER1
+criterion_id: TIER1-OPIOID-002
+content_sha: "9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d"
+tier: tier_1_immediate_safety
+summary: >
+  First opioid prescription (active <=1d) AND no S8-authorised
+  prescriber on shift. Routes through AuthorisationHelpers role
+  check; fallback ED_transfer_protocol if no prescriber available.
+
+trigger_sources:
+  - source_type: medication_change
+    predicate: "first_opioid_prescription"
+
+state_machine_references:
+  reads_from:
+    - machine: clinical
+      fact_type: medicine_uses_filtered_by_atc
+      read_or_write: read
+    - machine: authorisation
+      fact_type: available_prescribers
+      read_or_write: read
+    - machine: clinical
+      fact_type: care_intensity
+      read_or_write: read
+    - machine: evidence_trace
+      fact_type: rule_fires_history
+      read_or_write: read
+  writes_to:
+    - machine: recommendation
+      fact_type: drafted_recommendation
+      action: create_drafted_recommendation
+    - machine: evidence_trace
+      fact_type: rule_fire_node
+      action: record_full_fire_context
+
+authorisation_gating:
+  required_roles:
+    - "GP_S8"
+    - "NP_S8"
+  scope_rule_refs:
+    - "scope_rule/opioid_naive_start_AU"
+  latency_budget_ms: 80
+  fallback_routing_if_unavailable:
+    - ED_transfer_protocol
+    - telehealth
+
+suppressions:
+  - class: substrate_state
+    predicate: "CurrentCareIntensity(resident) = 'palliative'"
+  - class: authorisation_context
+    predicate: "HasAvailablePrescriberForClass(facility, 'Schedule_8_opioid')"
+  - class: recently_actioned
+    predicate: "RuleFiredFor(resident, 'OPIOID_NAIVE_START_S8_AUTHORISATION_CHECK', last_24h)"
+
+test_cases:
+  - name: opioid_naive_no_prescriber_fires_fallback
+    class: authorisation_routing
+    fixture: fixtures/op-naive-no-prescriber.json
+    expected_fire: true
+    expected_recommendation: "Route via ED_transfer_protocol for S8 authorisation"
+  - name: opioid_naive_prescriber_available_no_fire
+    class: positive
+    fixture: fixtures/op-naive-prescriber-available.json
+    expected_fire: false
+  - name: evidence_trace_records_authorisation_status
+    class: evidence_trace
+    fixture: fixtures/op-naive-no-prescriber.json
+    expected_fire: true
+  - name: suppression_palliative
+    class: care_intensity
+    fixture: fixtures/op-naive-palliative.json
+    expected_fire: false
