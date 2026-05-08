@@ -934,9 +934,9 @@ git commit -m "test: bottom-up adoption motion end-to-end with 5-class visibilit
 - [x] DataConsentStore interface — Task 3
 - [x] Permission middleware with two-store check (ViewPermission + DataAggregationConsent for PDP/PFA non-subject reads) — Task 4
 - [x] Five view-type adapters — Task 5
-- [x] Algorithmic-vs-human EvidenceTrace filtering — Task 6
+- [x] Algorithmic-vs-human EvidenceTrace filtering — Task 6 (post-traversal `FilterByActorClass` helper; reframed from the plan's SQL `WhereActorClass` sketch because Edge has no actor_class column and the query layer is BFS-based, not a Query builder; documented inline in `actor_class_filter.go`)
 - [x] Contestation pathway — Task 7
-- [x] Pharmacist self-visibility data API — Task 8
-- [x] End-to-end bottom-up adoption integration — Task 9
+- [ ] Pharmacist self-visibility data API — **Task 8 deferred to Phase 1b** per the plan header's substrate-only split (lines 7–10). Phase 1b's plan owns the six dashboard surfaces and HTTP endpoints over the same substrate.
+- [x] End-to-end bottom-up adoption integration — Task 9 (Go-package level: `permissions/integration_test.go::TestBottomUpAdoptionMotion_EndToEnd` with 5 subtests; no HTTP since Task 8 deferred)
 
 Plan complete and saved.
