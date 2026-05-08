@@ -14,6 +14,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 
 	"kb-authorisation-evaluator/internal/api"
 	"kb-authorisation-evaluator/internal/audit"
@@ -54,7 +55,18 @@ func main() {
 	}
 	loadExamples(s)
 
-	c := cache.NewInMemory()
+	var c cache.Cache
+	if redisAddr := os.Getenv("KB30_REDIS_ADDR"); redisAddr != "" {
+		rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+		if err := rdb.Ping(context.Background()).Err(); err != nil {
+			log.Fatalf("ping kb30 redis at %s: %v", redisAddr, err)
+		}
+		log.Printf("kb-30: using RedisCache at %s", redisAddr)
+		c = cache.NewRedisFromClient(rdb)
+	} else {
+		log.Printf("kb-30: using InMemoryCache (KB30_REDIS_ADDR unset)")
+		c = cache.NewInMemory()
+	}
 	auditSvc := audit.NewService()
 	eval := evaluator.New(s, resolver)
 

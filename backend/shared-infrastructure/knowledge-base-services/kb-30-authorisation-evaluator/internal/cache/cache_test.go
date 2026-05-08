@@ -137,17 +137,11 @@ func TestDefaultTTL_ConsentDominatesAgreementDominatesCredential(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, DefaultTTL(r))
 }
 
-func TestRedisCache_StubInterface(t *testing.T) {
-	// The stub must satisfy the Cache interface and never error. This locks
-	// the contract until production Redis credentials are wired.
-	var c Cache = NewRedis()
-	got, ok, err := c.Get(context.Background(), "anything")
-	require.NoError(t, err)
-	assert.False(t, ok)
-	assert.Nil(t, got)
-	require.NoError(t, c.Set(context.Background(), "k", &evaluator.Result{}, time.Minute))
-	require.NoError(t, c.Invalidate(context.Background(), "*"))
-	assert.Equal(t, 0, c.Size())
+// TestRedisCache_InterfaceConformance verifies *RedisCache satisfies the
+// Cache interface at compile time. Real behaviour is tested in
+// redis_cache_test.go (skips without KB30_TEST_REDIS_ADDR).
+func TestRedisCache_InterfaceConformance(t *testing.T) {
+	var _ Cache = (*RedisCache)(nil)
 }
 
 // TestInMemory_HitRate verifies > 95% hit rate on a steady-state workload
