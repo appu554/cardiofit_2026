@@ -20,6 +20,7 @@ import (
 	"kb-authorisation-evaluator/internal/cache"
 	"kb-authorisation-evaluator/internal/dsl"
 	"kb-authorisation-evaluator/internal/evaluator"
+	credentialresolver "kb-authorisation-evaluator/internal/resolver"
 	"kb-authorisation-evaluator/internal/store"
 )
 
@@ -29,7 +30,10 @@ func main() {
 		port = "8138"
 	}
 
-	var s store.Store
+	var (
+		s        store.Store
+		resolver evaluator.ConditionResolver
+	)
 	if dsn := os.Getenv("KB30_DATABASE_URL"); dsn != "" {
 		db, err := sql.Open("postgres", dsn)
 		if err != nil {
@@ -40,15 +44,19 @@ func main() {
 		}
 		log.Printf("kb-30: using PostgresStore (KB30_DATABASE_URL set)")
 		s = store.NewPostgresStore(db)
+		resolver = credentialresolver.NewCredentialResolver(db)
+		log.Printf("kb-30: using CredentialResolver (real)")
 	} else {
 		log.Printf("kb-30: using MemoryStore (KB30_DATABASE_URL unset)")
 		s = store.NewMemoryStore()
+		resolver = evaluator.AlwaysPassResolver
+		log.Printf("kb-30: using AlwaysPassResolver (test)")
 	}
 	loadExamples(s)
 
 	c := cache.NewInMemory()
 	auditSvc := audit.NewService()
-	eval := evaluator.New(s, evaluator.AlwaysPassResolver)
+	eval := evaluator.New(s, resolver)
 
 	server := &api.Server{Evaluator: eval, Cache: c, Audit: auditSvc}
 
