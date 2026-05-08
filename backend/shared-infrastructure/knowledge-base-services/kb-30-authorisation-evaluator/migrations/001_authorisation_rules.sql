@@ -30,9 +30,14 @@ CREATE TABLE IF NOT EXISTS authorisation_rules (
 CREATE INDEX IF NOT EXISTS idx_auth_rules_jurisdiction_effective
     ON authorisation_rules(jurisdiction, effective_start, effective_end);
 
+-- Active rules with no explicit end-date. Time-bounded "active" filtering
+-- is handled at query time by idx_auth_rules_jurisdiction_effective; this
+-- partial index narrows specifically to open-ended rules. (Plan 0.4 Task 3
+-- removed `OR effective_end > now()` because now() is not IMMUTABLE and
+-- cannot appear in a partial index predicate.)
 CREATE INDEX IF NOT EXISTS idx_auth_rules_active
     ON authorisation_rules(jurisdiction)
-    WHERE effective_end IS NULL OR effective_end > now();
+    WHERE effective_end IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_auth_rules_rule_id_version
     ON authorisation_rules(rule_id, version DESC);

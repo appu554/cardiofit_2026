@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	_ "github.com/lib/pq"
 
 	"kb-authorisation-evaluator/internal/api"
 	"kb-authorisation-evaluator/internal/audit"
@@ -26,7 +29,21 @@ func main() {
 		port = "8138"
 	}
 
-	s := store.NewMemoryStore()
+	var s store.Store
+	if dsn := os.Getenv("KB30_DATABASE_URL"); dsn != "" {
+		db, err := sql.Open("postgres", dsn)
+		if err != nil {
+			log.Fatalf("open kb30 postgres: %v", err)
+		}
+		if err := db.Ping(); err != nil {
+			log.Fatalf("ping kb30 postgres: %v", err)
+		}
+		log.Printf("kb-30: using PostgresStore (KB30_DATABASE_URL set)")
+		s = store.NewPostgresStore(db)
+	} else {
+		log.Printf("kb-30: using MemoryStore (KB30_DATABASE_URL unset)")
+		s = store.NewMemoryStore()
+	}
 	loadExamples(s)
 
 	c := cache.NewInMemory()
@@ -60,7 +77,7 @@ func main() {
 
 // loadExamples ingests the bundled example rules into the in-memory store.
 // Production wiring would use the PostgresStore + a migration-driven seed.
-func loadExamples(s *store.MemoryStore) {
+func loadExamples(s store.Store) {
 	dir := "examples"
 	if env := os.Getenv("KB30_EXAMPLES_DIR"); env != "" {
 		dir = env
