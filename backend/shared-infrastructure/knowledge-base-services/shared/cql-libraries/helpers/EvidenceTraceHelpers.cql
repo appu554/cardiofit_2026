@@ -17,7 +17,9 @@ include Vaidshala.Substrate version '1.0' called Substrate
  * (Wave 1) warns if it appears inside a Tier 1 rule (not in the hot
  * path).
  *
- * TODO(wave-1-runtime): execute under HAPI Test Engine.
+ * TODO(plan-0.5-followup): wired runtime requires (a) cqf-fhir-cr engine
+ * integration in $evaluate-rule (Task 5 followup) and (b) registration of
+ * unregistered Substrate.* symbols (see Plan-0.5-Task-8 audit).
  *
  * Spec: docs/superpowers/specs/2026-05-Layer3-Wave0-cql-helper-surface.md
  *       (File 6 — EvidenceTraceHelpers).

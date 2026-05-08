@@ -117,6 +117,20 @@ const (
 	// MedicationRequest.
 	EventTypeReconciliationCompleted = "reconciliation_completed"
 
+	// EventTypeMonitoringThresholdCrossed is emitted by the monitoring
+	// threshold evaluator (Plan 0.3 Task 5) when an Observation lands and
+	// crosses the threshold spec on a tracked obligation. Re-enters the
+	// Recommendation trigger surface — closes the v2 §3 line 136 outcome
+	// loop. Routes to FHIR Communication on egress.
+	EventTypeMonitoringThresholdCrossed = "monitoring_threshold_crossed"
+
+	// EventTypeMonitoringObligationMissed is emitted by the monitoring
+	// escalator (Plan 0.3 Task 6) when an active plan accumulates more
+	// missed obligations than its EscalateAfterMissed threshold. Marks
+	// the plan as escalated; the missed-obligations count is in the
+	// DescriptionStructured payload.
+	EventTypeMonitoringObligationMissed = "monitoring_obligation_missed"
+
 	// concern_expired_unresolved is registered as a system-bucket event
 	// type via IsSystemEventType so the FHIR mapper routes it to
 	// Communication. The constant lives in active_concern.go as
@@ -172,7 +186,9 @@ func IsSystemEventType(s string) bool {
 		EventTypeCredentialVerifiedOrExpired,
 		EventTypeConcernExpiredUnresolved,
 		EventTypeCapacityChange,
-		EventTypeReconciliationCompleted:
+		EventTypeReconciliationCompleted,
+		EventTypeMonitoringThresholdCrossed,
+		EventTypeMonitoringObligationMissed:
 		return true
 	}
 	return false

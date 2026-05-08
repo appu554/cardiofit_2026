@@ -222,3 +222,171 @@ func IsValidDeltaFlag(s string) bool {
 	}
 	return false
 }
+
+// RecommendationState* — the 9 lifecycle states plus deferred.
+// See plan: docs/superpowers/plans/2026-05-07-phase-0-1-recommendation-entity-lifecycle.md
+const (
+	RecommendationStateDetected         = "detected"
+	RecommendationStateDrafted          = "drafted"
+	RecommendationStateSubmitted        = "submitted"
+	RecommendationStateViewed           = "viewed"
+	RecommendationStateDeferred         = "deferred"
+	RecommendationStateDecided          = "decided"
+	RecommendationStateImplemented      = "implemented"
+	RecommendationStateMonitoringActive = "monitoring-active"
+	RecommendationStateOutcomeRecorded  = "outcome-recorded"
+	RecommendationStateClosed           = "closed"
+)
+
+// RecommendationType* — ordering hint per v3 §7 line 384.
+// STOP > MONITOR > DOSE_CHANGE > ADD by acceptance probability.
+const (
+	RecommendationTypeStop       = "stop"
+	RecommendationTypeMonitor    = "monitor"
+	RecommendationTypeDoseChange = "dose_change"
+	RecommendationTypeAdd        = "add"
+)
+
+// RecommendationUrgency* — three tiers per v3 §7 line 396.
+const (
+	RecommendationUrgencyRed   = "red"   // 24-48h
+	RecommendationUrgencyAmber = "amber" // 1-2 weeks
+	RecommendationUrgencyGreen = "green" // next review
+)
+
+// IsValidRecommendationState reports whether s is a known lifecycle state.
+func IsValidRecommendationState(s string) bool {
+	switch s {
+	case RecommendationStateDetected, RecommendationStateDrafted,
+		RecommendationStateSubmitted, RecommendationStateViewed,
+		RecommendationStateDeferred, RecommendationStateDecided,
+		RecommendationStateImplemented, RecommendationStateMonitoringActive,
+		RecommendationStateOutcomeRecorded, RecommendationStateClosed:
+		return true
+	}
+	return false
+}
+
+// IsValidRecommendationType reports whether s is a known recommendation type.
+func IsValidRecommendationType(s string) bool {
+	switch s {
+	case RecommendationTypeStop, RecommendationTypeMonitor,
+		RecommendationTypeDoseChange, RecommendationTypeAdd:
+		return true
+	}
+	return false
+}
+
+// IsValidRecommendationUrgency reports whether s is a known urgency tier.
+func IsValidRecommendationUrgency(s string) bool {
+	switch s {
+	case RecommendationUrgencyRed, RecommendationUrgencyAmber, RecommendationUrgencyGreen:
+		return true
+	}
+	return false
+}
+
+// IsValidActorClass reports whether s is a valid recommendation lifecycle
+// actor class. The recommendation package owns the canonical constants
+// (ActorClassHuman, etc.); this validator lives in models so it can be
+// referenced from substrate-level guards without an import cycle.
+func IsValidActorClass(s string) bool {
+	switch s {
+	case "human", "algorithmic",
+		"human-with-algorithmic-suggestion",
+		"human-overriding-algorithmic":
+		return true
+	}
+	return false
+}
+
+// ConsentState* — the 9 lifecycle states (6 non-terminal + 3 terminal).
+// See plan: docs/superpowers/plans/2026-05-07-phase-0-2-consent-entity-lifecycle.md
+const (
+	ConsentStateRequested             = "requested"
+	ConsentStateDiscussed             = "discussed"
+	ConsentStateGranted               = "granted"
+	ConsentStateGrantedWithConditions = "granted-with-conditions"
+	ConsentStateRefused               = "refused"
+	ConsentStateActive                = "active"
+	ConsentStateUnderReview           = "under-review"
+	ConsentStateWithdrawn             = "withdrawn"
+	ConsentStateExpired               = "expired"
+)
+
+// ConsentClass* — the recommendation classes a Consent applies to.
+// One Consent can cover all psychotropic recommendations for a resident
+// until withdrawn or expired.
+const (
+	ConsentClassPsychotropic        = "psychotropic"
+	ConsentClassRestrictivePractice = "restrictive-practice"
+	ConsentClassChemotherapy        = "chemotherapy"
+	ConsentClassEndOfLifeMedication = "end-of-life-medication"
+	ConsentClassGeneralMedication   = "general-medication"
+)
+
+// IsValidConsentState reports whether s is a known lifecycle state.
+func IsValidConsentState(s string) bool {
+	switch s {
+	case ConsentStateRequested, ConsentStateDiscussed, ConsentStateGranted,
+		ConsentStateGrantedWithConditions, ConsentStateRefused,
+		ConsentStateActive, ConsentStateUnderReview,
+		ConsentStateWithdrawn, ConsentStateExpired:
+		return true
+	}
+	return false
+}
+
+// IsValidConsentClass reports whether s is a known consent class.
+func IsValidConsentClass(s string) bool {
+	switch s {
+	case ConsentClassPsychotropic, ConsentClassRestrictivePractice,
+		ConsentClassChemotherapy, ConsentClassEndOfLifeMedication,
+		ConsentClassGeneralMedication:
+		return true
+	}
+	return false
+}
+
+// MonitoringPlanState* — the 5 lifecycle states.
+// Pending → Active → Completed | Escalated | Abandoned
+// (3 terminal: Completed, Escalated, Abandoned).
+// See plan: docs/superpowers/plans/2026-05-07-phase-0-3-monitoring-entity-lifecycle.md
+const (
+	MonitoringPlanStatePending   = "pending"
+	MonitoringPlanStateActive    = "active"
+	MonitoringPlanStateCompleted = "completed"
+	MonitoringPlanStateEscalated = "escalated"
+	MonitoringPlanStateAbandoned = "abandoned"
+)
+
+// MonitoringObligationType* — the kind of obligation a plan tracks.
+const (
+	MonitoringObligationTypeObservation      = "observation"
+	MonitoringObligationTypeFollowUpReview   = "follow_up_review"
+	MonitoringObligationTypeBehaviouralChart = "behavioural_chart"
+	MonitoringObligationTypeLab              = "lab"
+)
+
+// IsValidMonitoringPlanState reports whether s is a known lifecycle state.
+func IsValidMonitoringPlanState(s string) bool {
+	switch s {
+	case MonitoringPlanStatePending, MonitoringPlanStateActive,
+		MonitoringPlanStateCompleted, MonitoringPlanStateEscalated,
+		MonitoringPlanStateAbandoned:
+		return true
+	}
+	return false
+}
+
+// IsValidMonitoringObligationType reports whether s is a known obligation type.
+func IsValidMonitoringObligationType(s string) bool {
+	switch s {
+	case MonitoringObligationTypeObservation,
+		MonitoringObligationTypeFollowUpReview,
+		MonitoringObligationTypeBehaviouralChart,
+		MonitoringObligationTypeLab:
+		return true
+	}
+	return false
+}

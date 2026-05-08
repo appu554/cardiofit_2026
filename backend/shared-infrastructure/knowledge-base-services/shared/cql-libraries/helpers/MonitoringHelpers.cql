@@ -11,7 +11,9 @@ include Vaidshala.Substrate version '1.0' called Substrate
  * Reads over the MonitoringPlan API (Layer 2 doc §2.4).
  *
  * Bodies reference Substrate.* — see MedicationHelpers.cql header.
- * TODO(wave-1-runtime): execute under HAPI Test Engine.
+ * TODO(plan-0.5-followup): wired runtime requires (a) cqf-fhir-cr engine
+ * integration in $evaluate-rule (Task 5 followup) and (b) registration of
+ * unregistered Substrate.* symbols (see Plan-0.5-Task-8 audit).
  *
  * Spec: docs/superpowers/specs/2026-05-Layer3-Wave0-cql-helper-surface.md
  *       (File 5 — MonitoringHelpers).

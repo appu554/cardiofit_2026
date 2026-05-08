@@ -2,6 +2,9 @@ package invalidation
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +115,103 @@ func TestInvalidator_NilCacheReturnsError(t *testing.T) {
 	inv := New(nil)
 	err := inv.InvalidateOnEvent(context.Background(), SubstrateChangeEvent{Type: EventConsentChanged})
 	require.Error(t, err)
+}
+
+// fakeCache captures Invalidate calls for KafkaConsumer tests.
+type fakeCache struct {
+	invalidated []string
+	err         error
+}
+
+func (f *fakeCache) Get(_ context.Context, _ string) (*evaluator.Result, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeCache) Set(_ context.Context, _ string, _ *evaluator.Result, _ time.Duration) error {
+	return nil
+}
+func (f *fakeCache) Invalidate(_ context.Context, pattern string) error {
+	f.invalidated = append(f.invalidated, pattern)
+	return f.err
+}
+func (f *fakeCache) Size() int { return 0 }
+
+func TestKafkaConsumer_HandleMessageInvalidatesOnCredentialChange(t *testing.T) {
+	cache := &fakeCache{}
+	inv := New(cache)
+	role := "acop_pharmacist"
+	ev := SubstrateChangeEvent{
+		Type: EventCredentialChanged,
+		Role: role,
+	}
+	raw, _ := json.Marshal(ev)
+
+	c := &KafkaConsumer{Inv: inv}
+	if err := c.handleMessage(context.Background(), raw); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(cache.invalidated) != 1 {
+		t.Fatalf("expected 1 invalidation; got %d", len(cache.invalidated))
+	}
+	if !strings.Contains(cache.invalidated[0], role) {
+		t.Errorf("invalidation pattern %q should include role %q", cache.invalidated[0], role)
+	}
+}
+
+func TestKafkaConsumer_HandleMessageInvalidatesOnConsentChange(t *testing.T) {
+	cache := &fakeCache{}
+	inv := New(cache)
+	resident := uuid.New()
+	ev := SubstrateChangeEvent{
+		Type:        EventConsentChanged,
+		ResidentRef: &resident,
+	}
+	raw, _ := json.Marshal(ev)
+
+	c := &KafkaConsumer{Inv: inv}
+	if err := c.handleMessage(context.Background(), raw); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(cache.invalidated) != 1 {
+		t.Errorf("expected 1 invalidation; got %d", len(cache.invalidated))
+	}
+	if !strings.Contains(cache.invalidated[0], resident.String()) {
+		t.Errorf("pattern should include resident UUID; got %q", cache.invalidated[0])
+	}
+}
+
+func TestKafkaConsumer_HandleMessageRejectsMissingType(t *testing.T) {
+	cache := &fakeCache{}
+	c := &KafkaConsumer{Inv: New(cache)}
+	raw := []byte(`{"role":"acop_pharmacist"}`)
+	err := c.handleMessage(context.Background(), raw)
+	if err == nil || !strings.Contains(err.Error(), "missing Type") {
+		t.Errorf("expected error mentioning missing Type; got %v", err)
+	}
+	if len(cache.invalidated) != 0 {
+		t.Errorf("no invalidation should occur on bad message")
+	}
+}
+
+func TestKafkaConsumer_HandleMessageRejectsBadJSON(t *testing.T) {
+	c := &KafkaConsumer{Inv: New(&fakeCache{})}
+	err := c.handleMessage(context.Background(), []byte("not json"))
+	if err == nil {
+		t.Errorf("expected decode error")
+	}
+}
+
+func TestKafkaConsumer_HandleMessagePropagatesInvalidationError(t *testing.T) {
+	cache := &fakeCache{err: errors.New("redis down")}
+	c := &KafkaConsumer{Inv: New(cache)}
+	role := "rn"
+	raw, _ := json.Marshal(SubstrateChangeEvent{
+		Type: EventCredentialChanged,
+		Role: role,
+	})
+	err := c.handleMessage(context.Background(), raw)
+	if err == nil {
+		t.Errorf("expected error propagated from invalidator")
+	}
 }
 
 func itoa(n int) string {

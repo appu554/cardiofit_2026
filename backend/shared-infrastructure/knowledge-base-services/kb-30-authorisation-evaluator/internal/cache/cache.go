@@ -1,11 +1,11 @@
 // Package cache holds the eval-result cache for the kb-30 evaluator.
 //
 // Two implementations:
-//   - InMemoryCache: production-grade for single-replica deploys, MVP local
-//     dev, and tests. Uses sync.Map + per-entry expiration tracking with
-//     a single periodic sweeper goroutine.
-//   - RedisCache:    stub. Wired at the cmd/server entry point in production.
-//     Marked TODO until production Redis credentials are available.
+//   - InMemoryCache: default for tests and local dev (and acceptable for
+//     single-replica deploys). Uses sync.Map + per-entry expiration
+//     tracking with a single periodic sweeper goroutine.
+//   - RedisCache:    production cache, backed by go-redis/v9. Selected by
+//     the cmd/server entry point when KB30_REDIS_ADDR is set.
 //
 // Per-rule TTLs (Layer 3 v2 doc Part 4.5.3):
 //   - 24h for static jurisdictional rules
@@ -16,16 +16,19 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"kb-authorisation-evaluator/internal/dsl"
 	"kb-authorisation-evaluator/internal/evaluator"
 )
 
-// Cache is the contract implemented by InMemoryCache and (eventually)
-// RedisCache.
+// Cache is the contract implemented by InMemoryCache and RedisCache.
 type Cache interface {
 	Get(ctx context.Context, key string) (*evaluator.Result, bool, error)
 	Set(ctx context.Context, key string, result *evaluator.Result, ttl time.Duration) error
@@ -174,19 +177,103 @@ func matchPattern(pattern, s string) bool {
 
 // ----- RedisCache ------------------------------------------------------------
 
-// RedisCache is a stub; production wiring requires go-redis credentials.
-type RedisCache struct{}
-
-// NewRedis returns the stub Redis cache. All operations are no-ops with
-// nil errors; the InMemoryCache should be used until Redis is wired.
+// RedisCache is a Redis-backed implementation of Cache. It serializes
+// *evaluator.Result via JSON. Glob-pattern Invalidate uses SCAN+MATCH+DEL.
 //
-// TODO(layer3-v1): wire go-redis client when production Redis credentials
-// are available. The interface above is sufficient for migration.
-func NewRedis() *RedisCache { return &RedisCache{} }
-
-func (RedisCache) Get(context.Context, string) (*evaluator.Result, bool, error) {
-	return nil, false, nil
+// Production use: pass a configured *redis.Client via NewRedisFromClient.
+// NewRedis (legacy name preserved for backwards-compat) wires the client
+// from a default Options{Addr: "localhost:6379"}.
+type RedisCache struct {
+	rdb *redis.Client
 }
-func (RedisCache) Set(context.Context, string, *evaluator.Result, time.Duration) error { return nil }
-func (RedisCache) Invalidate(context.Context, string) error                            { return nil }
-func (RedisCache) Size() int                                                           { return 0 }
+
+// NewRedisFromClient constructs a RedisCache wrapping the supplied client.
+// This is the production entry point; tests inject a configured client via
+// this constructor.
+func NewRedisFromClient(rdb *redis.Client) *RedisCache {
+	return &RedisCache{rdb: rdb}
+}
+
+// NewRedis preserves the legacy zero-arg constructor name. Returns a
+// RedisCache that connects to localhost:6379 with default options. For
+// production use, prefer NewRedisFromClient with a configured *redis.Client.
+//
+// Kept for backwards-compat with prior call sites.
+func NewRedis() *RedisCache {
+	return &RedisCache{rdb: redis.NewClient(&redis.Options{Addr: "localhost:6379"})}
+}
+
+func (c *RedisCache) Get(ctx context.Context, key string) (*evaluator.Result, bool, error) {
+	raw, err := c.rdb.Get(ctx, key).Bytes()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("redis get %q: %w", key, err)
+	}
+	var res evaluator.Result
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, false, fmt.Errorf("unmarshal cached result for %q: %w", key, err)
+	}
+	return &res, true, nil
+}
+
+func (c *RedisCache) Set(ctx context.Context, key string, result *evaluator.Result, ttl time.Duration) error {
+	if result == nil {
+		return fmt.Errorf("redis set: result must not be nil")
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal result for %q: %w", key, err)
+	}
+	if err := c.rdb.Set(ctx, key, raw, ttl).Err(); err != nil {
+		return fmt.Errorf("redis set %q: %w", key, err)
+	}
+	return nil
+}
+
+// Invalidate accepts the same glob-pattern semantics as InMemoryCache:
+//   - Exact key match deletes one key
+//   - Glob pattern (with '*' wildcard) deletes all matching keys via
+//     SCAN+MATCH+DEL.
+//
+// Production deployments should rely on Kafka-driven invalidation
+// (Plan 0.4 Task 6) rather than directly calling Invalidate from
+// application code.
+func (c *RedisCache) Invalidate(ctx context.Context, pattern string) error {
+	if !containsGlob(pattern) {
+		return c.rdb.Del(ctx, pattern).Err()
+	}
+	iter := c.rdb.Scan(ctx, 0, pattern, 100).Iterator()
+	var keys []string
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		return fmt.Errorf("redis scan %q: %w", pattern, err)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := c.rdb.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("redis del %d keys: %w", len(keys), err)
+	}
+	return nil
+}
+
+// Size returns the total number of keys in the Redis database via DBSIZE.
+// Note: this is the server-wide size, not just kb-30's keys.
+func (c *RedisCache) Size() int {
+	n, err := c.rdb.DBSize(context.Background()).Result()
+	if err != nil {
+		return -1
+	}
+	return int(n)
+}
+
+// containsGlob reports whether pattern contains a wildcard character.
+// kb-30 only uses '*' wildcards in invalidation patterns, mirroring the
+// InMemoryCache.matchPattern semantics.
+func containsGlob(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?[")
+}

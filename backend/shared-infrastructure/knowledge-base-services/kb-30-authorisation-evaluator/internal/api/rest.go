@@ -18,11 +18,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"kb-authorisation-evaluator/internal/audit"
 	"kb-authorisation-evaluator/internal/cache"
 	"kb-authorisation-evaluator/internal/dsl"
 	"kb-authorisation-evaluator/internal/evaluator"
+	"kb-authorisation-evaluator/internal/metrics"
 )
 
 // Server bundles the runtime evaluator + caches + audit query API.
@@ -59,6 +61,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("/v1/audit/credential/", s.handleAuditCredential)
 	mux.HandleFunc("/v1/audit/jurisdiction/", s.handleAuditJurisdiction)
 	mux.HandleFunc("/v1/audit/authorisation/", s.handleAuditChain)
+	mux.Handle("/metrics", promhttp.Handler())
 	return mux
 }
 
@@ -67,6 +70,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleAuthorise(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	outcome := metrics.OutcomeError // default; updated once we have a result
+	defer func() {
+		metrics.ObserveEvaluation(outcome, time.Since(start).Seconds())
+	}()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -98,6 +107,7 @@ func (s *Server) handleAuthorise(w http.ResponseWriter, r *http.Request) {
 	// Cache lookup.
 	if s.Cache != nil {
 		if cached, ok, _ := s.Cache.Get(r.Context(), q.CacheKey()); ok && cached != nil {
+			outcome = decisionToOutcome(cached.Decision)
 			resp := AuthoriseResponse{Result: *cached, CacheHit: true}
 			writeJSON(w, http.StatusOK, resp)
 			return
@@ -109,6 +119,7 @@ func (s *Server) handleAuthorise(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "evaluation failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	outcome = decisionToOutcome(res.Decision)
 	if s.Cache != nil {
 		ttl := cache.DefaultTTL(res)
 		_ = s.Cache.Set(r.Context(), q.CacheKey(), &res, ttl)
@@ -132,6 +143,20 @@ func (s *Server) handleAuthorise(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, AuthoriseResponse{Result: res, CacheHit: false})
+}
+
+// decisionToOutcome maps a dsl.Decision to the metrics outcome label.
+// Granted (with or without conditions) is reported as "allow"; Denied as
+// "deny"; anything else falls back to "error".
+func decisionToOutcome(d dsl.Decision) string {
+	switch d {
+	case dsl.DecisionGranted, dsl.DecisionGrantedWithConditions:
+		return metrics.OutcomeAllow
+	case dsl.DecisionDenied:
+		return metrics.OutcomeDeny
+	default:
+		return metrics.OutcomeError
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

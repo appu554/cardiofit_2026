@@ -1,0 +1,4 @@
+BEGIN;
+DROP MATERIALIZED VIEW IF EXISTS recommendation_rir_28d;
+DROP TABLE IF EXISTS recommendations;
+COMMIT;

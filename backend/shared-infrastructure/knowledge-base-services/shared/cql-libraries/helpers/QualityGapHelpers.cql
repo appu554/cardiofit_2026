@@ -26,7 +26,9 @@ include Vaidshala.Substrate version '1.0' called Substrate
  * substrate adapter; until the HAPI engine wiring lands these are
  * declarative skeletons (same convention as MedicationHelpers).
  *
- * TODO(wave-1-runtime): execute under HAPI Test Engine.
+ * TODO(plan-0.5-followup): wired runtime requires (a) cqf-fhir-cr engine
+ * integration in $evaluate-rule (Task 5 followup) and (b) registration of
+ * unregistered Substrate.* symbols (see Plan-0.5-Task-8 audit).
  *
  * Spec: docs/superpowers/plans/2026-05-04-layer3-rule-encoding-plan.md
  *       (Wave 4A — Tier 3 quality-gap rules).
