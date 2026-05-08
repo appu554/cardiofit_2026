@@ -6,6 +6,7 @@
 package dashboards
 
 import (
+	"bytes"
 	"context"
 	"sort"
 
@@ -60,9 +61,11 @@ func NewWorklist(src RiskSource) *Worklist { return &Worklist{src: src} }
 // Today returns the pharmacist's daily worklist sorted by CompositeRisk
 // descending (highest urgency first).
 //
-// Sorting is performed with sort.SliceStable so that residents with equal
-// composite risk scores maintain a stable relative order across calls; callers
-// may rely on this invariant for deterministic rendering.
+// Sorting is performed with sort.Slice using a comparator that sorts by
+// CompositeRisk descending, with a deterministic tie-break by ResidentID
+// (UUID byte order ascending). This provides deterministic output across all
+// calls, even when multiple residents share the same composite risk score.
+// Callers may rely on this invariant for deterministic rendering.
 //
 // A defensive context check is performed after fetching scores: if the context
 // has been cancelled by then, ctx.Err() is returned immediately so callers
@@ -95,10 +98,14 @@ func (w *Worklist) Today(ctx context.Context, pharmacistID uuid.UUID) ([]Worklis
 		})
 	}
 
-	// sort.SliceStable preserves insertion order for equal CompositeRisk values,
-	// providing deterministic output when scores are tied.
-	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].CompositeRisk > items[j].CompositeRisk
+	// Sort by CompositeRisk descending (highest urgency first), with deterministic
+	// tie-break by ResidentID byte order ascending.
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CompositeRisk != items[j].CompositeRisk {
+			return items[i].CompositeRisk > items[j].CompositeRisk
+		}
+		// Deterministic tie-break by ResidentID (UUID byte order).
+		return bytes.Compare(items[i].ResidentID[:], items[j].ResidentID[:]) < 0
 	})
 	return items, nil
 }

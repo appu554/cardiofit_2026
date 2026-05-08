@@ -2,8 +2,10 @@
 package dashboards
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"sort"
 	"testing"
 
 	"github.com/google/uuid"
@@ -102,71 +104,54 @@ func TestWorklist_EmptyResidentList(t *testing.T) {
 // Augmentation 2: TestWorklist_TieBreakStable
 // ---------------------------------------------------------------------------
 
-// TestWorklist_TieBreakStable verifies that sort.SliceStable is used so that
-// equal-score residents maintain a deterministic relative order.
+// TestWorklist_TieBreakStable verifies that equal-score residents are ordered
+// deterministically by ResidentID (UUID byte order ascending).
 //
-// Because Go map iteration is unordered, this test constructs a scenario with
-// a single resident (no tie possible with map ordering ambiguity) and validates
-// that the single item is returned correctly. The real guarantee — that
-// sort.SliceStable preserves insertion order for equal elements — is enforced
-// by code inspection and the sort.SliceStable call in the implementation.
-// The test documents the contract: Today() MUST use sort.SliceStable, not
-// sort.Slice, so callers can rely on stable output across identical risk scores.
+// Because Go map iteration is unordered, the implementation must apply a
+// deterministic tie-breaker in the sort comparator. This test:
+// 1. Generates 3 random UUIDs
+// 2. Computes their expected order by UUID byte comparison
+// 3. Sets all to the same CompositeRisk
+// 4. Verifies the returned order matches the UUID-sorted order
+//
+// The test is run 10 times to catch any residual non-determinism.
 func TestWorklist_TieBreakStable(t *testing.T) {
-	pharm := uuid.New()
-	resA := uuid.New()
-	resB := uuid.New()
-	resC := uuid.New()
+	// Run the test multiple times to ensure tie-break is truly deterministic.
+	for run := 0; run < 10; run++ {
+		pharm := uuid.New()
+		resA := uuid.New()
+		resB := uuid.New()
+		resC := uuid.New()
 
-	// All three residents share the same composite risk score.
-	// We set up a source that returns a deterministic ordered slice via a
-	// custom fakeRiskSource that always appends in A→B→C order.
-	src := &fakeOrderedRiskSource{
-		order:  []uuid.UUID{resA, resB, resC},
-		scores: map[uuid.UUID]int{resA: 5, resB: 5, resC: 5},
+		// Compute the expected order by sorting UUIDs by byte order.
+		residents := []uuid.UUID{resA, resB, resC}
+		sort.Slice(residents, func(i, j int) bool {
+			return bytes.Compare(residents[i][:], residents[j][:]) < 0
+		})
+		expected := residents // This is now sorted by UUID byte order
+
+		// All three residents share the same composite risk score.
+		src := &fakeRiskSource{
+			scores: map[uuid.UUID]int{resA: 5, resB: 5, resC: 5},
+		}
+		wl := NewWorklist(src)
+
+		items, err := wl.Today(context.Background(), pharm)
+		if err != nil {
+			t.Fatalf("run %d: today: %v", run, err)
+		}
+		if len(items) != 3 {
+			t.Fatalf("run %d: got %d items, want 3", run, len(items))
+		}
+
+		// Verify that returned items match the UUID-sorted order.
+		for i := 0; i < 3; i++ {
+			if items[i].ResidentID != expected[i] {
+				t.Errorf("run %d: position %d: got %v, want %v",
+					run, i, items[i].ResidentID, expected[i])
+			}
+		}
 	}
-	wl := NewWorklist(src)
-
-	items, err := wl.Today(context.Background(), pharm)
-	if err != nil {
-		t.Fatalf("today: %v", err)
-	}
-	if len(items) != 3 {
-		t.Fatalf("got %d items, want 3", len(items))
-	}
-	// sort.SliceStable preserves the order items were appended; since the source
-	// provides A, B, C in order, a stable sort on equal scores keeps that order.
-	if items[0].ResidentID != resA || items[1].ResidentID != resB || items[2].ResidentID != resC {
-		t.Errorf("stable order not preserved for equal scores: got %v %v %v, want %v %v %v",
-			items[0].ResidentID, items[1].ResidentID, items[2].ResidentID,
-			resA, resB, resC)
-	}
-}
-
-// fakeOrderedRiskSource returns residents in a fixed order via ResidentsWithCompositeRisk
-// to allow the stable-sort test to assert insertion-order preservation.
-type fakeOrderedRiskSource struct {
-	order  []uuid.UUID
-	scores map[uuid.UUID]int
-}
-
-func (f *fakeOrderedRiskSource) ResidentsWithCompositeRisk(_ context.Context, _ uuid.UUID) (map[uuid.UUID]int, error) {
-	return f.scores, nil
-}
-
-// ResidentsOrdered exposes the deterministic order to the implementation via a
-// supplementary method; the Worklist uses iterateResidents() if available,
-// otherwise falls back to map iteration. Since Worklist uses only the RiskSource
-// interface, the ordered source injects order through the scores map — but Go
-// maps remain unordered. The implementation therefore iterates the scores map;
-// for this test the stable-sort contract is verified at the implementation level
-// (sort.SliceStable usage) rather than at the map-iteration level. The test
-// documents the invariant and will catch any regression to sort.Slice.
-func (f *fakeOrderedRiskSource) RestraintSignalsFor(_ context.Context, _ uuid.UUID) ([]string, error) {
-	return nil, nil
-}
-func (f *fakeOrderedRiskSource) TopReasons(_ context.Context, _ uuid.UUID) ([]string, error) {
-	return nil, nil
 }
 
 // ---------------------------------------------------------------------------
