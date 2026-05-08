@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -159,23 +160,36 @@ func (s *PostgresStore) Revoke(ctx context.Context, id uuid.UUID) error {
 // InMemoryStore — in-memory stub for unit tests
 // ---------------------------------------------------------------------------
 
-// InMemoryStore is a simple in-memory implementation of Store for unit tests.
-// It is not safe for concurrent use (no locking).
+// inMemoryViewPerm is the internal wrapper used by InMemoryStore to track
+// revocation separately from the ViewPermission struct, mirroring the
+// Postgres revoked_at column without mutating ExpiresAt on the entity.
+type inMemoryViewPerm struct {
+	p         ViewPermission
+	revokedAt *time.Time
+}
+
+// InMemoryStore is safe for concurrent use; mutations and reads are guarded
+// by an RWMutex.
 type InMemoryStore struct {
-	records []ViewPermission
+	mu      sync.RWMutex
+	records []inMemoryViewPerm
 }
 
 var _ Store = (*InMemoryStore)(nil)
 
 func (s *InMemoryStore) Create(_ context.Context, p ViewPermission) (ViewPermission, error) {
-	s.records = append(s.records, p)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, inMemoryViewPerm{p: p})
 	return p, nil
 }
 
 func (s *InMemoryStore) Get(_ context.Context, id uuid.UUID) (*ViewPermission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for i := range s.records {
-		if s.records[i].ID == id {
-			cp := s.records[i]
+		if s.records[i].p.ID == id {
+			cp := s.records[i].p
 			return &cp, nil
 		}
 	}
@@ -184,48 +198,55 @@ func (s *InMemoryStore) Get(_ context.Context, id uuid.UUID) (*ViewPermission, e
 
 func (s *InMemoryStore) FindForSubjectAndViewer(_ context.Context,
 	subjectID, viewerRoleID uuid.UUID) (*ViewPermission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	now := time.Now().UTC()
 	// Walk in reverse insertion order (last-in first-out) to mimic ORDER BY granted_at DESC.
 	for i := len(s.records) - 1; i >= 0; i-- {
-		p := s.records[i]
+		rec := s.records[i]
+		p := rec.p
 		if p.SubjectID != subjectID || p.ViewerRoleID != viewerRoleID {
 			continue
 		}
-		// skip revoked
+		// skip revoked (revokedAt set by Revoke)
+		if rec.revokedAt != nil {
+			continue
+		}
+		// skip expired
 		if p.ExpiresAt != nil && now.After(*p.ExpiresAt) {
 			continue
 		}
-		// skip expired (RevokedAt is represented by the absence of nil: check the
-		// records directly because InMemoryStore doesn't track revoked_at separately —
-		// Revoke sets a sentinel). We store a revokedAt marker in the record to stay
-		// consistent with the Postgres semantics.
-		// (See Revoke below — it updates ExpiresAt to a past value as a proxy.)
-		return &p, nil
+		cp := p
+		return &cp, nil
 	}
 	return nil, nil
 }
 
 func (s *InMemoryStore) ListBySubject(_ context.Context,
 	subjectID uuid.UUID) ([]ViewPermission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var out []ViewPermission
-	for _, p := range s.records {
-		if p.SubjectID == subjectID {
-			cp := p
+	for _, rec := range s.records {
+		if rec.p.SubjectID == subjectID {
+			cp := rec.p
 			out = append(out, cp)
 		}
 	}
 	return out, nil
 }
 
-// Revoke marks the record as revoked by setting ExpiresAt to a past time.
-// This matches the Postgres semantics where revoked_at IS NOT NULL makes the
-// record inactive; in the InMemoryStore we piggyback on ExpiresAt so that
-// FindForSubjectAndViewer naturally excludes the record.
+// Revoke marks the record as revoked by setting revokedAt to the current
+// time. FindForSubjectAndViewer skips records where revokedAt != nil.
+// ListBySubject returns all records including revoked ones (audit picture).
+// Returns sql.ErrNoRows if no record with that id exists.
 func (s *InMemoryStore) Revoke(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range s.records {
-		if s.records[i].ID == id {
-			past := time.Now().UTC().Add(-1 * time.Second)
-			s.records[i].ExpiresAt = &past
+		if s.records[i].p.ID == id {
+			now := time.Now().UTC()
+			s.records[i].revokedAt = &now
 			return nil
 		}
 	}
@@ -387,9 +408,10 @@ WHERE id = $1`
 // InMemoryDataConsentStore — in-memory stub for unit tests
 // ---------------------------------------------------------------------------
 
-// InMemoryDataConsentStore is a simple in-memory implementation of DataConsentStore
-// for unit tests. It is not safe for concurrent use.
+// InMemoryDataConsentStore is safe for concurrent use; mutations and reads
+// are guarded by an RWMutex.
 type InMemoryDataConsentStore struct {
+	mu      sync.RWMutex
 	records []DataAggregationConsent
 }
 
@@ -397,6 +419,8 @@ var _ DataConsentStore = (*InMemoryDataConsentStore)(nil)
 
 func (s *InMemoryDataConsentStore) CreateConsent(_ context.Context,
 	c DataAggregationConsent) (DataAggregationConsent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.records = append(s.records, c)
 	return c, nil
 }
@@ -404,6 +428,8 @@ func (s *InMemoryDataConsentStore) CreateConsent(_ context.Context,
 func (s *InMemoryDataConsentStore) FindActiveConsent(_ context.Context,
 	pharmacistID uuid.UUID, dataElement, aggregationTarget string,
 	asOf time.Time) (*DataAggregationConsent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	// Walk in reverse insertion order for most-recent-first semantics.
 	for i := len(s.records) - 1; i >= 0; i-- {
 		c := s.records[i]
@@ -424,6 +450,8 @@ func (s *InMemoryDataConsentStore) FindActiveConsent(_ context.Context,
 
 func (s *InMemoryDataConsentStore) ListByPharmacist(_ context.Context,
 	pharmacistID uuid.UUID) ([]DataAggregationConsent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var out []DataAggregationConsent
 	for _, c := range s.records {
 		if c.PharmacistID == pharmacistID {
@@ -436,6 +464,8 @@ func (s *InMemoryDataConsentStore) ListByPharmacist(_ context.Context,
 
 func (s *InMemoryDataConsentStore) RevokeConsent(_ context.Context,
 	id uuid.UUID, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range s.records {
 		if s.records[i].ID == id {
 			now := time.Now().UTC()

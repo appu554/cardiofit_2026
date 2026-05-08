@@ -12,13 +12,13 @@ import (
 )
 
 // testDB returns a connection to the local Docker Postgres for integration
-// tests. Tests skip if KB_TEST_DATABASE_URL is unset, so `go test ./...`
+// tests. Tests skip if VAIDSHALA_TEST_DSN is unset, so `go test ./...`
 // still passes in CI environments without a database.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := os.Getenv("KB_TEST_DATABASE_URL")
+	dsn := os.Getenv("VAIDSHALA_TEST_DSN")
 	if dsn == "" {
-		t.Skip("KB_TEST_DATABASE_URL unset; skipping DB integration test")
+		t.Skip("VAIDSHALA_TEST_DSN unset; skipping DB integration test")
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -386,7 +386,7 @@ func TestInMemoryDataConsentStore_Revoke_UnknownID(t *testing.T) {
 }
 
 // ===========================================================================
-// PostgresStore tests — skip if KB_TEST_DATABASE_URL unset
+// PostgresStore tests — skip if VAIDSHALA_TEST_DSN unset
 // ===========================================================================
 
 func TestPostgresStore_ViewPermission_CreateAndGet(t *testing.T) {
