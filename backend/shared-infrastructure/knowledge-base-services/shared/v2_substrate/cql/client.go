@@ -7,14 +7,21 @@
 // Java service currently returns a placeholder shape (Task 5 transitional
 // state), the Go client targets the final schema so that Phase 2 consumers
 // need not be updated when the Java engine catches up.
+//
+// Example:
+//
+//	c := cql.NewClient("http://kb-cql-runtime:8095")
+//	result, err := c.EvaluateRule(ctx, "EGFR-001", residentID)
 package cql
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +48,14 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
+// SetHTTPClient replaces the underlying HTTP client, e.g. to inject a
+// timeout override or an instrumented transport for tracing.
+func (c *Client) SetHTTPClient(h *http.Client) {
+	if h != nil {
+		c.http = h
+	}
+}
+
 // RuleResult is the Phase 2 contract shape returned by $evaluate-rule.
 // While kb-cql-runtime currently returns a placeholder response (Task 5
 // transitional state), callers should bind to this struct; the Java engine
@@ -63,7 +78,7 @@ type RuleResult struct {
 // Errors are returned for:
 //   - context cancellation or deadline exceeded
 //   - network failures
-//   - non-2xx HTTP status codes (the status code is included in the error)
+//   - non-2xx HTTP status codes (the status code and body are included in the error)
 //   - JSON decode failures
 func (c *Client) EvaluateRule(ctx context.Context, ruleID string, residentID uuid.UUID) (*RuleResult, error) {
 	base, err := url.Parse(c.baseURL)
@@ -76,7 +91,7 @@ func (c *Client) EvaluateRule(ctx context.Context, ruleID string, residentID uui
 	// transport serialises the percent-encoded form on the wire.
 	base.Path = "/Library/" + ruleID + "/$evaluate-rule"
 	base.RawPath = "/Library/" + escapedRuleID + "/$evaluate-rule"
-	base.RawQuery = "residentId=" + residentID.String()
+	base.RawQuery = url.Values{"residentId": {residentID.String()}}.Encode()
 
 	rawURL := base.String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, nil)
@@ -91,7 +106,9 @@ func (c *Client) EvaluateRule(ctx context.Context, ruleID string, residentID uui
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("cql: %s %s: status %d", req.Method, rawURL, resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("cql: POST %s: status %d: %s",
+			rawURL, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var out RuleResult

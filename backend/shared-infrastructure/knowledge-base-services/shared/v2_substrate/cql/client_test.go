@@ -14,6 +14,8 @@ import (
 
 // TestEvaluateRule_HappyPath verifies that a 200 response with the Phase 2
 // contract shape is decoded into a RuleResult correctly.
+// All keys/values in ClinicalContent are verified explicitly, and a length
+// check ensures no unexpected extra keys are present.
 func TestEvaluateRule_HappyPath(t *testing.T) {
 	residentID := uuid.New()
 	want := RuleResult{
@@ -30,7 +32,7 @@ func TestEvaluateRule_HappyPath(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(want)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	c := NewClient(server.URL)
 	got, err := c.EvaluateRule(context.Background(), "EGFR-001", residentID)
@@ -46,9 +48,15 @@ func TestEvaluateRule_HappyPath(t *testing.T) {
 	if got.Urgency != want.Urgency {
 		t.Errorf("Urgency: got %q want %q", got.Urgency, want.Urgency)
 	}
+	// Assert all expected ClinicalContent keys explicitly.
 	if got.ClinicalContent["reason"] != want.ClinicalContent["reason"] {
 		t.Errorf("ClinicalContent[reason]: got %v want %v",
 			got.ClinicalContent["reason"], want.ClinicalContent["reason"])
+	}
+	// Guard against extra keys that would indicate unexpected fields.
+	if len(got.ClinicalContent) != len(want.ClinicalContent) {
+		t.Errorf("ClinicalContent len: got %d want %d (extra keys: %v)",
+			len(got.ClinicalContent), len(want.ClinicalContent), got.ClinicalContent)
 	}
 }
 
@@ -58,7 +66,7 @@ func TestEvaluateRule_Non2xx(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rule not found", http.StatusNotFound)
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	c := NewClient(server.URL)
 	_, err := c.EvaluateRule(context.Background(), "NONEXISTENT", uuid.New())
@@ -67,6 +75,69 @@ func TestEvaluateRule_Non2xx(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "404") {
 		t.Errorf("expected error to mention status 404, got: %v", err)
+	}
+}
+
+// TestEvaluateRule_Non2xx_BodyInError verifies that a 500 response body is
+// included in the returned error for debuggability.
+func TestEvaluateRule_Non2xx_BodyInError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("OperationOutcome: rule failed"))
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewClient(server.URL)
+	_, err := c.EvaluateRule(context.Background(), "FAILING-RULE", uuid.New())
+	if err == nil {
+		t.Fatal("expected an error for 500 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("expected error to contain status code 500, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "OperationOutcome: rule failed") {
+		t.Errorf("expected error to contain response body, got: %v", err)
+	}
+}
+
+// TestEvaluateRule_SetHTTPClient verifies that SetHTTPClient injects a custom
+// transport that is actually used when EvaluateRule fires the request.
+func TestEvaluateRule_SetHTTPClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(RuleResult{})
+	}))
+	t.Cleanup(server.Close)
+
+	var sawRequest bool
+	recording := &recordingTransport{
+		delegate: http.DefaultTransport,
+		onRequest: func(req *http.Request) {
+			sawRequest = true
+		},
+	}
+
+	c := NewClient(server.URL)
+	c.SetHTTPClient(&http.Client{Transport: recording})
+
+	_, err := c.EvaluateRule(context.Background(), "SOME-RULE", uuid.New())
+	if err != nil {
+		t.Fatalf("EvaluateRule: %v", err)
+	}
+	if !sawRequest {
+		t.Error("expected custom transport to be used, but it was not called")
+	}
+}
+
+// TestEvaluateRule_SetHTTPClient_NilIgnored verifies that passing nil to
+// SetHTTPClient does not replace the existing client.
+func TestEvaluateRule_SetHTTPClient_NilIgnored(t *testing.T) {
+	c := NewClient("http://localhost:9999")
+	original := c.http
+	c.SetHTTPClient(nil)
+	if c.http != original {
+		t.Error("SetHTTPClient(nil) should not replace the existing http.Client")
 	}
 }
 
@@ -94,7 +165,7 @@ func TestEvaluateRule_URLConstruction(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(RuleResult{})
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	c := NewClient(server.URL)
 	_, err := c.EvaluateRule(context.Background(), ruleID, residentID)
@@ -120,10 +191,10 @@ func TestEvaluateRule_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-unblock
 	}))
-	defer func() {
+	t.Cleanup(func() {
 		close(unblock)
 		server.Close()
-	}()
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately before the request starts
@@ -133,4 +204,22 @@ func TestEvaluateRule_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// recordingTransport is an http.RoundTripper that calls onRequest for every
+// request, then delegates to the wrapped transport.
+type recordingTransport struct {
+	delegate  http.RoundTripper
+	onRequest func(*http.Request)
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if rt.onRequest != nil {
+		rt.onRequest(req)
+	}
+	return rt.delegate.RoundTrip(req)
 }
