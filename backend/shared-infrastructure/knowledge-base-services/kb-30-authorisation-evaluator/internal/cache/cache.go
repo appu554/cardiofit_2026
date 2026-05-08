@@ -1,11 +1,11 @@
 // Package cache holds the eval-result cache for the kb-30 evaluator.
 //
 // Two implementations:
-//   - InMemoryCache: production-grade for single-replica deploys, MVP local
-//     dev, and tests. Uses sync.Map + per-entry expiration tracking with
-//     a single periodic sweeper goroutine.
-//   - RedisCache:    stub. Wired at the cmd/server entry point in production.
-//     Marked TODO until production Redis credentials are available.
+//   - InMemoryCache: default for tests and local dev (and acceptable for
+//     single-replica deploys). Uses sync.Map + per-entry expiration
+//     tracking with a single periodic sweeper goroutine.
+//   - RedisCache:    production cache, backed by go-redis/v9. Selected by
+//     the cmd/server entry point when KB30_REDIS_ADDR is set.
 //
 // Per-rule TTLs (Layer 3 v2 doc Part 4.5.3):
 //   - 24h for static jurisdictional rules
@@ -28,8 +28,7 @@ import (
 	"kb-authorisation-evaluator/internal/evaluator"
 )
 
-// Cache is the contract implemented by InMemoryCache and (eventually)
-// RedisCache.
+// Cache is the contract implemented by InMemoryCache and RedisCache.
 type Cache interface {
 	Get(ctx context.Context, key string) (*evaluator.Result, bool, error)
 	Set(ctx context.Context, key string, result *evaluator.Result, ttl time.Duration) error
@@ -199,7 +198,7 @@ func NewRedisFromClient(rdb *redis.Client) *RedisCache {
 // RedisCache that connects to localhost:6379 with default options. For
 // production use, prefer NewRedisFromClient with a configured *redis.Client.
 //
-// Kept for backwards-compat with prior call sites that used the stub.
+// Kept for backwards-compat with prior call sites.
 func NewRedis() *RedisCache {
 	return &RedisCache{rdb: redis.NewClient(&redis.Options{Addr: "localhost:6379"})}
 }

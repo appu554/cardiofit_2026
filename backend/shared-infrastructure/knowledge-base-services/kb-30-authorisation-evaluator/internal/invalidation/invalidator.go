@@ -2,10 +2,12 @@
 // invalidation patterns for the kb-30 evaluator (Layer 3 v2 doc
 // Part 4.5.3).
 //
-// The Kafka consumer is a stub for the MVP — it would subscribe to the
-// `substrate_updates` topic emitted by Layer 2 plan Wave 1 and fan events
-// into InvalidateOnEvent. The InvalidateOnEvent function itself is fully
-// implemented and tested with synthetic events.
+// The KafkaConsumer subscribes to the `substrate_updates` topic emitted
+// by Layer 2 Wave 1 and dispatches each message to InvalidateOnEvent.
+// Per-message failures are logged and the consumer continues — a bad
+// message must not kill the consumer. Production deployments enable the
+// consumer via KB30_KAFKA_BROKERS + KB30_KAFKA_TOPIC env vars at the
+// cmd/server entry point.
 package invalidation
 
 import (
