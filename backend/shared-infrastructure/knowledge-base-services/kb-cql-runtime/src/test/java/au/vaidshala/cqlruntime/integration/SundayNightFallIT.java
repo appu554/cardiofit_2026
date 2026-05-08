@@ -285,6 +285,10 @@ class SundayNightFallIT {
     //       .isNotEmpty()
     //       .containsKey("recommendation");
     //   assertThat(result.urgency()).isEqualTo("high");
+    //   // Consumable by Plan 0.1 Recommendation lifecycle (detected → drafted):
+    //   //   var rec = Recommendation.fromRuleResult(result);
+    //   //   assertThat(rec.state()).isEqualTo("detected");
+    //   //   assertThat(rec.clinicalContent()).isNotEmpty();
     //
     // The WireMock stubs above (fall_risk concern + frusemide/metoprolol
     // medications + fall_event observation in past 24 h) are pre-wired to
