@@ -19,7 +19,9 @@ include Vaidshala.Substrate version '1.0' called Substrate
  * "evaluator down" case explicitly. Wave 1 validator lints for
  * unhandled-null returns from these helpers.
  *
- * TODO(wave-1-runtime): wire to Authorisation evaluator under HAPI.
+ * TODO(plan-0.5-followup): wired runtime requires (a) cqf-fhir-cr engine
+ * integration in $evaluate-rule (Task 5 followup) and (b) registration of
+ * unregistered Substrate.* symbols (see Plan-0.5-Task-8 audit).
  *
  * Spec: docs/superpowers/specs/2026-05-Layer3-Wave0-cql-helper-surface.md
  *       (File 4 — AuthorisationHelpers).

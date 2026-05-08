@@ -4,10 +4,9 @@ using FHIR version '4.0.1'
 
 include MedicationHelpers version '1.0' called Meds
 
-// TODO(wave-1-runtime): execute under HAPI Test Engine when the
-// Substrate adapter library lands. Until then this file is a static
-// fixture-binding spec; the validator inspects it for define-coverage
-// rather than evaluating the CQL.
+// TODO(plan-0.5-followup): wired runtime requires (a) cqf-fhir-cr engine
+// integration in $evaluate-rule (Task 5 followup) and (b) registration of
+// unregistered Substrate.* symbols (see Plan-0.5-Task-8 audit).
 
 context Patient
 

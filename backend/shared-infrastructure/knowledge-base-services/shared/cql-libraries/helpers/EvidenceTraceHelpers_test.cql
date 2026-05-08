@@ -4,7 +4,9 @@ using FHIR version '4.0.1'
 
 include EvidenceTraceHelpers version '1.0' called Trace
 
-// TODO(wave-1-runtime): execute under HAPI Test Engine.
+// TODO(plan-0.5-followup): wired runtime requires (a) cqf-fhir-cr engine
+// integration in $evaluate-rule (Task 5 followup) and (b) registration of
+// unregistered Substrate.* symbols (see Plan-0.5-Task-8 audit).
 
 context Patient
 
