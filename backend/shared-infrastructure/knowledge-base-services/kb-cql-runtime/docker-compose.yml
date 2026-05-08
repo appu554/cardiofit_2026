@@ -1,0 +1,90 @@
+# kb-cql-runtime — minimal Docker Compose for container-based integration testing.
+#
+# Plan 0.5 Task 7.
+#
+# PREFERRED APPROACH for running the IT:
+#   Run the IT directly via Maven Failsafe against an in-process Spring Boot
+#   server (no Docker required):
+#
+#     cd kb-cql-runtime
+#     mvn verify -P integration
+#
+#   SundayNightFallIT uses @SpringBootTest(webEnvironment=RANDOM_PORT) and
+#   starts WireMock in-process as a JVM-side test fixture. This is idiomatic
+#   for Spring ITs and avoids Docker daemon requirements.
+#
+# THIS docker-compose.yml is provided for:
+#   - Manual smoke-testing the built container image.
+#   - CI/CD pipelines that want to validate the container artifact separately.
+#   - Future tasks that may layer in a real kb-20-patient-profile sidecar.
+#
+# kb-20-patient-profile (Go service + Postgres + Redis + seed data) is NOT
+# included here.  Substrate calls are handled by WireMock running inside
+# the IT JVM when using `mvn verify -P integration`.  If you need the real
+# substrate, see the top-level knowledge-base-services docker-compose files.
+
+version: "3.9"
+
+services:
+
+  # -------------------------------------------------------------------------
+  # kb-cql-runtime: the Java Spring Boot HAPI FHIR runtime.
+  #
+  # Built from the Dockerfile in this directory.
+  # Substrate URL left at default (localhost:8131) — if running standalone
+  # smoke tests, override via:
+  #   SUBSTRATE_BASE_URL=http://wiremock:8080 docker compose up
+  # -------------------------------------------------------------------------
+  kb-cql-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kb-cql-runtime:dev
+    container_name: kb-cql-runtime-dev
+    ports:
+      - "8140:8140"
+    environment:
+      # Point substrate at the wiremock sidecar defined below.
+      SUBSTRATE_BASE_URL: http://wiremock:8080
+      # CQL library roots inside the container — the Dockerfile copies the
+      # jar only; CQL files are not in the image.  The loader silently skips
+      # missing roots (by design in CqlLibraryLoader.loadAll), so the service
+      # starts even without live CQL files when used purely as a smoke target.
+      # For a fully-loaded container, mount the cql-libraries volume:
+      #   volumes:
+      #     - ../shared/cql-libraries:/cql/shared
+      #   KB_CQL_LIBRARY_ROOTS=/cql/shared
+      KB_CQL_LIBRARY_ROOTS: ""
+    depends_on:
+      wiremock:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8140/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -------------------------------------------------------------------------
+  # wiremock: substrate stub for container-mode smoke tests.
+  #
+  # Provides canned Sunday-night-fall responses on the 5 substrate endpoints.
+  # The responses match the stubs in SundayNightFallIT.java exactly so that
+  # once the cqf-fhir-cr engine is wired, both the JVM-IT and the container
+  # smoke test exercise the same clinical scenario.
+  #
+  # TODO(plan-0.5-followup): replace wiremock with real kb-20-patient-profile
+  # once the engine is wired and the full round-trip is validated.
+  # -------------------------------------------------------------------------
+  wiremock:
+    image: wiremock/wiremock:3.3.1-alpine
+    container_name: kb-cql-runtime-wiremock
+    ports:
+      - "8180:8080"
+    volumes:
+      - ./src/test/resources/wiremock:/home/wiremock
+    command: ["--global-response-templating"]
+
+networks:
+  default:
+    name: kb-cql-runtime-net
