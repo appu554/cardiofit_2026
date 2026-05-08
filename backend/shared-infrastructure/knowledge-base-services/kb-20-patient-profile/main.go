@@ -320,6 +320,17 @@ func main() {
 		// wiring needed here — the join uses the same DB connection.
 		// Closes the wave-2.2 TODO in baseline_store.go.
 		logger.Info("v2 active-concern routes registered at /v2 (residents/:id/active-concerns, active-concerns/expiring)")
+
+		// Plan 0.5 Task 2: substrate REST API for kb-cql-runtime (Java HAPI).
+		// Mounts five thin GET endpoints under /v2/runtime/* that the
+		// SubstrateExternalFunctions class (Plan 0.5 Task 3+) calls during
+		// CQL evaluation. EmptyRuntimeProviders returns empty/zero results
+		// to make the routes reachable from boot; Task 3 will swap it for
+		// a real adapter wired to the existing kb-20 stores.
+		runtimeProviders := &api.EmptyRuntimeProviders{}
+		runtimeHandlers := api.NewRuntimeHandlers(runtimeProviders)
+		runtimeHandlers.RegisterRoutes(httpServer.Router.Group("/v2"))
+		logger.Info("v2 runtime routes registered at /v2/runtime (baseline, active-concerns, care-intensity, medicine-use, observations) with EmptyRuntimeProviders — Plan 0.5 Task 3 will wire real stores")
 	}
 
 	// Start HTTP server
