@@ -10,10 +10,14 @@ package invalidation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 
 	"kb-authorisation-evaluator/internal/cache"
 )
@@ -100,24 +104,91 @@ func (i *Invalidator) InvalidateOnEvent(ctx context.Context, e SubstrateChangeEv
 	return nil
 }
 
-// ----- Kafka consumer stub ---------------------------------------------------
+// ----- Kafka consumer ---------------------------------------------------
 
-// KafkaConsumer is the entry point for the substrate_updates topic.
-// Production wiring will use confluent-kafka-go or segmentio/kafka-go.
-//
-// TODO(layer3-v1): wire confluent-kafka-go consumer. The InvalidateOnEvent
-// function is the per-message handler.
+// kafkaReader is the minimal interface this package needs from kafka-go.
+// Defined as an interface so the consumer can be unit-tested with a fake.
+type kafkaReader interface {
+	ReadMessage(ctx context.Context) (kafka.Message, error)
+	Close() error
+}
+
+// KafkaConsumer subscribes to the substrate_updates topic and fans
+// SubstrateChangeEvent messages into Inv.InvalidateOnEvent. Cache
+// invalidation in production happens via this consumer; direct
+// Cache.Invalidate calls are reserved for tests.
 type KafkaConsumer struct {
 	Brokers []string
 	Topic   string
+	GroupID string
 	Inv     *Invalidator
+
+	// reader is constructed lazily by Run from the Brokers/Topic/GroupID
+	// fields. Tests inject a fake by setting reader directly.
+	reader kafkaReader
 }
 
-// Run is a stub for the MVP. Production wiring would loop over the
-// consumer fetching messages, decoding them into SubstrateChangeEvent, and
-// calling Inv.InvalidateOnEvent. For tests + local dev the function
-// returns immediately so the service can still start.
+// Run loops reading messages off Kafka and dispatching each to
+// handleMessage. Blocks until ctx is cancelled or the reader returns a
+// permanent error.
+//
+// Per-message failures (decode errors, invalidation errors) are logged
+// and the loop continues — a bad message must not kill the consumer.
+// The consumer commits offsets via the underlying kafka.Reader.
 func (k *KafkaConsumer) Run(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
+	if k.reader == nil {
+		if len(k.Brokers) == 0 || k.Topic == "" {
+			return fmt.Errorf("kafka consumer: brokers and topic required")
+		}
+		groupID := k.GroupID
+		if groupID == "" {
+			groupID = "kb-30-invalidator"
+		}
+		k.reader = kafka.NewReader(kafka.ReaderConfig{
+			Brokers:        k.Brokers,
+			Topic:          k.Topic,
+			GroupID:        groupID,
+			MinBytes:       1,
+			MaxBytes:       1 << 20, // 1 MiB
+			MaxWait:        500 * time.Millisecond,
+			CommitInterval: time.Second, // async commit
+		})
+	}
+	defer k.reader.Close()
+
+	log.Printf("kb-30 kafka consumer: subscribed to %s on %v", k.Topic, k.Brokers)
+	for {
+		msg, err := k.reader.ReadMessage(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return ctx.Err()
+			}
+			// Transient error — log and continue. The reader's own retry
+			// machinery will reconnect.
+			log.Printf("kb-30 kafka read error: %v", err)
+			continue
+		}
+		if err := k.handleMessage(ctx, msg.Value); err != nil {
+			log.Printf("kb-30 kafka handle error (offset=%d): %v", msg.Offset, err)
+			// Continue; do not crash the consumer on a single bad message.
+		}
+	}
+}
+
+// handleMessage decodes one Kafka payload into a SubstrateChangeEvent
+// and dispatches it to InvalidateOnEvent. Extracted as a separate method
+// so unit tests can exercise the decode + invalidation path with
+// synthetic bytes (no broker required).
+func (k *KafkaConsumer) handleMessage(ctx context.Context, raw []byte) error {
+	var ev SubstrateChangeEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return fmt.Errorf("decode substrate change event: %w", err)
+	}
+	if ev.Type == "" {
+		return fmt.Errorf("event missing Type field; raw=%s", string(raw))
+	}
+	if k.Inv == nil {
+		return fmt.Errorf("invalidator not configured")
+	}
+	return k.Inv.InvalidateOnEvent(ctx, ev)
 }

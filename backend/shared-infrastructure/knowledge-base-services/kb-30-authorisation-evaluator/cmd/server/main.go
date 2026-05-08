@@ -5,11 +5,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"kb-authorisation-evaluator/internal/cache"
 	"kb-authorisation-evaluator/internal/dsl"
 	"kb-authorisation-evaluator/internal/evaluator"
+	"kb-authorisation-evaluator/internal/invalidation"
 	credentialresolver "kb-authorisation-evaluator/internal/resolver"
 	"kb-authorisation-evaluator/internal/store"
 )
@@ -85,9 +88,36 @@ func main() {
 		}
 	}()
 
+	// Kafka consumer for substrate-driven cache invalidation. Started as a
+	// goroutine so server boot is not blocked by Kafka availability; the
+	// consumer logs read errors and continues, never crashing main.
+	consumerCtx, cancelConsumer := context.WithCancel(context.Background())
+	defer cancelConsumer()
+	if brokers := os.Getenv("KB30_KAFKA_BROKERS"); brokers != "" {
+		topic := os.Getenv("KB30_KAFKA_TOPIC")
+		if topic == "" {
+			topic = "substrate_updates"
+		}
+		kc := &invalidation.KafkaConsumer{
+			Brokers: strings.Split(brokers, ","),
+			Topic:   topic,
+			Inv:     invalidation.New(c),
+		}
+		go func() {
+			if err := kc.Run(consumerCtx); err != nil &&
+				!errors.Is(err, context.Canceled) {
+				log.Printf("kb-30 kafka consumer exited: %v", err)
+			}
+		}()
+		log.Printf("kb-30: started Kafka consumer for topic %s on %s", topic, brokers)
+	} else {
+		log.Printf("kb-30: KB30_KAFKA_BROKERS unset; skipping Kafka consumer (cache invalidation only via direct API)")
+	}
+
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	cancelConsumer()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
