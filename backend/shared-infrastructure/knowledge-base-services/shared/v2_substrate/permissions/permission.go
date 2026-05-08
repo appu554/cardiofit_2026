@@ -7,16 +7,56 @@ import (
 	"github.com/google/uuid"
 )
 
+// Sentinel errors. The HTTP layer maps these to status codes; Validate never
+// returns raw errors for structural violations.
+//
+// Sentinel list returned by Scope.Validate():
+//   - ErrMissingVisibilityClass — Class field left at zero value (VisibilityClassUnset)
+//   - ErrEmptyResourceTypes    — ResourceTypes slice is nil or empty
+//   - ErrPFARequiresGate       — PFA scope has nil AggregationGate
+//   - ErrNonPFAGateMustBeNil   — non-PFA scope has a non-nil AggregationGate
+var (
+	ErrMissingVisibilityClass = errors.New("permissions: scope has no VisibilityClass set")
+	ErrEmptyResourceTypes     = errors.New("permissions: scope has no resource_types")
+	ErrPFARequiresGate        = errors.New("permissions: PFA scope must have a non-nil AggregationGate")
+	ErrNonPFAGateMustBeNil    = errors.New("permissions: non-PFA scope must have nil AggregationGate")
+)
+
 // VisibilityClass encodes who can see what, per Self-Visibility Guidelines §2.1.
 type VisibilityClass int
 
 const (
-	POA VisibilityClass = iota // Pharmacist-Only-Always
-	PDP                        // Pharmacist-Default-Private
-	PFA                        // Pharmacist-First-Then-Aggregated
-	WO                         // Workflow-Operational
-	AD                         // Audit-Defensible
+	VisibilityClassUnset VisibilityClass = iota // zero value — invalid; surfaces forgotten classification
+	POA                                         // Pharmacist-Only-Always
+	PDP                                         // Pharmacist-Default-Private
+	PFA                                         // Pharmacist-First-Then-Aggregated
+	WO                                          // Workflow-Operational
+	AD                                          // Audit-Defensible
 )
+
+// String returns the human-readable name for the VisibilityClass.
+func (c VisibilityClass) String() string {
+	switch c {
+	case VisibilityClassUnset:
+		return "unset"
+	case POA:
+		return "POA"
+	case PDP:
+		return "PDP"
+	case PFA:
+		return "PFA"
+	case WO:
+		return "WO"
+	case AD:
+		return "AD"
+	}
+	return "unknown"
+}
+
+// Valid reports whether c is a defined, non-zero VisibilityClass.
+func (c VisibilityClass) Valid() bool {
+	return c == POA || c == PDP || c == PFA || c == WO || c == AD
+}
 
 const (
 	ViewTypePharmacist = "pharmacist"
@@ -67,17 +107,30 @@ type Scope struct {
 	Gate *AggregationGate `json:"gate,omitempty"`
 }
 
-// Validate enforces the PFA/non-PFA gate invariant.
+// Validate enforces structural invariants on a Scope. It returns one of four
+// sentinel errors: ErrMissingVisibilityClass, ErrEmptyResourceTypes,
+// ErrPFARequiresGate, or ErrNonPFAGateMustBeNil.
 func (s Scope) Validate() error {
+	if s.Class == VisibilityClassUnset {
+		return ErrMissingVisibilityClass
+	}
+	if len(s.ResourceTypes) == 0 {
+		return ErrEmptyResourceTypes
+	}
 	if s.Class == PFA && s.Gate == nil {
-		return errors.New("PFA scope must have a non-nil AggregationGate")
+		return ErrPFARequiresGate
 	}
 	if s.Class != PFA && s.Gate != nil {
-		return errors.New("non-PFA scope must have nil AggregationGate")
+		return ErrNonPFAGateMustBeNil
 	}
 	return nil
 }
 
+// ViewPermission is the per-(subject, viewer_role) record that grants visibility
+// into a substrate slice per the Scope. Active permissions are bounded by
+// GrantedAt..ExpiresAt and revoked by setting RevokedAt (managed at Store level).
+// Allows() encodes per-class semantics; non-subject PDP/PFA reads require an
+// additional DataAggregationConsent check at the middleware layer.
 type ViewPermission struct {
 	ID                    uuid.UUID  `json:"id"`
 	SubjectID             uuid.UUID  `json:"subject_id"`
