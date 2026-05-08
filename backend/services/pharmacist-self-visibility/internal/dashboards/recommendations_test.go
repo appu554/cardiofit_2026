@@ -102,16 +102,6 @@ func TestMyRecommendations_ContextCancellation(t *testing.T) {
 // Test helper types
 // ---------------------------------------------------------------------------
 
-// recRow mirrors the internal row type used by fakeRecSource.
-// It is the minimal projection the RecSource.ListByAuthor contract returns.
-// Callers MUST use Plan 0.1 lifecycle state values (see IsValidLifecycleState).
-type recRow struct {
-	id              uuid.UUID
-	authorID        uuid.UUID
-	state           string
-	rejectionReason string
-}
-
 // fakeRecSource filters by authorID, simulating permission middleware from Phase 1a.
 type fakeRecSource struct{ recs []recRow }
 

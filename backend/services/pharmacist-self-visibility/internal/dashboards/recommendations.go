@@ -92,14 +92,22 @@ type RecommendationCard struct {
 	RejectionReason string
 }
 
+// recRow mirrors the internal row type used by RecSource implementations.
+// It is the minimal projection the RecSource.ListByAuthor contract returns.
+// Callers MUST use Plan 0.1 lifecycle state values (see IsValidLifecycleState).
+type recRow struct {
+	id              uuid.UUID
+	authorID        uuid.UUID
+	state           string
+	rejectionReason string
+}
+
 // RecSource is the data-access interface that backs MyRecommendations.
 // Implementations must respect context cancellation and must return rows whose
 // State values satisfy IsValidLifecycleState; canonicalisation is the
 // implementer's responsibility.
 //
-// Note: recRow is defined in the test file (recommendations_test.go) as a
-// package-level type so that both production code and tests share the same
-// struct layout. In a full deployment the production source would use a
+// In a full deployment the production source would use a
 // database-backed implementation of this interface.
 type RecSource interface {
 	// ListByAuthor returns all recommendation rows authored by the given
