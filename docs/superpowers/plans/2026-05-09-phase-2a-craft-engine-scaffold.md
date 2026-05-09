@@ -1057,6 +1057,13 @@ git commit -m "feat(kb-32): HTTP API + lifecycle integration + Sunday-night-fall
 - Restraint signals (9 signal detectors)
 - Expanded test suite (clinical-safety, metric-integrity, performance categories)
 
+**Carry-forwards from 2026-05-09 implementation gap analysis (deferred to `2026-05-09-phase-2-completion.md`):**
+- **Production blocker:** `inMemorySubstrateClient` in `cmd/server/main.go` returns zero-value snapshots — no real substrate signals fire. Phase 2-completion Task 1 lands `PostgresSubstrateClient` over kb-20-patient-profile.
+- **Production blocker:** `DefaultAppropriatenessSource` returns 3 across all 5 dimensions — gate is structurally present but always passes. Phase 2-completion Task 2 lands `SubstrateBackedScorer` driven by ClinicalSnapshot + rule.
+- **Stage 7 EvidenceTrace emission** — `lifecycle/transitions.go` Gate logic is wired but Postgres write + EvidenceTrace emission absent. Phase 2-completion Task 4.
+- **Layer 2 substrate-driven generation** — content is currently static template text from generator; ClinicalSnapshot trajectory-driven L2 generation is pre-pilot work (Phase 2-completion).
+- **Principle 2 (peer-to-peer mirror) ordering** — generator produces sections in Issue → Context order; no test asserts the Trajectory→Context→Recommendation discipline. Add a generator test in Phase 2-completion or fold into Phase 3.
+
 **Out of scope (UI/governance):**
 - Layer 4 surfaces UX
 - Pharmacy-employer view design

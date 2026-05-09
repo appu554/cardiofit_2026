@@ -748,10 +748,18 @@ git commit -m "test(kb-32): clinical-safety + metric-integrity + perf test categ
 - [x] Restraint signals 9 detectors (Guidelines Part 10) — Task 9
 - [x] Test suite expansion — clinical safety, metric integrity, performance (Guidelines Part 13) — Task 10
 
+**Carry-forwards from 2026-05-09 implementation gap analysis (deferred to `2026-05-09-phase-2-completion.md`):**
+- **Override taxonomy vocabulary mismatch with Guidelines Part 5** — the implementation uses verbose snake_case codes (`alert_fatigue`, `patient_preference`) per the plan; Guidelines Part 5 specifies 3-letter codes (`WMP`, `NCS`, etc.). Phase 2-completion Task 5 aligns; requires clinical informatics sign-off on canonical vocabulary.
+- **`PinAtFireTime` not invoked from `pipeline.Run()`** — fixed inline by commit `01bed02c` (Pipeline now wires citations.Registry; nil-registry skips gracefully; production callers use NewPipelineWithRegistry).
+- **Postgres-backed citations.Registry** — current implementation is `InMemoryRegistry` only. Phase 2-completion Task 3 lands `PostgresCitationRegistry` over migration 043.
+- **Prescriber framing opt-out HTTP endpoint** — table exists (Phase 2a migration 041); per-GP observer reads from it; no HTTP route to register/revoke. Phase 2-completion Task 6.
+- **PDP middleware unmounted on /v1/craft/override** — Phase 2-completion Task 7 mounts Phase 1a permissions middleware (gated by `KB32_PERMISSIONS_ENFORCED=true`).
+
 **Out of scope (still deferred to future work):**
 - Layer 4 surfaces UX (worklist UI rendering, GP communication hub)
 - Pharmacy-employer view design (uses citations + override patterns; Phase 1b scaffolds the data layer, UX is downstream)
 - Regulator audit interface
+- gRPC RecommendationCraftService — REST sufficient for pilot
 - Pharmacist Advisory Group constitution (operational/process, not code)
 
 Plan complete and saved.
