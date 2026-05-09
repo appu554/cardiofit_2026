@@ -33,10 +33,14 @@ import (
 func RenderPortfolioPDF(pack RPLPack, pharmacistName string, w io.Writer) error {
 	pdf := gofpdf.New("P", "mm", "A4", "")
 
-	// Pin the PDF creation-date metadata field to the zero time so that two
-	// calls with identical inputs produce byte-identical output. Without this,
-	// gofpdf embeds time.Now() in the metadata, making output non-deterministic.
-	pdf.SetCreationDate(time.Time{})
+	// Pin both the creation-date and modification-date metadata fields to a
+	// fixed sentinel time so that two calls with identical inputs produce
+	// byte-identical output. gofpdf's timeOrNow() helper falls back to
+	// time.Now() when the stored value is the zero time, so we must supply a
+	// non-zero sentinel (the Unix epoch works well).
+	epoch := time.Unix(0, 0).UTC()
+	pdf.SetCreationDate(epoch)
+	pdf.SetModificationDate(epoch)
 
 	pdf.AddPage()
 
