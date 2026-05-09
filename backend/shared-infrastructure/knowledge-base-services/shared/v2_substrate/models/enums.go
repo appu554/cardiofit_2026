@@ -223,7 +223,11 @@ func IsValidDeltaFlag(s string) bool {
 	return false
 }
 
-// RecommendationState* — the 9 lifecycle states plus deferred.
+// RecommendationState* — the 13 lifecycle states per Recommendation Craft
+// Guidelines Part 3. The first 10 were present from Plan 0.1; the three
+// terminal states below (rejected, withdrawn, superseded) were added in
+// Phase 2a Task 2 so kb-32 and Phase 2b override/citation flows can
+// transition recommendations through them.
 // See plan: docs/superpowers/plans/2026-05-07-phase-0-1-recommendation-entity-lifecycle.md
 const (
 	RecommendationStateDetected         = "detected"
@@ -236,6 +240,12 @@ const (
 	RecommendationStateMonitoringActive = "monitoring-active"
 	RecommendationStateOutcomeRecorded  = "outcome-recorded"
 	RecommendationStateClosed           = "closed"
+
+	// Terminal states added Phase 2a Task 2 (Guidelines Part 3, §13).
+	// No transitions are permitted out of these states.
+	RecommendationStateRejected   = "rejected"   // decided → rejected: GP declines outright
+	RecommendationStateWithdrawn  = "withdrawn"  // drafted → withdrawn: author pulls before submission
+	RecommendationStateSuperseded = "superseded" // implemented|monitoring-active → superseded: newer guideline
 )
 
 // RecommendationType* — ordering hint per v3 §7 line 384.
@@ -255,13 +265,16 @@ const (
 )
 
 // IsValidRecommendationState reports whether s is a known lifecycle state.
+// All 13 canonical states (Guidelines Part 3) are accepted.
 func IsValidRecommendationState(s string) bool {
 	switch s {
 	case RecommendationStateDetected, RecommendationStateDrafted,
 		RecommendationStateSubmitted, RecommendationStateViewed,
 		RecommendationStateDeferred, RecommendationStateDecided,
 		RecommendationStateImplemented, RecommendationStateMonitoringActive,
-		RecommendationStateOutcomeRecorded, RecommendationStateClosed:
+		RecommendationStateOutcomeRecorded, RecommendationStateClosed,
+		RecommendationStateRejected, RecommendationStateWithdrawn,
+		RecommendationStateSuperseded:
 		return true
 	}
 	return false

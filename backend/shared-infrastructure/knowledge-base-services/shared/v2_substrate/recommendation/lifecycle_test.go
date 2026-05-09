@@ -298,6 +298,152 @@ func (c *consentCheckCounter) ConsentActive(_ context.Context, _ uuid.UUID,
 	return true, nil
 }
 
+// ---------------------------------------------------------------------------
+// CraftEngineGate tests (Task 13)
+// ---------------------------------------------------------------------------
+
+// fakeCraftGate is a test double for the optional CraftEngineGate.
+// passThrough=true → nil error (allow transition).
+// passThrough=false → sentinelGateErr (block transition).
+type fakeCraftGate struct {
+	passThrough bool
+	calls       int
+}
+
+var sentinelGateErr = errors.New("craft gate: held")
+
+func (g *fakeCraftGate) AdvanceDetectedToDrafted(_ context.Context, _ uuid.UUID) error {
+	g.calls++
+	if g.passThrough {
+		return nil
+	}
+	return sentinelGateErr
+}
+
+// TestLifecycle_CraftEngineGate_AllowsDetectedToDrafted verifies that when
+// the gate returns nil, the detected → drafted transition succeeds and an
+// EvidenceTrace edge is emitted.
+func TestLifecycle_CraftEngineGate_AllowsDetectedToDrafted(t *testing.T) {
+	store := &fakeStore{rec: &models.Recommendation{
+		ID:    uuid.New(),
+		State: models.RecommendationStateDetected,
+	}}
+	edges := &fakeEdgeStore{}
+	lc := NewLifecycle(store, edges, AlwaysPassConsentChecker{})
+
+	gate := &fakeCraftGate{passThrough: true}
+	lc.SetCraftEngineGate(gate)
+
+	err := lc.Transition(context.Background(), TransitionRequest{
+		RecommendationID: store.rec.ID,
+		ToState:          models.RecommendationStateDrafted,
+		ActorID:          uuid.New(),
+		ActorClass:       ActorClassAlgorithmic,
+	})
+	if err != nil {
+		t.Fatalf("expected transition to succeed; got %v", err)
+	}
+	if gate.calls != 1 {
+		t.Errorf("gate invoked %d times; want 1", gate.calls)
+	}
+	if len(edges.emitted) != 1 {
+		t.Fatalf("want 1 evidence edge; got %d", len(edges.emitted))
+	}
+}
+
+// TestLifecycle_CraftEngineGate_BlocksDetectedToDrafted verifies that when
+// the gate returns an error, the detected → drafted transition is aborted and
+// no state change is committed.
+func TestLifecycle_CraftEngineGate_BlocksDetectedToDrafted(t *testing.T) {
+	store := &fakeStore{rec: &models.Recommendation{
+		ID:    uuid.New(),
+		State: models.RecommendationStateDetected,
+	}}
+	edges := &fakeEdgeStore{}
+	lc := NewLifecycle(store, edges, AlwaysPassConsentChecker{})
+
+	gate := &fakeCraftGate{passThrough: false}
+	lc.SetCraftEngineGate(gate)
+
+	err := lc.Transition(context.Background(), TransitionRequest{
+		RecommendationID: store.rec.ID,
+		ToState:          models.RecommendationStateDrafted,
+		ActorID:          uuid.New(),
+		ActorClass:       ActorClassAlgorithmic,
+	})
+	if err == nil {
+		t.Fatal("expected transition to fail (gate holds); got nil")
+	}
+	if !errors.Is(err, sentinelGateErr) {
+		t.Errorf("expected sentinelGateErr in error chain; got %v", err)
+	}
+	if gate.calls != 1 {
+		t.Errorf("gate invoked %d times; want 1", gate.calls)
+	}
+	// State must not have changed.
+	if store.last.newState != "" {
+		t.Errorf("state was mutated despite gate hold: %q", store.last.newState)
+	}
+	if len(edges.emitted) != 0 {
+		t.Errorf("no evidence edge should be emitted on blocked transition; got %d", len(edges.emitted))
+	}
+}
+
+// TestLifecycle_CraftEngineGate_NotInvokedForOtherTransitions verifies that
+// the CraftEngineGate is ONLY called for the detected → drafted edge. All
+// other transitions must bypass the gate even when one is configured.
+func TestLifecycle_CraftEngineGate_NotInvokedForOtherTransitions(t *testing.T) {
+	// drafted → submitted: gate must NOT be invoked.
+	store := &fakeStore{rec: &models.Recommendation{
+		ID:    uuid.New(),
+		State: models.RecommendationStateDrafted,
+	}}
+	edges := &fakeEdgeStore{}
+	lc := NewLifecycle(store, edges, AlwaysPassConsentChecker{})
+
+	gate := &fakeCraftGate{passThrough: false} // would block if called
+	lc.SetCraftEngineGate(gate)
+
+	err := lc.Transition(context.Background(), TransitionRequest{
+		RecommendationID: store.rec.ID,
+		ToState:          models.RecommendationStateSubmitted,
+		ActorID:          uuid.New(),
+		ActorClass:       ActorClassHuman,
+	})
+	if err != nil {
+		t.Fatalf("drafted→submitted should succeed without gate; got %v", err)
+	}
+	if gate.calls != 0 {
+		t.Errorf("gate should not be invoked for drafted→submitted; got %d calls", gate.calls)
+	}
+}
+
+// TestLifecycle_NoCraftEngineGate_DetectedToDraftedSucceeds verifies that
+// existing Lifecycle instances without a configured gate behave identically
+// to pre-Task-13 behaviour (no gate invocation, transition succeeds).
+func TestLifecycle_NoCraftEngineGate_DetectedToDraftedSucceeds(t *testing.T) {
+	store := &fakeStore{rec: &models.Recommendation{
+		ID:    uuid.New(),
+		State: models.RecommendationStateDetected,
+	}}
+	edges := &fakeEdgeStore{}
+	// No SetCraftEngineGate call — gate is nil.
+	lc := NewLifecycle(store, edges, AlwaysPassConsentChecker{})
+
+	err := lc.Transition(context.Background(), TransitionRequest{
+		RecommendationID: store.rec.ID,
+		ToState:          models.RecommendationStateDrafted,
+		ActorID:          uuid.New(),
+		ActorClass:       ActorClassAlgorithmic,
+	})
+	if err != nil {
+		t.Fatalf("expected detected→drafted to succeed with no gate configured; got %v", err)
+	}
+	if len(edges.emitted) != 1 {
+		t.Fatalf("want 1 evidence edge; got %d", len(edges.emitted))
+	}
+}
+
 // TestLifecycle_OccurredAtDefaultsToNow verifies that an unset OccurredAt
 // in the request is replaced with the lifecycle's `now` value before being
 // recorded into the EvidenceEdge.

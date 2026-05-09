@@ -68,6 +68,10 @@ type ClinicalContent struct {
 // is in the map iff the transition is permitted. Direct mutation outside
 // recommendation.Lifecycle is a contract violation; this function exists so
 // the Lifecycle engine and storage layer share one source of truth.
+//
+// Terminal states (closed, rejected, withdrawn, superseded) have no entry in
+// this map, which means IsValidTransition always returns false for them as the
+// source state — enforcing their terminal nature without an explicit guard.
 var validTransitions = map[string]map[string]bool{
 	RecommendationStateDetected: {
 		RecommendationStateDrafted: true,
@@ -76,6 +80,7 @@ var validTransitions = map[string]map[string]bool{
 	RecommendationStateDrafted: {
 		RecommendationStateSubmitted: true,
 		RecommendationStateClosed:    true,
+		RecommendationStateWithdrawn: true, // author pulls before submission
 	},
 	RecommendationStateSubmitted: {
 		RecommendationStateViewed:   true,
@@ -94,18 +99,24 @@ var validTransitions = map[string]map[string]bool{
 	RecommendationStateDecided: {
 		RecommendationStateImplemented: true,
 		RecommendationStateClosed:      true, // decided-no-action
+		RecommendationStateRejected:    true, // GP declines outright
 	},
 	RecommendationStateImplemented: {
 		RecommendationStateMonitoringActive: true,
 		RecommendationStateOutcomeRecorded:  true, // skip monitoring if not warranted
+		RecommendationStateSuperseded:       true, // newer guideline supersedes
 	},
 	RecommendationStateMonitoringActive: {
 		RecommendationStateOutcomeRecorded: true,
+		RecommendationStateSuperseded:      true, // newer guideline supersedes during monitoring
 	},
 	RecommendationStateOutcomeRecorded: {
 		RecommendationStateClosed: true,
 	},
-	// RecommendationStateClosed is terminal; no entry.
+	// RecommendationStateClosed, RecommendationStateRejected,
+	// RecommendationStateWithdrawn, RecommendationStateSuperseded are all
+	// terminal — no entries, so IsValidTransition returns false for any
+	// transition originating from them.
 }
 
 // IsValidTransition reports whether the lifecycle DAG permits from → to.

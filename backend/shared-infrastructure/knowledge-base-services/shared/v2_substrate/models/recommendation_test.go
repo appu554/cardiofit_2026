@@ -159,3 +159,125 @@ func TestIsValidRecommendationUrgency(t *testing.T) {
 		}
 	}
 }
+
+// TestRecommendation_RejectedWithdrawnSupersededAreValid asserts that the three
+// new terminal states are accepted by IsValidRecommendationState and that all
+// 13 canonical states (Guidelines Part 3) are present.
+func TestRecommendation_RejectedWithdrawnSupersededAreValid(t *testing.T) {
+	all13 := []string{
+		RecommendationStateDetected,
+		RecommendationStateDrafted,
+		RecommendationStateSubmitted,
+		RecommendationStateViewed,
+		RecommendationStateDeferred,
+		RecommendationStateDecided,
+		RecommendationStateImplemented,
+		RecommendationStateMonitoringActive,
+		RecommendationStateOutcomeRecorded,
+		RecommendationStateClosed,
+		RecommendationStateRejected,
+		RecommendationStateWithdrawn,
+		RecommendationStateSuperseded,
+	}
+	if len(all13) != 13 {
+		t.Fatalf("expected 13 states in the canonical set, got %d", len(all13))
+	}
+	for _, s := range all13 {
+		if !IsValidRecommendationState(s) {
+			t.Errorf("IsValidRecommendationState(%q) = false, want true", s)
+		}
+	}
+	// Sanity: bogus still rejected.
+	if IsValidRecommendationState("bogus") {
+		t.Error("IsValidRecommendationState(\"bogus\") = true, want false")
+	}
+}
+
+// TestRecommendation_RejectedFromDecided asserts that decided → rejected is
+// permitted (GP declines a pharmacist proposal outright).
+func TestRecommendation_RejectedFromDecided(t *testing.T) {
+	if !IsValidTransition(RecommendationStateDecided, RecommendationStateRejected) {
+		t.Errorf("IsValidTransition(decided, rejected) = false, want true")
+	}
+}
+
+// TestRecommendation_DraftedToWithdrawn asserts that drafted → withdrawn is
+// permitted (author pulls the recommendation before submission).
+func TestRecommendation_DraftedToWithdrawn(t *testing.T) {
+	if !IsValidTransition(RecommendationStateDrafted, RecommendationStateWithdrawn) {
+		t.Errorf("IsValidTransition(drafted, withdrawn) = false, want true")
+	}
+}
+
+// TestRecommendation_ImplementedToSuperseded asserts that implemented →
+// superseded is permitted (a newer guideline supersedes the action).
+func TestRecommendation_ImplementedToSuperseded(t *testing.T) {
+	if !IsValidTransition(RecommendationStateImplemented, RecommendationStateSuperseded) {
+		t.Errorf("IsValidTransition(implemented, superseded) = false, want true")
+	}
+}
+
+// TestRecommendation_MonitoringActiveToSuperseded asserts that
+// monitoring-active → superseded is permitted.
+func TestRecommendation_MonitoringActiveToSuperseded(t *testing.T) {
+	if !IsValidTransition(RecommendationStateMonitoringActive, RecommendationStateSuperseded) {
+		t.Errorf("IsValidTransition(monitoring-active, superseded) = false, want true")
+	}
+}
+
+// TestRecommendation_RejectedIsTerminal asserts that no transitions are
+// permitted out of rejected.
+func TestRecommendation_RejectedIsTerminal(t *testing.T) {
+	allStates := []string{
+		RecommendationStateDetected, RecommendationStateDrafted,
+		RecommendationStateSubmitted, RecommendationStateViewed,
+		RecommendationStateDeferred, RecommendationStateDecided,
+		RecommendationStateImplemented, RecommendationStateMonitoringActive,
+		RecommendationStateOutcomeRecorded, RecommendationStateClosed,
+		RecommendationStateRejected, RecommendationStateWithdrawn,
+		RecommendationStateSuperseded,
+	}
+	for _, to := range allStates {
+		if IsValidTransition(RecommendationStateRejected, to) {
+			t.Errorf("IsValidTransition(rejected, %q) = true, want false — rejected is terminal", to)
+		}
+	}
+}
+
+// TestRecommendation_SupersededIsTerminal asserts that no transitions are
+// permitted out of superseded.
+func TestRecommendation_SupersededIsTerminal(t *testing.T) {
+	allStates := []string{
+		RecommendationStateDetected, RecommendationStateDrafted,
+		RecommendationStateSubmitted, RecommendationStateViewed,
+		RecommendationStateDeferred, RecommendationStateDecided,
+		RecommendationStateImplemented, RecommendationStateMonitoringActive,
+		RecommendationStateOutcomeRecorded, RecommendationStateClosed,
+		RecommendationStateRejected, RecommendationStateWithdrawn,
+		RecommendationStateSuperseded,
+	}
+	for _, to := range allStates {
+		if IsValidTransition(RecommendationStateSuperseded, to) {
+			t.Errorf("IsValidTransition(superseded, %q) = true, want false — superseded is terminal", to)
+		}
+	}
+}
+
+// TestRecommendation_WithdrawnIsTerminal asserts that no transitions are
+// permitted out of withdrawn.
+func TestRecommendation_WithdrawnIsTerminal(t *testing.T) {
+	allStates := []string{
+		RecommendationStateDetected, RecommendationStateDrafted,
+		RecommendationStateSubmitted, RecommendationStateViewed,
+		RecommendationStateDeferred, RecommendationStateDecided,
+		RecommendationStateImplemented, RecommendationStateMonitoringActive,
+		RecommendationStateOutcomeRecorded, RecommendationStateClosed,
+		RecommendationStateRejected, RecommendationStateWithdrawn,
+		RecommendationStateSuperseded,
+	}
+	for _, to := range allStates {
+		if IsValidTransition(RecommendationStateWithdrawn, to) {
+			t.Errorf("IsValidTransition(withdrawn, %q) = true, want false — withdrawn is terminal", to)
+		}
+	}
+}

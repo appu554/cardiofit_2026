@@ -1,4 +1,16 @@
-# Recommendation Craft Engine Implementation Plan
+# Recommendation Craft Engine Implementation Plan — SUPERSEDED
+
+> **⚠️ SUPERSEDED 2026-05-09 by Phase 2a + 2b split.**
+>
+> The 2026-05-09 gap analysis against `Recommendation_Craft_Implementation_Guidelines_v1.md` (1,298 lines) found this plan covered ~45% of the guideline scope. Two P0 blockers (migration 029 collision; missing `replace github.com/cardiofit/shared` directive in Task 1 scaffold), two P1 clinical-safety gaps (no Stage 2 reasoning chain builder; no Stage 4 appropriateness gate), and three architectural-moat gaps (override-reason taxonomy, citation versioning, negative-evidence patterns) are addressed in the split.
+>
+> **Phase 2a — Rendering Pipeline Scaffold** (`docs/superpowers/plans/2026-05-09-phase-2a-craft-engine-scaffold.md`) carries the 9 tasks from this plan plus 4 added tasks (Stage 2 reasoning, Stage 4 appropriateness, Stage 6 brevity formatter, lifecycle-state additions) with the P0 blockers fixed inline.
+>
+> **Phase 2b — Clinical Safety + Audit Moat** (`docs/superpowers/plans/2026-05-09-phase-2b-clinical-safety-and-audit-moat.md`) lands the 4 distinctive items the guidelines call out as the platform's moat: override-reason taxonomy, citation versioning, negative-evidence patterns, restraint signals.
+>
+> The original 9 tasks below are **historical reference only**. Do NOT execute against this file. Execute against the 2a/2b plans.
+
+---
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
