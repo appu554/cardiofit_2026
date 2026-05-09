@@ -24,7 +24,15 @@ type RACHSource interface {
 var ErrMismatchedRACHID = errors.New("views: RACH source returned mismatched RACH ID")
 
 // RACHView returns pharmacy-partner level roll-up data.
+//
 // Phase 1a stub: wraps the source call and enforces RACH ID consistency.
+// No aggregation logic is performed here.
+//
+// Phase 1c will own: aggregation invariants for the RACH view-type
+// (contestation-aware pharmacy-partner roll-ups, restrictive-practice
+// filtering per Ethical Architecture Guidelines §6, and resident
+// vulnerability respecting per §5.3). See
+// docs/superpowers/plans/2026-05-07-phase-1c-ethical-architecture-substrate.md.
 type RACHView struct {
 	src RACHSource
 }

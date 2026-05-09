@@ -34,7 +34,15 @@ var ErrMissingProvenance = errors.New("views: regulator audit pack missing conte
 
 // RegulatorView returns audit-grade evidence packs for regulatory consumption.
 // It validates that every returned pack carries a non-empty content hash
-// before surfacing the data. Phase 1a stub — Phase 1b will expose via HTTP.
+// before surfacing the data.
+//
+// Phase 1a stub: enforces provenance presence only.
+//
+// Phase 1c will own: AD-class data-sharing-agreement enforcement, ERM
+// review of regulator queries (per Ethical Architecture Guidelines §4 +
+// §10 ethics-based auditing), and data-minimisation for the cryptographic
+// audit pack. See
+// docs/superpowers/plans/2026-05-07-phase-1c-ethical-architecture-substrate.md.
 type RegulatorView struct {
 	src RegulatorSource
 }

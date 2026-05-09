@@ -1974,13 +1974,15 @@ git commit -m "feat(self-visibility): cross-employer transition with free-tier r
 ## Spec coverage
 
 - [x] Five visibility classes inherited from Phase 1a — used throughout (POA on Tasks 1, 12; PDP on Tasks 5, 6, 11; PFA on Tasks 7, 10; WO on Tasks 4, 8)
-- [x] Six dashboard surfaces — Tasks 4–9
+- [x] Six dashboard surfaces (Go data-shaping layer) — Tasks 4–9
 - [x] Seven KPI computations — Tasks 10–12 (RIR, class-specific, context-time, appropriateness, restraint override, CPD activity, plus career portfolio metrics surfaced via Task 9)
 - [x] Reflective writing engine — Tasks 1, 2
 - [x] Algorithmic-vs-human 4-class taxonomy — Task 3
-- [x] RPL evidence pack — Task 13
-- [x] AHPRA CPD record export — Task 14
+- [x] RPL evidence pack (Go struct generation) — Task 13
+- [x] AHPRA CPD record export (Go struct generation) — Task 14
 - [x] Cross-employer portability + free-tier reversion — Task 15
+- [ ] **Portfolio PDF export (`internal/exports/portfolio_pdf.go` + `gofpdf` dependency)** — listed in File Structure (line 47) and Tech Stack but **deferred to Phase 1b-completion plan** (`2026-05-09-phase-1b-completion.md`). Surfaced by the 2026-05-09 gap analysis (G6). The dashboard portfolio surface (Task 9) returns a Go struct; PDF rendering is a separate concern and not present in this plan's tasks.
+- [ ] **HTTP/gRPC API layer (`cmd/server/main.go`, `internal/api/{http,grpc}.go`)** — listed in File Structure (lines 17–19) but **deferred to Phase 1b-completion plan**. Surfaced by the 2026-05-09 gap analysis (G5). All 15 implementation tasks in this plan ship in-process Go libraries with source interfaces; concrete HTTP exposure of `/views/pharmacist/own/*` was not implemented as part of Phase 1b's task list. The plan header (lines 5–7) frames Phase 1b as the layer that "exposes the pharmacist self-visibility dashboard data API" — the data-shaping is delivered, the HTTP exposition is the completion plan's responsibility.
 
 **Out of scope for 1b (handled in 1c):**
 - Ethical Reasoning Module (ERM)
@@ -1993,5 +1995,10 @@ git commit -m "feat(self-visibility): cross-employer transition with free-tier r
 - Pharmacist Advisory Group constitution
 - Plain-language privacy notices (UI copy)
 - Aboriginal community engagement protocol
+
+**Deferred to phase-1b-completion plan (gap-analysis-driven):**
+- Portfolio PDF export (G6)
+- HTTP/gRPC API surface over the dashboards + Phase 1a permission middleware (G5)
+- Wrapping Plan 0.1 / 0.4 read APIs with `permissions.Middleware` (G4 — Phase 1a "Modified files" item, never delivered, no named owner before this deferral)
 
 Plan complete and saved.

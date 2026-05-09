@@ -24,7 +24,14 @@ type ChainSource interface {
 var ErrWrongChainNetwork = errors.New("views: chain source returned mismatched chain network ID")
 
 // ChainView returns network-level roll-up data for a pharmacy chain.
+//
 // Phase 1a stub: wraps the source call and enforces chain ID consistency.
+// No network-level aggregation is performed here.
+//
+// Phase 1c will own: chain-network roll-up aggregation, contestation-aware
+// network metrics, and surveillance-pattern detection per Ethical Architecture
+// Guidelines §9.7 and §11. See
+// docs/superpowers/plans/2026-05-07-phase-1c-ethical-architecture-substrate.md.
 type ChainView struct {
 	src ChainSource
 }
