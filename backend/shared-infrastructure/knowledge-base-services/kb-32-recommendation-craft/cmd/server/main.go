@@ -155,6 +155,11 @@ func main() {
 	}
 
 	pipeline := api.NewPipelineWithRegistry(assembler, chain, appSrc, nil, citationRegistry)
+	// TODO(phase-2-completion): wire capacity.Gate via pipeline.WithCapacityGate
+	// once the Postgres-backed CapacitySource (vulnerability + restrictive-practice
+	// consent reads) lands. The Gate API ships in Phase 3 Task 3; production
+	// source wiring is intentionally deferred. See:
+	// internal/capacity/integration.go (Guidelines §6.4–6.6).
 	handler := api.NewHandler(pipeline)
 
 	// Override store — InMemory in Phase 2b; replace with PostgresStore (VAIDSHALA_DSN)
