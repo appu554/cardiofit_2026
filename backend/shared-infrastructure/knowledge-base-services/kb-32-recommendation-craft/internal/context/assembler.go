@@ -55,6 +55,24 @@ type ClinicalSnapshot struct {
 	// to hospital within the past 72 hours.
 	RecentAdmission72h bool
 
+	// FamilyDistress is true when SDM/family complaint patterns signal distress.
+	// Populated by Task 9 restraint substrate signaling.
+	FamilyDistress bool
+
+	// CapacityLapse is true when a recent capacity assessment shows cognitive decline.
+	// Populated by Task 9 restraint substrate signaling.
+	CapacityLapse bool
+
+	// FrailtyStepIncrease30d is true when the CFS score increased by ≥ 2 steps
+	// within the past 30 days.
+	// Populated by Task 9 restraint substrate signaling.
+	FrailtyStepIncrease30d bool
+
+	// RestrictivePracticeActive is true when an active restrictive practice
+	// consent is recorded for the resident.
+	// Populated by Task 9 restraint substrate signaling.
+	RestrictivePracticeActive bool
+
 	// AssessedAt is the wall-clock time at which this snapshot was captured.
 	// Used by Task 9's appropriateness checker to detect stale state.
 	AssessedAt time.Time
