@@ -19,6 +19,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cardiofit/shared/v2_substrate/ethics/consent_extension"
+
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/appropriateness"
 	"github.com/cardiofit/kb32/internal/capacity"
@@ -297,15 +299,15 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 }
 
 // classifyRestrictivePractice maps a generated Packet to the
-// consent_extension.PracticeType string it triggers, or "" when the packet
-// is not a restrictive practice.
+// consent_extension.PracticeType it triggers, or the empty PracticeType("")
+// when the packet is not a restrictive practice.
 //
 // Mapping (spec § Phase 3 Task 3) — restrictive packet Type → PracticeType:
 //
-//	"PSYCHOTROPIC"            → "chemical_restraint"
-//	"PHYSICAL_RESTRAINT"      → "physical_restraint"
-//	"ENVIRONMENTAL_RESTRAINT" → "environmental_restraint"
-//	"SECLUSION"               → "seclusion"
+//	"PSYCHOTROPIC"            → consent_extension.PracticeChemicalRestraint
+//	"PHYSICAL_RESTRAINT"      → consent_extension.PracticePhysicalRestraint
+//	"ENVIRONMENTAL_RESTRAINT" → consent_extension.PracticeEnvironmentalRestraint
+//	"SECLUSION"               → consent_extension.PracticeSeclusion
 //
 // As of Phase 3 Task 3 the generator only emits the four canonical types
 // {STOP, MONITOR, DOSE_CHANGE, ADD} (see internal/generator.validPacketTypes),
@@ -315,19 +317,19 @@ func (p *Pipeline) Run(ctx context.Context, ruleID string, residentID, authorID 
 //
 // Per the Phase 3 Task 3 spec, no new packet Types are invented here — the
 // classifier accepts only future-defined Type strings.
-func classifyRestrictivePractice(pkt *generator.Packet) string {
+func classifyRestrictivePractice(pkt *generator.Packet) consent_extension.PracticeType {
 	if pkt == nil {
 		return ""
 	}
 	switch pkt.Type {
 	case "PSYCHOTROPIC":
-		return "chemical_restraint"
+		return consent_extension.PracticeChemicalRestraint
 	case "PHYSICAL_RESTRAINT":
-		return "physical_restraint"
+		return consent_extension.PracticePhysicalRestraint
 	case "ENVIRONMENTAL_RESTRAINT":
-		return "environmental_restraint"
+		return consent_extension.PracticeEnvironmentalRestraint
 	case "SECLUSION":
-		return "seclusion"
+		return consent_extension.PracticeSeclusion
 	default:
 		return ""
 	}

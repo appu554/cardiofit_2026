@@ -30,7 +30,7 @@ func (f *fakeCapacitySource) AssessmentFor(_ context.Context, _ uuid.UUID) (vuln
 }
 
 func (f *fakeCapacitySource) RestrictivePracticeConsentFor(_ context.Context, _ uuid.UUID,
-	_ string) (*consent_extension.RestrictivePracticeConsent, error) {
+	_ consent_extension.PracticeType) (*consent_extension.RestrictivePracticeConsent, error) {
 	return f.consent, f.consentErr
 }
 

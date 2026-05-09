@@ -3,6 +3,7 @@ package capacity
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func (f *fakeSource) AssessmentFor(_ context.Context, _ uuid.UUID) (vulnerabilit
 }
 
 func (f *fakeSource) RestrictivePracticeConsentFor(_ context.Context, _ uuid.UUID,
-	_ string) (*consent_extension.RestrictivePracticeConsent, error) {
+	_ consent_extension.PracticeType) (*consent_extension.RestrictivePracticeConsent, error) {
 	return f.consent, f.consentErr
 }
 
@@ -66,14 +67,14 @@ func TestGate_Evaluate(t *testing.T) {
 	srcConsentErr := errors.New("source: consent fetch failed")
 
 	tests := []struct {
-		name             string
-		assessment       vulnerability.Assessment
-		assessmentErr    error
-		consent          *consent_extension.RestrictivePracticeConsent
-		consentErr       error
-		restrictiveType  string
-		wantErr          error
-		wantErrContains  string // for source-error propagation
+		name            string
+		assessment      vulnerability.Assessment
+		assessmentErr   error
+		consent         *consent_extension.RestrictivePracticeConsent
+		consentErr      error
+		restrictiveType consent_extension.PracticeType
+		wantErr         error
+		wantErrContains string // for source-error propagation
 	}{
 		{
 			name: "capacity_intact_non_restrictive_proceeds",
@@ -91,7 +92,7 @@ func TestGate_Evaluate(t *testing.T) {
 				AssessedAt:        now,
 			},
 			consent:         activeConsent(now),
-			restrictiveType: string(consent_extension.PracticeChemicalRestraint),
+			restrictiveType: consent_extension.PracticeChemicalRestraint,
 			wantErr:         nil,
 		},
 		{
@@ -101,7 +102,7 @@ func TestGate_Evaluate(t *testing.T) {
 				AssessedAt:        now,
 			},
 			consent:         nil,
-			restrictiveType: string(consent_extension.PracticeChemicalRestraint),
+			restrictiveType: consent_extension.PracticeChemicalRestraint,
 			wantErr:         ErrRestrictivePracticeNoConsent,
 		},
 		{
@@ -111,7 +112,7 @@ func TestGate_Evaluate(t *testing.T) {
 				AssessedAt:        now,
 			},
 			consent:         expiredConsent(),
-			restrictiveType: string(consent_extension.PracticeChemicalRestraint),
+			restrictiveType: consent_extension.PracticeChemicalRestraint,
 			wantErr:         ErrRestrictivePracticeNoConsent,
 		},
 		{
@@ -171,7 +172,7 @@ func TestGate_Evaluate(t *testing.T) {
 				AssessedAt:        now,
 			},
 			consentErr:      srcConsentErr,
-			restrictiveType: string(consent_extension.PracticeChemicalRestraint),
+			restrictiveType: consent_extension.PracticeChemicalRestraint,
 			wantErrContains: "consent fetch failed",
 		},
 		{
@@ -182,7 +183,7 @@ func TestGate_Evaluate(t *testing.T) {
 				AssessedAt:        now,
 			},
 			consent:         nil,
-			restrictiveType: string(consent_extension.PracticeChemicalRestraint),
+			restrictiveType: consent_extension.PracticeChemicalRestraint,
 			wantErr:         ErrRestrictivePracticeNoConsent,
 		},
 	}
@@ -203,7 +204,7 @@ func TestGate_Evaluate(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tc.wantErrContains)
 				}
-				if got := err.Error(); !contains(got, tc.wantErrContains) {
+				if got := err.Error(); !strings.Contains(got, tc.wantErrContains) {
 					t.Fatalf("expected error containing %q, got %q", tc.wantErrContains, got)
 				}
 				return
@@ -213,18 +214,4 @@ func TestGate_Evaluate(t *testing.T) {
 			}
 		})
 	}
-}
-
-// contains is a tiny helper that avoids importing strings just for one call;
-// keeps the test file self-contained.
-func contains(haystack, needle string) bool {
-	if len(needle) == 0 {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
 }

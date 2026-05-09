@@ -42,11 +42,10 @@ type CapacitySource interface {
 	AssessmentFor(ctx context.Context, residentID uuid.UUID) (vulnerability.Assessment, error)
 
 	// RestrictivePracticeConsentFor returns the active
-	// RestrictivePracticeConsent for residentID and practice (a
-	// consent_extension.PracticeType string), or nil when no consent record
-	// exists. An error from the source is propagated as-is.
+	// RestrictivePracticeConsent for residentID and practice, or nil when no
+	// consent record exists. An error from the source is propagated as-is.
 	RestrictivePracticeConsentFor(ctx context.Context, residentID uuid.UUID,
-		practice string) (*consent_extension.RestrictivePracticeConsent, error)
+		practice consent_extension.PracticeType) (*consent_extension.RestrictivePracticeConsent, error)
 }
 
 // Gate is the Stage 3.5 capacity + consent gate.
@@ -84,17 +83,18 @@ var (
 // Evaluate runs the two-step gate: capacity then (if relevant) restrictive
 // practice consent.
 //
-// restrictivePracticeType is the consent_extension.PracticeType string the
-// recommendation maps to (one of "chemical_restraint", "physical_restraint",
-// "environmental_restraint", "seclusion") or "" when the recommendation is
-// not a restrictive practice. When "", only the capacity check runs.
+// restrictivePractice is the consent_extension.PracticeType the recommendation
+// maps to (one of PracticeChemicalRestraint, PracticePhysicalRestraint,
+// PracticeEnvironmentalRestraint, PracticeSeclusion) or the empty
+// PracticeType("") when the recommendation is not a restrictive practice.
+// When empty, only the capacity check runs.
 //
 // Return values:
 //   - nil                              → proceed (Stage 4 follows)
 //   - ErrSDMRequired                   → capacity check failed; hold
 //   - ErrRestrictivePracticeNoConsent  → consent check failed; hold
 //   - any other error                  → infrastructure failure from src
-func (g *Gate) Evaluate(ctx context.Context, residentID uuid.UUID, restrictivePracticeType string) error {
+func (g *Gate) Evaluate(ctx context.Context, residentID uuid.UUID, restrictivePractice consent_extension.PracticeType) error {
 	assessment, err := g.src.AssessmentFor(ctx, residentID)
 	if err != nil {
 		return err
@@ -109,10 +109,10 @@ func (g *Gate) Evaluate(ctx context.Context, residentID uuid.UUID, restrictivePr
 
 	// Restrictive-practice consent check (Guidelines §6.6).
 	// Only runs when the recommendation maps to a restrictive practice type.
-	if restrictivePracticeType == "" {
+	if restrictivePractice == "" {
 		return nil
 	}
-	consent, err := g.src.RestrictivePracticeConsentFor(ctx, residentID, restrictivePracticeType)
+	consent, err := g.src.RestrictivePracticeConsentFor(ctx, residentID, restrictivePractice)
 	if err != nil {
 		return err
 	}
