@@ -49,8 +49,10 @@ func main() {
 	// verification lands in Task 2.
 	router.Group(func(r chi.Router) {
 		r.Use(api.JWTMiddleware(jwtSecret))
-		// Dashboard surface routes (501 stubs — real handlers land in Task 3).
-		api.MountDashboardRoutes(r, mw)
+		// Dashboard surface routes. DashboardDeps is zero-value (all nil) until
+		// Task 4 wires Postgres-backed sources. Nil deps degrade to 503; routes
+		// are mounted so path registration is visible to health/smoke checks.
+		api.MountDashboardRoutes(r, mw, api.DashboardDeps{})
 	})
 
 	srv := &http.Server{
