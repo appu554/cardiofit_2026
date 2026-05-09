@@ -2,12 +2,15 @@
 package generator_test
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
 	"github.com/cardiofit/kb32/internal/generator"
+	"github.com/cardiofit/kb32/internal/negative_evidence"
 	"github.com/cardiofit/kb32/internal/reasoning"
 	"github.com/cardiofit/kb32/internal/template"
 	"github.com/google/uuid"
@@ -216,5 +219,126 @@ func TestIsValidPacketType_Invalid(t *testing.T) {
 		if generator.IsValidPacketType(v) {
 			t.Errorf("expected IsValidPacketType(%q) = false", v)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GenerateWithNegativeEvidence tests
+// ---------------------------------------------------------------------------
+
+// attacher is a thin adapter used in tests: wraps an InMemoryQuerier so it
+// satisfies generator.NegativeEvidenceAttacher via negative_evidence.AttachNegativeEvidence.
+type attacherFn struct {
+	querier *negative_evidence.InMemoryQuerier
+}
+
+func (a *attacherFn) AttachTo(ctx context.Context, pkt *generator.Packet, residentID uuid.UUID) error {
+	return negative_evidence.AttachNegativeEvidence(ctx, a.querier, pkt, residentID)
+}
+
+func makeAttacher(q *negative_evidence.InMemoryQuerier) generator.NegativeEvidenceAttacher {
+	return &attacherFn{querier: q}
+}
+
+// TestGenerateWithNegativeEvidence_STOPAbsenceConfirmed verifies that a STOP
+// packet's evidence section is populated by the absence text when absence is confirmed.
+func TestGenerateWithNegativeEvidence_STOPAbsenceConfirmed(t *testing.T) {
+	snap := freshSnapshot()
+	rules := []reasoning.ApplicableRule{
+		{RuleID: "PostFall", Type: "STOP", Urgency: "HIGH"},
+	}
+	attacher := makeAttacher(negative_evidence.NewInMemoryQuerier(nil)) // absence confirmed
+
+	pkt, err := generator.GenerateWithNegativeEvidence(context.Background(), snap, rules, uuid.New(), attacher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ev := pkt.Sections["evidence"]
+	if ev == "N/A" || ev == "" {
+		t.Errorf("evidence section should contain absence text, got %q", ev)
+	}
+}
+
+// TestGenerateWithNegativeEvidence_STOPPresenceDetected verifies that when
+// presence is detected the evidence section is left at the N/A placeholder.
+func TestGenerateWithNegativeEvidence_STOPPresenceDetected(t *testing.T) {
+	snap := freshSnapshot()
+	rules := []reasoning.ApplicableRule{
+		{RuleID: "PostFall", Type: "STOP", Urgency: "HIGH"},
+	}
+	lastSeen := time.Now().UTC().Add(-24 * time.Hour)
+	attacher := makeAttacher(negative_evidence.NewInMemoryQuerier(&lastSeen)) // presence
+
+	pkt, err := generator.GenerateWithNegativeEvidence(context.Background(), snap, rules, uuid.New(), attacher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pkt.Sections["evidence"] != template.NA {
+		t.Errorf("evidence should remain %q on presence detection, got %q", template.NA, pkt.Sections["evidence"])
+	}
+}
+
+// TestGenerateWithNegativeEvidence_NonSTOP_Unchanged verifies that non-STOP
+// packets are not modified regardless of querier state.
+func TestGenerateWithNegativeEvidence_NonSTOP_Unchanged(t *testing.T) {
+	snap := freshSnapshot()
+	for _, ruleType := range []string{"MONITOR", "DOSE_CHANGE", "ADD"} {
+		rules := []reasoning.ApplicableRule{
+			{RuleID: "ANY-001", Type: ruleType, Urgency: "ROUTINE"},
+		}
+		attacher := makeAttacher(negative_evidence.NewInMemoryQuerier(nil))
+
+		pkt, err := generator.GenerateWithNegativeEvidence(context.Background(), snap, rules, uuid.New(), attacher)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", ruleType, err)
+		}
+		if pkt.Sections["evidence"] != template.NA {
+			t.Errorf("%s: evidence section changed for non-STOP packet (got %q, want %q)", ruleType, pkt.Sections["evidence"], template.NA)
+		}
+	}
+}
+
+// TestGenerateWithNegativeEvidence_NilAttacher_BehavesLikeGenerate confirms
+// that passing a nil attacher yields a packet identical to calling Generate.
+func TestGenerateWithNegativeEvidence_NilAttacher_BehavesLikeGenerate(t *testing.T) {
+	snap := freshSnapshot()
+	rules := []reasoning.ApplicableRule{
+		{RuleID: "PostFall", Type: "STOP", Urgency: "HIGH"},
+	}
+
+	pkt, err := generator.GenerateWithNegativeEvidence(context.Background(), snap, rules, uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pkt.Sections["evidence"] != template.NA {
+		t.Errorf("nil attacher: evidence should remain %q, got %q", template.NA, pkt.Sections["evidence"])
+	}
+}
+
+// TestGenerateWithNegativeEvidence_QuerierError_Propagated verifies that a
+// querier error is surfaced to the caller of GenerateWithNegativeEvidence.
+func TestGenerateWithNegativeEvidence_QuerierError_Propagated(t *testing.T) {
+	snap := freshSnapshot()
+	rules := []reasoning.ApplicableRule{
+		{RuleID: "PostFall", Type: "STOP", Urgency: "HIGH"},
+	}
+	sentinel := errors.New("db failure")
+	attacher := makeAttacher(negative_evidence.NewInMemoryQuerierWithError(sentinel))
+
+	_, err := generator.GenerateWithNegativeEvidence(context.Background(), snap, rules, uuid.New(), attacher)
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected sentinel error, got %v", err)
+	}
+}
+
+// TestGenerateWithNegativeEvidence_EmptyRules_ErrNoApplicableRules verifies
+// that the ErrNoApplicableRules sentinel is propagated unchanged when rules is empty.
+func TestGenerateWithNegativeEvidence_EmptyRules_ErrNoApplicableRules(t *testing.T) {
+	snap := freshSnapshot()
+	attacher := makeAttacher(negative_evidence.NewInMemoryQuerier(nil))
+
+	_, err := generator.GenerateWithNegativeEvidence(context.Background(), snap, nil, uuid.New(), attacher)
+	if !errors.Is(err, generator.ErrNoApplicableRules) {
+		t.Errorf("expected ErrNoApplicableRules, got %v", err)
 	}
 }

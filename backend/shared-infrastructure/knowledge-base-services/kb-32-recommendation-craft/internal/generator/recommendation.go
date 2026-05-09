@@ -17,9 +17,17 @@
 //   - urgency:          rule urgency tier
 //   - rationale, evidence, proposed_plan, monitoring: template.NA placeholders
 //     (filled by Tasks 7, 10, and 12)
+//
+// # Deprescribing-aware generation
+//
+// GenerateWithNegativeEvidence extends Generate by attaching negative-evidence
+// audit text to STOP packets. Production deprescribing workflows should call
+// GenerateWithNegativeEvidence; Generate is preserved for backward compatibility
+// and for non-STOP recommendation types.
 package generator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -28,6 +36,16 @@ import (
 	"github.com/cardiofit/kb32/internal/template"
 	"github.com/google/uuid"
 )
+
+// NegativeEvidenceAttacher is the narrow interface accepted by
+// GenerateWithNegativeEvidence. The negative_evidence package provides the
+// canonical implementation; define the interface here so the generator package
+// does not import negative_evidence (avoiding a circular dependency).
+type NegativeEvidenceAttacher interface {
+	// AttachTo augments pkt.Sections["evidence"] for STOP packets. It is a
+	// no-op for other packet types.
+	AttachTo(ctx context.Context, pkt *Packet, residentID uuid.UUID) error
+}
 
 // ErrNoApplicableRules is returned by Generate when the rules slice is empty
 // or nil. Without at least one fired rule there is no basis for a packet.
@@ -140,4 +158,46 @@ func buildClinicalContextSection(snap kb32ctx.ClinicalSnapshot) string {
 
 func buildUrgencySection(rule reasoning.ApplicableRule) string {
 	return fmt.Sprintf("Urgency: %s (derived from rule %s).", rule.Urgency, rule.RuleID)
+}
+
+// ---------------------------------------------------------------------------
+// GenerateWithNegativeEvidence
+// ---------------------------------------------------------------------------
+
+// GenerateWithNegativeEvidence produces a draft Packet via Generate and then,
+// for STOP packets, calls attacher.AttachTo to populate the evidence section
+// with a negative-evidence audit defensibility statement.
+//
+// The attacher parameter may be nil; when nil, GenerateWithNegativeEvidence
+// behaves identically to Generate (safe for callers that do not yet have a
+// Querier available).
+//
+// Production deprescribing workflows should use this function. The original
+// Generate function is preserved unchanged for backward compatibility and for
+// non-STOP recommendation types where negative-evidence attachment is not
+// meaningful.
+//
+// Returns ErrNoApplicableRules when rules is empty (propagated from Generate).
+// Attacher errors are propagated directly to the caller.
+func GenerateWithNegativeEvidence(
+	ctx context.Context,
+	snap kb32ctx.ClinicalSnapshot,
+	rules []reasoning.ApplicableRule,
+	authorID uuid.UUID,
+	attacher NegativeEvidenceAttacher,
+) (*Packet, error) {
+	pkt, err := Generate(snap, rules, authorID)
+	if err != nil {
+		return nil, err
+	}
+
+	if attacher == nil || pkt.Type != "STOP" {
+		return pkt, nil
+	}
+
+	if err := attacher.AttachTo(ctx, pkt, snap.ResidentID); err != nil {
+		return nil, fmt.Errorf("generator: attach negative evidence: %w", err)
+	}
+
+	return pkt, nil
 }
