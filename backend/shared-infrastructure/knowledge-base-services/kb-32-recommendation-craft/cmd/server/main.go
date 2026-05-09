@@ -33,6 +33,7 @@ import (
 
 	"github.com/cardiofit/kb32/internal/api"
 	kb32ctx "github.com/cardiofit/kb32/internal/context"
+	"github.com/cardiofit/kb32/internal/overrides"
 	"github.com/cardiofit/kb32/internal/reasoning"
 )
 
@@ -127,8 +128,18 @@ func main() {
 	pipeline := api.NewPipeline(assembler, chain, appSrc, nil)
 	handler := api.NewHandler(pipeline)
 
+	// Override store — InMemory in Phase 2b; replace with PostgresStore (VAIDSHALA_DSN)
+	// once migration 042 is applied in a production environment.
+	overrideStore := overrides.NewInMemoryStore()
+	overrideHandler := api.NewOverrideHandler(overrideStore)
+
 	v1 := r.Group("/v1/craft")
 	v1.POST("/draft", handler.HandleDraft)
+
+	// POST /v1/craft/override/:recommendation_id
+	// NOTE: PDP middleware NOT mounted — Phase 2-completion follow-up.
+	// See override_handlers.go package comment for deferral rationale.
+	v1.POST("/override/:recommendation_id", overrideHandler.HandleCapture)
 
 	srv := &http.Server{
 		Addr:              ":" + port,
