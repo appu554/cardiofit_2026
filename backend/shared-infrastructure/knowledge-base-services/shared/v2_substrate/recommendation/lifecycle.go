@@ -19,6 +19,27 @@ var (
 	ErrConsentRequired   = errors.New("recommendation requires active consent before submission")
 )
 
+// CraftEngineGate is an optional gate that runs before the detected → drafted
+// transition. When configured on a Lifecycle via SetCraftEngineGate, the gate's
+// AdvanceDetectedToDrafted method is called before the substrate records the
+// state change. If the gate returns ErrTransitionHeld (or any non-nil error),
+// the transition is aborted and the error is returned to the caller.
+//
+// The gate is OPTIONAL: existing Lifecycle instances without a configured gate
+// behave identically to the pre-Task-13 implementation (no gate invocation).
+// This preserves full backward compatibility for all existing tests.
+//
+// Implementations:
+//   - kb-32/internal/lifecycle.Gate: checks the appropriateness.Assessment
+//     against the five-dimension HoldThreshold rubric.
+//   - nil (default): transition proceeds without any appropriateness check.
+type CraftEngineGate interface {
+	// AdvanceDetectedToDrafted is called with the context and recommendation ID
+	// before the detected → drafted state change is committed. Return nil to
+	// allow the transition or a non-nil error to abort it.
+	AdvanceDetectedToDrafted(ctx context.Context, recID uuid.UUID) error
+}
+
 // ActorClass distinguishes algorithmic from human actors in the
 // EvidenceTrace, satisfying v3 §9 Principle 4.
 type ActorClass string
@@ -78,10 +99,11 @@ type TransitionRequest struct {
 
 // Lifecycle is the only sanctioned mutator of recommendation state.
 type Lifecycle struct {
-	store   Store
-	edges   EdgeStore
-	consent ConsentChecker
-	now     func() time.Time
+	store            Store
+	edges            EdgeStore
+	consent          ConsentChecker
+	now              func() time.Time
+	craftEngineGate  CraftEngineGate // optional; nil means no gate
 }
 
 // NewLifecycle constructs a Lifecycle wired to the supplied collaborators.
@@ -92,6 +114,21 @@ func NewLifecycle(store Store, edges EdgeStore, consent ConsentChecker) *Lifecyc
 		consent: consent,
 		now:     func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// SetCraftEngineGate configures an optional CraftEngineGate on the Lifecycle.
+// When set, the gate is invoked before every detected → drafted transition.
+// Passing nil clears any previously configured gate (equivalent to no gate).
+//
+// The gate is optional: Lifecycle instances without a configured gate operate
+// identically to pre-Task-13 behaviour. This method exists so the kb-32
+// craft engine can wire its appropriateness gate into the shared substrate
+// without modifying the NewLifecycle constructor signature.
+//
+// Call SetCraftEngineGate immediately after NewLifecycle before the Lifecycle
+// is handed to any handler goroutines. It is not safe for concurrent use.
+func (l *Lifecycle) SetCraftEngineGate(gate CraftEngineGate) {
+	l.craftEngineGate = gate
 }
 
 // Transition advances a recommendation through one DAG edge. Returns one of
@@ -135,6 +172,19 @@ func (l *Lifecycle) Transition(ctx context.Context, req TransitionRequest) error
 	occurred := req.OccurredAt
 	if occurred.IsZero() {
 		occurred = l.now()
+	}
+
+	// CraftEngineGate: optional appropriateness gate for detected → drafted.
+	// The gate is invoked BEFORE state is committed so that a held recommendation
+	// remains in the detected state without any partial write. The gate is
+	// intentionally scoped to only the detected → drafted edge; all other
+	// transitions bypass it regardless of whether a gate is configured.
+	if l.craftEngineGate != nil &&
+		rec.State == models.RecommendationStateDetected &&
+		req.ToState == models.RecommendationStateDrafted {
+		if err := l.craftEngineGate.AdvanceDetectedToDrafted(ctx, rec.ID); err != nil {
+			return fmt.Errorf("craft engine gate: %w", err)
+		}
 	}
 
 	// Capture fromState BEFORE UpdateState — Get may return a pointer that

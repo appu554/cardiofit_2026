@@ -28,8 +28,17 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	_ "github.com/lib/pq"
+
+	"github.com/cardiofit/kb32/internal/api"
+	kb32ctx "github.com/cardiofit/kb32/internal/context"
+	"github.com/cardiofit/kb32/internal/reasoning"
 )
+
+// cqlRuntimeURL is the base URL for the kb-cql-runtime HAPI endpoint.
+// Override with KB32_CQL_RUNTIME_URL in the environment.
+const defaultCQLRuntimeURL = "http://kb-cql-runtime:8095"
 
 // Version is emitted at startup and returned by /healthz.
 // Bumped by each phase-2a task that changes the service's behaviour.
@@ -87,6 +96,40 @@ func main() {
 		})
 	})
 
+	// -----------------------------------------------------------------------
+	// /v1/craft/ route group — Recommendation Craft Engine endpoints
+	//
+	// NOTE: PDP permissions middleware wrapping is deferred to Phase 2b.
+	// The pipeline enforces clinical safety independently via the Stage 4
+	// appropriateness gate. See internal/api package doc for the full
+	// deferral rationale.
+	// -----------------------------------------------------------------------
+	cqlRuntimeURL := getenv("KB32_CQL_RUNTIME_URL", defaultCQLRuntimeURL)
+
+	// Stage 1: context assembler (SubstrateClient deferred to Phase 2b Postgres
+	// implementation; for now we use the HAPI client endpoint as source of truth
+	// for rule evaluation — snapshot assembly uses an in-memory placeholder that
+	// returns a minimal ClinicalSnapshot so the service starts and routes work).
+	//
+	// Production wiring: replace inMemorySubstrateClient with a Postgres-backed
+	// implementation that reads from the v2_substrate residents table.
+	substrateClient := &inMemorySubstrateClient{dsn: dsn}
+	assembler := kb32ctx.NewAssembler(substrateClient)
+
+	// Stage 2: reasoning chain builder backed by the real HAPI client.
+	hapiClient := reasoning.NewHAPIClient(cqlRuntimeURL)
+	chain := reasoning.NewChainBuilder(hapiClient)
+
+	// Stages 4–6 use the DefaultAppropriatenessSource (all dims at 3).
+	// Replace with a real scorer in Phase 2b.
+	appSrc := api.DefaultAppropriatenessSource{}
+
+	pipeline := api.NewPipeline(assembler, chain, appSrc, nil)
+	handler := api.NewHandler(pipeline)
+
+	v1 := r.Group("/v1/craft")
+	v1.POST("/draft", handler.HandleDraft)
+
 	srv := &http.Server{
 		Addr:              ":" + port,
 		Handler:           r,
@@ -127,4 +170,26 @@ func getenv(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// inMemorySubstrateClient is the Phase 2a placeholder SubstrateClient.
+// It returns a minimal ClinicalSnapshot so the /v1/craft/draft route is
+// reachable and the pipeline can be exercised end-to-end during shadow
+// deployment. The DSN field is accepted for future Phase 2b Postgres wiring
+// but is not used here.
+//
+// REPLACE in Phase 2b with a Postgres-backed implementation that reads
+// resident clinical state from the v2_substrate residents table.
+type inMemorySubstrateClient struct {
+	dsn string // reserved for Phase 2b Postgres wiring
+}
+
+func (c *inMemorySubstrateClient) SnapshotFor(
+	_ context.Context, residentID uuid.UUID,
+) (kb32ctx.ClinicalSnapshot, error) {
+	return kb32ctx.ClinicalSnapshot{
+		ResidentID:    residentID,
+		CareIntensity: "active",
+		AssessedAt:    time.Now().UTC(),
+	}, nil
 }
