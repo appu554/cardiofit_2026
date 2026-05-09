@@ -26,6 +26,9 @@ func main() {
 		log.Fatal("VAIDSHALA_DSN is required")
 	}
 	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET is required — set the environment variable before starting")
+	}
 
 	log.Printf("pharmacist-self-visibility %s starting on :%s", Version, port)
 
