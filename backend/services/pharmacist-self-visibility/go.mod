@@ -11,4 +11,6 @@ require (
 
 require github.com/golang-jwt/jwt/v5 v5.2.0
 
+require github.com/jung-kurt/gofpdf v1.16.2 // indirect
+
 replace github.com/cardiofit/shared => ../../shared-infrastructure/knowledge-base-services/shared
