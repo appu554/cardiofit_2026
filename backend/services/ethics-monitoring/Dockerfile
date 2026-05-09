@@ -31,12 +31,20 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /server ./cm
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata wget
 
 WORKDIR /app
 
 COPY --from=builder /server /app/server
 
+# Run as non-root for defence-in-depth — the service makes outbound DB calls
+# only and never needs privileged operations on the container filesystem.
+RUN addgroup -S app && adduser -S -G app app
+USER app
+
 EXPOSE 8160
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8160/healthz || exit 1
 
 ENTRYPOINT ["/app/server"]

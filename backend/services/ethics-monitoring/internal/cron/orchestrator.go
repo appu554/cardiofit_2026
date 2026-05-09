@@ -9,6 +9,7 @@
 package cron
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -24,9 +25,10 @@ type Job interface {
 	Name() string
 	// Schedule returns a 5-field crontab expression (m h dom mon dow).
 	Schedule() string
-	// Run executes the job. Errors are logged by the orchestrator; the
-	// scheduler continues regardless.
-	Run() error
+	// Run executes the job. The context is cancelled when the orchestrator
+	// is stopped so jobs can abort cooperatively. Errors are logged by the
+	// orchestrator; the scheduler continues regardless.
+	Run(ctx context.Context) error
 }
 
 // Orchestrator wraps robfig/cron and tracks registered jobs.
@@ -37,14 +39,22 @@ type Job interface {
 type Orchestrator struct {
 	mu      sync.RWMutex
 	c       *robfigcron.Cron
+	ctx     context.Context
+	cancel  context.CancelFunc
 	count   int
 	running bool
 }
 
 // New constructs a fresh Orchestrator. The underlying cron uses standard
-// 5-field parsing (no seconds field).
+// 5-field parsing (no seconds field). The orchestrator owns a cancellable
+// context that is propagated to every job's Run; Stop() cancels it.
 func New() *Orchestrator {
-	return &Orchestrator{c: robfigcron.New()}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Orchestrator{
+		c:      robfigcron.New(),
+		ctx:    ctx,
+		cancel: cancel,
+	}
 }
 
 // Register adds j to the schedule. A malformed crontab expression returns an
@@ -55,7 +65,7 @@ func (o *Orchestrator) Register(j Job) error {
 	}
 	name := j.Name()
 	_, err := o.c.AddFunc(j.Schedule(), func() {
-		if err := j.Run(); err != nil {
+		if err := j.Run(o.ctx); err != nil {
 			log.Printf("ethics-monitoring: job %q run error: %v", name, err)
 		}
 	})
@@ -88,16 +98,23 @@ func (o *Orchestrator) Start() error {
 	return nil
 }
 
-// Stop halts the scheduler. Safe to call without a prior Start (no-op in that
-// case) and safe to call multiple times. Does NOT wait for in-flight job
-// goroutines to finish — callers needing graceful drain should use the
-// underlying robfig/cron Stop context (not exposed here in Phase 3 Task 1).
-func (o *Orchestrator) Stop() {
+// Stop halts the scheduler and cancels the orchestrator context so in-flight
+// jobs observing ctx.Done() can abort. It returns the drain context from
+// robfig/cron whose Done channel closes once all currently-running job
+// goroutines finish — callers should select on it (with a deadline of their
+// choice) to await graceful drain. Safe to call without a prior Start (returns
+// an already-closed context) and safe to call multiple times.
+func (o *Orchestrator) Stop() context.Context {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.cancel()
 	if !o.running {
-		return
+		// Return an already-cancelled context so callers can select uniformly.
+		closed, cancel := context.WithCancel(context.Background())
+		cancel()
+		return closed
 	}
-	o.c.Stop()
+	drainCtx := o.c.Stop()
 	o.running = false
+	return drainCtx
 }

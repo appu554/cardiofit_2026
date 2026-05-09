@@ -27,8 +27,7 @@ func (WeeklyContentVariationJob) Schedule() string { return "0 3 * * 1" }
 // no canonical "audit_scheduled" value; we use EntryTypeReviewRequested with a
 // descriptive message and severity 1 so the cadence is visible without
 // false-positive ringing.
-func (j WeeklyContentVariationJob) Run() error {
-	ctx := context.Background()
+func (j WeeklyContentVariationJob) Run(ctx context.Context) error {
 	entry := ethics_log.Entry{
 		EntryType:   ethics_log.EntryTypeReviewRequested,
 		Severity:    1,

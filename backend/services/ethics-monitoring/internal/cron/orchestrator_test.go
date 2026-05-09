@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"sync"
 	"testing"
 )
@@ -10,9 +11,9 @@ type fakeJob struct {
 	schedule string
 }
 
-func (f fakeJob) Name() string     { return f.name }
-func (f fakeJob) Schedule() string { return f.schedule }
-func (f fakeJob) Run() error       { return nil }
+func (f fakeJob) Name() string                 { return f.name }
+func (f fakeJob) Schedule() string             { return f.schedule }
+func (f fakeJob) Run(_ context.Context) error  { return nil }
 
 func TestOrchestrator_Register_IncrementsCount(t *testing.T) {
 	o := New()
@@ -50,8 +51,13 @@ func TestOrchestrator_Register_NilJob(t *testing.T) {
 
 func TestOrchestrator_Lifecycle_Idempotent(t *testing.T) {
 	o := New()
-	// Stop before Start is safe.
-	o.Stop()
+	// Stop before Start is safe and returns an already-closed context.
+	preStartCtx := o.Stop()
+	select {
+	case <-preStartCtx.Done():
+	default:
+		t.Fatal("Stop before Start should return an already-cancelled context")
+	}
 	if err := o.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -59,9 +65,12 @@ func TestOrchestrator_Lifecycle_Idempotent(t *testing.T) {
 	if err := o.Start(); err != nil {
 		t.Fatalf("second Start: %v", err)
 	}
-	o.Stop()
-	// Second Stop is a no-op.
-	o.Stop()
+	drainCtx := o.Stop()
+	if drainCtx == nil {
+		t.Fatal("Stop returned nil context")
+	}
+	// Second Stop is a no-op (orchestrator already not-running).
+	_ = o.Stop()
 }
 
 func TestOrchestrator_ConcurrentRegisterAndCount(t *testing.T) {

@@ -27,8 +27,7 @@ func (MonthlyBiasDisparityJob) Schedule() string { return "0 4 1 * *" }
 // canonical "audit_scheduled" value; we use EntryTypeReviewRequested with a
 // descriptive message and severity 1 to flag the cadence without raising a
 // false alarm.
-func (j MonthlyBiasDisparityJob) Run() error {
-	ctx := context.Background()
+func (j MonthlyBiasDisparityJob) Run(ctx context.Context) error {
 	entry := ethics_log.Entry{
 		EntryType:   ethics_log.EntryTypeReviewRequested,
 		Severity:    1,

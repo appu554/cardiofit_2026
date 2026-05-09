@@ -15,6 +15,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
@@ -63,12 +64,16 @@ func (DailyAcceptanceAppropriatenessJob) Name() string {
 func (DailyAcceptanceAppropriatenessJob) Schedule() string { return "0 2 * * *" }
 
 // Run executes the detector. It is safe to call directly from tests.
-func (j DailyAcceptanceAppropriatenessJob) Run() error {
+//
+// Errors from individual Logger.Append calls are accumulated via errors.Join
+// rather than aborting on the first failure, so a transient log-store error
+// for one rule does not silently drop subsequent divergent rules in the same
+// batch. The fetch error is still terminal (without inputs there is no work).
+func (j DailyAcceptanceAppropriatenessJob) Run(ctx context.Context) error {
 	threshold := j.Threshold
 	if threshold == 0 {
 		threshold = 0.10
 	}
-	ctx := context.Background()
 	prior, current, err := j.Fetcher.LatestRuleSnapshots(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch snapshots: %w", err)
@@ -76,6 +81,7 @@ func (j DailyAcceptanceAppropriatenessJob) Run() error {
 	if len(prior) != len(current) {
 		return fmt.Errorf("snapshot length mismatch: prior=%d current=%d", len(prior), len(current))
 	}
+	var errs []error
 	for i := range prior {
 		if !pattern_detection.DetectDivergence(prior[i], current[i], threshold) {
 			continue
@@ -91,10 +97,10 @@ func (j DailyAcceptanceAppropriatenessJob) Run() error {
 			),
 		}
 		if err := j.Logger.Append(ctx, entry); err != nil {
-			return fmt.Errorf("log emit: %w", err)
+			errs = append(errs, fmt.Errorf("log emit %s: %w", current[i].RuleID, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // DailySuppressionScanJob runs at 02:15 daily and emits a pattern_detected
@@ -120,8 +126,9 @@ func (DailySuppressionScanJob) Name() string { return "daily_suppression_scan" }
 // acceptance/appropriateness job to spread DB load.
 func (DailySuppressionScanJob) Schedule() string { return "15 2 * * *" }
 
-// Run executes the suppression detector.
-func (j DailySuppressionScanJob) Run() error {
+// Run executes the suppression detector. As with the divergence job, per-rule
+// log-emit failures are accumulated via errors.Join rather than aborting.
+func (j DailySuppressionScanJob) Run(ctx context.Context) error {
 	deferral := j.DeferralThreshold
 	if deferral == 0 {
 		deferral = 0.40
@@ -130,11 +137,11 @@ func (j DailySuppressionScanJob) Run() error {
 	if undoc == 0 {
 		undoc = 0.20
 	}
-	ctx := context.Background()
 	inputs, err := j.Fetcher.SuppressionInputs(ctx)
 	if err != nil {
 		return fmt.Errorf("fetch suppression inputs: %w", err)
 	}
+	var errs []error
 	for _, in := range inputs {
 		if !pattern_detection.DetectSuppression(in, deferral, undoc) {
 			continue
@@ -150,8 +157,8 @@ func (j DailySuppressionScanJob) Run() error {
 			),
 		}
 		if err := j.Logger.Append(ctx, entry); err != nil {
-			return fmt.Errorf("log emit: %w", err)
+			errs = append(errs, fmt.Errorf("log emit %s: %w", in.RuleID, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

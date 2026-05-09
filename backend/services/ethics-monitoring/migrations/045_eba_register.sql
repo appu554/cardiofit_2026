@@ -5,7 +5,7 @@
 
 BEGIN;
 
-CREATE TABLE eba_register (
+CREATE TABLE IF NOT EXISTS eba_register (
     id            UUID PRIMARY KEY,
     finding_type  TEXT NOT NULL,
     severity      INT  NOT NULL CHECK (severity BETWEEN 1 AND 5),
@@ -15,7 +15,7 @@ CREATE TABLE eba_register (
     closed_at     TIMESTAMPTZ
 );
 
-CREATE INDEX idx_eba_register_status_recent
+CREATE INDEX IF NOT EXISTS idx_eba_register_status_recent
     ON eba_register (status, detected_at DESC);
 
 COMMIT;

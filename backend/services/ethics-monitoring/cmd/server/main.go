@@ -74,7 +74,6 @@ func main() {
 	if err := orch.Start(); err != nil {
 		log.Fatalf("ethics-monitoring: orchestrator start: %v", err)
 	}
-	defer orch.Stop()
 
 	// ---------- HTTP server ----------
 	gin.SetMode(gin.ReleaseMode)
@@ -90,21 +89,40 @@ func main() {
 
 	log.Printf("ethics-monitoring %s starting on :%s (jobs=%d)", api.Version, port, orch.JobCount())
 
+	// Surface ListenAndServe errors via a channel rather than log.Fatalf so
+	// that deferred shutdown logic still runs (Fatalf calls os.Exit which
+	// bypasses defers and skips orchestrator drain).
+	errCh := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("ethics-monitoring: server error: %v", err)
+			errCh <- err
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("ethics-monitoring: shutdown error: %v", err)
+	select {
+	case <-sigCh:
+		log.Println("ethics-monitoring: shutdown signal received")
+	case err := <-errCh:
+		log.Printf("ethics-monitoring: http server error: %v", err)
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("ethics-monitoring: http shutdown error: %v", err)
+	}
+
+	drainCtx := orch.Stop()
+	select {
+	case <-drainCtx.Done():
+		log.Println("ethics-monitoring: cron drained cleanly")
+	case <-time.After(30 * time.Second):
+		log.Println("ethics-monitoring: cron drain timeout (30s)")
+	}
+
 	log.Print("ethics-monitoring: shutdown complete")
 }
 
