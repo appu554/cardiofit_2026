@@ -11,6 +11,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -20,6 +21,10 @@ import (
 	"github.com/cardiofit/shared/v2_substrate/ethics/decision_metadata"
 	"github.com/cardiofit/shared/v2_substrate/ethics/ethics_log"
 )
+
+// LinkedTraceDepth is the maximum traversal depth requested from the
+// EvidenceTraceLinker. Set per Phase 3 (tightened) plan Task 4.
+const LinkedTraceDepth = 5
 
 // EvidenceTraceLinker is a minimal port for fetching nodes linked to a
 // decision in the evidence-trace graph. Implementations may walk forward,
@@ -89,12 +94,19 @@ func NewExplainHandler(
 	return &ExplainHandler{metadata: md, log: log, citationReg: reg, linker: linker}
 }
 
+// TODO(phase-2-completion / phase-4): mount with AD-class auditor permission
+// middleware before pilot. Until then, the route is authenticated only by the
+// kb-32 service-level auth (no auditor-class scope check).
+//
 // HandleExplain serves GET /v1/explain/:decision_id.
 //
 // Response codes:
-//   - 400 bad_decision_id   — :decision_id is not a parseable UUID.
-//   - 404 decision_not_found — no Metadata record exists for the decision.
-//   - 200                   — full audit trail (metadata + ethics log + citations + linked trace nodes).
+//   - 400 bad_decision_id        — :decision_id is not a parseable UUID.
+//   - 404 decision_not_found     — no Metadata record exists for the decision.
+//   - 500 metadata_lookup_failed — substrate failure during metadata.Get;
+//     distinguishes a real server error from a legitimate "never existed"
+//     so auditors aren't misled when the DB is temporarily unavailable.
+//   - 200                        — full audit trail (metadata + ethics log + citations + linked trace nodes).
 //
 // Errors from downstream stores (ethics log, citation registry, evidence-trace
 // linker) degrade gracefully to empty slices rather than 500, so a partial
@@ -110,15 +122,26 @@ func (h *ExplainHandler) HandleExplain(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	md, err := h.metadata.Get(ctx, decisionID)
-	if err != nil || md == nil {
+	if err != nil {
+		log.Printf("explain: metadata.Get failed for decision_id=%s: %v", decisionID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "metadata_lookup_failed"})
+		return
+	}
+	if md == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "decision_not_found"})
 		return
 	}
 
-	// Ethics log entries — degrade to empty slice on error.
+	// Ethics log entries — degrade to empty slice on error, but log
+	// server-side so operators can detect substrate problems even when the
+	// caller-facing response stays 200 with a partial payload.
 	entries := []ethics_log.Entry{}
 	if h.log != nil {
-		if e, err := ethics_log.NewQuerier(h.log).ByDecision(ctx, decisionID); err == nil && e != nil {
+		e, err := ethics_log.NewQuerier(h.log).ByDecision(ctx, decisionID)
+		if err != nil {
+			log.Printf("explain: ethics_log.ByDecision failed for decision_id=%s: %v", decisionID, err)
+			entries = []ethics_log.Entry{}
+		} else if e != nil {
 			entries = e
 		}
 	}
@@ -127,12 +150,25 @@ func (h *ExplainHandler) HandleExplain(c *gin.Context) {
 	// current decision_metadata.Metadata struct does not carry a
 	// recommendation-ID. Until the substrate is extended, return [].
 	// See ExplainResponse type doc-comment for the full deferral note.
+	//
+	// The log line below is staged here so it activates the moment a future
+	// Metadata.RecommendationID field unblocks the ListCitations call:
+	//
+	//   cites, err := h.citationReg.ListCitations(ctx, md.RecommendationID)
+	//   if err != nil {
+	//       log.Printf("explain: citations.ListCitations failed for decision_id=%s: %v", decisionID, err)
+	//       cites = []citations.RecommendationCitation{}
+	//   }
 	cites := []citations.RecommendationCitation{}
 
-	// Linked evidence-trace nodes — depth=5 per Phase 3 plan.
+	// Linked evidence-trace nodes — depth per Phase 3 plan.
 	linked := []uuid.UUID{}
 	if h.linker != nil {
-		if nodes, err := h.linker.LinkedNodes(ctx, decisionID, 5); err == nil && nodes != nil {
+		nodes, err := h.linker.LinkedNodes(ctx, decisionID, LinkedTraceDepth)
+		if err != nil {
+			log.Printf("explain: linker.LinkedNodes failed for decision_id=%s: %v", decisionID, err)
+			linked = []uuid.UUID{}
+		} else if nodes != nil {
 			linked = nodes
 		}
 	}

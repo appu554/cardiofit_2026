@@ -311,6 +311,48 @@ func TestExplain_RegistryError_DegradesGracefully(t *testing.T) {
 	}
 }
 
+// erroringMetadataStore implements decision_metadata.Store and returns a
+// fixed error from Get. Used to verify that a substrate failure surfaces as
+// 500 metadata_lookup_failed rather than a misleading 404 decision_not_found.
+type erroringMetadataStore struct {
+	err error
+}
+
+func (e erroringMetadataStore) Put(_ context.Context, _ decision_metadata.Metadata) error {
+	return nil
+}
+
+func (e erroringMetadataStore) Get(_ context.Context, _ uuid.UUID) (*decision_metadata.Metadata, error) {
+	return nil, e.err
+}
+
+func (e erroringMetadataStore) QueryBySubject(_ context.Context, _ string) ([]decision_metadata.Metadata, error) {
+	return nil, nil
+}
+
+func TestExplain_MetadataLookupError_Returns500(t *testing.T) {
+	r := newExplainTestRouter(t,
+		erroringMetadataStore{err: errors.New("simulated db outage")},
+		ethics_log.NewInMemoryStore(),
+		citations.NewInMemoryRegistry(),
+		NoOpEvidenceTraceLinker{},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/v1/explain/"+uuid.New().String(), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 (substrate failure must not masquerade as 404), got %d (body=%s)", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["error"] != "metadata_lookup_failed" {
+		t.Errorf("expected error=metadata_lookup_failed, got %q", body["error"])
+	}
+}
+
 func TestNoOpEvidenceTraceLinker_ReturnsNothing(t *testing.T) {
 	nodes, err := NoOpEvidenceTraceLinker{}.LinkedNodes(context.Background(), uuid.New(), 5)
 	if err != nil {
