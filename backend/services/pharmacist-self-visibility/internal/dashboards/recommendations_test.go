@@ -18,10 +18,10 @@ import (
 func TestMyRecommendations_FilterByAuthor(t *testing.T) {
 	author := uuid.New()
 	src := &fakeRecSource{
-		recs: []recRow{
-			{authorID: author, state: "drafted", id: uuid.New()},
-			{authorID: author, state: "implemented", id: uuid.New()},
-			{authorID: uuid.New(), state: "drafted", id: uuid.New()}, // someone else's
+		recs: []RecRow{
+			{AuthorID: author, State: "drafted", ID: uuid.New()},
+			{AuthorID: author, State: "implemented", ID: uuid.New()},
+			{AuthorID: uuid.New(), State: "drafted", ID: uuid.New()}, // someone else's
 		},
 	}
 	d := NewMyRecommendations(src)
@@ -34,7 +34,7 @@ func TestMyRecommendations_FilterByAuthor(t *testing.T) {
 func TestMyRecommendations_RejectedFramedAsLearning(t *testing.T) {
 	author := uuid.New()
 	src := &fakeRecSource{
-		recs: []recRow{{authorID: author, state: "rejected", id: uuid.New(), rejectionReason: "GP preferred alternative"}},
+		recs: []RecRow{{AuthorID: author, State: "rejected", ID: uuid.New(), RejectionReason: "GP preferred alternative"}},
 	}
 	d := NewMyRecommendations(src)
 	got, _ := d.For(context.Background(), author)
@@ -62,7 +62,7 @@ func TestMyRecommendations_PropagatesSourceError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMyRecommendations_EmptyResultIsEmptySlice(t *testing.T) {
-	src := &fakeRecSource{recs: []recRow{}}
+	src := &fakeRecSource{recs: []RecRow{}}
 	d := NewMyRecommendations(src)
 	got, err := d.For(context.Background(), uuid.New())
 	if err != nil {
@@ -83,8 +83,8 @@ func TestMyRecommendations_EmptyResultIsEmptySlice(t *testing.T) {
 func TestMyRecommendations_ContextCancellation(t *testing.T) {
 	author := uuid.New()
 	src := &fakeRecSource{
-		recs: []recRow{
-			{authorID: author, state: "drafted", id: uuid.New()},
+		recs: []RecRow{
+			{AuthorID: author, State: "drafted", ID: uuid.New()},
 		},
 	}
 	d := NewMyRecommendations(src)
@@ -102,13 +102,13 @@ func TestMyRecommendations_ContextCancellation(t *testing.T) {
 // Test helper types
 // ---------------------------------------------------------------------------
 
-// fakeRecSource filters by authorID, simulating permission middleware from Phase 1a.
-type fakeRecSource struct{ recs []recRow }
+// fakeRecSource filters by AuthorID, simulating permission middleware from Phase 1a.
+type fakeRecSource struct{ recs []RecRow }
 
-func (f *fakeRecSource) ListByAuthor(_ context.Context, author uuid.UUID) ([]recRow, error) {
-	out := []recRow{}
+func (f *fakeRecSource) ListByAuthor(_ context.Context, author uuid.UUID) ([]RecRow, error) {
+	out := []RecRow{}
 	for _, r := range f.recs {
-		if r.authorID == author {
+		if r.AuthorID == author {
 			out = append(out, r)
 		}
 	}
@@ -118,6 +118,6 @@ func (f *fakeRecSource) ListByAuthor(_ context.Context, author uuid.UUID) ([]rec
 // errRecSource always returns an error from ListByAuthor.
 type errRecSource struct{ err error }
 
-func (e *errRecSource) ListByAuthor(_ context.Context, _ uuid.UUID) ([]recRow, error) {
+func (e *errRecSource) ListByAuthor(_ context.Context, _ uuid.UUID) ([]RecRow, error) {
 	return nil, e.err
 }

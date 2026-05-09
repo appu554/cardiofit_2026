@@ -16,7 +16,7 @@ import (
 // github.com/cardiofit/shared to avoid a cross-module dependency
 // (pharmacist-self-visibility is its own Go module).
 //
-// Callers providing recRow.State values MUST use these constants or the
+// Callers providing RecRow.State values MUST use these constants or the
 // canonical strings they represent. IsValidLifecycleState validates at the
 // boundary; the RecSource implementation is responsible for canonicalisation
 // before rows reach MyRecommendations.For.
@@ -92,14 +92,24 @@ type RecommendationCard struct {
 	RejectionReason string
 }
 
-// recRow mirrors the internal row type used by RecSource implementations.
+// RecRow mirrors the row type used by RecSource implementations.
 // It is the minimal projection the RecSource.ListByAuthor contract returns.
 // Callers MUST use Plan 0.1 lifecycle state values (see IsValidLifecycleState).
-type recRow struct {
-	id              uuid.UUID
-	authorID        uuid.UUID
-	state           string
-	rejectionReason string
+//
+// VisibilityClass: PDP — exported so that store/postgres implementations outside
+// this package can satisfy the RecSource interface without reflection tricks.
+type RecRow struct {
+	// ID is the unique identifier of the recommendation entity.
+	ID uuid.UUID
+	// AuthorID is the pharmacist UUID that authored this recommendation.
+	AuthorID uuid.UUID
+	// State is the current Plan 0.1 lifecycle state string.
+	State string
+	// RejectionReason is the GP's stated reason for rejection, if available.
+	// This field is populated only when State == "rejected". The Plan 0.1
+	// migration 023 schema does not carry a rejection_reason column; this field
+	// is reserved for a future schema extension or application-layer annotation.
+	RejectionReason string
 }
 
 // RecSource is the data-access interface that backs MyRecommendations.
@@ -113,7 +123,7 @@ type RecSource interface {
 	// ListByAuthor returns all recommendation rows authored by the given
 	// pharmacist UUID. The source is expected to apply Phase 1a permission
 	// middleware so that only PDP-consented rows are returned.
-	ListByAuthor(ctx context.Context, author uuid.UUID) ([]recRow, error)
+	ListByAuthor(ctx context.Context, author uuid.UUID) ([]RecRow, error)
 }
 
 // MyRecommendations surfaces a pharmacist's own recommendation lifecycle view.
@@ -157,11 +167,11 @@ func (m *MyRecommendations) For(ctx context.Context, author uuid.UUID) ([]Recomm
 	out := make([]RecommendationCard, 0, len(rows))
 	for _, r := range rows {
 		c := RecommendationCard{
-			RecommendationID: r.id,
-			State:            r.state,
-			RejectionReason:  r.rejectionReason,
+			RecommendationID: r.ID,
+			State:            r.State,
+			RejectionReason:  r.RejectionReason,
 		}
-		if r.state == LifecycleRejected {
+		if r.State == LifecycleRejected {
 			c.Framing = "learning_opportunity"
 		}
 		out = append(out, c)

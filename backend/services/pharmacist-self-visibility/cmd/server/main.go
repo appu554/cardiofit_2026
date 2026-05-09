@@ -11,6 +11,8 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/cardiofit/pharmacist-self-visibility/internal/api"
+	"github.com/cardiofit/pharmacist-self-visibility/internal/dashboards"
+	pgstore "github.com/cardiofit/pharmacist-self-visibility/internal/store/postgres"
 	"github.com/cardiofit/shared/v2_substrate/permissions"
 )
 
@@ -49,10 +51,13 @@ func main() {
 	// verification lands in Task 2.
 	router.Group(func(r chi.Router) {
 		r.Use(api.JWTMiddleware(jwtSecret))
-		// Dashboard surface routes. DashboardDeps is zero-value (all nil) until
-		// Task 4 wires Postgres-backed sources. Nil deps degrade to 503; routes
-		// are mounted so path registration is visible to health/smoke checks.
-		api.MountDashboardRoutes(r, mw, api.DashboardDeps{})
+		// Dashboard surface routes. Recommendations is backed by Postgres
+		// (Task 4). Remaining deps stay nil → 503 with dependency_unavailable
+		// until subsequent tasks wire their sources.
+		deps := api.DashboardDeps{
+			Recommendations: dashboards.NewMyRecommendations(pgstore.NewPostgresRecSource(db)),
+		}
+		api.MountDashboardRoutes(r, mw, deps)
 	})
 
 	srv := &http.Server{
