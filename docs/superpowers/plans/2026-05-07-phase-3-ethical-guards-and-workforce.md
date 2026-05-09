@@ -1,4 +1,30 @@
-# Ethical Guards + Workforce Modules Implementation Plan
+# Ethical Guards + Workforce Modules Implementation Plan — SUPERSEDED
+
+> **⚠️ SUPERSEDED 2026-05-09 by tightened Phase 3 plan.**
+>
+> The 2026-05-09 cross-check against the merged Phase 1+2 substrate (commit `c8d4215e` on main) found this plan ~70% redundant with what already shipped:
+> - Task 1 (Appropriateness scoring) — already shipped via Phase 2a Task 9; refinement is Phase 2-completion Task 2 (`SubstrateBackedScorer`).
+> - Task 2 (Suppression detector) — partially shipped via Phase 1c pattern_detection + Phase 2b override feedback loop; one new variant (frequency-drop-without-context-change) genuinely missing.
+> - Task 3 (Restraint signaler) — fully shipped as Phase 2b Task 9, with 9 detectors and structural drift guard.
+> - Task 4 (RPL evidence pack) — fully shipped as Phase 1b Task 13 + Phase 1b-completion Task 6 (gofpdf renderer).
+> - Task 5 (CPD tagger + AHPRA records) — fully shipped as Phase 1b Task 14.
+> - Task 6 (Lifecycle wire-up) — fully shipped as Phase 2a Task 13's `CraftEngineGate`.
+> - Task 7 (Persuasive-framing-of-marginal detection test) — genuinely missing; carried forward.
+>
+> Migration numbers 030 and 031 in the original plan also collide with Phase 1b's reflective_entries (030) and algorithmic_observations (031), already on main.
+>
+> **The tightened successor** (`docs/superpowers/plans/2026-05-09-phase-3-ethics-monitoring-and-pre-pilot-gates.md`) covers 5 genuinely-new pre-pilot code gaps:
+> 1. Standalone `ethics-monitoring` service (cron orchestration over Phase 1c detectors)
+> 2. Demographic stratification pipeline feeding `DetectBiasDisparity`
+> 3. Capacity assessment + dynamic consent integration with kb-32 ERM
+> 4. Layer 4 deep-audit query API (`/v1/explain/{decision_id}`)
+> 5. CI invariance gates (override pathway availability + frame-vs-content content_hash invariance)
+>
+> The workforce modules (RPL pack + CPD record + AHPRA export) that this plan originally bundled are correctly implemented in the pharmacist-self-visibility service per *Pharmacist Self-Visibility Implementation Guidelines v1.0* Part 7 — they sit in Phase 1b, not Phase 3.
+>
+> The original 7 tasks below are **historical reference only**. Do NOT execute against this file. Execute against the tightened plan.
+
+---
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
